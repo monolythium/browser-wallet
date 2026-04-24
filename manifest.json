@@ -17,6 +17,11 @@
       "js": ["src/content/provider.ts"],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/bridge.ts"],
+      "run_at": "document_start"
     }
   ],
   "permissions": ["storage"],
