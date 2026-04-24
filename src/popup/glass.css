@@ -1,0 +1,29 @@
+/* Glass surface tokens — minimal subset of designs/styles/themes.css default theme.
+   Only the variables the ext.css selectors reference. */
+
+:root {
+  --glass-fill:        rgba(255, 255, 255, 0.04);
+  --glass-fill-strong: rgba(255, 255, 255, 0.07);
+  --glass-fill-hover:  rgba(255, 255, 255, 0.08);
+  --glass-stroke:      rgba(255, 255, 255, 0.10);
+  --glass-stroke-hi:   rgba(255, 255, 255, 0.16);
+  --glass-inner:       rgba(255, 255, 255, 0.12);
+  --glass-blur:        24px;
+  --glass:             var(--glass-fill);
+}
+
+/* Popup window — fixed 380x620 per ext.css, no rounded corners (browser draws those). */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0a0815;
+  color: #ecedf3;
+  font-family: var(--f-sans);
+  width: 380px;
+  height: 620px;
+  overflow: hidden;
+}
+
+#root { width: 380px; height: 620px; }
+
+.ext { border-radius: 0; box-shadow: none; }
