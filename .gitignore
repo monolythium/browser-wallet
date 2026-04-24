@@ -1,0 +1,80 @@
+# --- Monolythium Vision base .gitignore (applies to every repo) ---
+
+# Local-only development context (NEVER push these)
+CLAUDE.md
+.claude/local/
+.claude/skills/
+.gemini/
+plans/
+docs-internal/
+*.internal.md
+AUDIT-*.md
+RESUME.md
+STATUS.md
+TODO.md
+
+# Environment + secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.keystore
+*.p12
+secrets/
+credentials/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+!.vscode/settings.recommended.json
+*.iml
+
+# Local scratch
+scratch/
+tmp/
+.cache/
+
+# Logs
+*.log
+logs/
+# --- Node / TS / Vite additions (append to gitignore.base) ---
+node_modules/
+dist/
+dist-ssr/
+build/
+.vite/
+.vitest-cache/
+.astro/
+.next/
+.turbo/
+.nuxt/
+.svelte-kit/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+.pnp.*
+.yarn/
+
+# Lockfiles: keep pnpm-lock.yaml; drop others if pnpm is the workspace's package manager
+# package-lock.json
+# yarn.lock
+# --- Browser extension additions (append to gitignore.base + gitignore.node) ---
+# Packed release bundles
+*.zip
+*.crx
+*.xpi
+web-ext-artifacts/
+.web-ext.json
+
+# Chrome Web Store / AMO signing credentials (NEVER commit)
+*.pub
+*.pem
+store-credentials.json
+amo-credentials.json
