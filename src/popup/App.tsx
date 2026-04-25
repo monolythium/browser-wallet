@@ -5,8 +5,8 @@
 //   1. user clicks the toolbar action -> default popup -> onboarding/lock/home
 //   2. background spawned an approval window via chrome.windows.create with
 //      `?approval=<id>` in the URL -> we show the matching ReqConnect /
-//      ReqSign / ReqMessage and post the user's decision back through the
-//      chrome.runtime channel.
+//      ReqSendTx / ReqPersonalSignReal / ReqTypedSign / ReqAddChain and post
+//      the user's decision back through the chrome.runtime channel.
 //
 // The keystore lives entirely in the service worker. The popup never sees
 // the private key — it only sends the password during unlock and reads back
@@ -18,10 +18,11 @@ import "./glass.css";
 import "./ext.css";
 import {
   Home, Accounts, Networks, Settings,
-  ReqConnect, ReqSign, ReqMessage, ReqOnboard,
+  ReqConnect, ReqOnboard,
   ReqSheet, AttStrip, DemoBanner,
+  ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
 } from "./components";
-import { ACCOUNTS, NETWORKS, type PendingSign, type Account, type Network } from "./demo-data";
+import { ACCOUNTS, NETWORKS, type Account, type Network } from "./demo-data";
 import {
   bgListPending,
   bgKeystoreStatus,
@@ -30,6 +31,10 @@ import {
   bgResolveApproval,
   type PendingApproval,
   type KeystoreStatus,
+  type SendTxRequest,
+  type PersonalSignRequest,
+  type TypedSignRequest,
+  type AddChainRequest,
 } from "./bg";
 
 type Screen =
@@ -44,8 +49,6 @@ type Screen =
 
 interface UiApproval {
   approval: PendingApproval;
-  // Per-screen demo state, e.g. selected sign type for ReqSign tabs.
-  signType: PendingSign["type"];
 }
 
 export default function App() {
@@ -73,7 +76,7 @@ export default function App() {
         const list = await bgListPending();
         const found = list.find((p) => p.id === approvalId);
         if (found) {
-          setActiveApproval({ approval: found, signType: "swap" });
+          setActiveApproval({ approval: found });
           setScreen("approval");
           return;
         }
@@ -103,11 +106,16 @@ export default function App() {
     };
   }, [acc.denom]);
 
-  // TODO(monolythium-vision): pull custody + algo from background keystore
-  // metadata once the multi-mode keystore lands. For now the on-disk vault
-  // is a software keystore (sw / slhdsa is unused).
-  const custody = "sw" as const;
-  const algo = "slhdsa" as const;
+  // Custody mode comes from the background keystore. Today the only mode is
+  // software ("sw" + secp256k1); when TPM / passkey / hardware-wallet backends
+  // land, the service worker simply returns a different value here and the
+  // approval views will reflect it without further popup changes.
+  const custody = keystore?.custody ?? "sw";
+  // The Settings panel still expects the legacy `slhdsa | mldsa` taxonomy from
+  // the design mockups. Map secp256k1 → "slhdsa" (the closest UI slot for the
+  // current pre-PQ key) so the Settings screen renders correctly. Once the PQ
+  // keystore lands this becomes a 1:1 mapping.
+  const algo = keystore?.algo === "mldsa" ? ("mldsa" as const) : ("slhdsa" as const);
 
   const handleUnlock = async (password: string) => {
     setUnlockError(null);
@@ -223,9 +231,7 @@ export default function App() {
           onUnlock={handleUnlock}
           onApprove={() => finalizeApproval(true)}
           onReject={() => finalizeApproval(false)}
-          onChangeSignType={(t) => setActiveApproval({ ...activeApproval, signType: t })}
           custody={custody}
-          algo={algo}
         />
       )}
     </div>
@@ -365,9 +371,7 @@ interface ApprovalRouteProps {
   onUnlock: (password: string) => void;
   onApprove: () => void;
   onReject: () => void;
-  onChangeSignType: (t: PendingSign["type"]) => void;
   custody: "tpm" | "passkey" | "hw" | "sw";
-  algo: "slhdsa" | "mldsa";
 }
 
 function ApprovalRoute({
@@ -377,9 +381,7 @@ function ApprovalRoute({
   onUnlock,
   onApprove,
   onReject,
-  onChangeSignType,
   custody,
-  algo,
 }: ApprovalRouteProps) {
   const a = approval.approval;
 
@@ -397,32 +399,57 @@ function ApprovalRoute({
     );
   }
 
-  if (a.request.kind === "connect") {
+  const req = a.request;
+
+  if (req.kind === "connect") {
     return (
       <ReqSheet onBack={onReject}>
         <ReqConnect custody={custody} onApprove={onApprove} onReject={onReject} />
       </ReqSheet>
     );
   }
-  if (a.request.kind === "personal_sign") {
+  if (req.kind === "personal_sign") {
     return (
       <ReqSheet onBack={onReject}>
-        <ReqMessage custody={custody} onApprove={onApprove} onReject={onReject} />
+        <ReqPersonalSignReal
+          request={req as PersonalSignRequest}
+          custody={custody}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
       </ReqSheet>
     );
   }
-  if (a.request.kind === "send_tx") {
+  if (req.kind === "typed_sign") {
     return (
-      <ReqSheet
-        onBack={onReject}
-        type={approval.signType}
-        showTypeTabs
-        onChangeSignType={onChangeSignType}
-      >
-        <ReqSign
-          type={approval.signType}
+      <ReqSheet onBack={onReject}>
+        <ReqTypedSign
+          request={req as TypedSignRequest}
           custody={custody}
-          algo={algo}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
+      </ReqSheet>
+    );
+  }
+  if (req.kind === "send_tx") {
+    return (
+      <ReqSheet onBack={onReject}>
+        <ReqSendTx
+          request={req as SendTxRequest}
+          custody={custody}
+          signerAddress={keystore?.address ?? ""}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
+      </ReqSheet>
+    );
+  }
+  if (req.kind === "add_chain") {
+    return (
+      <ReqSheet onBack={onReject}>
+        <ReqAddChain
+          request={req as AddChainRequest}
           onApprove={onApprove}
           onReject={onReject}
         />
@@ -436,7 +463,7 @@ function ApprovalRoute({
       <div style={{ padding: 18 }}>
         <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Confirm request</h2>
         <pre style={{ marginTop: 10, fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", whiteSpace: "pre-wrap" }}>
-          {JSON.stringify(a.request, null, 2)}
+          {JSON.stringify(req, null, 2)}
         </pre>
       </div>
       <div className="req-foot">
