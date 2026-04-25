@@ -20,5 +20,13 @@
     "react-dom": "^19.0.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "@monolythium/core-sdk": "file:../mono-core-sdk/packages/ts",
+    "@noble/ciphers": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
+    "@noble/secp256k1": "^3.1.0",
+    "@scure/bip32": "^2.2.0",
+    "@scure/bip39": "^2.2.0"
   }
 }
