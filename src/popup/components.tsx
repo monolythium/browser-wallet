@@ -1,6 +1,12 @@
 // Component port from designs/src/ext-popup.jsx + ext-app.jsx + ext-requests.jsx.
-// Surface-only. No keystore, no RPC, no signing here.
-// TODO(monolythium-vision): swap demo-data imports for @monolythium/core-sdk reads.
+// Surface-only. No keystore, no RPC, no signing here. The home / accounts /
+// networks / settings views still source mock data from `demo-data` because
+// the chain-side reads they need (balances, asset prices, activity log) are
+// not in the SDK yet — see `TODO(monolythium-vision)` markers below.
+//
+// Approval views (ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain)
+// at the bottom of this file render REAL payloads passed in by the service
+// worker. No demo-data is read on the approval path.
 
 import type { ReactNode, CSSProperties } from "react";
 import { useState } from "react";
@@ -12,6 +18,12 @@ import {
 import type {
   Account, Network, Custody, Algo, PendingSign,
 } from "./demo-data";
+import type {
+  PersonalSignRequest,
+  TypedSignRequest,
+  SendTxRequest,
+  AddChainRequest,
+} from "./bg";
 
 // ---- Attestation strip (top-of-popup chromatic halo of node attestation) ----
 export function AttStrip() {
@@ -1017,3 +1029,638 @@ export function ReqOnboard() {
 }
 
 export { ReqSheet };
+
+// ---------------------------------------------------------------------------
+// Real-payload approval views (Stage 4)
+//
+// These render the actual EIP-1193 request the dapp sent — no demo-data here.
+// The service worker pre-populates an `SendTxView` (gas, simulation, nonce)
+// and an EIP-712 `digest` so the popup can show real numbers without RPC
+// access of its own.
+// ---------------------------------------------------------------------------
+
+// Hex / bytes helpers that don't drag a Buffer dep in.
+
+function hexToBytes(hex: string): Uint8Array {
+  const r = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (r.length === 0) return new Uint8Array(0);
+  const padded = r.length % 2 === 1 ? "0" + r : r;
+  const out = new Uint8Array(padded.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(padded.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function bytesToUtf8IfPrintable(b: Uint8Array): string | null {
+  try {
+    const s = new TextDecoder("utf-8", { fatal: true }).decode(b);
+    // Reject obviously-binary blobs: characters under 0x20 (other than \n\r\t)
+    // are a strong signal the dapp meant raw bytes.
+    for (const ch of s) {
+      const c = ch.codePointAt(0)!;
+      if (c < 0x20 && c !== 9 && c !== 10 && c !== 13) return null;
+    }
+    return s;
+  } catch {
+    return null;
+  }
+}
+
+function parseHexQuantity(hex: string | null | undefined): bigint | null {
+  if (!hex) return null;
+  try {
+    return BigInt(hex.startsWith("0x") || hex.startsWith("0X") ? hex : "0x" + hex);
+  } catch {
+    return null;
+  }
+}
+
+function formatGasUnits(hex: string | null | undefined): string {
+  const b = parseHexQuantity(hex);
+  return b == null ? "—" : b.toString(10);
+}
+
+function formatGwei(hex: string | null | undefined): string {
+  const b = parseHexQuantity(hex);
+  if (b == null) return "—";
+  // gwei = wei / 1e9 ; show with 2 decimals when < 100, else integer
+  const gweiInt = b / 1_000_000_000n;
+  const gweiFrac = (b % 1_000_000_000n) / 10_000_000n; // 2-dp
+  const fracStr = gweiFrac.toString().padStart(2, "0");
+  return `${gweiInt}.${fracStr}`;
+}
+
+function formatLyth(hex: string | null | undefined): string {
+  const b = parseHexQuantity(hex);
+  if (b == null) return "—";
+  const wholeWei = 1_000_000_000_000_000_000n;
+  const whole = b / wholeWei;
+  const frac = b % wholeWei;
+  // Show up to 6 decimals, trim trailing zeros.
+  const fracStr = frac.toString().padStart(18, "0").slice(0, 6).replace(/0+$/, "");
+  return fracStr.length > 0 ? `${whole}.${fracStr}` : whole.toString();
+}
+
+// ---- send_tx approval ----
+interface ReqSendTxProps {
+  request: SendTxRequest;
+  custody: Custody;
+  signerAddress: string;
+  onApprove: () => void;
+  onReject: () => void;
+}
+
+type GasTier = "low" | "medium" | "high";
+
+export function ReqSendTx({
+  request,
+  custody,
+  signerAddress,
+  onApprove,
+  onReject,
+}: ReqSendTxProps) {
+  const { tx, view, origin } = request;
+  const [tier, setTier] = useState<GasTier>("medium");
+  const [showRaw, setShowRaw] = useState(false);
+  const [showSim, setShowSim] = useState(true);
+
+  const baseGasPrice = parseHexQuantity(view.gasPrice);
+  const tieredGasPrice =
+    baseGasPrice == null
+      ? null
+      : tier === "low"
+        ? (baseGasPrice * 90n) / 100n
+        : tier === "high"
+          ? (baseGasPrice * 130n) / 100n
+          : baseGasPrice;
+  const tieredHex = tieredGasPrice == null ? null : "0x" + tieredGasPrice.toString(16);
+
+  const gasUsed = parseHexQuantity(view.estimatedGas);
+  const totalFeeWei =
+    gasUsed != null && tieredGasPrice != null ? gasUsed * tieredGasPrice : null;
+  const totalFeeHex = totalFeeWei == null ? null : "0x" + totalFeeWei.toString(16);
+
+  const value = tx.value;
+  const data = tx.data ?? "0x";
+  const hasCalldata = data.length > 2;
+
+  return (
+    <>
+      <DemoBanner />
+      <AttStrip />
+      <div className="req-head">
+        <div className="origin">
+          <div className="fav C">⌘</div>
+          <div className="info">
+            <div className="n">Sign transaction</div>
+            <div className="u">{origin}</div>
+          </div>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--gold)", padding: "3px 7px", border: "1px solid rgba(124,127,255,0.4)", borderRadius: 4 }}>
+            tx
+          </div>
+        </div>
+        <h2>{hasCalldata ? "Contract interaction" : "Transfer"}</h2>
+        <div className="sub">
+          on {view.chainLabel} ({view.chainId})
+        </div>
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">From</div>
+        <div className="req-kv">
+          <span className="k">Signer</span>
+          <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
+            {signerAddress || "—"}
+          </span>
+        </div>
+        <div className="req-kv">
+          <span className="k">To</span>
+          <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
+            {tx.to ?? "(contract creation)"}
+          </span>
+        </div>
+        <div className="req-kv">
+          <span className="k">Value</span>
+          <span className="v">{value ? `${formatLyth(value)} LYTH` : "0 LYTH"}</span>
+        </div>
+        <div className="req-kv">
+          <span className="k">Nonce</span>
+          <span className="v">{view.nonce ?? "—"}</span>
+        </div>
+      </div>
+
+      {hasCalldata && (
+        <div className="req-section">
+          <div className="req-section__h">
+            <span>Simulation</span>
+            <button onClick={() => setShowSim((v) => !v)}>{showSim ? "hide" : "show"} ↓</button>
+          </div>
+          {showSim && view.simulation == null && (
+            <div className="req-warn warn">
+              <Icon name="warn" size={14} />
+              <div>Simulation not available — node did not respond. Approve at your own risk.</div>
+            </div>
+          )}
+          {showSim && view.simulation && view.simulation.success && (
+            <div className="req-sim">
+              <div className="req-sim__h">
+                <Icon name="check" size={10} /> Simulation succeeded
+              </div>
+              <div className="req-sim__row">
+                <span className="k">eth_call return</span>
+                <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 10, wordBreak: "break-all" }}>
+                  {view.simulation.returnData.length > 80
+                    ? view.simulation.returnData.slice(0, 80) + "…"
+                    : view.simulation.returnData}
+                </span>
+              </div>
+            </div>
+          )}
+          {showSim && view.simulation && !view.simulation.success && (
+            <div className="req-warn warn">
+              <Icon name="warn" size={14} />
+              <div>
+                <b>Simulation reverted.</b> {view.simulation.error}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="req-section">
+        <div className="req-section__h">Gas</div>
+        <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+          {(["low", "medium", "high"] as GasTier[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTier(t)}
+              style={{
+                flex: 1,
+                padding: "7px 6px",
+                borderRadius: 8,
+                fontSize: 10,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                fontFamily: "var(--f-mono)",
+                background: tier === t ? "var(--gold-bg)" : "transparent",
+                color: tier === t ? "var(--gold)" : "var(--fg-300)",
+                border: tier === t ? "1px solid rgba(124,127,255,0.4)" : "1px solid var(--fg-700)",
+                cursor: "pointer",
+              }}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <div className="req-kv">
+          <span className="k">Gas limit</span>
+          <span className="v">{formatGasUnits(view.estimatedGas)}</span>
+        </div>
+        <div className="req-kv">
+          <span className="k">Gas price</span>
+          <span className="v">{formatGwei(tieredHex)} gwei</span>
+        </div>
+        <div className="req-kv">
+          <span className="k">Max fee</span>
+          <span className="v">
+            {totalFeeHex ? `${formatLyth(totalFeeHex)} LYTH` : "—"}
+          </span>
+        </div>
+      </div>
+
+      <div className="req-section" style={{ paddingBottom: 16 }}>
+        <div className="req-section__h">
+          <span>Raw calldata</span>
+          <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
+        </div>
+        {showRaw && (
+          <div className="req-raw" style={{ wordBreak: "break-all" }}>
+            {hasCalldata ? data : "0x (no calldata)"}
+          </div>
+        )}
+      </div>
+
+      <CustodyBadge mode={custody} />
+      <div className="req-foot">
+        <button onClick={onReject}>Reject</button>
+        <button className="prim" onClick={onApprove}>
+          {custody === "hw" ? "Confirm on device" : "Sign & send"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ---- personal_sign approval ----
+interface ReqPersonalSignRealProps {
+  request: PersonalSignRequest;
+  custody: Custody;
+  onApprove: () => void;
+  onReject: () => void;
+}
+
+export function ReqPersonalSignReal({
+  request,
+  custody,
+  onApprove,
+  onReject,
+}: ReqPersonalSignRealProps) {
+  const { message, address, origin } = request;
+  const isHex = message.startsWith("0x") || message.startsWith("0X");
+  const bytes = isHex ? hexToBytes(message) : new TextEncoder().encode(message);
+  const utf8 = isHex ? bytesToUtf8IfPrintable(bytes) : message;
+  const [showRaw, setShowRaw] = useState(false);
+
+  return (
+    <>
+      <DemoBanner />
+      <AttStrip />
+      <div className="req-head">
+        <div className="origin">
+          <div className="fav G">M</div>
+          <div className="info">
+            <div className="n">Sign message</div>
+            <div className="u">{origin}</div>
+          </div>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--fg-200)", padding: "3px 7px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4 }}>
+            personal_sign
+          </div>
+        </div>
+        <h2>Confirm message signature</h2>
+        <div className="sub">no value transferred · EIP-191 prefix applied before sign</div>
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">Signing as</div>
+        <div className="req-kv">
+          <span className="k">Address</span>
+          <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
+            {address || "—"}
+          </span>
+        </div>
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">Message</div>
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(0,0,0,0.3)",
+            border: "1px solid rgba(255,255,255,0.05)",
+            fontFamily: utf8 == null ? "var(--f-mono)" : "var(--f-sans)",
+            fontSize: 12,
+            lineHeight: 1.55,
+            color: "var(--fg-100)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            maxHeight: 220,
+            overflowY: "auto",
+          }}
+        >
+          {utf8 ?? message}
+        </div>
+        {isHex && utf8 == null && (
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", marginTop: 6 }}>
+            payload is binary · displayed as hex
+          </div>
+        )}
+      </div>
+
+      {isHex && utf8 != null && (
+        <div className="req-section">
+          <div className="req-section__h">
+            <span>Raw hex</span>
+            <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
+          </div>
+          {showRaw && (
+            <div className="req-raw" style={{ wordBreak: "break-all" }}>
+              {message}
+            </div>
+          )}
+        </div>
+      )}
+
+      <CustodyBadge mode={custody} />
+      <div className="req-foot">
+        <button onClick={onReject}>Reject</button>
+        <button className="prim" onClick={onApprove}>
+          {custody === "hw" ? "Confirm on device" : "Sign message"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ---- typed_sign approval ----
+interface ReqTypedSignProps {
+  request: TypedSignRequest;
+  custody: Custody;
+  onApprove: () => void;
+  onReject: () => void;
+}
+
+export function ReqTypedSign({
+  request,
+  custody,
+  onApprove,
+  onReject,
+}: ReqTypedSignProps) {
+  const { parsed, digest, address, origin, rawTypedData } = request;
+  const [showRaw, setShowRaw] = useState(false);
+
+  return (
+    <>
+      <DemoBanner />
+      <AttStrip />
+      <div className="req-head">
+        <div className="origin">
+          <div className="fav G">⛬</div>
+          <div className="info">
+            <div className="n">Sign typed data (EIP-712)</div>
+            <div className="u">{origin}</div>
+          </div>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--fg-200)", padding: "3px 7px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4 }}>
+            v4
+          </div>
+        </div>
+        <h2>{parsed?.primaryType ?? "Typed-data envelope"}</h2>
+        <div className="sub">
+          {parsed
+            ? `domain ${String(parsed.domain.name ?? "—")} · structured`
+            : "could not parse — review raw payload below"}
+        </div>
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">Signing as</div>
+        <div className="req-kv">
+          <span className="k">Address</span>
+          <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
+            {address || "—"}
+          </span>
+        </div>
+      </div>
+
+      {parsed && (
+        <div className="req-section">
+          <div className="req-section__h">Domain</div>
+          <div
+            style={{
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.25)",
+              border: "1px solid rgba(255,255,255,0.05)",
+            }}
+          >
+            {Object.entries(parsed.domain).map(([k, v]) => (
+              <div className="req-kv" key={k}>
+                <span className="k">{k}</span>
+                <span
+                  className="v"
+                  style={{ fontFamily: "var(--f-mono)", fontSize: 11, wordBreak: "break-all" }}
+                >
+                  {String(v)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {parsed && (
+        <div className="req-section">
+          <div className="req-section__h">Message · {parsed.primaryType}</div>
+          <TypedDataTree value={parsed.message} />
+        </div>
+      )}
+
+      {digest && (
+        <div className="req-section">
+          <div className="req-section__h">EIP-712 digest</div>
+          <div
+            className="req-raw"
+            style={{ wordBreak: "break-all", fontSize: 10, color: "var(--gold)" }}
+          >
+            {digest}
+          </div>
+        </div>
+      )}
+
+      <div className="req-section" style={{ paddingBottom: 16 }}>
+        <div className="req-section__h">
+          <span>Raw payload</span>
+          <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
+        </div>
+        {showRaw && <div className="req-raw" style={{ wordBreak: "break-all" }}>{rawTypedData}</div>}
+      </div>
+
+      <CustodyBadge mode={custody} />
+      <div className="req-foot">
+        <button onClick={onReject}>Reject</button>
+        <button className="prim" onClick={onApprove} disabled={!parsed}>
+          {custody === "hw" ? "Confirm on device" : "Sign typed data"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// Tiny collapsible tree for the EIP-712 message body.
+function TypedDataTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  if (value == null) {
+    return <span style={{ color: "var(--fg-500)" }}>null</span>;
+  }
+  if (typeof value !== "object") {
+    const s = String(value);
+    return (
+      <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-100)", wordBreak: "break-all" }}>
+        {s}
+      </span>
+    );
+  }
+  if (Array.isArray(value)) {
+    return <TypedDataNode label={`[${value.length}]`} value={value} depth={depth} />;
+  }
+  return <TypedDataNode label="" value={value as Record<string, unknown>} depth={depth} />;
+}
+
+function TypedDataNode({
+  label,
+  value,
+  depth,
+}: {
+  label: string;
+  value: Record<string, unknown> | unknown[];
+  depth: number;
+}) {
+  const [open, setOpen] = useState(depth < 2);
+  const entries = Array.isArray(value)
+    ? value.map((v, i) => [String(i), v] as [string, unknown])
+    : Object.entries(value);
+  return (
+    <div style={{ paddingLeft: depth * 10 }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          background: "transparent",
+          border: 0,
+          color: "var(--fg-300)",
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          letterSpacing: "0.06em",
+          cursor: "pointer",
+          padding: "4px 0",
+        }}
+      >
+        {open ? "▾" : "▸"} {label || (Array.isArray(value) ? "[ ]" : "{ }")}{" "}
+        <span style={{ color: "var(--fg-500)" }}>{entries.length} field{entries.length === 1 ? "" : "s"}</span>
+      </button>
+      {open && (
+        <div>
+          {entries.map(([k, v]) => (
+            <div key={k} style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: 8, padding: "3px 0" }}>
+              <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)" }}>{k}</span>
+              <div style={{ minWidth: 0 }}>
+                <TypedDataTree value={v} depth={depth + 1} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- add_chain approval (EIP-3085) ----
+interface ReqAddChainProps {
+  request: AddChainRequest;
+  onApprove: () => void;
+  onReject: () => void;
+}
+
+export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) {
+  const { chain, origin } = request;
+  return (
+    <>
+      <DemoBanner />
+      <AttStrip />
+      <div className="req-head">
+        <div className="origin">
+          <div className="fav S">+</div>
+          <div className="info">
+            <div className="n">Add network</div>
+            <div className="u">{origin}</div>
+          </div>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--warn)", padding: "3px 7px", border: "1px solid rgba(220,160,0,0.4)", borderRadius: 4 }}>
+            new chain
+          </div>
+        </div>
+        <h2>{chain.chainName}</h2>
+        <div className="sub">requesting · adds chain to wallet network list</div>
+      </div>
+
+      <div className="req-warn warn">
+        <Icon name="warn" size={14} />
+        <div>
+          <b>Verify this network.</b> Malicious dapps may request fake chains
+          to capture signatures. Only approve if you trust the origin.
+        </div>
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">Network</div>
+        <div className="req-kv">
+          <span className="k">Name</span>
+          <span className="v">{chain.chainName}</span>
+        </div>
+        <div className="req-kv">
+          <span className="k">Chain ID</span>
+          <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
+            {chain.chainId}
+          </span>
+        </div>
+        {chain.nativeCurrency && (
+          <div className="req-kv">
+            <span className="k">Native currency</span>
+            <span className="v">
+              {chain.nativeCurrency.symbol} ({chain.nativeCurrency.name}, {chain.nativeCurrency.decimals} dp)
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">RPC endpoints</div>
+        {chain.rpcUrls.map((u, i) => (
+          <div key={i} className="req-kv">
+            <span className="k">RPC #{i + 1}</span>
+            <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11, wordBreak: "break-all" }}>
+              {u}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {chain.blockExplorerUrls && chain.blockExplorerUrls.length > 0 && (
+        <div className="req-section">
+          <div className="req-section__h">Block explorer</div>
+          {chain.blockExplorerUrls.map((u, i) => (
+            <div key={i} className="req-kv">
+              <span className="k">Explorer #{i + 1}</span>
+              <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11, wordBreak: "break-all" }}>
+                {u}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="req-foot">
+        <button onClick={onReject}>Reject</button>
+        <button className="prim" onClick={onApprove}>Add network</button>
+      </div>
+    </>
+  );
+}

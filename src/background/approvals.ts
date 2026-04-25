@@ -19,8 +19,10 @@
 export type ApprovalKind =
   | "connect"
   | "personal_sign"
+  | "typed_sign"
   | "send_tx"
-  | "switch_chain";
+  | "switch_chain"
+  | "add_chain";
 
 export interface ConnectApprovalReq {
   kind: "connect";
@@ -32,6 +34,57 @@ export interface PersonalSignApprovalReq {
   origin: string;
   message: string; // raw input from dapp (utf8 or 0x-hex)
   address: string;
+}
+
+/** EIP-712 typed-data v4. The popup decodes / hashes for display. */
+export interface TypedSignApprovalReq {
+  kind: "typed_sign";
+  origin: string;
+  address: string;
+  /**
+   * The raw param the dapp sent. Either a JSON string (modern wallets pass a
+   * string) or a pre-parsed object. We keep both so the popup can display the
+   * source the dapp actually transmitted alongside the structured render.
+   */
+  rawTypedData: string;
+  /** Best-effort parsed envelope: domain, types, primaryType, message. */
+  parsed: TypedDataEnvelope | null;
+  /** Hex-encoded EIP-712 digest the keystore will sign over, when computable. */
+  digest: string | null;
+}
+
+export interface TypedDataEnvelope {
+  domain: Record<string, unknown>;
+  types: Record<string, Array<{ name: string; type: string }>>;
+  primaryType: string;
+  message: Record<string, unknown>;
+}
+
+/**
+ * Pre-computed view of a send-tx request — populated by the service worker
+ * before opening the popup so the approval screen can render real numbers
+ * without making its own RPC calls (the popup has no RpcClient).
+ */
+export interface SendTxView {
+  /** Estimated gas as a hex quantity, populated from `eth_estimateGas`. */
+  estimatedGas: string | null;
+  /** Node minimum gas price, hex quantity, from `eth_gasPrice`. */
+  gasPrice: string | null;
+  /** Sender's pending nonce, hex quantity. */
+  nonce: string | null;
+  /**
+   * `eth_call` simulation result. `null` if the tx has no `data` (plain
+   * transfer) or the simulation hasn't been attempted. `success: false`
+   * captures revert reasons surfaced by the node.
+   */
+  simulation:
+    | null
+    | { success: true; returnData: string }
+    | { success: false; error: string };
+  /** Active chain id at enqueue time (hex), so the popup can show the right name. */
+  chainId: string;
+  /** Display-ready chain label resolved from KNOWN_CHAINS / user-added chains. */
+  chainLabel: string;
 }
 
 export interface SendTxApprovalReq {
@@ -47,6 +100,7 @@ export interface SendTxApprovalReq {
     nonce?: string;
     chainId?: string;
   };
+  view: SendTxView;
 }
 
 export interface SwitchChainApprovalReq {
@@ -55,11 +109,29 @@ export interface SwitchChainApprovalReq {
   chainId: string;
 }
 
+/** `wallet_addEthereumChain` parameter (EIP-3085). */
+export interface AddChainSpec {
+  chainId: string;
+  chainName: string;
+  rpcUrls: string[];
+  blockExplorerUrls?: string[];
+  iconUrls?: string[];
+  nativeCurrency?: { name: string; symbol: string; decimals: number };
+}
+
+export interface AddChainApprovalReq {
+  kind: "add_chain";
+  origin: string;
+  chain: AddChainSpec;
+}
+
 export type ApprovalReq =
   | ConnectApprovalReq
   | PersonalSignApprovalReq
+  | TypedSignApprovalReq
   | SendTxApprovalReq
-  | SwitchChainApprovalReq;
+  | SwitchChainApprovalReq
+  | AddChainApprovalReq;
 
 export interface PendingApproval {
   id: string;
