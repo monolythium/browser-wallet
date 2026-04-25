@@ -2,20 +2,40 @@
 //
 // EIP-1193 RPC dispatch lives here. Wired methods:
 //   - eth_accounts
-//   - eth_requestAccounts
-//   - eth_chainId
-//   - net_version
-//   - eth_sendTransaction (stub: returns a synthetic tx hash)
-//   - personal_sign        (stub: returns a synthetic signature)
+//   - eth_requestAccounts        (real popup approval)
+//   - eth_chainId / net_version
+//   - eth_sendTransaction        (real RLP build + secp256k1 sign + raw broadcast)
+//   - personal_sign              (real secp256k1 sign over the EIP-191 prefix)
+//   - eth_sendRawTransaction     (proxy to RpcClient.ethSendRawTransaction)
 //   - wallet_switchEthereumChain
-//   - wallet_addEthereumChain (acks if known, errors if unknown)
+//   - wallet_addEthereumChain    (acks if known, errors if unknown)
 //
-// Keystore is intentionally stubbed: on first wake we generate an ephemeral
-// in-memory account so `eth_accounts` has something to return for the design
-// review pass. Real keystore (argon2id + xchacha20poly1305 + chrome.storage)
-// lands in Stage 4 of plans/browser-wallet.md.
-// TODO(monolythium-vision): replace EPHEMERAL_ACCOUNT with the encrypted
-// keystore + unlock prompt once Stage 4 ships.
+// Plus internal channels used by the popup:
+//   - get-pending-approval
+//   - resolve-approval
+//   - keystore.{status, unlock, lock, create-from-new, create-from-mnemonic}
+
+import { RpcClient } from "@monolythium/core-sdk";
+import {
+  enqueue as enqueueApproval,
+  resolve as resolveApproval,
+  rejectByWindow,
+  getPending,
+  listPending,
+  type ApprovalDecision,
+} from "./approvals.js";
+import {
+  hasVault,
+  getStoredAddress,
+  getUnlockedAddress,
+  isUnlocked,
+  lock as lockKeystore,
+  unlock as unlockKeystore,
+  createVaultFromNewMnemonic,
+  createVaultFromMnemonic,
+  personalSign as keystorePersonalSign,
+  signLegacyTx,
+} from "./keystore.js";
 
 interface RpcArgs {
   method: string;
@@ -34,48 +54,37 @@ interface RpcResponse {
   error?: { code: number; message: string };
 }
 
-// ---- Known networks (subset of demo-data NETWORKS, kept duplicated so the
-//      service worker has zero popup-side imports). ----
-const KNOWN_CHAINS: Record<string, { name: string; rpc: string }> = {
-  "0x1B1C": { name: "LythiumDAG-BFT Testnet", rpc: "https://node-tnt.monolythium.xyz" },
-  "0x6970": { name: "Monolythium Mainnet", rpc: "https://node-01.monolythium.xyz" },
-  "0x7A69": { name: "Local devnet", rpc: "http://127.0.0.1:8545" },
+// ---- Known networks ----
+interface NetInfo {
+  name: string;
+  rpc: string;
+  chainIdNum: number;
+}
+
+const KNOWN_CHAINS: Record<string, NetInfo> = {
+  "0x1B1C": { name: "LythiumDAG-BFT Testnet", rpc: "https://node-tnt.monolythium.xyz", chainIdNum: 6940 },
+  "0x6970": { name: "Monolythium Mainnet", rpc: "https://node-01.monolythium.xyz", chainIdNum: 26992 },
+  "0x7A69": { name: "Local devnet", rpc: "http://127.0.0.1:8545", chainIdNum: 31337 },
 };
 
-interface WalletState {
-  // Currently selected EVM account (lowercased 0x-prefixed hex).
-  account: string;
-  // Currently selected EVM chain id (0x-prefixed hex).
+interface SessionState {
   chainId: keyof typeof KNOWN_CHAINS;
-  // Origins the user has approved. {origin -> true}
+  // Origins the user has approved for eth_accounts visibility. {origin -> true}
   connectedOrigins: Set<string>;
 }
 
-// Generate an ephemeral 20-byte address. Not a real key — purely a placeholder
-// so dapps can call eth_accounts without crashing. Keystore replaces this.
-function ephemeralAddress(): string {
-  const bytes = new Uint8Array(20);
-  crypto.getRandomValues(bytes);
-  return "0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-// In-memory state. MV3 service workers go to sleep after ~30s idle; for the
-// design pass we accept the loss. Persistent state moves to chrome.storage in
-// Stage 4 (keystore).
-const state: WalletState = {
-  account: ephemeralAddress(),
+const session: SessionState = {
   chainId: "0x1B1C",
   connectedOrigins: new Set<string>(),
 };
 
-console.log("[Monolythium Wallet] service worker boot, ephemeral account:", state.account);
+console.log("[Monolythium Wallet] service worker boot");
 
 // ---- Helpers ----
 
 function ok(result: unknown): RpcResponse {
   return { result };
 }
-
 function err(code: number, message: string): RpcResponse {
   return { error: { code, message } };
 }
@@ -85,17 +94,13 @@ const ERR_USER_REJECTED = 4001;
 const ERR_UNAUTHORIZED = 4100;
 const ERR_UNSUPPORTED_METHOD = 4200;
 const ERR_CHAIN_NOT_ADDED = 4902;
+const ERR_INTERNAL = -32603;
 
-// Synthetic 0x-prefixed hex of the given byte length. For sendTransaction /
-// personal_sign stubs.
-function syntheticHex(bytes: number): string {
-  const u = new Uint8Array(bytes);
-  crypto.getRandomValues(u);
-  return "0x" + Array.from(u, (b) => b.toString(16).padStart(2, "0")).join("");
+function rpcClientFor(chainId: keyof typeof KNOWN_CHAINS): RpcClient {
+  const net = KNOWN_CHAINS[chainId]!;
+  return new RpcClient(net.rpc);
 }
 
-// Broadcast an event to every connected tab. Used for chainChanged /
-// accountsChanged. Tabs that don't have our content script ignore it.
 function broadcastEvent(event: string, payload: unknown): void {
   chrome.tabs.query({}, (tabs) => {
     for (const t of tabs) {
@@ -115,47 +120,154 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
 
   switch (method) {
     case "eth_chainId":
-      return ok(state.chainId);
+      return ok(session.chainId);
 
     case "net_version":
-      return ok(String(parseInt(state.chainId, 16)));
+      return ok(String(parseInt(session.chainId, 16)));
 
-    case "eth_accounts":
-      // Per EIP-1102, return [] if not connected, [account] if connected.
-      return ok(state.connectedOrigins.has(origin) ? [state.account] : []);
+    case "eth_accounts": {
+      const addr = getUnlockedAddress() ?? (await getStoredAddress());
+      if (!addr) return ok([]);
+      return ok(session.connectedOrigins.has(origin) ? [addr] : []);
+    }
 
     case "eth_requestAccounts": {
-      // TODO(monolythium-vision): pop the popup and require explicit user
-      // approval (designs/src/ext-requests.jsx ReqConnect). For Stage 3 we
-      // auto-approve so dapp round-trip can be exercised end-to-end.
-      state.connectedOrigins.add(origin);
-      broadcastEvent("accountsChanged", [state.account]);
-      broadcastEvent("connect", { chainId: state.chainId });
-      return ok([state.account]);
+      // If wallet doesn't exist yet, surface a clear error so the dapp can
+      // tell the user to onboard. We could also auto-open the popup at the
+      // onboarding screen — left to next stage.
+      if (!(await hasVault())) {
+        return err(ERR_UNAUTHORIZED, "Monolythium Wallet has no vault — open the extension and complete onboarding first");
+      }
+      const decision = await enqueueApproval({ kind: "connect", origin });
+      if (!decision.ok) {
+        return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the connection");
+      }
+      // After approval the keystore must be unlocked (popup unlocks before
+      // confirming). If not, fail closed.
+      const addr = getUnlockedAddress();
+      if (!addr) {
+        return err(ERR_UNAUTHORIZED, "wallet is locked");
+      }
+      session.connectedOrigins.add(origin);
+      broadcastEvent("accountsChanged", [addr]);
+      broadcastEvent("connect", { chainId: session.chainId });
+      return ok([addr]);
     }
 
     case "personal_sign": {
-      if (!state.connectedOrigins.has(origin)) {
-        return err(ERR_UNAUTHORIZED, "wallet is locked or origin not connected");
+      if (!session.connectedOrigins.has(origin)) {
+        return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
       }
-      // params: [message, address] or [address, message] depending on caller.
-      // TODO(monolythium-vision): show ReqMessage dialog and require approval.
-      // TODO(monolythium-vision): real signature once keystore lands.
-      // Return a synthetic but plausible 65-byte signature so the caller
-      // can serialize/parse it.
-      return ok(syntheticHex(65));
+      // EIP-191 personal_sign params: [message, address] (modern) or
+      // [address, message] (legacy MetaMask). Detect by looking at which arg
+      // is an address.
+      const arr = Array.isArray(params) ? params : [];
+      let messageParam: unknown;
+      const a = arr[0];
+      const b = arr[1];
+      if (typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a)) {
+        messageParam = b;
+      } else {
+        messageParam = a;
+      }
+      if (typeof messageParam !== "string") {
+        return err(-32602, "personal_sign expects a message string");
+      }
+
+      const decision = await enqueueApproval({
+        kind: "personal_sign",
+        origin,
+        message: messageParam,
+        address: getUnlockedAddress() ?? (await getStoredAddress()) ?? "",
+      });
+      if (!decision.ok) {
+        return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the message");
+      }
+      if (!isUnlocked()) {
+        return err(ERR_UNAUTHORIZED, "wallet is locked");
+      }
+      try {
+        const sig = await keystorePersonalSign(messageParam);
+        return ok("0x" + bytesToHex(sig));
+      } catch (e) {
+        return err(ERR_INTERNAL, `signing failed: ${(e as Error).message}`);
+      }
     }
 
     case "eth_sendTransaction": {
-      if (!state.connectedOrigins.has(origin)) {
-        return err(ERR_UNAUTHORIZED, "wallet is locked or origin not connected");
+      if (!session.connectedOrigins.has(origin)) {
+        return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
       }
-      // params: [{ from, to, value?, data?, gas?, ... }]
-      // TODO(monolythium-vision): show ReqSign dialog and require approval.
-      // TODO(monolythium-vision): build + sign + broadcast once keystore + RPC
-      // wiring land. For now return a synthetic 32-byte hash so the caller's
-      // tx-watcher doesn't crash.
-      return ok(syntheticHex(32));
+      const arr = Array.isArray(params) ? params : [];
+      const txReq = (arr[0] as Record<string, string> | undefined) ?? {};
+
+      const decision = await enqueueApproval({ kind: "send_tx", origin, tx: txReq });
+      if (!decision.ok) {
+        return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the transaction");
+      }
+      if (!isUnlocked()) {
+        return err(ERR_UNAUTHORIZED, "wallet is locked");
+      }
+
+      try {
+        const net = KNOWN_CHAINS[session.chainId]!;
+        const client = rpcClientFor(session.chainId);
+        const fromAddr = getUnlockedAddress() ?? "0x0000000000000000000000000000000000000000";
+
+        // Fill in defaults (nonce / gasPrice / gas) from the node when missing.
+        const nonceHex =
+          txReq.nonce ??
+          numberToHexQuantity(await client.ethGetTransactionCount(fromAddr, "pending"));
+        const gasPriceHex =
+          txReq.gasPrice ?? numberToHexQuantity(await client.ethGasPrice());
+        const gasHex =
+          txReq.gas ??
+          numberToHexQuantity(
+            await client.ethEstimateGas({
+              from: fromAddr,
+              ...(txReq.to !== undefined ? { to: txReq.to } : {}),
+              ...(txReq.value !== undefined ? { value: txReq.value } : {}),
+              ...(txReq.data !== undefined ? { data: txReq.data } : {}),
+            }),
+          );
+
+        const { rawTx, txHash } = await signLegacyTx({
+          ...(txReq.to !== undefined ? { to: txReq.to } : {}),
+          ...(txReq.value !== undefined ? { value: txReq.value } : {}),
+          ...(txReq.data !== undefined ? { data: txReq.data } : {}),
+          nonce: nonceHex,
+          gas: gasHex,
+          gasPrice: gasPriceHex,
+          chainId: net.chainIdNum,
+        });
+
+        // Best-effort broadcast. If the RPC rejects, surface the message but
+        // also return the locally-computed hash so the caller can poll. We
+        // strongly prefer a successful broadcast though.
+        try {
+          const accepted = await client.ethSendRawTransaction(rawTx);
+          return ok(accepted || txHash);
+        } catch (e) {
+          return err(ERR_INTERNAL, `broadcast failed: ${(e as Error).message}`);
+        }
+      } catch (e) {
+        return err(ERR_INTERNAL, `tx build failed: ${(e as Error).message}`);
+      }
+    }
+
+    case "eth_sendRawTransaction": {
+      const arr = Array.isArray(params) ? params : [];
+      const raw = arr[0];
+      if (typeof raw !== "string") {
+        return err(-32602, "eth_sendRawTransaction expects a hex string");
+      }
+      try {
+        const client = rpcClientFor(session.chainId);
+        const hash = await client.ethSendRawTransaction(raw);
+        return ok(hash);
+      } catch (e) {
+        return err(ERR_INTERNAL, `broadcast failed: ${(e as Error).message}`);
+      }
     }
 
     case "wallet_switchEthereumChain": {
@@ -165,8 +277,8 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!KNOWN_CHAINS[requested as keyof typeof KNOWN_CHAINS]) {
         return err(ERR_CHAIN_NOT_ADDED, "Unknown chain. Use wallet_addEthereumChain first.");
       }
-      state.chainId = requested as keyof typeof KNOWN_CHAINS;
-      broadcastEvent("chainChanged", state.chainId);
+      session.chainId = requested as keyof typeof KNOWN_CHAINS;
+      broadcastEvent("chainChanged", session.chainId);
       return ok(null);
     }
 
@@ -175,7 +287,6 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       const requested = p?.chainId;
       if (!requested) return err(-32602, "wallet_addEthereumChain: missing chainId param");
       // TODO(monolythium-vision): show user-approval UI for adding new chains.
-      // For Stage 3 we only acknowledge known chains.
       if (KNOWN_CHAINS[requested as keyof typeof KNOWN_CHAINS]) {
         return ok(null);
       }
@@ -187,18 +298,107 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
   }
 }
 
+function bytesToHex(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
+  return s;
+}
+
+function numberToHexQuantity(n: number | bigint): string {
+  const big = typeof n === "bigint" ? n : BigInt(n);
+  return "0x" + big.toString(16);
+}
+
+// ---- internal popup messages ----
+
+interface PopupMessage {
+  kind: "popup";
+  op: string;
+  payload?: unknown;
+}
+
+async function handlePopup(message: PopupMessage): Promise<unknown> {
+  switch (message.op) {
+    case "list-pending":
+      return listPending();
+    case "get-pending": {
+      const id = (message.payload as { id?: string } | undefined)?.id;
+      return id ? getPending(id) : null;
+    }
+    case "resolve": {
+      const p = message.payload as { id: string; decision: ApprovalDecision };
+      const found = resolveApproval(p.id, p.decision);
+      return { found };
+    }
+    case "keystore-status": {
+      return {
+        hasVault: await hasVault(),
+        unlocked: isUnlocked(),
+        address: getUnlockedAddress() ?? (await getStoredAddress()),
+      };
+    }
+    case "keystore-unlock": {
+      const p = message.payload as { password: string };
+      try {
+        const r = await unlockKeystore(p.password);
+        return { ok: true, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "keystore-lock": {
+      lockKeystore();
+      return { ok: true };
+    }
+    case "keystore-create-new": {
+      const p = message.payload as { password: string };
+      try {
+        const r = await createVaultFromNewMnemonic(p.password);
+        return { ok: true, mnemonic: r.mnemonic, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "keystore-create-from-mnemonic": {
+      const p = message.payload as { password: string; mnemonic: string };
+      try {
+        const r = await createVaultFromMnemonic(p.password, p.mnemonic);
+        return { ok: true, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    default:
+      return { error: `unknown popup op ${message.op}` };
+  }
+}
+
+// ---- message routing ----
+
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   const m = message as { kind?: string };
-  if (m?.kind !== "rpc") return false;
-
-  const rpc = message as RpcMessage;
-  handleRpc(rpc)
-    .then(sendResponse)
-    .catch((e) => sendResponse({ error: { code: -32603, message: String(e) } }));
-
-  return true; // keep the channel open for async response
+  if (m?.kind === "rpc") {
+    const rpc = message as RpcMessage;
+    handleRpc(rpc)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: { code: -32603, message: String(e) } }));
+    return true;
+  }
+  if (m?.kind === "popup") {
+    handlePopup(message as PopupMessage)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: String(e) }));
+    return true;
+  }
+  return false;
 });
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("[Monolythium Wallet] service worker installed");
 });
+
+if (chrome.windows?.onRemoved) {
+  chrome.windows.onRemoved.addListener((winId) => {
+    rejectByWindow(winId);
+  });
+}
