@@ -6,6 +6,13 @@ export type SignAlgo = "secp256k1" | "slhdsa" | "mldsa";
 
 export interface KeystoreStatus {
   hasVault: boolean;
+  /**
+   * `true` when a legacy v1 (PBKDF2+AES-GCM) envelope is on disk. The popup
+   * surfaces a "vault format upgraded — re-import your seed" notice on the
+   * onboarding screen so the user knows their old keystore is no longer
+   * usable. Per the v1→v2 ethos there is no silent re-encryption.
+   */
+  legacyVault: boolean;
   unlocked: boolean;
   address: string | null;
   /**
