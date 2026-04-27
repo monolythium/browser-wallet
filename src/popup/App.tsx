@@ -174,7 +174,11 @@ export default function App() {
               onContinue={() => setScreen("home")}
             />
           ) : (
-            <CreateWalletForm onSubmit={handleCreateNew} error={createError} />
+            <CreateWalletForm
+              onSubmit={handleCreateNew}
+              error={createError}
+              legacyNotice={!!keystore?.legacyVault}
+            />
           )}
         </ReqSheet>
       )}
@@ -243,9 +247,14 @@ export default function App() {
 interface CreateWalletFormProps {
   onSubmit: (password: string) => void;
   error: string | null;
+  /**
+   * Show the "vault format upgraded — re-import your seed" banner. Set when
+   * the background reports a legacy v1 (PBKDF2+AES-GCM) envelope on disk.
+   */
+  legacyNotice: boolean;
 }
 
-function CreateWalletForm({ onSubmit, error }: CreateWalletFormProps) {
+function CreateWalletForm({ onSubmit, error, legacyNotice }: CreateWalletFormProps) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const mismatch = password.length > 0 && confirm.length > 0 && password !== confirm;
@@ -260,6 +269,24 @@ function CreateWalletForm({ onSubmit, error }: CreateWalletFormProps) {
           one password unlocks the keystore
         </div>
       </div>
+      {legacyNotice && (
+        <div
+          style={{
+            margin: "0 18px 10px",
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(242,180,65,0.08)",
+            border: "1px solid rgba(242,180,65,0.4)",
+            color: "var(--fg-100)",
+            fontSize: 12,
+            lineHeight: 1.4,
+          }}
+        >
+          Vault format upgraded — re-import your seed. Your previous keystore
+          used PBKDF2+AES-GCM and cannot be unlocked by this build. Create a
+          new vault below, or import your existing recovery phrase.
+        </div>
+      )}
       <div style={{ padding: "0 18px" }}>
         <PasswordField label="Password (8+ chars)" value={password} onChange={setPassword} />
         <PasswordField label="Confirm" value={confirm} onChange={setConfirm} />

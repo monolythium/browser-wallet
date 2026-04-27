@@ -39,6 +39,7 @@ import {
 } from "./approvals.js";
 import {
   hasVault,
+  hasLegacyVault,
   getStoredAddress,
   getUnlockedAddress,
   isUnlocked,
@@ -682,8 +683,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { found };
     }
     case "keystore-status": {
+      // `hasLegacyVault()` reports whether the on-disk envelope is the
+      // pre-v2 PBKDF2+AES-GCM shape. `hasVault()` returns false in that case
+      // (so the popup routes to onboarding) and the popup surfaces the
+      // legacy-vault notice next to "Create / Import" so the user knows
+      // their old keystore was cleared by the format upgrade.
       return {
         hasVault: await hasVault(),
+        legacyVault: await hasLegacyVault(),
         unlocked: isUnlocked(),
         address: getUnlockedAddress() ?? (await getStoredAddress()),
         // Expose the actual custody mode so the popup can show real settings
