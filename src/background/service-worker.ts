@@ -5,9 +5,9 @@
 //   - eth_requestAccounts        (real popup approval)
 //   - eth_chainId / net_version
 //   - eth_sendTransaction        (real RLP build + secp256k1 sign + raw broadcast)
-//   - personal_sign              (real secp256k1 sign over the EIP-191 prefix)
+//   - eth_sign / personal_sign   (real secp256k1 sign over the EIP-191 prefix)
 //   - eth_signTypedData_v4       (EIP-712 typed-data signing)
-//   - eth_sendRawTransaction     (proxy to RpcClient.ethSendRawTransaction)
+//   - eth_sendRawTransaction     (proxy through MonolythiumProvider)
 //   - wallet_switchEthereumChain
 //   - wallet_addEthereumChain    (real approval UI; persists to chrome.storage)
 //
@@ -15,8 +15,17 @@
 //   - get-pending-approval
 //   - resolve-approval
 //   - keystore.{status, unlock, lock, create-from-new, create-from-mnemonic}
+//
+// Chain reads/writes go through `MonolythiumProvider` from
+// `@monolythium/core-sdk` — the ethers v6 shim. The shim re-uses the SDK's
+// JSON-RPC transport (no raw fetch in this file), so any future SDK transport
+// feature (auth headers, ws upgrade, registry-aware routing) lights up for the
+// wallet automatically.
 
-import { RpcClient } from "@monolythium/core-sdk";
+import {
+  MonolythiumProvider,
+  MONOLYTHIUM_TESTNET_CHAIN_ID,
+} from "@monolythium/core-sdk";
 import {
   enqueue as enqueueApproval,
   resolve as resolveApproval,
@@ -73,20 +82,19 @@ interface NetInfo {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
+// Canonical chain id for the LythiumDAG-BFT testnet (Law §13.1, mirrored by
+// the SDK's `MONOLYTHIUM_TESTNET_CHAIN_ID`). Stored as the upper-cased hex
+// quantity so chain-registry lookups don't drift on casing.
+const TESTNET_CHAIN_ID_HEX =
+  "0x" + MONOLYTHIUM_TESTNET_CHAIN_ID.toString(16).toUpperCase(); // 0x10F2C
+
 // Built-in chains. User-added chains live in `userChains` (loaded from
 // chrome.storage at boot) and are merged into KNOWN_CHAINS at lookup time.
 const BUILTIN_CHAINS: Record<string, NetInfo> = {
-  "0x1B1C": {
+  [TESTNET_CHAIN_ID_HEX]: {
     name: "LythiumDAG-BFT Testnet",
     rpc: "https://node-tnt.monolythium.xyz",
-    chainIdNum: 6940,
-    builtin: true,
-    nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
-  },
-  "0x6970": {
-    name: "Monolythium Mainnet",
-    rpc: "https://node-01.monolythium.xyz",
-    chainIdNum: 26992,
+    chainIdNum: Number(MONOLYTHIUM_TESTNET_CHAIN_ID),
     builtin: true,
     nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
   },
@@ -143,7 +151,7 @@ interface SessionState {
 }
 
 const session: SessionState = {
-  chainId: "0x1B1C",
+  chainId: TESTNET_CHAIN_ID_HEX,
   connectedOrigins: new Set<string>(),
 };
 
@@ -168,10 +176,58 @@ const ERR_UNSUPPORTED_METHOD = 4200;
 const ERR_CHAIN_NOT_ADDED = 4902;
 const ERR_INTERNAL = -32603;
 
-function rpcClientFor(chainId: string): RpcClient {
+/**
+ * Build a `MonolythiumProvider` for the given chain. The provider is the
+ * ethers v6 shim from `@monolythium/core-sdk` and re-uses the SDK's transport,
+ * so every JSON-RPC call benefits from the SDK's error envelope handling.
+ *
+ * We keep an in-memory cache keyed by `<chainId, rpcUrl>` so each chain reuses
+ * a single transport across calls — the service worker rebuilds the cache on
+ * cold start, which is fine because the underlying transport holds no state
+ * beyond the endpoint URL.
+ */
+const providerCache = new Map<string, MonolythiumProvider>();
+
+function providerFor(chainId: string): MonolythiumProvider {
   const net = lookupChain(chainId);
   if (!net) throw new Error(`unknown chain ${chainId}`);
-  return new RpcClient(net.rpc);
+  const key = `${chainId}|${net.rpc}`;
+  let provider = providerCache.get(key);
+  if (!provider) {
+    provider = new MonolythiumProvider(net.rpc, {
+      network: { chainId: BigInt(net.chainIdNum), name: net.name },
+    });
+    providerCache.set(key, provider);
+  }
+  return provider;
+}
+
+/**
+ * Send a single JSON-RPC method through the SDK transport that the
+ * `MonolythiumProvider` uses. Surfaces `{ result }` / `{ error }` from the
+ * provider's `_send` exactly as a JSON-RPC server would, then unwraps to a
+ * native value or throws.
+ */
+async function rpcSend<T>(
+  provider: MonolythiumProvider,
+  method: string,
+  params: unknown[],
+): Promise<T> {
+  const [response] = await provider._send({
+    id: 1,
+    jsonrpc: "2.0",
+    method,
+    params,
+  });
+  if (!response) {
+    throw new Error(`provider returned no response for ${method}`);
+  }
+  if ("error" in response && response.error) {
+    const e = new Error(response.error.message ?? `rpc error ${method}`) as Error & { code?: number };
+    e.code = response.error.code;
+    throw e;
+  }
+  return (response as { result: T }).result;
 }
 
 function broadcastEvent(event: string, payload: unknown): void {
@@ -227,13 +283,19 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return ok([addr]);
     }
 
+    case "eth_sign":
     case "personal_sign": {
+      // `eth_sign` is the legacy alias dapp libraries still send. We treat it
+      // identically to `personal_sign` (apply the EIP-191 prefix and require
+      // user approval) — this is the safe MetaMask-shaped behaviour. Wallets
+      // that bypass the prefix have shipped phishing-friendly attack
+      // surfaces; we deliberately do not.
       if (!session.connectedOrigins.has(origin)) {
         return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
       }
       // EIP-191 personal_sign params: [message, address] (modern) or
-      // [address, message] (legacy MetaMask). Detect by looking at which arg
-      // is an address.
+      // [address, message] (legacy MetaMask / `eth_sign` order). Detect by
+      // looking at which arg is an address.
       const arr = Array.isArray(params) ? params : [];
       let messageParam: unknown;
       const a = arr[0];
@@ -296,7 +358,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       try {
         const net = lookupChain(session.chainId);
         if (!net) throw new Error(`unknown chain ${session.chainId}`);
-        const client = rpcClientFor(session.chainId);
+        const provider = providerFor(session.chainId);
 
         // Re-resolve gas with the latest node values at sign time. The view
         // we showed the user is the same shape (and usually identical
@@ -304,19 +366,19 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         const fromAddr = getUnlockedAddress() ?? "0x0000000000000000000000000000000000000000";
         const nonceHex =
           txReq.nonce ?? view.nonce ??
-          numberToHexQuantity(await client.ethGetTransactionCount(fromAddr, "pending"));
+          (await rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]));
         const gasPriceHex =
-          txReq.gasPrice ?? view.gasPrice ?? numberToHexQuantity(await client.ethGasPrice());
+          txReq.gasPrice ?? view.gasPrice ?? (await rpcSend<string>(provider, "eth_gasPrice", []));
         const gasHex =
           txReq.gas ?? view.estimatedGas ??
-          numberToHexQuantity(
-            await client.ethEstimateGas({
+          (await rpcSend<string>(provider, "eth_estimateGas", [
+            {
               from: fromAddr,
               ...(txReq.to !== undefined ? { to: txReq.to } : {}),
               ...(txReq.value !== undefined ? { value: txReq.value } : {}),
               ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-            }),
-          );
+            },
+          ]));
 
         const { rawTx, txHash } = await signLegacyTx({
           ...(txReq.to !== undefined ? { to: txReq.to } : {}),
@@ -332,7 +394,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         // also return the locally-computed hash so the caller can poll. We
         // strongly prefer a successful broadcast though.
         try {
-          const accepted = await client.ethSendRawTransaction(rawTx);
+          const accepted = await rpcSend<string>(provider, "eth_sendRawTransaction", [rawTx]);
           return ok(accepted || txHash);
         } catch (e) {
           return err(ERR_INTERNAL, `broadcast failed: ${(e as Error).message}`);
@@ -410,8 +472,8 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, "eth_sendRawTransaction expects a hex string");
       }
       try {
-        const client = rpcClientFor(session.chainId);
-        const hash = await client.ethSendRawTransaction(raw);
+        const provider = providerFor(session.chainId);
+        const hash = await rpcSend<string>(provider, "eth_sendRawTransaction", [raw]);
         return ok(hash);
       } catch (e) {
         return err(ERR_INTERNAL, `broadcast failed: ${(e as Error).message}`);
@@ -478,11 +540,6 @@ function bytesToHex(b: Uint8Array): string {
   let s = "";
   for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
   return s;
-}
-
-function numberToHexQuantity(n: number | bigint): string {
-  const big = typeof n === "bigint" ? n : BigInt(n);
-  return "0x" + big.toString(16);
 }
 
 function parseHexQuantity(hex: string): number {
@@ -554,7 +611,7 @@ async function buildSendTxView(
   };
   if (!net) return view;
 
-  const client = rpcClientFor(chainId);
+  const provider = providerFor(chainId);
   const fromAddr =
     txReq.from ?? getUnlockedAddress() ?? (await getStoredAddress()) ?? "0x0000000000000000000000000000000000000000";
 
@@ -568,8 +625,7 @@ async function buildSendTxView(
   type SimResult = SendTxView["simulation"];
   const simPromise: Promise<SimResult> =
     txReq.data && txReq.data !== "0x" && txReq.data.length > 2
-      ? client
-          .ethCall(callShape)
+      ? rpcSend<string>(provider, "eth_call", [callShape, "latest"])
           .then(
             (r): SimResult => ({ success: true, returnData: r ?? "0x" }),
           )
@@ -584,21 +640,15 @@ async function buildSendTxView(
   const [gasEst, gasPrice, nonce, sim] = await Promise.all([
     view.estimatedGas != null
       ? Promise.resolve(view.estimatedGas)
-      : client
-          .ethEstimateGas(callShape)
-          .then((n) => numberToHexQuantity(n))
+      : rpcSend<string>(provider, "eth_estimateGas", [callShape])
           .catch(() => null as string | null),
     view.gasPrice != null
       ? Promise.resolve(view.gasPrice)
-      : client
-          .ethGasPrice()
-          .then((n) => numberToHexQuantity(n))
+      : rpcSend<string>(provider, "eth_gasPrice", [])
           .catch(() => null as string | null),
     view.nonce != null
       ? Promise.resolve(view.nonce)
-      : client
-          .ethGetTransactionCount(fromAddr, "pending")
-          .then((n) => numberToHexQuantity(n))
+      : rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"])
           .catch(() => null as string | null),
     simPromise,
   ]);

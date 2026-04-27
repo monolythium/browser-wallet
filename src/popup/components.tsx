@@ -1102,6 +1102,117 @@ function formatLyth(hex: string | null | undefined): string {
   return fracStr.length > 0 ? `${whole}.${fracStr}` : whole.toString();
 }
 
+// ---- calldata decoder ----
+//
+// Best-effort decoder for the small set of selectors that account for ~95% of
+// what a user will see on a write-op approval (token transfers + approvals).
+// Anything we can't recognise falls back to the raw section already rendered
+// below — we never claim to "decode" something we don't actually understand.
+//
+// Why hand-rolled instead of ethers' `Interface`: the popup does not have
+// network access (the SW does), and we want zero false positives. Recognising
+// four selectors locally is robust; pulling in a registry that might
+// auto-suggest the wrong ABI is exactly the phishing-friendly path we don't
+// want to ship.
+
+interface DecodedCall {
+  /** Function name pulled from the matched selector. */
+  name: string;
+  /** Selector hex, e.g. `0xa9059cbb`. */
+  selector: string;
+  /** Decoded args in display order. */
+  args: Array<{ name: string; type: string; value: string }>;
+}
+
+function decodeCalldata(data: string): DecodedCall | null {
+  if (!data || !data.startsWith("0x") || data.length < 10) return null;
+  const selector = data.slice(0, 10).toLowerCase();
+  const body = data.slice(10);
+  switch (selector) {
+    case "0xa9059cbb": {
+      // ERC-20 transfer(address,uint256)
+      const to = readAddress(body, 0);
+      const amount = readUint256(body, 1);
+      if (!to || amount == null) return null;
+      return {
+        name: "transfer",
+        selector,
+        args: [
+          { name: "to", type: "address", value: to },
+          { name: "amount", type: "uint256", value: amount.toString(10) },
+        ],
+      };
+    }
+    case "0x095ea7b3": {
+      // ERC-20 approve(address,uint256)
+      const spender = readAddress(body, 0);
+      const amount = readUint256(body, 1);
+      if (!spender || amount == null) return null;
+      const approvalLabel =
+        amount === (1n << 256n) - 1n ? "unlimited" : amount.toString(10);
+      return {
+        name: "approve",
+        selector,
+        args: [
+          { name: "spender", type: "address", value: spender },
+          { name: "amount", type: "uint256", value: approvalLabel },
+        ],
+      };
+    }
+    case "0x23b872dd": {
+      // ERC-20 transferFrom(address,address,uint256)
+      const from = readAddress(body, 0);
+      const to = readAddress(body, 1);
+      const amount = readUint256(body, 2);
+      if (!from || !to || amount == null) return null;
+      return {
+        name: "transferFrom",
+        selector,
+        args: [
+          { name: "from", type: "address", value: from },
+          { name: "to", type: "address", value: to },
+          { name: "amount", type: "uint256", value: amount.toString(10) },
+        ],
+      };
+    }
+    case "0x42842e0e": {
+      // ERC-721 safeTransferFrom(address,address,uint256)
+      const from = readAddress(body, 0);
+      const to = readAddress(body, 1);
+      const tokenId = readUint256(body, 2);
+      if (!from || !to || tokenId == null) return null;
+      return {
+        name: "safeTransferFrom",
+        selector,
+        args: [
+          { name: "from", type: "address", value: from },
+          { name: "to", type: "address", value: to },
+          { name: "tokenId", type: "uint256", value: tokenId.toString(10) },
+        ],
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function readAddress(body: string, slot: number): string | null {
+  const word = body.slice(slot * 64, (slot + 1) * 64);
+  if (word.length !== 64) return null;
+  // Address is the rightmost 20 bytes of a 32-byte word.
+  return "0x" + word.slice(24);
+}
+
+function readUint256(body: string, slot: number): bigint | null {
+  const word = body.slice(slot * 64, (slot + 1) * 64);
+  if (word.length !== 64) return null;
+  try {
+    return BigInt("0x" + word);
+  } catch {
+    return null;
+  }
+}
+
 // ---- send_tx approval ----
 interface ReqSendTxProps {
   request: SendTxRequest;
@@ -1144,6 +1255,8 @@ export function ReqSendTx({
   const value = tx.value;
   const data = tx.data ?? "0x";
   const hasCalldata = data.length > 2;
+  const decoded = hasCalldata ? decodeCalldata(data) : null;
+  const [showDecoded, setShowDecoded] = useState(true);
 
   return (
     <>
@@ -1268,6 +1381,51 @@ export function ReqSendTx({
           </span>
         </div>
       </div>
+
+      {decoded && (
+        <div className="req-section">
+          <div className="req-section__h">
+            <span>Decoded call</span>
+            <button onClick={() => setShowDecoded((v) => !v)}>
+              {showDecoded ? "hide" : "show"} ↓
+            </button>
+          </div>
+          {showDecoded && (
+            <>
+              <div className="req-kv">
+                <span className="k">Function</span>
+                <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
+                  {decoded.name} <span style={{ color: "var(--fg-500)" }}>({decoded.selector})</span>
+                </span>
+              </div>
+              {decoded.args.map((a) => (
+                <div className="req-kv" key={a.name}>
+                  <span className="k">{a.name}</span>
+                  <span
+                    className="v"
+                    style={{ fontFamily: "var(--f-mono)", fontSize: 11, wordBreak: "break-all" }}
+                  >
+                    {a.value}
+                    <span style={{ color: "var(--fg-500)", marginLeft: 6 }}>{a.type}</span>
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {hasCalldata && !decoded && (
+        <div className="req-section">
+          <div className="req-warn warn">
+            <Icon name="warn" size={14} />
+            <div>
+              <b>Unrecognised calldata.</b> Selector {data.slice(0, 10)} is not in the wallet's
+              decoder set — review the raw bytes below before approving.
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="req-section" style={{ paddingBottom: 16 }}>
         <div className="req-section__h">
