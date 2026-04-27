@@ -28,6 +28,7 @@
     "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.1.0",
     "@scure/bip32": "^2.2.0",
-    "@scure/bip39": "^2.2.0"
+    "@scure/bip39": "^2.2.0",
+    "ethers": "^6.16.0"
   }
 }

@@ -45,9 +45,11 @@ class MonolythiumProvider {
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
   // Locally cached state — updated by the bridge when the user picks a
-  // different account or network in the popup.
+  // different account or network in the popup. The default reflects the
+  // LythiumDAG-BFT testnet chain id from Law §13.1; the bridge will overwrite
+  // this on `chainChanged` if the user is on a different chain.
   private cachedAccounts: string[] = [];
-  private cachedChainId: string = "0x1B1C"; // LythiumDAG-BFT testnet (6940)
+  private cachedChainId: string = "0x10F2C"; // LythiumDAG-BFT testnet (69420)
 
   constructor() {
     window.addEventListener("message", (ev) => this.handleMessage(ev));
