@@ -217,11 +217,12 @@ interface HomeProps {
   onOpenAccounts: () => void;
   onOpenNetworks: () => void;
   onSettings: () => void;
+  onOpenReceive: () => void;
   onOpenRequest: (id: "connect" | "sign" | "message", signType?: PendingSign["type"]) => void;
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenRequest, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenRequest, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const isPriv = account.denom === "private";
   const balanceStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
@@ -261,7 +262,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
               <span className="ico"><Icon name="send" size={16} /></span>
               <span>Send</span>
             </button>
-            <button className="ext-act" onClick={onOpenAccounts}>
+            <button className="ext-act" onClick={onOpenReceive}>
               <span className="ico"><Icon name="receive" size={16} /></span>
               <span>Receive</span>
             </button>
@@ -395,6 +396,104 @@ export function Accounts({ current, onBack, onPick }: AccountsProps) {
         <button className="ext-act" style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}>
           <Icon name="plus" size={13} /> Import or create
         </button>
+      </div>
+    </>
+  );
+}
+
+// ---- Receive sheet ----
+interface ReceiveProps {
+  account: Account;
+  onBack: () => void;
+}
+
+export function Receive({ account, onBack }: ReceiveProps) {
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(account.addr);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard write can fail in iframes / focus-loss races. Leave the
+      // button label unchanged so the user notices it didn't flip and
+      // can retry — surfacing an error string here would be louder than
+      // the failure mode warrants.
+    }
+  };
+
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack}><Icon name="back" size={15} /></button>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>Receive</div>
+        <div style={{ width: 28 }} />
+      </div>
+      <div className="ext-body">
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 8,
+            }}
+          >
+            Your address
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: "var(--fg-100)",
+              padding: "10px 12px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.3)",
+              border: "1px solid var(--fg-700)",
+              wordBreak: "break-all",
+              userSelect: "all",
+            }}
+          >
+            {account.addr}
+          </div>
+          <button
+            className="ext-act prim"
+            onClick={onCopy}
+            style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8, marginTop: 12 }}
+          >
+            {copied ? "Copied" : "Copy address"}
+          </button>
+        </div>
+
+        <div
+          className="ext-card"
+          style={{
+            padding: "10px 12px",
+            background: "rgba(242,180,65,0.08)",
+            border: "1px solid rgba(242,180,65,0.4)",
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 6,
+            }}
+          >
+            Network
+          </div>
+          <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg-100)" }}>
+            Send LYTH on Sprintnet only. Chain id 69420 (0x10F2C). Sending LYTH
+            from a different chain may result in lost funds.
+          </div>
+        </div>
       </div>
     </>
   );
