@@ -78,3 +78,6 @@ web-ext-artifacts/
 *.pem
 store-credentials.json
 amo-credentials.json
+ 
+# Local pnpm build approval (per-machine, not source-controlled) 
+pnpm-workspace.yaml 
