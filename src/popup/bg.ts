@@ -21,7 +21,11 @@ export interface KeystoreStatus {
    * passkey / TPM backends can flip the popup's chrome without UI rewrites.
    */
   custody: Custody;
-  /** Signature algorithm. Only secp256k1 today. */
+  /** Signature algorithm currently active. `"mldsa"` once a v3 vault is
+   * the primary; `"secp256k1"` while a legacy v2 vault is the only one
+   * on disk. The `"slhdsa"` slot was reserved for a SLH-DSA pilot that
+   * was retired in favour of ML-DSA-65 — kept in the union so the
+   * Settings panel's pre-PQ fallback render path still typechecks. */
   algo: SignAlgo;
 }
 
@@ -166,9 +170,13 @@ export async function bgKeystoreLock(): Promise<{ ok: boolean }> {
 export async function bgKeystoreCreateNew(
   password: string,
 ): Promise<
-  | { ok: true; mnemonic: string; address: string }
+  | { ok: true; seedHex: string; address: string }
   | { ok: false; reason?: string }
 > {
+  // v3 keystore returns a 32-byte ML-DSA-65 seed (hex) rather than a
+  // BIP-39 mnemonic. The mnemonic-derivation rule for ML-DSA-65 is open
+  // (MISSING.md OQ-1); until it lands the seed itself is the recovery
+  // secret the popup reveals to the user.
   return send("keystore-create-new", { password });
 }
 
@@ -176,7 +184,53 @@ export async function bgKeystoreCreateFromMnemonic(
   password: string,
   mnemonic: string,
 ): Promise<{ ok: true; address: string } | { ok: false; reason?: string }> {
+  // Background returns `{ ok: false, reason }` until BIP-39 → ML-DSA-65
+  // derivation lands. The helper is kept for source compatibility — the
+  // popup hasn't wired a "import mnemonic" entry point yet, and when it
+  // does the surface here will be the channel.
   return send("keystore-create-from-mnemonic", { password, mnemonic });
+}
+
+export async function bgKeystoreImportFromSeedHex(
+  password: string,
+  seedHex: string,
+): Promise<{ ok: true; address: string } | { ok: false; reason?: string }> {
+  return send("keystore-create-from-seedhex", { password, seedHex });
+}
+
+/**
+ * Real account state surfaced to the popup so Home can render the
+ * unlocked v3 wallet's address instead of the demo `mono1:…` placeholder.
+ * Mirrors the shape the service worker returns from "wallet-active-account".
+ */
+export interface ActiveAccount {
+  /** EVM-style hex address (`0x` + 40 hex chars). */
+  address: string;
+  algo: SignAlgo;
+  custody: Custody;
+}
+
+export async function bgWalletActiveAccount(): Promise<
+  { ok: true; account: ActiveAccount } | { ok: false; reason?: string }
+> {
+  // The IPC handler returns the account fields inline rather than nested.
+  // Reshape here so callers can keep `r.account.address` etc.
+  type Reply =
+    | { ok: true; address: string; algo: SignAlgo; custody: Custody }
+    | { ok: false; reason?: string };
+  const r = await send<Reply>("wallet-active-account");
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    account: { address: r.address, algo: r.algo, custody: r.custody },
+  };
+}
+
+export async function bgWalletBalance(
+  address: string,
+  chainIdHex: string,
+): Promise<{ ok: true; balanceHex: string } | { ok: false; reason?: string }> {
+  return send("wallet-balance", { address, chainIdHex });
 }
 
 export async function bgListPending(): Promise<PendingApproval[]> {
