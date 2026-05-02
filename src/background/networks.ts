@@ -49,6 +49,53 @@ export const SPRINTNET_VALIDATOR_RPCS: ReadonlyArray<{
 ];
 
 /**
+ * Built-in chain registry entry. The chain-list IPC merges these with
+ * user-added chains from chrome.storage; the popup's Networks screen
+ * splits them into "Official" and "Custom" sections per `official`.
+ *
+ * Shape is a superset of what `service-worker.ts:NetInfo` carries — the
+ * extra `official` field surfaces on the chain-list IPC reply so the
+ * popup can render the badge without a second lookup.
+ */
+export interface BuiltinChain {
+  chainId: string;
+  chainIdNum: number;
+  name: string;
+  /** Single RPC URL for legacy `MonolythiumProvider` consumers. Sprintnet
+   * reads/writes funnel through `sprintnetJsonRpc` (validator iteration),
+   * not through this URL — it's here only to satisfy callers that still
+   * ask for one. */
+  rpc: string;
+  blockExplorer?: string;
+  nativeCurrency?: { name: string; symbol: string; decimals: number };
+  /** True for Foundation-attested official chains (Sprintnet today). */
+  official: boolean;
+}
+
+/**
+ * Built-in chains shipped with the wallet. v4.0 ships exactly one —
+ * Sprintnet (chain_id 69420). All other chains are user-added at
+ * runtime via `wallet_addEthereumChain`.
+ *
+ * Note: the legacy "Local devnet" (0x7A69) and "LythiumDAG-BFT Testnet"
+ * with the NXDOMAIN `node-tnt.monolythium.xyz` alias have been removed.
+ * Sprintnet IS the testnet, and the canonical RPC is the validator
+ * fallback list (`SPRINTNET_VALIDATOR_RPCS`) — the `rpc` field below
+ * is the first validator, kept for legacy `MonolythiumProvider`
+ * consumers; the read/write hot path goes through `sprintnetJsonRpc`.
+ */
+export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
+  {
+    chainId: SPRINTNET_CHAIN_ID_HEX,
+    chainIdNum: SPRINTNET_CHAIN_ID,
+    name: "Monolythium · Sprintnet",
+    rpc: SPRINTNET_VALIDATOR_RPCS[0]!.rpc,
+    nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
+    official: true,
+  },
+];
+
+/**
  * Returns true when the chain id requires the ML-DSA-65 native envelope.
  * Sprintnet refuses RLP+secp256k1 raw txs at the decoder layer per Law §2.1.
  *

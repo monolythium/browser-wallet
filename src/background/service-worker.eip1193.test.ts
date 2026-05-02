@@ -272,11 +272,18 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   it("eth_sendTransaction returns the broadcast tx hash after auto-approval", async () => {
     const origin = "https://tx-test.example";
     await connectOrigin(origin);
-    // Switch to local devnet (0x7A69) before sending — this test covers
-    // the legacy secp256k1 + RLP + eth_sendRawTransaction path, which is
-    // active only for chains that don't require ML-DSA. The default
-    // session chain id (Sprintnet, 0x10F2C) routes through the
-    // encrypted-mempool envelope per `chainRequiresMlDsa()`.
+    // Register + switch to a non-Sprintnet chain before sending — this
+    // test covers the legacy secp256k1 + RLP + eth_sendRawTransaction
+    // path, which is active only for chains that don't require ML-DSA.
+    // Sprintnet is the only built-in chain now, so the test adds a
+    // user-defined devnet via `wallet_addEthereumChain` (auto-approved
+    // by the approvals mock) and switches to it.
+    await dispatch("wallet_addEthereumChain", [{
+      chainId: "0x7A69",
+      chainName: "Local devnet",
+      rpcUrls: ["http://127.0.0.1:8545"],
+      nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
+    }], origin);
     await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
     rpcResponses["eth_getTransactionCount"] = "0x5";
     rpcResponses["eth_gasPrice"] = "0x3b9aca00";
@@ -390,9 +397,16 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   it("eth_sendTransaction round trip uses MonolythiumProvider with the testnet chain id", async () => {
     const origin = "https://provider-sanity.example";
     await connectOrigin(origin);
-    // Same rationale as the auto-approval test above — exercise the
-    // legacy MonolythiumProvider call shape on a chain that doesn't
-    // route through the encrypted-mempool envelope.
+    // Same rationale as the auto-approval test above — register +
+    // switch to a non-Sprintnet chain so we exercise the legacy
+    // MonolythiumProvider call shape rather than the encrypted-mempool
+    // envelope.
+    await dispatch("wallet_addEthereumChain", [{
+      chainId: "0x7A69",
+      chainName: "Local devnet",
+      rpcUrls: ["http://127.0.0.1:8545"],
+      nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
+    }], origin);
     await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
     rpcResponses["eth_getTransactionCount"] = "0x0";
     rpcResponses["eth_gasPrice"] = "0x1";
