@@ -272,6 +272,12 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   it("eth_sendTransaction returns the broadcast tx hash after auto-approval", async () => {
     const origin = "https://tx-test.example";
     await connectOrigin(origin);
+    // Switch to local devnet (0x7A69) before sending — this test covers
+    // the legacy secp256k1 + RLP + eth_sendRawTransaction path, which is
+    // active only for chains that don't require ML-DSA. The default
+    // session chain id (Sprintnet, 0x10F2C) routes through the
+    // encrypted-mempool envelope per `chainRequiresMlDsa()`.
+    await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
     rpcResponses["eth_getTransactionCount"] = "0x5";
     rpcResponses["eth_gasPrice"] = "0x3b9aca00";
     rpcResponses["eth_estimateGas"] = "0x5208";
@@ -384,6 +390,10 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   it("eth_sendTransaction round trip uses MonolythiumProvider with the testnet chain id", async () => {
     const origin = "https://provider-sanity.example";
     await connectOrigin(origin);
+    // Same rationale as the auto-approval test above — exercise the
+    // legacy MonolythiumProvider call shape on a chain that doesn't
+    // route through the encrypted-mempool envelope.
+    await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
     rpcResponses["eth_getTransactionCount"] = "0x0";
     rpcResponses["eth_gasPrice"] = "0x1";
     rpcResponses["eth_estimateGas"] = "0x5208";
