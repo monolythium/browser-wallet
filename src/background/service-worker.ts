@@ -60,7 +60,11 @@ import {
   createVaultFromNewSeed,
   createVaultFromSeedHex,
 } from "./keystore-mldsa.js";
-import { chainRequiresMlDsa, SPRINTNET_TRANSFER_GAS_LIMIT_HEX } from "./networks.js";
+import {
+  chainRequiresMlDsa,
+  SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
+  probeFirstAliveValidator,
+} from "./networks.js";
 import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
@@ -735,6 +739,21 @@ async function buildSendTxView(
  */
 const SPRINTNET_MIN_PRIORITY_FEE_HEX = "0x2540be400";
 
+// ---- Validator liveness cache ----
+//
+// Backs the popup's chain-status banner. We probe the published Sprintnet
+// validators in order and remember which one answered. The cache lives at
+// module scope inside the service worker, so it survives across popup
+// re-renders but resets when the worker hibernates — that's fine because
+// hibernation is itself a "re-check liveness" signal.
+//
+// `name === null` means we probed and nothing answered. We still cache
+// that result for the same TTL so the popup doesn't hammer dead nodes
+// every render; the popup's own 10-second tick will retry once the TTL
+// lapses.
+const VALIDATOR_CACHE_TTL_MS = 10_000;
+let cachedValidator: { name: string | null; checkedAt: number } | null = null;
+
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
  * given chain. On Sprintnet we ignore `eth_gasPrice` (returns `0x0`)
@@ -911,6 +930,28 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await createVaultFromSeedHex(p.password, p.seedHex);
         return { ok: true, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-validator-status": {
+      // Liveness probe for the popup's chain-status banner. We iterate
+      // SPRINTNET_VALIDATOR_RPCS and return the first that answers
+      // `net_version` with the expected chain id (within a 1-second
+      // per-host budget). Result is cached for 10s so a banner that
+      // re-renders on every screen change doesn't hammer the chain.
+      const now = Date.now();
+      if (
+        cachedValidator !== null &&
+        now - cachedValidator.checkedAt < VALIDATOR_CACHE_TTL_MS
+      ) {
+        return { ok: true, name: cachedValidator.name };
+      }
+      try {
+        const hit = await probeFirstAliveValidator(undefined, 1_000);
+        const name = hit?.name ?? null;
+        cachedValidator = { name, checkedAt: now };
+        return { ok: true, name };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
