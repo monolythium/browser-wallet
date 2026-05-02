@@ -14,6 +14,20 @@ export const SPRINTNET_CHAIN_ID_HEX =
 export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 
 /**
+ * Minimum intrinsic gas for a plain LYTH transfer on Sprintnet.
+ * Empirically verified via admission rejection at val-1: the chain
+ * enforces a floor of 24309 (presumably ML-DSA-65 verify + envelope
+ * decrypt + state proof overhead). 30000 = 0x7530 leaves headroom.
+ * If the floor moves above this, the wallet needs a bump.
+ *
+ * Note: `eth_estimateGas` is NOT trustworthy for Sprintnet — it returns
+ * the EVM execution gas only (~21000) and ignores the mempool intrinsic
+ * floor. The Sprintnet code paths must hardcode this constant instead
+ * of estimating.
+ */
+export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
+
+/**
  * Sprintnet validator RPC endpoints — published by Nayiem 2026-04-29.
  * The hardcoded `node-tnt.monolythium.xyz` alias resolves to NXDOMAIN as
  * of audit; broadcast paths must iterate this list and use the first
