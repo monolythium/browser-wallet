@@ -60,7 +60,7 @@ import {
   createVaultFromNewSeed,
   createVaultFromSeedHex,
 } from "./keystore-mldsa.js";
-import { chainRequiresMlDsa } from "./networks.js";
+import { chainRequiresMlDsa, SPRINTNET_TRANSFER_GAS_LIMIT_HEX } from "./networks.js";
 import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
@@ -388,16 +388,14 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           const gasPriceHex =
             txReq.gasPrice ?? view.gasPrice ??
             (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
+          // Sprintnet's mempool intrinsic floor is above what
+          // `eth_estimateGas` reports (the latter only covers EVM
+          // execution). Honour an explicit dapp gas hint if provided —
+          // a dapp may know better than us and we'd rather surface a
+          // chain reject than silently override — otherwise default to
+          // the wallet's audited Sprintnet floor with headroom.
           const gasHex =
-            txReq.gas ?? view.estimatedGas ??
-            (await sprintnetJsonRpc<string>("eth_estimateGas", [
-              {
-                from: fromAddr,
-                ...(txReq.to !== undefined ? { to: txReq.to } : {}),
-                ...(txReq.value !== undefined ? { value: txReq.value } : {}),
-                ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-              },
-            ])).result;
+            txReq.gas ?? view.estimatedGas ?? SPRINTNET_TRANSFER_GAS_LIMIT_HEX;
 
           // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
           // The chain rejects plaintext at admission (Law §4.5 / Q2), so
@@ -752,6 +750,11 @@ async function suggestFee(chainIdHex: string): Promise<{
   maxPriorityFeePerGas: string;
   maxFeePerGas: string;
   baseFeePerGas: string;
+  /** Hex gas-limit recommendation. Sprintnet has a known intrinsic
+   * floor that `eth_estimateGas` doesn't reflect — surface the
+   * pre-resolved value to the popup so the fee preview is accurate.
+   * Other chains return null and let the caller estimate themselves. */
+  gasLimit: string | null;
 }> {
   if (chainRequiresMlDsa(chainIdHex)) {
     const { result } = await sprintnetJsonRpc<{
@@ -774,6 +777,7 @@ async function suggestFee(chainIdHex: string): Promise<{
       baseFeePerGas: baseHex,
       maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_HEX,
       maxFeePerGas: "0x" + (baseWei + tipWei).toString(16),
+      gasLimit: SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
     };
   }
   const provider = providerFor(chainIdHex);
@@ -782,6 +786,7 @@ async function suggestFee(chainIdHex: string): Promise<{
     baseFeePerGas: gasPriceHex,
     maxPriorityFeePerGas: gasPriceHex,
     maxFeePerGas: gasPriceHex,
+    gasLimit: null,
   };
 }
 
@@ -1029,10 +1034,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           [fromAddr, "latest"],
         );
         const fee = await suggestFee(p.chainIdHex);
+        // Sprintnet's mempool enforces an intrinsic-gas floor (~24309 as
+        // of audit) that `eth_estimateGas` doesn't reflect — it returns
+        // EVM execution gas only and ignores ML-DSA verify + envelope
+        // decrypt + state proof overhead. Use the pre-resolved hex from
+        // suggestFee instead. Falls back to 0x5208 if the suggestion
+        // somehow returns null on the Sprintnet branch (shouldn't happen
+        // — defensive).
+        const gasHex = fee.gasLimit ?? "0x5208";
         const { txHash, via } = await submitEncryptedMlDsaTx({
           to: p.to,
           value: p.valueWeiHex,
-          gas: "0x5208", // 21_000 — plain transfer with no contract call
+          gas: gasHex,
           nonce: nonceRes.result,
           maxFeePerGas: fee.maxFeePerGas,
           maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
