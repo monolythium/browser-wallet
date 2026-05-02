@@ -64,6 +64,7 @@ import {
   chainRequiresMlDsa,
   SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
   probeFirstAliveValidator,
+  BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
 } from "./networks.js";
 import {
   submitEncryptedMlDsaTx,
@@ -94,6 +95,8 @@ interface NetInfo {
   chainIdNum: number;
   /** True when this chain is in the built-in Monolythium registry. */
   builtin?: boolean;
+  /** True for Foundation-attested official chains (Sprintnet). */
+  official?: boolean;
   /** Optional explorer URL surfaced by `wallet_addEthereumChain`. */
   blockExplorer?: string;
   /** Native currency descriptor (default: LYTH 18). */
@@ -106,26 +109,26 @@ interface NetInfo {
 const TESTNET_CHAIN_ID_HEX =
   "0x" + MONOLYTHIUM_TESTNET_CHAIN_ID.toString(16).toUpperCase(); // 0x10F2C
 
-// Built-in chains. User-added chains live in `userChains` (loaded from
-// chrome.storage at boot) and are merged into KNOWN_CHAINS at lookup time.
-const BUILTIN_CHAINS: Record<string, NetInfo> = {
-  [TESTNET_CHAIN_ID_HEX]: {
-    name: "LythiumDAG-BFT Testnet",
-    rpc: "https://node-tnt.monolythium.xyz",
-    chainIdNum: Number(MONOLYTHIUM_TESTNET_CHAIN_ID),
-    builtin: true,
-    nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
-  },
-  "0x7A69": {
-    name: "Local devnet",
-    rpc: "http://127.0.0.1:8545",
-    chainIdNum: 31337,
-    builtin: true,
-    nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
-  },
-};
+// Built-in chains derived from networks.ts. v4.0 ships Sprintnet only;
+// user-added chains via `wallet_addEthereumChain` live in `userChains`
+// (loaded from chrome.storage at boot) and are merged at lookup time.
+const BUILTIN_CHAINS: Record<string, NetInfo> = Object.fromEntries(
+  BUILTIN_CHAINS_LIST.map((c) => [
+    c.chainId,
+    {
+      name: c.name,
+      rpc: c.rpc,
+      chainIdNum: c.chainIdNum,
+      builtin: true,
+      official: c.official,
+      ...(c.blockExplorer ? { blockExplorer: c.blockExplorer } : {}),
+      ...(c.nativeCurrency ? { nativeCurrency: c.nativeCurrency } : {}),
+    } satisfies NetInfo,
+  ]),
+);
 
-const USER_CHAINS_STORAGE_KEY = "mono.user-chains";
+const USER_CHAINS_STORAGE_KEY = "mono.chains.user";
+const ACTIVE_CHAIN_STORAGE_KEY = "mono.chain.active";
 let userChains: Record<string, NetInfo> = {};
 
 function chainRegistry(): Record<string, NetInfo> {
@@ -162,6 +165,34 @@ async function persistUserChains(): Promise<void> {
   });
 }
 
+/**
+ * Load the persisted active chain id from chrome.storage. Returns the
+ * Sprintnet default when nothing is stored yet (first launch) or when
+ * the stored id no longer maps to a known chain (e.g. user removed the
+ * user-added chain that was active).
+ */
+async function loadActiveChainId(): Promise<string> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([ACTIVE_CHAIN_STORAGE_KEY], (res) => {
+      const v = res?.[ACTIVE_CHAIN_STORAGE_KEY];
+      if (typeof v === "string" && lookupChain(v)) {
+        resolve(canonicalChainKey(v));
+        return;
+      }
+      resolve(TESTNET_CHAIN_ID_HEX);
+    });
+  });
+}
+
+async function persistActiveChainId(chainId: string): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set(
+      { [ACTIVE_CHAIN_STORAGE_KEY]: chainId },
+      () => resolve(),
+    );
+  });
+}
+
 interface SessionState {
   chainId: string;
   // Origins the user has approved for eth_accounts visibility. {origin -> true}
@@ -174,9 +205,14 @@ const session: SessionState = {
 };
 
 console.log("[Monolythium Wallet] service worker boot");
-// Hydrate user-added chains as soon as the worker spins up. Service worker
-// hibernation -> we re-read on every boot.
-void loadUserChains();
+// Hydrate user-added chains and the persisted active chain id as soon as
+// the worker spins up. Service-worker hibernation → we re-read on every
+// boot. The active-chain hydration runs after user-chains so a stored id
+// pointing at a user-added chain resolves cleanly via lookupChain.
+void (async () => {
+  await loadUserChains();
+  session.chainId = await loadActiveChainId();
+})();
 
 // ---- Helpers ----
 
@@ -557,6 +593,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_CHAIN_NOT_ADDED, "Unknown chain. Use wallet_addEthereumChain first.");
       }
       session.chainId = canonicalChainKey(requested);
+      await persistActiveChainId(session.chainId);
       broadcastEvent("chainChanged", session.chainId);
       return ok(null);
     }
@@ -873,10 +910,31 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         rpc: n.rpc,
         chainIdNum: n.chainIdNum,
         builtin: !!n.builtin,
+        official: !!n.official,
         active: id === session.chainId,
         ...(n.blockExplorer ? { blockExplorer: n.blockExplorer } : {}),
         ...(n.nativeCurrency ? { nativeCurrency: n.nativeCurrency } : {}),
       }));
+    }
+    case "wallet-active-chain": {
+      return { ok: true, chainId: session.chainId };
+    }
+    case "wallet-set-active-chain": {
+      // Popup-side chain switch. Mirrors `wallet_switchEthereumChain`'s
+      // contract (validate against the known set, persist, broadcast
+      // chainChanged) but is invoked through the popup IPC channel
+      // rather than the dApp RPC channel.
+      const p = message.payload as { chainId?: string };
+      if (typeof p?.chainId !== "string") {
+        return { ok: false, reason: "missing chainId" };
+      }
+      if (!lookupChain(p.chainId)) {
+        return { ok: false, reason: "unknown chainId" };
+      }
+      session.chainId = canonicalChainKey(p.chainId);
+      await persistActiveChainId(session.chainId);
+      broadcastEvent("chainChanged", session.chainId);
+      return { ok: true, chainId: session.chainId };
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
