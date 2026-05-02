@@ -233,6 +233,57 @@ export async function bgWalletBalance(
   return send("wallet-balance", { address, chainIdHex });
 }
 
+/** Fee strategy returned by `bgWalletFeeSuggestion`. */
+export interface FeeSuggestion {
+  /** Hex wei — sender's tip target (the only revenue path on Sprintnet). */
+  maxPriorityFeePerGas: string;
+  /** Hex wei — hard cap (priority + base). */
+  maxFeePerGas: string;
+  /** Hex wei — current/next-block base fee. Surfaced for the UI fee preview. */
+  baseFeePerGas: string;
+}
+
+/** Tx hash + diagnostic validator id from `bgWalletSendTx`. */
+export interface SendTxResult {
+  txHash: string;
+  via: string;
+}
+
+export async function bgWalletFeeSuggestion(
+  chainIdHex: string,
+): Promise<{ ok: true; suggestion: FeeSuggestion } | { ok: false; reason?: string }> {
+  // The IPC handler returns the fee fields inline; reshape for callers.
+  type Reply =
+    | ({ ok: true } & FeeSuggestion)
+    | { ok: false; reason?: string };
+  const r = await send<Reply>("wallet-fee-suggestion", { chainIdHex });
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    suggestion: {
+      maxPriorityFeePerGas: r.maxPriorityFeePerGas,
+      maxFeePerGas: r.maxFeePerGas,
+      baseFeePerGas: r.baseFeePerGas,
+    },
+  };
+}
+
+export async function bgWalletSendTx(args: {
+  to: string;
+  valueWeiHex: string;
+  chainIdHex: string;
+}): Promise<
+  { ok: true; result: SendTxResult }
+  | { ok: false; reason?: string; code?: number }
+> {
+  type Reply =
+    | { ok: true; txHash: string; via: string }
+    | { ok: false; reason?: string; code?: number };
+  const r = await send<Reply>("wallet-send-tx", args);
+  if (!r.ok) return r;
+  return { ok: true, result: { txHash: r.txHash, via: r.via } };
+}
+
 export async function bgListPending(): Promise<PendingApproval[]> {
   return send<PendingApproval[]>("list-pending");
 }
