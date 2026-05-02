@@ -13,16 +13,17 @@ import { useState, useEffect } from "react";
 import { Icon, Spark, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import {
-  ACCOUNTS, ASSETS, NETWORKS, DAPPS, ACTIVITY, PENDING, NODE,
+  ACCOUNTS, ASSETS, DAPPS, ACTIVITY, PENDING, NODE,
 } from "./demo-data";
 import type {
-  Account, Network, Custody, Algo, PendingSign,
+  Account, Custody, Algo, PendingSign,
 } from "./demo-data";
 import type {
   PersonalSignRequest,
   TypedSignRequest,
   SendTxRequest,
   AddChainRequest,
+  ChainEntry,
   FeeSuggestion,
 } from "./bg";
 import { bgWalletFeeSuggestion, bgWalletSendTx, bgWalletValidatorStatus } from "./bg";
@@ -164,15 +165,18 @@ export function ChainStatusBanner() {
 // ---- Top row: brand + account + network + settings ----
 interface TopProps {
   account: Account;
-  network: Network;
+  network: ChainEntry;
   onOpenAccounts: () => void;
   onOpenNetworks: () => void;
   onSettings: () => void;
 }
 
 export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettings }: TopProps) {
-  const isTestnet = network.id === "testnet";
-  const netLabel = network.id === "mainnet" ? "Mainnet" : isTestnet ? "Testnet" : "Local";
+  // Sprintnet (the only built-in chain today) carries the `test` chip
+  // styling because it's the testnet for v4.0. User-added chains keep
+  // the default chip styling — they may be production chains, may be
+  // dev chains, we don't know.
+  const isTestnet = network.official === true;
   return (
     <div className="ext-top">
       <span className="ext-brand" />
@@ -185,7 +189,7 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
         <span className="ext-acc__chev"><Icon name="chev-d" size={14} /></span>
       </div>
       <button className={`ext-net ${isTestnet ? "test" : ""}`} onClick={onOpenNetworks}>
-        <span className="dot" />{netLabel}
+        <span className="dot" />{network.name}
         <Icon name="chev-d" size={10} />
       </button>
       <button className="ext-iconbtn" onClick={onSettings}><Icon name="settings" size={16} /></button>
@@ -326,7 +330,7 @@ function PendingShelf({ onOpen }: PendingShelfProps) {
 // ---- Home screen ----
 interface HomeProps {
   account: Account;
-  network: Network;
+  network: ChainEntry;
   onOpenAccounts: () => void;
   onOpenNetworks: () => void;
   onSettings: () => void;
@@ -616,16 +620,18 @@ export function Receive({ account, onBack }: ReceiveProps) {
 
 // ---- Send sheet ----
 
-const SPRINTNET_CHAIN_ID_HEX = "0x10F2C";
 const ADMISSION_REJECT_CODE_LO = -32049;
 const ADMISSION_REJECT_CODE_HI = -32020;
 
 interface SendProps {
   account: Account;
+  /** Chain id (hex) the send targets — passed in from App.tsx so the
+   * popup's active chain is the source of truth, not a hardcode here. */
+  chainId: string;
   onBack: () => void;
 }
 
-export function Send({ account, onBack }: SendProps) {
+export function Send({ account, chainId, onBack }: SendProps) {
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
@@ -636,25 +642,23 @@ export function Send({ account, onBack }: SendProps) {
   const [submitErrorCode, setSubmitErrorCode] = useState<number | null>(null);
   const [hashCopied, setHashCopied] = useState(false);
 
-  // Fetch fee suggestion on mount. Sprintnet's chain id is hardcoded
-  // until the Networks list wires the real chain — same TODO as the
-  // balance refresh in App.tsx.
-  // TODO: wire Networks list to real Sprintnet chain id in next step
+  // Fetch fee suggestion when the screen opens or chainId changes.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const r = await bgWalletFeeSuggestion(SPRINTNET_CHAIN_ID_HEX);
+      const r = await bgWalletFeeSuggestion(chainId);
       if (cancelled) return;
       if (!r.ok) {
         setFeeError(r.reason ?? "fee suggestion failed");
         return;
       }
+      setFeeError(null);
       setFeeSuggestion(r.suggestion);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [chainId]);
 
   const toError = validateToAddress(to);
   const amountError = validateAmount(amountStr);
@@ -674,7 +678,7 @@ export function Send({ account, onBack }: SendProps) {
       const r = await bgWalletSendTx({
         to,
         valueWeiHex,
-        chainIdHex: SPRINTNET_CHAIN_ID_HEX,
+        chainIdHex: chainId,
       });
       if (r.ok) {
         setResult({ txHash: r.result.txHash });
@@ -995,27 +999,112 @@ function formatGweiFromHex(weiHex: string): string {
 
 // ---- Networks picker ----
 interface NetworksProps {
-  current: Network;
+  current: ChainEntry;
+  chains: ChainEntry[];
   onBack: () => void;
-  onPick: (n: Network) => void;
+  onPick: (chainId: string) => void;
 }
 
-export function Networks({ current, onBack, onPick }: NetworksProps) {
+export function Networks({ current, chains, onBack, onPick }: NetworksProps) {
+  const [comingSoon, setComingSoon] = useState(false);
+  const builtin = chains.filter((c) => c.builtin);
+  const custom = chains.filter((c) => !c.builtin);
   return (
     <>
       <div className="ext-top">
         <button className="ext-iconbtn" onClick={onBack}><Icon name="back" size={15} /></button>
         <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>Networks</div>
-        <button className="ext-iconbtn"><Icon name="plus" size={15} /></button>
+        <div style={{ width: 28 }} />
       </div>
       <div className="ext-body">
+        <NetworksSection
+          title="Official"
+          chains={builtin}
+          currentChainId={current.chainId}
+          onPick={onPick}
+          emptyHint={null}
+        />
+        <NetworksSection
+          title="Custom"
+          chains={custom}
+          currentChainId={current.chainId}
+          onPick={onPick}
+          emptyHint="No custom chains added yet."
+        />
+        <button
+          className="ext-act"
+          onClick={() => setComingSoon(true)}
+          style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
+        >
+          <Icon name="plus" size={13} /> Add custom chain
+        </button>
+        {comingSoon && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: "10px 12px",
+              borderRadius: 10,
+              background: "rgba(124,127,255,0.08)",
+              border: "1px solid rgba(124,127,255,0.3)",
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: "var(--fg-100)",
+            }}
+          >
+            Coming soon. dApps can already add custom chains via{" "}
+            <span style={{ fontFamily: "var(--f-mono)" }}>wallet_addEthereumChain</span>;
+            an in-wallet add UI lands in a follow-up.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+interface NetworksSectionProps {
+  title: string;
+  chains: ChainEntry[];
+  currentChainId: string;
+  onPick: (chainId: string) => void;
+  emptyHint: string | null;
+}
+
+function NetworksSection({ title, chains, currentChainId, onPick, emptyHint }: NetworksSectionProps) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-400)",
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+          margin: "8px 12px 6px",
+        }}
+      >
+        {title}
+      </div>
+      {chains.length === 0 ? (
+        emptyHint && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--fg-400)",
+              padding: "12px 18px",
+              fontStyle: "italic",
+            }}
+          >
+            {emptyHint}
+          </div>
+        )
+      ) : (
         <div className="ext-card" style={{ padding: "6px 10px" }}>
-          {NETWORKS.map((n) => {
-            const active = n.id === current.id;
+          {chains.map((c) => {
+            const active = c.chainId === currentChainId;
             return (
               <div
-                key={n.id}
-                onClick={() => onPick(n)}
+                key={c.chainId}
+                onClick={() => onPick(c.chainId)}
                 style={{
                   padding: "12px 6px",
                   borderRadius: 10,
@@ -1029,26 +1118,41 @@ export function Networks({ current, onBack, onPick }: NetworksProps) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
-                      {n.label}
-                      {n.official && (
+                      {c.name}
+                      {c.official && (
                         <span className="ext-badge-att" style={{ fontSize: 8 }}>
                           <Icon name="shield" size={8} /> Official
                         </span>
                       )}
                     </div>
-                    <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 3, letterSpacing: "0.02em" }}>{n.rpc}</div>
+                    <div
+                      style={{
+                        fontFamily: "var(--f-mono)",
+                        fontSize: 10,
+                        color: "var(--fg-400)",
+                        marginTop: 3,
+                        letterSpacing: "0.02em",
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {c.rpc}
+                    </div>
                   </div>
                   <div style={{ textAlign: "right", fontFamily: "var(--f-mono)", fontSize: 10 }}>
-                    <div style={{ color: n.status === "live" ? "var(--ok)" : "var(--err)" }}>● {n.status}</div>
-                    <div style={{ color: "var(--fg-400)", marginTop: 2 }}>chain {n.chainId}</div>
+                    {active && (
+                      <div style={{ color: "var(--gold)" }}>
+                        <Icon name="check" size={14} />
+                      </div>
+                    )}
+                    <div style={{ color: "var(--fg-400)", marginTop: active ? 4 : 0 }}>{c.chainId}</div>
                   </div>
                 </div>
               </div>
             );
           })}
         </div>
-      </div>
-    </>
+      )}
+    </div>
   );
 }
 

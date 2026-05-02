@@ -32,16 +32,6 @@ export interface Asset {
   opaque?: boolean;
 }
 
-export interface Network {
-  id: "mainnet" | "testnet" | "local";
-  label: string;
-  rpc: string;
-  status: "live" | "offline";
-  round: string;
-  chainId: string;
-  official: boolean;
-}
-
 export interface Dapp {
   id: string;
   name: string;
@@ -124,14 +114,6 @@ export const ASSETS: Asset[] = [
   { sym: "wLYTH", label: "Wrapped LYTH", chain: "solana", amount: 420.11, change: 0.78, spark: [22, 23, 24, 23, 25, 26, 27, 28, 27, 29, 30, 31, 32, 33, 32, 34, 35, 36, 35, 37], attested: false, bridged: true },
   { sym: "LYTH", label: "LYTH · IBC", chain: "cosmos:hub", amount: 88.40, change: 0.30, spark: [40, 41, 40, 42, 43, 42, 44, 45, 44, 46, 47, 46, 48, 49, 48, 50, 51, 50, 52, 53], attested: false, bridged: true },
   { sym: "USDC", label: "USD Coin", chain: "solana", amount: 1240.00, change: -0.01, spark: [50, 50, 49, 50, 51, 50, 50, 50, 49, 50, 50, 51, 50, 50, 49, 50, 50, 50, 51, 50], attested: false, bridged: true },
-];
-
-// LythiumDAG-BFT testnet is chain_id 6940 per workspace orchestration §3.
-// 0x1B1C = 6940.
-export const NETWORKS: Network[] = [
-  { id: "mainnet", label: "Monolythium Mainnet", rpc: "https://node-01.monolythium.xyz", status: "offline", round: "—", chainId: "0x6970", official: true },
-  { id: "testnet", label: "LythiumDAG-BFT Testnet", rpc: "https://node-tnt.monolythium.xyz", status: "live", round: "1241·108", chainId: "0x1B1C", official: true },
-  { id: "local", label: "Local devnet", rpc: "http://127.0.0.1:8545", status: "offline", round: "—", chainId: "0x7A69", official: false },
 ];
 
 export const DAPPS: Dapp[] = [

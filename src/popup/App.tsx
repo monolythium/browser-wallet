@@ -22,7 +22,7 @@ import {
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
 } from "./components";
-import { ACCOUNTS, NETWORKS, type Account, type Network } from "./demo-data";
+import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
   bgKeystoreStatus,
@@ -32,6 +32,7 @@ import {
   bgWalletActiveAccount,
   bgWalletBalance,
   bgWalletActiveChain,
+  bgWalletSetActiveChain,
   bgChainList,
   type PendingApproval,
   type KeystoreStatus,
@@ -86,16 +87,11 @@ export default function App() {
   const [generated, setGenerated] = useState<{ seedHex: string; address: string } | null>(null);
 
   const initialAccount: Account = ACCOUNTS[0]!;
-  const initialNetwork: Network = NETWORKS[1] ?? NETWORKS[0]!;
   const [acc, setAcc] = useState<Account>(initialAccount);
-  const [net, setNet] = useState<Network>(initialNetwork);
-  // Active-chain state replaces the demo-NETWORKS-based flow at the data
-  // layer. The service worker is the source of truth (`mono.chain.active`
-  // in chrome.storage); we mirror it locally so the balance/fee hooks
-  // can dep on it. The Top/Networks/Send UI rewrite to consume
-  // `activeChain` lives in the next commit; for this commit only the
-  // balance hook reads from it. `activeChain` falls back to the
-  // Sprintnet shape during the bootstrap window before the first
+  // Active-chain state. The service worker is the source of truth
+  // (`mono.chain.active` in chrome.storage); we mirror it locally so
+  // the balance/fee hooks can dep on it. `activeChain` falls back to
+  // the Sprintnet shape during the bootstrap window before the first
   // chain-list fetch resolves AND when a stored active id points at a
   // now-deleted user-added chain.
   const [activeChainId, setActiveChainId] = useState<string>(SPRINTNET_FALLBACK.chainId);
@@ -222,6 +218,27 @@ export default function App() {
   // keystore lands this becomes a 1:1 mapping.
   const algo = keystore?.algo === "mldsa" ? ("mldsa" as const) : ("slhdsa" as const);
 
+  /**
+   * Switch the active chain via the popup IPC. Mirrors what
+   * `wallet_switchEthereumChain` does for dApps (validate, persist,
+   * broadcast `chainChanged`) so connected dApps see the switch
+   * immediately. Re-fetches the chain list so the new `active` flag
+   * is right; balance + fee hooks pick up the change via their
+   * `activeChain.chainId` deps.
+   */
+  const handlePickChain = async (chainId: string) => {
+    const r = await bgWalletSetActiveChain(chainId);
+    if (!r.ok) {
+      // The Networks screen only renders chains the service worker
+      // returned, so unknown-chainId here would be a programmer error.
+      // Surfacing it would just confuse the user; swallow and stay on
+      // the screen so the user can re-pick.
+      return;
+    }
+    await loadChainState();
+    setScreen("home");
+  };
+
   const handleUnlock = async (password: string) => {
     setUnlockError(null);
     const r = await bgKeystoreUnlock(password);
@@ -310,7 +327,7 @@ export default function App() {
       {screen === "home" && (
         <Home
           account={acc}
-          network={net}
+          network={activeChain}
           onOpenAccounts={() => setScreen("accounts")}
           onOpenNetworks={() => setScreen("networks")}
           onSettings={() => setScreen("settings")}
@@ -333,9 +350,10 @@ export default function App() {
 
       {screen === "networks" && (
         <Networks
-          current={net}
+          current={activeChain}
+          chains={chainList}
           onBack={() => setScreen("home")}
-          onPick={(n) => { setNet(n); setScreen("home"); }}
+          onPick={(chainId) => { void handlePickChain(chainId); }}
         />
       )}
 
@@ -348,7 +366,11 @@ export default function App() {
       )}
 
       {screen === "send" && (
-        <Send account={acc} onBack={() => setScreen("home")} />
+        <Send
+          account={acc}
+          chainId={activeChain.chainId}
+          onBack={() => setScreen("home")}
+        />
       )}
 
       {screen === "approval" && activeApproval && (
