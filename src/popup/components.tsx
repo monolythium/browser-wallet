@@ -25,7 +25,7 @@ import type {
   AddChainRequest,
   FeeSuggestion,
 } from "./bg";
-import { bgWalletFeeSuggestion, bgWalletSendTx } from "./bg";
+import { bgWalletFeeSuggestion, bgWalletSendTx, bgWalletValidatorStatus } from "./bg";
 
 // ---- Attestation strip (top-of-popup chromatic halo of node attestation) ----
 export function AttStrip() {
@@ -42,10 +42,136 @@ export function AttStrip() {
   );
 }
 
+/** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
   return (
     <div className="ext-demo-banner">
       <Icon name="warn" size={10} /> Mock · no real value · design-only
+    </div>
+  );
+}
+
+// ---- Chain status banner (replaces DemoBanner) ----
+//
+// Reflects the wallet's actual operational state instead of the legacy
+// "MOCK · NO REAL VALUE · DESIGN-ONLY" copy. The wallet now holds real
+// ML-DSA-65 keys, reads live Sprintnet state, and submits real
+// encrypted-envelope txs — that's worth surfacing. Other parts of the
+// UI (Top status bar, account list, activity log, recent dApps) ARE
+// still demo data and live below the AttStrip; we'll address those in
+// follow-up cleanups.
+
+type ChainStatus =
+  | { kind: "loading" }
+  | { kind: "live"; validator: string }
+  | { kind: "offline" }
+  | { kind: "error"; reason: string };
+
+const CHAIN_STATUS_TICK_MS = 10_000;
+
+export function ChainStatusBanner() {
+  const [state, setState] = useState<ChainStatus>({ kind: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await bgWalletValidatorStatus();
+        if (cancelled) return;
+        if (!r.ok) {
+          setState({ kind: "error", reason: r.reason ?? "rpc error" });
+        } else if (r.name === null) {
+          setState({ kind: "offline" });
+        } else {
+          setState({ kind: "live", validator: r.name });
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setState({ kind: "error", reason: (e as Error).message });
+      }
+    };
+    void tick();
+    const id = setInterval(tick, CHAIN_STATUS_TICK_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Match `.ext-demo-banner` height/padding so swapping doesn't shift
+  // the Top component below. Tokens come from tokens.css; no new CSS
+  // is introduced.
+  const containerStyle: CSSProperties = {
+    fontFamily: "var(--f-mono)",
+    fontSize: 9.5,
+    letterSpacing: "0.16em",
+    textTransform: "uppercase",
+    padding: "5px 14px",
+    borderBottom: "1px solid var(--fg-700)",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: "var(--fg-300)",
+  };
+
+  let dotColor: string;
+  let body: ReactNode;
+  switch (state.kind) {
+    case "live":
+      dotColor = "var(--ok)";
+      body = (
+        <>
+          <span style={{ color: "var(--ok)", fontWeight: 500 }}>LIVE</span>
+          <span style={{ color: "var(--fg-600)" }}>·</span>
+          <span>SPRINTNET</span>
+          <span style={{ color: "var(--fg-600)" }}>·</span>
+          <span style={{ color: "var(--ok)" }}>{state.validator.toUpperCase()}</span>
+        </>
+      );
+      break;
+    case "offline":
+      dotColor = "var(--warn)";
+      body = (
+        <>
+          <span style={{ color: "var(--warn)", fontWeight: 500 }}>OFFLINE</span>
+          <span style={{ color: "var(--fg-600)" }}>·</span>
+          <span>NO SPRINTNET VALIDATOR</span>
+        </>
+      );
+      break;
+    case "error":
+      dotColor = "var(--err)";
+      body = (
+        <>
+          <span style={{ color: "var(--err)", fontWeight: 500 }}>ERROR</span>
+          <span style={{ color: "var(--fg-600)" }}>·</span>
+          <span style={{ textTransform: "none", letterSpacing: 0 }}>{state.reason}</span>
+        </>
+      );
+      break;
+    case "loading":
+    default:
+      dotColor = "var(--fg-500)";
+      body = <span>CONNECTING…</span>;
+      break;
+  }
+
+  return (
+    <div style={containerStyle}>
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: dotColor,
+          boxShadow:
+            state.kind === "live" || state.kind === "error"
+              ? `0 0 6px ${dotColor}`
+              : "none",
+          flexShrink: 0,
+        }}
+      />
+      {body}
     </div>
   );
 }
@@ -1145,7 +1271,7 @@ export function ReqConnect({ custody, onApprove, onReject }: ReqConnectProps) {
   const acc = ACCOUNTS.find((a) => a.id === r.accountToShare)!;
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <AttStrip />
       <div className="req-head">
         <div className="origin">
@@ -1237,7 +1363,7 @@ export function ReqSign({ type, custody, algo: initAlgo, onApprove, onReject }: 
 
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <AttStrip />
       <div className="req-head">
         <div className="origin">
@@ -1382,7 +1508,7 @@ export function ReqMessage({ custody, onApprove, onReject }: { custody: Custody;
   const dapp = DAPPS.find((d) => d.id === r.dappId)!;
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <AttStrip />
       <div className="req-head">
         <div className="origin">
@@ -1442,7 +1568,7 @@ export function ReqOnboard() {
   };
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <div style={{ padding: "40px 24px 20px", textAlign: "center" }}>
         <div
           style={{
@@ -1742,7 +1868,7 @@ export function ReqSendTx({
 
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <AttStrip />
       <div className="req-head">
         <div className="origin">
@@ -1954,7 +2080,7 @@ export function ReqPersonalSignReal({
 
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <AttStrip />
       <div className="req-head">
         <div className="origin">
@@ -2052,7 +2178,7 @@ export function ReqTypedSign({
 
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <AttStrip />
       <div className="req-head">
         <div className="origin">
@@ -2224,7 +2350,7 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
   const { chain, origin } = request;
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <AttStrip />
       <div className="req-head">
         <div className="origin">
