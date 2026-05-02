@@ -9,7 +9,7 @@
 // worker. No demo-data is read on the approval path.
 
 import type { ReactNode, CSSProperties } from "react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Icon, Spark, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import {
@@ -23,7 +23,9 @@ import type {
   TypedSignRequest,
   SendTxRequest,
   AddChainRequest,
+  FeeSuggestion,
 } from "./bg";
+import { bgWalletFeeSuggestion, bgWalletSendTx } from "./bg";
 
 // ---- Attestation strip (top-of-popup chromatic halo of node attestation) ----
 export function AttStrip() {
@@ -218,11 +220,13 @@ interface HomeProps {
   onOpenNetworks: () => void;
   onSettings: () => void;
   onOpenReceive: () => void;
+  /** Optional so commit C compiles cleanly before commit D wires the App.tsx route. */
+  onOpenSend?: () => void;
   onOpenRequest: (id: "connect" | "sign" | "message", signType?: PendingSign["type"]) => void;
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenRequest, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenRequest, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const isPriv = account.denom === "private";
   const balanceStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
@@ -258,7 +262,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
           )}
 
           <div className="ext-hero-acts">
-            <button className="ext-act prim" onClick={() => onOpenRequest("sign", "swap")}>
+            <button className="ext-act prim" onClick={onOpenSend ?? (() => {})}>
               <span className="ico"><Icon name="send" size={16} /></span>
               <span>Send</span>
             </button>
@@ -497,6 +501,380 @@ export function Receive({ account, onBack }: ReceiveProps) {
       </div>
     </>
   );
+}
+
+// ---- Send sheet ----
+
+const SPRINTNET_CHAIN_ID_HEX = "0x10F2C";
+const ADMISSION_REJECT_CODE_LO = -32049;
+const ADMISSION_REJECT_CODE_HI = -32020;
+
+interface SendProps {
+  account: Account;
+  onBack: () => void;
+}
+
+export function Send({ account, onBack }: SendProps) {
+  const [to, setTo] = useState("");
+  const [amountStr, setAmountStr] = useState("");
+  const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
+  const [feeError, setFeeError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ txHash: string } | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitErrorCode, setSubmitErrorCode] = useState<number | null>(null);
+  const [hashCopied, setHashCopied] = useState(false);
+
+  // Fetch fee suggestion on mount. Sprintnet's chain id is hardcoded
+  // until the Networks list wires the real chain — same TODO as the
+  // balance refresh in App.tsx.
+  // TODO: wire Networks list to real Sprintnet chain id in next step
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgWalletFeeSuggestion(SPRINTNET_CHAIN_ID_HEX);
+      if (cancelled) return;
+      if (!r.ok) {
+        setFeeError(r.reason ?? "fee suggestion failed");
+        return;
+      }
+      setFeeSuggestion(r.suggestion);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toError = validateToAddress(to);
+  const amountError = validateAmount(amountStr);
+  const canSubmit =
+    toError === null &&
+    amountError === null &&
+    feeSuggestion !== null &&
+    !submitting &&
+    result === null;
+
+  const onSubmit = async () => {
+    setSubmitError(null);
+    setSubmitErrorCode(null);
+    setSubmitting(true);
+    try {
+      const valueWeiHex = lythToWeiHex(amountStr);
+      const r = await bgWalletSendTx({
+        to,
+        valueWeiHex,
+        chainIdHex: SPRINTNET_CHAIN_ID_HEX,
+      });
+      if (r.ok) {
+        setResult({ txHash: r.result.txHash });
+      } else {
+        setSubmitError(r.reason ?? "send failed");
+        setSubmitErrorCode(typeof r.code === "number" ? r.code : null);
+      }
+    } catch (e) {
+      setSubmitError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onCopyHash = async () => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result.txHash);
+      setHashCopied(true);
+      setTimeout(() => setHashCopied(false), 2000);
+    } catch {
+      /* see Receive.onCopy — silent on clipboard failure */
+    }
+  };
+
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack}><Icon name="back" size={15} /></button>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>Send</div>
+        <div style={{ width: 28 }} />
+      </div>
+      <div className="ext-body">
+        {result ? (
+          <SendSuccess
+            txHash={result.txHash}
+            copied={hashCopied}
+            onCopy={onCopyHash}
+            onDone={onBack}
+          />
+        ) : (
+          <>
+            <FormCard label="To">
+              <input
+                type="text"
+                value={to}
+                onChange={(e) => setTo(e.target.value.trim())}
+                placeholder="0x…"
+                spellCheck={false}
+                autoComplete="off"
+                style={addressInputStyle}
+              />
+              {toError && <div style={inlineError}>{toError}</div>}
+            </FormCard>
+
+            <FormCard label="Amount">
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="text"
+                  value={amountStr}
+                  onChange={(e) => setAmountStr(e.target.value.trim())}
+                  placeholder="0.0"
+                  inputMode="decimal"
+                  style={{ ...addressInputStyle, flex: 1 }}
+                />
+                <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-400)" }}>
+                  LYTH
+                </div>
+              </div>
+              {amountError && <div style={inlineError}>{amountError}</div>}
+              {/* From-address hint so the user can sanity-check which
+                  vault is signing. Truncated to keep the card compact. */}
+              <div style={fromHint}>from: {shortAddr(account.addr, 18)}</div>
+            </FormCard>
+
+            <div className="ext-card" style={{ padding: 14 }}>
+              <div style={cardLabel}>Network fee</div>
+              {feeError ? (
+                <div style={{ ...inlineError, marginTop: 4 }}>
+                  Could not fetch fee: {feeError}
+                </div>
+              ) : feeSuggestion === null ? (
+                <div style={{ fontSize: 12, color: "var(--fg-400)", marginTop: 4 }}>
+                  Loading fee…
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "var(--fg-100)", lineHeight: 1.6, marginTop: 4 }}>
+                  <div>
+                    Estimated max fee:{" "}
+                    <span style={{ fontFamily: "var(--f-mono)" }}>
+                      {formatGweiFromHex(feeSuggestion.maxFeePerGas)} gwei
+                    </span>
+                  </div>
+                  <div>
+                    Priority tip:{" "}
+                    <span style={{ fontFamily: "var(--f-mono)" }}>
+                      {formatGweiFromHex(feeSuggestion.maxPriorityFeePerGas)} gwei
+                    </span>
+                  </div>
+                  <div style={{ color: "var(--fg-400)", marginTop: 4 }}>
+                    Gas limit 21,000 for plain transfer.
+                  </div>
+                  <div style={{ color: "var(--fg-400)", marginTop: 4 }}>
+                    Sprintnet requires 10 gwei minimum tip.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {submitError && (
+              <div
+                className="ext-card"
+                style={{
+                  padding: "10px 12px",
+                  background: "rgba(220,80,80,0.08)",
+                  border: "1px solid rgba(220,80,80,0.4)",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: "var(--fg-100)",
+                }}
+              >
+                {submitErrorCode !== null &&
+                submitErrorCode >= ADMISSION_REJECT_CODE_LO &&
+                submitErrorCode <= ADMISSION_REJECT_CODE_HI
+                  ? `Chain rejected: ${submitError}`
+                  : submitError}
+              </div>
+            )}
+
+            <button
+              className="ext-act prim"
+              onClick={onSubmit}
+              disabled={!canSubmit}
+              style={{
+                width: "100%",
+                padding: "12px",
+                flexDirection: "row",
+                gap: 8,
+                opacity: canSubmit ? 1 : 0.5,
+                cursor: canSubmit ? "pointer" : "default",
+              }}
+            >
+              {submitting ? "Sending…" : "Send"}
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+interface SendSuccessProps {
+  txHash: string;
+  copied: boolean;
+  onCopy: () => void;
+  onDone: () => void;
+}
+
+function SendSuccess({ txHash, copied, onCopy, onDone }: SendSuccessProps) {
+  return (
+    <>
+      <div className="ext-card" style={{ padding: 14 }}>
+        <div style={cardLabel}>Transaction submitted</div>
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: "var(--fg-100)",
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(0,0,0,0.3)",
+            border: "1px solid var(--fg-700)",
+            wordBreak: "break-all",
+            userSelect: "all",
+            marginTop: 8,
+          }}
+        >
+          {txHash}
+        </div>
+        <button
+          className="ext-act"
+          onClick={onCopy}
+          style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8, marginTop: 12 }}
+        >
+          {copied ? "Copied" : "Copy tx hash"}
+        </button>
+        <div style={{ fontSize: 11, color: "var(--fg-400)", marginTop: 10, lineHeight: 1.5 }}>
+          Explorer URL not yet wired for Sprintnet — keep this hash to track
+          the tx on a validator directly.
+        </div>
+      </div>
+      <button
+        className="ext-act prim"
+        onClick={onDone}
+        style={{ width: "100%", padding: "12px", flexDirection: "row", gap: 8 }}
+      >
+        Done
+      </button>
+    </>
+  );
+}
+
+// ---- Send-form helpers ----
+
+interface FormCardProps {
+  label: string;
+  children: ReactNode;
+}
+
+function FormCard({ label, children }: FormCardProps) {
+  return (
+    <div className="ext-card" style={{ padding: 14 }}>
+      <div style={cardLabel}>{label}</div>
+      <div style={{ marginTop: 8 }}>{children}</div>
+    </div>
+  );
+}
+
+const cardLabel: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  color: "var(--fg-400)",
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+};
+
+const addressInputStyle: CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  background: "rgba(0,0,0,0.3)",
+  border: "1px solid var(--fg-700)",
+  color: "var(--fg-100)",
+  fontSize: 13,
+  fontFamily: "var(--f-mono)",
+};
+
+const inlineError: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  color: "var(--err)",
+  marginTop: 6,
+};
+
+const fromHint: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  color: "var(--fg-500)",
+  marginTop: 8,
+};
+
+function validateToAddress(s: string): string | null {
+  if (s.length === 0) return null; // empty = "unfilled", not yet an error
+  if (!s.startsWith("0x")) return "address must start with 0x";
+  if (s.length !== 42) return `address must be 42 chars (got ${s.length})`;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(s)) return "address must be 0x + 40 hex chars";
+  return null;
+}
+
+function validateAmount(s: string): string | null {
+  if (s.length === 0) return null;
+  if (!/^\d+(\.\d+)?$/.test(s)) return "amount must be a positive decimal";
+  if (parseFloat(s) <= 0) return "amount must be greater than 0";
+  const dot = s.indexOf(".");
+  if (dot >= 0 && s.length - dot - 1 > 18) {
+    return "amount cannot have more than 18 decimal places";
+  }
+  return null;
+}
+
+/**
+ * Convert a decimal LYTH amount string to wei (`0x` hex). Precision-safe
+ * — splits on `.` and builds the BigInt from the integer + zero-padded
+ * fractional parts so `0.000000000000000001` (1 wei) round-trips
+ * exactly. Rejects invalid input by throwing — callers should pre-
+ * validate via `validateAmount`.
+ */
+function lythToWeiHex(amountStr: string): string {
+  const dot = amountStr.indexOf(".");
+  const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
+  const fracPartRaw = dot < 0 ? "" : amountStr.slice(dot + 1);
+  if (fracPartRaw.length > 18) {
+    throw new Error(`amount has more than 18 decimal places`);
+  }
+  const fracPadded = (fracPartRaw + "0".repeat(18)).slice(0, 18);
+  // Strip leading zeros so the BigInt parse doesn't choke on `00…01`.
+  const intBig = BigInt(intPart === "" ? "0" : intPart);
+  const fracBig = BigInt(fracPadded === "" ? "0" : fracPadded);
+  const wei = intBig * 10n ** 18n + fracBig;
+  return "0x" + wei.toString(16);
+}
+
+/**
+ * Format a hex wei value as a gwei display string (e.g. "10", "20.5").
+ * Uses 9-decimal scaling: 1 gwei = 1e9 wei. Trims trailing zeros and
+ * the decimal point for whole-gwei values.
+ */
+function formatGweiFromHex(weiHex: string): string {
+  let wei: bigint;
+  try {
+    wei = BigInt(weiHex);
+  } catch {
+    return "?";
+  }
+  const gwei = wei / 10n ** 9n;
+  const remainder = wei % 10n ** 9n;
+  if (remainder === 0n) return gwei.toString();
+  // Pad to 9 digits, strip trailing zeros for compact display.
+  const fracStr = remainder.toString().padStart(9, "0").replace(/0+$/, "");
+  return fracStr.length === 0 ? gwei.toString() : `${gwei}.${fracStr}`;
 }
 
 // ---- Networks picker ----
