@@ -663,9 +663,14 @@ export function Send({ account, onBack }: SendProps) {
                       {formatGweiFromHex(feeSuggestion.maxPriorityFeePerGas)} gwei
                     </span>
                   </div>
-                  <div style={{ color: "var(--fg-400)", marginTop: 4 }}>
-                    Gas limit 21,000 for plain transfer.
-                  </div>
+                  {feeSuggestion.gasLimit !== null && (
+                    <div style={{ color: "var(--fg-400)", marginTop: 4 }}>
+                      Gas limit:{" "}
+                      <span style={{ fontFamily: "var(--f-mono)" }}>
+                        {parseInt(feeSuggestion.gasLimit, 16).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
                   <div style={{ color: "var(--fg-400)", marginTop: 4 }}>
                     Sprintnet requires 10 gwei minimum tip.
                   </div>
