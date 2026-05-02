@@ -45,13 +45,26 @@ import {
   isUnlocked,
   lock as lockKeystore,
   unlock as unlockKeystore,
-  createVaultFromNewMnemonic,
-  createVaultFromMnemonic,
   personalSign as keystorePersonalSign,
   signLegacyTx,
   signTypedDataV4,
   computeTypedDataDigest,
 } from "./keystore.js";
+import {
+  isUnlockedV3,
+  getUnlockedAddressV3,
+  hasVaultV3,
+  getStoredAddressV3,
+  unlockV3,
+  lockV3,
+  createVaultFromNewSeed,
+  createVaultFromSeedHex,
+} from "./keystore-mldsa.js";
+import { chainRequiresMlDsa } from "./networks.js";
+import {
+  submitEncryptedMlDsaTx,
+  sprintnetJsonRpc,
+} from "./tx-mldsa.js";
 
 interface RpcArgs {
   method: string;
@@ -352,6 +365,58 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the transaction");
       }
+
+      // Monolythium-protocol chains reject the legacy RLP+secp256k1
+      // envelope at the decoder layer (Law §2.1) — route to the SDK's
+      // ML-DSA-65 bincode wire format instead. The v3 keystore holds
+      // the unlocked backend; reads/writes funnel through the published
+      // Sprintnet validators since the canonical alias is NXDOMAIN.
+      if (chainRequiresMlDsa(session.chainId)) {
+        if (!isUnlockedV3()) {
+          return err(ERR_UNAUTHORIZED, "wallet is locked");
+        }
+        try {
+          const fromAddr =
+            getUnlockedAddressV3() ?? "0x0000000000000000000000000000000000000000";
+          // Resolve missing nonce/gas/fee from the validators directly —
+          // the chain registry's RPC alias resolves NXDOMAIN and the
+          // existing `view` was built against that broken alias too, so
+          // its fields are usually null on Sprintnet.
+          const nonceHex =
+            txReq.nonce ?? view.nonce ??
+            (await sprintnetJsonRpc<string>("eth_getTransactionCount", [fromAddr, "pending"])).result;
+          const gasPriceHex =
+            txReq.gasPrice ?? view.gasPrice ??
+            (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
+          const gasHex =
+            txReq.gas ?? view.estimatedGas ??
+            (await sprintnetJsonRpc<string>("eth_estimateGas", [
+              {
+                from: fromAddr,
+                ...(txReq.to !== undefined ? { to: txReq.to } : {}),
+                ...(txReq.value !== undefined ? { value: txReq.value } : {}),
+                ...(txReq.data !== undefined ? { data: txReq.data } : {}),
+              },
+            ])).result;
+
+          // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
+          // The chain rejects plaintext at admission (Law §4.5 / Q2), so
+          // there is no eth_sendRawTransaction fallback path on Sprintnet.
+          const { txHash } = await submitEncryptedMlDsaTx({
+            ...(txReq.to !== undefined ? { to: txReq.to } : {}),
+            ...(txReq.value !== undefined ? { value: txReq.value } : {}),
+            ...(txReq.data !== undefined ? { data: txReq.data } : {}),
+            nonce: nonceHex,
+            gas: gasHex,
+            gasPrice: gasPriceHex,
+            chainIdHex: session.chainId,
+          });
+          return ok(txHash);
+        } catch (e) {
+          return err(ERR_INTERNAL, `ml-dsa tx failed: ${(e as Error).message}`);
+        }
+      }
+
       if (!isUnlocked()) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
@@ -683,19 +748,37 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { found };
     }
     case "keystore-status": {
-      // `hasLegacyVault()` reports whether the on-disk envelope is the
-      // pre-v2 PBKDF2+AES-GCM shape. `hasVault()` returns false in that case
-      // (so the popup routes to onboarding) and the popup surfaces the
-      // legacy-vault notice next to "Create / Import" so the user knows
-      // their old keystore was cleared by the format upgrade.
+      // Strategy A — v3 (ML-DSA-65) is the new primary vault. Detection
+      // order: v3 first (current canonical shape), v2 next (still
+      // unlockable for non-Sprintnet chains pending a v2→v3 migration
+      // rule), v1 last (PBKDF2+AES-GCM, surfaced as legacy-only so the
+      // popup nudges re-creation).
+      //
+      // `legacyVault` is the popup's banner trigger ("vault format
+      // upgraded — re-import your seed"). It fires whenever any
+      // non-current vault is on disk: v1 always, plus v2 once v3 is
+      // the new primary or once we've deprecated v2.
+      const v3Exists = await hasVaultV3();
+      const v2Exists = await hasVault();
+      const v1Exists = await hasLegacyVault();
+      if (v3Exists) {
+        return {
+          hasVault: true,
+          legacyVault: v1Exists || v2Exists,
+          unlocked: isUnlockedV3(),
+          address: getUnlockedAddressV3() ?? (await getStoredAddressV3()),
+          custody: "sw" as const,
+          algo: "mldsa" as const,
+        };
+      }
+      // No v3 vault. If a v2 vault exists, the user can still unlock it
+      // for legacy chains; the banner flips on so the home/onboarding
+      // surface tells them v2 is the older format.
       return {
-        hasVault: await hasVault(),
-        legacyVault: await hasLegacyVault(),
+        hasVault: v2Exists,
+        legacyVault: v1Exists || v2Exists,
         unlocked: isUnlocked(),
         address: getUnlockedAddress() ?? (await getStoredAddress()),
-        // Expose the actual custody mode so the popup can show real settings
-        // instead of a hard-coded "sw / slhdsa" stub. Only software keystores
-        // exist today; future TPM/passkey/HW backends slot in here.
         custody: "sw" as const,
         algo: "secp256k1" as const,
       };
@@ -715,6 +798,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "keystore-unlock": {
       const p = message.payload as { password: string };
       try {
+        // Route to v3 when the v3 envelope is on disk; otherwise fall
+        // through to legacy v2 unlock so a user with only an old vault
+        // can still operate on non-Sprintnet chains.
+        if (await hasVaultV3()) {
+          const r = await unlockV3(p.password);
+          return { ok: true, address: r.address };
+        }
         const r = await unlockKeystore(p.password);
         return { ok: true, address: r.address };
       } catch (e) {
@@ -722,23 +812,91 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "keystore-lock": {
+      // Lock both — no-op when one isn't unlocked.
+      lockV3();
       lockKeystore();
       return { ok: true };
     }
     case "keystore-create-new": {
+      // Strategy A — every new wallet from this point is v3 (ML-DSA-65).
+      // The seed is returned to the popup so the user can back it up;
+      // mnemonic-based onboarding is paused until the BIP-39 → ML-DSA-65
+      // derivation rule lands (MISSING.md OQ-1).
       const p = message.payload as { password: string };
       try {
-        const r = await createVaultFromNewMnemonic(p.password);
-        return { ok: true, mnemonic: r.mnemonic, address: r.address };
+        const r = await createVaultFromNewSeed(p.password);
+        return { ok: true, seedHex: r.seedHex, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
     }
     case "keystore-create-from-mnemonic": {
-      const p = message.payload as { password: string; mnemonic: string };
+      // Pre-PQ flow used BIP-39 → seed → secp256k1. The ML-DSA-65 seed
+      // derivation rule is still open (Nayiem owns; tracked as
+      // MISSING.md OQ-1), so we surface a clear "use seed hex import
+      // instead" message rather than silently writing a v2-shaped
+      // vault that the rest of the app won't touch.
+      return {
+        ok: false,
+        reason:
+          "BIP-39 import for ML-DSA-65 pending spec; use seed hex import instead",
+      };
+    }
+    case "keystore-create-from-seedhex": {
+      const p = message.payload as { password: string; seedHex: string };
       try {
-        const r = await createVaultFromMnemonic(p.password, p.mnemonic);
+        const r = await createVaultFromSeedHex(p.password, p.seedHex);
         return { ok: true, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-active-account": {
+      // Surface the unlocked v3 keypair to the popup so Home can render
+      // the real ML-DSA-65 address instead of the demo `mono1:…` placeholder.
+      // Stays scoped to v3 — the legacy v2 keystore goes through the
+      // existing demo-data path until the Networks list switch lands.
+      if (!(await hasVaultV3())) {
+        return { ok: false, reason: "no v3 vault" };
+      }
+      if (!isUnlockedV3()) {
+        return { ok: false, reason: "locked" };
+      }
+      const address = getUnlockedAddressV3() ?? (await getStoredAddressV3());
+      if (!address) {
+        return { ok: false, reason: "v3 vault has no stored address" };
+      }
+      return {
+        ok: true,
+        address,
+        algo: "mldsa" as const,
+        custody: "sw" as const,
+      };
+    }
+    case "wallet-balance": {
+      // Read-only `eth_getBalance` for the popup Home balance pill.
+      // Sprintnet routes through the validator-fallback helper because
+      // the canonical alias `node-tnt.monolythium.xyz` resolves NXDOMAIN;
+      // every other chain id flows through `providerFor` so user-added
+      // chains via wallet_addEthereumChain just work.
+      const p = message.payload as { address?: string; chainIdHex?: string };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      try {
+        if (chainRequiresMlDsa(p.chainIdHex)) {
+          const { result } = await sprintnetJsonRpc<string>("eth_getBalance", [
+            p.address,
+            "latest",
+          ]);
+          return { ok: true, balanceHex: result };
+        }
+        const provider = providerFor(p.chainIdHex);
+        const balanceHex = await rpcSend<string>(provider, "eth_getBalance", [
+          p.address,
+          "latest",
+        ]);
+        return { ok: true, balanceHex };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
