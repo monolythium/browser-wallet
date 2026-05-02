@@ -726,6 +726,65 @@ async function buildSendTxView(
   return view;
 }
 
+// ---- fee suggestion ----
+
+/**
+ * Sprintnet-specific minimum priority tip discovered empirically via
+ * smoke-test admission rejection: 10 gwei (10_000_000_000 wei). The
+ * chain doesn't expose this via RPC and `eth_maxPriorityFeePerGas`
+ * is method-not-found, so it lives here as a chain constant. If the
+ * chain operators ever change the floor, this is the one place to bump.
+ */
+const SPRINTNET_MIN_PRIORITY_FEE_HEX = "0x2540be400";
+
+/**
+ * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
+ * given chain. On Sprintnet we ignore `eth_gasPrice` (returns `0x0`)
+ * and `eth_maxPriorityFeePerGas` (method-not-found) and instead read
+ * the next-block base fee via `eth_feeHistory(1, "latest", [])` and
+ * stack the hardcoded 10 gwei tip floor on top.
+ *
+ * For non-Sprintnet chains we fall back to `eth_gasPrice` for now —
+ * close enough for the legacy path that the popup may eventually use,
+ * and the existing `eth_sendTransaction` handler does the same.
+ */
+async function suggestFee(chainIdHex: string): Promise<{
+  maxPriorityFeePerGas: string;
+  maxFeePerGas: string;
+  baseFeePerGas: string;
+}> {
+  if (chainRequiresMlDsa(chainIdHex)) {
+    const { result } = await sprintnetJsonRpc<{
+      baseFeePerGas?: string[];
+      gasUsedRatio?: number[];
+      oldestBlock?: string;
+      reward?: unknown[];
+    }>("eth_feeHistory", ["0x1", "latest", []]);
+    const baseList = Array.isArray(result?.baseFeePerGas) ? result.baseFeePerGas : [];
+    if (baseList.length === 0) {
+      throw new Error("eth_feeHistory returned no baseFeePerGas entries");
+    }
+    // Last entry is the next-block estimate when feeHistory returns the
+    // pending base fee; with a single requested block we get two
+    // entries (current + next).
+    const baseHex = baseList[baseList.length - 1]!;
+    const baseWei = BigInt(baseHex);
+    const tipWei = BigInt(SPRINTNET_MIN_PRIORITY_FEE_HEX);
+    return {
+      baseFeePerGas: baseHex,
+      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_HEX,
+      maxFeePerGas: "0x" + (baseWei + tipWei).toString(16),
+    };
+  }
+  const provider = providerFor(chainIdHex);
+  const gasPriceHex = await rpcSend<string>(provider, "eth_gasPrice", []);
+  return {
+    baseFeePerGas: gasPriceHex,
+    maxPriorityFeePerGas: gasPriceHex,
+    maxFeePerGas: gasPriceHex,
+  };
+}
+
 // ---- internal popup messages ----
 
 interface PopupMessage {
@@ -879,17 +938,41 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // the canonical alias `node-tnt.monolythium.xyz` resolves NXDOMAIN;
       // every other chain id flows through `providerFor` so user-added
       // chains via wallet_addEthereumChain just work.
+      //
+      // Sprintnet returns a NON-STANDARD `eth_getBalance` shape — instead
+      // of `{ result: "0x..." }` it returns `{ result: { value: "0x...",
+      // blockNumber, proof, stateRoot } }` so light clients can verify
+      // the balance against `stateRoot`. We accept both shapes here:
+      // `value` field for the proof variant, raw hex string for plain
+      // chains. Other Sprintnet RPC methods stay standard.
       const p = message.payload as { address?: string; chainIdHex?: string };
       if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing address or chainIdHex" };
       }
       try {
         if (chainRequiresMlDsa(p.chainIdHex)) {
-          const { result } = await sprintnetJsonRpc<string>("eth_getBalance", [
+          const { result } = await sprintnetJsonRpc<unknown>("eth_getBalance", [
             p.address,
             "latest",
           ]);
-          return { ok: true, balanceHex: result };
+          console.log(
+            "[wallet] balance shape:",
+            typeof result === "string"
+              ? "hex"
+              : Object.keys((result as object | null) ?? {}).join(","),
+          );
+          if (typeof result === "string" && result.startsWith("0x")) {
+            return { ok: true, balanceHex: result };
+          }
+          if (
+            result !== null &&
+            typeof result === "object" &&
+            typeof (result as { value?: unknown }).value === "string" &&
+            ((result as { value: string }).value).startsWith("0x")
+          ) {
+            return { ok: true, balanceHex: (result as { value: string }).value };
+          }
+          return { ok: false, reason: "unexpected balance shape" };
         }
         const provider = providerFor(p.chainIdHex);
         const balanceHex = await rpcSend<string>(provider, "eth_getBalance", [
@@ -899,6 +982,71 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: true, balanceHex };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-fee-suggestion": {
+      const p = message.payload as { chainIdHex?: string };
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      try {
+        const fee = await suggestFee(p.chainIdHex);
+        return { ok: true, ...fee };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-send-tx": {
+      const p = message.payload as {
+        to?: string;
+        valueWeiHex?: string;
+        chainIdHex?: string;
+      };
+      if (
+        typeof p?.to !== "string" ||
+        typeof p?.valueWeiHex !== "string" ||
+        typeof p?.chainIdHex !== "string"
+      ) {
+        return { ok: false, reason: "missing to, valueWeiHex, or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        // Real-send through the legacy secp256k1 path is not in scope yet —
+        // the popup only wires Sprintnet for now. When non-Sprintnet send
+        // lands it'll route through providerFor + signLegacyTx like the
+        // existing `eth_sendTransaction` handler does.
+        return { ok: false, reason: "send is only wired for Sprintnet today" };
+      }
+      if (!isUnlockedV3()) {
+        return { ok: false, reason: "wallet locked" };
+      }
+      const fromAddr = getUnlockedAddressV3();
+      if (!fromAddr) {
+        return { ok: false, reason: "wallet has no unlocked address" };
+      }
+      try {
+        const nonceRes = await sprintnetJsonRpc<string>(
+          "eth_getTransactionCount",
+          [fromAddr, "latest"],
+        );
+        const fee = await suggestFee(p.chainIdHex);
+        const { txHash, via } = await submitEncryptedMlDsaTx({
+          to: p.to,
+          value: p.valueWeiHex,
+          gas: "0x5208", // 21_000 — plain transfer with no contract call
+          nonce: nonceRes.result,
+          maxFeePerGas: fee.maxFeePerGas,
+          maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+          chainIdHex: p.chainIdHex,
+        });
+        return { ok: true, txHash, via };
+      } catch (e) {
+        const err = e as Error & { code?: number };
+        const code = typeof err.code === "number" ? err.code : undefined;
+        const reason = err.message ?? "send failed";
+        if (code !== undefined) {
+          return { ok: false, reason, code };
+        }
+        return { ok: false, reason };
       }
     }
     default:
