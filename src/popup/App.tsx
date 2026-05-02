@@ -31,12 +31,15 @@ import {
   bgResolveApproval,
   bgWalletActiveAccount,
   bgWalletBalance,
+  bgWalletActiveChain,
+  bgChainList,
   type PendingApproval,
   type KeystoreStatus,
   type SendTxRequest,
   type PersonalSignRequest,
   type TypedSignRequest,
   type AddChainRequest,
+  type ChainEntry,
 } from "./bg";
 
 type Screen =
@@ -55,6 +58,25 @@ interface UiApproval {
   approval: PendingApproval;
 }
 
+/**
+ * Sprintnet fallback used during the bootstrap window before the first
+ * chain-list IPC fetch resolves, and as the safety net if the persisted
+ * active chain id points at a chain that's no longer in the registry
+ * (e.g. user removed a custom chain). Shape mirrors what the service
+ * worker returns from `chain-list` so the popup never has to special-
+ * case the bootstrap state.
+ */
+const SPRINTNET_FALLBACK: ChainEntry = {
+  chainId: "0x10F2C",
+  chainIdNum: 69420,
+  name: "Monolythium · Sprintnet",
+  rpc: "http://192.0.2.7:8545",
+  builtin: true,
+  official: true,
+  active: true,
+  nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
+};
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
   const [keystore, setKeystore] = useState<KeystoreStatus | null>(null);
@@ -67,6 +89,28 @@ export default function App() {
   const initialNetwork: Network = NETWORKS[1] ?? NETWORKS[0]!;
   const [acc, setAcc] = useState<Account>(initialAccount);
   const [net, setNet] = useState<Network>(initialNetwork);
+  // Active-chain state replaces the demo-NETWORKS-based flow at the data
+  // layer. The service worker is the source of truth (`mono.chain.active`
+  // in chrome.storage); we mirror it locally so the balance/fee hooks
+  // can dep on it. The Top/Networks/Send UI rewrite to consume
+  // `activeChain` lives in the next commit; for this commit only the
+  // balance hook reads from it. `activeChain` falls back to the
+  // Sprintnet shape during the bootstrap window before the first
+  // chain-list fetch resolves AND when a stored active id points at a
+  // now-deleted user-added chain.
+  const [activeChainId, setActiveChainId] = useState<string>(SPRINTNET_FALLBACK.chainId);
+  const [chainList, setChainList] = useState<ChainEntry[]>([]);
+  const activeChain: ChainEntry =
+    chainList.find((c) => c.chainId === activeChainId) ?? SPRINTNET_FALLBACK;
+
+  const loadChainState = async () => {
+    const [activeRes, list] = await Promise.all([
+      bgWalletActiveChain(),
+      bgChainList(),
+    ]);
+    setChainList(list);
+    if (activeRes.ok) setActiveChainId(activeRes.chainId);
+  };
 
   // Fetch the unlocked v3 keypair and patch `acc` with its real EVM
   // address + algo. Demo data stays as the fallback shape; only the
@@ -120,20 +164,22 @@ export default function App() {
           await loadActiveAccount();
         }
       }
+      // Always hydrate the chain state — the locked / onboarding
+      // screens don't need it, but the cost is a single IPC pair and
+      // it primes the home screen render that follows unlock.
+      await loadChainState();
     })();
   }, []);
 
-  // Balance refresh — runs whenever the active account or network
-  // changes. Sprintnet's chain id is hardcoded for now because the
-  // Networks list still points at the legacy demo testnet (0x1B1C);
-  // once that wiring lands the next session, this falls back to
-  // `net.chainId`.
-  // TODO: wire Networks list to real Sprintnet chain id in next step
+  // Balance refresh — runs whenever the active account or active
+  // chain changes. Reads from `activeChain.chainId`, which the
+  // service worker resolves from chrome.storage (`mono.chain.active`)
+  // and falls back to Sprintnet on first launch.
   useEffect(() => {
     if (!acc.addr.startsWith("0x")) return;
     let cancelled = false;
     void (async () => {
-      const r = await bgWalletBalance(acc.addr, "0x10F2C");
+      const r = await bgWalletBalance(acc.addr, activeChain.chainId);
       if (cancelled) return;
       if (!r.ok) {
         // Leave the existing balance in place; Home renders "0.00" when
@@ -153,7 +199,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [acc.addr, net.chainId]);
+  }, [acc.addr, activeChain.chainId]);
 
   // Re-skin popup background per active denom (matches designs/src/ext-app.jsx).
   useEffect(() => {
@@ -188,6 +234,7 @@ export default function App() {
     if (ks.algo === "mldsa") {
       await loadActiveAccount();
     }
+    await loadChainState();
     if (activeApproval) {
       // We're in the approval flow — stay on the approval screen so the user
       // can hit Approve.
@@ -237,6 +284,7 @@ export default function App() {
               onContinue={() => {
                 setScreen("home");
                 void loadActiveAccount();
+                void loadChainState();
               }}
             />
           ) : (
