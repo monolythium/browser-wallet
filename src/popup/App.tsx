@@ -19,7 +19,7 @@ import "./ext.css";
 import {
   Home, Accounts, Networks, Settings, Receive, Send,
   ReqConnect, ReqOnboard,
-  ReqSheet, AttStrip, ChainStatusBanner,
+  ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
 } from "./components";
 import { ACCOUNTS, NETWORKS, type Account, type Network } from "./demo-data";
@@ -225,7 +225,6 @@ export default function App() {
   return (
     <div className="ext" data-denom={acc.denom}>
       {showBannerStrip && <ChainStatusBanner />}
-      {showBannerStrip && <AttStrip />}
 
       {screen === "loading" && <div className="ext-body" style={{ padding: 24, color: "var(--fg-300)" }}>Loading…</div>}
 
