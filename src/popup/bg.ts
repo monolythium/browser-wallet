@@ -132,6 +132,10 @@ export interface ChainEntry {
   rpc: string;
   chainIdNum: number;
   builtin: boolean;
+  /** True for Foundation-attested official chains (Sprintnet today).
+   * Surfaces the "Official" badge on the Networks screen; user-added
+   * chains via `wallet_addEthereumChain` are always `false`. */
+  official?: boolean;
   active: boolean;
   blockExplorer?: string;
   nativeCurrency?: { name: string; symbol: string; decimals: number };
@@ -271,6 +275,28 @@ export async function bgWalletFeeSuggestion(
       gasLimit: r.gasLimit,
     },
   };
+}
+
+/**
+ * Read the active chain id from chrome.storage. Returns the Sprintnet
+ * default (`0x10F2C`) when nothing is stored yet (first launch) or when
+ * the stored id no longer maps to a known chain.
+ */
+export async function bgWalletActiveChain(): Promise<
+  { ok: true; chainId: string } | { ok: false; reason?: string }
+> {
+  return send("wallet-active-chain");
+}
+
+/**
+ * Switch the active chain. Mirrors `wallet_switchEthereumChain` (validate,
+ * persist, broadcast `chainChanged`) but is invoked through the popup IPC
+ * channel rather than the dApp RPC channel.
+ */
+export async function bgWalletSetActiveChain(
+  chainId: string,
+): Promise<{ ok: true; chainId: string } | { ok: false; reason?: string }> {
+  return send("wallet-set-active-chain", { chainId });
 }
 
 /**
