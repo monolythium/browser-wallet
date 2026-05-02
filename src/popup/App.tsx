@@ -17,7 +17,7 @@ import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Settings, Receive,
+  Home, Accounts, Networks, Settings, Receive, Send,
   ReqConnect, ReqOnboard,
   ReqSheet, AttStrip, DemoBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -48,6 +48,7 @@ type Screen =
   | "networks"
   | "settings"
   | "receive"
+  | "send"
   | "approval";
 
 interface UiApproval {
@@ -218,7 +219,8 @@ export default function App() {
     screen === "accounts" ||
     screen === "networks" ||
     screen === "settings" ||
-    screen === "receive";
+    screen === "receive" ||
+    screen === "send";
 
   return (
     <div className="ext" data-denom={acc.denom}>
@@ -266,6 +268,7 @@ export default function App() {
           onOpenNetworks={() => setScreen("networks")}
           onSettings={() => setScreen("settings")}
           onOpenReceive={() => setScreen("receive")}
+          onOpenSend={() => setScreen("send")}
           onOpenRequest={() => {
             /* clicking demo pending shelf in normal home does nothing real */
           }}
@@ -295,6 +298,10 @@ export default function App() {
 
       {screen === "receive" && (
         <Receive account={acc} onBack={() => setScreen("home")} />
+      )}
+
+      {screen === "send" && (
+        <Send account={acc} onBack={() => setScreen("home")} />
       )}
 
       {screen === "approval" && activeApproval && (
