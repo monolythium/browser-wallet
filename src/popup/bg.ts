@@ -241,6 +241,10 @@ export interface FeeSuggestion {
   maxFeePerGas: string;
   /** Hex wei — current/next-block base fee. Surfaced for the UI fee preview. */
   baseFeePerGas: string;
+  /** Hex gas-limit recommendation. Non-null on Sprintnet (the chain has
+   * an intrinsic floor `eth_estimateGas` doesn't report); null on other
+   * chains where the popup should estimate itself if needed. */
+  gasLimit: string | null;
 }
 
 /** Tx hash + diagnostic validator id from `bgWalletSendTx`. */
@@ -264,6 +268,7 @@ export async function bgWalletFeeSuggestion(
       maxPriorityFeePerGas: r.maxPriorityFeePerGas,
       maxFeePerGas: r.maxFeePerGas,
       baseFeePerGas: r.baseFeePerGas,
+      gasLimit: r.gasLimit,
     },
   };
 }
