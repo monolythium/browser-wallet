@@ -27,21 +27,6 @@ import type {
 } from "./bg";
 import { bgWalletFeeSuggestion, bgWalletSendTx, bgWalletValidatorStatus } from "./bg";
 
-// ---- Attestation strip (top-of-popup chromatic halo of node attestation) ----
-export function AttStrip() {
-  return (
-    <div className="ext-att">
-      <span className="state"><span className="dot" />ATTESTED</span>
-      <span className="sep">·</span>
-      <span className="k">node</span> <span className="v">{NODE.handle}</span>
-      <span className="sep">·</span>
-      <span className="k">DAC</span> <span className="v">{(NODE.dacCoverage * 100).toFixed(0)}%</span>
-      <span className="sep">·</span>
-      <span className="k">round</span> <span className="v">{NODE.round}</span>
-    </div>
-  );
-}
-
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
   return (
@@ -1272,7 +1257,6 @@ export function ReqConnect({ custody, onApprove, onReject }: ReqConnectProps) {
   return (
     <>
       <ChainStatusBanner />
-      <AttStrip />
       <div className="req-head">
         <div className="origin">
           <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
@@ -1364,7 +1348,6 @@ export function ReqSign({ type, custody, algo: initAlgo, onApprove, onReject }: 
   return (
     <>
       <ChainStatusBanner />
-      <AttStrip />
       <div className="req-head">
         <div className="origin">
           <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
@@ -1509,7 +1492,6 @@ export function ReqMessage({ custody, onApprove, onReject }: { custody: Custody;
   return (
     <>
       <ChainStatusBanner />
-      <AttStrip />
       <div className="req-head">
         <div className="origin">
           <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
@@ -1869,7 +1851,6 @@ export function ReqSendTx({
   return (
     <>
       <ChainStatusBanner />
-      <AttStrip />
       <div className="req-head">
         <div className="origin">
           <div className="fav C">⌘</div>
@@ -2081,7 +2062,6 @@ export function ReqPersonalSignReal({
   return (
     <>
       <ChainStatusBanner />
-      <AttStrip />
       <div className="req-head">
         <div className="origin">
           <div className="fav G">M</div>
@@ -2179,7 +2159,6 @@ export function ReqTypedSign({
   return (
     <>
       <ChainStatusBanner />
-      <AttStrip />
       <div className="req-head">
         <div className="origin">
           <div className="fav G">⛬</div>
@@ -2351,7 +2330,6 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
   return (
     <>
       <ChainStatusBanner />
-      <AttStrip />
       <div className="req-head">
         <div className="origin">
           <div className="fav S">+</div>
