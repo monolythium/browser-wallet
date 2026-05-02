@@ -273,6 +273,18 @@ export async function bgWalletFeeSuggestion(
   };
 }
 
+/**
+ * Probe the published Sprintnet validators and report which one answered
+ * (or `null` if none did within budget). Backs the chain-status banner;
+ * the service worker caches the answer for 10s, so it's safe to call on
+ * every popup tick.
+ */
+export async function bgWalletValidatorStatus(): Promise<
+  { ok: true; name: string | null } | { ok: false; reason?: string }
+> {
+  return send("wallet-validator-status");
+}
+
 export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
