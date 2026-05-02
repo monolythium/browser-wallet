@@ -19,7 +19,7 @@ import "./ext.css";
 import {
   Home, Accounts, Networks, Settings, Receive, Send,
   ReqConnect, ReqOnboard,
-  ReqSheet, AttStrip, DemoBanner,
+  ReqSheet, AttStrip, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
 } from "./components";
 import { ACCOUNTS, NETWORKS, type Account, type Network } from "./demo-data";
@@ -224,7 +224,7 @@ export default function App() {
 
   return (
     <div className="ext" data-denom={acc.denom}>
-      {showBannerStrip && <DemoBanner />}
+      {showBannerStrip && <ChainStatusBanner />}
       {showBannerStrip && <AttStrip />}
 
       {screen === "loading" && <div className="ext-body" style={{ padding: 24, color: "var(--fg-300)" }}>Loading…</div>}
@@ -339,7 +339,7 @@ function CreateWalletForm({ onSubmit, error, legacyNotice }: CreateWalletFormPro
 
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <div style={{ padding: "26px 22px 12px", textAlign: "center" }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Create a wallet</h2>
         <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", letterSpacing: "0.16em", textTransform: "uppercase", marginTop: 4 }}>
@@ -403,7 +403,7 @@ function NewWalletReveal({ seedHex, address, onContinue }: NewWalletRevealProps)
   const chunks = [raw.slice(0, 16), raw.slice(16, 32), raw.slice(32, 48), raw.slice(48, 64)];
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <div style={{ padding: "20px 18px 8px" }}>
         <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Your recovery seed</h2>
         <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", letterSpacing: "0.14em", textTransform: "uppercase", marginTop: 4 }}>
@@ -451,7 +451,7 @@ function UnlockForm({ address, error, onSubmit }: UnlockFormProps) {
   const [password, setPassword] = useState("");
   return (
     <>
-      <DemoBanner />
+      <ChainStatusBanner />
       <div style={{ padding: "30px 22px 8px", textAlign: "center" }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Unlock wallet</h2>
         <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 6 }}>
@@ -567,7 +567,7 @@ function ApprovalRoute({
   // switch_chain or future approval kinds — fall through with a generic confirm.
   return (
     <ReqSheet onBack={onReject}>
-      <DemoBanner />
+      <ChainStatusBanner />
       <div style={{ padding: 18 }}>
         <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Confirm request</h2>
         <pre style={{ marginTop: 10, fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", whiteSpace: "pre-wrap" }}>
