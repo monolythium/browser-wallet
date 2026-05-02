@@ -17,7 +17,7 @@ import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Settings,
+  Home, Accounts, Networks, Settings, Receive,
   ReqConnect, ReqOnboard,
   ReqSheet, AttStrip, DemoBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -29,6 +29,8 @@ import {
   bgKeystoreCreateNew,
   bgKeystoreUnlock,
   bgResolveApproval,
+  bgWalletActiveAccount,
+  bgWalletBalance,
   type PendingApproval,
   type KeystoreStatus,
   type SendTxRequest,
@@ -45,6 +47,7 @@ type Screen =
   | "accounts"
   | "networks"
   | "settings"
+  | "receive"
   | "approval";
 
 interface UiApproval {
@@ -57,12 +60,32 @@ export default function App() {
   const [activeApproval, setActiveApproval] = useState<UiApproval | null>(null);
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [generated, setGenerated] = useState<{ mnemonic: string; address: string } | null>(null);
+  const [generated, setGenerated] = useState<{ seedHex: string; address: string } | null>(null);
 
   const initialAccount: Account = ACCOUNTS[0]!;
   const initialNetwork: Network = NETWORKS[1] ?? NETWORKS[0]!;
   const [acc, setAcc] = useState<Account>(initialAccount);
   const [net, setNet] = useState<Network>(initialNetwork);
+
+  // Fetch the unlocked v3 keypair and patch `acc` with its real EVM
+  // address + algo. Demo data stays as the fallback shape; only the
+  // identity-bearing fields are overridden so Home keeps rendering the
+  // same component without a rewrite.
+  const loadActiveAccount = async () => {
+    const r = await bgWalletActiveAccount();
+    if (!r.ok) return;
+    setAcc((prev) => ({
+      ...prev,
+      id: "v3-active",
+      label: "ML-DSA-65 wallet",
+      addr: r.account.address,
+      algo: r.account.algo === "mldsa" ? "mldsa" : "slhdsa",
+      custody: r.account.custody,
+      denom: "public",
+      balance: null,
+      pinned: true,
+    }));
+  };
 
   // ---- mount-time bootstrap ----
   useEffect(() => {
@@ -92,9 +115,44 @@ export default function App() {
         setScreen("locked");
       } else {
         setScreen("home");
+        if (ks.algo === "mldsa") {
+          await loadActiveAccount();
+        }
       }
     })();
   }, []);
+
+  // Balance refresh — runs whenever the active account or network
+  // changes. Sprintnet's chain id is hardcoded for now because the
+  // Networks list still points at the legacy demo testnet (0x1B1C);
+  // once that wiring lands the next session, this falls back to
+  // `net.chainId`.
+  // TODO: wire Networks list to real Sprintnet chain id in next step
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) return;
+    let cancelled = false;
+    void (async () => {
+      const r = await bgWalletBalance(acc.addr, "0x10F2C");
+      if (cancelled) return;
+      if (!r.ok) {
+        // Leave the existing balance in place; Home renders "0.00" when
+        // null which is acceptable until we surface a load error.
+        return;
+      }
+      try {
+        const wei = BigInt(r.balanceHex);
+        // 18-decimal LYTH; Number() loses precision above ~9e15 LYTH but
+        // that's far beyond any realistic Sprintnet balance.
+        const lyth = Number(wei) / 1e18;
+        setAcc((prev) => ({ ...prev, balance: lyth }));
+      } catch {
+        // Malformed hex — ignore, balance stays null.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [acc.addr, net.chainId]);
 
   // Re-skin popup background per active denom (matches designs/src/ext-app.jsx).
   useEffect(() => {
@@ -126,6 +184,9 @@ export default function App() {
     }
     const ks = await bgKeystoreStatus();
     setKeystore(ks);
+    if (ks.algo === "mldsa") {
+      await loadActiveAccount();
+    }
     if (activeApproval) {
       // We're in the approval flow — stay on the approval screen so the user
       // can hit Approve.
@@ -141,7 +202,7 @@ export default function App() {
       setCreateError(r.reason ?? "failed to create vault");
       return;
     }
-    setGenerated({ mnemonic: r.mnemonic, address: r.address });
+    setGenerated({ seedHex: r.seedHex, address: r.address });
     const ks = await bgKeystoreStatus();
     setKeystore(ks);
   };
@@ -156,7 +217,8 @@ export default function App() {
     screen === "home" ||
     screen === "accounts" ||
     screen === "networks" ||
-    screen === "settings";
+    screen === "settings" ||
+    screen === "receive";
 
   return (
     <div className="ext" data-denom={acc.denom}>
@@ -169,9 +231,12 @@ export default function App() {
         <ReqSheet onBack={() => setScreen("loading")}>
           {generated ? (
             <NewWalletReveal
-              mnemonic={generated.mnemonic}
+              seedHex={generated.seedHex}
               address={generated.address}
-              onContinue={() => setScreen("home")}
+              onContinue={() => {
+                setScreen("home");
+                void loadActiveAccount();
+              }}
             />
           ) : (
             <CreateWalletForm
@@ -200,6 +265,7 @@ export default function App() {
           onOpenAccounts={() => setScreen("accounts")}
           onOpenNetworks={() => setScreen("networks")}
           onSettings={() => setScreen("settings")}
+          onOpenReceive={() => setScreen("receive")}
           onOpenRequest={() => {
             /* clicking demo pending shelf in normal home does nothing real */
           }}
@@ -225,6 +291,10 @@ export default function App() {
 
       {screen === "settings" && (
         <Settings onBack={() => setScreen("home")} custody={custody} algo={algo} />
+      )}
+
+      {screen === "receive" && (
+        <Receive account={acc} onBack={() => setScreen("home")} />
       )}
 
       {screen === "approval" && activeApproval && (
@@ -310,21 +380,27 @@ function CreateWalletForm({ onSubmit, error, legacyNotice }: CreateWalletFormPro
 }
 
 interface NewWalletRevealProps {
-  mnemonic: string;
+  seedHex: string;
   address: string;
   onContinue: () => void;
 }
 
-function NewWalletReveal({ mnemonic, address, onContinue }: NewWalletRevealProps) {
+function NewWalletReveal({ seedHex, address, onContinue }: NewWalletRevealProps) {
   const [revealed, setRevealed] = useState(false);
-  const words = mnemonic.split(" ");
+  // 32-byte seed ⇒ 64 hex chars. Break into four 16-char chunks so the
+  // user can transcribe one row at a time and visually verify each row
+  // matches their backup. Strip the 0x prefix if the keystore returned
+  // one — the visual is cleaner without it, and the underlying bytes
+  // are identical.
+  const raw = seedHex.startsWith("0x") || seedHex.startsWith("0X") ? seedHex.slice(2) : seedHex;
+  const chunks = [raw.slice(0, 16), raw.slice(16, 32), raw.slice(32, 48), raw.slice(48, 64)];
   return (
     <>
       <DemoBanner />
       <div style={{ padding: "20px 18px 8px" }}>
-        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Your recovery phrase</h2>
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Your recovery seed</h2>
         <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", letterSpacing: "0.14em", textTransform: "uppercase", marginTop: 4 }}>
-          write it down · we cannot recover it
+          32-byte ML-DSA-65 seed · write it down · we cannot recover it
         </div>
       </div>
       <div style={{ padding: "0 18px" }}>
@@ -342,10 +418,8 @@ function NewWalletReveal({ mnemonic, address, onContinue }: NewWalletRevealProps
           userSelect: revealed ? "text" : "none",
         }} onClick={() => setRevealed(true)}>
           {revealed
-            ? words.map((w, i) => (
-                <span key={i} style={{ marginRight: 8 }}>
-                  <span style={{ color: "var(--fg-500)" }}>{i + 1}.</span> {w}
-                </span>
+            ? chunks.map((c, i) => (
+                <div key={i} style={{ letterSpacing: "0.05em" }}>{c}</div>
               ))
             : "tap to reveal"}
         </div>
