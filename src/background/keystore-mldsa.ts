@@ -285,7 +285,7 @@ export async function unlockV3(password: string): Promise<{ address: string }> {
 /**
  * Sign + bincode-encode a Monolythium-native EVM transaction.
  * Returns the wire-ready 0x-prefixed hex string + tx hash + the raw
- * `bincode(SignedTransaction)` bytes (needed by the encrypted-envelope
+ * `bincode(SignedTransaction)` bytes (needed by the SDK encrypted-envelope
  * wrapper, which uses the raw bytes as the AEAD plaintext).
  */
 export async function signEvmTxV3(req: {
@@ -333,12 +333,16 @@ export function getUnlockedAddressBytesV3(): Uint8Array | null {
   return unlocked?.backend.addressBytes() ?? null;
 }
 
+export function getUnlockedBackendV3(): MlDsa65Backend | null {
+  return unlocked?.backend ?? null;
+}
+
 /**
  * Sign an arbitrary 32-byte digest with ML-DSA-65 — used by the
- * encrypted-envelope outer signature, which signs
+ * SDK encrypted-envelope outer signature, which signs
  * `keccak256(bincode(nonce_aad) || ciphertext || bincode(decryption_hint)
  * || sender_pubkey)`. Keeping the secret-key dereference inside this
- * module is what lets `encrypted-envelope.ts` stay state-less.
+ * module is what keeps secret-key dereferences scoped to the keystore.
  *
  * Throws `"v3 wallet is locked"` if the keystore isn't unlocked.
  */
