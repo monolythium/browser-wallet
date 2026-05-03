@@ -10,10 +10,10 @@
 
 import type { ReactNode, CSSProperties } from "react";
 import { useState, useEffect } from "react";
-import { Icon, Spark, fmt, shortAddr } from "./Icon";
+import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import {
-  ACCOUNTS, ASSETS, DAPPS, ACTIVITY, PENDING, NODE,
+  ACCOUNTS, DAPPS, ACTIVITY, PENDING, NODE,
 } from "./demo-data";
 import type {
   Account, Custody, Algo, PendingSign,
@@ -226,46 +226,54 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
 }
 
 // ---- Asset list ----
-function AssetList() {
+//
+// Two rows: LYTH (live, sourced from `account.balance`) and LYTH-p
+// (coming soon — the bifurcated-denomination split lives in
+// `project_bifurcated_denomination.md` as a future task). No
+// bridged / wrapped entries — those were demo-mock pairs and the
+// wallet doesn't have authoritative data for them.
+
+interface AssetListProps {
+  account: Account;
+  network: ChainEntry;
+}
+
+function AssetList({ account, network }: AssetListProps) {
+  const lythAmount = account.balance;
   return (
     <div>
-      {ASSETS.map((a, i) => {
-        const cls = a.sym === "LYTH-p" ? "priv"
-          : a.sym === "USDC" ? "usdc"
-          : a.bridged ? "w"
-          : a.sym === "LYTH" && !a.bridged ? "native"
-          : "";
-        const gly = a.sym === "LYTH-p" ? "Ⓜ"
-          : a.sym === "USDC" ? "$"
-          : a.sym === "wLYTH" ? "w"
-          : a.sym.slice(0, 3).toUpperCase();
-        return (
-          <div className="ext-asset" key={i}>
-            <div className={`ext-asset__ico ${cls}`}>{gly}</div>
-            <div className="ext-asset__main">
-              <div className="sym">
-                {a.sym}{" "}
-                {a.attested && <span className="ext-badge-att">Att</span>}
-                {a.bridged && <span className="ext-badge-bridged">Bridge</span>}
-              </div>
-              <div className="chain">{a.label} · {a.chain}</div>
-            </div>
-            <div className="ext-asset__spark">
-              {a.spark && <Spark data={a.spark} down={(a.change ?? 0) < 0} />}
-            </div>
-            <div className="ext-asset__right">
-              {a.opaque
-                ? <div className="opaque">hidden</div>
-                : <div className="amt">{fmt(a.amount, 2)}</div>}
-              {a.change != null && (
-                <div className={`chg ${a.change < 0 ? "down" : ""}`}>
-                  {a.change > 0 ? "+" : ""}{a.change}%
-                </div>
-              )}
-            </div>
+      {/* LYTH — live row */}
+      <div className="ext-asset">
+        <div className="ext-asset__ico native">LYT</div>
+        <div className="ext-asset__main">
+          <div className="sym">
+            LYTH <span className="ext-badge-att">Att</span>
           </div>
-        );
-      })}
+          <div className="chain">Monolythium · {network.name}</div>
+        </div>
+        <div className="ext-asset__spark" />
+        <div className="ext-asset__right">
+          <div className="amt">{lythAmount != null ? fmt(lythAmount, 2) : "0.00"}</div>
+          <div className="chg">—</div>
+        </div>
+      </div>
+
+      {/* LYTH-p — coming soon */}
+      <div className="ext-asset" style={{ opacity: 0.6, cursor: "default" }}>
+        <div className="ext-asset__ico priv">Ⓜ</div>
+        <div className="ext-asset__main">
+          <div className="sym" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            LYTH-p
+            <span className="ext-badge-att">Att</span>
+            <ComingSoonBadge />
+          </div>
+          <div className="chain">Monolythium (private) · private denomination</div>
+        </div>
+        <div className="ext-asset__spark" />
+        <div className="ext-asset__right">
+          <div className="amt">—</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -468,7 +476,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
             <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
             <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
           </div>
-          {tab === "assets" ? <AssetList /> : <ActivityList />}
+          {tab === "assets" ? <AssetList account={account} network={network} /> : <ActivityList />}
         </div>
 
         {/* First-run onboarding link */}
