@@ -897,6 +897,156 @@ export function Stake({ onBack }: StakeProps) {
   );
 }
 
+// ---- Bridge sheet ----
+//
+// Pre-stage of the cross-chain bridge surface (whitepaper §26). Pure
+// presentational — IBC + SP1 sync-committee bridges are documented in
+// the source tree (crates/ibc, crates/zk-bridge-verifier) but not
+// active on Sprintnet. The safety-guarantees list here mirrors §26.3
+// (drain caps), §26.4 (slashable insurance), and §30.2 D (Foundation
+// multisig 5-of-7 circuit-breaker threshold).
+
+interface BridgeProps {
+  onBack: () => void;
+}
+
+export function Bridge({ onBack }: BridgeProps) {
+  const bridgeTypes: Array<{ name: string; desc: string }> = [
+    {
+      name: "IBC",
+      desc: "Trustless light-client bridging to Cosmos ecosystem chains",
+    },
+    {
+      name: "SP1 zk-sync committee",
+      desc: "Zero-knowledge proofs of Ethereum sync-committee state transitions",
+    },
+  ];
+  const guarantees = [
+    "Per-asset hourly drain caps",
+    "Slashable insurance pool funded by bridge fees",
+    "On-chain trust-disclosure metadata",
+    "Circuit breaker tripped by anomaly detection or Foundation multisig (5-of-7)",
+  ];
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack}>
+          <Icon name="back" size={15} />
+        </button>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+          Cross-chain bridge
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+      <div className="ext-body">
+        <div className="ext-card" style={{ padding: 14 }}>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: "var(--fg-100)",
+            }}
+          >
+            Move assets between Monolythium and other chains via
+            trust-minimized bridges. Each bridge publishes its trust
+            model, drain caps, and insurance pool size on-chain.
+          </p>
+        </div>
+
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Supported bridge types
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {bridgeTypes.map((b) => (
+              <div
+                key={b.name}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid var(--fg-700)",
+                  background: "transparent",
+                  opacity: 0.6,
+                  cursor: "default",
+                }}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-100)" }}>
+                  {b.name}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    lineHeight: 1.4,
+                    color: "var(--fg-400)",
+                    marginTop: 4,
+                  }}
+                >
+                  {b.desc}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Safety guarantees
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              padding: 0,
+              listStyle: "none",
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: "var(--fg-200)",
+            }}
+          >
+            {guarantees.map((line) => (
+              <li key={line} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span style={{ color: "var(--fg-500)", flexShrink: 0 }}>·</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            letterSpacing: "0.08em",
+            textAlign: "center",
+            marginTop: 4,
+          }}
+        >
+          — Per Monolythium v2 §26
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ---- Send sheet ----
 
 const ADMISSION_REJECT_CODE_LO = -32049;
