@@ -28,34 +28,6 @@ import type {
 } from "./bg";
 import { bgWalletFeeSuggestion, bgWalletSendTx, bgWalletValidatorStatus } from "./bg";
 
-/**
- * Small dim capsule for placeholder UI surfaces — pending requests,
- * planned-but-not-shipped dApp tiles, future LYTH-p assets. Visually
- * matches the `ext-badge-att` / `ext-badge-bridged` rhythm so it fits
- * in the same row as other badges, but with muted `--fg-500` text on
- * a faint border so the eye reads it as inert.
- */
-export function ComingSoonBadge() {
-  return (
-    <span
-      style={{
-        fontFamily: "var(--f-mono)",
-        fontSize: 8,
-        letterSpacing: "0.1em",
-        padding: "1px 5px",
-        borderRadius: 3,
-        background: "rgba(255,255,255,0.04)",
-        color: "var(--fg-500)",
-        textTransform: "uppercase",
-        border: "1px solid var(--fg-700)",
-        whiteSpace: "nowrap",
-      }}
-    >
-      coming soon
-    </span>
-  );
-}
-
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
   return (
@@ -258,14 +230,13 @@ function AssetList({ account, network }: AssetListProps) {
         </div>
       </div>
 
-      {/* LYTH-p — coming soon */}
+      {/* LYTH-p — disabled (private denomination not active in this build) */}
       <div className="ext-asset" style={{ opacity: 0.6, cursor: "default" }}>
         <div className="ext-asset__ico priv">Ⓜ</div>
         <div className="ext-asset__main">
           <div className="sym" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             LYTH-p
             <span className="ext-badge-att">Att</span>
-            <ComingSoonBadge />
           </div>
           <div className="chain">Monolythium (private) · private denomination</div>
         </div>
@@ -332,12 +303,11 @@ function ActivityList() {
 
 // ---- Pending requests shelf ----
 //
-// Placeholder card for the planned EIP-1193 approval queue. The real
-// queue will list active dApp connect / sign / message requests; until
-// the in-popup approval router is wired, this card pre-stages the
-// visual entry point with three illustrative rows. Rows are inert
-// (no onClick, no cursor pointer, opacity 0.6) and each carries a
-// "coming soon" badge so the user reads them as a preview.
+// Placeholder for the planned EIP-1193 approval queue. The real queue
+// will list active dApp connect / sign / message requests; until the
+// in-popup approval router is wired here, this card shows three
+// illustrative rows. Rows are inert (no onClick, cursor default,
+// opacity 0.6) — the disabled-state visual is the only signal needed.
 
 function PendingShelf() {
   const items: Array<{ id: string; title: string; hint: string; icon: string }> = [
@@ -350,7 +320,7 @@ function PendingShelf() {
       <div className="ext-card__head">
         <h3>Pending requests</h3>
         <div className="spacer" />
-        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", letterSpacing: "0.08em", textTransform: "uppercase" }}>preview</span>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", letterSpacing: "0.08em", textTransform: "uppercase" }}>{items.length} open</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {items.map((it) => (
@@ -380,7 +350,6 @@ function PendingShelf() {
               <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg-100)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
               <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 2, letterSpacing: "0.02em" }}>{it.hint}</div>
             </div>
-            <ComingSoonBadge />
           </div>
         ))}
       </div>
@@ -476,16 +445,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
               >
                 <div className={`glyph ${d.icon}`}>{d.glyph ?? d.icon}</div>
                 <div className="nm">{d.name}</div>
-                <div
-                  className="last"
-                  style={{
-                    color: "var(--fg-500)",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em",
-                  }}
-                >
-                  coming soon
-                </div>
+                <div className="last">{d.lastUsed}</div>
               </div>
             ))}
           </div>
