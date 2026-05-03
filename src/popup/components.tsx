@@ -10,10 +10,10 @@
 
 import type { ReactNode, CSSProperties } from "react";
 import { useState, useEffect } from "react";
-import { Icon, Spark, fmt, shortAddr } from "./Icon";
+import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import {
-  ACCOUNTS, ASSETS, DAPPS, ACTIVITY, PENDING, NODE,
+  ACCOUNTS, DAPPS, ACTIVITY, PENDING, NODE,
 } from "./demo-data";
 import type {
   Account, Custody, Algo, PendingSign,
@@ -198,52 +198,80 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
 }
 
 // ---- Asset list ----
-function AssetList() {
+//
+// Two rows: LYTH (live, sourced from `account.balance`) and LYTH-p
+// (coming soon — the bifurcated-denomination split lives in
+// `project_bifurcated_denomination.md` as a future task). No
+// bridged / wrapped entries — those were demo-mock pairs and the
+// wallet doesn't have authoritative data for them.
+
+interface AssetListProps {
+  account: Account;
+  network: ChainEntry;
+}
+
+function AssetList({ account, network }: AssetListProps) {
+  const lythAmount = account.balance;
   return (
     <div>
-      {ASSETS.map((a, i) => {
-        const cls = a.sym === "LYTH-p" ? "priv"
-          : a.sym === "USDC" ? "usdc"
-          : a.bridged ? "w"
-          : a.sym === "LYTH" && !a.bridged ? "native"
-          : "";
-        const gly = a.sym === "LYTH-p" ? "Ⓜ"
-          : a.sym === "USDC" ? "$"
-          : a.sym === "wLYTH" ? "w"
-          : a.sym.slice(0, 3).toUpperCase();
-        return (
-          <div className="ext-asset" key={i}>
-            <div className={`ext-asset__ico ${cls}`}>{gly}</div>
-            <div className="ext-asset__main">
-              <div className="sym">
-                {a.sym}{" "}
-                {a.attested && <span className="ext-badge-att">Att</span>}
-                {a.bridged && <span className="ext-badge-bridged">Bridge</span>}
-              </div>
-              <div className="chain">{a.label} · {a.chain}</div>
-            </div>
-            <div className="ext-asset__spark">
-              {a.spark && <Spark data={a.spark} down={(a.change ?? 0) < 0} />}
-            </div>
-            <div className="ext-asset__right">
-              {a.opaque
-                ? <div className="opaque">hidden</div>
-                : <div className="amt">{fmt(a.amount, 2)}</div>}
-              {a.change != null && (
-                <div className={`chg ${a.change < 0 ? "down" : ""}`}>
-                  {a.change > 0 ? "+" : ""}{a.change}%
-                </div>
-              )}
-            </div>
+      {/* LYTH — live row */}
+      <div className="ext-asset">
+        <div className="ext-asset__ico native">LYT</div>
+        <div className="ext-asset__main">
+          <div className="sym">
+            LYTH <span className="ext-badge-att">Att</span>
           </div>
-        );
-      })}
+          <div className="chain">Monolythium · {network.name}</div>
+        </div>
+        <div className="ext-asset__spark" />
+        <div className="ext-asset__right">
+          <div className="amt">{lythAmount != null ? fmt(lythAmount, 2) : "0.00"}</div>
+          <div className="chg">—</div>
+        </div>
+      </div>
+
+      {/* LYTH-p — disabled (private denomination not active in this build) */}
+      <div className="ext-asset" style={{ opacity: 0.6, cursor: "default" }}>
+        <div className="ext-asset__ico priv">Ⓜ</div>
+        <div className="ext-asset__main">
+          <div className="sym" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            LYTH-p
+            <span className="ext-badge-att">Att</span>
+          </div>
+          <div className="chain">Monolythium (private) · private denomination</div>
+        </div>
+        <div className="ext-asset__spark" />
+        <div className="ext-asset__right">
+          <div className="amt">—</div>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ---- Activity list ----
+//
+// Empty until the wallet indexes its own tx history. The Send screen
+// already submits real transactions against the live validators; this
+// view just doesn't query them back yet. Framed as "No transactions
+// yet" (real-but-not-surfaced) rather than "coming soon" (planned-but-
+// not-shipped).
 function ActivityList() {
+  if (ACTIVITY.length === 0) {
+    return (
+      <div
+        style={{
+          padding: "32px 18px",
+          textAlign: "center",
+          fontSize: 12,
+          color: "var(--fg-500)",
+          lineHeight: 1.5,
+        }}
+      >
+        No transactions yet
+      </div>
+    );
+  }
   return (
     <div>
       {ACTIVITY.map((t) => (
@@ -274,13 +302,16 @@ function ActivityList() {
 }
 
 // ---- Pending requests shelf ----
-interface PendingShelfProps {
-  onOpen: (id: "connect" | "sign" | "message") => void;
-}
+//
+// Placeholder for the planned EIP-1193 approval queue. The real queue
+// will list active dApp connect / sign / message requests; until the
+// in-popup approval router is wired here, this card shows three
+// illustrative rows. Rows are inert (no onClick, cursor default,
+// opacity 0.6) — the disabled-state visual is the only signal needed.
 
-function PendingShelf({ onOpen }: PendingShelfProps) {
-  const items: Array<{ id: "connect" | "sign" | "message"; title: string; hint: string; icon: string }> = [
-    { id: "connect", title: "Connect · Coinzen DEX", hint: "3 permissions", icon: "C" },
+function PendingShelf() {
+  const items: Array<{ id: string; title: string; hint: string; icon: string }> = [
+    { id: "connect", title: "Connect · MonoHub", hint: "3 permissions", icon: "M" },
     { id: "sign", title: "Sign · swap 500 LYTH → USDC", hint: "simulated", icon: "C" },
     { id: "message", title: "Sign-in · gov.monolythium.xyz", hint: "no value", icon: "G" },
   ];
@@ -293,9 +324,8 @@ function PendingShelf({ onOpen }: PendingShelfProps) {
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {items.map((it) => (
-          <button
+          <div
             key={it.id}
-            onClick={() => onOpen(it.id)}
             style={{
               width: "100%",
               display: "grid",
@@ -307,9 +337,10 @@ function PendingShelf({ onOpen }: PendingShelfProps) {
               background: "rgba(255,255,255,0.03)",
               border: "1px solid var(--fg-700)",
               color: "inherit",
-              cursor: "pointer",
+              cursor: "default",
               fontFamily: "inherit",
               textAlign: "left",
+              opacity: 0.6,
             }}
           >
             <div style={{ width: 28, height: 28, borderRadius: 7, fontSize: 12, display: "grid", placeItems: "center", fontFamily: "var(--f-mono)", fontWeight: 700, color: "#fff", background: it.icon === "G" ? "linear-gradient(135deg, #3a6fa5, #1c3a5a)" : "linear-gradient(135deg, #8a3fa5, #4a1f5a)" }}>
@@ -319,9 +350,67 @@ function PendingShelf({ onOpen }: PendingShelfProps) {
               <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg-100)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
               <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 2, letterSpacing: "0.02em" }}>{it.hint}</div>
             </div>
-            <Icon name="chev" size={12} />
-          </button>
+          </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- Hero chip (Total / Staked) ----
+//
+// Tappable card pair under the hero balance. `Total` is always live
+// and reflects `account.balance`. `Staked` is rendered in disabled
+// style (opacity 0.6, no onClick) until the delegation precompile
+// (0x100A) activates on Sprintnet; the visual hierarchy keeps the
+// "could-be-active" affordance so wiring later is just a prop flip.
+interface HeroChipProps {
+  label: string;
+  value: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}
+
+function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
+  return (
+    <div
+      onClick={disabled ? undefined : onClick}
+      style={{
+        flex: 1,
+        minWidth: 120,
+        padding: "10px 14px",
+        borderRadius: 12,
+        border: active
+          ? "1px solid var(--gold)"
+          : "1px solid var(--fg-700)",
+        background: active ? "var(--gold-bg)" : "transparent",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+        transition: "background 160ms var(--e-out), border-color 160ms var(--e-out)",
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9.5,
+          letterSpacing: "0.16em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: 16,
+          fontWeight: 600,
+          color: "var(--fg-100)",
+          marginTop: 4,
+          letterSpacing: "-0.01em",
+        }}
+      >
+        {value}
       </div>
     </div>
   );
@@ -335,17 +424,26 @@ interface HomeProps {
   onOpenNetworks: () => void;
   onSettings: () => void;
   onOpenReceive: () => void;
-  /** Optional so commit C compiles cleanly before commit D wires the App.tsx route. */
+  /** Optional so a wallet harness without the route wired still compiles cleanly. */
   onOpenSend?: () => void;
-  onOpenRequest: (id: "connect" | "sign" | "message", signType?: PendingSign["type"]) => void;
+  onOpenStake?: () => void;
+  onOpenBridge?: () => void;
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenRequest, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
+  const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
-  const balanceStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
-  const [intPart, fracPart] = balanceStr.split(".");
+  const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
+  // Staked is hardcoded zero until the delegation precompile (0x100A)
+  // activates on Sprintnet — see ADR-0015. The Staked chip is rendered
+  // disabled-style in the meantime; the hero number falls back to
+  // "0.00" when staked is the active view, which is accurate, not a
+  // placeholder.
+  const stakedStr = "0.00";
+  const heroStr = activeChip === "total" ? totalStr : stakedStr;
+  const [intPart, fracPart] = heroStr.split(".");
 
   return (
     <>
@@ -369,10 +467,40 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
               <span className="d">LYTH</span>
             </div>
           )}
-          {!isPriv && <div className="chg">+0.82% · 24h · attested</div>}
+          {!isPriv && (
+            <div className="chg">
+              {activeChip === "total"
+                ? "—% · 24h · attested"
+                : "delegated · 0 / 10 clusters"}
+            </div>
+          )}
           {isPriv && (
             <div className="chg" style={{ color: "oklch(0.78 0.14 240)" }}>
               {account.envelopes ?? 0} envelopes · 30d · DAC 100%
+            </div>
+          )}
+
+          {!isPriv && (
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                marginTop: 14,
+              }}
+            >
+              <HeroChip
+                label="Total"
+                value={totalStr}
+                active={activeChip === "total"}
+                disabled={false}
+                onClick={() => setActiveChip("total")}
+              />
+              <HeroChip
+                label="Staked"
+                value={stakedStr}
+                active={activeChip === "staked"}
+                disabled
+              />
             </div>
           )}
 
@@ -385,11 +513,11 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
               <span className="ico"><Icon name="receive" size={16} /></span>
               <span>Receive</span>
             </button>
-            <button className="ext-act" onClick={() => onOpenRequest("sign", "stake")}>
+            <button className="ext-act" onClick={onOpenStake ?? (() => {})}>
               <span className="ico"><Icon name="stake" size={16} /></span>
               <span>Stake</span>
             </button>
-            <button className="ext-act" onClick={() => onOpenRequest("sign", "bridge")}>
+            <button className="ext-act" onClick={onOpenBridge ?? (() => {})}>
               <span className="ico"><Icon name="bridge" size={16} /></span>
               <span>Bridge</span>
             </button>
@@ -397,7 +525,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
         </div>
 
         {/* Pending requests shelf */}
-        <PendingShelf onOpen={(id) => onOpenRequest(id)} />
+        <PendingShelf />
 
         {/* Recent dApps */}
         <div className="ext-card">
@@ -408,8 +536,12 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
           </div>
           <div className="ext-dapp-row">
             {DAPPS.slice(0, 4).map((d) => (
-              <div key={d.id} className="ext-dapp" onClick={() => onOpenRequest("connect")}>
-                <div className={`glyph ${d.icon}`}>{d.icon}</div>
+              <div
+                key={d.id}
+                className="ext-dapp"
+                style={{ opacity: 0.6, cursor: "default" }}
+              >
+                <div className={`glyph ${d.icon}`}>{d.glyph ?? d.icon}</div>
                 <div className="nm">{d.name}</div>
                 <div className="last">{d.lastUsed}</div>
               </div>
@@ -423,7 +555,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
             <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
             <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
           </div>
-          {tab === "assets" ? <AssetList /> : <ActivityList />}
+          {tab === "assets" ? <AssetList account={account} network={network} /> : <ActivityList />}
         </div>
 
         {/* First-run onboarding link */}
@@ -612,6 +744,304 @@ export function Receive({ account, onBack }: ReceiveProps) {
             Send LYTH on Sprintnet only. Chain id 69420 (0x10F2C). Sending LYTH
             from a different chain may result in lost funds.
           </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---- Stake sheet ----
+//
+// Pre-stage of the cluster-delegation surface (whitepaper §23 + §23.9
+// autovote). Pure presentational right now — no RPC plumbing — because
+// the delegation precompile (DELEGATION_ADDRESS = 0x100A) is gateable
+// per ADR-0015 and not activated on Sprintnet yet (verified: 0x100A
+// returns "0x" empty success). The four-strategy grid is fixed by §23.9
+// and rendered disabled-style; binding lands when the milestone flips.
+
+interface StakeProps {
+  onBack: () => void;
+}
+
+export function Stake({ onBack }: StakeProps) {
+  const strategies: Array<{ name: string; desc: string }> = [
+    {
+      name: "Max Yield",
+      desc: "Highest-APR clusters within the per-cluster cap",
+    },
+    {
+      name: "Max Diversity",
+      desc: "Spread across as many independent clusters as the cap allows",
+    },
+    {
+      name: "Max Decentralization",
+      desc: "Actively avoid clusters with high correlated-preference scores",
+    },
+    {
+      name: "Custom",
+      desc: "Manual per-cluster allocation",
+    },
+  ];
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack}>
+          <Icon name="back" size={15} />
+        </button>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+          Cluster delegation
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+      <div className="ext-body">
+        <div className="ext-card" style={{ padding: 14 }}>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: "var(--fg-100)",
+            }}
+          >
+            Distribute your LYTH across up to 10 clusters with basis-point
+            granularity. Stay 100% liquid — your tokens never leave your
+            wallet, and there's no unbonding period.
+          </p>
+          <ul
+            style={{
+              margin: "12px 0 0",
+              padding: 0,
+              listStyle: "none",
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: "var(--fg-200)",
+            }}
+          >
+            {[
+              "100% liquid — tokens stay in your wallet",
+              "Zero unbonding period — exit any delegation instantly",
+              "Up to 10 clusters per wallet (10000 bps total)",
+              "Quadratic reward curve — diminishing returns on cluster concentration",
+            ].map((line) => (
+              <li key={line} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span style={{ color: "var(--fg-500)", flexShrink: 0 }}>·</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Allocation strategies
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 12,
+            }}
+          >
+            {strategies.map((s) => (
+              <div
+                key={s.name}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid var(--fg-700)",
+                  background: "transparent",
+                  opacity: 0.6,
+                  cursor: "default",
+                }}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-100)" }}>
+                  {s.name}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    lineHeight: 1.4,
+                    color: "var(--fg-400)",
+                    marginTop: 4,
+                  }}
+                >
+                  {s.desc}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            letterSpacing: "0.08em",
+            textAlign: "center",
+            marginTop: 4,
+          }}
+        >
+          — Per Monolythium v2 §23
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---- Bridge sheet ----
+//
+// Pre-stage of the cross-chain bridge surface (whitepaper §26). Pure
+// presentational — IBC + SP1 sync-committee bridges are documented in
+// the source tree (crates/ibc, crates/zk-bridge-verifier) but not
+// active on Sprintnet. The safety-guarantees list here mirrors §26.3
+// (drain caps), §26.4 (slashable insurance), and §30.2 D (Foundation
+// multisig 5-of-7 circuit-breaker threshold).
+
+interface BridgeProps {
+  onBack: () => void;
+}
+
+export function Bridge({ onBack }: BridgeProps) {
+  const bridgeTypes: Array<{ name: string; desc: string }> = [
+    {
+      name: "IBC",
+      desc: "Trustless light-client bridging to Cosmos ecosystem chains",
+    },
+    {
+      name: "SP1 zk-sync committee",
+      desc: "Zero-knowledge proofs of Ethereum sync-committee state transitions",
+    },
+  ];
+  const guarantees = [
+    "Per-asset hourly drain caps",
+    "Slashable insurance pool funded by bridge fees",
+    "On-chain trust-disclosure metadata",
+    "Circuit breaker tripped by anomaly detection or Foundation multisig (5-of-7)",
+  ];
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack}>
+          <Icon name="back" size={15} />
+        </button>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+          Cross-chain bridge
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+      <div className="ext-body">
+        <div className="ext-card" style={{ padding: 14 }}>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: "var(--fg-100)",
+            }}
+          >
+            Move assets between Monolythium and other chains via
+            trust-minimized bridges. Each bridge publishes its trust
+            model, drain caps, and insurance pool size on-chain.
+          </p>
+        </div>
+
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Supported bridge types
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {bridgeTypes.map((b) => (
+              <div
+                key={b.name}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid var(--fg-700)",
+                  background: "transparent",
+                  opacity: 0.6,
+                  cursor: "default",
+                }}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-100)" }}>
+                  {b.name}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    lineHeight: 1.4,
+                    color: "var(--fg-400)",
+                    marginTop: 4,
+                  }}
+                >
+                  {b.desc}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Safety guarantees
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              padding: 0,
+              listStyle: "none",
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: "var(--fg-200)",
+            }}
+          >
+            {guarantees.map((line) => (
+              <li key={line} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span style={{ color: "var(--fg-500)", flexShrink: 0 }}>·</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            letterSpacing: "0.08em",
+            textAlign: "center",
+            marginTop: 4,
+          }}
+        >
+          — Per Monolythium v2 §26
         </div>
       </div>
     </>

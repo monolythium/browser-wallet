@@ -36,7 +36,12 @@ export interface Dapp {
   id: string;
   name: string;
   url: string;
+  /** Color class for the avatar — maps to `.ext-dapp .glyph.{icon}` CSS. */
   icon: "M" | "S" | "C" | "G";
+  /** Displayed character on the avatar. Defaults to `icon` when unset.
+   * Lets a dApp wear a color class without locking the visible letter
+   * to it (e.g. MonoHub uses the `C` purple class but displays "M"). */
+  glyph?: string;
   verified: boolean;
   lastUsed: string;
   perms: string[];
@@ -108,36 +113,37 @@ export const ACCOUNTS: Account[] = [
   { id: "acc4", label: "payroll burner", denom: "public", addr: "mono1:c9a3:burner:1", algo: "slhdsa", balance: 120.80, stakable: 120.80, staked: 0, custody: "sw", pinned: false },
 ];
 
+// LYTH and LYTH-p only. Bridged / wrapped / stablecoin entries from
+// the design mock have been removed — the wallet's bifurcated
+// denomination is the only honest asset model right now (whitepaper
+// §13 / §25); cross-chain wrappers are speculative pairs that don't
+// belong in the assets list. LYTH amount is filled from the live
+// wallet balance at render time; LYTH-p is rendered as "coming soon"
+// (publicBalance/privateBalance split is a future task).
 export const ASSETS: Asset[] = [
-  { sym: "LYTH", label: "Monolythium", chain: "lyth:mainnet", amount: 4128.42, change: 0.82, spark: [34, 35, 33, 36, 38, 37, 39, 40, 42, 41, 44, 45, 43, 46, 48, 47, 50, 52, 51, 54], attested: true },
+  { sym: "LYTH", label: "Monolythium", chain: "lyth:mainnet", amount: null, change: null, spark: null, attested: true },
   { sym: "LYTH-p", label: "Monolythium (private)", chain: "lyth:mainnet", amount: null, change: null, spark: null, attested: true, opaque: true },
-  { sym: "wLYTH", label: "Wrapped LYTH", chain: "solana", amount: 420.11, change: 0.78, spark: [22, 23, 24, 23, 25, 26, 27, 28, 27, 29, 30, 31, 32, 33, 32, 34, 35, 36, 35, 37], attested: false, bridged: true },
-  { sym: "LYTH", label: "LYTH · IBC", chain: "cosmos:hub", amount: 88.40, change: 0.30, spark: [40, 41, 40, 42, 43, 42, 44, 45, 44, 46, 47, 46, 48, 49, 48, 50, 51, 50, 52, 53], attested: false, bridged: true },
-  { sym: "USDC", label: "USD Coin", chain: "solana", amount: 1240.00, change: -0.01, spark: [50, 50, 49, 50, 51, 50, 50, 50, 49, 50, 50, 51, 50, 50, 49, 50, 50, 50, 51, 50], attested: false, bridged: true },
 ];
 
 export const DAPPS: Dapp[] = [
   { id: "monoscan", name: "Monoscan", url: "https://monoscan.xyz", icon: "M", verified: true, lastUsed: "now", perms: ["read:address", "read:activity"] },
   { id: "stake", name: "LYTH Stake", url: "https://stake.monolythium.xyz", icon: "S", verified: true, lastUsed: "2h ago", perms: ["read:address", "sign:stake"] },
-  { id: "coinzen", name: "Coinzen DEX", url: "https://app.coinzen.io", icon: "C", verified: false, lastUsed: "5d ago", perms: ["read:address", "sign:tx", "sign:message"] },
+  { id: "monohub", name: "MonoHub", url: "https://app.monohub.xyz", icon: "C", glyph: "M", verified: false, lastUsed: "5d ago", perms: ["read:address", "sign:tx", "sign:message"] },
   { id: "gov", name: "LYTH Gov", url: "https://gov.monolythium.xyz", icon: "G", verified: true, lastUsed: "yesterday", perms: ["read:address", "sign:message", "sign:vote"] },
 ];
 
-export const ACTIVITY: ActivityItem[] = [
-  { id: "t1", when: "just now", dir: "in", amount: 112.4, sym: "LYTH", who: "cluster C-014 · reward", attest: "attested", dac: 1.00, round: "2938·441", algo: "bls", dapp: null },
-  { id: "t2", when: "4m ago", dir: "out", amount: 48.00, sym: "LYTH", who: "cypher payroll", attest: "attested", dac: 1.00, round: "2938·440", algo: "slhdsa", dapp: "coinzen" },
-  { id: "t3", when: "1h ago", dir: "in", amount: 18.22, sym: "LYTH", who: "cluster C-003 · reward", attest: "attested", dac: 1.00, round: "2938·432", algo: "bls" },
-  { id: "t4", when: "3h ago", dir: "out", amount: 1500, sym: "LYTH", who: "stake → C-021", attest: "attested", dac: 1.00, round: "2938·420", algo: "slhdsa", dapp: "stake" },
-  { id: "t5", when: "yesterday", dir: "out", amount: null, sym: "LYTH-p", who: "mvk:mira:p2p", attest: "attested", dac: 1.00, round: "2937·880", algo: "mldsa", opaque: true },
-  { id: "t6", when: "2d ago", dir: "out", amount: 90, sym: "LYTH", who: "bridge · Solana out", attest: "quorum-8/11", dac: 0.73, round: "2936·102", algo: "ed25519", bridged: true, dapp: "coinzen" },
-  { id: "t7", when: "3d ago", dir: "in", amount: 520, sym: "LYTH", who: "coinzen withdrawal", attest: "attested", dac: 1.00, round: "2935·211", algo: "slhdsa", dapp: "coinzen" },
-  { id: "t8", when: "4d ago", dir: "out", amount: 7.2, sym: "LYTH", who: "vote PROP-42 · abstain", attest: "attested", dac: 1.00, round: "2934·050", algo: "slhdsa", dapp: "gov" },
-];
+// Empty until the wallet queries its own tx history. The Send screen
+// produces real transactions against the live validators today, but the
+// popup doesn't yet index them or pull them back into a list view.
+// Activity is real-but-not-surfaced rather than coming-soon, so the
+// empty state reads "No transactions yet" with no future-feature
+// framing.
+export const ACTIVITY: ActivityItem[] = [];
 
 export const PENDING = {
   connect: {
-    dappId: "coinzen",
-    origin: "https://app.coinzen.io",
+    dappId: "monohub",
+    origin: "https://app.monohub.xyz",
     verified: false,
     perms: [
       { k: "read:address", desc: "See your active address", required: true },
@@ -149,10 +155,10 @@ export const PENDING = {
     phishingScore: 0.08,
   } as PendingConnect,
   signSwap: {
-    dappId: "coinzen",
-    origin: "https://app.coinzen.io",
+    dappId: "monohub",
+    origin: "https://app.monohub.xyz",
     type: "swap" as const,
-    summary: { pay: { amount: 100, sym: "LYTH" }, receive: { amount: 1382.40, sym: "USDC" }, rate: "1 LYTH = 13.824 USDC", slippage: "0.5%", route: "coinzen pool #14" },
+    summary: { pay: { amount: 100, sym: "LYTH" }, receive: { amount: 1382.40, sym: "USDC" }, rate: "1 LYTH = 13.824 USDC", slippage: "0.5%", route: "monohub pool #14" },
     sim: { willReceive: { amount: 1382.40, sym: "USDC" }, willPay: { amount: 100, sym: "LYTH" }, warnings: [] },
     fee: { amount: 0.0082, sym: "LYTH", denom: "public" as const },
     algo: "slhdsa" as const,
@@ -199,7 +205,7 @@ export const PENDING = {
     raw: "0x3f4b7b8400000000000000000000000000000000000000000000000000002b0000000000000000000000000000000000000000000000000000000000000001",
   } as PendingSign,
   signBridge: {
-    dappId: "coinzen",
+    dappId: "monohub",
     origin: "https://bridge.monolythium.xyz",
     type: "bridge" as const,
     summary: { action: "bridge out", amount: { amount: 90, sym: "LYTH" }, from: "Monolythium mainnet", to: "Solana", receive: { amount: 90, sym: "wLYTH" }, rate: "1:1 canonical", relays: "11/14 live", etaMin: 3 },
@@ -214,8 +220,8 @@ export const PENDING = {
     raw: "0x9eac01b900000000000000000000000000000000000000000000000000005614",
   } as PendingSign,
   signContract: {
-    dappId: "coinzen",
-    origin: "https://app.coinzen.io",
+    dappId: "monohub",
+    origin: "https://app.monohub.xyz",
     type: "contract" as const,
     summary: { action: "Approve unlimited spend", token: "LYTH", spender: "cz14:router", risk: "high" },
     sim: { net: "No value transferred — grants spend rights", warnings: ["Unlimited allowance — consider a bounded cap", "Spender not in LYTH verified registry"] },
