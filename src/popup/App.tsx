@@ -17,7 +17,7 @@ import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Settings, Receive, Send,
+  Home, Accounts, Networks, Settings, Receive, Send, Stake, Bridge,
   ReqConnect, ReqOnboard,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -53,6 +53,8 @@ type Screen =
   | "settings"
   | "receive"
   | "send"
+  | "stake"
+  | "bridge"
   | "approval";
 
 interface UiApproval {
@@ -333,9 +335,8 @@ export default function App() {
           onSettings={() => setScreen("settings")}
           onOpenReceive={() => setScreen("receive")}
           onOpenSend={() => setScreen("send")}
-          onOpenRequest={() => {
-            /* clicking demo pending shelf in normal home does nothing real */
-          }}
+          onOpenStake={() => setScreen("stake")}
+          onOpenBridge={() => setScreen("bridge")}
           onOpenOnboard={() => setScreen("onboard-create")}
         />
       )}
@@ -371,6 +372,14 @@ export default function App() {
           chainId={activeChain.chainId}
           onBack={() => setScreen("home")}
         />
+      )}
+
+      {screen === "stake" && (
+        <Stake onBack={() => setScreen("home")} />
+      )}
+
+      {screen === "bridge" && (
+        <Bridge onBack={() => setScreen("home")} />
       )}
 
       {screen === "approval" && activeApproval && (
