@@ -357,6 +357,65 @@ function PendingShelf() {
   );
 }
 
+// ---- Hero chip (Total / Staked) ----
+//
+// Tappable card pair under the hero balance. `Total` is always live
+// and reflects `account.balance`. `Staked` is rendered in disabled
+// style (opacity 0.6, no onClick) until the delegation precompile
+// (0x100A) activates on Sprintnet; the visual hierarchy keeps the
+// "could-be-active" affordance so wiring later is just a prop flip.
+interface HeroChipProps {
+  label: string;
+  value: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}
+
+function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
+  return (
+    <div
+      onClick={disabled ? undefined : onClick}
+      style={{
+        flex: 1,
+        minWidth: 120,
+        padding: "10px 14px",
+        borderRadius: 12,
+        border: active
+          ? "1px solid var(--gold)"
+          : "1px solid var(--fg-700)",
+        background: active ? "var(--gold-bg)" : "transparent",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+        transition: "background 160ms var(--e-out), border-color 160ms var(--e-out)",
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9.5,
+          letterSpacing: "0.16em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: 16,
+          fontWeight: 600,
+          color: "var(--fg-100)",
+          marginTop: 4,
+          letterSpacing: "-0.01em",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 // ---- Home screen ----
 interface HomeProps {
   account: Account;
@@ -373,9 +432,17 @@ interface HomeProps {
 
 export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenRequest, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
+  const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
-  const balanceStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
-  const [intPart, fracPart] = balanceStr.split(".");
+  const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
+  // Staked is hardcoded zero until the delegation precompile (0x100A)
+  // activates on Sprintnet — see ADR-0015. The Staked chip is rendered
+  // disabled-style in the meantime; the hero number falls back to
+  // "0.00" when staked is the active view, which is accurate, not a
+  // placeholder.
+  const stakedStr = "0.00";
+  const heroStr = activeChip === "total" ? totalStr : stakedStr;
+  const [intPart, fracPart] = heroStr.split(".");
 
   return (
     <>
@@ -399,10 +466,40 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
               <span className="d">LYTH</span>
             </div>
           )}
-          {!isPriv && <div className="chg">—% · 24h · attested</div>}
+          {!isPriv && (
+            <div className="chg">
+              {activeChip === "total"
+                ? "—% · 24h · attested"
+                : "delegated · 0 / 10 clusters"}
+            </div>
+          )}
           {isPriv && (
             <div className="chg" style={{ color: "oklch(0.78 0.14 240)" }}>
               {account.envelopes ?? 0} envelopes · 30d · DAC 100%
+            </div>
+          )}
+
+          {!isPriv && (
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                marginTop: 14,
+              }}
+            >
+              <HeroChip
+                label="Total"
+                value={totalStr}
+                active={activeChip === "total"}
+                disabled={false}
+                onClick={() => setActiveChip("total")}
+              />
+              <HeroChip
+                label="Staked"
+                value={stakedStr}
+                active={activeChip === "staked"}
+                disabled
+              />
             </div>
           )}
 
