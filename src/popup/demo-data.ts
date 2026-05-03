@@ -132,16 +132,13 @@ export const DAPPS: Dapp[] = [
   { id: "gov", name: "LYTH Gov", url: "https://gov.monolythium.xyz", icon: "G", verified: true, lastUsed: "yesterday", perms: ["read:address", "sign:message", "sign:vote"] },
 ];
 
-export const ACTIVITY: ActivityItem[] = [
-  { id: "t1", when: "just now", dir: "in", amount: 112.4, sym: "LYTH", who: "cluster C-014 · reward", attest: "attested", dac: 1.00, round: "2938·441", algo: "bls", dapp: null },
-  { id: "t2", when: "4m ago", dir: "out", amount: 48.00, sym: "LYTH", who: "cypher payroll", attest: "attested", dac: 1.00, round: "2938·440", algo: "slhdsa", dapp: "monohub" },
-  { id: "t3", when: "1h ago", dir: "in", amount: 18.22, sym: "LYTH", who: "cluster C-003 · reward", attest: "attested", dac: 1.00, round: "2938·432", algo: "bls" },
-  { id: "t4", when: "3h ago", dir: "out", amount: 1500, sym: "LYTH", who: "stake → C-021", attest: "attested", dac: 1.00, round: "2938·420", algo: "slhdsa", dapp: "stake" },
-  { id: "t5", when: "yesterday", dir: "out", amount: null, sym: "LYTH-p", who: "mvk:mira:p2p", attest: "attested", dac: 1.00, round: "2937·880", algo: "mldsa", opaque: true },
-  { id: "t6", when: "2d ago", dir: "out", amount: 90, sym: "LYTH", who: "bridge · Solana out", attest: "quorum-8/11", dac: 0.73, round: "2936·102", algo: "ed25519", bridged: true, dapp: "monohub" },
-  { id: "t7", when: "3d ago", dir: "in", amount: 520, sym: "LYTH", who: "monohub withdrawal", attest: "attested", dac: 1.00, round: "2935·211", algo: "slhdsa", dapp: "monohub" },
-  { id: "t8", when: "4d ago", dir: "out", amount: 7.2, sym: "LYTH", who: "vote PROP-42 · abstain", attest: "attested", dac: 1.00, round: "2934·050", algo: "slhdsa", dapp: "gov" },
-];
+// Empty until the wallet queries its own tx history. The Send screen
+// produces real transactions against the live validators today, but the
+// popup doesn't yet index them or pull them back into a list view.
+// Activity is real-but-not-surfaced rather than coming-soon, so the
+// empty state reads "No transactions yet" with no future-feature
+// framing.
+export const ACTIVITY: ActivityItem[] = [];
 
 export const PENDING = {
   connect: {

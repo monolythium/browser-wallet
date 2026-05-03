@@ -279,7 +279,28 @@ function AssetList({ account, network }: AssetListProps) {
 }
 
 // ---- Activity list ----
+//
+// Empty until the wallet indexes its own tx history. The Send screen
+// already submits real transactions against the live validators; this
+// view just doesn't query them back yet. Framed as "No transactions
+// yet" (real-but-not-surfaced) rather than "coming soon" (planned-but-
+// not-shipped).
 function ActivityList() {
+  if (ACTIVITY.length === 0) {
+    return (
+      <div
+        style={{
+          padding: "32px 18px",
+          textAlign: "center",
+          fontSize: 12,
+          color: "var(--fg-500)",
+          lineHeight: 1.5,
+        }}
+      >
+        No transactions yet
+      </div>
+    );
+  }
   return (
     <div>
       {ACTIVITY.map((t) => (
