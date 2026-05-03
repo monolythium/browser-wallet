@@ -749,6 +749,154 @@ export function Receive({ account, onBack }: ReceiveProps) {
   );
 }
 
+// ---- Stake sheet ----
+//
+// Pre-stage of the cluster-delegation surface (whitepaper §23 + §23.9
+// autovote). Pure presentational right now — no RPC plumbing — because
+// the delegation precompile (DELEGATION_ADDRESS = 0x100A) is gateable
+// per ADR-0015 and not activated on Sprintnet yet (verified: 0x100A
+// returns "0x" empty success). The four-strategy grid is fixed by §23.9
+// and rendered disabled-style; binding lands when the milestone flips.
+
+interface StakeProps {
+  onBack: () => void;
+}
+
+export function Stake({ onBack }: StakeProps) {
+  const strategies: Array<{ name: string; desc: string }> = [
+    {
+      name: "Max Yield",
+      desc: "Highest-APR clusters within the per-cluster cap",
+    },
+    {
+      name: "Max Diversity",
+      desc: "Spread across as many independent clusters as the cap allows",
+    },
+    {
+      name: "Max Decentralization",
+      desc: "Actively avoid clusters with high correlated-preference scores",
+    },
+    {
+      name: "Custom",
+      desc: "Manual per-cluster allocation",
+    },
+  ];
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack}>
+          <Icon name="back" size={15} />
+        </button>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+          Cluster delegation
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+      <div className="ext-body">
+        <div className="ext-card" style={{ padding: 14 }}>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: "var(--fg-100)",
+            }}
+          >
+            Distribute your LYTH across up to 10 clusters with basis-point
+            granularity. Stay 100% liquid — your tokens never leave your
+            wallet, and there's no unbonding period.
+          </p>
+          <ul
+            style={{
+              margin: "12px 0 0",
+              padding: 0,
+              listStyle: "none",
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: "var(--fg-200)",
+            }}
+          >
+            {[
+              "100% liquid — tokens stay in your wallet",
+              "Zero unbonding period — exit any delegation instantly",
+              "Up to 10 clusters per wallet (10000 bps total)",
+              "Quadratic reward curve — diminishing returns on cluster concentration",
+            ].map((line) => (
+              <li key={line} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span style={{ color: "var(--fg-500)", flexShrink: 0 }}>·</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Allocation strategies
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 12,
+            }}
+          >
+            {strategies.map((s) => (
+              <div
+                key={s.name}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid var(--fg-700)",
+                  background: "transparent",
+                  opacity: 0.6,
+                  cursor: "default",
+                }}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-100)" }}>
+                  {s.name}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    lineHeight: 1.4,
+                    color: "var(--fg-400)",
+                    marginTop: 4,
+                  }}
+                >
+                  {s.desc}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            letterSpacing: "0.08em",
+            textAlign: "center",
+            marginTop: 4,
+          }}
+        >
+          — Per Monolythium v2 §23
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ---- Send sheet ----
 
 const ADMISSION_REJECT_CODE_LO = -32049;
