@@ -31,17 +31,15 @@
 //        `npx tsx scripts/smoke-mldsa-vault.ts` (any Node 18+, requires tsx)
 //
 // File extension is .ts (originally scoped as .mjs) so the script can
-// import the wallet's encrypted-envelope + networks modules directly.
-// Node strips types in .ts files but treats .mjs as plain JS, and the
-// alternative — duplicating the wire-format in the smoke check — would
-// drift from the wallet's runtime path. Keeping a single source of
-// truth is the whole point of an end-to-end smoke test.
+// import the wallet's networks module directly. Protocol wire-format
+// helpers come from @monolythium/core-sdk/crypto so the smoke path and
+// runtime path share the SDK-owned implementation.
 
 import { MlDsa65Backend } from "@monolythium/core-sdk/crypto";
 import {
   buildEncryptedEnvelope,
   MempoolClass,
-} from "../src/background/encrypted-envelope.ts";
+} from "@monolythium/core-sdk/crypto";
 import {
   SPRINTNET_VALIDATOR_RPCS,
   SPRINTNET_CHAIN_ID,
