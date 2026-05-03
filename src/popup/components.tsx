@@ -440,10 +440,23 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
           </div>
           <div className="ext-dapp-row">
             {DAPPS.slice(0, 4).map((d) => (
-              <div key={d.id} className="ext-dapp" onClick={() => onOpenRequest("connect")}>
-                <div className={`glyph ${d.icon}`}>{d.icon}</div>
+              <div
+                key={d.id}
+                className="ext-dapp"
+                style={{ opacity: 0.6, cursor: "default" }}
+              >
+                <div className={`glyph ${d.icon}`}>{d.glyph ?? d.icon}</div>
                 <div className="nm">{d.name}</div>
-                <div className="last">{d.lastUsed}</div>
+                <div
+                  className="last"
+                  style={{
+                    color: "var(--fg-500)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                  }}
+                >
+                  coming soon
+                </div>
               </div>
             ))}
           </div>

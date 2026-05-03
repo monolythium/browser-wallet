@@ -36,7 +36,12 @@ export interface Dapp {
   id: string;
   name: string;
   url: string;
+  /** Color class for the avatar — maps to `.ext-dapp .glyph.{icon}` CSS. */
   icon: "M" | "S" | "C" | "G";
+  /** Displayed character on the avatar. Defaults to `icon` when unset.
+   * Lets a dApp wear a color class without locking the visible letter
+   * to it (e.g. MonoHub uses the `C` purple class but displays "M"). */
+  glyph?: string;
   verified: boolean;
   lastUsed: string;
   perms: string[];
@@ -119,24 +124,24 @@ export const ASSETS: Asset[] = [
 export const DAPPS: Dapp[] = [
   { id: "monoscan", name: "Monoscan", url: "https://monoscan.xyz", icon: "M", verified: true, lastUsed: "now", perms: ["read:address", "read:activity"] },
   { id: "stake", name: "LYTH Stake", url: "https://stake.monolythium.xyz", icon: "S", verified: true, lastUsed: "2h ago", perms: ["read:address", "sign:stake"] },
-  { id: "coinzen", name: "Coinzen DEX", url: "https://app.coinzen.io", icon: "C", verified: false, lastUsed: "5d ago", perms: ["read:address", "sign:tx", "sign:message"] },
+  { id: "monohub", name: "MonoHub", url: "https://app.monohub.xyz", icon: "C", glyph: "M", verified: false, lastUsed: "5d ago", perms: ["read:address", "sign:tx", "sign:message"] },
   { id: "gov", name: "LYTH Gov", url: "https://gov.monolythium.xyz", icon: "G", verified: true, lastUsed: "yesterday", perms: ["read:address", "sign:message", "sign:vote"] },
 ];
 
 export const ACTIVITY: ActivityItem[] = [
   { id: "t1", when: "just now", dir: "in", amount: 112.4, sym: "LYTH", who: "cluster C-014 · reward", attest: "attested", dac: 1.00, round: "2938·441", algo: "bls", dapp: null },
-  { id: "t2", when: "4m ago", dir: "out", amount: 48.00, sym: "LYTH", who: "cypher payroll", attest: "attested", dac: 1.00, round: "2938·440", algo: "slhdsa", dapp: "coinzen" },
+  { id: "t2", when: "4m ago", dir: "out", amount: 48.00, sym: "LYTH", who: "cypher payroll", attest: "attested", dac: 1.00, round: "2938·440", algo: "slhdsa", dapp: "monohub" },
   { id: "t3", when: "1h ago", dir: "in", amount: 18.22, sym: "LYTH", who: "cluster C-003 · reward", attest: "attested", dac: 1.00, round: "2938·432", algo: "bls" },
   { id: "t4", when: "3h ago", dir: "out", amount: 1500, sym: "LYTH", who: "stake → C-021", attest: "attested", dac: 1.00, round: "2938·420", algo: "slhdsa", dapp: "stake" },
   { id: "t5", when: "yesterday", dir: "out", amount: null, sym: "LYTH-p", who: "mvk:mira:p2p", attest: "attested", dac: 1.00, round: "2937·880", algo: "mldsa", opaque: true },
-  { id: "t6", when: "2d ago", dir: "out", amount: 90, sym: "LYTH", who: "bridge · Solana out", attest: "quorum-8/11", dac: 0.73, round: "2936·102", algo: "ed25519", bridged: true, dapp: "coinzen" },
-  { id: "t7", when: "3d ago", dir: "in", amount: 520, sym: "LYTH", who: "coinzen withdrawal", attest: "attested", dac: 1.00, round: "2935·211", algo: "slhdsa", dapp: "coinzen" },
+  { id: "t6", when: "2d ago", dir: "out", amount: 90, sym: "LYTH", who: "bridge · Solana out", attest: "quorum-8/11", dac: 0.73, round: "2936·102", algo: "ed25519", bridged: true, dapp: "monohub" },
+  { id: "t7", when: "3d ago", dir: "in", amount: 520, sym: "LYTH", who: "monohub withdrawal", attest: "attested", dac: 1.00, round: "2935·211", algo: "slhdsa", dapp: "monohub" },
   { id: "t8", when: "4d ago", dir: "out", amount: 7.2, sym: "LYTH", who: "vote PROP-42 · abstain", attest: "attested", dac: 1.00, round: "2934·050", algo: "slhdsa", dapp: "gov" },
 ];
 
 export const PENDING = {
   connect: {
-    dappId: "coinzen",
+    dappId: "monohub",
     origin: "https://app.monohub.xyz",
     verified: false,
     perms: [
@@ -149,7 +154,7 @@ export const PENDING = {
     phishingScore: 0.08,
   } as PendingConnect,
   signSwap: {
-    dappId: "coinzen",
+    dappId: "monohub",
     origin: "https://app.monohub.xyz",
     type: "swap" as const,
     summary: { pay: { amount: 100, sym: "LYTH" }, receive: { amount: 1382.40, sym: "USDC" }, rate: "1 LYTH = 13.824 USDC", slippage: "0.5%", route: "monohub pool #14" },
@@ -199,7 +204,7 @@ export const PENDING = {
     raw: "0x3f4b7b8400000000000000000000000000000000000000000000000000002b0000000000000000000000000000000000000000000000000000000000000001",
   } as PendingSign,
   signBridge: {
-    dappId: "coinzen",
+    dappId: "monohub",
     origin: "https://bridge.monolythium.xyz",
     type: "bridge" as const,
     summary: { action: "bridge out", amount: { amount: 90, sym: "LYTH" }, from: "Monolythium mainnet", to: "Solana", receive: { amount: 90, sym: "wLYTH" }, rate: "1:1 canonical", relays: "11/14 live", etaMin: 3 },
@@ -214,7 +219,7 @@ export const PENDING = {
     raw: "0x9eac01b900000000000000000000000000000000000000000000000000005614",
   } as PendingSign,
   signContract: {
-    dappId: "coinzen",
+    dappId: "monohub",
     origin: "https://app.monohub.xyz",
     type: "contract" as const,
     summary: { action: "Approve unlimited spend", token: "LYTH", spender: "cz14:router", risk: "high" },
