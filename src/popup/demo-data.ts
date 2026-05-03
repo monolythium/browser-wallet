@@ -137,7 +137,7 @@ export const ACTIVITY: ActivityItem[] = [
 export const PENDING = {
   connect: {
     dappId: "coinzen",
-    origin: "https://app.coinzen.io",
+    origin: "https://app.monohub.xyz",
     verified: false,
     perms: [
       { k: "read:address", desc: "See your active address", required: true },
@@ -150,9 +150,9 @@ export const PENDING = {
   } as PendingConnect,
   signSwap: {
     dappId: "coinzen",
-    origin: "https://app.coinzen.io",
+    origin: "https://app.monohub.xyz",
     type: "swap" as const,
-    summary: { pay: { amount: 100, sym: "LYTH" }, receive: { amount: 1382.40, sym: "USDC" }, rate: "1 LYTH = 13.824 USDC", slippage: "0.5%", route: "coinzen pool #14" },
+    summary: { pay: { amount: 100, sym: "LYTH" }, receive: { amount: 1382.40, sym: "USDC" }, rate: "1 LYTH = 13.824 USDC", slippage: "0.5%", route: "monohub pool #14" },
     sim: { willReceive: { amount: 1382.40, sym: "USDC" }, willPay: { amount: 100, sym: "LYTH" }, warnings: [] },
     fee: { amount: 0.0082, sym: "LYTH", denom: "public" as const },
     algo: "slhdsa" as const,
@@ -215,7 +215,7 @@ export const PENDING = {
   } as PendingSign,
   signContract: {
     dappId: "coinzen",
-    origin: "https://app.coinzen.io",
+    origin: "https://app.monohub.xyz",
     type: "contract" as const,
     summary: { action: "Approve unlimited spend", token: "LYTH", spender: "cz14:router", risk: "high" },
     sim: { net: "No value transferred — grants spend rights", warnings: ["Unlimited allowance — consider a bounded cap", "Spender not in LYTH verified registry"] },

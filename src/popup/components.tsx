@@ -28,6 +28,34 @@ import type {
 } from "./bg";
 import { bgWalletFeeSuggestion, bgWalletSendTx, bgWalletValidatorStatus } from "./bg";
 
+/**
+ * Small dim capsule for placeholder UI surfaces — pending requests,
+ * planned-but-not-shipped dApp tiles, future LYTH-p assets. Visually
+ * matches the `ext-badge-att` / `ext-badge-bridged` rhythm so it fits
+ * in the same row as other badges, but with muted `--fg-500` text on
+ * a faint border so the eye reads it as inert.
+ */
+export function ComingSoonBadge() {
+  return (
+    <span
+      style={{
+        fontFamily: "var(--f-mono)",
+        fontSize: 8,
+        letterSpacing: "0.1em",
+        padding: "1px 5px",
+        borderRadius: 3,
+        background: "rgba(255,255,255,0.04)",
+        color: "var(--fg-500)",
+        textTransform: "uppercase",
+        border: "1px solid var(--fg-700)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      coming soon
+    </span>
+  );
+}
+
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
   return (
@@ -274,13 +302,17 @@ function ActivityList() {
 }
 
 // ---- Pending requests shelf ----
-interface PendingShelfProps {
-  onOpen: (id: "connect" | "sign" | "message") => void;
-}
+//
+// Placeholder card for the planned EIP-1193 approval queue. The real
+// queue will list active dApp connect / sign / message requests; until
+// the in-popup approval router is wired, this card pre-stages the
+// visual entry point with three illustrative rows. Rows are inert
+// (no onClick, no cursor pointer, opacity 0.6) and each carries a
+// "coming soon" badge so the user reads them as a preview.
 
-function PendingShelf({ onOpen }: PendingShelfProps) {
-  const items: Array<{ id: "connect" | "sign" | "message"; title: string; hint: string; icon: string }> = [
-    { id: "connect", title: "Connect · Coinzen DEX", hint: "3 permissions", icon: "C" },
+function PendingShelf() {
+  const items: Array<{ id: string; title: string; hint: string; icon: string }> = [
+    { id: "connect", title: "Connect · MonoHub", hint: "3 permissions", icon: "M" },
     { id: "sign", title: "Sign · swap 500 LYTH → USDC", hint: "simulated", icon: "C" },
     { id: "message", title: "Sign-in · gov.monolythium.xyz", hint: "no value", icon: "G" },
   ];
@@ -289,13 +321,12 @@ function PendingShelf({ onOpen }: PendingShelfProps) {
       <div className="ext-card__head">
         <h3>Pending requests</h3>
         <div className="spacer" />
-        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", letterSpacing: "0.08em", textTransform: "uppercase" }}>{items.length} open</span>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", letterSpacing: "0.08em", textTransform: "uppercase" }}>preview</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {items.map((it) => (
-          <button
+          <div
             key={it.id}
-            onClick={() => onOpen(it.id)}
             style={{
               width: "100%",
               display: "grid",
@@ -307,9 +338,10 @@ function PendingShelf({ onOpen }: PendingShelfProps) {
               background: "rgba(255,255,255,0.03)",
               border: "1px solid var(--fg-700)",
               color: "inherit",
-              cursor: "pointer",
+              cursor: "default",
               fontFamily: "inherit",
               textAlign: "left",
+              opacity: 0.6,
             }}
           >
             <div style={{ width: 28, height: 28, borderRadius: 7, fontSize: 12, display: "grid", placeItems: "center", fontFamily: "var(--f-mono)", fontWeight: 700, color: "#fff", background: it.icon === "G" ? "linear-gradient(135deg, #3a6fa5, #1c3a5a)" : "linear-gradient(135deg, #8a3fa5, #4a1f5a)" }}>
@@ -319,8 +351,8 @@ function PendingShelf({ onOpen }: PendingShelfProps) {
               <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg-100)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
               <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 2, letterSpacing: "0.02em" }}>{it.hint}</div>
             </div>
-            <Icon name="chev" size={12} />
-          </button>
+            <ComingSoonBadge />
+          </div>
         ))}
       </div>
     </div>
@@ -397,7 +429,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
         </div>
 
         {/* Pending requests shelf */}
-        <PendingShelf onOpen={(id) => onOpenRequest(id)} />
+        <PendingShelf />
 
         {/* Recent dApps */}
         <div className="ext-card">
