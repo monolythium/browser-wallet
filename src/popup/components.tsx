@@ -424,13 +424,14 @@ interface HomeProps {
   onOpenNetworks: () => void;
   onSettings: () => void;
   onOpenReceive: () => void;
-  /** Optional so commit C compiles cleanly before commit D wires the App.tsx route. */
+  /** Optional so a wallet harness without the route wired still compiles cleanly. */
   onOpenSend?: () => void;
-  onOpenRequest: (id: "connect" | "sign" | "message", signType?: PendingSign["type"]) => void;
+  onOpenStake?: () => void;
+  onOpenBridge?: () => void;
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenRequest, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -512,11 +513,11 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
               <span className="ico"><Icon name="receive" size={16} /></span>
               <span>Receive</span>
             </button>
-            <button className="ext-act" onClick={() => onOpenRequest("sign", "stake")}>
+            <button className="ext-act" onClick={onOpenStake ?? (() => {})}>
               <span className="ico"><Icon name="stake" size={16} /></span>
               <span>Stake</span>
             </button>
-            <button className="ext-act" onClick={() => onOpenRequest("sign", "bridge")}>
+            <button className="ext-act" onClick={onOpenBridge ?? (() => {})}>
               <span className="ico"><Icon name="bridge" size={16} /></span>
               <span>Bridge</span>
             </button>
