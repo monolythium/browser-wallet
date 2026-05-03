@@ -369,7 +369,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
               <span className="d">LYTH</span>
             </div>
           )}
-          {!isPriv && <div className="chg">+0.82% · 24h · attested</div>}
+          {!isPriv && <div className="chg">—% · 24h · attested</div>}
           {isPriv && (
             <div className="chg" style={{ color: "oklch(0.78 0.14 240)" }}>
               {account.envelopes ?? 0} envelopes · 30d · DAC 100%
