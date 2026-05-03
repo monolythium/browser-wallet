@@ -113,12 +113,16 @@ export const ACCOUNTS: Account[] = [
   { id: "acc4", label: "payroll burner", denom: "public", addr: "mono1:c9a3:burner:1", algo: "slhdsa", balance: 120.80, stakable: 120.80, staked: 0, custody: "sw", pinned: false },
 ];
 
+// LYTH and LYTH-p only. Bridged / wrapped / stablecoin entries from
+// the design mock have been removed — the wallet's bifurcated
+// denomination is the only honest asset model right now (whitepaper
+// §13 / §25); cross-chain wrappers are speculative pairs that don't
+// belong in the assets list. LYTH amount is filled from the live
+// wallet balance at render time; LYTH-p is rendered as "coming soon"
+// (publicBalance/privateBalance split is a future task).
 export const ASSETS: Asset[] = [
-  { sym: "LYTH", label: "Monolythium", chain: "lyth:mainnet", amount: 4128.42, change: 0.82, spark: [34, 35, 33, 36, 38, 37, 39, 40, 42, 41, 44, 45, 43, 46, 48, 47, 50, 52, 51, 54], attested: true },
+  { sym: "LYTH", label: "Monolythium", chain: "lyth:mainnet", amount: null, change: null, spark: null, attested: true },
   { sym: "LYTH-p", label: "Monolythium (private)", chain: "lyth:mainnet", amount: null, change: null, spark: null, attested: true, opaque: true },
-  { sym: "wLYTH", label: "Wrapped LYTH", chain: "solana", amount: 420.11, change: 0.78, spark: [22, 23, 24, 23, 25, 26, 27, 28, 27, 29, 30, 31, 32, 33, 32, 34, 35, 36, 35, 37], attested: false, bridged: true },
-  { sym: "LYTH", label: "LYTH · IBC", chain: "cosmos:hub", amount: 88.40, change: 0.30, spark: [40, 41, 40, 42, 43, 42, 44, 45, 44, 46, 47, 46, 48, 49, 48, 50, 51, 50, 52, 53], attested: false, bridged: true },
-  { sym: "USDC", label: "USD Coin", chain: "solana", amount: 1240.00, change: -0.01, spark: [50, 50, 49, 50, 51, 50, 50, 50, 49, 50, 50, 51, 50, 50, 49, 50, 50, 50, 51, 50], attested: false, bridged: true },
 ];
 
 export const DAPPS: Dapp[] = [
