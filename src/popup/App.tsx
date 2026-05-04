@@ -32,6 +32,9 @@ import { ShowPhrase } from "./pages/ShowPhrase";
 import { VerifyPhrase } from "./pages/VerifyPhrase";
 import { ImportWallet } from "./pages/ImportWallet";
 import { UnlockScreen } from "./pages/UnlockScreen";
+import { RevealPhrase } from "./pages/RevealPhrase";
+import { ResetWallet } from "./pages/ResetWallet";
+import { ForgotPassword } from "./pages/ForgotPassword";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
@@ -63,11 +66,14 @@ type Screen =
   | "verify-phrase"
   | "import"
   | "set-password-import"
+  | "forgot-password"
   | "locked"
   | "home"
   | "accounts"
   | "networks"
   | "settings"
+  | "reveal-phrase"
+  | "reset-wallet"
   | "receive"
   | "send"
   | "stake"
@@ -77,7 +83,10 @@ type Screen =
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
 // kicking off them mid-flow would lose the recovery phrase display or the
-// user's typed mnemonic.
+// user's typed mnemonic. forgot-password and reset-wallet are protected for
+// the same reason — a user mid-reset must not be redirected to Unlock.
+// reveal-phrase is intentionally NOT exempt: a lock signal mid-reveal
+// correctly forces re-auth before the seed can be re-displayed.
 const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "approval",
   "loading",
@@ -87,6 +96,8 @@ const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "verify-phrase",
   "import",
   "set-password-import",
+  "forgot-password",
+  "reset-wallet",
 ]);
 
 interface UiApproval {
@@ -383,7 +394,9 @@ export default function App() {
     screen === "networks" ||
     screen === "settings" ||
     screen === "receive" ||
-    screen === "send";
+    screen === "send" ||
+    screen === "reveal-phrase" ||
+    screen === "reset-wallet";
 
   return (
     <div className="ext" data-denom={acc.denom}>
@@ -401,6 +414,19 @@ export default function App() {
           onImport={() => {
             setImportError(null);
             setPendingMnemonic(null);
+            setScreen("import");
+          }}
+          onForgotPassword={() => setScreen("forgot-password")}
+        />
+      )}
+
+      {screen === "forgot-password" && (
+        <ForgotPassword
+          onBack={() => setScreen("welcome")}
+          onWipedThenImport={() => {
+            setImportError(null);
+            setPendingMnemonic(null);
+            void refreshKeystoreStatus();
             setScreen("import");
           }}
         />
@@ -497,6 +523,30 @@ export default function App() {
           onBack={() => setScreen("home")}
           address={keystore?.address ?? ""}
           algo={keystore?.algo ?? "secp256k1"}
+          canRevealMnemonic={keystore?.canRevealMnemonic ?? false}
+          onShowPhrase={() => setScreen("reveal-phrase")}
+          onResetWallet={() => setScreen("reset-wallet")}
+        />
+      )}
+
+      {screen === "reveal-phrase" && (
+        <RevealPhrase onBack={() => setScreen("settings")} />
+      )}
+
+      {screen === "reset-wallet" && (
+        <ResetWallet
+          onBack={() => setScreen("settings")}
+          onSuccess={() => {
+            // SW already wiped + locked; refresh so keystore.hasVault
+            // reflects the empty state, then route to Welcome — same
+            // path the cold-boot bootstrap takes for a fresh wallet.
+            void refreshKeystoreStatus();
+            setCreateError(null);
+            setImportError(null);
+            setGenerated(null);
+            setPendingMnemonic(null);
+            setScreen("welcome");
+          }}
         />
       )}
 
