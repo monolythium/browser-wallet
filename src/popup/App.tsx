@@ -18,11 +18,12 @@ import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Settings, Receive, Send, Stake, Bridge,
+  Home, Accounts, Networks, Receive, Send, Stake, Bridge,
   ReqConnect, ReqOnboard,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
 } from "./components";
+import { Settings } from "./pages/Settings";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
@@ -283,11 +284,6 @@ export default function App() {
   // land, the service worker simply returns a different value here and the
   // approval views will reflect it without further popup changes.
   const custody = keystore?.custody ?? "sw";
-  // The Settings panel still expects the legacy `slhdsa | mldsa` taxonomy from
-  // the design mockups. Map secp256k1 → "slhdsa" (the closest UI slot for the
-  // current pre-PQ key) so the Settings screen renders correctly. Once the PQ
-  // keystore lands this becomes a 1:1 mapping.
-  const algo = keystore?.algo === "mldsa" ? ("mldsa" as const) : ("slhdsa" as const);
 
   /**
    * Switch the active chain via the popup IPC. Mirrors what
@@ -423,7 +419,11 @@ export default function App() {
       )}
 
       {screen === "settings" && (
-        <Settings onBack={() => setScreen("home")} custody={custody} algo={algo} />
+        <Settings
+          onBack={() => setScreen("home")}
+          address={keystore?.address ?? ""}
+          algo={keystore?.algo ?? "secp256k1"}
+        />
       )}
 
       {screen === "receive" && (
