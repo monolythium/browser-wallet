@@ -174,13 +174,9 @@ export async function bgKeystoreLock(): Promise<{ ok: boolean }> {
 export async function bgKeystoreCreateNew(
   password: string,
 ): Promise<
-  | { ok: true; seedHex: string; address: string }
+  | { ok: true; mnemonic: string; address: string }
   | { ok: false; reason?: string }
 > {
-  // v3 keystore returns a 32-byte ML-DSA-65 seed (hex) rather than a
-  // BIP-39 mnemonic. The mnemonic-derivation rule for ML-DSA-65 is open
-  // (MISSING.md OQ-1); until it lands the seed itself is the recovery
-  // secret the popup reveals to the user.
   return send("keystore-create-new", { password });
 }
 
@@ -188,10 +184,6 @@ export async function bgKeystoreCreateFromMnemonic(
   password: string,
   mnemonic: string,
 ): Promise<{ ok: true; address: string } | { ok: false; reason?: string }> {
-  // Background returns `{ ok: false, reason }` until BIP-39 → ML-DSA-65
-  // derivation lands. The helper is kept for source compatibility — the
-  // popup hasn't wired a "import mnemonic" entry point yet, and when it
-  // does the surface here will be the channel.
   return send("keystore-create-from-mnemonic", { password, mnemonic });
 }
 

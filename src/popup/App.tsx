@@ -88,7 +88,7 @@ export default function App() {
   const [activeApproval, setActiveApproval] = useState<UiApproval | null>(null);
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [generated, setGenerated] = useState<{ seedHex: string; address: string } | null>(null);
+  const [generated, setGenerated] = useState<{ mnemonic: string; address: string } | null>(null);
 
   const initialAccount: Account = ACCOUNTS[0]!;
   const [acc, setAcc] = useState<Account>(initialAccount);
@@ -291,7 +291,7 @@ export default function App() {
       setCreateError(r.reason ?? "failed to create vault");
       return;
     }
-    setGenerated({ seedHex: r.seedHex, address: r.address });
+    setGenerated({ mnemonic: r.mnemonic, address: r.address });
     const ks = await bgKeystoreStatus();
     setKeystore(ks);
   };
@@ -320,7 +320,7 @@ export default function App() {
         <ReqSheet onBack={() => setScreen("loading")}>
           {generated ? (
             <NewWalletReveal
-              seedHex={generated.seedHex}
+              mnemonic={generated.mnemonic}
               address={generated.address}
               onContinue={() => {
                 setScreen("home");
@@ -488,27 +488,21 @@ function CreateWalletForm({ onSubmit, error, legacyNotice }: CreateWalletFormPro
 }
 
 interface NewWalletRevealProps {
-  seedHex: string;
+  mnemonic: string;
   address: string;
   onContinue: () => void;
 }
 
-function NewWalletReveal({ seedHex, address, onContinue }: NewWalletRevealProps) {
+function NewWalletReveal({ mnemonic, address, onContinue }: NewWalletRevealProps) {
   const [revealed, setRevealed] = useState(false);
-  // 32-byte seed ⇒ 64 hex chars. Break into four 16-char chunks so the
-  // user can transcribe one row at a time and visually verify each row
-  // matches their backup. Strip the 0x prefix if the keystore returned
-  // one — the visual is cleaner without it, and the underlying bytes
-  // are identical.
-  const raw = seedHex.startsWith("0x") || seedHex.startsWith("0X") ? seedHex.slice(2) : seedHex;
-  const chunks = [raw.slice(0, 16), raw.slice(16, 32), raw.slice(32, 48), raw.slice(48, 64)];
+  const words = mnemonic.trim().split(/\s+/);
   return (
     <>
       <ChainStatusBanner />
       <div style={{ padding: "20px 18px 8px" }}>
-        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Your recovery seed</h2>
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Your recovery phrase</h2>
         <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", letterSpacing: "0.14em", textTransform: "uppercase", marginTop: 4 }}>
-          32-byte ML-DSA-65 seed · write it down · we cannot recover it
+          PQM-1 · 24 words · write it down · we cannot recover it
         </div>
       </div>
       <div style={{ padding: "0 18px" }}>
@@ -517,18 +511,25 @@ function NewWalletReveal({ seedHex, address, onContinue }: NewWalletRevealProps)
           borderRadius: 12,
           background: revealed ? "rgba(124,127,255,0.08)" : "rgba(0,0,0,0.4)",
           border: "1px solid var(--fg-700)",
-          minHeight: 96,
+          minHeight: 164,
           fontFamily: "var(--f-mono)",
           fontSize: 12,
-          lineHeight: 1.6,
+          lineHeight: 1.45,
           color: revealed ? "var(--fg-100)" : "var(--fg-500)",
           cursor: "pointer",
           userSelect: revealed ? "text" : "none",
         }} onClick={() => setRevealed(true)}>
           {revealed
-            ? chunks.map((c, i) => (
-                <div key={i} style={{ letterSpacing: "0.05em" }}>{c}</div>
-              ))
+            ? (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 12, rowGap: 6 }}>
+                  {words.map((word, i) => (
+                    <div key={`${word}-${i}`} style={{ display: "grid", gridTemplateColumns: "24px 1fr", gap: 6 }}>
+                      <span style={{ color: "var(--fg-500)", textAlign: "right" }}>{i + 1}</span>
+                      <span>{word}</span>
+                    </div>
+                  ))}
+                </div>
+              )
             : "tap to reveal"}
         </div>
         <div style={{ marginTop: 14, fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)" }}>
