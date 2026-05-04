@@ -57,7 +57,8 @@ import {
   getStoredAddressV3,
   unlockV3,
   lockV3,
-  createVaultFromNewSeed,
+  createVaultFromNewMnemonic,
+  createVaultFromMnemonic,
   createVaultFromSeedHex,
 } from "./keystore-mldsa.js";
 import {
@@ -974,28 +975,24 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-create-new": {
       // Strategy A — every new wallet from this point is v3 (ML-DSA-65).
-      // The seed is returned to the popup so the user can back it up;
-      // mnemonic-based onboarding is paused until the BIP-39 → ML-DSA-65
-      // derivation rule lands (MISSING.md OQ-1).
+      // PQM-1 is the canonical recovery format: 24 BIP-39 words carrying
+      // the PQM-1 algo/version payload and 30 bytes of entropy.
       const p = message.payload as { password: string };
       try {
-        const r = await createVaultFromNewSeed(p.password);
-        return { ok: true, seedHex: r.seedHex, address: r.address };
+        const r = await createVaultFromNewMnemonic(p.password);
+        return { ok: true, mnemonic: r.mnemonic, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
     }
     case "keystore-create-from-mnemonic": {
-      // Pre-PQ flow used BIP-39 → seed → secp256k1. The ML-DSA-65 seed
-      // derivation rule is still open (Nayiem owns; tracked as
-      // MISSING.md OQ-1), so we surface a clear "use seed hex import
-      // instead" message rather than silently writing a v2-shaped
-      // vault that the rest of the app won't touch.
-      return {
-        ok: false,
-        reason:
-          "BIP-39 import for ML-DSA-65 pending spec; use seed hex import instead",
-      };
+      const p = message.payload as { password: string; mnemonic: string };
+      try {
+        const r = await createVaultFromMnemonic(p.password, p.mnemonic);
+        return { ok: true, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
     }
     case "keystore-create-from-seedhex": {
       const p = message.payload as { password: string; seedHex: string };

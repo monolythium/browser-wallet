@@ -22,16 +22,14 @@
 // re-imports their seed (or generates a fresh one), per the same v1->v2
 // ethos in keystore.ts.
 //
-// BIP-39 mnemonic -> ML-DSA-65 seed derivation rule is an open spec
-// question (MISSING.md rev 3, OQ-1) so this module ships raw 32-byte
-// seed import + fresh generation, not mnemonic. Once the spec answer
-// lands, this module gains a `createVaultFromMnemonicMlDsa` path
-// without changing the on-disk schema.
-
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { MlDsa65Backend } from "@monolythium/core-sdk/crypto";
+import {
+  MlDsa65Backend,
+  generatePqm1Mnemonic,
+  pqm1MnemonicToMlDsa65Seed,
+} from "@monolythium/core-sdk/crypto";
 
 const VAULT_KEY_V3 = "mono.vault.v3";
 
@@ -162,12 +160,43 @@ export function lockV3(): void {
 }
 
 /**
- * Generate a fresh 32-byte ML-DSA-65 seed using the platform CSPRNG and
- * commit a v3 vault. Returns the seed for one-time display so the user can
- * back it up (the seed is the only recovery path — there is no mnemonic
- * derivation rule yet, see MISSING.md OQ-1).
+ * Generate a fresh PQM-1 v1 24-word mnemonic and commit a v3 vault.
  *
- * The returned seed is the recovery secret. Treat it like a private key.
+ * The returned mnemonic is the recovery secret. Treat it like a private key.
+ */
+export async function createVaultFromNewMnemonic(password: string): Promise<{
+  mnemonic: string;
+  address: string;
+}> {
+  if (await hasVaultV3()) {
+    throw new Error("v3 vault already exists; cannot overwrite");
+  }
+  const mnemonic = generatePqm1Mnemonic((out) => {
+    out.set(randomBytes(out.length));
+  });
+  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const address = await commitVaultFromSeed(password, seed);
+  seed.fill(0);
+  return { mnemonic, address };
+}
+
+/** Import from a user-supplied PQM-1 v1 24-word mnemonic. */
+export async function createVaultFromMnemonic(
+  password: string,
+  mnemonic: string,
+): Promise<{ address: string }> {
+  if (await hasVaultV3()) {
+    throw new Error("v3 vault already exists; cannot overwrite");
+  }
+  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const address = await commitVaultFromSeed(password, seed);
+  seed.fill(0);
+  return { address };
+}
+
+/**
+ * Compatibility path for pre-PQM-1 browser-wallet builds that exposed a raw
+ * 32-byte ML-DSA-65 seed. New wallets should use createVaultFromNewMnemonic.
  */
 export async function createVaultFromNewSeed(password: string): Promise<{
   seedHex: string;
@@ -178,7 +207,9 @@ export async function createVaultFromNewSeed(password: string): Promise<{
   }
   const seed = randomBytes(SEED_LEN);
   const address = await commitVaultFromSeed(password, seed);
-  return { seedHex: bytesToHex(seed), address };
+  const seedHex = bytesToHex(seed);
+  seed.fill(0);
+  return { seedHex, address };
 }
 
 /** Import from a user-supplied 32-byte seed (hex with or without 0x prefix). */
