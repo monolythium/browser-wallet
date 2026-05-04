@@ -1,0 +1,543 @@
+// Send page — full sub-state machine: form → preview → sending → (success | error).
+//
+// Commit H lands the form sub-state with Paste / Max / Slow-Normal-Fast tiers
+// + the lifted helpers from the previous components.tsx Send. Preview, sending,
+// success, and error sub-states land in Commit I.
+//
+// Wire format: the SW takes `{ to, valueWeiHex, chainIdHex }` and handles the
+// encrypted-envelope path on Sprintnet (whitepaper §22). Everything below is
+// just shaping that call.
+
+import type { ReactNode, CSSProperties } from "react";
+import { useEffect, useState } from "react";
+import { Icon, shortAddr } from "../Icon";
+import {
+  bgWalletBalance,
+  bgWalletFeeSuggestion,
+  type FeeSuggestion,
+} from "../bg";
+import type { Account } from "../demo-data";
+
+interface SendProps {
+  account: Account;
+  /** Active chain id (hex). Source of truth for the tx broadcast and the
+   *  fee-suggestion fetch. */
+  chainId: string;
+  onBack: () => void;
+}
+
+type Step = "form" | "preview" | "sending" | "success" | "error";
+
+type FeeTier = "slow" | "normal" | "fast";
+
+const TIER_MULTIPLIERS: Record<FeeTier, number> = {
+  slow: 0.5,
+  normal: 1,
+  fast: 2,
+};
+
+const TIER_LABELS: Record<FeeTier, string> = {
+  slow: "Slow",
+  normal: "Normal",
+  fast: "Fast",
+};
+
+const ADMISSION_REJECT_CODE_LO = -32049;
+const ADMISSION_REJECT_CODE_HI = -32020;
+
+// Fallback gas limit for native LYTH transfer when the chain doesn't supply
+// one (Sprintnet always returns 21000+ via wallet-fee-suggestion, but other
+// chains may omit it). Hex.
+const FALLBACK_TRANSFER_GAS_LIMIT_HEX = "0x5208"; // 21000
+
+export function Send({ account, chainId, onBack }: SendProps) {
+  const [step, setStep] = useState<Step>("form");
+
+  // Form state — kept in a single object so the preview/result steps can
+  // read it without prop drilling and "Try again" preserves the user's
+  // input on a failed broadcast (Commit I).
+  const [to, setTo] = useState("");
+  const [amountStr, setAmountStr] = useState("");
+  const [tier, setTier] = useState<FeeTier>("normal");
+
+  // External data the form depends on.
+  const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
+  const [feeError, setFeeError] = useState<string | null>(null);
+  const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
+
+  // Fetch fee suggestion when the screen opens or the chain changes.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgWalletFeeSuggestion(chainId);
+      if (cancelled) return;
+      if (!r.ok) {
+        setFeeError(r.reason ?? "fee suggestion failed");
+        return;
+      }
+      setFeeError(null);
+      setFeeSuggestion(r.suggestion);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chainId]);
+
+  // Fetch the unlocked account's balance in wei so Max can be exact.
+  useEffect(() => {
+    if (!account.addr.startsWith("0x")) return;
+    let cancelled = false;
+    void (async () => {
+      const r = await bgWalletBalance(account.addr, chainId);
+      if (cancelled) return;
+      if (!r.ok) return;
+      try {
+        setBalanceWei(BigInt(r.balanceHex));
+      } catch {
+        // Malformed hex — leave null; "Max" stays disabled.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [account.addr, chainId]);
+
+  const tierMultiplier = TIER_MULTIPLIERS[tier];
+  const estimatedFeeWei = computeEstimatedFeeWei(feeSuggestion, tierMultiplier);
+
+  const toError = validateToAddress(to);
+  const amountError = validateAmount(amountStr);
+  const amountWei = amountError === null && amountStr.length > 0
+    ? safeLythToWeiBigInt(amountStr)
+    : null;
+
+  // Continue is enabled iff: recipient + amount validate, fee loaded, and
+  // (amount + fee) <= balance. If balance hasn't loaded we can't safely
+  // gate, so we allow the user through with a warning hint instead of
+  // silently blocking — the SW would surface insufficient-funds on send.
+  const insufficientFunds =
+    amountWei !== null &&
+    estimatedFeeWei !== null &&
+    balanceWei !== null &&
+    amountWei + estimatedFeeWei > balanceWei;
+
+  const canContinue =
+    toError === null &&
+    amountError === null &&
+    amountStr.length > 0 &&
+    parseFloat(amountStr) > 0 &&
+    feeSuggestion !== null &&
+    !insufficientFunds;
+
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setTo(text.trim());
+    } catch {
+      // Clipboard read can fail without permission; stay quiet.
+    }
+  };
+
+  const handleMax = () => {
+    if (balanceWei === null || estimatedFeeWei === null) return;
+    const maxWei = balanceWei - estimatedFeeWei;
+    if (maxWei <= 0n) {
+      setAmountStr("0");
+      return;
+    }
+    setAmountStr(weiToLythString(maxWei));
+  };
+
+  const handleContinue = () => {
+    if (!canContinue) return;
+    setStep("preview");
+  };
+
+  // ---- render ----
+  // Preview / sending / success / error sub-states land in Commit I. Until
+  // then, hand only the form path to render.
+  if (step !== "form") {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+          <Icon name="back" size={15} />
+        </button>
+        <div
+          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+        >
+          Send
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+
+      <div className="ext-body">
+        <FormCard label="Recipient">
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="text"
+              value={to}
+              onChange={(e) => setTo(e.target.value.trim())}
+              placeholder="0x…"
+              spellCheck={false}
+              autoComplete="off"
+              style={{ ...addressInputStyle, flex: 1 }}
+            />
+            <button
+              onClick={() => void handlePaste()}
+              style={inlineButton}
+              type="button"
+            >
+              Paste
+            </button>
+          </div>
+          {toError && <div style={inlineError}>{toError}</div>}
+        </FormCard>
+
+        <FormCard label="Amount">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="text"
+              value={amountStr}
+              onChange={(e) => setAmountStr(e.target.value.trim())}
+              placeholder="0.0"
+              inputMode="decimal"
+              style={{ ...addressInputStyle, flex: 1 }}
+            />
+            <button
+              onClick={handleMax}
+              disabled={balanceWei === null || estimatedFeeWei === null}
+              style={{
+                ...inlineButton,
+                opacity:
+                  balanceWei === null || estimatedFeeWei === null ? 0.5 : 1,
+              }}
+              type="button"
+            >
+              Max
+            </button>
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                color: "var(--fg-400)",
+              }}
+            >
+              LYTH
+            </div>
+          </div>
+          {amountError && <div style={inlineError}>{amountError}</div>}
+          {!amountError && insufficientFunds && (
+            <div style={inlineError}>
+              Amount + fee exceeds balance.
+            </div>
+          )}
+          <div style={fromHint}>
+            from: {shortAddr(account.addr, 18)}
+            {balanceWei !== null && (
+              <>
+                {" · balance: "}
+                <span style={{ fontFamily: "var(--f-mono)" }}>
+                  {weiToLythString(balanceWei)} LYTH
+                </span>
+              </>
+            )}
+          </div>
+        </FormCard>
+
+        <FormCard label="Network fee">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 6,
+              marginTop: 4,
+            }}
+          >
+            {(Object.keys(TIER_MULTIPLIERS) as FeeTier[]).map((t) => {
+              const active = t === tier;
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTier(t)}
+                  style={{
+                    padding: "8px 4px",
+                    borderRadius: 8,
+                    border: active
+                      ? "1px solid var(--gold)"
+                      : "1px solid var(--fg-700)",
+                    background: active
+                      ? "var(--gold-bg)"
+                      : "rgba(255,255,255,0.04)",
+                    color: active ? "var(--gold)" : "var(--fg-100)",
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 12,
+                    fontWeight: active ? 600 : 500,
+                    cursor: "pointer",
+                  }}
+                >
+                  {TIER_LABELS[t]}
+                </button>
+              );
+            })}
+          </div>
+          {feeError ? (
+            <div style={{ ...inlineError, marginTop: 8 }}>
+              Could not fetch fee: {feeError}
+            </div>
+          ) : feeSuggestion === null ? (
+            <div
+              style={{ fontSize: 12, color: "var(--fg-400)", marginTop: 8 }}
+            >
+              Loading fee…
+            </div>
+          ) : (
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.6,
+                marginTop: 10,
+              }}
+            >
+              <div>
+                Tip:{" "}
+                <span style={{ fontFamily: "var(--f-mono)" }}>
+                  {scaleGwei(
+                    feeSuggestion.maxPriorityFeePerGas,
+                    tierMultiplier,
+                  )}{" "}
+                  gwei
+                </span>{" "}
+                <span style={{ color: "var(--fg-500)" }}>
+                  ({TIER_LABELS[tier]} · {tierMultiplier}×)
+                </span>
+              </div>
+              <div>
+                Base fee:{" "}
+                <span style={{ fontFamily: "var(--f-mono)" }}>
+                  {formatGweiFromHex(feeSuggestion.baseFeePerGas)} gwei
+                </span>
+              </div>
+              <div style={{ color: "var(--fg-200)", marginTop: 4 }}>
+                Estimated fee:{" "}
+                <span style={{ fontFamily: "var(--f-mono)" }}>
+                  {estimatedFeeWei !== null
+                    ? `${weiToLythString(estimatedFeeWei)} LYTH`
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          )}
+        </FormCard>
+
+        <button
+          className="ext-act prim"
+          onClick={handleContinue}
+          disabled={!canContinue}
+          style={{
+            width: "100%",
+            padding: "12px",
+            flexDirection: "row",
+            gap: 8,
+            opacity: canContinue ? 1 : 0.5,
+            cursor: canContinue ? "pointer" : "default",
+          }}
+        >
+          Continue
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ---- form layout helpers ----
+
+interface FormCardProps {
+  label: string;
+  children: ReactNode;
+}
+
+function FormCard({ label, children }: FormCardProps) {
+  return (
+    <div className="ext-card" style={{ padding: 14 }}>
+      <div style={cardLabel}>{label}</div>
+      <div style={{ marginTop: 8 }}>{children}</div>
+    </div>
+  );
+}
+
+const cardLabel: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  color: "var(--fg-400)",
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+};
+
+const addressInputStyle: CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  background: "rgba(0,0,0,0.3)",
+  border: "1px solid var(--fg-700)",
+  color: "var(--fg-100)",
+  fontSize: 13,
+  fontFamily: "var(--f-mono)",
+  boxSizing: "border-box",
+};
+
+const inlineButton: CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.04)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 11,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const inlineError: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  color: "var(--err)",
+  marginTop: 6,
+};
+
+const fromHint: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  color: "var(--fg-500)",
+  marginTop: 8,
+};
+
+// ---- validation ----
+
+export function validateToAddress(s: string): string | null {
+  if (s.length === 0) return null; // empty = "unfilled", not yet an error
+  if (!s.startsWith("0x")) return "address must start with 0x";
+  if (s.length !== 42) return `address must be 42 chars (got ${s.length})`;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(s)) return "address must be 0x + 40 hex chars";
+  return null;
+}
+
+export function validateAmount(s: string): string | null {
+  if (s.length === 0) return null;
+  if (!/^\d+(\.\d+)?$/.test(s)) return "amount must be a positive decimal";
+  if (parseFloat(s) <= 0) return "amount must be greater than 0";
+  const dot = s.indexOf(".");
+  if (dot >= 0 && s.length - dot - 1 > 18) {
+    return "amount cannot have more than 18 decimal places";
+  }
+  return null;
+}
+
+// ---- amount conversion ----
+
+/**
+ * Convert a decimal LYTH amount string to wei (`0x` hex). Precision-safe —
+ * splits on `.` and builds the BigInt from integer + zero-padded fractional
+ * parts so `0.000000000000000001` (1 wei) round-trips exactly. Throws on
+ * invalid input; callers should pre-validate via `validateAmount`.
+ */
+export function lythToWeiHex(amountStr: string): string {
+  return "0x" + safeLythToWeiBigInt(amountStr).toString(16);
+}
+
+function safeLythToWeiBigInt(amountStr: string): bigint {
+  const dot = amountStr.indexOf(".");
+  const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
+  const fracPartRaw = dot < 0 ? "" : amountStr.slice(dot + 1);
+  if (fracPartRaw.length > 18) {
+    throw new Error("amount has more than 18 decimal places");
+  }
+  const fracPadded = (fracPartRaw + "0".repeat(18)).slice(0, 18);
+  const intBig = BigInt(intPart === "" ? "0" : intPart);
+  const fracBig = BigInt(fracPadded === "" ? "0" : fracPadded);
+  return intBig * 10n ** 18n + fracBig;
+}
+
+/** wei → decimal LYTH string, trimming trailing zeros and the decimal point. */
+function weiToLythString(wei: bigint): string {
+  if (wei < 0n) return "0";
+  const intPart = wei / 10n ** 18n;
+  const fracPart = wei % 10n ** 18n;
+  if (fracPart === 0n) return intPart.toString();
+  const fracStr = fracPart.toString().padStart(18, "0").replace(/0+$/, "");
+  return fracStr.length === 0
+    ? intPart.toString()
+    : `${intPart.toString()}.${fracStr}`;
+}
+
+// ---- gwei display ----
+
+/** Format a hex wei value as a gwei display string. */
+function formatGweiFromHex(weiHex: string): string {
+  let wei: bigint;
+  try {
+    wei = BigInt(weiHex);
+  } catch {
+    return "?";
+  }
+  return formatGwei(wei);
+}
+
+function formatGwei(wei: bigint): string {
+  const gwei = wei / 10n ** 9n;
+  const remainder = wei % 10n ** 9n;
+  if (remainder === 0n) return gwei.toString();
+  const fracStr = remainder.toString().padStart(9, "0").replace(/0+$/, "");
+  return fracStr.length === 0 ? gwei.toString() : `${gwei}.${fracStr}`;
+}
+
+/** Multiply a hex wei tip by a tier multiplier and format the result as
+ *  gwei. Multiplier comes from a small fixed set so we widen to BigInt by
+ *  scaling to milli-multiplier units. */
+function scaleGwei(weiHex: string, multiplier: number): string {
+  let wei: bigint;
+  try {
+    wei = BigInt(weiHex);
+  } catch {
+    return "?";
+  }
+  const milli = BigInt(Math.round(multiplier * 1000));
+  return formatGwei((wei * milli) / 1000n);
+}
+
+// ---- fee math ----
+
+function computeEstimatedFeeWei(
+  fee: FeeSuggestion | null,
+  multiplier: number,
+): bigint | null {
+  if (!fee) return null;
+  let priority: bigint;
+  let base: bigint;
+  let gas: bigint;
+  try {
+    priority = BigInt(fee.maxPriorityFeePerGas);
+    base = BigInt(fee.baseFeePerGas);
+    gas = BigInt(fee.gasLimit ?? FALLBACK_TRANSFER_GAS_LIMIT_HEX);
+  } catch {
+    return null;
+  }
+  const milli = BigInt(Math.round(multiplier * 1000));
+  const scaledPriority = (priority * milli) / 1000n;
+  return (scaledPriority + base) * gas;
+}
+
+// ---- exports for Commit I ----
+
+export {
+  ADMISSION_REJECT_CODE_LO,
+  ADMISSION_REJECT_CODE_HI,
+  TIER_LABELS,
+  computeEstimatedFeeWei,
+  weiToLythString,
+};

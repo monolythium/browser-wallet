@@ -18,12 +18,13 @@ import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Send, Stake, Bridge,
+  Home, Accounts, Networks, Stake, Bridge,
   ReqConnect,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
 } from "./components";
 import { Receive } from "./pages/Receive";
+import { Send } from "./pages/Send";
 import { Settings } from "./pages/Settings";
 import { Welcome } from "./pages/Welcome";
 import { SetPassword } from "./pages/SetPassword";
