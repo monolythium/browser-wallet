@@ -163,7 +163,15 @@ export async function bgKeystoreStatus(): Promise<KeystoreStatus> {
 
 export async function bgKeystoreUnlock(
   password: string,
-): Promise<{ ok: true; address: string } | { ok: false; reason?: string }> {
+): Promise<
+  | { ok: true; address: string }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
   return send("keystore-unlock", { password });
 }
 
@@ -390,4 +398,20 @@ export async function bgResolveApproval(
 
 export async function bgChainList(): Promise<ChainEntry[]> {
   return send<ChainEntry[]>("chain-list");
+}
+
+export async function bgGetAutoLockMinutes(): Promise<{
+  autoLockMinutes: number;
+  options: readonly number[];
+}> {
+  return send("get-auto-lock-minutes");
+}
+
+export async function bgSetAutoLockMinutes(
+  minutes: number,
+): Promise<
+  | { ok: true; autoLockMinutes: number }
+  | { ok: false; reason?: string }
+> {
+  return send("set-auto-lock-minutes", { minutes });
 }
