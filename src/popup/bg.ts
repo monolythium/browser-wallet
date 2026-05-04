@@ -231,6 +231,39 @@ export async function bgKeystoreExportSeed(
 }
 
 /**
+ * Re-auth + destructive wipe used by Settings → Reset wallet. Same
+ * brute-force lockout counters as `bgKeystoreUnlock` /
+ * `bgKeystoreExportSeed`. After a successful reply the SW broadcasts
+ * `walletLocked = true` so any open popup re-syncs to the post-wipe state.
+ */
+export async function bgKeystoreReset(
+  password: string,
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("keystore-reset", { password });
+}
+
+/**
+ * No-re-auth wipe used by Welcome → Forgot password? → "Reset & Import".
+ * The user has no password to enter, so this path is throttled at the SW
+ * (one call per 5 s) rather than gated by re-auth. Threat model: a
+ * popup-access attacker can wipe but gets no key material; the security
+ * boundary is the 24-word recovery phrase, not the popup.
+ */
+export async function bgKeystoreWipeUnauth(): Promise<
+  { ok: true } | { ok: false; reason?: string }
+> {
+  return send("keystore-wipe-unauth");
+}
+
+/**
  * Real account state surfaced to the popup so Home can render the
  * unlocked v3 wallet's address instead of the demo `mono1:…` placeholder.
  * Mirrors the shape the service worker returns from "wallet-active-account".

@@ -62,6 +62,7 @@ import {
   createVaultFromMnemonic,
   createVaultFromSeedHex,
   exportMnemonicV3,
+  wipeVaultV3,
 } from "./keystore-mldsa.js";
 import {
   chainRequiresMlDsa,
@@ -85,6 +86,12 @@ import {
   SESSION_KEY_WALLET_LOCKED,
   STORAGE_KEY_AUTO_LOCK_MINUTES,
 } from "../shared/constants.js";
+
+/** Internal session key — last keystore-wipe-unauth timestamp (ms epoch).
+ *  Used to throttle the no-re-auth wipe path so an accidental rapid-fire
+ *  click can't churn chrome.storage.local repeatedly. */
+const SESSION_KEY_LAST_WIPE_UNAUTH_AT = "mono.session.lastWipeUnauthAt";
+const WIPE_UNAUTH_RATE_LIMIT_MS = 5_000;
 
 interface RpcArgs {
   method: string;
@@ -1196,6 +1203,86 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
         };
       }
+    }
+    case "keystore-reset": {
+      // Re-auth + destructive wipe path used by Settings → Reset wallet.
+      // Same SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL counters as
+      // keystore-unlock — wrong-password attempts here count toward the
+      // shared brute-force lockout window.
+      const p = message.payload as { password: string };
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+          failCount,
+        };
+      }
+      try {
+        await unlockV3(p.password);
+      } catch {
+        failCount += 1;
+        const ms = lockoutMsFor(failCount);
+        if (ms > 0) lockoutUntil = Date.now() + ms;
+        await chrome.storage.session.set({
+          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+        });
+        return {
+          ok: false,
+          reason: "wrong_password",
+          failCount,
+          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+        };
+      }
+      // Password verified — wipe and broadcast lock.
+      await wipeVaultV3();
+      await chrome.storage.session.remove([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      await triggerAutoLock();
+      return { ok: true };
+    }
+    case "keystore-wipe-unauth": {
+      // No-re-auth wipe used by the Welcome → Forgot password? path: the
+      // user has no password to enter, so the security boundary is the
+      // 24-word recovery phrase (which is what restores funds elsewhere).
+      // Throttled to one call per 5 s to make accidental rapid-fire harmless.
+      const ses = await chrome.storage.session.get(
+        SESSION_KEY_LAST_WIPE_UNAUTH_AT,
+      );
+      const last =
+        typeof ses[SESSION_KEY_LAST_WIPE_UNAUTH_AT] === "number"
+          ? (ses[SESSION_KEY_LAST_WIPE_UNAUTH_AT] as number)
+          : 0;
+      const now = Date.now();
+      if (now - last < WIPE_UNAUTH_RATE_LIMIT_MS) {
+        return { ok: false, reason: "rate_limited" };
+      }
+      await chrome.storage.session.set({
+        [SESSION_KEY_LAST_WIPE_UNAUTH_AT]: now,
+      });
+      await wipeVaultV3();
+      await chrome.storage.session.remove([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      await triggerAutoLock();
+      return { ok: true };
     }
     case "set-auto-lock-minutes": {
       const p = message.payload as { minutes?: unknown };
