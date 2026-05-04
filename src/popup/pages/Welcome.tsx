@@ -1,9 +1,17 @@
 interface WelcomeProps {
   onCreateNew: () => void;
   onImport: () => void;
+  /** Routes to the ForgotPassword info page. Optional so the welcome
+   *  screen still renders cleanly in contexts that don't yet wire the
+   *  forgotten-password recovery flow. */
+  onForgotPassword?: () => void;
 }
 
-export function Welcome({ onCreateNew, onImport }: WelcomeProps) {
+export function Welcome({
+  onCreateNew,
+  onImport,
+  onForgotPassword,
+}: WelcomeProps) {
   return (
     <>
       <div
@@ -114,6 +122,26 @@ export function Welcome({ onCreateNew, onImport }: WelcomeProps) {
         >
           Import existing wallet
         </button>
+        {onForgotPassword && (
+          <button
+            onClick={onForgotPassword}
+            style={{
+              padding: "8px 16px",
+              borderRadius: 8,
+              border: "none",
+              background: "transparent",
+              color: "var(--fg-400)",
+              fontFamily: "var(--f-sans)",
+              fontWeight: 500,
+              fontSize: 11.5,
+              cursor: "pointer",
+              textDecoration: "underline",
+              textUnderlineOffset: 2,
+            }}
+          >
+            Forgot password?
+          </button>
+        )}
       </div>
     </>
   );
