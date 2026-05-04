@@ -121,27 +121,58 @@ type OnMessageHandler = (
 let capturedOnMessage: OnMessageHandler | null = null;
 const broadcastEvents: Array<{ event: string; payload: unknown }> = [];
 const chromeStorage: Record<string, unknown> = {};
+const chromeStorageSession: Record<string, unknown> = {};
+
+// Build a storage area that supports both the legacy `(keys, cb)` form and
+// the MV3-native promise form `(keys)`. The SW mixes both — the chain code
+// stuck with callbacks, the new auto-lock code uses promises.
+function makeStorageArea(map: Record<string, unknown>): {
+  get: (keys: string | string[], cb?: (res: Record<string, unknown>) => void) => Promise<Record<string, unknown>>;
+  set: (entries: Record<string, unknown>, cb?: () => void) => Promise<void>;
+  remove: (keys: string | string[], cb?: () => void) => Promise<void>;
+} {
+  return {
+    get: (keys, cb) => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      const out: Record<string, unknown> = {};
+      for (const k of list) {
+        if (k in map) out[k] = map[k];
+      }
+      if (cb) {
+        queueMicrotask(() => cb(out));
+        return Promise.resolve(out);
+      }
+      return Promise.resolve(out);
+    },
+    set: (entries, cb) => {
+      for (const [k, v] of Object.entries(entries)) map[k] = v;
+      if (cb) queueMicrotask(() => cb());
+      return Promise.resolve();
+    },
+    remove: (keys, cb) => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      for (const k of list) delete map[k];
+      if (cb) queueMicrotask(() => cb());
+      return Promise.resolve();
+    },
+  };
+}
 
 function installChromeStub(): void {
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
-      local: {
-        get: (keys: string[], cb: (res: Record<string, unknown>) => void) => {
-          const out: Record<string, unknown> = {};
-          for (const k of keys) {
-            if (k in chromeStorage) out[k] = chromeStorage[k];
-          }
-          queueMicrotask(() => cb(out));
-        },
-        set: (entries: Record<string, unknown>, cb: () => void) => {
-          for (const [k, v] of Object.entries(entries)) chromeStorage[k] = v;
-          queueMicrotask(() => cb());
-        },
-        remove: (keys: string[], cb?: () => void) => {
-          for (const k of keys) delete chromeStorage[k];
-          if (cb) queueMicrotask(() => cb());
-        },
-      },
+      local: makeStorageArea(chromeStorage),
+      session: makeStorageArea(chromeStorageSession),
+      onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
+    },
+    alarms: {
+      // The SW's auto-lock alarm machinery needs these to exist so that
+      // module-scope `chrome.alarms.onAlarm.addListener(...)` doesn't throw
+      // on import. We don't simulate alarm firing — the auto-lock behavior
+      // is exercised at runtime, not in this RPC dispatcher suite.
+      onAlarm: { addListener: vi.fn() },
+      create: vi.fn(() => Promise.resolve()),
+      clear: vi.fn(() => Promise.resolve(true)),
     },
     runtime: {
       onMessage: {
