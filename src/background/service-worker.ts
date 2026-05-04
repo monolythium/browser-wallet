@@ -71,6 +71,15 @@ import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
 } from "./tx-mldsa.js";
+import {
+  ALARM_AUTO_LOCK,
+  AUTO_LOCK_EXEMPT_OPS,
+  AUTO_LOCK_MINUTES_DEFAULT,
+  AUTO_LOCK_OPTIONS,
+  SESSION_KEY_AUTO_LOCK_DEADLINE,
+  SESSION_KEY_WALLET_LOCKED,
+  STORAGE_KEY_AUTO_LOCK_MINUTES,
+} from "../shared/constants.js";
 
 interface RpcArgs {
   method: string;
@@ -198,11 +207,13 @@ interface SessionState {
   chainId: string;
   // Origins the user has approved for eth_accounts visibility. {origin -> true}
   connectedOrigins: Set<string>;
+  autoLockMinutes: number;
 }
 
 const session: SessionState = {
   chainId: TESTNET_CHAIN_ID_HEX,
   connectedOrigins: new Set<string>(),
+  autoLockMinutes: AUTO_LOCK_MINUTES_DEFAULT,
 };
 
 console.log("[Monolythium Wallet] service worker boot");
@@ -213,7 +224,66 @@ console.log("[Monolythium Wallet] service worker boot");
 void (async () => {
   await loadUserChains();
   session.chainId = await loadActiveChainId();
+
+  const local = await chrome.storage.local.get(STORAGE_KEY_AUTO_LOCK_MINUTES);
+  const m = local[STORAGE_KEY_AUTO_LOCK_MINUTES];
+  if (typeof m === "number" && (AUTO_LOCK_OPTIONS as readonly number[]).includes(m)) {
+    session.autoLockMinutes = m;
+  }
+
+  // Cold-boot recovery: SW restart always loses the in-memory ML-DSA backend,
+  // so isUnlockedV3() is false here — there is nothing to "lock later." Clean
+  // up any stale deadline and signal locked so any open popup re-syncs.
+  if (!isUnlockedV3()) {
+    await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+    await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+  }
 })();
+
+// ---- Auto-lock ----
+//
+// MV3 service workers hibernate on idle (~30 s) and lose the in-memory
+// ML-DSA backend held by `keystore-mldsa.ts`. The actual lock therefore
+// happens implicitly on hibernation; the alarm is a backstop that fires
+// *while the SW is awake* (e.g. popup open + user idle) so the popup can
+// re-render the Unlock screen at the user-set duration.
+
+async function resetAutoLock(): Promise<void> {
+  await chrome.alarms.clear(ALARM_AUTO_LOCK);
+  if (isUnlockedV3()) {
+    await chrome.alarms.create(ALARM_AUTO_LOCK, {
+      delayInMinutes: session.autoLockMinutes,
+    });
+    const deadline = Date.now() + session.autoLockMinutes * 60_000;
+    await chrome.storage.session.set({
+      [SESSION_KEY_AUTO_LOCK_DEADLINE]: deadline,
+      [SESSION_KEY_WALLET_LOCKED]: false,
+    });
+  } else {
+    await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+  }
+}
+
+async function triggerAutoLock(): Promise<void> {
+  lockV3();
+  await chrome.alarms.clear(ALARM_AUTO_LOCK);
+  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+  await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== ALARM_AUTO_LOCK) return;
+  void (async () => {
+    // Advisory race guard — the alarm and a `resetAutoLock()` can collide
+    // when the popup fires a user-activity op as the alarm is dispatching.
+    // If the deadline has been pushed forward, bail and let the new alarm
+    // do the work.
+    const ses = await chrome.storage.session.get(SESSION_KEY_AUTO_LOCK_DEADLINE);
+    const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
+    if (typeof deadline === "number" && Date.now() < deadline) return;
+    await triggerAutoLock();
+  })();
+});
 
 // ---- Helpers ----
 
@@ -959,6 +1029,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // can still operate on non-Sprintnet chains.
         if (await hasVaultV3()) {
           const r = await unlockV3(p.password);
+          await resetAutoLock();
           return { ok: true, address: r.address };
         }
         const r = await unlockKeystore(p.password);
@@ -968,8 +1039,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "keystore-lock": {
-      // Lock both — no-op when one isn't unlocked.
-      lockV3();
+      await triggerAutoLock();
+      // Legacy v2 lock kept inline so a v2-only user still locks cleanly
+      // through this op; lockV3() inside triggerAutoLock() is idempotent.
       lockKeystore();
       return { ok: true };
     }
@@ -980,6 +1052,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = message.payload as { password: string };
       try {
         const r = await createVaultFromNewMnemonic(p.password);
+        await resetAutoLock();
         return { ok: true, mnemonic: r.mnemonic, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -989,6 +1062,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = message.payload as { password: string; mnemonic: string };
       try {
         const r = await createVaultFromMnemonic(p.password, p.mnemonic);
+        await resetAutoLock();
         return { ok: true, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -998,10 +1072,28 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = message.payload as { password: string; seedHex: string };
       try {
         const r = await createVaultFromSeedHex(p.password, p.seedHex);
+        await resetAutoLock();
         return { ok: true, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
+    }
+    case "set-auto-lock-minutes": {
+      const p = message.payload as { minutes?: unknown };
+      const minutes = typeof p?.minutes === "number" ? p.minutes : NaN;
+      if (!(AUTO_LOCK_OPTIONS as readonly number[]).includes(minutes)) {
+        return { ok: false, reason: "invalid minutes" };
+      }
+      await chrome.storage.local.set({ [STORAGE_KEY_AUTO_LOCK_MINUTES]: minutes });
+      session.autoLockMinutes = minutes;
+      await resetAutoLock();
+      return { ok: true, autoLockMinutes: minutes };
+    }
+    case "get-auto-lock-minutes": {
+      return {
+        autoLockMinutes: session.autoLockMinutes,
+        options: AUTO_LOCK_OPTIONS,
+      };
     }
     case "wallet-operator-status": {
       // Liveness probe for the popup's chain-status banner. We iterate
@@ -1220,7 +1312,13 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
   }
   if (m?.kind === "popup") {
     handlePopup(message as PopupMessage)
-      .then(sendResponse)
+      .then((reply) => {
+        sendResponse(reply);
+        const op = (message as PopupMessage).op;
+        if (!AUTO_LOCK_EXEMPT_OPS.has(op) && isUnlockedV3()) {
+          void resetAutoLock();
+        }
+      })
       .catch((e) => sendResponse({ error: String(e) }));
     return true;
   }
