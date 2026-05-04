@@ -76,7 +76,10 @@ import {
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
   AUTO_LOCK_OPTIONS,
+  LOCKOUT_THRESHOLDS,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
+  SESSION_KEY_UNLOCK_FAIL_COUNT,
+  SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
   SESSION_KEY_WALLET_LOCKED,
   STORAGE_KEY_AUTO_LOCK_MINUTES,
 } from "../shared/constants.js";
@@ -269,6 +272,16 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+}
+
+// Progressive brute-force lockout — state lives in chrome.storage.session
+// only (no module mirror, since SW hibernation would desync). Returns the
+// longest matching window for `fails`, or 0 if no threshold is met.
+function lockoutMsFor(fails: number): number {
+  for (const t of LOCKOUT_THRESHOLDS) {
+    if (fails >= t.fails) return t.ms;
+  }
+  return 0;
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1023,15 +1036,58 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
-      try {
-        // Route to v3 when the v3 envelope is on disk; otherwise fall
-        // through to legacy v2 unlock so a user with only an old vault
-        // can still operate on non-Sprintnet chains.
-        if (await hasVaultV3()) {
+      // Route to v3 when the v3 envelope is on disk; otherwise fall through
+      // to legacy v2 unlock so a user with only an old vault can still
+      // operate on non-Sprintnet chains. Lockout gates the v3 path only —
+      // v2 is sunset and getting wired through it would muddy the threshold
+      // accounting.
+      if (await hasVaultV3()) {
+        const ses = await chrome.storage.session.get([
+          SESSION_KEY_UNLOCK_FAIL_COUNT,
+          SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+        ]);
+        let failCount =
+          typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+            ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+            : 0;
+        let lockoutUntil =
+          typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+            ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+            : 0;
+        const now = Date.now();
+        if (lockoutUntil > now) {
+          return {
+            ok: false,
+            reason: "rate_limited",
+            secondsRemaining: Math.ceil((lockoutUntil - now) / 1000),
+            failCount,
+          };
+        }
+        try {
           const r = await unlockV3(p.password);
+          await chrome.storage.session.remove([
+            SESSION_KEY_UNLOCK_FAIL_COUNT,
+            SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+          ]);
           await resetAutoLock();
           return { ok: true, address: r.address };
+        } catch {
+          failCount += 1;
+          const ms = lockoutMsFor(failCount);
+          if (ms > 0) lockoutUntil = Date.now() + ms;
+          await chrome.storage.session.set({
+            [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+            [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+          });
+          return {
+            ok: false,
+            reason: "wrong_password",
+            failCount,
+            secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+          };
         }
+      }
+      try {
         const r = await unlockKeystore(p.password);
         return { ok: true, address: r.address };
       } catch (e) {
