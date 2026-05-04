@@ -31,6 +31,7 @@ import {
   bgResolveApproval,
   bgWalletActiveAccount,
   bgWalletBalance,
+  bgWalletIndexerSnapshot,
   bgWalletActiveChain,
   bgWalletSetActiveChain,
   bgChainList,
@@ -41,6 +42,7 @@ import {
   type TypedSignRequest,
   type AddChainRequest,
   type ChainEntry,
+  type WalletIndexerSnapshot,
 } from "./bg";
 
 type Screen =
@@ -90,6 +92,7 @@ export default function App() {
 
   const initialAccount: Account = ACCOUNTS[0]!;
   const [acc, setAcc] = useState<Account>(initialAccount);
+  const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
   // the balance/fee hooks can dep on it. `activeChain` falls back to
@@ -193,6 +196,25 @@ export default function App() {
       } catch {
         // Malformed hex — ignore, balance stays null.
       }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [acc.addr, activeChain.chainId]);
+
+  // Indexer-backed wallet enrichments. These are partial and best-effort:
+  // older testnet nodes return method-not-found until the latest mono-core
+  // deploy lands, so Home keeps its existing fallback rows when arrays are empty.
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) {
+      setIndexerSnapshot(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const r = await bgWalletIndexerSnapshot(acc.addr, activeChain.chainId);
+      if (cancelled) return;
+      setIndexerSnapshot(r.ok ? r.snapshot : null);
     })();
     return () => {
       cancelled = true;
@@ -330,6 +352,7 @@ export default function App() {
         <Home
           account={acc}
           network={activeChain}
+          indexer={indexerSnapshot}
           onOpenAccounts={() => setScreen("accounts")}
           onOpenNetworks={() => setScreen("networks")}
           onSettings={() => setScreen("settings")}

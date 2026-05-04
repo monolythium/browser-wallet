@@ -3,7 +3,7 @@
 // Protocol-critical signing, native tx encoding, and encrypted-envelope
 // construction live in `@monolythium/core-sdk/crypto`. This module keeps
 // browser-wallet responsibilities local: translate EIP-1193 fields,
-// iterate Sprintnet validator RPCs, and surface wallet-friendly errors.
+// iterate Sprintnet operator RPCs, and surface wallet-friendly errors.
 
 import {
   buildEncryptedSubmission as sdkBuildEncryptedSubmission,
@@ -11,7 +11,7 @@ import {
   type NativeEvmTxFields,
 } from "@monolythium/core-sdk/crypto";
 import { getUnlockedBackendV3 } from "./keystore-mldsa.js";
-import { SPRINTNET_VALIDATOR_RPCS } from "./networks.js";
+import { SPRINTNET_OPERATOR_RPCS } from "./networks.js";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -54,9 +54,9 @@ function hexToBytes(s: string): Uint8Array {
 }
 
 /**
- * Iterate the published Sprintnet validators in order, returning the
+ * Iterate the published Sprintnet operators in order, returning the
  * first one that produces a non-error JSON-RPC response. Transport-level
- * failures trigger fallback to the next validator; RPC-level rejections
+ * failures trigger fallback to the next operator; RPC-level rejections
  * propagate immediately because they are state-level consensus answers.
  */
 export async function sprintnetJsonRpc<T>(
@@ -64,7 +64,7 @@ export async function sprintnetJsonRpc<T>(
   params: unknown[],
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
-  for (const v of SPRINTNET_VALIDATOR_RPCS) {
+  for (const v of SPRINTNET_OPERATOR_RPCS) {
     let res: Response;
     try {
       res = await fetch(v.rpc, {
@@ -99,7 +99,7 @@ export async function sprintnetJsonRpc<T>(
     }
     return { result: body.result, via: v.name };
   }
-  throw lastTransportErr ?? new Error("no Sprintnet validator reachable");
+  throw lastTransportErr ?? new Error("no Sprintnet operator reachable");
 }
 
 /** Fetch the cluster's current ML-KEM-768 encapsulation key. */

@@ -237,6 +237,60 @@ export async function bgWalletBalance(
   return send("wallet-balance", { address, chainIdHex });
 }
 
+export interface WalletTokenBalance {
+  tokenId: string;
+  balance: string;
+  updatedAtBlock: number;
+}
+
+export interface WalletAddressLabel {
+  address: string;
+  category: string;
+  displayName: string | null;
+  updatedAtBlock: number;
+}
+
+export interface WalletDelegationHistoryRow {
+  blockHeight: number;
+  txIndex: number;
+  logIndex: number;
+  wallet: string;
+  cluster: number;
+  toCluster: number | null;
+  kind: string;
+  weightBps: number;
+  walletTotalBps: number | null;
+}
+
+export interface WalletAddressActivityRow {
+  blockHeight: number;
+  txIndex: number;
+  logIndex: number;
+  kind: string;
+  direction: "in" | "out" | null;
+  counterparty: string | null;
+  tokenId: string | null;
+  amount: string | null;
+  cluster: number | null;
+  weightBps: number | null;
+  subKind: string | null;
+}
+
+export interface WalletIndexerSnapshot {
+  tokenBalances: WalletTokenBalance[];
+  addressLabel: WalletAddressLabel | null;
+  delegationHistory: WalletDelegationHistoryRow[];
+  addressActivity: WalletAddressActivityRow[];
+  errors: Partial<Record<"tokenBalances" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
+}
+
+export async function bgWalletIndexerSnapshot(
+  address: string,
+  chainIdHex: string,
+): Promise<{ ok: true; snapshot: WalletIndexerSnapshot } | { ok: false; reason?: string }> {
+  return send("wallet-indexer-snapshot", { address, chainIdHex });
+}
+
 /** Fee strategy returned by `bgWalletFeeSuggestion`. */
 export interface FeeSuggestion {
   /** Hex wei — sender's tip target (the only revenue path on Sprintnet). */
@@ -251,7 +305,7 @@ export interface FeeSuggestion {
   gasLimit: string | null;
 }
 
-/** Tx hash + diagnostic validator id from `bgWalletSendTx`. */
+/** Tx hash + diagnostic operator id from `bgWalletSendTx`. */
 export interface SendTxResult {
   txHash: string;
   via: string;
@@ -300,15 +354,15 @@ export async function bgWalletSetActiveChain(
 }
 
 /**
- * Probe the published Sprintnet validators and report which one answered
+ * Probe the published Sprintnet operators and report which one answered
  * (or `null` if none did within budget). Backs the chain-status banner;
  * the service worker caches the answer for 10s, so it's safe to call on
  * every popup tick.
  */
-export async function bgWalletValidatorStatus(): Promise<
+export async function bgWalletOperatorStatus(): Promise<
   { ok: true; name: string | null } | { ok: false; reason?: string }
 > {
-  return send("wallet-validator-status");
+  return send("wallet-operator-status");
 }
 
 export async function bgWalletSendTx(args: {

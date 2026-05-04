@@ -63,7 +63,7 @@ import {
 import {
   chainRequiresMlDsa,
   SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
-  probeFirstAliveValidator,
+  probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
 } from "./networks.js";
 import {
@@ -410,7 +410,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // envelope at the decoder layer (Law §2.1) — route to the SDK's
       // ML-DSA-65 bincode wire format instead. The v3 keystore holds
       // the unlocked backend; reads/writes funnel through the published
-      // Sprintnet validators since the canonical alias is NXDOMAIN.
+      // Sprintnet operators since the canonical alias is NXDOMAIN.
       if (chainRequiresMlDsa(session.chainId)) {
         if (!isUnlockedV3()) {
           return err(ERR_UNAUTHORIZED, "wallet is locked");
@@ -418,7 +418,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         try {
           const fromAddr =
             getUnlockedAddressV3() ?? "0x0000000000000000000000000000000000000000";
-          // Resolve missing nonce/gas/fee from the validators directly —
+          // Resolve missing nonce/gas/fee from the operators directly —
           // the chain registry's RPC alias resolves NXDOMAIN and the
           // existing `view` was built against that broken alias too, so
           // its fields are usually null on Sprintnet.
@@ -776,10 +776,10 @@ async function buildSendTxView(
  */
 const SPRINTNET_MIN_PRIORITY_FEE_HEX = "0x2540be400";
 
-// ---- Validator liveness cache ----
+// ---- Operator liveness cache ----
 //
 // Backs the popup's chain-status banner. We probe the published Sprintnet
-// validators in order and remember which one answered. The cache lives at
+// operators in order and remember which one answered. The cache lives at
 // module scope inside the service worker, so it survives across popup
 // re-renders but resets when the worker hibernates — that's fine because
 // hibernation is itself a "re-check liveness" signal.
@@ -788,8 +788,8 @@ const SPRINTNET_MIN_PRIORITY_FEE_HEX = "0x2540be400";
 // that result for the same TTL so the popup doesn't hammer dead nodes
 // every render; the popup's own 10-second tick will retry once the TTL
 // lapses.
-const VALIDATOR_CACHE_TTL_MS = 10_000;
-let cachedValidator: { name: string | null; checkedAt: number } | null = null;
+const OPERATOR_CACHE_TTL_MS = 10_000;
+let cachedOperator: { name: string | null; checkedAt: number } | null = null;
 
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
@@ -852,6 +852,20 @@ interface PopupMessage {
   kind: "popup";
   op: string;
   payload?: unknown;
+}
+
+interface SettledRpc<T> {
+  value: T | null;
+  error: string | null;
+}
+
+async function settleSprintnetRpc<T>(method: string, params: unknown[]): Promise<SettledRpc<T>> {
+  try {
+    const { result } = await sprintnetJsonRpc<T>(method, params);
+    return { value: result, error: null };
+  } catch (e) {
+    return { value: null, error: (e as Error).message };
+  }
 }
 
 async function handlePopup(message: PopupMessage): Promise<unknown> {
@@ -992,23 +1006,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
-    case "wallet-validator-status": {
+    case "wallet-operator-status": {
       // Liveness probe for the popup's chain-status banner. We iterate
-      // SPRINTNET_VALIDATOR_RPCS and return the first that answers
+      // SPRINTNET_OPERATOR_RPCS and return the first that answers
       // `net_version` with the expected chain id (within a 1-second
       // per-host budget). Result is cached for 10s so a banner that
       // re-renders on every screen change doesn't hammer the chain.
       const now = Date.now();
       if (
-        cachedValidator !== null &&
-        now - cachedValidator.checkedAt < VALIDATOR_CACHE_TTL_MS
+        cachedOperator !== null &&
+        now - cachedOperator.checkedAt < OPERATOR_CACHE_TTL_MS
       ) {
-        return { ok: true, name: cachedValidator.name };
+        return { ok: true, name: cachedOperator.name };
       }
       try {
-        const hit = await probeFirstAliveValidator(undefined, 1_000);
+        const hit = await probeFirstAliveOperator(undefined, 1_000);
         const name = hit?.name ?? null;
-        cachedValidator = { name, checkedAt: now };
+        cachedOperator = { name, checkedAt: now };
         return { ok: true, name };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -1038,7 +1052,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-balance": {
       // Read-only `eth_getBalance` for the popup Home balance pill.
-      // Sprintnet routes through the validator-fallback helper because
+      // Sprintnet routes through the operator-fallback helper because
       // the canonical alias `node-tnt.monolythium.xyz` resolves NXDOMAIN;
       // every other chain id flows through `providerFor` so user-added
       // chains via wallet_addEthereumChain just work.
@@ -1087,6 +1101,36 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
+    }
+    case "wallet-indexer-snapshot": {
+      const p = message.payload as { address?: string; chainIdHex?: string };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "indexer snapshot is only wired for Sprintnet today" };
+      }
+      const [tokenBalances, addressLabel, delegationHistory, addressActivity] = await Promise.all([
+        settleSprintnetRpc<unknown[]>("lyth_getTokenBalances", [p.address]),
+        settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [p.address]),
+        settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [p.address, 20]),
+        settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [p.address, 30]),
+      ]);
+      const errors: Record<string, string> = {};
+      if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
+      if (addressLabel.error) errors.addressLabel = addressLabel.error;
+      if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
+      if (addressActivity.error) errors.addressActivity = addressActivity.error;
+      return {
+        ok: true,
+        snapshot: {
+          tokenBalances: Array.isArray(tokenBalances.value) ? tokenBalances.value : [],
+          addressLabel: addressLabel.value ?? null,
+          delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
+          addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
+          errors,
+        },
+      };
     }
     case "wallet-fee-suggestion": {
       const p = message.payload as { chainIdHex?: string };
