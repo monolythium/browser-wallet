@@ -14,6 +14,7 @@ import { Icon, shortAddr } from "../Icon";
 import {
   bgWalletBalance,
   bgWalletFeeSuggestion,
+  bgWalletSendTx,
   type FeeSuggestion,
 } from "../bg";
 import type { Account } from "../demo-data";
@@ -53,9 +54,8 @@ const FALLBACK_TRANSFER_GAS_LIMIT_HEX = "0x5208"; // 21000
 export function Send({ account, chainId, onBack }: SendProps) {
   const [step, setStep] = useState<Step>("form");
 
-  // Form state — kept in a single object so the preview/result steps can
-  // read it without prop drilling and "Try again" preserves the user's
-  // input on a failed broadcast (Commit I).
+  // Form state — single source of truth so preview and "Try again" can
+  // round-trip without prop drilling.
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
@@ -64,6 +64,14 @@ export function Send({ account, chainId, onBack }: SendProps) {
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
   const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
+
+  // Result state — written by handleConfirm.
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [hashCopied, setHashCopied] = useState(false);
+  const [submitError, setSubmitError] = useState<{
+    message: string;
+    code: number | null;
+  } | null>(null);
 
   // Fetch fee suggestion when the screen opens or the chain changes.
   useEffect(() => {
@@ -153,11 +161,87 @@ export function Send({ account, chainId, onBack }: SendProps) {
     setStep("preview");
   };
 
+  const handleConfirm = async () => {
+    if (amountWei === null) return;
+    setStep("sending");
+    setSubmitError(null);
+    setTxHash(null);
+    try {
+      const valueWeiHex = "0x" + amountWei.toString(16);
+      const r = await bgWalletSendTx({ to, valueWeiHex, chainIdHex: chainId });
+      if (r.ok) {
+        setTxHash(r.result.txHash);
+        setStep("success");
+      } else {
+        setSubmitError({
+          message: r.reason ?? "send failed",
+          code: typeof r.code === "number" ? r.code : null,
+        });
+        setStep("error");
+      }
+    } catch (e) {
+      setSubmitError({
+        message: (e as Error).message ?? "send failed",
+        code: null,
+      });
+      setStep("error");
+    }
+  };
+
+  const handleCopyHash = async () => {
+    if (!txHash) return;
+    try {
+      await navigator.clipboard.writeText(txHash);
+      setHashCopied(true);
+      setTimeout(() => setHashCopied(false), 2000);
+    } catch {
+      // Clipboard write can fail in iframes / focus-loss races. Stay quiet.
+    }
+  };
+
   // ---- render ----
-  // Preview / sending / success / error sub-states land in Commit I. Until
-  // then, hand only the form path to render.
-  if (step !== "form") {
-    return null;
+
+  if (step === "preview") {
+    return (
+      <PreviewView
+        to={to}
+        amountWei={amountWei}
+        estimatedFeeWei={estimatedFeeWei}
+        tier={tier}
+        fromAddr={account.addr}
+        onConfirm={() => void handleConfirm()}
+        onBack={() => setStep("form")}
+      />
+    );
+  }
+
+  if (step === "sending") {
+    return <SendingView />;
+  }
+
+  if (step === "success" && txHash !== null) {
+    return (
+      <SuccessView
+        txHash={txHash}
+        copied={hashCopied}
+        onCopy={() => void handleCopyHash()}
+        onDone={onBack}
+      />
+    );
+  }
+
+  if (step === "error" && submitError !== null) {
+    return (
+      <ErrorView
+        message={submitError.message}
+        code={submitError.code}
+        onRetry={() => {
+          setSubmitError(null);
+          setStep("form");
+        }}
+        onCancel={onBack}
+      />
+    );
   }
 
   return (
@@ -532,7 +616,425 @@ function computeEstimatedFeeWei(
   return (scaledPriority + base) * gas;
 }
 
-// ---- exports for Commit I ----
+// ---- preview / sending / success / error sub-state views ----
+
+interface PreviewViewProps {
+  to: string;
+  amountWei: bigint | null;
+  estimatedFeeWei: bigint | null;
+  tier: FeeTier;
+  fromAddr: string;
+  onConfirm: () => void;
+  onBack: () => void;
+}
+
+function PreviewView({
+  to,
+  amountWei,
+  estimatedFeeWei,
+  tier,
+  fromAddr,
+  onConfirm,
+  onBack,
+}: PreviewViewProps) {
+  const total = amountWei !== null && estimatedFeeWei !== null
+    ? amountWei + estimatedFeeWei
+    : null;
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+          <Icon name="back" size={15} />
+        </button>
+        <div
+          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+        >
+          Review send
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+
+      <div className="ext-body">
+        <div className="ext-card" style={{ padding: 14 }}>
+          <SummaryRow label="From" value={shortAddr(fromAddr, 18)} mono />
+          <SummaryRow label="To" value={shortAddr(to, 18)} mono />
+          <SummaryRow
+            label="Amount"
+            value={amountWei !== null ? `${weiToLythString(amountWei)} LYTH` : "—"}
+            mono
+          />
+          <SummaryRow
+            label={`Fee (${TIER_LABELS[tier]})`}
+            value={
+              estimatedFeeWei !== null
+                ? `${weiToLythString(estimatedFeeWei)} LYTH`
+                : "—"
+            }
+            mono
+          />
+          <div
+            style={{
+              marginTop: 8,
+              paddingTop: 10,
+              borderTop: "1px solid var(--fg-700)",
+            }}
+          >
+            <SummaryRow
+              label="Total"
+              value={total !== null ? `${weiToLythString(total)} LYTH` : "—"}
+              mono
+              emphasis
+            />
+          </div>
+        </div>
+
+        <div
+          className="ext-card"
+          style={{
+            padding: "10px 12px",
+            background: "rgba(242,180,65,0.08)",
+            border: "1px solid rgba(242,180,65,0.4)",
+          }}
+        >
+          <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg-100)" }}>
+            Transactions are irreversible. Confirm the recipient and amount
+            carefully.
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 8,
+          }}
+        >
+          <button
+            className="ext-act"
+            onClick={onBack}
+            style={{
+              padding: "12px",
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            Back
+          </button>
+          <button
+            className="ext-act prim"
+            onClick={onConfirm}
+            style={{
+              padding: "12px",
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+interface SummaryRowProps {
+  label: string;
+  value: string;
+  mono?: boolean;
+  emphasis?: boolean;
+}
+
+function SummaryRow({ label, value, mono, emphasis }: SummaryRowProps) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "baseline",
+        gap: 12,
+        padding: "6px 0",
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-400)",
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: mono ? "var(--f-mono)" : "var(--f-sans)",
+          fontSize: emphasis ? 13 : 12,
+          fontWeight: emphasis ? 600 : 500,
+          color: emphasis ? "var(--gold)" : "var(--fg-100)",
+          textAlign: "right",
+          wordBreak: "break-all",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function SendingView() {
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 16,
+        padding: 32,
+      }}
+    >
+      <div
+        style={{
+          width: 48,
+          height: 48,
+          border: "3px solid var(--fg-700)",
+          borderTopColor: "var(--gold)",
+          borderRadius: "50%",
+          animation: "monoSendSpin 0.9s linear infinite",
+        }}
+        aria-hidden="true"
+      />
+      <div style={{ fontSize: 13, color: "var(--fg-200)" }}>
+        Sending transaction…
+      </div>
+      <style>{`@keyframes monoSendSpin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+interface SuccessViewProps {
+  txHash: string;
+  copied: boolean;
+  onCopy: () => void;
+  onDone: () => void;
+}
+
+function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onDone} aria-label="Back">
+          <Icon name="back" size={15} />
+        </button>
+        <div
+          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+        >
+          Transaction sent
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+
+      <div className="ext-body">
+        <div style={{ textAlign: "center", padding: "20px 0 8px" }}>
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              margin: "0 auto 12px",
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "50%",
+              background: "rgba(80,200,120,0.12)",
+              border: "1px solid rgba(80,200,120,0.4)",
+              color: "var(--ok)",
+              fontSize: 28,
+            }}
+            aria-hidden="true"
+          >
+            ✓
+          </div>
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              color: "var(--fg-100)",
+            }}
+          >
+            Transaction submitted
+          </div>
+        </div>
+
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 8,
+            }}
+          >
+            Transaction hash
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: "var(--fg-100)",
+              padding: "10px 12px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.3)",
+              border: "1px solid var(--fg-700)",
+              wordBreak: "break-all",
+              userSelect: "all",
+            }}
+          >
+            {txHash}
+          </div>
+          <button
+            className="ext-act"
+            onClick={onCopy}
+            style={{
+              width: "100%",
+              padding: "10px",
+              flexDirection: "row",
+              gap: 8,
+              marginTop: 12,
+            }}
+          >
+            {copied ? "Copied" : "Copy tx hash"}
+          </button>
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--fg-400)",
+              marginTop: 10,
+              lineHeight: 1.5,
+            }}
+          >
+            Explorer URL not yet wired for Sprintnet — keep this hash to
+            track the tx on an operator directly.
+          </div>
+        </div>
+
+        <button
+          className="ext-act prim"
+          onClick={onDone}
+          style={{
+            width: "100%",
+            padding: "12px",
+            flexDirection: "row",
+            gap: 8,
+          }}
+        >
+          Done
+        </button>
+      </div>
+    </>
+  );
+}
+
+interface ErrorViewProps {
+  message: string;
+  code: number | null;
+  onRetry: () => void;
+  onCancel: () => void;
+}
+
+function ErrorView({ message, code, onRetry, onCancel }: ErrorViewProps) {
+  const isAdmissionReject =
+    code !== null &&
+    code >= ADMISSION_REJECT_CODE_LO &&
+    code <= ADMISSION_REJECT_CODE_HI;
+  const display = isAdmissionReject ? `Chain rejected: ${message}` : message;
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onCancel} aria-label="Back">
+          <Icon name="back" size={15} />
+        </button>
+        <div
+          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+        >
+          Transaction failed
+        </div>
+        <div style={{ width: 28 }} />
+      </div>
+
+      <div className="ext-body">
+        <div style={{ textAlign: "center", padding: "20px 0 8px" }}>
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              margin: "0 auto 12px",
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "50%",
+              background: "rgba(220,80,80,0.12)",
+              border: "1px solid rgba(220,80,80,0.4)",
+              color: "var(--err)",
+              fontSize: 28,
+            }}
+            aria-hidden="true"
+          >
+            ✕
+          </div>
+        </div>
+
+        <div
+          className="ext-card"
+          style={{
+            padding: "12px 14px",
+            background: "rgba(220,80,80,0.08)",
+            border: "1px solid rgba(220,80,80,0.4)",
+          }}
+        >
+          <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--fg-100)" }}>
+            {display}
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 8,
+          }}
+        >
+          <button
+            className="ext-act"
+            onClick={onCancel}
+            style={{
+              padding: "12px",
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            className="ext-act prim"
+            onClick={onRetry}
+            style={{
+              padding: "12px",
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---- shared exports ----
 
 export {
   ADMISSION_REJECT_CODE_LO,
