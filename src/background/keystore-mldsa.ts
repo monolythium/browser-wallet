@@ -191,6 +191,21 @@ export function lockV3(): void {
 }
 
 /**
+ * Wipe the v3 vault from chrome.storage.local and drop the in-memory
+ * backend. Used by both the password-confirmed Settings → Reset wallet
+ * path and the Welcome → Forgot password? path. Caller is responsible
+ * for clearing the lockout counters (`SESSION_KEY_UNLOCK_FAIL_COUNT`,
+ * `_UNTIL`) and broadcasting `walletLocked` if the popup needs to
+ * route — those live in the SW dispatcher.
+ */
+export async function wipeVaultV3(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    chrome.storage.local.remove(VAULT_KEY_V3, () => resolve());
+  });
+  lockV3();
+}
+
+/**
  * Generate a fresh PQM-1 v1 24-word mnemonic and commit a v3 vault.
  *
  * The returned mnemonic is the recovery secret. Treat it like a private key.
