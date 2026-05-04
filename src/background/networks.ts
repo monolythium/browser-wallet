@@ -28,13 +28,13 @@ export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
 
 /**
- * Sprintnet validator RPC endpoints — published by Nayiem 2026-04-29.
+ * Sprintnet operator RPC endpoints — published by Nayiem 2026-04-29.
  * The hardcoded `node-tnt.monolythium.xyz` alias resolves to NXDOMAIN as
  * of audit; broadcast paths must iterate this list and use the first
  * responder. Order is intentional — fsn1 hosts are geographically closer
  * to most EU/US users; ash + sin are the long-haul fallbacks.
  */
-export const SPRINTNET_VALIDATOR_RPCS: ReadonlyArray<{
+export const SPRINTNET_OPERATOR_RPCS: ReadonlyArray<{
   name: string;
   region: string;
   rpc: string;
@@ -62,7 +62,7 @@ export interface BuiltinChain {
   chainIdNum: number;
   name: string;
   /** Single RPC URL for legacy `MonolythiumProvider` consumers. Sprintnet
-   * reads/writes funnel through `sprintnetJsonRpc` (validator iteration),
+   * reads/writes funnel through `sprintnetJsonRpc` (operator iteration),
    * not through this URL — it's here only to satisfy callers that still
    * ask for one. */
   rpc: string;
@@ -79,9 +79,9 @@ export interface BuiltinChain {
  *
  * Note: the legacy "Local devnet" (0x7A69) and "LythiumDAG-BFT Testnet"
  * with the NXDOMAIN `node-tnt.monolythium.xyz` alias have been removed.
- * Sprintnet IS the testnet, and the canonical RPC is the validator
- * fallback list (`SPRINTNET_VALIDATOR_RPCS`) — the `rpc` field below
- * is the first validator, kept for legacy `MonolythiumProvider`
+ * Sprintnet IS the testnet, and the canonical RPC is the operator
+ * fallback list (`SPRINTNET_OPERATOR_RPCS`) — the `rpc` field below
+ * is the first operator, kept for legacy `MonolythiumProvider`
  * consumers; the read/write hot path goes through `sprintnetJsonRpc`.
  */
 export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
@@ -89,7 +89,7 @@ export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
     chainId: SPRINTNET_CHAIN_ID_HEX,
     chainIdNum: SPRINTNET_CHAIN_ID,
     name: "Monolythium · Sprintnet",
-    rpc: SPRINTNET_VALIDATOR_RPCS[0]!.rpc,
+    rpc: SPRINTNET_OPERATOR_RPCS[0]!.rpc,
     nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
     official: true,
   },
@@ -108,19 +108,19 @@ export function chainRequiresMlDsa(chainIdHex: string): boolean {
 }
 
 /**
- * Probe the validator list and return the first endpoint that answers
+ * Probe the operator list and return the first endpoint that answers
  * `net_version` matching the expected chain id. Used at boot to pin a
  * working RPC since the canonical alias is offline.
  *
- * Returns null when every validator is unreachable or returns the wrong
+ * Returns null when every operator is unreachable or returns the wrong
  * chain id (regenesis-with-different-id case — operator should be told
  * to reconfigure).
  */
-export async function probeFirstAliveValidator(
+export async function probeFirstAliveOperator(
   expectedChainIdDec: number = SPRINTNET_CHAIN_ID,
   timeoutMs: number = 3_000,
 ): Promise<{ name: string; rpc: string } | null> {
-  for (const v of SPRINTNET_VALIDATOR_RPCS) {
+  for (const v of SPRINTNET_OPERATOR_RPCS) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);

@@ -3,10 +3,10 @@
 //
 // End-to-end exercise of the wallet's submit pipeline against Sprintnet:
 //
-//   1. Probe the published validator list, pick the first that answers
+//   1. Probe the published operator list, pick the first that answers
 //      `net_version` with the expected chain id.
 //   2. Generate a fresh 32-byte ML-DSA-65 seed, derive the address.
-//   3. Fetch `lyth_getEncryptionKey` from the live validator. The
+//   3. Fetch `lyth_getEncryptionKey` from the live operator. The
 //      response carries `{ algo: "ml-kem-768", epoch, encapsulationKey }`.
 //   4. Build a minimal `Transaction` (21k-gas transfer to 0x1111…11),
 //      sign it with the freshly-derived ML-DSA-65 keypair, and produce
@@ -41,7 +41,7 @@ import {
   MempoolClass,
 } from "@monolythium/core-sdk/crypto";
 import {
-  SPRINTNET_VALIDATOR_RPCS,
+  SPRINTNET_OPERATOR_RPCS,
   SPRINTNET_CHAIN_ID,
 } from "../src/background/networks.ts";
 import { webcrypto } from "node:crypto";
@@ -52,13 +52,13 @@ const ADMISSION_REJECT_CODE_LO = -32049;
 const ADMISSION_REJECT_CODE_HI = -32020;
 
 async function main() {
-  // ---- Step 1: pick a live validator ----
-  const validator = await pickFirstAlive(SPRINTNET_VALIDATOR_RPCS);
-  if (!validator) {
-    console.error("no Sprintnet validator answered net_version with chain id 69420");
+  // ---- Step 1: pick a live operator ----
+  const operator = await pickFirstAlive(SPRINTNET_OPERATOR_RPCS);
+  if (!operator) {
+    console.error("no Sprintnet operator answered net_version with chain id 69420");
     process.exit(2);
   }
-  console.log(`live validator: ${validator.name} (${validator.rpc})`);
+  console.log(`live operator: ${operator.name} (${operator.rpc})`);
 
   // ---- Step 2: fresh keypair ----
   const seed = new Uint8Array(32);
@@ -73,10 +73,10 @@ async function main() {
   // ---- Step 3: fetch cluster encryption key ----
   let kemResponse;
   try {
-    kemResponse = await rpcCall(validator.rpc, "lyth_getEncryptionKey", []);
+    kemResponse = await rpcCall(operator.rpc, "lyth_getEncryptionKey", []);
   } catch (e) {
     console.error(
-      `\nFAIL — lyth_getEncryptionKey rejected by ${validator.name}:`,
+      `\nFAIL — lyth_getEncryptionKey rejected by ${operator.name}:`,
       e?.message ?? e,
     );
     console.error(
@@ -142,10 +142,10 @@ async function main() {
   console.log(`envelope hex prefix: ${envelopeHex.slice(0, 80)}…`);
 
   // ---- Step 6: submit ----
-  console.log(`\nPOST ${validator.rpc} lyth_submitEncrypted`);
+  console.log(`\nPOST ${operator.rpc} lyth_submitEncrypted`);
   let body;
   try {
-    body = await rpcRawCall(validator.rpc, "lyth_submitEncrypted", [envelopeHex]);
+    body = await rpcRawCall(operator.rpc, "lyth_submitEncrypted", [envelopeHex]);
   } catch (e) {
     console.error(`\nFAIL — transport error: ${e?.message ?? e}`);
     process.exit(2);
@@ -190,8 +190,8 @@ async function main() {
 
 // ---- helpers ----
 
-async function pickFirstAlive(validators) {
-  for (const v of validators) {
+async function pickFirstAlive(operators) {
+  for (const v of operators) {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 3000);

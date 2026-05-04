@@ -133,7 +133,7 @@ export const DAPPS: Dapp[] = [
 ];
 
 // Empty until the wallet queries its own tx history. The Send screen
-// produces real transactions against the live validators today, but the
+// produces real transactions against the live operators today, but the
 // popup doesn't yet index them or pull them back into a list view.
 // Activity is real-but-not-surfaced rather than coming-soon, so the
 // empty state reads "No transactions yet" with no future-feature

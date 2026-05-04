@@ -25,8 +25,10 @@ import type {
   AddChainRequest,
   ChainEntry,
   FeeSuggestion,
+  WalletAddressActivityRow,
+  WalletIndexerSnapshot,
 } from "./bg";
-import { bgWalletFeeSuggestion, bgWalletSendTx, bgWalletValidatorStatus } from "./bg";
+import { bgWalletFeeSuggestion, bgWalletSendTx, bgWalletOperatorStatus } from "./bg";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -49,7 +51,7 @@ export function DemoBanner() {
 
 type ChainStatus =
   | { kind: "loading" }
-  | { kind: "live"; validator: string }
+  | { kind: "live"; operator: string }
   | { kind: "offline" }
   | { kind: "error"; reason: string };
 
@@ -62,14 +64,14 @@ export function ChainStatusBanner() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await bgWalletValidatorStatus();
+        const r = await bgWalletOperatorStatus();
         if (cancelled) return;
         if (!r.ok) {
           setState({ kind: "error", reason: r.reason ?? "rpc error" });
         } else if (r.name === null) {
           setState({ kind: "offline" });
         } else {
-          setState({ kind: "live", validator: r.name });
+          setState({ kind: "live", operator: r.name });
         }
       } catch (e) {
         if (cancelled) return;
@@ -111,7 +113,7 @@ export function ChainStatusBanner() {
           <span style={{ color: "var(--fg-600)" }}>·</span>
           <span>SPRINTNET</span>
           <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span style={{ color: "var(--ok)" }}>{state.validator.toUpperCase()}</span>
+          <span style={{ color: "var(--ok)" }}>{state.operator.toUpperCase()}</span>
         </>
       );
       break;
@@ -121,7 +123,7 @@ export function ChainStatusBanner() {
         <>
           <span style={{ color: "var(--warn)", fontWeight: 500 }}>OFFLINE</span>
           <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span>NO SPRINTNET VALIDATOR</span>
+          <span>NO SPRINTNET OPERATOR</span>
         </>
       );
       break;
@@ -208,12 +210,31 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
 interface AssetListProps {
   account: Account;
   network: ChainEntry;
+  indexer: WalletIndexerSnapshot | null;
 }
 
-function AssetList({ account, network }: AssetListProps) {
+function AssetList({ account, network, indexer }: AssetListProps) {
   const lythAmount = account.balance;
+  const liveRows = indexer?.tokenBalances ?? [];
   return (
     <div>
+      {liveRows.length > 0 && liveRows.map((row) => (
+        <div className="ext-asset" key={row.tokenId}>
+          <div className="ext-asset__ico native">IDX</div>
+          <div className="ext-asset__main">
+            <div className="sym">
+              {shortHex(row.tokenId)} <span className="ext-badge-att">Indexed</span>
+            </div>
+            <div className="chain">updated at block {row.updatedAtBlock.toLocaleString()}</div>
+          </div>
+          <div className="ext-asset__spark" />
+          <div className="ext-asset__right">
+            <div className="amt">{row.balance}</div>
+            <div className="chg">raw units</div>
+          </div>
+        </div>
+      ))}
+
       {/* LYTH — live row */}
       <div className="ext-asset">
         <div className="ext-asset__ico native">LYT</div>
@@ -252,11 +273,37 @@ function AssetList({ account, network }: AssetListProps) {
 // ---- Activity list ----
 //
 // Empty until the wallet indexes its own tx history. The Send screen
-// already submits real transactions against the live validators; this
+// already submits real transactions against the live operators; this
 // view just doesn't query them back yet. Framed as "No transactions
 // yet" (real-but-not-surfaced) rather than "coming soon" (planned-but-
 // not-shipped).
-function ActivityList() {
+function ActivityList({ rows }: { rows: WalletAddressActivityRow[] }) {
+  if (rows.length > 0) {
+    return (
+      <div>
+        {rows.map((row) => (
+          <div className="ext-act-row" key={`${row.blockHeight}-${row.txIndex}-${row.logIndex}`}>
+            <div className={`dir ${row.direction === "in" ? "in" : "out"}`}>
+              <Icon name={row.direction === "in" ? "receive" : "send"} size={13} />
+            </div>
+            <div className="ext-act-row__main">
+              <div className="ext-act-row__who">{formatActivityTitle(row)}</div>
+              <div className="ext-act-row__meta">
+                <span>block {row.blockHeight.toLocaleString()}</span>
+                <span>·</span>
+                <span>tx {row.txIndex}</span>
+                <span style={{ color: "var(--ok)" }}>● Indexed</span>
+              </div>
+            </div>
+            <div className="ext-act-row__right">
+              <div className={`amt ${row.direction === "in" ? "in" : ""}`}>{formatActivityAmount(row)}</div>
+              <div className="sym">{row.tokenId ? shortHex(row.tokenId) : row.kind}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (ACTIVITY.length === 0) {
     return (
       <div
@@ -299,6 +346,23 @@ function ActivityList() {
       ))}
     </div>
   );
+}
+
+function shortHex(value: string): string {
+  return value.length > 26 ? `${value.slice(0, 14)}…${value.slice(-8)}` : value;
+}
+
+function formatActivityTitle(row: WalletAddressActivityRow): string {
+  const kind = row.subKind ? `${row.kind} · ${row.subKind}` : row.kind;
+  if (row.counterparty) return `${kind} · ${shortHex(row.counterparty)}`;
+  if (row.cluster !== null) return `${kind} · C-${String(row.cluster + 1).padStart(3, "0")}`;
+  return kind;
+}
+
+function formatActivityAmount(row: WalletAddressActivityRow): string {
+  if (row.amount) return `${row.direction === "out" ? "-" : "+"}${row.amount}`;
+  if (row.weightBps !== null) return `${row.weightBps} bps`;
+  return "indexed";
 }
 
 // ---- Pending requests shelf ----
@@ -420,6 +484,7 @@ function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
 interface HomeProps {
   account: Account;
   network: ChainEntry;
+  indexer: WalletIndexerSnapshot | null;
   onOpenAccounts: () => void;
   onOpenNetworks: () => void;
   onSettings: () => void;
@@ -431,11 +496,14 @@ interface HomeProps {
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
+  const liveActivity = indexer?.addressActivity ?? [];
+  const liveLabel = indexer?.addressLabel;
+  const latestDelegation = indexer?.delegationHistory[0] ?? null;
   // Staked is hardcoded zero until the delegation precompile (0x100A)
   // activates on Sprintnet — see ADR-0015. The Staked chip is rendered
   // disabled-style in the meantime; the hero number falls back to
@@ -457,7 +525,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
       <div className="ext-body">
         {/* Hero */}
         <div className="ext-card ext-hero">
-          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : "Available · LYTH"}</div>
+          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : liveLabel?.displayName ?? "Available · LYTH"}</div>
           {isPriv ? (
             <div className="num opaque">— amount hidden by design</div>
           ) : (
@@ -471,7 +539,9 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
             <div className="chg">
               {activeChip === "total"
                 ? "—% · 24h · attested"
-                : "delegated · 0 / 10 clusters"}
+                : latestDelegation
+                  ? `${latestDelegation.kind} · C-${String(latestDelegation.cluster + 1).padStart(3, "0")} · ${latestDelegation.weightBps} bps`
+                  : "delegated · 0 / 10 clusters"}
             </div>
           )}
           {isPriv && (
@@ -555,7 +625,7 @@ export function Home({ account, network, onOpenAccounts, onOpenNetworks, onSetti
             <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
             <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
           </div>
-          {tab === "assets" ? <AssetList account={account} network={network} /> : <ActivityList />}
+          {tab === "assets" ? <AssetList account={account} network={network} indexer={indexer} /> : <ActivityList rows={liveActivity} />}
         </div>
 
         {/* First-run onboarding link */}
@@ -1303,7 +1373,7 @@ function SendSuccess({ txHash, copied, onCopy, onDone }: SendSuccessProps) {
         </button>
         <div style={{ fontSize: 11, color: "var(--fg-400)", marginTop: 10, lineHeight: 1.5 }}>
           Explorer URL not yet wired for Sprintnet — keep this hash to track
-          the tx on a validator directly.
+          the tx on an operator directly.
         </div>
       </div>
       <button
