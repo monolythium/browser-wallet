@@ -12,7 +12,8 @@
 // the private key — it only sends the password during unlock and reads back
 // boolean/address state through `popup` IPC messages.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { SESSION_KEY_WALLET_LOCKED } from "../shared/constants";
 import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
@@ -133,15 +134,31 @@ export default function App() {
     }));
   };
 
+  // Re-fetch keystore status + dependent identity/chain state. Used by the
+  // mount bootstrap, the unlock/create flows, and the SW-pushed lock signal.
+  // Empty deps deliberately — this captures the first-render closures and
+  // the underlying setters/imports are stable across renders.
+  const refreshKeystoreStatus = useCallback(async () => {
+    const ks = await bgKeystoreStatus();
+    setKeystore(ks);
+    if (ks.algo === "mldsa") {
+      await loadActiveAccount();
+    }
+    await loadChainState();
+    return ks;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---- mount-time bootstrap ----
   useEffect(() => {
     void (async () => {
-      const ks = await bgKeystoreStatus();
-      setKeystore(ks);
-
       const url = new URL(window.location.href);
       const approvalId = url.searchParams.get("approval");
       if (approvalId) {
+        // Approval window: just hydrate keystore (so the unlock prompt
+        // can render correctly) and route to the approval screen.
+        const ks = await bgKeystoreStatus();
+        setKeystore(ks);
         const list = await bgListPending();
         const found = list.find((p) => p.id === approvalId);
         if (found) {
@@ -154,23 +171,53 @@ export default function App() {
         return;
       }
 
-      // No approval requested — show normal popup.
+      const ks = await refreshKeystoreStatus();
       if (!ks.hasVault) {
         setScreen("onboard-create");
       } else if (!ks.unlocked) {
         setScreen("locked");
       } else {
         setScreen("home");
-        if (ks.algo === "mldsa") {
-          await loadActiveAccount();
-        }
       }
-      // Always hydrate the chain state — the locked / onboarding
-      // screens don't need it, but the cost is a single IPC pair and
-      // it primes the home screen render that follows unlock.
-      await loadChainState();
     })();
-  }, []);
+  }, [refreshKeystoreStatus]);
+
+  // SW-pushed lock signal — chrome.storage.session is set with
+  // walletLocked=true whenever the SW auto-locks (alarm fired) or any code
+  // path explicitly locks. Refetch state and route the popup back to the
+  // Unlock screen so the user can't act on a stale "unlocked" UI.
+  useEffect(() => {
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      areaName,
+    ) => {
+      if (areaName !== "session") return;
+      const change = changes[SESSION_KEY_WALLET_LOCKED];
+      if (change && change.newValue === true) {
+        void (async () => {
+          await refreshKeystoreStatus();
+          setScreen((prev) =>
+            prev === "approval" || prev === "loading" || prev === "onboard-create"
+              ? prev
+              : "locked",
+          );
+        })();
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  }, [refreshKeystoreStatus]);
+
+  // visibilitychange safety net — when the popup becomes visible again
+  // (e.g. an approval window regaining focus), re-sync state in case the
+  // SW silently restarted and lost the unlocked backend in between.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") void refreshKeystoreStatus();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [refreshKeystoreStatus]);
 
   // Balance refresh — runs whenever the active account or active
   // chain changes. Reads from `activeChain.chainId`, which the
@@ -270,12 +317,7 @@ export default function App() {
       setUnlockError(r.reason ?? "wrong password");
       return;
     }
-    const ks = await bgKeystoreStatus();
-    setKeystore(ks);
-    if (ks.algo === "mldsa") {
-      await loadActiveAccount();
-    }
-    await loadChainState();
+    await refreshKeystoreStatus();
     if (activeApproval) {
       // We're in the approval flow — stay on the approval screen so the user
       // can hit Approve.
@@ -292,8 +334,7 @@ export default function App() {
       return;
     }
     setGenerated({ mnemonic: r.mnemonic, address: r.address });
-    const ks = await bgKeystoreStatus();
-    setKeystore(ks);
+    await refreshKeystoreStatus();
   };
 
   const finalizeApproval = async (ok: boolean) => {
