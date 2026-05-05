@@ -20,7 +20,6 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
   const [error, setError] = useState<string | null>(null);
   const [secondsRemaining, setSecondsRemaining] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [noMnemonic, setNoMnemonic] = useState(false);
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [autoHideRemaining, setAutoHideRemaining] = useState(AUTO_HIDE_SECONDS);
   const [copied, setCopied] = useState(false);
@@ -100,11 +99,6 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         } else {
           setError("Wrong password.");
         }
-      } else if (r.reason === "no_mnemonic_stored") {
-        setNoMnemonic(true);
-        setError(
-          "This wallet was created before recovery-phrase reveal was supported. Re-import from your 24-word phrase to enable this feature.",
-        );
       } else {
         setError(r.reason ?? "Could not reveal phrase.");
       }
@@ -140,7 +134,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
 
   if (step === "reauth") {
     const disabled =
-      submitting || secondsRemaining > 0 || password.length === 0 || noMnemonic;
+      submitting || secondsRemaining > 0 || password.length === 0;
     return (
       <>
         <div className="ext-top">
@@ -220,7 +214,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
                 if (e.key === "Enter") void handleAuthSubmit();
               }}
               autoFocus
-              disabled={secondsRemaining > 0 || noMnemonic}
+              disabled={secondsRemaining > 0}
               style={{
                 width: "100%",
                 padding: "10px 12px",
@@ -232,7 +226,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
                 fontSize: 13,
                 outline: "none",
                 boxSizing: "border-box",
-                opacity: secondsRemaining > 0 || noMnemonic ? 0.5 : 1,
+                opacity: secondsRemaining > 0 ? 0.5 : 1,
               }}
             />
           </label>

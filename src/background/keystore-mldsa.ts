@@ -194,17 +194,6 @@ export async function getStoredAddressV4(): Promise<string | null> {
   return v?.addr ?? null;
 }
 
-/**
- * Whether the on-disk v4 vault carries an encrypted mnemonic. v4 strict
- * makes the mnemonic mandatory at the type level, so this is equivalent
- * to `hasVaultV4()`. Retained transitionally; Phase 3.5 Commit D drops
- * the canRevealMnemonic plumbing this fed and removes this helper.
- */
-export async function hasStoredMnemonicV4(): Promise<boolean> {
-  const v = await loadVaultV4();
-  return v !== null;
-}
-
 export function isUnlockedV4(): boolean {
   return unlocked !== null;
 }
