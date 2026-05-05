@@ -293,6 +293,43 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
 }
 
+// Suspend the auto-lock alarm while a separate-window approval is open.
+// Without this, a slow user can find the wallet locked at the moment they
+// click Approve — the approval window doesn't fire any popup IPC ops, so the
+// usual `resetAutoLock()` on activity never runs. Counter so concurrent
+// approvals (different origins) all have to close before the alarm restarts.
+async function pauseAutoLock(): Promise<void> {
+  await chrome.alarms.clear(ALARM_AUTO_LOCK);
+  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+}
+
+let openApprovalCount = 0;
+
+async function approvalOpened(): Promise<void> {
+  openApprovalCount++;
+  await pauseAutoLock();
+}
+
+async function approvalClosed(): Promise<void> {
+  openApprovalCount = Math.max(0, openApprovalCount - 1);
+  if (openApprovalCount === 0) {
+    await resetAutoLock();
+  }
+}
+
+/** enqueueApproval wrapped in approvalOpened/Closed so the auto-lock alarm
+ *  stays paused for the lifetime of the approval window. */
+async function gatedEnqueue(
+  req: Parameters<typeof enqueueApproval>[0],
+): Promise<ApprovalDecision> {
+  await approvalOpened();
+  try {
+    return await enqueueApproval(req);
+  } finally {
+    await approvalClosed();
+  }
+}
+
 // Progressive brute-force lockout — state lives in chrome.storage.session
 // only (no module mirror, since SW hibernation would desync). Returns the
 // longest matching window for `fails`, or 0 if no threshold is met.
@@ -424,7 +461,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!(await hasVault())) {
         return err(ERR_UNAUTHORIZED, "Monolythium Wallet has no vault — open the extension and complete onboarding first");
       }
-      const decision = await enqueueApproval({ kind: "connect", origin });
+      const decision = await gatedEnqueue({ kind: "connect", origin });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the connection");
       }
@@ -467,7 +504,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, "personal_sign expects a message string");
       }
 
-      const decision = await enqueueApproval({
+      const decision = await gatedEnqueue({
         kind: "personal_sign",
         origin,
         message: messageParam,
@@ -500,7 +537,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // the user approve, but the popup will surface the gap.
       const view = await buildSendTxView(txReq);
 
-      const decision = await enqueueApproval({
+      const decision = await gatedEnqueue({
         kind: "send_tx",
         origin,
         tx: txReq,
@@ -650,7 +687,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      const decision = await enqueueApproval({
+      const decision = await gatedEnqueue({
         kind: "typed_sign",
         origin,
         address: address ?? getUnlockedAddress() ?? (await getStoredAddress()) ?? "",
@@ -722,7 +759,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         ...(Array.isArray(p?.iconUrls) ? { iconUrls: p.iconUrls } : {}),
         ...(p?.nativeCurrency ? { nativeCurrency: p.nativeCurrency } : {}),
       };
-      const decision = await enqueueApproval({ kind: "add_chain", origin, chain: spec });
+      const decision = await gatedEnqueue({ kind: "add_chain", origin, chain: spec });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the new chain");
       }
