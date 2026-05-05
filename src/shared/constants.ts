@@ -40,4 +40,7 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "keystore-create-new",
   "keystore-create-from-mnemonic",
   "keystore-create-from-seedhex",
+  "keystore-export-seed",
+  "keystore-reset",
+  "keystore-wipe-unauth",
 ]);
