@@ -11,12 +11,8 @@ interface SettingsProps {
   onBack: () => void;
   address: string;
   algo: SignAlgo;
-  /** True when the active vault stores an encrypted mnemonic. False on
-   *  legacy v2 vaults and on v3 vaults created before Phase 3 — surfaces
-   *  the reveal button as disabled with an explanatory tooltip rather
-   *  than letting the user enter a flow that will fail mid-re-auth. */
-  canRevealMnemonic: boolean;
-  /** Routes to the RevealPhrase page. */
+  /** Routes to the RevealPhrase page. v4 strict guarantees every vault
+   *  is revealable, so this is always wired. */
   onShowPhrase: () => void;
   /** Routes to the ResetWallet page (destructive). */
   onResetWallet: () => void;
@@ -42,7 +38,6 @@ export function Settings({
   onBack,
   address,
   algo,
-  canRevealMnemonic,
   onShowPhrase,
   onResetWallet,
 }: SettingsProps) {
@@ -160,12 +155,6 @@ export function Settings({
             </div>
             <button
               onClick={onShowPhrase}
-              disabled={!canRevealMnemonic}
-              title={
-                canRevealMnemonic
-                  ? undefined
-                  : "This wallet was created before recovery-phrase reveal was supported. Re-import from your 24-word phrase to enable."
-              }
               style={{
                 marginTop: 6,
                 alignSelf: "flex-start",
@@ -173,11 +162,10 @@ export function Settings({
                 borderRadius: 8,
                 border: "1px solid var(--fg-700)",
                 background: "rgba(255,255,255,0.04)",
-                color: canRevealMnemonic ? "var(--fg-100)" : "var(--fg-500)",
+                color: "var(--fg-100)",
                 fontFamily: "var(--f-sans)",
                 fontSize: 11.5,
-                cursor: canRevealMnemonic ? "pointer" : "not-allowed",
-                opacity: canRevealMnemonic ? 1 : 0.6,
+                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 gap: 8,

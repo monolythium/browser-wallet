@@ -54,7 +54,6 @@ import {
   isUnlockedV4,
   getUnlockedAddressV4,
   hasVaultV4,
-  hasStoredMnemonicV4,
   getStoredAddressV4,
   unlockV4,
   lockV4,
@@ -974,20 +973,24 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { found };
     }
     case "keystore-status": {
-      // Strategy A — v3 (ML-DSA-65) is the new primary vault. Detection
-      // order: v3 first (current canonical shape), v2 next (still
-      // unlockable for non-Sprintnet chains pending a v2→v3 migration
+      // Strategy A — v4 (ML-DSA-65) is the new primary vault. Detection
+      // order: v4 first (current canonical shape), v2 next (still
+      // unlockable for non-Sprintnet chains pending a v2→v4 migration
       // rule), v1 last (PBKDF2+AES-GCM, surfaced as legacy-only so the
-      // popup nudges re-creation).
+      // popup nudges re-creation). v3 storage entries (Phase 3) are
+      // unreachable from this code path — the storage key was bumped
+      // from "mono.vault.v3" to "mono.vault.v4" in Phase 3.5 Commit A,
+      // so any pre-upgrade dev session naturally falls through to
+      // Welcome and re-onboards.
       //
       // `legacyVault` is the popup's banner trigger ("vault format
       // upgraded — re-import your seed"). It fires whenever any
-      // non-current vault is on disk: v1 always, plus v2 once v3 is
+      // non-current vault is on disk: v1 always, plus v2 once v4 is
       // the new primary or once we've deprecated v2.
-      const v3Exists = await hasVaultV4();
+      const v4Exists = await hasVaultV4();
       const v2Exists = await hasVault();
       const v1Exists = await hasLegacyVault();
-      if (v3Exists) {
+      if (v4Exists) {
         return {
           hasVault: true,
           legacyVault: v1Exists || v2Exists,
@@ -995,13 +998,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           address: getUnlockedAddressV4() ?? (await getStoredAddressV4()),
           custody: "sw" as const,
           algo: "mldsa" as const,
-          canRevealMnemonic: await hasStoredMnemonicV4(),
         };
       }
-      // No v3 vault. If a v2 vault exists, the user can still unlock it
+      // No v4 vault. If a v2 vault exists, the user can still unlock it
       // for legacy chains; the banner flips on so the home/onboarding
-      // surface tells them v2 is the older format. v2 has no mnemonic
-      // recovery surface (it stored a raw secp256k1 key, not a phrase).
+      // surface tells them v2 is the older format.
       return {
         hasVault: v2Exists,
         legacyVault: v1Exists || v2Exists,
@@ -1009,7 +1010,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         address: getUnlockedAddress() ?? (await getStoredAddress()),
         custody: "sw" as const,
         algo: "secp256k1" as const,
-        canRevealMnemonic: false,
       };
     }
     case "chain-list": {
@@ -1139,11 +1139,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Re-auth path that returns the 24-word PQM-1 mnemonic for the
       // Settings → Show recovery phrase flow. Shares the unlock-attempt
       // session counters with keystore-unlock so wrong-password attempts
-      // here count against the same brute-force lockout thresholds. Older
-      // vaults that predate mnemonic persistence return no_mnemonic_stored
-      // without consuming an attempt — the popup surfaces the disabled
-      // state through canRevealMnemonic on keystore-status, but we keep
-      // the SW guard in case a stale popup gets through.
+      // here count against the same brute-force lockout thresholds. v4
+      // strict guarantees the mnemonic is always present, so there is
+      // no "no_mnemonic_stored" branch — wrong password is the only
+      // failure case beyond the rate limit.
       const p = message.payload as { password: string };
       const ses = await chrome.storage.session.get([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
@@ -1172,9 +1171,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
         ]);
-        if (!r) {
-          return { ok: false, reason: "no_mnemonic_stored" };
-        }
         await resetAutoLock();
         return { ok: true, mnemonic: r.mnemonic };
       } catch {
