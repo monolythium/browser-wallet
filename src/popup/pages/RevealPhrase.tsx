@@ -20,10 +20,14 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
   const [error, setError] = useState<string | null>(null);
   const [secondsRemaining, setSecondsRemaining] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [noMnemonic, setNoMnemonic] = useState(false);
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [autoHideRemaining, setAutoHideRemaining] = useState(AUTO_HIDE_SECONDS);
+  const [autoHideStarted, setAutoHideStarted] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Tap-to-reveal toggle. `revealed` flips on click anywhere on the
+  // grid/overlay click target; first transition to `true` arms the
+  // sticky `autoHideStarted` flag below.
+  const [revealed, setRevealed] = useState(false);
 
   // Keep timer handles in refs so the unmount cleanup can clear them
   // without re-running the effect on every state tick.
@@ -45,9 +49,12 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     return () => clearInterval(t);
   }, [secondsRemaining]);
 
-  // Auto-hide countdown — only ticks while the reveal sub-state is mounted.
+  // Auto-hide countdown — starts on the FIRST successful hold-to-reveal
+  // (autoHideStarted flag, set inside startHold) and ticks continuously
+  // regardless of subsequent press/release cycles. Expiry routes back to
+  // Settings via onBack.
   useEffect(() => {
-    if (step !== "reveal") return;
+    if (!autoHideStarted) return;
     const t = setInterval(() => {
       setAutoHideRemaining((s) => {
         const next = s - 1;
@@ -60,7 +67,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [step, onBack]);
+  }, [autoHideStarted, onBack]);
 
   // Cleanup on unmount: drop the mnemonic from React state and cancel any
   // pending clipboard-clear timer. The mnemonic string itself can't be
@@ -75,6 +82,16 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
       }
     };
   }, []);
+
+  // Tap-to-reveal toggle. The first transition to revealed=true arms
+  // the sticky 30s auto-hide (subsequent reveal/hide cycles don't reset
+  // it — same semantics as the previous hold-to-reveal implementation).
+  const toggleReveal = () => {
+    setRevealed((r) => {
+      if (!r) setAutoHideStarted(true);
+      return !r;
+    });
+  };
 
   const handleAuthSubmit = async () => {
     if (submitting || secondsRemaining > 0) return;
@@ -100,11 +117,6 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         } else {
           setError("Wrong password.");
         }
-      } else if (r.reason === "no_mnemonic_stored") {
-        setNoMnemonic(true);
-        setError(
-          "This wallet was created before recovery-phrase reveal was supported. Re-import from your 24-word phrase to enable this feature.",
-        );
       } else {
         setError(r.reason ?? "Could not reveal phrase.");
       }
@@ -140,7 +152,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
 
   if (step === "reauth") {
     const disabled =
-      submitting || secondsRemaining > 0 || password.length === 0 || noMnemonic;
+      submitting || secondsRemaining > 0 || password.length === 0;
     return (
       <>
         <div className="ext-top">
@@ -220,7 +232,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
                 if (e.key === "Enter") void handleAuthSubmit();
               }}
               autoFocus
-              disabled={secondsRemaining > 0 || noMnemonic}
+              disabled={secondsRemaining > 0}
               style={{
                 width: "100%",
                 padding: "10px 12px",
@@ -232,7 +244,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
                 fontSize: 13,
                 outline: "none",
                 boxSizing: "border-box",
-                opacity: secondsRemaining > 0 || noMnemonic ? 0.5 : 1,
+                opacity: secondsRemaining > 0 ? 0.5 : 1,
               }}
             />
           </label>
@@ -324,9 +336,11 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
               lineHeight: 1.6,
             }}
           >
-            The phrase will hide automatically after {AUTO_HIDE_SECONDS}{" "}
-            seconds. If you copy it, your clipboard will be cleared after
-            another {AUTO_HIDE_SECONDS} seconds.
+            On the next screen, tap the words to reveal them. Tap
+            again to hide. The phrase auto-hides after{" "}
+            {AUTO_HIDE_SECONDS} seconds. If you copy it, your
+            clipboard will be cleared after another{" "}
+            {AUTO_HIDE_SECONDS} seconds.
           </div>
         </div>
 
@@ -405,7 +419,97 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           </div>
         </div>
 
-        {mnemonic && <MnemonicGrid mnemonic={mnemonic} />}
+        {/* Tap-to-reveal click target. The grid is blurred (~12 px) by
+            default; tapping anywhere on the area toggles `revealed`.
+            When revealed, an unintrusive "Tap to hide" hint nudges the
+            user toward the close gesture. */}
+        {mnemonic && (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-pressed={revealed}
+            aria-label={
+              revealed ? "Hide recovery phrase" : "Reveal recovery phrase"
+            }
+            onClick={toggleReveal}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleReveal();
+              }
+            }}
+            style={{
+              position: "relative",
+              borderRadius: 12,
+              overflow: "hidden",
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            <div
+              style={{
+                filter: revealed ? "none" : "blur(12px)",
+                transition: "filter 120ms var(--e-out, ease-out)",
+                pointerEvents: "none", // clicks pass through to the wrapper
+              }}
+              aria-hidden={!revealed}
+            >
+              <MnemonicGrid mnemonic={mnemonic} />
+            </div>
+            {!revealed && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  background: "rgba(0,0,0,0.4)",
+                  borderRadius: 12,
+                  textAlign: "center",
+                  padding: 12,
+                  pointerEvents: "none",
+                }}
+              >
+                <Icon name="eye" size={20} />
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "var(--fg-100)",
+                  }}
+                >
+                  Tap to reveal
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--fg-300)",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  Make sure no one is watching your screen.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {revealed && (
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-500)",
+              letterSpacing: "0.08em",
+              textAlign: "center",
+            }}
+          >
+            Tap the words to hide them.
+          </div>
+        )}
 
         <button
           onClick={() => void handleCopy()}

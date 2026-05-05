@@ -27,11 +27,6 @@ export interface KeystoreStatus {
    * was retired in favour of ML-DSA-65 — kept in the union so the
    * Settings panel's pre-PQ fallback render path still typechecks. */
   algo: SignAlgo;
-  /** True when the on-disk vault carries an encrypted mnemonic and the
-   * Settings → Show recovery phrase flow can return the 24-word phrase
-   * after re-auth. False on legacy v2 vaults and on v3 vaults created
-   * before mnemonic persistence shipped (Phase 3). */
-  canRevealMnemonic: boolean;
 }
 
 export type ApprovalKind =
@@ -200,21 +195,13 @@ export async function bgKeystoreCreateFromMnemonic(
   return send("keystore-create-from-mnemonic", { password, mnemonic });
 }
 
-export async function bgKeystoreImportFromSeedHex(
-  password: string,
-  seedHex: string,
-): Promise<{ ok: true; address: string } | { ok: false; reason?: string }> {
-  return send("keystore-create-from-seedhex", { password, seedHex });
-}
-
 /**
  * Re-auth and return the 24-word PQM-1 mnemonic for the Settings →
  * Show recovery phrase flow. Wrong-password attempts share the
  * SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL counters with `bgKeystoreUnlock`,
- * so brute-force lockout thresholds apply identically. `no_mnemonic_stored`
- * indicates the vault was created before mnemonic persistence shipped
- * — surface a "re-import to enable" hint and keep the Settings button
- * disabled going forward (KeystoreStatus.canRevealMnemonic gates the UI).
+ * so brute-force lockout thresholds apply identically. v4 strict
+ * guarantees the mnemonic is always stored, so the only failure cases
+ * are wrong_password and rate_limited.
  */
 export async function bgKeystoreExportSeed(
   password: string,
@@ -222,7 +209,7 @@ export async function bgKeystoreExportSeed(
   | { ok: true; mnemonic: string }
   | {
       ok: false;
-      reason?: "wrong_password" | "rate_limited" | "no_mnemonic_stored" | string;
+      reason?: "wrong_password" | "rate_limited" | string;
       secondsRemaining?: number;
       failCount?: number;
     }

@@ -523,7 +523,6 @@ export default function App() {
           onBack={() => setScreen("home")}
           address={keystore?.address ?? ""}
           algo={keystore?.algo ?? "secp256k1"}
-          canRevealMnemonic={keystore?.canRevealMnemonic ?? false}
           onShowPhrase={() => setScreen("reveal-phrase")}
           onResetWallet={() => setScreen("reset-wallet")}
         />
