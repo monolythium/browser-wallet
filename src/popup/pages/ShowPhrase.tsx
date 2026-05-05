@@ -1,4 +1,5 @@
 import { Icon } from "../Icon";
+import { MnemonicGrid } from "../components/MnemonicGrid";
 
 interface ShowPhraseProps {
   mnemonic: string;
@@ -7,7 +8,7 @@ interface ShowPhraseProps {
 }
 
 export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
-  const words = mnemonic.trim().split(/\s+/);
+  const wordCount = mnemonic.trim().split(/\s+/).length;
 
   return (
     <>
@@ -45,41 +46,10 @@ export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
             textTransform: "uppercase",
           }}
         >
-          PQM-1 · {words.length} words
+          PQM-1 · {wordCount} words
         </div>
 
-        <div
-          style={{
-            padding: 14,
-            borderRadius: 12,
-            background: "rgba(124,127,255,0.06)",
-            border: "1px solid var(--fg-700)",
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            columnGap: 14,
-            rowGap: 8,
-            fontFamily: "var(--f-mono)",
-            fontSize: 12,
-            lineHeight: 1.4,
-            color: "var(--fg-100)",
-          }}
-        >
-          {words.map((word, i) => (
-            <div
-              key={`${i}-${word}`}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "22px 1fr",
-                gap: 6,
-              }}
-            >
-              <span style={{ color: "var(--fg-500)", textAlign: "right" }}>
-                {i + 1}
-              </span>
-              <span>{word}</span>
-            </div>
-          ))}
-        </div>
+        <MnemonicGrid mnemonic={mnemonic} />
 
         <div
           style={{

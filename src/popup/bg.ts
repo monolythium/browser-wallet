@@ -27,6 +27,11 @@ export interface KeystoreStatus {
    * was retired in favour of ML-DSA-65 — kept in the union so the
    * Settings panel's pre-PQ fallback render path still typechecks. */
   algo: SignAlgo;
+  /** True when the on-disk vault carries an encrypted mnemonic and the
+   * Settings → Show recovery phrase flow can return the 24-word phrase
+   * after re-auth. False on legacy v2 vaults and on v3 vaults created
+   * before mnemonic persistence shipped (Phase 3). */
+  canRevealMnemonic: boolean;
 }
 
 export type ApprovalKind =
@@ -200,6 +205,62 @@ export async function bgKeystoreImportFromSeedHex(
   seedHex: string,
 ): Promise<{ ok: true; address: string } | { ok: false; reason?: string }> {
   return send("keystore-create-from-seedhex", { password, seedHex });
+}
+
+/**
+ * Re-auth and return the 24-word PQM-1 mnemonic for the Settings →
+ * Show recovery phrase flow. Wrong-password attempts share the
+ * SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL counters with `bgKeystoreUnlock`,
+ * so brute-force lockout thresholds apply identically. `no_mnemonic_stored`
+ * indicates the vault was created before mnemonic persistence shipped
+ * — surface a "re-import to enable" hint and keep the Settings button
+ * disabled going forward (KeystoreStatus.canRevealMnemonic gates the UI).
+ */
+export async function bgKeystoreExportSeed(
+  password: string,
+): Promise<
+  | { ok: true; mnemonic: string }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | "no_mnemonic_stored" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("keystore-export-seed", { password });
+}
+
+/**
+ * Re-auth + destructive wipe used by Settings → Reset wallet. Same
+ * brute-force lockout counters as `bgKeystoreUnlock` /
+ * `bgKeystoreExportSeed`. After a successful reply the SW broadcasts
+ * `walletLocked = true` so any open popup re-syncs to the post-wipe state.
+ */
+export async function bgKeystoreReset(
+  password: string,
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      reason?: "wrong_password" | "rate_limited" | string;
+      secondsRemaining?: number;
+      failCount?: number;
+    }
+> {
+  return send("keystore-reset", { password });
+}
+
+/**
+ * No-re-auth wipe used by Welcome → Forgot password? → "Reset & Import".
+ * The user has no password to enter, so this path is throttled at the SW
+ * (one call per 5 s) rather than gated by re-auth. Threat model: a
+ * popup-access attacker can wipe but gets no key material; the security
+ * boundary is the 24-word recovery phrase, not the popup.
+ */
+export async function bgKeystoreWipeUnauth(): Promise<
+  { ok: true } | { ok: false; reason?: string }
+> {
+  return send("keystore-wipe-unauth");
 }
 
 /**

@@ -11,6 +11,15 @@ interface SettingsProps {
   onBack: () => void;
   address: string;
   algo: SignAlgo;
+  /** True when the active vault stores an encrypted mnemonic. False on
+   *  legacy v2 vaults and on v3 vaults created before Phase 3 — surfaces
+   *  the reveal button as disabled with an explanatory tooltip rather
+   *  than letting the user enter a flow that will fail mid-re-auth. */
+  canRevealMnemonic: boolean;
+  /** Routes to the RevealPhrase page. */
+  onShowPhrase: () => void;
+  /** Routes to the ResetWallet page (destructive). */
+  onResetWallet: () => void;
 }
 
 const ALGO_LABEL: Record<SignAlgo, string> = {
@@ -29,7 +38,14 @@ function getExtensionVersion(): string {
   }
 }
 
-export function Settings({ onBack, address, algo }: SettingsProps) {
+export function Settings({
+  onBack,
+  address,
+  algo,
+  canRevealMnemonic,
+  onShowPhrase,
+  onResetWallet,
+}: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
   const [savingAutoLock, setSavingAutoLock] = useState(false);
@@ -142,6 +158,34 @@ export function Settings({ onBack, address, algo }: SettingsProps) {
             >
               Signing: <span style={{ color: "var(--gold)" }}>{ALGO_LABEL[algo]}</span>
             </div>
+            <button
+              onClick={onShowPhrase}
+              disabled={!canRevealMnemonic}
+              title={
+                canRevealMnemonic
+                  ? undefined
+                  : "This wallet was created before recovery-phrase reveal was supported. Re-import from your 24-word phrase to enable."
+              }
+              style={{
+                marginTop: 6,
+                alignSelf: "flex-start",
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.04)",
+                color: canRevealMnemonic ? "var(--fg-100)" : "var(--fg-500)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 11.5,
+                cursor: canRevealMnemonic ? "pointer" : "not-allowed",
+                opacity: canRevealMnemonic ? 1 : 0.6,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <Icon name="eye" size={11} />
+              Show recovery phrase
+            </button>
           </div>
         </div>
 
@@ -221,6 +265,37 @@ export function Settings({ onBack, address, algo }: SettingsProps) {
             <Icon name="lock" size={13} />
             Lock wallet now
           </button>
+
+          <div
+            style={{
+              marginTop: 14,
+              paddingTop: 14,
+              borderTop: "1px solid var(--fg-700)",
+            }}
+          >
+            <button
+              onClick={onResetWallet}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid rgba(220,80,80,0.4)",
+                background: "rgba(220,80,80,0.08)",
+                color: "var(--err)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              <Icon name="warn" size={13} />
+              Reset wallet
+            </button>
+          </div>
         </div>
 
         <div className="ext-card">
