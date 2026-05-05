@@ -51,18 +51,16 @@ import {
   computeTypedDataDigest,
 } from "./keystore.js";
 import {
-  isUnlockedV3,
-  getUnlockedAddressV3,
-  hasVaultV3,
-  hasStoredMnemonicV3,
-  getStoredAddressV3,
-  unlockV3,
-  lockV3,
+  isUnlockedV4,
+  getUnlockedAddressV4,
+  hasVaultV4,
+  getStoredAddressV4,
+  unlockV4,
+  lockV4,
   createVaultFromNewMnemonic,
   createVaultFromMnemonic,
-  createVaultFromSeedHex,
-  exportMnemonicV3,
-  wipeVaultV3,
+  exportMnemonicV4,
+  wipeVaultV4,
 } from "./keystore-mldsa.js";
 import {
   chainRequiresMlDsa,
@@ -244,9 +242,9 @@ void (async () => {
   }
 
   // Cold-boot recovery: SW restart always loses the in-memory ML-DSA backend,
-  // so isUnlockedV3() is false here — there is nothing to "lock later." Clean
+  // so isUnlockedV4() is false here — there is nothing to "lock later." Clean
   // up any stale deadline and signal locked so any open popup re-syncs.
-  if (!isUnlockedV3()) {
+  if (!isUnlockedV4()) {
     await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
     await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   }
@@ -262,7 +260,7 @@ void (async () => {
 
 async function resetAutoLock(): Promise<void> {
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
-  if (isUnlockedV3()) {
+  if (isUnlockedV4()) {
     await chrome.alarms.create(ALARM_AUTO_LOCK, {
       delayInMinutes: session.autoLockMinutes,
     });
@@ -277,7 +275,7 @@ async function resetAutoLock(): Promise<void> {
 }
 
 async function triggerAutoLock(): Promise<void> {
-  lockV3();
+  lockV4();
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
@@ -505,12 +503,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // the unlocked backend; reads/writes funnel through the published
       // Sprintnet operators since the canonical alias is NXDOMAIN.
       if (chainRequiresMlDsa(session.chainId)) {
-        if (!isUnlockedV3()) {
+        if (!isUnlockedV4()) {
           return err(ERR_UNAUTHORIZED, "wallet is locked");
         }
         try {
           const fromAddr =
-            getUnlockedAddressV3() ?? "0x0000000000000000000000000000000000000000";
+            getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
           // Resolve missing nonce/gas/fee from the operators directly —
           // the chain registry's RPC alias resolves NXDOMAIN and the
           // existing `view` was built against that broken alias too, so
@@ -975,34 +973,36 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { found };
     }
     case "keystore-status": {
-      // Strategy A — v3 (ML-DSA-65) is the new primary vault. Detection
-      // order: v3 first (current canonical shape), v2 next (still
-      // unlockable for non-Sprintnet chains pending a v2→v3 migration
+      // Strategy A — v4 (ML-DSA-65) is the new primary vault. Detection
+      // order: v4 first (current canonical shape), v2 next (still
+      // unlockable for non-Sprintnet chains pending a v2→v4 migration
       // rule), v1 last (PBKDF2+AES-GCM, surfaced as legacy-only so the
-      // popup nudges re-creation).
+      // popup nudges re-creation). v3 storage entries (Phase 3) are
+      // unreachable from this code path — the storage key was bumped
+      // from "mono.vault.v3" to "mono.vault.v4" in Phase 3.5 Commit A,
+      // so any pre-upgrade dev session naturally falls through to
+      // Welcome and re-onboards.
       //
       // `legacyVault` is the popup's banner trigger ("vault format
       // upgraded — re-import your seed"). It fires whenever any
-      // non-current vault is on disk: v1 always, plus v2 once v3 is
+      // non-current vault is on disk: v1 always, plus v2 once v4 is
       // the new primary or once we've deprecated v2.
-      const v3Exists = await hasVaultV3();
+      const v4Exists = await hasVaultV4();
       const v2Exists = await hasVault();
       const v1Exists = await hasLegacyVault();
-      if (v3Exists) {
+      if (v4Exists) {
         return {
           hasVault: true,
           legacyVault: v1Exists || v2Exists,
-          unlocked: isUnlockedV3(),
-          address: getUnlockedAddressV3() ?? (await getStoredAddressV3()),
+          unlocked: isUnlockedV4(),
+          address: getUnlockedAddressV4() ?? (await getStoredAddressV4()),
           custody: "sw" as const,
           algo: "mldsa" as const,
-          canRevealMnemonic: await hasStoredMnemonicV3(),
         };
       }
-      // No v3 vault. If a v2 vault exists, the user can still unlock it
+      // No v4 vault. If a v2 vault exists, the user can still unlock it
       // for legacy chains; the banner flips on so the home/onboarding
-      // surface tells them v2 is the older format. v2 has no mnemonic
-      // recovery surface (it stored a raw secp256k1 key, not a phrase).
+      // surface tells them v2 is the older format.
       return {
         hasVault: v2Exists,
         legacyVault: v1Exists || v2Exists,
@@ -1010,7 +1010,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         address: getUnlockedAddress() ?? (await getStoredAddress()),
         custody: "sw" as const,
         algo: "secp256k1" as const,
-        canRevealMnemonic: false,
       };
     }
     case "chain-list": {
@@ -1053,7 +1052,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // operate on non-Sprintnet chains. Lockout gates the v3 path only —
       // v2 is sunset and getting wired through it would muddy the threshold
       // accounting.
-      if (await hasVaultV3()) {
+      if (await hasVaultV4()) {
         const ses = await chrome.storage.session.get([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1076,7 +1075,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           };
         }
         try {
-          const r = await unlockV3(p.password);
+          const r = await unlockV4(p.password);
           await chrome.storage.session.remove([
             SESSION_KEY_UNLOCK_FAIL_COUNT,
             SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1109,7 +1108,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "keystore-lock": {
       await triggerAutoLock();
       // Legacy v2 lock kept inline so a v2-only user still locks cleanly
-      // through this op; lockV3() inside triggerAutoLock() is idempotent.
+      // through this op; lockV4() inside triggerAutoLock() is idempotent.
       lockKeystore();
       return { ok: true };
     }
@@ -1136,25 +1135,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
-    case "keystore-create-from-seedhex": {
-      const p = message.payload as { password: string; seedHex: string };
-      try {
-        const r = await createVaultFromSeedHex(p.password, p.seedHex);
-        await resetAutoLock();
-        return { ok: true, address: r.address };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
-    }
     case "keystore-export-seed": {
       // Re-auth path that returns the 24-word PQM-1 mnemonic for the
       // Settings → Show recovery phrase flow. Shares the unlock-attempt
       // session counters with keystore-unlock so wrong-password attempts
-      // here count against the same brute-force lockout thresholds. Older
-      // vaults that predate mnemonic persistence return no_mnemonic_stored
-      // without consuming an attempt — the popup surfaces the disabled
-      // state through canRevealMnemonic on keystore-status, but we keep
-      // the SW guard in case a stale popup gets through.
+      // here count against the same brute-force lockout thresholds. v4
+      // strict guarantees the mnemonic is always present, so there is
+      // no "no_mnemonic_stored" branch — wrong password is the only
+      // failure case beyond the rate limit.
       const p = message.payload as { password: string };
       const ses = await chrome.storage.session.get([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
@@ -1178,14 +1166,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       try {
-        const r = await exportMnemonicV3(p.password);
+        const r = await exportMnemonicV4(p.password);
         await chrome.storage.session.remove([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
         ]);
-        if (!r) {
-          return { ok: false, reason: "no_mnemonic_stored" };
-        }
         await resetAutoLock();
         return { ok: true, mnemonic: r.mnemonic };
       } catch {
@@ -1232,7 +1217,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       try {
-        await unlockV3(p.password);
+        await unlockV4(p.password);
       } catch {
         failCount += 1;
         const ms = lockoutMsFor(failCount);
@@ -1249,7 +1234,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       // Password verified — wipe and broadcast lock.
-      await wipeVaultV3();
+      await wipeVaultV4();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1276,7 +1261,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await chrome.storage.session.set({
         [SESSION_KEY_LAST_WIPE_UNAUTH_AT]: now,
       });
-      await wipeVaultV3();
+      await wipeVaultV4();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1328,13 +1313,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // the real ML-DSA-65 address instead of the demo `mono1:…` placeholder.
       // Stays scoped to v3 — the legacy v2 keystore goes through the
       // existing demo-data path until the Networks list switch lands.
-      if (!(await hasVaultV3())) {
+      if (!(await hasVaultV4())) {
         return { ok: false, reason: "no v3 vault" };
       }
-      if (!isUnlockedV3()) {
+      if (!isUnlockedV4()) {
         return { ok: false, reason: "locked" };
       }
-      const address = getUnlockedAddressV3() ?? (await getStoredAddressV3());
+      const address = getUnlockedAddressV4() ?? (await getStoredAddressV4());
       if (!address) {
         return { ok: false, reason: "v3 vault has no stored address" };
       }
@@ -1459,10 +1444,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // existing `eth_sendTransaction` handler does.
         return { ok: false, reason: "send is only wired for Sprintnet today" };
       }
-      if (!isUnlockedV3()) {
+      if (!isUnlockedV4()) {
         return { ok: false, reason: "wallet locked" };
       }
-      const fromAddr = getUnlockedAddressV3();
+      const fromAddr = getUnlockedAddressV4();
       if (!fromAddr) {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
@@ -1521,7 +1506,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
       .then((reply) => {
         sendResponse(reply);
         const op = (message as PopupMessage).op;
-        if (!AUTO_LOCK_EXEMPT_OPS.has(op) && isUnlockedV3()) {
+        if (!AUTO_LOCK_EXEMPT_OPS.has(op) && isUnlockedV4()) {
           void resetAutoLock();
         }
       })

@@ -1,38 +1,43 @@
-// Monolythium Wallet — ML-DSA-65 keystore (vault v3).
+// Monolythium Wallet — ML-DSA-65 keystore (vault v4).
 //
-// Vault layout (stored under chrome.storage.local["mono.vault.v3"]):
+// Vault layout (stored under chrome.storage.local["mono.vault.v4"]):
 //
 //   {
-//     version: 3,
+//     version: 4,
 //     algo: "ml-dsa-65",
 //     kdf: "argon2id",
 //     kdfParams: { m: 65536, t: 3, p: 1, salt: "<base64 16B>" },
 //     aead: "xchacha20-poly1305",
 //     nonce: "<base64 24B>",
-//     ciphertext: "<base64 seed32 || tag>",   // 32-byte ML-DSA-65 seed
-//     addr: "0x...",                          // keccak256(mldsa_pk)[12..32]
-//     // Optional — present on vaults created with recovery-phrase reveal
-//     // support (Phase 3+). The PQM-1 SDK does not support inverse
-//     // derivation from the SHAKE256-derived seed, so the original
-//     // mnemonic is persisted alongside the seed (encrypted under the
-//     // same DEK, fresh nonce) to back the Settings → Show recovery
-//     // phrase flow. Older vaults omit these fields and the reveal
-//     // surface is disabled with an explanatory message.
-//     mnemonicCiphertext?: "<base64 utf8(mnemonic) || tag>",
-//     mnemonicNonce?: "<base64 24B>",
+//     ciphertext: "<base64 seed32 || tag>",        // 32-byte ML-DSA-65 seed
+//     mnemonicCiphertext: "<base64 utf8(mnemonic) || tag>",
+//     mnemonicNonce: "<base64 24B>",
+//     addr: "0x...",                               // keccak256(mldsa_pk)[12..32]
 //   }
 //
-// Why "vault v3" and not v2-with-bigger-payload: the algorithm change
-// is a breaking semantic change. A v2 vault holds a 32-byte secp256k1
-// private key; a v3 vault holds a 32-byte ML-DSA-65 *seed* that derives
-// a 4032-byte secret key + 1952-byte public key + 20-byte address.
-// Same on-disk size for the secret material; completely different
-// downstream interpretation. v2 vaults are NOT auto-upgraded — the user
-// re-imports their seed (or generates a fresh one), per the same v1->v2
-// ethos in keystore.ts.
+// v4 strict (Phase 3.5): mnemonic fields are MANDATORY, not optional.
+// Every v4 vault carries an encrypted mnemonic so Settings → Show
+// recovery phrase always works. The seed-only vault-creation paths
+// from earlier builds (v3) are gone; they survive transitionally as
+// stub-throwing exports until Phase 3.5 Commit C removes them entirely.
+//
+// v3→v4 migration is silent: the storage key was bumped from
+// "mono.vault.v3" to "mono.vault.v4", so any old v3 entry on disk is
+// unreachable from this code path. Internal-dev upgraders land on
+// Welcome and re-onboard. No migration UX, no detection branch — the
+// key bump is the migration.
+//
+// Why a separate vault format and not v2-with-bigger-payload: the
+// algorithm change is a breaking semantic change. A v2 vault holds a
+// 32-byte secp256k1 private key; a v4 vault holds a 32-byte ML-DSA-65
+// *seed* that derives a 4032-byte secret key + 1952-byte public key
+// + 20-byte address, plus a persisted mnemonic. v2 vaults are NOT
+// auto-upgraded — the user re-imports their seed (or generates fresh).
 //
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
   MlDsa65Backend,
@@ -40,7 +45,7 @@ import {
   pqm1MnemonicToMlDsa65Seed,
 } from "@monolythium/core-sdk/crypto";
 
-const VAULT_KEY_V3 = "mono.vault.v3";
+const VAULT_KEY_V4 = "mono.vault.v4";
 
 const ARGON2_M_KIB = 64 * 1024; // 64 MiB
 const ARGON2_T = 3;
@@ -50,35 +55,32 @@ const SALT_LEN = 16;
 const XCHACHA_NONCE_LEN = 24;
 const SEED_LEN = 32;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const ALGO_ID = "ml-dsa-65" as const;
 const KDF_ID = "argon2id" as const;
 const AEAD_ID = "xchacha20-poly1305" as const;
 
-interface VaultEnvelopeV3 {
-  version: 3;
+// HKDF info labels — committed to the v4 schema. The `-v4` suffix means
+// any future schema bump can rotate these labels (and therefore the
+// derived sub-keys) cleanly without ambiguity.
+const HKDF_INFO_SEED = new TextEncoder().encode("mono-seed-v4");
+const HKDF_INFO_MNEMONIC = new TextEncoder().encode("mono-mnemonic-reveal-v4");
+const SUBKEY_LEN = 32; // XChaCha20-Poly1305 expects a 256-bit key.
+
+interface VaultEnvelopeV4 {
+  version: 4;
   algo: typeof ALGO_ID;
   kdf: typeof KDF_ID;
   kdfParams: { m: number; t: number; p: number; salt: string };
   aead: typeof AEAD_ID;
   nonce: string;
   ciphertext: string;
+  /** UTF-8 mnemonic encrypted under the same Argon2id-derived DEK as
+   *  the seed (Commit B switches each side to its own HKDF sub-key).
+   *  Mandatory in v4 — every vault is revealable by definition. */
+  mnemonicCiphertext: string;
+  mnemonicNonce: string;
   addr: string;
-  /** Phase 3+ — UTF-8 mnemonic encrypted under the same DEK as the
-   *  seed, with a fresh nonce. Optional for backward compatibility
-   *  with vaults created before the Show-Recovery-Phrase flow shipped. */
-  mnemonicCiphertext?: string;
-  mnemonicNonce?: string;
-}
-
-/** Error thrown when called against a v2 (secp256k1) envelope on a v3 op. */
-export class WrongVaultVersionError extends Error {
-  constructor() {
-    super(
-      "vault is v2 (secp256k1) — use the legacy keystore path; this module operates on v3 ML-DSA-65 vaults only",
-    );
-    this.name = "WrongVaultVersionError";
-  }
 }
 
 interface UnlockedState {
@@ -104,17 +106,49 @@ function base64ToBytes(s: string): Uint8Array {
   return out;
 }
 
+/**
+ * Expand the Argon2id-derived DEK into two 32-byte XChaCha20 sub-keys via
+ * HKDF-SHA-256 with explicit, schema-bound info labels:
+ *
+ *   seedKey     = HKDF(DEK, info="mono-seed-v4")
+ *   mnemonicKey = HKDF(DEK, info="mono-mnemonic-reveal-v4")
+ *
+ * Why HKDF and not the DEK directly: reusing the same key across two
+ * AEAD encryptions is safe under XChaCha20-Poly1305 (the random nonces
+ * already give us IND-CPA), but separating the keys gives us a clean
+ * audit story + decoupled re-encryption hooks for a future
+ * password-change flow that may need to rotate one side independently.
+ *
+ * Caller owns the DEK lifetime — this helper does not zero `dek`.
+ * Caller MUST zero both returned sub-keys after use (mirroring the
+ * `dek.fill(0)` discipline elsewhere in this module).
+ */
+function deriveSubKeys(dek: Uint8Array): {
+  seedKey: Uint8Array;
+  mnemonicKey: Uint8Array;
+} {
+  const seedKey = hkdf(sha256, dek, undefined, HKDF_INFO_SEED, SUBKEY_LEN);
+  const mnemonicKey = hkdf(
+    sha256,
+    dek,
+    undefined,
+    HKDF_INFO_MNEMONIC,
+    SUBKEY_LEN,
+  );
+  return { seedKey, mnemonicKey };
+}
+
 // ---- chrome.storage helpers ----
 
-async function loadRawV3(): Promise<unknown | null> {
+async function loadRawV4(): Promise<unknown | null> {
   return new Promise((resolve) => {
-    chrome.storage.local.get([VAULT_KEY_V3], (res) => {
-      resolve(res?.[VAULT_KEY_V3] ?? null);
+    chrome.storage.local.get([VAULT_KEY_V4], (res) => {
+      resolve(res?.[VAULT_KEY_V4] ?? null);
     });
   });
 }
 
-function isV3Envelope(raw: unknown): raw is VaultEnvelopeV3 {
+function isV4Envelope(raw: unknown): raw is VaultEnvelopeV4 {
   if (!raw || typeof raw !== "object") return false;
   const obj = raw as Record<string, unknown>;
   if (obj["version"] !== SCHEMA_VERSION) return false;
@@ -129,84 +163,69 @@ function isV3Envelope(raw: unknown): raw is VaultEnvelopeV3 {
   if (typeof params["salt"] !== "string") return false;
   if (typeof obj["nonce"] !== "string") return false;
   if (typeof obj["ciphertext"] !== "string") return false;
+  if (typeof obj["mnemonicCiphertext"] !== "string") return false;
+  if (typeof obj["mnemonicNonce"] !== "string") return false;
   if (typeof obj["addr"] !== "string") return false;
-  // Optional Phase-3 mnemonic fields — both must be present together if either is.
-  const mc = obj["mnemonicCiphertext"];
-  const mn = obj["mnemonicNonce"];
-  if (mc !== undefined || mn !== undefined) {
-    if (typeof mc !== "string") return false;
-    if (typeof mn !== "string") return false;
-  }
   return true;
 }
 
-async function loadVaultV3(): Promise<VaultEnvelopeV3 | null> {
-  const raw = await loadRawV3();
+async function loadVaultV4(): Promise<VaultEnvelopeV4 | null> {
+  const raw = await loadRawV4();
   if (raw === null) return null;
-  if (isV3Envelope(raw)) return raw;
-  throw new Error("v3 vault envelope is unrecognised — refusing to read");
+  if (isV4Envelope(raw)) return raw;
+  throw new Error("v4 vault envelope is unrecognised — refusing to read");
 }
 
-async function saveVaultV3(envelope: VaultEnvelopeV3): Promise<void> {
+async function saveVaultV4(envelope: VaultEnvelopeV4): Promise<void> {
   return new Promise((resolve) => {
-    chrome.storage.local.set({ [VAULT_KEY_V3]: envelope }, () => resolve());
+    chrome.storage.local.set({ [VAULT_KEY_V4]: envelope }, () => resolve());
   });
 }
 
 // ---- public API ----
 
-export async function hasVaultV3(): Promise<boolean> {
-  const v = await loadVaultV3();
+export async function hasVaultV4(): Promise<boolean> {
+  const v = await loadVaultV4();
   return v !== null;
 }
 
-export async function getStoredAddressV3(): Promise<string | null> {
-  const v = await loadVaultV3();
+export async function getStoredAddressV4(): Promise<string | null> {
+  const v = await loadVaultV4();
   return v?.addr ?? null;
 }
 
-/**
- * Whether the on-disk v3 vault carries an encrypted mnemonic (Phase 3+).
- * Lets the popup grey out "Show recovery phrase" for older vaults instead
- * of failing the user inside the re-auth flow.
- */
-export async function hasStoredMnemonicV3(): Promise<boolean> {
-  const v = await loadVaultV3();
-  return !!(v?.mnemonicCiphertext && v?.mnemonicNonce);
-}
-
-export function isUnlockedV3(): boolean {
+export function isUnlockedV4(): boolean {
   return unlocked !== null;
 }
 
-export function getUnlockedAddressV3(): string | null {
+export function getUnlockedAddressV4(): string | null {
   return unlocked?.address ?? null;
 }
 
 /** Lock — drop the in-memory backend reference. The backend's secret key
  * is held by the SDK in private fields; we cannot zero it deterministically,
  * but releasing the reference makes it eligible for GC. */
-export function lockV3(): void {
+export function lockV4(): void {
   unlocked = null;
 }
 
 /**
- * Wipe the v3 vault from chrome.storage.local and drop the in-memory
+ * Wipe the v4 vault from chrome.storage.local and drop the in-memory
  * backend. Used by both the password-confirmed Settings → Reset wallet
  * path and the Welcome → Forgot password? path. Caller is responsible
  * for clearing the lockout counters (`SESSION_KEY_UNLOCK_FAIL_COUNT`,
  * `_UNTIL`) and broadcasting `walletLocked` if the popup needs to
  * route — those live in the SW dispatcher.
  */
-export async function wipeVaultV3(): Promise<void> {
+export async function wipeVaultV4(): Promise<void> {
   await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(VAULT_KEY_V3, () => resolve());
+    chrome.storage.local.remove(VAULT_KEY_V4, () => resolve());
   });
-  lockV3();
+  lockV4();
 }
 
 /**
- * Generate a fresh PQM-1 v1 24-word mnemonic and commit a v3 vault.
+ * Generate a fresh PQM-1 v1 24-word mnemonic and commit a v4 vault.
  *
  * The returned mnemonic is the recovery secret. Treat it like a private key.
  * The mnemonic is also persisted in the vault (encrypted under the same DEK)
@@ -217,8 +236,8 @@ export async function createVaultFromNewMnemonic(password: string): Promise<{
   mnemonic: string;
   address: string;
 }> {
-  if (await hasVaultV3()) {
-    throw new Error("v3 vault already exists; cannot overwrite");
+  if (await hasVaultV4()) {
+    throw new Error("v4 vault already exists; cannot overwrite");
   }
   const mnemonic = generatePqm1Mnemonic((out) => {
     out.set(randomBytes(out.length));
@@ -238,8 +257,8 @@ export async function createVaultFromMnemonic(
   password: string,
   mnemonic: string,
 ): Promise<{ address: string }> {
-  if (await hasVaultV3()) {
-    throw new Error("v3 vault already exists; cannot overwrite");
+  if (await hasVaultV4()) {
+    throw new Error("v4 vault already exists; cannot overwrite");
   }
   const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
   const address = await commitVaultFromSeed(password, seed, mnemonic);
@@ -247,44 +266,16 @@ export async function createVaultFromMnemonic(
   return { address };
 }
 
-/**
- * Compatibility path for pre-PQM-1 browser-wallet builds that exposed a raw
- * 32-byte ML-DSA-65 seed. New wallets should use createVaultFromNewMnemonic.
- */
-export async function createVaultFromNewSeed(password: string): Promise<{
-  seedHex: string;
-  address: string;
-}> {
-  if (await hasVaultV3()) {
-    throw new Error("v3 vault already exists; cannot overwrite");
-  }
-  const seed = randomBytes(SEED_LEN);
-  const address = await commitVaultFromSeed(password, seed);
-  const seedHex = bytesToHex(seed);
-  seed.fill(0);
-  return { seedHex, address };
-}
-
-/** Import from a user-supplied 32-byte seed (hex with or without 0x prefix). */
-export async function createVaultFromSeedHex(
-  password: string,
-  seedHex: string,
-): Promise<{ address: string }> {
-  if (await hasVaultV3()) {
-    throw new Error("v3 vault already exists; cannot overwrite");
-  }
-  const seed = parseSeedHex(seedHex);
-  const address = await commitVaultFromSeed(password, seed);
-  return { address };
-}
-
 async function commitVaultFromSeed(
   password: string,
   seed: Uint8Array,
-  mnemonic?: string,
+  mnemonic: string,
 ): Promise<string> {
   if (seed.length !== SEED_LEN) {
     throw new Error(`seed must be ${SEED_LEN} bytes`);
+  }
+  if (mnemonic.length === 0) {
+    throw new Error("mnemonic must be non-empty");
   }
 
   // Derive the keypair eagerly to compute the address that goes in the envelope.
@@ -298,26 +289,25 @@ async function commitVaultFromSeed(
     salt,
     { m: ARGON2_M_KIB, t: ARGON2_T, p: ARGON2_P, dkLen: ARGON2_DKLEN },
   );
-  const seedCipher = xchacha20poly1305(dek, nonce);
-  const ct = seedCipher.encrypt(seed);
-
-  // Optional mnemonic persistence — independent nonce so reusing the DEK
-  // across two AEAD encryptions stays IND-CPA. Same DEK is reused since
-  // it's derived from the user's password and an additional argon2id pass
-  // would just duplicate work without strengthening anything.
-  let mnemonicCiphertext: string | undefined;
-  let mnemonicNonce: string | undefined;
-  if (typeof mnemonic === "string" && mnemonic.length > 0) {
-    const mnNonceBytes = randomBytes(XCHACHA_NONCE_LEN);
-    const mnCipher = xchacha20poly1305(dek, mnNonceBytes);
-    const mnPlain = new TextEncoder().encode(mnemonic);
-    const mnCt = mnCipher.encrypt(mnPlain);
-    mnemonicCiphertext = bytesToBase64(mnCt);
-    mnemonicNonce = bytesToBase64(mnNonceBytes);
-  }
+  const { seedKey, mnemonicKey } = deriveSubKeys(dek);
   dek.fill(0);
 
-  const envelope: VaultEnvelopeV3 = {
+  let ct: Uint8Array;
+  let mnCt: Uint8Array;
+  const mnNonceBytes = randomBytes(XCHACHA_NONCE_LEN);
+  try {
+    const seedCipher = xchacha20poly1305(seedKey, nonce);
+    ct = seedCipher.encrypt(seed);
+    const mnCipher = xchacha20poly1305(mnemonicKey, mnNonceBytes);
+    const mnPlain = new TextEncoder().encode(mnemonic);
+    mnCt = mnCipher.encrypt(mnPlain);
+    mnPlain.fill(0);
+  } finally {
+    seedKey.fill(0);
+    mnemonicKey.fill(0);
+  }
+
+  const envelope: VaultEnvelopeV4 = {
     version: SCHEMA_VERSION,
     algo: ALGO_ID,
     kdf: KDF_ID,
@@ -330,24 +320,23 @@ async function commitVaultFromSeed(
     aead: AEAD_ID,
     nonce: bytesToBase64(nonce),
     ciphertext: bytesToBase64(ct),
+    mnemonicCiphertext: bytesToBase64(mnCt),
+    mnemonicNonce: bytesToBase64(mnNonceBytes),
     addr: address,
-    ...(mnemonicCiphertext && mnemonicNonce
-      ? { mnemonicCiphertext, mnemonicNonce }
-      : {}),
   };
-  await saveVaultV3(envelope);
+  await saveVaultV4(envelope);
 
   unlocked = { backend, address };
   return address;
 }
 
 /**
- * Decrypt the v3 vault and load the ML-DSA-65 backend into memory.
+ * Decrypt the v4 vault and load the ML-DSA-65 backend into memory.
  * Throws `"wrong password"` on AEAD failure.
  */
-export async function unlockV3(password: string): Promise<{ address: string }> {
-  const v = await loadVaultV3();
-  if (!v) throw new Error("no v3 vault — run onboarding first");
+export async function unlockV4(password: string): Promise<{ address: string }> {
+  const v = await loadVaultV4();
+  if (!v) throw new Error("no v4 vault — run onboarding first");
 
   const salt = base64ToBytes(v.kdfParams.salt);
   const nonce = base64ToBytes(v.nonce);
@@ -363,14 +352,21 @@ export async function unlockV3(password: string): Promise<{ address: string }> {
       dkLen: ARGON2_DKLEN,
     },
   );
+  const { seedKey, mnemonicKey } = deriveSubKeys(dek);
+  dek.fill(0);
+  // mnemonicKey isn't needed for unlock (the mnemonic is only decrypted
+  // on demand by exportMnemonicV4). Zero it immediately rather than
+  // letting it sit in memory until GC.
+  mnemonicKey.fill(0);
+
   let seed: Uint8Array;
   try {
-    const cipher = xchacha20poly1305(dek, nonce);
+    const cipher = xchacha20poly1305(seedKey, nonce);
     seed = cipher.decrypt(ct);
   } catch {
     throw new Error("wrong password");
   } finally {
-    dek.fill(0);
+    seedKey.fill(0);
   }
   if (seed.length !== SEED_LEN) {
     seed.fill(0);
@@ -387,20 +383,16 @@ export async function unlockV3(password: string): Promise<{ address: string }> {
 
 /**
  * Re-derive the DEK from `password` and decrypt the stored mnemonic.
- * Returns `null` when the vault was created before mnemonic persistence
- * shipped (no `mnemonicCiphertext` field on the envelope). Throws
- * `"wrong password"` on AEAD failure — same shape as `unlockV3`, so
- * callers can share the lockout-counter machinery.
- *
- * The seed AEAD is decrypted first so the password check is anchored to
- * the same primary record that `unlockV3` validates.
+ * v4 schema mandates the mnemonic, so this returns the mnemonic on
+ * success or throws `"wrong password"` on AEAD failure — never returns
+ * null. The seed AEAD is decrypted first so the password check is
+ * anchored to the same primary record that `unlockV4` validates.
  */
-export async function exportMnemonicV3(
+export async function exportMnemonicV4(
   password: string,
-): Promise<{ mnemonic: string } | null> {
-  const v = await loadVaultV3();
-  if (!v) throw new Error("no v3 vault — run onboarding first");
-  if (!v.mnemonicCiphertext || !v.mnemonicNonce) return null;
+): Promise<{ mnemonic: string }> {
+  const v = await loadVaultV4();
+  if (!v) throw new Error("no v4 vault — run onboarding first");
 
   const salt = base64ToBytes(v.kdfParams.salt);
   const seedNonce = base64ToBytes(v.nonce);
@@ -418,14 +410,16 @@ export async function exportMnemonicV3(
       dkLen: ARGON2_DKLEN,
     },
   );
+  const { seedKey, mnemonicKey } = deriveSubKeys(dek);
+  dek.fill(0);
   try {
     // Verify password by decrypting the seed first; if this fails the
     // mnemonic decrypt would also fail, but anchoring to the seed keeps
-    // the wrong-password signal identical to unlockV3.
-    const seedCipher = xchacha20poly1305(dek, seedNonce);
+    // the wrong-password signal identical to unlockV4.
+    const seedCipher = xchacha20poly1305(seedKey, seedNonce);
     const seedPlain = seedCipher.decrypt(seedCt);
     seedPlain.fill(0);
-    const mnCipher = xchacha20poly1305(dek, mnNonce);
+    const mnCipher = xchacha20poly1305(mnemonicKey, mnNonce);
     const mnPlain = mnCipher.decrypt(mnCt);
     const mnemonic = new TextDecoder().decode(mnPlain);
     mnPlain.fill(0);
@@ -433,7 +427,8 @@ export async function exportMnemonicV3(
   } catch {
     throw new Error("wrong password");
   } finally {
-    dek.fill(0);
+    seedKey.fill(0);
+    mnemonicKey.fill(0);
   }
 }
 
@@ -444,7 +439,7 @@ export async function exportMnemonicV3(
  * `bincode(SignedTransaction)` bytes (needed by the SDK encrypted-envelope
  * wrapper, which uses the raw bytes as the AEAD plaintext).
  */
-export async function signEvmTxV3(req: {
+export async function signEvmTxV4(req: {
   chainId: bigint;
   nonce: bigint;
   maxPriorityFeePerGas: bigint;
@@ -462,7 +457,7 @@ export async function signEvmTxV3(req: {
   /** Raw 32-byte sighash. */
   sighashBytes: Uint8Array;
 }> {
-  if (!unlocked) throw new Error("v3 wallet is locked");
+  if (!unlocked) throw new Error("v4 wallet is locked");
   const result = unlocked.backend.signEvmTx(req);
   return {
     rawTxHex: "0x" + result.wireHex,
@@ -476,7 +471,7 @@ export async function signEvmTxV3(req: {
 /** Get the unlocked backend's 1952-byte public key — needed for monkey-patched
  * `eth_accounts` views that want to surface "this is the ML-DSA pubkey" along
  * with the address. */
-export function getUnlockedPublicKeyV3(): Uint8Array | null {
+export function getUnlockedPublicKeyV4(): Uint8Array | null {
   return unlocked?.backend.publicKey() ?? null;
 }
 
@@ -485,11 +480,11 @@ export function getUnlockedPublicKeyV3(): Uint8Array | null {
  * building a `NonceAad` (which carries a `sender` byte array, not a
  * hex string). Returns null when the keystore is locked.
  */
-export function getUnlockedAddressBytesV3(): Uint8Array | null {
+export function getUnlockedAddressBytesV4(): Uint8Array | null {
   return unlocked?.backend.addressBytes() ?? null;
 }
 
-export function getUnlockedBackendV3(): MlDsa65Backend | null {
+export function getUnlockedBackendV4(): MlDsa65Backend | null {
   return unlocked?.backend ?? null;
 }
 
@@ -500,10 +495,10 @@ export function getUnlockedBackendV3(): MlDsa65Backend | null {
  * || sender_pubkey)`. Keeping the secret-key dereference inside this
  * module is what keeps secret-key dereferences scoped to the keystore.
  *
- * Throws `"v3 wallet is locked"` if the keystore isn't unlocked.
+ * Throws `"v4 wallet is locked"` if the keystore isn't unlocked.
  */
-export function signOuterDigestV3(digest: Uint8Array): Uint8Array {
-  if (!unlocked) throw new Error("v3 wallet is locked");
+export function signOuterDigestV4(digest: Uint8Array): Uint8Array {
+  if (!unlocked) throw new Error("v4 wallet is locked");
   if (digest.length !== 32) {
     throw new Error(`outer digest must be 32 bytes, got ${digest.length}`);
   }
@@ -517,22 +512,3 @@ function bytesToHex(b: Uint8Array): string {
   for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
   return s;
 }
-
-function parseSeedHex(s: string): Uint8Array {
-  const r = s.startsWith("0x") || s.startsWith("0X") ? s.slice(2) : s;
-  if (r.length !== SEED_LEN * 2) {
-    throw new Error(`seed hex must be ${SEED_LEN * 2} chars (got ${r.length})`);
-  }
-  const out = new Uint8Array(SEED_LEN);
-  for (let i = 0; i < SEED_LEN; i++) {
-    const byte = parseInt(r.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(byte)) throw new Error("seed hex has invalid characters");
-    out[i] = byte;
-  }
-  return out;
-}
-
-export const __internalV3 = {
-  isV3Envelope,
-  parseSeedHex,
-};
