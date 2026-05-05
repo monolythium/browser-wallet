@@ -200,13 +200,6 @@ export async function bgKeystoreCreateFromMnemonic(
   return send("keystore-create-from-mnemonic", { password, mnemonic });
 }
 
-export async function bgKeystoreImportFromSeedHex(
-  password: string,
-  seedHex: string,
-): Promise<{ ok: true; address: string } | { ok: false; reason?: string }> {
-  return send("keystore-create-from-seedhex", { password, seedHex });
-}
-
 /**
  * Re-auth and return the 24-word PQM-1 mnemonic for the Settings →
  * Show recovery phrase flow. Wrong-password attempts share the
