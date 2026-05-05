@@ -73,6 +73,10 @@ import {
   sprintnetJsonRpc,
 } from "./tx-mldsa.js";
 import {
+  loadConnectedSites,
+  saveConnectedSite,
+} from "./connected-sites.js";
+import {
   ALARM_AUTO_LOCK,
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
@@ -234,6 +238,14 @@ console.log("[Monolythium Wallet] service worker boot");
 void (async () => {
   await loadUserChains();
   session.chainId = await loadActiveChainId();
+
+  // Restore origins the user has previously approved. Without this, every
+  // SW hibernation (~30 s idle) drops connectedOrigins back to empty and
+  // dapps see eth_accounts → [] until the user re-approves.
+  const sites = await loadConnectedSites();
+  for (const origin of Object.keys(sites)) {
+    session.connectedOrigins.add(origin);
+  }
 
   const local = await chrome.storage.local.get(STORAGE_KEY_AUTO_LOCK_MINUTES);
   const m = local[STORAGE_KEY_AUTO_LOCK_MINUTES];
@@ -423,6 +435,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
       session.connectedOrigins.add(origin);
+      await saveConnectedSite(origin, addr);
       broadcastEvent("accountsChanged", [addr]);
       broadcastEvent("connect", { chainId: session.chainId });
       return ok([addr]);
