@@ -10,7 +10,7 @@ import {
   type EncryptionKey,
   type NativeEvmTxFields,
 } from "@monolythium/core-sdk/crypto";
-import { getUnlockedBackendV3 } from "./keystore-mldsa.js";
+import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
 import { SPRINTNET_OPERATOR_RPCS } from "./networks.js";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
@@ -149,7 +149,7 @@ export async function buildEncryptedSubmission(args: {
   innerSighashHex: string;
   innerWireBytes: number;
 }> {
-  const backend = getUnlockedBackendV3();
+  const backend = getUnlockedBackendV4();
   if (backend === null) {
     throw new Error("v3 wallet is locked");
   }
