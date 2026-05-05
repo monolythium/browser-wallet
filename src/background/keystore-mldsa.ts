@@ -36,6 +36,8 @@
 //
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
   MlDsa65Backend,
@@ -57,6 +59,13 @@ const SCHEMA_VERSION = 4;
 const ALGO_ID = "ml-dsa-65" as const;
 const KDF_ID = "argon2id" as const;
 const AEAD_ID = "xchacha20-poly1305" as const;
+
+// HKDF info labels — committed to the v4 schema. The `-v4` suffix means
+// any future schema bump can rotate these labels (and therefore the
+// derived sub-keys) cleanly without ambiguity.
+const HKDF_INFO_SEED = new TextEncoder().encode("mono-seed-v4");
+const HKDF_INFO_MNEMONIC = new TextEncoder().encode("mono-mnemonic-reveal-v4");
+const SUBKEY_LEN = 32; // XChaCha20-Poly1305 expects a 256-bit key.
 
 interface VaultEnvelopeV4 {
   version: 4;
@@ -105,6 +114,38 @@ function base64ToBytes(s: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+/**
+ * Expand the Argon2id-derived DEK into two 32-byte XChaCha20 sub-keys via
+ * HKDF-SHA-256 with explicit, schema-bound info labels:
+ *
+ *   seedKey     = HKDF(DEK, info="mono-seed-v4")
+ *   mnemonicKey = HKDF(DEK, info="mono-mnemonic-reveal-v4")
+ *
+ * Why HKDF and not the DEK directly: reusing the same key across two
+ * AEAD encryptions is safe under XChaCha20-Poly1305 (the random nonces
+ * already give us IND-CPA), but separating the keys gives us a clean
+ * audit story + decoupled re-encryption hooks for a future
+ * password-change flow that may need to rotate one side independently.
+ *
+ * Caller owns the DEK lifetime — this helper does not zero `dek`.
+ * Caller MUST zero both returned sub-keys after use (mirroring the
+ * `dek.fill(0)` discipline elsewhere in this module).
+ */
+function deriveSubKeys(dek: Uint8Array): {
+  seedKey: Uint8Array;
+  mnemonicKey: Uint8Array;
+} {
+  const seedKey = hkdf(sha256, dek, undefined, HKDF_INFO_SEED, SUBKEY_LEN);
+  const mnemonicKey = hkdf(
+    sha256,
+    dek,
+    undefined,
+    HKDF_INFO_MNEMONIC,
+    SUBKEY_LEN,
+  );
+  return { seedKey, mnemonicKey };
 }
 
 // ---- chrome.storage helpers ----
@@ -299,17 +340,23 @@ async function commitVaultFromSeed(
     salt,
     { m: ARGON2_M_KIB, t: ARGON2_T, p: ARGON2_P, dkLen: ARGON2_DKLEN },
   );
-  const seedCipher = xchacha20poly1305(dek, nonce);
-  const ct = seedCipher.encrypt(seed);
-
-  // Mandatory mnemonic encryption — independent nonce so reusing the DEK
-  // across two AEAD encryptions stays IND-CPA. Commit B switches both
-  // encryptions to HKDF-derived sub-keys for cleaner audit story.
-  const mnNonceBytes = randomBytes(XCHACHA_NONCE_LEN);
-  const mnCipher = xchacha20poly1305(dek, mnNonceBytes);
-  const mnPlain = new TextEncoder().encode(mnemonic);
-  const mnCt = mnCipher.encrypt(mnPlain);
+  const { seedKey, mnemonicKey } = deriveSubKeys(dek);
   dek.fill(0);
+
+  let ct: Uint8Array;
+  let mnCt: Uint8Array;
+  const mnNonceBytes = randomBytes(XCHACHA_NONCE_LEN);
+  try {
+    const seedCipher = xchacha20poly1305(seedKey, nonce);
+    ct = seedCipher.encrypt(seed);
+    const mnCipher = xchacha20poly1305(mnemonicKey, mnNonceBytes);
+    const mnPlain = new TextEncoder().encode(mnemonic);
+    mnCt = mnCipher.encrypt(mnPlain);
+    mnPlain.fill(0);
+  } finally {
+    seedKey.fill(0);
+    mnemonicKey.fill(0);
+  }
 
   const envelope: VaultEnvelopeV4 = {
     version: SCHEMA_VERSION,
@@ -356,14 +403,21 @@ export async function unlockV4(password: string): Promise<{ address: string }> {
       dkLen: ARGON2_DKLEN,
     },
   );
+  const { seedKey, mnemonicKey } = deriveSubKeys(dek);
+  dek.fill(0);
+  // mnemonicKey isn't needed for unlock (the mnemonic is only decrypted
+  // on demand by exportMnemonicV4). Zero it immediately rather than
+  // letting it sit in memory until GC.
+  mnemonicKey.fill(0);
+
   let seed: Uint8Array;
   try {
-    const cipher = xchacha20poly1305(dek, nonce);
+    const cipher = xchacha20poly1305(seedKey, nonce);
     seed = cipher.decrypt(ct);
   } catch {
     throw new Error("wrong password");
   } finally {
-    dek.fill(0);
+    seedKey.fill(0);
   }
   if (seed.length !== SEED_LEN) {
     seed.fill(0);
@@ -407,14 +461,16 @@ export async function exportMnemonicV4(
       dkLen: ARGON2_DKLEN,
     },
   );
+  const { seedKey, mnemonicKey } = deriveSubKeys(dek);
+  dek.fill(0);
   try {
     // Verify password by decrypting the seed first; if this fails the
     // mnemonic decrypt would also fail, but anchoring to the seed keeps
     // the wrong-password signal identical to unlockV4.
-    const seedCipher = xchacha20poly1305(dek, seedNonce);
+    const seedCipher = xchacha20poly1305(seedKey, seedNonce);
     const seedPlain = seedCipher.decrypt(seedCt);
     seedPlain.fill(0);
-    const mnCipher = xchacha20poly1305(dek, mnNonce);
+    const mnCipher = xchacha20poly1305(mnemonicKey, mnNonce);
     const mnPlain = mnCipher.decrypt(mnCt);
     const mnemonic = new TextDecoder().decode(mnPlain);
     mnPlain.fill(0);
@@ -422,7 +478,8 @@ export async function exportMnemonicV4(
   } catch {
     throw new Error("wrong password");
   } finally {
-    dek.fill(0);
+    seedKey.fill(0);
+    mnemonicKey.fill(0);
   }
 }
 
