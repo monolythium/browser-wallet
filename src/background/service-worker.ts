@@ -60,7 +60,6 @@ import {
   lockV4,
   createVaultFromNewMnemonic,
   createVaultFromMnemonic,
-  createVaultFromSeedHex,
   exportMnemonicV4,
   wipeVaultV4,
 } from "./keystore-mldsa.js";
@@ -1130,16 +1129,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = message.payload as { password: string; mnemonic: string };
       try {
         const r = await createVaultFromMnemonic(p.password, p.mnemonic);
-        await resetAutoLock();
-        return { ok: true, address: r.address };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
-    }
-    case "keystore-create-from-seedhex": {
-      const p = message.payload as { password: string; seedHex: string };
-      try {
-        const r = await createVaultFromSeedHex(p.password, p.seedHex);
         await resetAutoLock();
         return { ok: true, address: r.address };
       } catch (e) {

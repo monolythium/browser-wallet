@@ -83,16 +83,6 @@ interface VaultEnvelopeV4 {
   addr: string;
 }
 
-/** Error thrown when called against a v2 (secp256k1) envelope on a v4 op. */
-export class WrongVaultVersionError extends Error {
-  constructor() {
-    super(
-      "vault is v2 (secp256k1) — use the legacy keystore path; this module operates on v4 ML-DSA-65 vaults only",
-    );
-    this.name = "WrongVaultVersionError";
-  }
-}
-
 interface UnlockedState {
   backend: MlDsa65Backend;
   /** Cached `0x`-prefixed address — same value MlDsa65Backend.getAddress() returns. */
@@ -285,36 +275,6 @@ export async function createVaultFromMnemonic(
   const address = await commitVaultFromSeed(password, seed, mnemonic);
   seed.fill(0);
   return { address };
-}
-
-/**
- * @deprecated v4 strict requires a mnemonic at vault-create time — the
- * raw-seed creation path can't satisfy that. Throws unconditionally; the
- * function survives only so that any stale call site fails loudly rather
- * than silently. Removed entirely in Phase 3.5 Commit C.
- */
-export async function createVaultFromNewSeed(_password: string): Promise<{
-  seedHex: string;
-  address: string;
-}> {
-  throw new Error(
-    "v4 strict: createVaultFromNewSeed is unsupported — use createVaultFromNewMnemonic",
-  );
-}
-
-/**
- * @deprecated v4 strict requires a mnemonic at vault-create time. To
- * import from raw seed bytes, re-derive a mnemonic via the SDK and call
- * `createVaultFromMnemonic` instead. Throws unconditionally; removed in
- * Phase 3.5 Commit C.
- */
-export async function createVaultFromSeedHex(
-  _password: string,
-  _seedHex: string,
-): Promise<{ address: string }> {
-  throw new Error(
-    "v4 strict: createVaultFromSeedHex is unsupported — re-derive a mnemonic via the SDK and use createVaultFromMnemonic",
-  );
 }
 
 async function commitVaultFromSeed(
@@ -563,22 +523,3 @@ function bytesToHex(b: Uint8Array): string {
   for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
   return s;
 }
-
-function parseSeedHex(s: string): Uint8Array {
-  const r = s.startsWith("0x") || s.startsWith("0X") ? s.slice(2) : s;
-  if (r.length !== SEED_LEN * 2) {
-    throw new Error(`seed hex must be ${SEED_LEN * 2} chars (got ${r.length})`);
-  }
-  const out = new Uint8Array(SEED_LEN);
-  for (let i = 0; i < SEED_LEN; i++) {
-    const byte = parseInt(r.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(byte)) throw new Error("seed hex has invalid characters");
-    out[i] = byte;
-  }
-  return out;
-}
-
-export const __internalV4 = {
-  isV4Envelope,
-  parseSeedHex,
-};
