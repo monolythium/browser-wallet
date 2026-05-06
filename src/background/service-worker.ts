@@ -73,6 +73,10 @@ import {
   sprintnetJsonRpc,
 } from "./tx-mldsa.js";
 import {
+  loadConnectedSites,
+  saveConnectedSite,
+} from "./connected-sites.js";
+import {
   ALARM_AUTO_LOCK,
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
@@ -232,21 +236,31 @@ console.log("[Monolythium Wallet] service worker boot");
 // boot. The active-chain hydration runs after user-chains so a stored id
 // pointing at a user-added chain resolves cleanly via lookupChain.
 void (async () => {
+  // Force-lock first — before any hydration await that could fail. SW
+  // restart always drops the in-memory ML-DSA backend held by
+  // keystore-mldsa.ts, so persistent state must say walletLocked=true to
+  // match. Hoisted ahead of the hydration awaits so a throw in
+  // loadConnectedSites / loadUserChains / etc. (cf. 5316b25) can't leave
+  // the flag stale at false. Popup's onChanged listener (a1068b6) picks
+  // up the write and routes to UnlockScreen if open.
+  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+  await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+
   await loadUserChains();
   session.chainId = await loadActiveChainId();
+
+  // Restore origins the user has previously approved. Without this, every
+  // SW hibernation (~30 s idle) drops connectedOrigins back to empty and
+  // dapps see eth_accounts → [] until the user re-approves.
+  const sites = await loadConnectedSites();
+  for (const origin of Object.keys(sites)) {
+    session.connectedOrigins.add(origin);
+  }
 
   const local = await chrome.storage.local.get(STORAGE_KEY_AUTO_LOCK_MINUTES);
   const m = local[STORAGE_KEY_AUTO_LOCK_MINUTES];
   if (typeof m === "number" && (AUTO_LOCK_OPTIONS as readonly number[]).includes(m)) {
     session.autoLockMinutes = m;
-  }
-
-  // Cold-boot recovery: SW restart always loses the in-memory ML-DSA backend,
-  // so isUnlockedV4() is false here — there is nothing to "lock later." Clean
-  // up any stale deadline and signal locked so any open popup re-syncs.
-  if (!isUnlockedV4()) {
-    await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
-    await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   }
 })();
 
@@ -279,6 +293,43 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+}
+
+// Suspend the auto-lock alarm while a separate-window approval is open.
+// Without this, a slow user can find the wallet locked at the moment they
+// click Approve — the approval window doesn't fire any popup IPC ops, so the
+// usual `resetAutoLock()` on activity never runs. Counter so concurrent
+// approvals (different origins) all have to close before the alarm restarts.
+async function pauseAutoLock(): Promise<void> {
+  await chrome.alarms.clear(ALARM_AUTO_LOCK);
+  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+}
+
+let openApprovalCount = 0;
+
+async function approvalOpened(): Promise<void> {
+  openApprovalCount++;
+  await pauseAutoLock();
+}
+
+async function approvalClosed(): Promise<void> {
+  openApprovalCount = Math.max(0, openApprovalCount - 1);
+  if (openApprovalCount === 0) {
+    await resetAutoLock();
+  }
+}
+
+/** enqueueApproval wrapped in approvalOpened/Closed so the auto-lock alarm
+ *  stays paused for the lifetime of the approval window. */
+async function gatedEnqueue(
+  req: Parameters<typeof enqueueApproval>[0],
+): Promise<ApprovalDecision> {
+  await approvalOpened();
+  try {
+    return await enqueueApproval(req);
+  } finally {
+    await approvalClosed();
+  }
 }
 
 // Progressive brute-force lockout — state lives in chrome.storage.session
@@ -400,7 +451,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return ok(String(parseInt(session.chainId, 16)));
 
     case "eth_accounts": {
-      const addr = getUnlockedAddress() ?? (await getStoredAddress());
+      const addr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
       if (!addr) return ok([]);
       return ok(session.connectedOrigins.has(origin) ? [addr] : []);
     }
@@ -409,20 +460,30 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // If wallet doesn't exist yet, surface a clear error so the dapp can
       // tell the user to onboard. We could also auto-open the popup at the
       // onboarding screen — left to next stage.
-      if (!(await hasVault())) {
+      if (!(await hasVaultV4())) {
         return err(ERR_UNAUTHORIZED, "Monolythium Wallet has no vault — open the extension and complete onboarding first");
       }
-      const decision = await enqueueApproval({ kind: "connect", origin });
+      // Phase 4.0 Decision §9: already-connected origin + unlocked wallet
+      // resolves silently. Locked or unconnected falls through to approval.
+      // No accountsChanged/connect re-emit — dApp is already connected.
+      if (session.connectedOrigins.has(origin) && isUnlockedV4()) {
+        const cached = getUnlockedAddressV4();
+        if (cached) {
+          return ok([cached]);
+        }
+      }
+      const decision = await gatedEnqueue({ kind: "connect", origin });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the connection");
       }
       // After approval the keystore must be unlocked (popup unlocks before
       // confirming). If not, fail closed.
-      const addr = getUnlockedAddress();
+      const addr = getUnlockedAddressV4();
       if (!addr) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
       session.connectedOrigins.add(origin);
+      await saveConnectedSite(origin, addr);
       broadcastEvent("accountsChanged", [addr]);
       broadcastEvent("connect", { chainId: session.chainId });
       return ok([addr]);
@@ -454,16 +515,16 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, "personal_sign expects a message string");
       }
 
-      const decision = await enqueueApproval({
+      const decision = await gatedEnqueue({
         kind: "personal_sign",
         origin,
         message: messageParam,
-        address: getUnlockedAddress() ?? (await getStoredAddress()) ?? "",
+        address: getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "",
       });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the message");
       }
-      if (!isUnlocked()) {
+      if (!isUnlockedV4()) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
       try {
@@ -487,7 +548,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // the user approve, but the popup will surface the gap.
       const view = await buildSendTxView(txReq);
 
-      const decision = await enqueueApproval({
+      const decision = await gatedEnqueue({
         kind: "send_tx",
         origin,
         tx: txReq,
@@ -546,7 +607,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      if (!isUnlocked()) {
+      if (!isUnlockedV4()) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
 
@@ -558,7 +619,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         // Re-resolve gas with the latest node values at sign time. The view
         // we showed the user is the same shape (and usually identical
         // numbers) but we don't trust stale views to be authoritative.
-        const fromAddr = getUnlockedAddress() ?? "0x0000000000000000000000000000000000000000";
+        const fromAddr = getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
         const nonceHex =
           txReq.nonce ?? view.nonce ??
           (await rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]));
@@ -637,10 +698,10 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      const decision = await enqueueApproval({
+      const decision = await gatedEnqueue({
         kind: "typed_sign",
         origin,
-        address: address ?? getUnlockedAddress() ?? (await getStoredAddress()) ?? "",
+        address: address ?? getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "",
         rawTypedData,
         parsed,
         digest,
@@ -648,7 +709,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the typed data");
       }
-      if (!isUnlocked()) return err(ERR_UNAUTHORIZED, "wallet is locked");
+      if (!isUnlockedV4()) return err(ERR_UNAUTHORIZED, "wallet is locked");
       if (!parsed) {
         return err(-32602, "typed data could not be parsed as EIP-712 v4");
       }
@@ -709,7 +770,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         ...(Array.isArray(p?.iconUrls) ? { iconUrls: p.iconUrls } : {}),
         ...(p?.nativeCurrency ? { nativeCurrency: p.nativeCurrency } : {}),
       };
-      const decision = await enqueueApproval({ kind: "add_chain", origin, chain: spec });
+      const decision = await gatedEnqueue({ kind: "add_chain", origin, chain: spec });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the new chain");
       }
@@ -809,7 +870,7 @@ async function buildSendTxView(
 
   const provider = providerFor(chainId);
   const fromAddr =
-    txReq.from ?? getUnlockedAddress() ?? (await getStoredAddress()) ?? "0x0000000000000000000000000000000000000000";
+    txReq.from ?? getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "0x0000000000000000000000000000000000000000";
 
   const callShape = {
     from: fromAddr,
