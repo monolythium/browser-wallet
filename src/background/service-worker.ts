@@ -461,6 +461,15 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!(await hasVaultV4())) {
         return err(ERR_UNAUTHORIZED, "Monolythium Wallet has no vault — open the extension and complete onboarding first");
       }
+      // Phase 4.0 Decision §9: already-connected origin + unlocked wallet
+      // resolves silently. Locked or unconnected falls through to approval.
+      // No accountsChanged/connect re-emit — dApp is already connected.
+      if (session.connectedOrigins.has(origin) && isUnlockedV4()) {
+        const cached = getUnlockedAddressV4();
+        if (cached) {
+          return ok([cached]);
+        }
+      }
       const decision = await gatedEnqueue({ kind: "connect", origin });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the connection");
