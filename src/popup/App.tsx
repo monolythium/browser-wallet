@@ -225,10 +225,17 @@ export default function App() {
     })();
   }, [refreshKeystoreStatus]);
 
-  // SW-pushed lock signal — chrome.storage.session is set with
-  // walletLocked=true whenever the SW auto-locks (alarm fired) or any code
-  // path explicitly locks. Refetch state and route the popup back to the
-  // Unlock screen so the user can't act on a stale "unlocked" UI.
+  // SW-pushed lock/unlock signal — chrome.storage.session.walletLocked is
+  // the authoritative cross-context flag. The SW writes `true` when it
+  // auto-locks (alarm fired) or any code path explicitly locks, and `false`
+  // immediately after a successful unlock (resetAutoLock in service-worker.ts).
+  // Both directions must be handled here so the popup's `keystore` state
+  // and `screen` stay in sync without depending on a fresh mount:
+  //   - lock  (newValue=true):  refresh + force "locked" except for exempt screens.
+  //   - unlock (newValue=false): refresh + nudge "locked" → "home".
+  // The unlock branch deliberately only nudges from "locked"; "approval" stays
+  // put so ApprovalRoute re-renders with the refreshed keystore prop and
+  // routes to the right Req* view, and onboarding screens stay put too.
   useEffect(() => {
     const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
       changes,
@@ -236,12 +243,18 @@ export default function App() {
     ) => {
       if (areaName !== "session") return;
       const change = changes[SESSION_KEY_WALLET_LOCKED];
-      if (change && change.newValue === true) {
+      if (!change) return;
+      if (change.newValue === true) {
         void (async () => {
           await refreshKeystoreStatus();
           setScreen((prev) =>
             LOCK_SIGNAL_EXEMPT.has(prev) ? prev : "locked",
           );
+        })();
+      } else if (change.newValue === false) {
+        void (async () => {
+          await refreshKeystoreStatus();
+          setScreen((prev) => (prev === "locked" ? "home" : prev));
         })();
       }
     };
