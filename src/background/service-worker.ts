@@ -236,6 +236,16 @@ console.log("[Monolythium Wallet] service worker boot");
 // boot. The active-chain hydration runs after user-chains so a stored id
 // pointing at a user-added chain resolves cleanly via lookupChain.
 void (async () => {
+  // Force-lock first — before any hydration await that could fail. SW
+  // restart always drops the in-memory ML-DSA backend held by
+  // keystore-mldsa.ts, so persistent state must say walletLocked=true to
+  // match. Hoisted ahead of the hydration awaits so a throw in
+  // loadConnectedSites / loadUserChains / etc. (cf. 5316b25) can't leave
+  // the flag stale at false. Popup's onChanged listener (a1068b6) picks
+  // up the write and routes to UnlockScreen if open.
+  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+  await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+
   await loadUserChains();
   session.chainId = await loadActiveChainId();
 
@@ -251,14 +261,6 @@ void (async () => {
   const m = local[STORAGE_KEY_AUTO_LOCK_MINUTES];
   if (typeof m === "number" && (AUTO_LOCK_OPTIONS as readonly number[]).includes(m)) {
     session.autoLockMinutes = m;
-  }
-
-  // Cold-boot recovery: SW restart always loses the in-memory ML-DSA backend,
-  // so isUnlockedV4() is false here — there is nothing to "lock later." Clean
-  // up any stale deadline and signal locked so any open popup re-syncs.
-  if (!isUnlockedV4()) {
-    await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
-    await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   }
 })();
 
