@@ -21,7 +21,7 @@ export type ConnectedSitesMap = Record<string, ConnectedSiteRecord>;
 export async function loadConnectedSites(): Promise<ConnectedSitesMap> {
   return new Promise((resolve) => {
     chrome.storage.local.get(CONNECTED_SITES_STORAGE_KEY, (got) => {
-      const raw = got[CONNECTED_SITES_STORAGE_KEY];
+      const raw = got?.[CONNECTED_SITES_STORAGE_KEY];
       if (!raw || typeof raw !== "object") {
         resolve({});
         return;
