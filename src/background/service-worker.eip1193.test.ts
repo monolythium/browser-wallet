@@ -76,6 +76,11 @@ vi.mock("./approvals.js", () => ({
 }));
 
 // Keystore mock — deterministic signing, always unlocked unless a test flips it.
+// The dApp request path (handleRpc / buildSendTxView) consults the v4 keystore
+// after Phase 4.0 commit 3; the legacy v2 helpers stay imported only for the
+// popup-IPC keystore-status migration-display branch. The two mocks share the
+// same `unlocked` / `vaultExists` flags so a test that flips either reflects
+// in both code paths.
 let unlocked = true;
 let vaultExists = true;
 
@@ -98,6 +103,26 @@ vi.mock("./keystore.js", () => ({
   signLegacyTx: vi.fn(async () => ({ rawTx: DETERMINISTIC_RAW_TX, txHash: DETERMINISTIC_TX_HASH })),
   signTypedDataV4: vi.fn(async () => DETERMINISTIC_SIG_BYTES),
   computeTypedDataDigest: vi.fn(() => new Uint8Array(32).fill(0x42)),
+}));
+
+vi.mock("./keystore-mldsa.js", () => ({
+  hasVaultV4: vi.fn(async () => vaultExists),
+  getStoredAddressV4: vi.fn(async () => DETERMINISTIC_ADDRESS),
+  getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
+  isUnlockedV4: vi.fn(() => unlocked),
+  lockV4: vi.fn(() => {
+    unlocked = false;
+  }),
+  unlockV4: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
+  createVaultFromNewMnemonic: vi.fn(async () => ({
+    mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    address: DETERMINISTIC_ADDRESS,
+  })),
+  createVaultFromMnemonic: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
+  exportMnemonicV4: vi.fn(async () => ({
+    mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  })),
+  wipeVaultV4: vi.fn(async () => undefined),
 }));
 
 // ---- chrome.* stub ----

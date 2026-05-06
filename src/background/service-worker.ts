@@ -449,7 +449,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return ok(String(parseInt(session.chainId, 16)));
 
     case "eth_accounts": {
-      const addr = getUnlockedAddress() ?? (await getStoredAddress());
+      const addr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
       if (!addr) return ok([]);
       return ok(session.connectedOrigins.has(origin) ? [addr] : []);
     }
@@ -458,7 +458,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // If wallet doesn't exist yet, surface a clear error so the dapp can
       // tell the user to onboard. We could also auto-open the popup at the
       // onboarding screen — left to next stage.
-      if (!(await hasVault())) {
+      if (!(await hasVaultV4())) {
         return err(ERR_UNAUTHORIZED, "Monolythium Wallet has no vault — open the extension and complete onboarding first");
       }
       const decision = await gatedEnqueue({ kind: "connect", origin });
@@ -467,7 +467,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
       // After approval the keystore must be unlocked (popup unlocks before
       // confirming). If not, fail closed.
-      const addr = getUnlockedAddress();
+      const addr = getUnlockedAddressV4();
       if (!addr) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
@@ -508,12 +508,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         kind: "personal_sign",
         origin,
         message: messageParam,
-        address: getUnlockedAddress() ?? (await getStoredAddress()) ?? "",
+        address: getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "",
       });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the message");
       }
-      if (!isUnlocked()) {
+      if (!isUnlockedV4()) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
       try {
@@ -596,7 +596,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      if (!isUnlocked()) {
+      if (!isUnlockedV4()) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
 
@@ -608,7 +608,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         // Re-resolve gas with the latest node values at sign time. The view
         // we showed the user is the same shape (and usually identical
         // numbers) but we don't trust stale views to be authoritative.
-        const fromAddr = getUnlockedAddress() ?? "0x0000000000000000000000000000000000000000";
+        const fromAddr = getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
         const nonceHex =
           txReq.nonce ?? view.nonce ??
           (await rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]));
@@ -690,7 +690,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       const decision = await gatedEnqueue({
         kind: "typed_sign",
         origin,
-        address: address ?? getUnlockedAddress() ?? (await getStoredAddress()) ?? "",
+        address: address ?? getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "",
         rawTypedData,
         parsed,
         digest,
@@ -698,7 +698,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the typed data");
       }
-      if (!isUnlocked()) return err(ERR_UNAUTHORIZED, "wallet is locked");
+      if (!isUnlockedV4()) return err(ERR_UNAUTHORIZED, "wallet is locked");
       if (!parsed) {
         return err(-32602, "typed data could not be parsed as EIP-712 v4");
       }
@@ -859,7 +859,7 @@ async function buildSendTxView(
 
   const provider = providerFor(chainId);
   const fromAddr =
-    txReq.from ?? getUnlockedAddress() ?? (await getStoredAddress()) ?? "0x0000000000000000000000000000000000000000";
+    txReq.from ?? getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "0x0000000000000000000000000000000000000000";
 
   const callShape = {
     from: fromAddr,
