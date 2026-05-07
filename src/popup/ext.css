@@ -140,11 +140,6 @@ body { margin:0; background:#0a0815; color:#fff; font-family: var(--f-sans); ove
 .ext-acc__chev { color: var(--fg-300); }
 .ext.light .ext-acc__chev { color:#606369; }
 
-.ext-net { display:flex; align-items:center; gap:5px; padding: 5px 9px; border-radius:999px; background: rgba(88,200,140,0.15); border:1px solid rgba(88,200,140,0.3); font-family: var(--f-mono); font-size:10px; color: var(--ok); cursor:pointer; letter-spacing:0.04em; }
-.ext-net .dot { width:5px; height:5px; border-radius:50%; background: var(--ok); box-shadow: 0 0 4px var(--ok); }
-.ext-net.test { color:#f9a825; background: rgba(249,168,37,0.1); border-color: rgba(249,168,37,0.3); }
-.ext-net.test .dot { background:#f9a825; box-shadow: 0 0 4px #f9a825; }
-
 .ext-iconbtn { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; color: var(--fg-200); background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); cursor:pointer; transition: all 160ms var(--e-out); }
 .ext-iconbtn:hover, .ext-iconbtn:active { background: rgba(255,255,255,0.09); border-color: var(--fg-500); }
 .ext.light .ext-iconbtn { color:#404348; background:#fff; border:1px solid #e0e0e7; }

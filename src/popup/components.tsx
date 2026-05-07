@@ -59,7 +59,16 @@ type ChainStatus =
 
 const CHAIN_STATUS_TICK_MS = 10_000;
 
-export function ChainStatusBanner() {
+interface ChainStatusBannerProps {
+  /** When provided, replaces the hardcoded "SPRINTNET" segment with the
+   *  active chain's display name. */
+  network?: ChainEntry;
+  /** When provided alongside `network`, the chain-name segment becomes
+   *  a clickable button that routes to the chain picker. */
+  onOpenNetworks?: () => void;
+}
+
+export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBannerProps = {}) {
   const [state, setState] = useState<ChainStatus>({ kind: "loading" });
 
   useEffect(() => {
@@ -113,7 +122,31 @@ export function ChainStatusBanner() {
         <>
           <span style={{ color: "var(--ok)", fontWeight: 500 }}>LIVE</span>
           <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span>SPRINTNET</span>
+          {network && onOpenNetworks ? (
+            <button
+              onClick={onOpenNetworks}
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                font: "inherit",
+                letterSpacing: "inherit",
+                textTransform: "inherit",
+                color: "inherit",
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              {network.name.toUpperCase()}
+              <Icon name="chev-d" size={9} />
+            </button>
+          ) : network ? (
+            <span>{network.name.toUpperCase()}</span>
+          ) : (
+            <span>SPRINTNET</span>
+          )}
           <span style={{ color: "var(--fg-600)" }}>·</span>
           <span style={{ color: "var(--ok)" }}>{state.operator.toUpperCase()}</span>
         </>
@@ -166,21 +199,19 @@ export function ChainStatusBanner() {
   );
 }
 
-// ---- Top row: brand + account + network + settings ----
+// ---- Top row: brand + account + settings ----
+//
+// The active chain selector lives in the status bar (`ChainStatusBanner`)
+// directly above this row. Top kept the chain chip until Phase 4.1.2,
+// when the full bech32m address landed in the account chip and needed
+// the freed horizontal width to render in 1-2 lines instead of 3-4.
 interface TopProps {
   account: Account;
-  network: ChainEntry;
   onOpenAccounts: () => void;
-  onOpenNetworks: () => void;
   onSettings: () => void;
 }
 
-export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettings }: TopProps) {
-  // Sprintnet (the only built-in chain today) carries the `test` chip
-  // styling because it's the testnet for v4.0. User-added chains keep
-  // the default chip styling — they may be production chains, may be
-  // dev chains, we don't know.
-  const isTestnet = network.official === true;
+export function Top({ account, onOpenAccounts, onSettings }: TopProps) {
   return (
     <div className="ext-top">
       <span className="ext-brand" />
@@ -193,10 +224,6 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
         </div>
         <span className="ext-acc__chev"><Icon name="chev-d" size={14} /></span>
       </div>
-      <button className={`ext-net ${isTestnet ? "test" : ""}`} onClick={onOpenNetworks}>
-        <span className="dot" />{network.name}
-        <Icon name="chev-d" size={10} />
-      </button>
       <button className="ext-iconbtn" onClick={onSettings}><Icon name="settings" size={16} /></button>
     </div>
   );
@@ -489,7 +516,6 @@ interface HomeProps {
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
   onOpenAccounts: () => void;
-  onOpenNetworks: () => void;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -499,7 +525,7 @@ interface HomeProps {
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -520,9 +546,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onOpenNetworks
     <>
       <Top
         account={account}
-        network={network}
         onOpenAccounts={onOpenAccounts}
-        onOpenNetworks={onOpenNetworks}
         onSettings={onSettings}
       />
       <div className="ext-body">
