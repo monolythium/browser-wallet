@@ -218,12 +218,26 @@ export function Top({ account, onOpenAccounts, onSettings }: TopProps) {
     <div className="ext-top">
       <div className="ext-acc" onClick={onOpenAccounts}>
         <div className="ext-acc__lbl">
-          <div className="n">{account.label}</div>
+          <div
+            className="n"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {account.label}
+            </span>
+            <span style={{ color: "var(--fg-300)", flexShrink: 0, display: "inline-flex" }}>
+              <Icon name="chev-d" size={12} />
+            </span>
+          </div>
           <div className="a" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <RevealableAddressBlock addr0x={account.addr} />
           </div>
         </div>
-        <span className="ext-acc__chev"><Icon name="chev-d" size={14} /></span>
       </div>
       <button className="ext-iconbtn" onClick={onSettings}><Icon name="settings" size={16} /></button>
     </div>
