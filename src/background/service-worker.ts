@@ -958,7 +958,15 @@ const SPRINTNET_MIN_PRIORITY_FEE_HEX = "0x2540be400";
 // every render; the popup's own 10-second tick will retry once the TTL
 // lapses.
 const OPERATOR_CACHE_TTL_MS = 10_000;
-let cachedOperator: { name: string | null; checkedAt: number } | null = null;
+// Shared between `wallet-operator-status` (popup chain-status banner) and
+// `wallet-chain-block-number` (popup chain-health poll). Both want the same
+// "first alive Sprintnet operator" answer; caching name+rpc together avoids
+// re-running the operator probe loop at the 8-second health-poll cadence.
+let cachedOperator: {
+  name: string | null;
+  rpc: string | null;
+  checkedAt: number;
+} | null = null;
 
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
@@ -1379,9 +1387,82 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const hit = await probeFirstAliveOperator(undefined, 1_000);
-        const name = hit?.name ?? null;
-        cachedOperator = { name, checkedAt: now };
-        return { ok: true, name };
+        cachedOperator = {
+          name: hit?.name ?? null,
+          rpc: hit?.rpc ?? null,
+          checkedAt: now,
+        };
+        return { ok: true, name: cachedOperator.name };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-chain-block-number": {
+      // Real chain-liveness probe for the popup's status-bar health
+      // indicator. Calls `eth_blockNumber` on the active Sprintnet
+      // operator and returns the hex result; the popup tracks block-
+      // advance freshness client-side at an 8-second cadence to drive
+      // the LIVE / STALLED / OFFLINE state machine.
+      //
+      // Reuses `cachedOperator` (shared with `wallet-operator-status`)
+      // to avoid re-running the operator probe loop on every health
+      // tick. Cache miss / stale falls through to a fresh probe and
+      // refreshes the cache for both handlers.
+      const now = Date.now();
+      let rpc: string | null = null;
+      let operatorName: string | null = null;
+      if (
+        cachedOperator !== null &&
+        now - cachedOperator.checkedAt < OPERATOR_CACHE_TTL_MS
+      ) {
+        rpc = cachedOperator.rpc;
+        operatorName = cachedOperator.name;
+      } else {
+        try {
+          const hit = await probeFirstAliveOperator(undefined, 1_000);
+          cachedOperator = {
+            name: hit?.name ?? null,
+            rpc: hit?.rpc ?? null,
+            checkedAt: now,
+          };
+          rpc = cachedOperator.rpc;
+          operatorName = cachedOperator.name;
+        } catch (e) {
+          return { ok: false, reason: (e as Error).message };
+        }
+      }
+      if (rpc === null) {
+        return { ok: false, reason: "no operator" };
+      }
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 1_500);
+        const res = await fetch(rpc, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "eth_blockNumber",
+            params: [],
+          }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        if (!res.ok) {
+          return { ok: false, reason: `http ${res.status}` };
+        }
+        const body = (await res.json()) as {
+          result?: string;
+          error?: { message?: string };
+        };
+        if (body.error) {
+          return { ok: false, reason: body.error.message ?? "rpc error" };
+        }
+        if (typeof body.result !== "string") {
+          return { ok: false, reason: "bad response" };
+        }
+        return { ok: true, blockHex: body.result, operator: operatorName };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
