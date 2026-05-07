@@ -6,6 +6,7 @@ import {
   bgSetAutoLockMinutes,
   type SignAlgo,
 } from "../bg";
+import { bech32mDisplay } from "../../shared/bech32m";
 
 interface SettingsProps {
   onBack: () => void;
@@ -69,7 +70,7 @@ export function Settings({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(address);
+      await navigator.clipboard.writeText(bech32mDisplay(address));
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -123,7 +124,7 @@ export function Settings({
                 lineHeight: 1.5,
               }}
             >
-              {address || "—"}
+              {bech32mDisplay(address)}
             </div>
             <button
               onClick={() => void handleCopy()}

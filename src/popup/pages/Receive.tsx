@@ -2,6 +2,7 @@ import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Icon } from "../Icon";
 import type { Account } from "../demo-data";
+import { bech32mDisplay } from "../../shared/bech32m";
 
 interface ReceiveProps {
   account: Account;
@@ -10,10 +11,14 @@ interface ReceiveProps {
 
 export function Receive({ account, onBack }: ReceiveProps) {
   const [copied, setCopied] = useState(false);
+  // Whitepaper §22.7 mandates bech32m for display. The QR is display, the
+  // copy-button payload is display, the inline string is display — all use
+  // the same bech32m form. Wire-format storage in `account.addr` stays 0x.
+  const display = bech32mDisplay(account.addr);
 
   const onCopy = async () => {
     try {
-      await navigator.clipboard.writeText(account.addr);
+      await navigator.clipboard.writeText(display);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -66,7 +71,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
             }}
           >
             <QRCodeSVG
-              value={account.addr}
+              value={display}
               size={224}
               level="M"
               marginSize={2}
@@ -86,7 +91,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
               userSelect: "all",
             }}
           >
-            {account.addr}
+            {display}
           </div>
           <button
             className="ext-act prim"
