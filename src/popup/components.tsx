@@ -21,6 +21,7 @@ import type {
   Account, Custody, Algo, PendingSign,
 } from "./demo-data";
 import type {
+  ConnectRequest,
   PersonalSignRequest,
   TypedSignRequest,
   SendTxRequest,
@@ -1310,69 +1311,75 @@ function AlgoPicker({ value, onChange }: { value: Algo; onChange: (a: Algo) => v
 }
 
 // ---- Connect request ----
+//
+// Reads the real ConnectRequest from the service worker (origin only —
+// the real protocol carries no perms list or phishing score, so the
+// previous demo perms / verified-badge / phishing-score sections are
+// gone). The account-to-share row uses RevealableAddressBlock so the
+// user sees the canonical bech32m form first and can reveal 0x via
+// the §22.7 warning gate, consistent with Home / Receive / Settings.
 interface ReqConnectProps {
+  request: ConnectRequest;
+  /** Active account address from the keystore (0x wire format). */
+  address: string;
   custody: Custody;
   onApprove: () => void;
   onReject: () => void;
 }
 
-export function ReqConnect({ custody, onApprove, onReject }: ReqConnectProps) {
-  const r = PENDING.connect;
-  const dapp = DAPPS.find((d) => d.id === r.dappId)!;
-  const acc = ACCOUNTS.find((a) => a.id === r.accountToShare)!;
+export function ReqConnect({
+  request,
+  address,
+  custody,
+  onApprove,
+  onReject,
+}: ReqConnectProps) {
+  const { origin } = request;
+  let hostname = origin;
+  try {
+    hostname = new URL(origin).hostname;
+  } catch {
+    // origin may already be a bare hostname or otherwise unparseable;
+    // fall back to the raw string.
+  }
+  const initial = (hostname[0] ?? "?").toUpperCase();
+
   return (
     <>
       <ChainStatusBanner />
       <div className="req-head">
         <div className="origin">
-          <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
+          <div className="fav G">{initial}</div>
           <div className="info">
-            <div className="n">
-              {dapp.name}{" "}
-              {dapp.verified
-                ? <span className="ext-badge-att"><Icon name="shield" size={8} /> Verified</span>
-                : <span style={{ color: "var(--warn)", fontSize: 9, fontFamily: "var(--f-mono)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Unverified</span>}
-            </div>
-            <div className="u">{r.origin}</div>
+            <div className="n">{hostname}</div>
+            <div className="u" title={origin}>{origin}</div>
+          </div>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--fg-200)", padding: "3px 7px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4 }}>
+            connect
           </div>
         </div>
-        <h2>Connect to {dapp.name}?</h2>
-        <div className="sub">requesting · {r.perms.length} permissions</div>
+        <h2>Connect this site?</h2>
+        <div className="sub">grants read access to your address — no signing</div>
       </div>
-
-      {!dapp.verified && (
-        <div className="req-warn warn">
-          <Icon name="warn" size={14} />
-          <div><b>Origin not in LYTH registry.</b> Phishing score {(r.phishingScore * 100).toFixed(0)}/100 · verify the URL.</div>
-        </div>
-      )}
 
       <div className="req-section">
         <div className="req-section__h">Account to share</div>
-        <div className="ext-acc" style={{ cursor: "default" }}>
-          <div className={`ext-acc__blob ${acc.denom}`} />
-          <div className="ext-acc__lbl">
-            <div className="n">{acc.label}</div>
-            <div className="a">{shortAddr(bech32mDisplay(acc.addr), 18)}</div>
-          </div>
-          <span style={{ color: "var(--gold)", fontSize: 10, fontFamily: "var(--f-mono)", letterSpacing: "0.08em" }}>PUBLIC · LYTH</span>
-        </div>
-      </div>
-
-      <div className="req-section">
-        <div className="req-section__h">This dApp will be able to</div>
-        {r.perms.map((p) => (
-          <div className="req-perm" key={p.k}>
-            <span className={`icobox ${p.k.startsWith("read") ? "read" : ""}`}>
-              <Icon name={p.k.startsWith("read") ? "eye" : "lock"} size={11} />
-            </span>
-            <div className="main">
-              <div className="k">{p.desc}</div>
-              <div className="d">{p.k}</div>
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(0,0,0,0.3)",
+            border: "1px solid rgba(255,255,255,0.05)",
+          }}
+        >
+          {address ? (
+            <RevealableAddressBlock addr0x={address} />
+          ) : (
+            <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-400)" }}>
+              —
             </div>
-            <span className="req-req">{p.required ? "required" : "optional"}</span>
-          </div>
-        ))}
+          )}
+        </div>
       </div>
 
       <CustodyBadge mode={custody} />
