@@ -6,7 +6,7 @@ import {
   bgSetAutoLockMinutes,
   type SignAlgo,
 } from "../bg";
-import { AddressLine } from "../components/AddressLine";
+import { RevealableAddressBlock } from "../components/RevealableAddressBlock";
 
 interface SettingsProps {
   onBack: () => void;
@@ -103,10 +103,7 @@ export function Settings({
             }}
           >
             {address ? (
-              <>
-                <AddressLine addr0x={address} format="bech32m" />
-                <AddressLine addr0x={address} format="hex" />
-              </>
+              <RevealableAddressBlock addr0x={address} />
             ) : (
               <div
                 style={{
