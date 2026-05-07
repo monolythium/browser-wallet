@@ -133,8 +133,6 @@ body { margin:0; background:#0a0815; color:#fff; font-family: var(--f-sans); ove
 .ext-acc { display:flex; align-items:center; gap:8px; padding: 5px 10px 5px 5px; border-radius: 999px; background: rgba(255,255,255,0.05); border:1px solid var(--fg-700); flex:1; cursor:pointer; transition: background 160ms; }
 .ext.light .ext-acc { background:#fff; border:1px solid #e0e0e7; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
 .ext-acc:hover { background: rgba(255,255,255,0.08); }
-.ext-acc__blob { width:24px; height:24px; border-radius:50%; background: conic-gradient(from 180deg, #f2b441, #d9612f, #8a3fa5, #3a6fa5, #f2b441); flex-shrink:0; box-shadow: 0 0 0 1px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(255,255,255,0.3); }
-.ext-acc__blob.private { background: conic-gradient(from 180deg, #6a7ba5, #3a4a72, #2a3555, #4a5a88, #6a7ba5); }
 .ext-acc__lbl { flex:1; overflow:hidden; }
 .ext-acc__lbl .n { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:-0.01em; }
 .ext-acc__lbl .a { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:1px; letter-spacing:0.02em; }
