@@ -417,7 +417,7 @@ export async function personalSign(
   return signHash(digest);
 }
 
-function hexOrUtf8ToBytes(s: string): Uint8Array {
+export function hexOrUtf8ToBytes(s: string): Uint8Array {
   if (s.startsWith("0x") || s.startsWith("0X")) {
     const rest = s.slice(2);
     const len = rest.length / 2;
