@@ -214,7 +214,6 @@ interface TopProps {
 export function Top({ account, onOpenAccounts, onSettings }: TopProps) {
   return (
     <div className="ext-top">
-      <span className="ext-brand" />
       <div className="ext-acc" onClick={onOpenAccounts}>
         <div className="ext-acc__lbl">
           <div className="n">{account.label}</div>
