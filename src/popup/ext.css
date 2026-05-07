@@ -124,8 +124,6 @@ body { margin:0; background:#0a0815; color:#fff; font-family: var(--f-sans); ove
 .ext-acc__lbl .n { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:-0.01em; }
 .ext-acc__lbl .a { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:1px; letter-spacing:0.02em; }
 .ext.light .ext-acc__lbl .a { color:#606369; }
-.ext-acc__chev { color: var(--fg-300); }
-.ext.light .ext-acc__chev { color:#606369; }
 
 .ext-iconbtn { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; color: var(--fg-200); background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); cursor:pointer; transition: all 160ms var(--e-out); }
 .ext-iconbtn:hover, .ext-iconbtn:active { background: rgba(255,255,255,0.09); border-color: var(--fg-500); }

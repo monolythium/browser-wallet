@@ -22,8 +22,9 @@
 import { useState } from "react";
 import type { MouseEvent } from "react";
 
-import { AddressLine } from "./AddressLine";
+import { AddressLine, CheckIcon, ClipboardIcon } from "./AddressLine";
 import { Modal } from "./Modal";
+import { bech32mDisplay } from "../../shared/bech32m";
 
 type RevealState = "closed" | "warning" | "revealed";
 
@@ -35,6 +36,7 @@ export interface RevealableAddressBlockProps {
 
 export function RevealableAddressBlock({ addr0x }: RevealableAddressBlockProps) {
   const [state, setState] = useState<RevealState>("closed");
+  const [copied, setCopied] = useState(false);
 
   const handleShowWarning = (e: MouseEvent) => {
     e.stopPropagation();
@@ -54,26 +56,56 @@ export function RevealableAddressBlock({ addr0x }: RevealableAddressBlockProps) 
   };
   const handleClose = () => setState("closed");
 
+  const handleCopyBech32m = (e: MouseEvent) => {
+    e.stopPropagation();
+    void navigator.clipboard.writeText(bech32mDisplay(addr0x)).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {},
+    );
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <AddressLine addr0x={addr0x} format="bech32m" truncate={false} />
+      <AddressLine addr0x={addr0x} format="bech32m" truncate={false} inlineCopy={false} />
 
-      <button
-        onClick={handleShowWarning}
-        style={{
-          alignSelf: "flex-start",
-          padding: "2px 0",
-          background: "transparent",
-          border: "none",
-          color: "var(--fg-400)",
-          fontFamily: "var(--f-mono)",
-          fontSize: 10,
-          letterSpacing: "0.04em",
-          cursor: "pointer",
-        }}
-      >
-        Show 0x format ▾
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button
+          onClick={handleCopyBech32m}
+          aria-label="Copy mono1 address"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 22,
+            height: 22,
+            padding: 0,
+            background: "transparent",
+            border: "none",
+            color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
+            cursor: "pointer",
+          }}
+        >
+          {copied ? <CheckIcon /> : <ClipboardIcon />}
+        </button>
+        <button
+          onClick={handleShowWarning}
+          style={{
+            padding: "2px 0",
+            background: "transparent",
+            border: "none",
+            color: "var(--fg-400)",
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            letterSpacing: "0.04em",
+            cursor: "pointer",
+          }}
+        >
+          Show 0x format ▾
+        </button>
+      </div>
 
       <Modal
         open={state === "warning"}

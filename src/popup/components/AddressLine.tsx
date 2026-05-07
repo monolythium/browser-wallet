@@ -25,6 +25,9 @@ export interface AddressLineProps {
   /** Override the default first-6 + … + last-4 truncation. */
   truncatePrefix?: number;
   truncateSuffix?: number;
+  /** When false, the inline copy icon is omitted so the address claims the
+   *  full row width. Caller renders its own copy affordance. Default true. */
+  inlineCopy?: boolean;
   /** Outer wrapper style hook for parents that need to tighten gaps. */
   style?: CSSProperties;
 }
@@ -35,6 +38,7 @@ export function AddressLine({
   truncate = true,
   truncatePrefix = 6,
   truncateSuffix = 4,
+  inlineCopy = true,
   style,
 }: AddressLineProps) {
   const [copied, setCopied] = useState(false);
@@ -88,30 +92,32 @@ export function AddressLine({
       >
         {display}
       </span>
-      <button
-        onClick={handleCopy}
-        aria-label={`Copy ${format === "bech32m" ? "mono1" : "0x"} address`}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 22,
-          height: 22,
-          padding: 0,
-          background: "transparent",
-          border: "none",
-          color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
-          cursor: "pointer",
-          flexShrink: 0,
-        }}
-      >
-        {copied ? <CheckIcon /> : <ClipboardIcon />}
-      </button>
+      {inlineCopy && (
+        <button
+          onClick={handleCopy}
+          aria-label={`Copy ${format === "bech32m" ? "mono1" : "0x"} address`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 22,
+            height: 22,
+            padding: 0,
+            background: "transparent",
+            border: "none",
+            color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          {copied ? <CheckIcon /> : <ClipboardIcon />}
+        </button>
+      )}
     </div>
   );
 }
 
-function ClipboardIcon() {
+export function ClipboardIcon() {
   // Two overlapping rounded squares — the standard "copy" glyph.
   return (
     <svg
@@ -145,7 +151,7 @@ function ClipboardIcon() {
   );
 }
 
-function CheckIcon() {
+export function CheckIcon() {
   return (
     <svg
       width="14"
