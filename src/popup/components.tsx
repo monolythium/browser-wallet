@@ -13,6 +13,7 @@ import { useState, useEffect } from "react";
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
+import { AddressLine } from "./components/AddressLine";
 import {
   ACCOUNTS, DAPPS, ACTIVITY, PENDING, NODE,
 } from "./demo-data";
@@ -186,7 +187,10 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
         <div className={`ext-acc__blob ${account.denom}`} />
         <div className="ext-acc__lbl">
           <div className="n">{account.label}</div>
-          <div className="a">{shortAddr(bech32mDisplay(account.addr))}</div>
+          <div className="a" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <AddressLine addr0x={account.addr} format="bech32m" />
+            <AddressLine addr0x={account.addr} format="hex" />
+          </div>
         </div>
         <span className="ext-acc__chev"><Icon name="chev-d" size={14} /></span>
       </div>
