@@ -1,8 +1,8 @@
-import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Icon } from "../Icon";
 import type { Account } from "../demo-data";
 import { bech32mDisplay } from "../../shared/bech32m";
+import { AddressLine } from "../components/AddressLine";
 
 interface ReceiveProps {
   account: Account;
@@ -10,21 +10,10 @@ interface ReceiveProps {
 }
 
 export function Receive({ account, onBack }: ReceiveProps) {
-  const [copied, setCopied] = useState(false);
-  // Whitepaper §22.7 mandates bech32m for display. The QR is display, the
-  // copy-button payload is display, the inline string is display — all use
-  // the same bech32m form. Wire-format storage in `account.addr` stays 0x.
-  const display = bech32mDisplay(account.addr);
-
-  const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(display);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard write can fail in iframes / focus-loss races. Stay quiet.
-    }
-  };
+  // Whitepaper §22.7 mandates bech32m display. The QR encodes the bech32m
+  // form (canonical Monolythium). The two AddressLines below show both
+  // mono1 and 0x with per-line copy icons — internal storage stays 0x.
+  const qrPayload = bech32mDisplay(account.addr);
 
   return (
     <>
@@ -71,7 +60,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
             }}
           >
             <QRCodeSVG
-              value={display}
+              value={qrPayload}
               size={224}
               level="M"
               marginSize={2}
@@ -79,33 +68,18 @@ export function Receive({ account, onBack }: ReceiveProps) {
           </div>
           <div
             style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "var(--fg-100)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
               padding: "10px 12px",
               borderRadius: 10,
               background: "rgba(0,0,0,0.3)",
               border: "1px solid var(--fg-700)",
-              wordBreak: "break-all",
-              userSelect: "all",
             }}
           >
-            {display}
+            <AddressLine addr0x={account.addr} format="bech32m" />
+            <AddressLine addr0x={account.addr} format="hex" />
           </div>
-          <button
-            className="ext-act prim"
-            onClick={() => void onCopy()}
-            style={{
-              width: "100%",
-              padding: "10px",
-              flexDirection: "row",
-              gap: 8,
-              marginTop: 12,
-            }}
-          >
-            {copied ? "Copied" : "Copy address"}
-          </button>
         </div>
 
         <div
