@@ -574,6 +574,47 @@ export function Home({ account, network, indexer, onOpenAccounts, onOpenNetworks
             </div>
           )}
 
+          {/* Whitepaper §13 bifurcation surface — private LYTH ships in a
+              later phase (Sprintnet activates the private side after
+              mainnet); this row makes the model visible so users learn it
+              exists. No fetch, no chain call. */}
+          {!isPriv && (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginTop: 10,
+                padding: "8px 12px",
+                borderRadius: 10,
+                background: "rgba(124,127,255,0.06)",
+                border: "1px dashed var(--fg-700)",
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 10,
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                  color: "var(--fg-400)",
+                }}
+              >
+                Private LYTH
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 11,
+                  color: "var(--fg-400)",
+                  fontStyle: "italic",
+                }}
+              >
+                — coming soon
+              </div>
+            </div>
+          )}
+
           <div className="ext-hero-acts">
             <button className="ext-act prim" onClick={onOpenSend ?? (() => {})}>
               <span className="ico"><Icon name="send" size={16} /></span>
