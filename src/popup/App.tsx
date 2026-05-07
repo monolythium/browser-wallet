@@ -50,6 +50,7 @@ import {
   bgChainList,
   type PendingApproval,
   type KeystoreStatus,
+  type ConnectRequest,
   type SendTxRequest,
   type PersonalSignRequest,
   type TypedSignRequest,
@@ -631,7 +632,13 @@ function ApprovalRoute({
   if (req.kind === "connect") {
     return (
       <ReqSheet onBack={onReject}>
-        <ReqConnect custody={custody} onApprove={onApprove} onReject={onReject} />
+        <ReqConnect
+          request={req as ConnectRequest}
+          address={keystore?.address ?? ""}
+          custody={custody}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
       </ReqSheet>
     );
   }
