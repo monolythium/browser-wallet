@@ -2411,8 +2411,10 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
       <div className="req-warn warn">
         <Icon name="warn" size={14} />
         <div>
-          <b>Verify this network.</b> Malicious dapps may request fake chains
-          to capture signatures. Only approve if you trust the origin.
+          <b>This chain is not in our verified registry.</b> Adding custom
+          RPC endpoints can expose your address and transactions to
+          untrusted operators. Only approve if you trust the dApp making
+          this request.
         </div>
       </div>
 
