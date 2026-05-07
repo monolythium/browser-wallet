@@ -38,12 +38,17 @@ import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
   MlDsa65Backend,
   generatePqm1Mnemonic,
   pqm1MnemonicToMlDsa65Seed,
 } from "@monolythium/core-sdk/crypto";
+import {
+  computeTypedDataDigest,
+  hexOrUtf8ToBytes,
+} from "./keystore.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -502,6 +507,52 @@ export function signOuterDigestV4(digest: Uint8Array): Uint8Array {
   if (digest.length !== 32) {
     throw new Error(`outer digest must be 32 bytes, got ${digest.length}`);
   }
+  return unlocked.backend.signPrehash(digest);
+}
+
+/**
+ * EIP-191 personal_sign with the v4 ML-DSA-65 backend. The v4 vault
+ * derives the wallet address from the ML-DSA pubkey, so signing
+ * personal_sign payloads with secp256k1 (the keystore.ts path) would
+ * recover to a different address than `eth_accounts[0]` — useless for
+ * any dApp that does ecrecover. We sign with ML-DSA instead. The
+ * signature is ~3309 bytes; dApps need a Monolythium-aware verifier
+ * (whitepaper §22.7 ecosystem direction).
+ *
+ * Throws `"v4 wallet is locked"` if the keystore isn't unlocked.
+ */
+export function personalSignV4(message: Uint8Array | string): Uint8Array {
+  if (!unlocked) throw new Error("v4 wallet is locked");
+  const bytes =
+    typeof message === "string" ? hexOrUtf8ToBytes(message) : message;
+  const prefix = new TextEncoder().encode(
+    `\x19Ethereum Signed Message:\n${bytes.length}`,
+  );
+  const concat = new Uint8Array(prefix.length + bytes.length);
+  concat.set(prefix, 0);
+  concat.set(bytes, prefix.length);
+  const digest = keccak_256(concat);
+  return unlocked.backend.signPrehash(digest);
+}
+
+/**
+ * EIP-712 v4 typed-data sign with the v4 ML-DSA-65 backend. Mirrors
+ * `personalSignV4` rationale: address is keccak(ml-dsa pubkey), so
+ * routing through keystore.ts secp256k1 would produce signatures
+ * that don't recover to the wallet's claimed address. We compute the
+ * EIP-712 v4 digest (pure helper from keystore.ts — no module state
+ * needed) and sign with ML-DSA-65.
+ *
+ * Throws `"v4 wallet is locked"` if the keystore isn't unlocked.
+ */
+export function signTypedDataV4FromV4(envelope: {
+  domain: Record<string, unknown>;
+  types: Record<string, Array<{ name: string; type: string }>>;
+  primaryType: string;
+  message: Record<string, unknown>;
+}): Uint8Array {
+  if (!unlocked) throw new Error("v4 wallet is locked");
+  const digest = computeTypedDataDigest(envelope);
   return unlocked.backend.signPrehash(digest);
 }
 

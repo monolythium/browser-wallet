@@ -6,6 +6,7 @@ import {
   bgSetAutoLockMinutes,
   type SignAlgo,
 } from "../bg";
+import { RevealableAddressBlock } from "../components/RevealableAddressBlock";
 
 interface SettingsProps {
   onBack: () => void;
@@ -44,7 +45,6 @@ export function Settings({
   const [autoLock, setAutoLock] = useState<number | null>(null);
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
   const [savingAutoLock, setSavingAutoLock] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,18 +65,6 @@ export function Settings({
     const r = await bgSetAutoLockMinutes(minutes);
     if (r.ok) setAutoLock(r.autoLockMinutes);
     setSavingAutoLock(false);
-  };
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // navigator.clipboard requires a secure context; in an MV3 popup it
-      // works, but if the API is unavailable fall through silently rather
-      // than break the panel.
-    }
   };
 
   const handleLockNow = async () => {
@@ -114,34 +102,19 @@ export function Settings({
               gap: 8,
             }}
           >
-            <div
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 11,
-                color: "var(--fg-100)",
-                wordBreak: "break-all",
-                lineHeight: 1.5,
-              }}
-            >
-              {address || "—"}
-            </div>
-            <button
-              onClick={() => void handleCopy()}
-              disabled={!address}
-              style={{
-                alignSelf: "flex-start",
-                padding: "6px 10px",
-                borderRadius: 8,
-                border: "1px solid var(--fg-700)",
-                background: "rgba(255,255,255,0.04)",
-                color: copied ? "var(--ok)" : "var(--fg-100)",
-                fontFamily: "var(--f-sans)",
-                fontSize: 11,
-                cursor: address ? "pointer" : "not-allowed",
-              }}
-            >
-              {copied ? "Copied" : "Copy address"}
-            </button>
+            {address ? (
+              <RevealableAddressBlock addr0x={address} />
+            ) : (
+              <div
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 11,
+                  color: "var(--fg-400)",
+                }}
+              >
+                —
+              </div>
+            )}
             <div
               style={{
                 fontFamily: "var(--f-mono)",

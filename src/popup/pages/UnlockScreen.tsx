@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { bgKeystoreUnlock } from "../bg";
+import { bech32mDisplay } from "../../shared/bech32m";
 
 interface UnlockScreenProps {
-  /** Truncated address chip rendered above the password field, e.g. "0xabcd…ef01". */
+  /** Truncated address chip rendered above the password field, in bech32m form (e.g. "mono1abc…wxyz"). */
   address: string | null;
   /** Optional success hook. Primary success signal is the SW's walletLocked
    * push channel which the App-level chrome.storage.onChanged listener
@@ -12,9 +13,9 @@ interface UnlockScreenProps {
 }
 
 function shortAddress(addr: string | null): string {
-  if (!addr) return "—";
-  if (addr.length <= 12) return addr;
-  return `${addr.slice(0, 8)}…${addr.slice(-4)}`;
+  const display = bech32mDisplay(addr);
+  if (display === "—" || display.length <= 12) return display;
+  return `${display.slice(0, 8)}…${display.slice(-4)}`;
 }
 
 export function UnlockScreen({ address, onUnlocked }: UnlockScreenProps) {

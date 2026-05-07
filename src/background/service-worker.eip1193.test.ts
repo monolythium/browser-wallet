@@ -123,6 +123,12 @@ vi.mock("./keystore-mldsa.js", () => ({
     mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
   })),
   wipeVaultV4: vi.fn(async () => undefined),
+  // Phase 4.1 Commit H: personal_sign + eth_signTypedData_v4 now route to
+  // the v4 ML-DSA backend when the v4 keystore is unlocked. Tests stub the
+  // sign output to a deterministic byte pattern — the SW just hex-encodes
+  // whatever the keystore returns.
+  personalSignV4: vi.fn(() => DETERMINISTIC_SIG_BYTES),
+  signTypedDataV4FromV4: vi.fn(() => DETERMINISTIC_SIG_BYTES),
 }));
 
 // ---- chrome.* stub ----
