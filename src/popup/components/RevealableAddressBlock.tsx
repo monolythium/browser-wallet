@@ -56,7 +56,7 @@ export function RevealableAddressBlock({ addr0x }: RevealableAddressBlockProps) 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <AddressLine addr0x={addr0x} format="bech32m" />
+      <AddressLine addr0x={addr0x} format="bech32m" truncate={false} />
 
       <button
         onClick={handleShowWarning}
@@ -149,7 +149,7 @@ export function RevealableAddressBlock({ addr0x }: RevealableAddressBlockProps) 
             border: "1px solid rgba(255,255,255,0.05)",
           }}
         >
-          <AddressLine addr0x={addr0x} format="hex" />
+          <AddressLine addr0x={addr0x} format="hex" truncate={false} />
         </div>
         <div
           style={{
