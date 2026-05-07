@@ -413,6 +413,21 @@ export async function bgWalletOperatorStatus(): Promise<
   return send("wallet-operator-status");
 }
 
+/**
+ * Read the active chain's current block number. Used by the popup's
+ * chain-health poll to drive the LIVE / STALLED / OFFLINE state machine —
+ * the popup compares blockHex across ticks, sets STALLED if it doesn't
+ * advance for 30+ seconds, OFFLINE if a tick errors. The service worker
+ * shares its operator cache with `bgWalletOperatorStatus` so the operator
+ * probe doesn't re-run on every 8s health tick.
+ */
+export async function bgWalletChainBlockNumber(): Promise<
+  { ok: true; blockHex: string; operator: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-chain-block-number");
+}
+
 export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
