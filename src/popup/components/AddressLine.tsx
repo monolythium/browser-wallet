@@ -19,6 +19,9 @@ export interface AddressLineProps {
   addr0x: string;
   /** Which form to render in this line. */
   format: "bech32m" | "hex";
+  /** When false, render the full address (no first-N + … + last-N collapse).
+   *  Tap-to-expand still works either way. Default true. */
+  truncate?: boolean;
   /** Override the default first-6 + … + last-4 truncation. */
   truncatePrefix?: number;
   truncateSuffix?: number;
@@ -29,6 +32,7 @@ export interface AddressLineProps {
 export function AddressLine({
   addr0x,
   format,
+  truncate = true,
   truncatePrefix = 6,
   truncateSuffix = 4,
   style,
@@ -38,7 +42,7 @@ export function AddressLine({
 
   const fullText = format === "bech32m" ? bech32mDisplay(addr0x) : addr0x;
   const display =
-    expanded || fullText.length <= truncatePrefix + truncateSuffix + 1
+    !truncate || expanded || fullText.length <= truncatePrefix + truncateSuffix + 1
       ? fullText
       : `${fullText.slice(0, truncatePrefix)}…${fullText.slice(-truncateSuffix)}`;
 
