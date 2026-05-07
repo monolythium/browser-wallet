@@ -12,6 +12,8 @@ import type { ReactNode, CSSProperties } from "react";
 import { useState, useEffect } from "react";
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
+import { bech32mDisplay } from "../shared/bech32m";
+import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import {
   ACCOUNTS, DAPPS, ACTIVITY, PENDING, NODE,
 } from "./demo-data";
@@ -185,7 +187,9 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
         <div className={`ext-acc__blob ${account.denom}`} />
         <div className="ext-acc__lbl">
           <div className="n">{account.label}</div>
-          <div className="a">{shortAddr(account.addr)}</div>
+          <div className="a" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <RevealableAddressBlock addr0x={account.addr} />
+          </div>
         </div>
         <span className="ext-acc__chev"><Icon name="chev-d" size={14} /></span>
       </div>
@@ -573,6 +577,47 @@ export function Home({ account, network, indexer, onOpenAccounts, onOpenNetworks
             </div>
           )}
 
+          {/* Whitepaper §13 bifurcation surface — private LYTH ships in a
+              later phase (Sprintnet activates the private side after
+              mainnet); this row makes the model visible so users learn it
+              exists. No fetch, no chain call. */}
+          {!isPriv && (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginTop: 10,
+                padding: "8px 12px",
+                borderRadius: 10,
+                background: "rgba(124,127,255,0.06)",
+                border: "1px dashed var(--fg-700)",
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 10,
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                  color: "var(--fg-400)",
+                }}
+              >
+                Private LYTH
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 11,
+                  color: "var(--fg-400)",
+                  fontStyle: "italic",
+                }}
+              >
+                — coming soon
+              </div>
+            </div>
+          )}
+
           <div className="ext-hero-acts">
             <button className="ext-act prim" onClick={onOpenSend ?? (() => {})}>
               <span className="ico"><Icon name="send" size={16} /></span>
@@ -695,7 +740,7 @@ export function Accounts({ current, onBack, onPick }: AccountsProps) {
                     </span>
                   )}
                 </div>
-                <div className="chain">{shortAddr(a.addr, 18)} · {a.denom} · {a.algo === "slhdsa" ? "SLH-DSA" : "ML-DSA"}</div>
+                <div className="chain">{shortAddr(bech32mDisplay(a.addr), 18)} · {a.denom} · {a.algo === "slhdsa" ? "SLH-DSA" : "ML-DSA"}</div>
               </div>
               <div className="ext-asset__right">
                 {a.balance == null
@@ -1308,7 +1353,7 @@ export function ReqConnect({ custody, onApprove, onReject }: ReqConnectProps) {
           <div className={`ext-acc__blob ${acc.denom}`} />
           <div className="ext-acc__lbl">
             <div className="n">{acc.label}</div>
-            <div className="a">{shortAddr(acc.addr, 18)}</div>
+            <div className="a">{shortAddr(bech32mDisplay(acc.addr), 18)}</div>
           </div>
           <span style={{ color: "var(--gold)", fontSize: 10, fontFamily: "var(--f-mono)", letterSpacing: "0.08em" }}>PUBLIC · LYTH</span>
         </div>
@@ -1894,13 +1939,13 @@ export function ReqSendTx({
         <div className="req-kv">
           <span className="k">Signer</span>
           <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
-            {signerAddress || "—"}
+            {bech32mDisplay(signerAddress)}
           </span>
         </div>
         <div className="req-kv">
           <span className="k">To</span>
           <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
-            {tx.to ?? "(contract creation)"}
+            {tx.to ? bech32mDisplay(tx.to) : "(contract creation)"}
           </span>
         </div>
         <div className="req-kv">
@@ -2103,7 +2148,7 @@ export function ReqPersonalSignReal({
         <div className="req-kv">
           <span className="k">Address</span>
           <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
-            {address || "—"}
+            {bech32mDisplay(address)}
           </span>
         </div>
       </div>
@@ -2204,7 +2249,7 @@ export function ReqTypedSign({
         <div className="req-kv">
           <span className="k">Address</span>
           <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
-            {address || "—"}
+            {bech32mDisplay(address)}
           </span>
         </div>
       </div>
@@ -2369,8 +2414,10 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
       <div className="req-warn warn">
         <Icon name="warn" size={14} />
         <div>
-          <b>Verify this network.</b> Malicious dapps may request fake chains
-          to capture signatures. Only approve if you trust the origin.
+          <b>This chain is not in our verified registry.</b> Adding custom
+          RPC endpoints can expose your address and transactions to
+          untrusted operators. Only approve if you trust the dApp making
+          this request.
         </div>
       </div>
 

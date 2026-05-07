@@ -61,6 +61,8 @@ import {
   createVaultFromMnemonic,
   exportMnemonicV4,
   wipeVaultV4,
+  personalSignV4,
+  signTypedDataV4FromV4,
 } from "./keystore-mldsa.js";
 import {
   chainRequiresMlDsa,
@@ -528,7 +530,16 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
       try {
-        const sig = await keystorePersonalSign(messageParam);
+        // v4-strict (Phase 3.5 + 4.0): the wallet's on-chain address is
+        // keccak(ml-dsa-65 pubkey). Routing personal_sign through the
+        // legacy keystore.ts secp256k1 path would produce a signature
+        // whose ecrecover'd address doesn't match `eth_accounts[0]` —
+        // and on top of that, the popup unlock flow only populates the
+        // v4 backend, so the secp256k1 path throws "wallet is locked"
+        // even when the v4 keystore is unlocked. Sign with ML-DSA-65.
+        const sig = isUnlockedV4()
+          ? personalSignV4(messageParam)
+          : await keystorePersonalSign(messageParam);
         return ok("0x" + bytesToHex(sig));
       } catch (e) {
         return err(ERR_INTERNAL, `signing failed: ${(e as Error).message}`);
@@ -714,7 +725,13 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, "typed data could not be parsed as EIP-712 v4");
       }
       try {
-        const sig = await signTypedDataV4(parsed);
+        // Same v4 routing as personal_sign — the v4 ML-DSA backend is
+        // the one that's unlocked and is the one whose pubkey defines
+        // the wallet's on-chain address. See the comment in the
+        // personal_sign branch above.
+        const sig = isUnlockedV4()
+          ? signTypedDataV4FromV4(parsed)
+          : await signTypedDataV4(parsed);
         return ok("0x" + bytesToHex(sig));
       } catch (e) {
         return err(ERR_INTERNAL, `typed-data sign failed: ${(e as Error).message}`);
