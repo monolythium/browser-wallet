@@ -180,3 +180,17 @@ export function shortBech32m(addr0x: string, n = 8): string {
   if (n <= 0 || body.length <= n + 4 + 1) return bech;
   return prefix + body.slice(0, n) + "…" + body.slice(-4);
 }
+
+// Render-time wrapper: convert 0x-shaped EVM addresses to bech32m for
+// display, pass through anything that isn't 0x-shaped (demo strings,
+// empty/null, already-bech32m). Never throws — render sites must keep
+// rendering even if upstream hands us a malformed address.
+export function bech32mDisplay(addr: string | null | undefined): string {
+  if (!addr) return "—";
+  if (!(addr.startsWith("0x") || addr.startsWith("0X"))) return addr;
+  try {
+    return addressToBech32m(addr);
+  } catch {
+    return addr;
+  }
+}
