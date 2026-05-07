@@ -126,9 +126,10 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
             <button
               onClick={onOpenNetworks}
               style={{
-                background: "transparent",
-                border: "none",
-                padding: 0,
+                padding: "2px 8px",
+                border: "1px solid var(--fg-700)",
+                borderRadius: 999,
+                background: "rgba(255,255,255,0.04)",
                 font: "inherit",
                 letterSpacing: "inherit",
                 textTransform: "inherit",
@@ -136,7 +137,8 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
                 cursor: "pointer",
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 4,
+                gap: 5,
+                lineHeight: 1,
               }}
             >
               {network.name.toUpperCase()}
