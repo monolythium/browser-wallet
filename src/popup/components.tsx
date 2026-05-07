@@ -185,7 +185,6 @@ export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettin
     <div className="ext-top">
       <span className="ext-brand" />
       <div className="ext-acc" onClick={onOpenAccounts}>
-        <div className={`ext-acc__blob ${account.denom}`} />
         <div className="ext-acc__lbl">
           <div className="n">{account.label}</div>
           <div className="a" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
