@@ -2,7 +2,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { Icon } from "../Icon";
 import type { Account } from "../demo-data";
 import { bech32mDisplay } from "../../shared/bech32m";
-import { AddressLine } from "../components/AddressLine";
+import { RevealableAddressBlock } from "../components/RevealableAddressBlock";
 
 interface ReceiveProps {
   account: Account;
@@ -68,17 +68,13 @@ export function Receive({ account, onBack }: ReceiveProps) {
           </div>
           <div
             style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
               padding: "10px 12px",
               borderRadius: 10,
               background: "rgba(0,0,0,0.3)",
               border: "1px solid var(--fg-700)",
             }}
           >
-            <AddressLine addr0x={account.addr} format="bech32m" />
-            <AddressLine addr0x={account.addr} format="hex" />
+            <RevealableAddressBlock addr0x={account.addr} />
           </div>
         </div>
 
