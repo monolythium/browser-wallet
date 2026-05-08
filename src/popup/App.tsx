@@ -414,7 +414,12 @@ export default function App() {
 
   return (
     <div className="ext" data-denom={acc.denom}>
-      {showBannerStrip && <ChainStatusBanner />}
+      {showBannerStrip && (
+        <ChainStatusBanner
+          network={activeChain}
+          onOpenNetworks={() => setScreen("networks")}
+        />
+      )}
 
       {screen === "loading" && <div className="ext-body" style={{ padding: 24, color: "var(--fg-300)" }}>Loading…</div>}
 
@@ -505,7 +510,6 @@ export default function App() {
           network={activeChain}
           indexer={indexerSnapshot}
           onOpenAccounts={() => setScreen("accounts")}
-          onOpenNetworks={() => setScreen("networks")}
           onSettings={() => setScreen("settings")}
           onOpenReceive={() => setScreen("receive")}
           onOpenSend={() => setScreen("send")}

@@ -30,7 +30,7 @@ import type {
   WalletAddressActivityRow,
   WalletIndexerSnapshot,
 } from "./bg";
-import { bgWalletOperatorStatus } from "./bg";
+import { bgWalletOperatorStatus, bgWalletChainBlockNumber } from "./bg";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -51,46 +51,110 @@ export function DemoBanner() {
 // still demo data and live below the AttStrip; we'll address those in
 // follow-up cleanups.
 
-type ChainStatus =
+// `ChainHealth` reflects the popup's read of chain liveness via an
+// `eth_blockNumber` poll on the active operator. LOADING is the initial
+// state before the first tick lands; STALLED is gated behind a 30-second
+// no-advance threshold so it never fires from a single missed tick or
+// on the loading-to-live transition itself.
+type ChainHealth =
   | { kind: "loading" }
-  | { kind: "live"; operator: string }
-  | { kind: "offline" }
-  | { kind: "error"; reason: string };
+  | { kind: "live"; blockHex: string }
+  | { kind: "stalled"; blockHex: string }
+  | { kind: "offline"; reason: string };
 
-const CHAIN_STATUS_TICK_MS = 10_000;
+const HEALTH_TICK_MS = 8_000;
+const STALL_THRESHOLD_MS = 30_000;
+const OPERATOR_TICK_MS = 10_000;
 
-export function ChainStatusBanner() {
-  const [state, setState] = useState<ChainStatus>({ kind: "loading" });
+interface ChainStatusBannerProps {
+  /** When provided, replaces the hardcoded "SPRINTNET" segment with the
+   *  active chain's display name. */
+  network?: ChainEntry;
+  /** When provided alongside `network`, the chain-name segment becomes
+   *  a clickable button that routes to the chain picker. */
+  onOpenNetworks?: () => void;
+}
 
+export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBannerProps = {}) {
+  const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
+  const [operator, setOperator] = useState<string | null>(null);
+
+  // Chain-health poll. Tracks `lastBlockHex` and `lastBlockObservedAt` so
+  // we can distinguish "RPC reachable but chain stalled" from "RPC down".
+  // Visibility-gated — when the popup is hidden (Chrome closes popups on
+  // focus loss in some builds; the page may also be backgrounded for a
+  // brief window before unmount), polling pauses to avoid wasted traffic.
+  // The `cancelled` flag in the cleanup short-circuits any in-flight
+  // setHealth that would otherwise fire on an unmounted component.
   useEffect(() => {
     let cancelled = false;
+    let lastBlockHex: string | null = null;
+    let lastBlockObservedAt = Date.now();
+
     const tick = async () => {
+      if (cancelled || document.visibilityState === "hidden") return;
       try {
-        const r = await bgWalletOperatorStatus();
+        const r = await bgWalletChainBlockNumber();
         if (cancelled) return;
         if (!r.ok) {
-          setState({ kind: "error", reason: r.reason ?? "rpc error" });
-        } else if (r.name === null) {
-          setState({ kind: "offline" });
-        } else {
-          setState({ kind: "live", operator: r.name });
+          setHealth({ kind: "offline", reason: r.reason ?? "unreachable" });
+          return;
         }
+        const now = Date.now();
+        if (lastBlockHex === null || r.blockHex !== lastBlockHex) {
+          lastBlockHex = r.blockHex;
+          lastBlockObservedAt = now;
+          setHealth({ kind: "live", blockHex: r.blockHex });
+        } else if (now - lastBlockObservedAt >= STALL_THRESHOLD_MS) {
+          setHealth({ kind: "stalled", blockHex: r.blockHex });
+        }
+        // else: same block but within fresh window — keep current state
       } catch (e) {
         if (cancelled) return;
-        setState({ kind: "error", reason: (e as Error).message });
+        setHealth({ kind: "offline", reason: (e as Error).message });
       }
     };
+
+    const visHandler = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+
     void tick();
-    const id = setInterval(tick, CHAIN_STATUS_TICK_MS);
+    const intervalId = setInterval(tick, HEALTH_TICK_MS);
+    document.addEventListener("visibilitychange", visHandler);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", visHandler);
     };
   }, []);
 
-  // Match `.ext-demo-banner` height/padding so swapping doesn't shift
-  // the Top component below. Tokens come from tokens.css; no new CSS
-  // is introduced.
+  // Operator-name poll, separate from chain-health. The operator label is
+  // a pure side-info readout (which Sprintnet validator answered our
+  // probe) and stays decoupled from the LIVE/STALLED/OFFLINE state — a
+  // chain can be live with an unknown operator, or stalled while the
+  // operator is still reachable.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled || document.visibilityState === "hidden") return;
+      try {
+        const r = await bgWalletOperatorStatus();
+        if (cancelled) return;
+        if (r.ok) setOperator(r.name);
+      } catch {
+        // operator name is not load-bearing — silent on transient errors
+      }
+    };
+
+    void tick();
+    const intervalId = setInterval(tick, OPERATOR_TICK_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, []);
+
   const containerStyle: CSSProperties = {
     fontFamily: "var(--f-mono)",
     fontSize: 9.5,
@@ -104,38 +168,77 @@ export function ChainStatusBanner() {
     color: "var(--fg-300)",
   };
 
+  const networkChip =
+    network && onOpenNetworks ? (
+      <button
+        onClick={onOpenNetworks}
+        style={{
+          padding: "2px 8px",
+          border: "1px solid var(--fg-700)",
+          borderRadius: 999,
+          background: "rgba(255,255,255,0.04)",
+          font: "inherit",
+          letterSpacing: "inherit",
+          textTransform: "inherit",
+          color: "inherit",
+          cursor: "pointer",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          lineHeight: 1,
+        }}
+      >
+        {network.name.toUpperCase()}
+        <Icon name="chev-d" size={9} />
+      </button>
+    ) : network ? (
+      <span>{network.name.toUpperCase()}</span>
+    ) : (
+      <span>SPRINTNET</span>
+    );
+
   let dotColor: string;
   let body: ReactNode;
-  switch (state.kind) {
+  switch (health.kind) {
     case "live":
       dotColor = "var(--ok)";
       body = (
         <>
           <span style={{ color: "var(--ok)", fontWeight: 500 }}>LIVE</span>
           <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span>SPRINTNET</span>
+          {networkChip}
+          {operator !== null && (
+            <>
+              <span style={{ color: "var(--fg-600)" }}>·</span>
+              <span style={{ color: "var(--ok)" }}>{operator.toUpperCase()}</span>
+            </>
+          )}
+        </>
+      );
+      break;
+    case "stalled":
+      dotColor = "var(--warn)";
+      body = (
+        <>
+          <span style={{ color: "var(--warn)", fontWeight: 500 }}>STALLED</span>
           <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span style={{ color: "var(--ok)" }}>{state.operator.toUpperCase()}</span>
+          {networkChip}
+          {operator !== null && (
+            <>
+              <span style={{ color: "var(--fg-600)" }}>·</span>
+              <span>{operator.toUpperCase()}</span>
+            </>
+          )}
         </>
       );
       break;
     case "offline":
-      dotColor = "var(--warn)";
-      body = (
-        <>
-          <span style={{ color: "var(--warn)", fontWeight: 500 }}>OFFLINE</span>
-          <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span>NO SPRINTNET OPERATOR</span>
-        </>
-      );
-      break;
-    case "error":
       dotColor = "var(--err)";
       body = (
         <>
-          <span style={{ color: "var(--err)", fontWeight: 500 }}>ERROR</span>
+          <span style={{ color: "var(--err)", fontWeight: 500 }}>OFFLINE</span>
           <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span style={{ textTransform: "none", letterSpacing: 0 }}>{state.reason}</span>
+          <span style={{ textTransform: "none", letterSpacing: 0 }}>{health.reason}</span>
         </>
       );
       break;
@@ -155,7 +258,7 @@ export function ChainStatusBanner() {
           borderRadius: "50%",
           background: dotColor,
           boxShadow:
-            state.kind === "live" || state.kind === "error"
+            health.kind === "live" || health.kind === "stalled" || health.kind === "offline"
               ? `0 0 6px ${dotColor}`
               : "none",
           flexShrink: 0,
@@ -166,38 +269,44 @@ export function ChainStatusBanner() {
   );
 }
 
-// ---- Top row: brand + account + network + settings ----
+// ---- Top row: brand + account + settings ----
+//
+// The active chain selector lives in the status bar (`ChainStatusBanner`)
+// directly above this row. Top kept the chain chip until Phase 4.1.2,
+// when the full bech32m address landed in the account chip and needed
+// the freed horizontal width to render in 1-2 lines instead of 3-4.
 interface TopProps {
   account: Account;
-  network: ChainEntry;
   onOpenAccounts: () => void;
-  onOpenNetworks: () => void;
   onSettings: () => void;
 }
 
-export function Top({ account, network, onOpenAccounts, onOpenNetworks, onSettings }: TopProps) {
-  // Sprintnet (the only built-in chain today) carries the `test` chip
-  // styling because it's the testnet for v4.0. User-added chains keep
-  // the default chip styling — they may be production chains, may be
-  // dev chains, we don't know.
-  const isTestnet = network.official === true;
+export function Top({ account, onOpenAccounts, onSettings }: TopProps) {
   return (
     <div className="ext-top">
-      <span className="ext-brand" />
       <div className="ext-acc" onClick={onOpenAccounts}>
-        <div className={`ext-acc__blob ${account.denom}`} />
         <div className="ext-acc__lbl">
-          <div className="n">{account.label}</div>
+          <div
+            className="n"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {account.label}
+            </span>
+            <span style={{ color: "var(--fg-300)", flexShrink: 0, display: "inline-flex" }}>
+              <Icon name="chev-d" size={12} />
+            </span>
+          </div>
           <div className="a" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <RevealableAddressBlock addr0x={account.addr} />
           </div>
         </div>
-        <span className="ext-acc__chev"><Icon name="chev-d" size={14} /></span>
       </div>
-      <button className={`ext-net ${isTestnet ? "test" : ""}`} onClick={onOpenNetworks}>
-        <span className="dot" />{network.name}
-        <Icon name="chev-d" size={10} />
-      </button>
       <button className="ext-iconbtn" onClick={onSettings}><Icon name="settings" size={16} /></button>
     </div>
   );
@@ -490,7 +599,6 @@ interface HomeProps {
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
   onOpenAccounts: () => void;
-  onOpenNetworks: () => void;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -500,7 +608,7 @@ interface HomeProps {
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onOpenNetworks, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -521,9 +629,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onOpenNetworks
     <>
       <Top
         account={account}
-        network={network}
         onOpenAccounts={onOpenAccounts}
-        onOpenNetworks={onOpenNetworks}
         onSettings={onSettings}
       />
       <div className="ext-body">

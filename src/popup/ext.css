@@ -113,39 +113,17 @@ body { margin:0; background:#0a0815; color:#fff; font-family: var(--f-sans); ove
 .ext-att .sep { color: var(--fg-600); }
 .ext.light .ext-att .sep { color:#bfc1ca; }
 
-/* --- Top row: glass strip with brand diamond + account + network --- */
-.ext-top { display:flex; align-items:center; gap:8px; padding: 10px 12px; border-bottom:1px solid var(--fg-700); background: rgba(10,10,20,0.35); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); }
+/* --- Top row: glass strip with account chip + settings --- */
+.ext-top { display:flex; align-items:flex-start; gap:8px; padding: 16px 12px; border-bottom:1px solid var(--fg-700); background: rgba(10,10,20,0.35); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); }
 .ext.light .ext-top { background: rgba(255,255,255,0.4); border-bottom:1px solid #e3e3ea; }
-
-/* Diamond brand glyph — same as mobile .mw-top__title .brand */
-.ext-brand {
-  width:20px; height:20px; flex-shrink:0; margin-right:2px;
-  background: var(--gold);
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 21000 21000'><path fill='black' d='M5997.1 8861.59l0 12103.94 3000 -1681.71 0 -8740.56 -3000 -1681.67zm6000 1681.67l0 8740.56 3000 1681.71 0 -12103.94 -3000 1681.67zm-12000 8777.94l0 -17784.68 2735.85 -1533.62 3343.55 1874.27 -3119.17 1748.5 39.77 17377.23 -3000 -1681.7zm4070.62 -15055.6l6429.39 3604.08 7499.99 -4204.25 0 17337.47 3000 -1681.7 0 -17784.68 -2735.86 -1533.62 -7764.13 4352.3 -3294.64 -1846.83 -3134.75 1757.23z'/></svg>");
-          mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 21000 21000'><path fill='black' d='M5997.1 8861.59l0 12103.94 3000 -1681.71 0 -8740.56 -3000 -1681.67zm6000 1681.67l0 8740.56 3000 1681.71 0 -12103.94 -3000 1681.67zm-12000 8777.94l0 -17784.68 2735.85 -1533.62 3343.55 1874.27 -3119.17 1748.5 39.77 17377.23 -3000 -1681.7zm4070.62 -15055.6l6429.39 3604.08 7499.99 -4204.25 0 17337.47 3000 -1681.7 0 -17784.68 -2735.86 -1533.62 -7764.13 4352.3 -3294.64 -1846.83 -3134.75 1757.23z'/></svg>");
-  -webkit-mask-size: contain;    mask-size: contain;
-  -webkit-mask-position: center; mask-position: center;
-  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-  filter: drop-shadow(0 0 8px rgba(var(--gold-glow), 0.35));
-}
-.ext[data-denom="private"] .ext-brand { background: oklch(0.75 0.14 240); filter: drop-shadow(0 0 8px oklch(0.75 0.14 240 / 0.35)); }
 
 .ext-acc { display:flex; align-items:center; gap:8px; padding: 5px 10px 5px 5px; border-radius: 999px; background: rgba(255,255,255,0.05); border:1px solid var(--fg-700); flex:1; cursor:pointer; transition: background 160ms; }
 .ext.light .ext-acc { background:#fff; border:1px solid #e0e0e7; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
 .ext-acc:hover { background: rgba(255,255,255,0.08); }
-.ext-acc__blob { width:24px; height:24px; border-radius:50%; background: conic-gradient(from 180deg, #f2b441, #d9612f, #8a3fa5, #3a6fa5, #f2b441); flex-shrink:0; box-shadow: 0 0 0 1px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(255,255,255,0.3); }
-.ext-acc__blob.private { background: conic-gradient(from 180deg, #6a7ba5, #3a4a72, #2a3555, #4a5a88, #6a7ba5); }
 .ext-acc__lbl { flex:1; overflow:hidden; }
 .ext-acc__lbl .n { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:-0.01em; }
 .ext-acc__lbl .a { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:1px; letter-spacing:0.02em; }
 .ext.light .ext-acc__lbl .a { color:#606369; }
-.ext-acc__chev { color: var(--fg-300); }
-.ext.light .ext-acc__chev { color:#606369; }
-
-.ext-net { display:flex; align-items:center; gap:5px; padding: 5px 9px; border-radius:999px; background: rgba(88,200,140,0.15); border:1px solid rgba(88,200,140,0.3); font-family: var(--f-mono); font-size:10px; color: var(--ok); cursor:pointer; letter-spacing:0.04em; }
-.ext-net .dot { width:5px; height:5px; border-radius:50%; background: var(--ok); box-shadow: 0 0 4px var(--ok); }
-.ext-net.test { color:#f9a825; background: rgba(249,168,37,0.1); border-color: rgba(249,168,37,0.3); }
-.ext-net.test .dot { background:#f9a825; box-shadow: 0 0 4px #f9a825; }
 
 .ext-iconbtn { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; color: var(--fg-200); background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); cursor:pointer; transition: all 160ms var(--e-out); }
 .ext-iconbtn:hover, .ext-iconbtn:active { background: rgba(255,255,255,0.09); border-color: var(--fg-500); }
