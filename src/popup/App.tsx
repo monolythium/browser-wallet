@@ -705,7 +705,7 @@ function ApprovalRoute({
   // switch_chain or future approval kinds — fall through with a generic confirm.
   return (
     <ReqSheet onBack={onReject}>
-      <ChainStatusBanner />
+      <ChainStatusBanner network={chain} />
       <div style={{ padding: 18 }}>
         <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Confirm request</h2>
         <pre style={{ marginTop: 10, fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", whiteSpace: "pre-wrap" }}>
