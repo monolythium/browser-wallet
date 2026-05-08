@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { bgKeystoreUnlock } from "../bg";
+import { bgKeystoreUnlock, type ChainEntry } from "../bg";
 import { bech32mDisplay } from "../../shared/bech32m";
 
 interface UnlockScreenProps {
@@ -10,6 +10,10 @@ interface UnlockScreenProps {
    * already handles; this is just a backup for callers that want to react
    * synchronously after the IPC reply. */
   onUnlocked?: () => void;
+  /** When rendered inside the approval window, the active chain is threaded
+   * down so the unlock screen can show the same status banner the rest of
+   * the approval flow renders. Omitted in normal-popup locked mode. */
+  chain?: ChainEntry;
 }
 
 function shortAddress(addr: string | null): string {
