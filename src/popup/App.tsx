@@ -594,6 +594,7 @@ export default function App() {
           onApprove={() => finalizeApproval(true)}
           onReject={() => finalizeApproval(false)}
           custody={custody}
+          chain={activeChain}
         />
       )}
     </div>
@@ -608,6 +609,7 @@ interface ApprovalRouteProps {
   onApprove: () => void;
   onReject: () => void;
   custody: "tpm" | "passkey" | "hw" | "sw";
+  chain: ChainEntry;
 }
 
 function ApprovalRoute({
@@ -616,6 +618,7 @@ function ApprovalRoute({
   onApprove,
   onReject,
   custody,
+  chain,
 }: ApprovalRouteProps) {
   const a = approval.approval;
 
@@ -626,7 +629,7 @@ function ApprovalRoute({
   if (keystore && !keystore.unlocked) {
     return (
       <ReqSheet onBack={onReject}>
-        <UnlockScreen address={keystore.address ?? null} />
+        <UnlockScreen address={keystore.address ?? null} chain={chain} />
       </ReqSheet>
     );
   }
@@ -642,6 +645,7 @@ function ApprovalRoute({
           custody={custody}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -654,6 +658,7 @@ function ApprovalRoute({
           custody={custody}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -666,6 +671,7 @@ function ApprovalRoute({
           custody={custody}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -679,6 +685,7 @@ function ApprovalRoute({
           signerAddress={keystore?.address ?? ""}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -690,6 +697,7 @@ function ApprovalRoute({
           request={req as AddChainRequest}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -697,7 +705,7 @@ function ApprovalRoute({
   // switch_chain or future approval kinds — fall through with a generic confirm.
   return (
     <ReqSheet onBack={onReject}>
-      <ChainStatusBanner />
+      <ChainStatusBanner network={chain} />
       <div style={{ padding: 18 }}>
         <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Confirm request</h2>
         <pre style={{ marginTop: 10, fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", whiteSpace: "pre-wrap" }}>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { bgKeystoreUnlock } from "../bg";
+import { bgKeystoreUnlock, type ChainEntry } from "../bg";
+import { ChainStatusBanner } from "../components";
 import { bech32mDisplay } from "../../shared/bech32m";
 
 interface UnlockScreenProps {
@@ -10,6 +11,10 @@ interface UnlockScreenProps {
    * already handles; this is just a backup for callers that want to react
    * synchronously after the IPC reply. */
   onUnlocked?: () => void;
+  /** When rendered inside the approval window, the active chain is threaded
+   * down so the unlock screen can show the same status banner the rest of
+   * the approval flow renders. Omitted in normal-popup locked mode. */
+  chain?: ChainEntry;
 }
 
 function shortAddress(addr: string | null): string {
@@ -18,7 +23,7 @@ function shortAddress(addr: string | null): string {
   return `${display.slice(0, 8)}…${display.slice(-4)}`;
 }
 
-export function UnlockScreen({ address, onUnlocked }: UnlockScreenProps) {
+export function UnlockScreen({ address, onUnlocked, chain }: UnlockScreenProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [secondsRemaining, setSecondsRemaining] = useState(0);
@@ -78,6 +83,7 @@ export function UnlockScreen({ address, onUnlocked }: UnlockScreenProps) {
 
   return (
     <>
+      {chain && <ChainStatusBanner network={chain} />}
       <div style={{ padding: "44px 22px 8px", textAlign: "center" }}>
         <div
           style={{
