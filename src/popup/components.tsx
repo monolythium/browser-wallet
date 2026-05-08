@@ -243,6 +243,8 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
         <>
           <span style={{ color: "var(--err)", fontWeight: 500 }}>OFFLINE</span>
           <span style={{ color: "var(--fg-600)" }}>·</span>
+          {networkChip}
+          <span style={{ color: "var(--fg-600)" }}>·</span>
           <span style={{ textTransform: "none", letterSpacing: 0 }}>{health.reason}</span>
         </>
       );
