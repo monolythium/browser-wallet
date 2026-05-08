@@ -67,15 +67,19 @@ const STALL_THRESHOLD_MS = 30_000;
 const OPERATOR_TICK_MS = 10_000;
 
 interface ChainStatusBannerProps {
-  /** When provided, replaces the hardcoded "SPRINTNET" segment with the
-   *  active chain's display name. */
-  network?: ChainEntry;
-  /** When provided alongside `network`, the chain-name segment becomes
-   *  a clickable button that routes to the chain picker. */
+  /** Active chain display data. Required — every callsite threads its
+   *  resolved chain (`activeChain` in the main popup, or the prop-drilled
+   *  `chain` in the approval window). */
+  network: ChainEntry;
+  /** When provided, the chain-name segment becomes a clickable button
+   *  that routes to the chain picker (interactive pill with a caret).
+   *  Omit for read-only contexts (e.g. approval window) — the chip then
+   *  renders as a non-clickable pill without the caret, matching the
+   *  visual weight of the interactive version. */
   onOpenNetworks?: () => void;
 }
 
-export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBannerProps = {}) {
+export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
   const [operator, setOperator] = useState<string | null>(null);
 
@@ -168,34 +172,35 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
     color: "var(--fg-300)",
   };
 
-  const networkChip =
-    network && onOpenNetworks ? (
-      <button
-        onClick={onOpenNetworks}
-        style={{
-          padding: "2px 8px",
-          border: "1px solid var(--fg-700)",
-          borderRadius: 999,
-          background: "rgba(255,255,255,0.04)",
-          font: "inherit",
-          letterSpacing: "inherit",
-          textTransform: "inherit",
-          color: "inherit",
-          cursor: "pointer",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 5,
-          lineHeight: 1,
-        }}
-      >
-        {network.name.toUpperCase()}
-        <Icon name="chev-d" size={9} />
-      </button>
-    ) : network ? (
-      <span>{network.name.toUpperCase()}</span>
-    ) : (
-      <span>SPRINTNET</span>
-    );
+  // Pill chip styling shared between the interactive (with caret) and
+  // read-only (no caret) variants. Read-only is used inside the approval
+  // window, where switching chains mid-approval would be unsafe.
+  const chipStyle: CSSProperties = {
+    padding: "2px 8px",
+    border: "1px solid var(--fg-700)",
+    borderRadius: 999,
+    background: "rgba(255,255,255,0.04)",
+    font: "inherit",
+    letterSpacing: "inherit",
+    textTransform: "inherit",
+    color: "inherit",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    lineHeight: 1,
+  };
+
+  const networkChip = onOpenNetworks ? (
+    <button
+      onClick={onOpenNetworks}
+      style={{ ...chipStyle, cursor: "pointer" }}
+    >
+      {network.name.toUpperCase()}
+      <Icon name="chev-d" size={9} />
+    </button>
+  ) : (
+    <span style={chipStyle}>{network.name.toUpperCase()}</span>
+  );
 
   let dotColor: string;
   let body: ReactNode;
@@ -1440,6 +1445,7 @@ export function ReqConnect({
   custody,
   onApprove,
   onReject,
+  chain,
 }: ReqConnectProps) {
   const { origin } = request;
   let hostname = origin;
@@ -1453,7 +1459,7 @@ export function ReqConnect({
 
   return (
     <>
-      <ChainStatusBanner />
+      <ChainStatusBanner network={chain} />
       <div className="req-head">
         <div className="origin">
           <div className="fav G">{initial}</div>
@@ -1527,7 +1533,6 @@ export function ReqSign({ type, custody, algo: initAlgo, onApprove, onReject }: 
 
   return (
     <>
-      <ChainStatusBanner />
       <div className="req-head">
         <div className="origin">
           <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
@@ -1671,7 +1676,6 @@ export function ReqMessage({ custody, onApprove, onReject }: { custody: Custody;
   const dapp = DAPPS.find((d) => d.id === r.dappId)!;
   return (
     <>
-      <ChainStatusBanner />
       <div className="req-head">
         <div className="origin">
           <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
@@ -1730,7 +1734,6 @@ export function ReqOnboard() {
   };
   return (
     <>
-      <ChainStatusBanner />
       <div style={{ padding: "40px 24px 20px", textAlign: "center" }}>
         <div
           style={{
@@ -2001,6 +2004,7 @@ export function ReqSendTx({
   signerAddress,
   onApprove,
   onReject,
+  chain,
 }: ReqSendTxProps) {
   const { tx, view, origin } = request;
   const [tier, setTier] = useState<GasTier>("medium");
@@ -2031,7 +2035,7 @@ export function ReqSendTx({
 
   return (
     <>
-      <ChainStatusBanner />
+      <ChainStatusBanner network={chain} />
       <div className="req-head">
         <div className="origin">
           <div className="fav C">⌘</div>
@@ -2234,6 +2238,7 @@ export function ReqPersonalSignReal({
   custody,
   onApprove,
   onReject,
+  chain,
 }: ReqPersonalSignRealProps) {
   const { message, address, origin } = request;
   const isHex = message.startsWith("0x") || message.startsWith("0X");
@@ -2243,7 +2248,7 @@ export function ReqPersonalSignReal({
 
   return (
     <>
-      <ChainStatusBanner />
+      <ChainStatusBanner network={chain} />
       <div className="req-head">
         <div className="origin">
           <div className="fav G">M</div>
@@ -2335,13 +2340,14 @@ export function ReqTypedSign({
   custody,
   onApprove,
   onReject,
+  chain,
 }: ReqTypedSignProps) {
   const { parsed, digest, address, origin, rawTypedData } = request;
   const [showRaw, setShowRaw] = useState(false);
 
   return (
     <>
-      <ChainStatusBanner />
+      <ChainStatusBanner network={chain} />
       <div className="req-head">
         <div className="origin">
           <div className="fav G">⛬</div>
@@ -2509,11 +2515,13 @@ interface ReqAddChainProps {
   chain: ChainEntry;
 }
 
-export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) {
-  const { chain, origin } = request;
+export function ReqAddChain({ request, onApprove, onReject, chain }: ReqAddChainProps) {
+  // `proposed` is the chain the dApp wants to add; `chain` (prop) is the
+  // wallet's currently active chain shown in the status banner.
+  const { chain: proposed, origin } = request;
   return (
     <>
-      <ChainStatusBanner />
+      <ChainStatusBanner network={chain} />
       <div className="req-head">
         <div className="origin">
           <div className="fav S">+</div>
@@ -2525,7 +2533,7 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
             new chain
           </div>
         </div>
-        <h2>{chain.chainName}</h2>
+        <h2>{proposed.chainName}</h2>
         <div className="sub">requesting · adds chain to wallet network list</div>
       </div>
 
@@ -2543,19 +2551,19 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
         <div className="req-section__h">Network</div>
         <div className="req-kv">
           <span className="k">Name</span>
-          <span className="v">{chain.chainName}</span>
+          <span className="v">{proposed.chainName}</span>
         </div>
         <div className="req-kv">
           <span className="k">Chain ID</span>
           <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>
-            {chain.chainId}
+            {proposed.chainId}
           </span>
         </div>
-        {chain.nativeCurrency && (
+        {proposed.nativeCurrency && (
           <div className="req-kv">
             <span className="k">Native currency</span>
             <span className="v">
-              {chain.nativeCurrency.symbol} ({chain.nativeCurrency.name}, {chain.nativeCurrency.decimals} dp)
+              {proposed.nativeCurrency.symbol} ({proposed.nativeCurrency.name}, {proposed.nativeCurrency.decimals} dp)
             </span>
           </div>
         )}
@@ -2563,7 +2571,7 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
 
       <div className="req-section">
         <div className="req-section__h">RPC endpoints</div>
-        {chain.rpcUrls.map((u, i) => (
+        {proposed.rpcUrls.map((u, i) => (
           <div key={i} className="req-kv">
             <span className="k">RPC #{i + 1}</span>
             <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11, wordBreak: "break-all" }}>
@@ -2573,10 +2581,10 @@ export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) 
         ))}
       </div>
 
-      {chain.blockExplorerUrls && chain.blockExplorerUrls.length > 0 && (
+      {proposed.blockExplorerUrls && proposed.blockExplorerUrls.length > 0 && (
         <div className="req-section">
           <div className="req-section__h">Block explorer</div>
-          {chain.blockExplorerUrls.map((u, i) => (
+          {proposed.blockExplorerUrls.map((u, i) => (
             <div key={i} className="req-kv">
               <span className="k">Explorer #{i + 1}</span>
               <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 11, wordBreak: "break-all" }}>

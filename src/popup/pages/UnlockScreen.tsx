@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { bgKeystoreUnlock, type ChainEntry } from "../bg";
+import { ChainStatusBanner } from "../components";
 import { bech32mDisplay } from "../../shared/bech32m";
 
 interface UnlockScreenProps {
@@ -22,7 +23,7 @@ function shortAddress(addr: string | null): string {
   return `${display.slice(0, 8)}…${display.slice(-4)}`;
 }
 
-export function UnlockScreen({ address, onUnlocked }: UnlockScreenProps) {
+export function UnlockScreen({ address, onUnlocked, chain }: UnlockScreenProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [secondsRemaining, setSecondsRemaining] = useState(0);
@@ -82,6 +83,7 @@ export function UnlockScreen({ address, onUnlocked }: UnlockScreenProps) {
 
   return (
     <>
+      {chain && <ChainStatusBanner network={chain} />}
       <div style={{ padding: "44px 22px 8px", textAlign: "center" }}>
         <div
           style={{
