@@ -1431,6 +1431,7 @@ interface ReqConnectProps {
   custody: Custody;
   onApprove: () => void;
   onReject: () => void;
+  chain: ChainEntry;
 }
 
 export function ReqConnect({
@@ -1989,6 +1990,7 @@ interface ReqSendTxProps {
   signerAddress: string;
   onApprove: () => void;
   onReject: () => void;
+  chain: ChainEntry;
 }
 
 type GasTier = "low" | "medium" | "high";
@@ -2224,6 +2226,7 @@ interface ReqPersonalSignRealProps {
   custody: Custody;
   onApprove: () => void;
   onReject: () => void;
+  chain: ChainEntry;
 }
 
 export function ReqPersonalSignReal({
@@ -2324,6 +2327,7 @@ interface ReqTypedSignProps {
   custody: Custody;
   onApprove: () => void;
   onReject: () => void;
+  chain: ChainEntry;
 }
 
 export function ReqTypedSign({
@@ -2502,6 +2506,7 @@ interface ReqAddChainProps {
   request: AddChainRequest;
   onApprove: () => void;
   onReject: () => void;
+  chain: ChainEntry;
 }
 
 export function ReqAddChain({ request, onApprove, onReject }: ReqAddChainProps) {

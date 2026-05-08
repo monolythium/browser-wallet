@@ -594,6 +594,7 @@ export default function App() {
           onApprove={() => finalizeApproval(true)}
           onReject={() => finalizeApproval(false)}
           custody={custody}
+          chain={activeChain}
         />
       )}
     </div>
@@ -608,6 +609,7 @@ interface ApprovalRouteProps {
   onApprove: () => void;
   onReject: () => void;
   custody: "tpm" | "passkey" | "hw" | "sw";
+  chain: ChainEntry;
 }
 
 function ApprovalRoute({
@@ -616,6 +618,7 @@ function ApprovalRoute({
   onApprove,
   onReject,
   custody,
+  chain,
 }: ApprovalRouteProps) {
   const a = approval.approval;
 
@@ -626,7 +629,7 @@ function ApprovalRoute({
   if (keystore && !keystore.unlocked) {
     return (
       <ReqSheet onBack={onReject}>
-        <UnlockScreen address={keystore.address ?? null} />
+        <UnlockScreen address={keystore.address ?? null} chain={chain} />
       </ReqSheet>
     );
   }
@@ -642,6 +645,7 @@ function ApprovalRoute({
           custody={custody}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -654,6 +658,7 @@ function ApprovalRoute({
           custody={custody}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -666,6 +671,7 @@ function ApprovalRoute({
           custody={custody}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -679,6 +685,7 @@ function ApprovalRoute({
           signerAddress={keystore?.address ?? ""}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
@@ -690,6 +697,7 @@ function ApprovalRoute({
           request={req as AddChainRequest}
           onApprove={onApprove}
           onReject={onReject}
+          chain={chain}
         />
       </ReqSheet>
     );
