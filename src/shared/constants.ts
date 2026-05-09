@@ -37,6 +37,7 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "wallet-indexer-snapshot",
   "list-pending",
   "get-pending",
+  "focus-approval",
   "keystore-unlock",
   "keystore-lock",
   "keystore-create-new",

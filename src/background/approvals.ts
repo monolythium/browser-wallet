@@ -228,6 +228,24 @@ export function resolve(id: string, decision: ApprovalDecision): boolean {
 }
 
 /**
+ * Bring the approval window for `id` to the front. Returns false if the
+ * entry is missing (already resolved/rejected) or if the window can't be
+ * focused — e.g. small race window between enqueue() returning and
+ * openApprovalWindow().then() populating entry.windowId, or the window
+ * was just closed and rejectByWindow hasn't fired yet.
+ */
+export async function focusApproval(id: string): Promise<{ focused: boolean }> {
+  const entry = pending.get(id);
+  if (!entry || entry.windowId == null) return { focused: false };
+  try {
+    await chrome.windows.update(entry.windowId, { focused: true });
+    return { focused: true };
+  } catch {
+    return { focused: false };
+  }
+}
+
+/**
  * Treat a closed approval window as a reject (matches MetaMask semantics).
  */
 export function rejectByWindow(windowId: number): void {
