@@ -79,6 +79,8 @@ import {
 import {
   loadConnectedSites,
   saveConnectedSite,
+  removeConnectedSite,
+  clearAllConnectedSites,
 } from "./connected-sites.js";
 import {
   ALARM_AUTO_LOCK,
@@ -1064,6 +1066,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const id = (message.payload as { id?: string } | undefined)?.id;
       if (!id) return { focused: false };
       return await focusApproval(id);
+    }
+    case "list-connected-sites": {
+      return loadConnectedSites();
+    }
+    case "revoke-origin": {
+      const p = message.payload as { origin?: string } | undefined;
+      if (!p?.origin) return { ok: false };
+      await removeConnectedSite(p.origin);
+      session.connectedOrigins.delete(p.origin);
+      return { ok: true };
+    }
+    case "revoke-all-origins": {
+      await clearAllConnectedSites();
+      session.connectedOrigins.clear();
+      return { ok: true };
     }
     case "keystore-status": {
       // Strategy A — v4 (ML-DSA-65) is the new primary vault. Detection
