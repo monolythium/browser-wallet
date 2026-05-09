@@ -7,6 +7,7 @@ export const ALARM_AUTO_LOCK = "monolythium.autolock";
 // chrome.storage.local
 export const STORAGE_KEY_AUTO_LOCK_MINUTES = "mono.autoLockMinutes";
 export const STORAGE_KEY_PENDING_APPROVALS = "mono.pending-approvals";
+export const STORAGE_KEY_CONNECTED_SITES = "mono.connected-sites";
 
 // chrome.storage.session
 export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
@@ -38,6 +39,9 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "list-pending",
   "get-pending",
   "focus-approval",
+  "list-connected-sites",
+  "revoke-origin",
+  "revoke-all-origins",
   "keystore-unlock",
   "keystore-lock",
   "keystore-create-new",
