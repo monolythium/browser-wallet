@@ -27,10 +27,12 @@ import type {
   SendTxRequest,
   AddChainRequest,
   ChainEntry,
+  PendingApproval,
   WalletAddressActivityRow,
   WalletIndexerSnapshot,
 } from "./bg";
-import { bgWalletOperatorStatus, bgWalletChainBlockNumber } from "./bg";
+import { bgWalletOperatorStatus, bgWalletChainBlockNumber, bgFocusApproval } from "./bg";
+import { useApprovalQueue } from "./hooks/useApprovalQueue";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -487,55 +489,106 @@ function formatActivityAmount(row: WalletAddressActivityRow): string {
 
 // ---- Pending requests shelf ----
 //
-// Placeholder for the planned EIP-1193 approval queue. The real queue
-// will list active dApp connect / sign / message requests; until the
-// in-popup approval router is wired here, this card shows three
-// illustrative rows. Rows are inert (no onClick, cursor default,
-// opacity 0.6) — the disabled-state visual is the only signal needed.
+// Reactive read of the SW approval queue via useApprovalQueue() — items
+// are real EIP-1193 connect / sign / send-tx / chain requests awaiting
+// user action in the dedicated approval window. Card is hidden entirely
+// when the queue is empty; tapping a row brings the matching approval
+// window to the front.
+
+interface ApprovalDisplay {
+  title: string;
+  subtitle: string;
+  letter: string;
+}
+
+function hostnameOf(origin: string): string {
+  try { return new URL(origin).hostname; } catch { return origin; }
+}
+
+function previewMessage(message: string): string {
+  // 0x-hex personal_sign payloads are commonly utf8-encoded text. Decode
+  // when the bytes are printable ASCII; fall through to the raw string
+  // otherwise (binary blobs, malformed hex) so the user still sees a
+  // recognisable preview.
+  let decoded = message;
+  if (message.startsWith("0x") && message.length > 2 && (message.length - 2) % 2 === 0) {
+    try {
+      const bytes = new Uint8Array((message.length - 2) / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(message.substr(2 + i * 2, 2), 16);
+      }
+      const text = new TextDecoder().decode(bytes);
+      if (/^[\x20-\x7E\n\r\t]*$/.test(text)) decoded = text;
+    } catch { /* fall through */ }
+  }
+  return decoded.length > 30 ? decoded.slice(0, 30) + "…" : decoded;
+}
+
+function describeApproval(item: PendingApproval): ApprovalDisplay {
+  const req = item.request;
+  const host = hostnameOf(req.origin);
+  const letter = host.charAt(0).toUpperCase() || "?";
+  switch (req.kind) {
+    case "connect":
+      return { title: `Connect · ${host}`, subtitle: "Connection request", letter };
+    case "personal_sign":
+      return { title: `Sign message · ${host}`, subtitle: previewMessage(req.message), letter };
+    case "typed_sign":
+      return { title: `Sign typed data · ${host}`, subtitle: req.parsed?.primaryType ?? "EIP-712", letter };
+    case "send_tx":
+      return { title: `Send · ${host}`, subtitle: req.tx.to ? `to ${shortAddr(req.tx.to)}` : "transaction", letter };
+    case "add_chain":
+      return { title: `Add network · ${host}`, subtitle: req.chain.chainName, letter };
+    case "switch_chain":
+      return { title: `Switch network · ${host}`, subtitle: req.chainId, letter };
+  }
+}
 
 function PendingShelf() {
-  const items: Array<{ id: string; title: string; hint: string; icon: string }> = [
-    { id: "connect", title: "Connect · MonoHub", hint: "3 permissions", icon: "M" },
-    { id: "sign", title: "Sign · swap 500 LYTH → USDC", hint: "simulated", icon: "C" },
-    { id: "message", title: "Sign-in · gov.monolythium.xyz", hint: "no value", icon: "G" },
-  ];
+  const { queue, loading } = useApprovalQueue();
+  if (loading || queue.length === 0) return null;
+
   return (
     <div className="ext-card" style={{ marginTop: 6 }}>
       <div className="ext-card__head">
         <h3>Pending requests</h3>
         <div className="spacer" />
-        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", letterSpacing: "0.08em", textTransform: "uppercase" }}>{items.length} open</span>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", letterSpacing: "0.08em", textTransform: "uppercase" }}>{queue.length} open</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {items.map((it) => (
-          <div
-            key={it.id}
-            style={{
-              width: "100%",
-              display: "grid",
-              gridTemplateColumns: "28px 1fr auto",
-              gap: 10,
-              alignItems: "center",
-              padding: "9px 10px",
-              borderRadius: 10,
-              background: "rgba(255,255,255,0.03)",
-              border: "1px solid var(--fg-700)",
-              color: "inherit",
-              cursor: "default",
-              fontFamily: "inherit",
-              textAlign: "left",
-              opacity: 0.6,
-            }}
-          >
-            <div style={{ width: 28, height: 28, borderRadius: 7, fontSize: 12, display: "grid", placeItems: "center", fontFamily: "var(--f-mono)", fontWeight: 700, color: "#fff", background: it.icon === "G" ? "linear-gradient(135deg, #3a6fa5, #1c3a5a)" : "linear-gradient(135deg, #8a3fa5, #4a1f5a)" }}>
-              {it.icon}
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg-100)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
-              <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 2, letterSpacing: "0.02em" }}>{it.hint}</div>
-            </div>
-          </div>
-        ))}
+        {queue.map((item) => {
+          const display = describeApproval(item);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => { void bgFocusApproval(item.id); }}
+              style={{
+                width: "100%",
+                display: "grid",
+                gridTemplateColumns: "28px 1fr auto",
+                gap: 10,
+                alignItems: "center",
+                padding: "9px 10px",
+                borderRadius: 10,
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid var(--fg-700)",
+                color: "inherit",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                textAlign: "left",
+              }}
+            >
+              <div style={{ width: 28, height: 28, borderRadius: 7, fontSize: 12, display: "grid", placeItems: "center", fontFamily: "var(--f-mono)", fontWeight: 700, color: "#fff", background: "linear-gradient(135deg, #8a3fa5, #4a1f5a)" }}>
+                {display.letter}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg-100)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display.title}</div>
+                <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 2, letterSpacing: "0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display.subtitle}</div>
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
