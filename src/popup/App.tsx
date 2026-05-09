@@ -34,6 +34,7 @@ import { ImportWallet } from "./pages/ImportWallet";
 import { UnlockScreen } from "./pages/UnlockScreen";
 import { RevealPhrase } from "./pages/RevealPhrase";
 import { ResetWallet } from "./pages/ResetWallet";
+import { ConnectedSites } from "./pages/ConnectedSites";
 import { ForgotPassword } from "./pages/ForgotPassword";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
@@ -79,7 +80,8 @@ type Screen =
   | "send"
   | "stake"
   | "bridge"
-  | "approval";
+  | "approval"
+  | "connected-sites";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -542,12 +544,17 @@ export default function App() {
           address={keystore?.address ?? ""}
           algo={keystore?.algo ?? "secp256k1"}
           onShowPhrase={() => setScreen("reveal-phrase")}
+          onShowConnectedSites={() => setScreen("connected-sites")}
           onResetWallet={() => setScreen("reset-wallet")}
         />
       )}
 
       {screen === "reveal-phrase" && (
         <RevealPhrase onBack={() => setScreen("settings")} />
+      )}
+
+      {screen === "connected-sites" && (
+        <ConnectedSites onBack={() => setScreen("settings")} />
       )}
 
       {screen === "reset-wallet" && (

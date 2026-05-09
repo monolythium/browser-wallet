@@ -32,6 +32,8 @@ import {
   rejectByWindow,
   getPending,
   listPending,
+  clearPending,
+  focusApproval,
   type ApprovalDecision,
   type SendTxView,
   type AddChainSpec,
@@ -77,6 +79,8 @@ import {
 import {
   loadConnectedSites,
   saveConnectedSite,
+  removeConnectedSite,
+  clearAllConnectedSites,
 } from "./connected-sites.js";
 import {
   ALARM_AUTO_LOCK,
@@ -1058,6 +1062,26 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const found = resolveApproval(p.id, p.decision);
       return { found };
     }
+    case "focus-approval": {
+      const id = (message.payload as { id?: string } | undefined)?.id;
+      if (!id) return { focused: false };
+      return await focusApproval(id);
+    }
+    case "list-connected-sites": {
+      return loadConnectedSites();
+    }
+    case "revoke-origin": {
+      const p = message.payload as { origin?: string } | undefined;
+      if (!p?.origin) return { ok: false };
+      await removeConnectedSite(p.origin);
+      session.connectedOrigins.delete(p.origin);
+      return { ok: true };
+    }
+    case "revoke-all-origins": {
+      await clearAllConnectedSites();
+      session.connectedOrigins.clear();
+      return { ok: true };
+    }
     case "keystore-status": {
       // Strategy A — v4 (ML-DSA-65) is the new primary vault. Detection
       // order: v4 first (current canonical shape), v2 next (still
@@ -1684,3 +1708,9 @@ if (chrome.windows?.onRemoved) {
     rejectByWindow(winId);
   });
 }
+
+// Reconcile the persisted approval queue with the (empty) in-memory state on
+// every SW startup. After the worker sleeps, storage outlives the in-memory
+// `pending` Map; without this reset the popup would render zombie rows whose
+// Promise resolvers no longer exist.
+void clearPending();

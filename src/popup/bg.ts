@@ -459,6 +459,29 @@ export async function bgResolveApproval(
   return send<{ found: boolean }>("resolve", { id, decision });
 }
 
+export async function bgFocusApproval(id: string): Promise<{ focused: boolean }> {
+  return send<{ focused: boolean }>("focus-approval", { id });
+}
+
+export interface ConnectedSiteRecord {
+  address: string;
+  approvedAt: number;
+}
+
+export type ConnectedSitesMap = Record<string, ConnectedSiteRecord>;
+
+export async function bgListConnectedSites(): Promise<ConnectedSitesMap> {
+  return send<ConnectedSitesMap>("list-connected-sites");
+}
+
+export async function bgRevokeOrigin(origin: string): Promise<{ ok: boolean }> {
+  return send<{ ok: boolean }>("revoke-origin", { origin });
+}
+
+export async function bgRevokeAllOrigins(): Promise<{ ok: boolean }> {
+  return send<{ ok: boolean }>("revoke-all-origins");
+}
+
 export async function bgChainList(): Promise<ChainEntry[]> {
   return send<ChainEntry[]>("chain-list");
 }

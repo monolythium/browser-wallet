@@ -9,7 +9,7 @@
 // Set<origin>) so a future multi-account / per-site account selection can
 // extend the value without migrating the storage key.
 
-const CONNECTED_SITES_STORAGE_KEY = "mono.connected-sites";
+import { STORAGE_KEY_CONNECTED_SITES } from "../shared/constants.js";
 
 export interface ConnectedSiteRecord {
   address: string;
@@ -20,8 +20,8 @@ export type ConnectedSitesMap = Record<string, ConnectedSiteRecord>;
 
 export async function loadConnectedSites(): Promise<ConnectedSitesMap> {
   return new Promise((resolve) => {
-    chrome.storage.local.get(CONNECTED_SITES_STORAGE_KEY, (got) => {
-      const raw = got?.[CONNECTED_SITES_STORAGE_KEY];
+    chrome.storage.local.get(STORAGE_KEY_CONNECTED_SITES, (got) => {
+      const raw = got?.[STORAGE_KEY_CONNECTED_SITES];
       if (!raw || typeof raw !== "object") {
         resolve({});
         return;
@@ -52,7 +52,7 @@ export async function saveConnectedSite(
   const sites = await loadConnectedSites();
   sites[origin] = { address, approvedAt: Date.now() };
   return new Promise((resolve) => {
-    chrome.storage.local.set({ [CONNECTED_SITES_STORAGE_KEY]: sites }, () =>
+    chrome.storage.local.set({ [STORAGE_KEY_CONNECTED_SITES]: sites }, () =>
       resolve(),
     );
   });
@@ -63,7 +63,7 @@ export async function removeConnectedSite(origin: string): Promise<void> {
   if (!(origin in sites)) return;
   delete sites[origin];
   return new Promise((resolve) => {
-    chrome.storage.local.set({ [CONNECTED_SITES_STORAGE_KEY]: sites }, () =>
+    chrome.storage.local.set({ [STORAGE_KEY_CONNECTED_SITES]: sites }, () =>
       resolve(),
     );
   });
@@ -72,4 +72,12 @@ export async function removeConnectedSite(origin: string): Promise<void> {
 export async function listConnectedOrigins(): Promise<string[]> {
   const sites = await loadConnectedSites();
   return Object.keys(sites);
+}
+
+export async function clearAllConnectedSites(): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [STORAGE_KEY_CONNECTED_SITES]: {} }, () =>
+      resolve(),
+    );
+  });
 }
