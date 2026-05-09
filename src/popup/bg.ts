@@ -459,6 +459,10 @@ export async function bgResolveApproval(
   return send<{ found: boolean }>("resolve", { id, decision });
 }
 
+export async function bgFocusApproval(id: string): Promise<{ focused: boolean }> {
+  return send<{ focused: boolean }>("focus-approval", { id });
+}
+
 export async function bgChainList(): Promise<ChainEntry[]> {
   return send<ChainEntry[]>("chain-list");
 }

@@ -33,6 +33,7 @@ import {
   getPending,
   listPending,
   clearPending,
+  focusApproval,
   type ApprovalDecision,
   type SendTxView,
   type AddChainSpec,
@@ -1058,6 +1059,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = message.payload as { id: string; decision: ApprovalDecision };
       const found = resolveApproval(p.id, p.decision);
       return { found };
+    }
+    case "focus-approval": {
+      const id = (message.payload as { id?: string } | undefined)?.id;
+      if (!id) return { focused: false };
+      return await focusApproval(id);
     }
     case "keystore-status": {
       // Strategy A — v4 (ML-DSA-65) is the new primary vault. Detection
