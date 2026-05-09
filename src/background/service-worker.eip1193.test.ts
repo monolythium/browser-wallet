@@ -73,6 +73,7 @@ vi.mock("./approvals.js", () => ({
   rejectByWindow: vi.fn(),
   getPending: vi.fn(() => null),
   listPending: vi.fn(() => []),
+  clearPending: vi.fn(async () => {}),
 }));
 
 // Keystore mock — deterministic signing, always unlocked unless a test flips it.

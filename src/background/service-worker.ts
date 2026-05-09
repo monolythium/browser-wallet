@@ -32,6 +32,7 @@ import {
   rejectByWindow,
   getPending,
   listPending,
+  clearPending,
   type ApprovalDecision,
   type SendTxView,
   type AddChainSpec,
@@ -1684,3 +1685,9 @@ if (chrome.windows?.onRemoved) {
     rejectByWindow(winId);
   });
 }
+
+// Reconcile the persisted approval queue with the (empty) in-memory state on
+// every SW startup. After the worker sleeps, storage outlives the in-memory
+// `pending` Map; without this reset the popup would render zombie rows whose
+// Promise resolvers no longer exist.
+void clearPending();
