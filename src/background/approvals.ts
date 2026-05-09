@@ -16,6 +16,8 @@
 // extension icon. Spawning a small dedicated window guarantees the dapp gets
 // the user's eyeballs on the request, which is the EIP-1193 contract.
 
+import { STORAGE_KEY_PENDING_APPROVALS } from "../shared/constants";
+
 export type ApprovalKind =
   | "connect"
   | "personal_sign"
@@ -242,11 +244,22 @@ export function rejectByWindow(windowId: number): void {
 // background sends a message back. Service workers may sleep, but storage
 // survives — popups read from storage, then resolve through the runtime
 // message channel which wakes the worker.
-const PENDING_STORAGE_KEY = "mono.pending-approvals";
 
 async function persistPending(): Promise<void> {
   const list = listPending();
   return new Promise((res) => {
-    chrome.storage.local.set({ [PENDING_STORAGE_KEY]: list }, () => res());
+    chrome.storage.local.set({ [STORAGE_KEY_PENDING_APPROVALS]: list }, () => res());
+  });
+}
+
+// Reconcile storage with in-memory state. Called at SW startup: when the
+// worker sleeps and is revived by a new request, the in-memory `pending`
+// Map is empty but storage still holds entries from the previous session
+// whose Promise resolvers are dead. Without this, the popup would render
+// zombie rows that never disappear and never respond to taps.
+export async function clearPending(): Promise<void> {
+  pending.clear();
+  await new Promise<void>((res) => {
+    chrome.storage.local.set({ [STORAGE_KEY_PENDING_APPROVALS]: [] }, () => res());
   });
 }

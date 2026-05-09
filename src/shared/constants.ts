@@ -6,6 +6,7 @@ export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
 // chrome.storage.local
 export const STORAGE_KEY_AUTO_LOCK_MINUTES = "mono.autoLockMinutes";
+export const STORAGE_KEY_PENDING_APPROVALS = "mono.pending-approvals";
 
 // chrome.storage.session
 export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
