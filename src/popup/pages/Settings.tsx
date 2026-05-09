@@ -15,6 +15,8 @@ interface SettingsProps {
   /** Routes to the RevealPhrase page. v4 strict guarantees every vault
    *  is revealable, so this is always wired. */
   onShowPhrase: () => void;
+  /** Routes to the ConnectedSites page (Phase 4.2.2). */
+  onShowConnectedSites: () => void;
   /** Routes to the ResetWallet page (destructive). */
   onResetWallet: () => void;
 }
@@ -40,6 +42,7 @@ export function Settings({
   address,
   algo,
   onShowPhrase,
+  onShowConnectedSites,
   onResetWallet,
 }: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
@@ -225,6 +228,30 @@ export function Settings({
           >
             <Icon name="lock" size={13} />
             Lock wallet now
+          </button>
+
+          <button
+            onClick={onShowConnectedSites}
+            style={{
+              width: "100%",
+              marginTop: 8,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+            }}
+          >
+            <Icon name="shield" size={13} />
+            Connected sites
           </button>
 
           <div
