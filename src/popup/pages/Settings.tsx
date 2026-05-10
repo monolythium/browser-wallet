@@ -17,6 +17,8 @@ interface SettingsProps {
   onShowPhrase: () => void;
   /** Routes to the ResetWallet page (destructive). */
   onResetWallet: () => void;
+  /** Routes to the Sprintnet operators sub-page (Phase 4.3). */
+  onOpenOperators: () => void;
 }
 
 const ALGO_LABEL: Record<SignAlgo, string> = {
@@ -41,6 +43,7 @@ export function Settings({
   algo,
   onShowPhrase,
   onResetWallet,
+  onOpenOperators,
 }: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
@@ -257,6 +260,45 @@ export function Settings({
               Reset wallet
             </button>
           </div>
+        </div>
+
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Network operators</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            Override the Sprintnet operator RPC list with your own validator
+            nodes. Defaults use the 7 published operators in round-robin.
+          </div>
+          <button
+            onClick={onOpenOperators}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>Manage operators</span>
+            <Icon name="chev" size={12} />
+          </button>
         </div>
 
         <div className="ext-card">

@@ -5,6 +5,12 @@
 // other Ethereum-compatible chains keep the legacy secp256k1 path.
 
 import { MONOLYTHIUM_TESTNET_CHAIN_ID } from "@monolythium/core-sdk";
+import {
+  STORAGE_KEY_OPERATOR_OVERRIDE,
+  validateOperatorList,
+  mergeOperatorOverride,
+  type OperatorEntry,
+} from "../shared/operators.js";
 
 /** Sprintnet (Monolythium L1 testnet) chain id, exposed as 0x-quantity hex. */
 export const SPRINTNET_CHAIN_ID_HEX =
@@ -33,12 +39,13 @@ export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
  * of audit; broadcast paths must iterate this list and use the first
  * responder. Order is intentional — fsn1 hosts are geographically closer
  * to most EU/US users; ash + sin are the long-haul fallbacks.
+ *
+ * Phase 4.3 Change 2: this is now the *defaults* list. Power users can
+ * override via chrome.storage.local["mono.operators.override"]. RPC
+ * dispatch uses `getActiveOperators()` which merges the override with
+ * these defaults at lookup time.
  */
-export const SPRINTNET_OPERATOR_RPCS: ReadonlyArray<{
-  name: string;
-  region: string;
-  rpc: string;
-}> = [
+export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> = [
   { name: "val-1", region: "fsn1", rpc: "http://192.0.2.7:8545" },
   { name: "val-2", region: "fsn1", rpc: "http://192.0.2.1:8545" },
   { name: "val-3", region: "nbg1", rpc: "http://192.0.2.2:8545" },
@@ -47,6 +54,69 @@ export const SPRINTNET_OPERATOR_RPCS: ReadonlyArray<{
   { name: "val-6", region: "ash",  rpc: "http://192.0.2.5:8545" },
   { name: "val-7", region: "sin",  rpc: "http://192.0.2.6:8545" },
 ];
+
+/** In-memory active operator list. Hydrated from storage at SW boot via
+ *  `loadOperatorOverride()` and updated by `setOperatorOverride()` and
+ *  the chrome.storage.onChanged listener in service-worker.ts. */
+let activeOperators: OperatorEntry[] = SPRINTNET_OPERATOR_RPCS_DEFAULTS.map(
+  (d) => ({ ...d }),
+);
+
+/** Snapshot of the current effective operator list (defaults or override).
+ *  RPC dispatch (`sprintnetJsonRpc`, `probeFirstAliveOperator`) calls
+ *  this on every iteration so a hot-swapped override takes effect on
+ *  the next RPC without a SW restart. */
+export function getActiveOperators(): ReadonlyArray<OperatorEntry> {
+  return activeOperators;
+}
+
+/** Read the persisted override (if any) and update the in-memory list.
+ *  Call at SW boot and from the chrome.storage.onChanged listener. */
+export async function loadOperatorOverride(): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([STORAGE_KEY_OPERATOR_OVERRIDE], (res) => {
+      const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
+      const validated = validateOperatorList(raw);
+      activeOperators = mergeOperatorOverride(SPRINTNET_OPERATOR_RPCS_DEFAULTS, validated);
+      resolve();
+    });
+  });
+}
+
+/** Persist a new override (or null to clear and revert to defaults).
+ *  Mutates in-memory state synchronously, then writes storage; the
+ *  chrome.storage.onChanged listener also re-applies on the storage
+ *  echo so an override set from outside the SW (e.g. DevTools) hot-
+ *  reloads correctly. */
+export async function setOperatorOverride(
+  override: OperatorEntry[] | null,
+): Promise<void> {
+  activeOperators = mergeOperatorOverride(SPRINTNET_OPERATOR_RPCS_DEFAULTS, override);
+  return new Promise((resolve) => {
+    if (override === null) {
+      chrome.storage.local.remove(STORAGE_KEY_OPERATOR_OVERRIDE, () => resolve());
+    } else {
+      chrome.storage.local.set({ [STORAGE_KEY_OPERATOR_OVERRIDE]: override }, () => resolve());
+    }
+  });
+}
+
+/** Defaults snapshot for popup-side display. */
+export function getDefaultOperators(): ReadonlyArray<OperatorEntry> {
+  return SPRINTNET_OPERATOR_RPCS_DEFAULTS;
+}
+
+/** Read the persisted override directly (without merging). Returns null
+ *  when no override is set. Used by the popup `sprintnet-operators-get`
+ *  IPC to render the "custom override active" banner. */
+export async function readOperatorOverride(): Promise<OperatorEntry[] | null> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([STORAGE_KEY_OPERATOR_OVERRIDE], (res) => {
+      const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
+      resolve(validateOperatorList(raw));
+    });
+  });
+}
 
 /**
  * Built-in chain registry entry. The chain-list IPC merges these with
@@ -89,7 +159,7 @@ export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
     chainId: SPRINTNET_CHAIN_ID_HEX,
     chainIdNum: SPRINTNET_CHAIN_ID,
     name: "Monolythium · Sprintnet",
-    rpc: SPRINTNET_OPERATOR_RPCS[0]!.rpc,
+    rpc: SPRINTNET_OPERATOR_RPCS_DEFAULTS[0]!.rpc,
     nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
     official: true,
   },
@@ -120,7 +190,7 @@ export async function probeFirstAliveOperator(
   expectedChainIdDec: number = SPRINTNET_CHAIN_ID,
   timeoutMs: number = 3_000,
 ): Promise<{ name: string; rpc: string } | null> {
-  for (const v of SPRINTNET_OPERATOR_RPCS) {
+  for (const v of getActiveOperators()) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);

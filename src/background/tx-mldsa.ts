@@ -11,7 +11,7 @@ import {
   type NativeEvmTxFields,
 } from "@monolythium/core-sdk/crypto";
 import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
-import { SPRINTNET_OPERATOR_RPCS } from "./networks.js";
+import { getActiveOperators } from "./networks.js";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -64,7 +64,7 @@ export async function sprintnetJsonRpc<T>(
   params: unknown[],
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
-  for (const v of SPRINTNET_OPERATOR_RPCS) {
+  for (const v of getActiveOperators()) {
     let res: Response;
     try {
       res = await fetch(v.rpc, {

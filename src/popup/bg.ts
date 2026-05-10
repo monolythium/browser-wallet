@@ -509,6 +509,33 @@ export async function bgChainDelete(
   return send("chain-delete", { chainId });
 }
 
+export interface OperatorEntryWire {
+  name: string;
+  region: string;
+  rpc: string;
+}
+
+/** Read the current operator-override state. `override` is null when the
+ *  user has not customized; `defaults` is the SDK-published list;
+ *  `effective` is what RPC dispatch actually iterates (defaults or override). */
+export async function bgOperatorsGet(): Promise<{
+  ok: true;
+  override: OperatorEntryWire[] | null;
+  defaults: OperatorEntryWire[];
+  effective: OperatorEntryWire[];
+}> {
+  return send("sprintnet-operators-get");
+}
+
+/** Persist a new operator override (or null to clear and revert to defaults).
+ *  The SW's chrome.storage.onChanged listener invalidates the operator
+ *  probe cache so the next chain-health tick picks up the new list. */
+export async function bgOperatorsSet(
+  operators: OperatorEntryWire[] | null,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("sprintnet-operators-set", { operators });
+}
+
 export async function bgGetAutoLockMinutes(): Promise<{
   autoLockMinutes: number;
   options: readonly number[];

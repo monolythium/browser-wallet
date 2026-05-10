@@ -666,4 +666,84 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       expect(broadcastEvents.some((e) => e.event === "chainChanged")).toBe(false);
     });
   });
+
+  // ---- Phase 4.3 Change 2 — Sprintnet operator override ----
+  describe("popup-IPC operator override", () => {
+    interface OperatorWire { name: string; region: string; rpc: string; }
+
+    it("sprintnet-operators-get returns defaults + null override on a fresh wallet", async () => {
+      // Defensive: clear any prior override so the test is order-independent.
+      await popupDispatch("sprintnet-operators-set", { operators: null });
+      const r = await popupDispatch<{
+        ok: boolean;
+        override: OperatorWire[] | null;
+        defaults: OperatorWire[];
+        effective: OperatorWire[];
+      }>("sprintnet-operators-get");
+      expect(r.ok).toBe(true);
+      expect(r.override).toBeNull();
+      expect(r.defaults.length).toBe(7); // val-1 through val-7
+      expect(r.effective).toEqual(r.defaults);
+    });
+
+    it("sprintnet-operators-set persists a valid override and effective reflects it", async () => {
+      const override: OperatorWire[] = [
+        { name: "my-node-1", region: "local", rpc: "http://127.0.0.1:8545" },
+        { name: "my-node-2", region: "local", rpc: "http://127.0.0.2:8545" },
+      ];
+      const setRes = await popupDispatch<{ ok: boolean }>(
+        "sprintnet-operators-set",
+        { operators: override },
+      );
+      expect(setRes.ok).toBe(true);
+      const getRes = await popupDispatch<{
+        ok: boolean;
+        override: OperatorWire[] | null;
+        effective: OperatorWire[];
+      }>("sprintnet-operators-get");
+      expect(getRes.ok).toBe(true);
+      expect(getRes.override).toEqual(override);
+      expect(getRes.effective).toEqual(override);
+      // Cleanup so other tests don't see the override.
+      await popupDispatch("sprintnet-operators-set", { operators: null });
+    });
+
+    it("sprintnet-operators-set with null reverts to defaults", async () => {
+      // Set then clear.
+      await popupDispatch("sprintnet-operators-set", {
+        operators: [{ name: "x", region: "y", rpc: "http://example.test" }],
+      });
+      const clear = await popupDispatch<{ ok: boolean }>(
+        "sprintnet-operators-set",
+        { operators: null },
+      );
+      expect(clear.ok).toBe(true);
+      const getRes = await popupDispatch<{
+        ok: boolean;
+        override: OperatorWire[] | null;
+        defaults: OperatorWire[];
+        effective: OperatorWire[];
+      }>("sprintnet-operators-get");
+      expect(getRes.override).toBeNull();
+      expect(getRes.effective).toEqual(getRes.defaults);
+    });
+
+    it("sprintnet-operators-set rejects malformed input shapes", async () => {
+      const cases: unknown[] = [
+        [], // empty array
+        [{ name: "x", region: "y" /* missing rpc */ }],
+        [{ name: "x", region: "y", rpc: "not-a-url" }],
+        [{ name: "", region: "y", rpc: "http://x.example" }], // empty name
+      ];
+      for (const c of cases) {
+        const r = await popupDispatch<{ ok: boolean; reason?: string }>(
+          "sprintnet-operators-set",
+          { operators: c },
+        );
+        expect(r.ok).toBe(false);
+      }
+      // Clean up.
+      await popupDispatch("sprintnet-operators-set", { operators: null });
+    });
+  });
 });
