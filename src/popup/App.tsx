@@ -29,6 +29,7 @@ import { Settings } from "./pages/Settings";
 import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
+import { Operators } from "./pages/Operators";
 import { Welcome } from "./pages/Welcome";
 import { SetPassword } from "./pages/SetPassword";
 import { ShowPhrase } from "./pages/ShowPhrase";
@@ -79,6 +80,7 @@ type Screen =
   | "network-add"
   | "network-edit"
   | "settings"
+  | "operators"
   | "reveal-phrase"
   | "reset-wallet"
   | "receive"
@@ -439,6 +441,7 @@ export default function App() {
     screen === "network-add" ||
     screen === "network-edit" ||
     screen === "settings" ||
+    screen === "operators" ||
     screen === "receive" ||
     screen === "send" ||
     screen === "reveal-phrase" ||
@@ -633,7 +636,12 @@ export default function App() {
           algo={keystore?.algo ?? "secp256k1"}
           onShowPhrase={() => setScreen("reveal-phrase")}
           onResetWallet={() => setScreen("reset-wallet")}
+          onOpenOperators={() => setScreen("operators")}
         />
+      )}
+
+      {screen === "operators" && (
+        <Operators onBack={() => setScreen("settings")} />
       )}
 
       {screen === "reveal-phrase" && (

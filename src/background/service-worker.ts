@@ -69,7 +69,16 @@ import {
   SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
+  loadOperatorOverride,
+  setOperatorOverride,
+  readOperatorOverride,
+  getDefaultOperators,
+  getActiveOperators,
 } from "./networks.js";
+import {
+  STORAGE_KEY_OPERATOR_OVERRIDE,
+  validateOperatorList,
+} from "../shared/operators.js";
 import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
@@ -249,6 +258,7 @@ void (async () => {
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
 
   await loadUserChains();
+  await loadOperatorOverride();
   session.chainId = await loadActiveChainId();
 
   // Restore origins the user has previously approved. Without this, every
@@ -265,6 +275,18 @@ void (async () => {
     session.autoLockMinutes = m;
   }
 })();
+
+// Hot-reload the operator override when storage changes. The popup's
+// sprintnet-operators-set IPC writes here and the in-memory activeOperators
+// list re-syncs; the `cachedOperator` answer used by the chain-status
+// banner + chain-health poll is also invalidated so the next probe picks
+// up the new list immediately rather than waiting for the 10s TTL.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
+  void loadOperatorOverride();
+  cachedOperator = null;
+});
 
 // ---- Auto-lock ----
 //
@@ -1284,6 +1306,38 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         await persistActiveChainId(session.chainId);
         broadcastEvent("chainChanged", session.chainId);
       }
+      return { ok: true };
+    }
+    case "sprintnet-operators-get": {
+      const override = await readOperatorOverride();
+      return {
+        ok: true,
+        override,
+        defaults: getDefaultOperators().map((d) => ({ ...d })),
+        effective: getActiveOperators().map((d) => ({ ...d })),
+      };
+    }
+    case "sprintnet-operators-set": {
+      // Payload: { operators: OperatorEntry[] | null }. Null clears the
+      // override and reverts to defaults; non-null persists the override.
+      // The chrome.storage.onChanged listener echoes the write and
+      // invalidates cachedOperator so the next probe picks up the new
+      // list immediately. Validation is run twice (here + onChanged
+      // listener via loadOperatorOverride) so a malformed payload from
+      // either path falls back to defaults rather than bricking RPC.
+      const p = message.payload as { operators?: unknown } | undefined;
+      const raw = p?.operators;
+      if (raw === null) {
+        await setOperatorOverride(null);
+        cachedOperator = null;
+        return { ok: true };
+      }
+      const validated = validateOperatorList(raw);
+      if (validated === null) {
+        return { ok: false, reason: "invalid operator list" };
+      }
+      await setOperatorOverride(validated);
+      cachedOperator = null;
       return { ok: true };
     }
     case "keystore-unlock": {
