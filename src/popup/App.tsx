@@ -12,7 +12,7 @@
 // the private key — it only sends the password during unlock and reads back
 // boolean/address state through `popup` IPC messages.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SESSION_KEY_WALLET_LOCKED } from "../shared/constants";
 import "./tokens.css";
 import "./glass.css";
@@ -208,6 +208,35 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Balance refresh. Reads from `activeChain.chainId`, which the service
+  // worker resolves from chrome.storage (`mono.chain.active`) and falls back
+  // to Sprintnet on first launch. The token ref discards stale fetches so a
+  // slow result for a previous account/chain can't overwrite the current
+  // balance — needed because refreshBalance is also called from event-driven
+  // handlers (visibilitychange, screen-change-to-home) that don't have the
+  // useEffect cleanup story to lean on.
+  const balanceTokenRef = useRef(0);
+  const refreshBalance = useCallback(async () => {
+    if (!acc.addr.startsWith("0x")) return;
+    const myToken = ++balanceTokenRef.current;
+    const r = await bgWalletBalance(acc.addr, activeChain.chainId);
+    if (myToken !== balanceTokenRef.current) return;
+    if (!r.ok) {
+      // Leave the existing balance in place; Home renders "0.00" when
+      // null which is acceptable until we surface a load error.
+      return;
+    }
+    try {
+      const wei = BigInt(r.balanceHex);
+      // 18-decimal LYTH; Number() loses precision above ~9e15 LYTH but
+      // that's far beyond any realistic Sprintnet balance.
+      const lyth = Number(wei) / 1e18;
+      setAcc((prev) => ({ ...prev, balance: lyth }));
+    } catch {
+      // Malformed hex — ignore, balance stays null.
+    }
+  }, [acc.addr, activeChain.chainId]);
+
   // ---- mount-time bootstrap ----
   useEffect(() => {
     void (async () => {
@@ -280,14 +309,17 @@ export default function App() {
 
   // visibilitychange safety net — when the popup becomes visible again
   // (e.g. an approval window regaining focus), re-sync state in case the
-  // SW silently restarted and lost the unlocked backend in between.
+  // SW silently restarted and lost the unlocked backend in between, and
+  // refresh the balance in case it changed while the popup was hidden.
   useEffect(() => {
     const onVis = () => {
-      if (document.visibilityState === "visible") void refreshKeystoreStatus();
+      if (document.visibilityState !== "visible") return;
+      void refreshKeystoreStatus();
+      void refreshBalance();
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [refreshKeystoreStatus]);
+  }, [refreshKeystoreStatus, refreshBalance]);
 
   // Defensive: if the user is on a detail / edit screen but the selected
   // chain is no longer in the list (e.g. dApp removed it via a future
@@ -305,35 +337,20 @@ export default function App() {
     }
   }, [screen, selectedChainId, chainList]);
 
-  // Balance refresh — runs whenever the active account or active
-  // chain changes. Reads from `activeChain.chainId`, which the
-  // service worker resolves from chrome.storage (`mono.chain.active`)
-  // and falls back to Sprintnet on first launch.
+  // Drive refreshBalance off (acc.addr, activeChain.chainId) deps via
+  // refreshBalance's own dep array; this effect just kicks the first call
+  // and re-fires whenever the callback identity changes.
   useEffect(() => {
-    if (!acc.addr.startsWith("0x")) return;
-    let cancelled = false;
-    void (async () => {
-      const r = await bgWalletBalance(acc.addr, activeChain.chainId);
-      if (cancelled) return;
-      if (!r.ok) {
-        // Leave the existing balance in place; Home renders "0.00" when
-        // null which is acceptable until we surface a load error.
-        return;
-      }
-      try {
-        const wei = BigInt(r.balanceHex);
-        // 18-decimal LYTH; Number() loses precision above ~9e15 LYTH but
-        // that's far beyond any realistic Sprintnet balance.
-        const lyth = Number(wei) / 1e18;
-        setAcc((prev) => ({ ...prev, balance: lyth }));
-      } catch {
-        // Malformed hex — ignore, balance stays null.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [acc.addr, activeChain.chainId]);
+    void refreshBalance();
+  }, [refreshBalance]);
+
+  // Refetch balance when the user lands on Home so in-popup navigations
+  // (Send → Home, Networks → Home, etc.) reflect a balance that may have
+  // changed while the user was on another screen. Also covers the post-send
+  // bounce-back, which Send.tsx itself doesn't trigger on the parent state.
+  useEffect(() => {
+    if (screen === "home") void refreshBalance();
+  }, [screen, refreshBalance]);
 
   // Indexer-backed wallet enrichments. These are partial and best-effort:
   // older testnet nodes return method-not-found until the latest mono-core
