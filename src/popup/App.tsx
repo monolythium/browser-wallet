@@ -26,6 +26,9 @@ import {
 import { Receive } from "./pages/Receive";
 import { Send } from "./pages/Send";
 import { Settings } from "./pages/Settings";
+import { NetworkDetail } from "./pages/NetworkDetail";
+import { AddCustomChain } from "./pages/AddCustomChain";
+import { EditChain } from "./pages/EditChain";
 import { Welcome } from "./pages/Welcome";
 import { SetPassword } from "./pages/SetPassword";
 import { ShowPhrase } from "./pages/ShowPhrase";
@@ -72,6 +75,9 @@ type Screen =
   | "home"
   | "accounts"
   | "networks"
+  | "network-detail"
+  | "network-add"
+  | "network-edit"
   | "settings"
   | "reveal-phrase"
   | "reset-wallet"
@@ -148,6 +154,13 @@ export default function App() {
   const [chainList, setChainList] = useState<ChainEntry[]>([]);
   const activeChain: ChainEntry =
     chainList.find((c) => c.chainId === activeChainId) ?? SPRINTNET_FALLBACK;
+  // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
+  // taps a row on the Networks list; cleared when they back out.
+  const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
+  const selectedChain: ChainEntry | null =
+    selectedChainId !== null
+      ? (chainList.find((c) => c.chainId === selectedChainId) ?? null)
+      : null;
 
   const loadChainState = async () => {
     const [activeRes, list] = await Promise.all([
@@ -273,6 +286,22 @@ export default function App() {
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [refreshKeystoreStatus]);
+
+  // Defensive: if the user is on a detail / edit screen but the selected
+  // chain is no longer in the list (e.g. dApp removed it via a future
+  // op, or chain-list refetch dropped it), bounce back to Networks. The
+  // normal navigation paths set selectedChainId before routing here, so
+  // this only fires on cross-context state shifts.
+  useEffect(() => {
+    if (
+      (screen === "network-detail" || screen === "network-edit") &&
+      selectedChainId !== null &&
+      !chainList.some((c) => c.chainId === selectedChainId)
+    ) {
+      setSelectedChainId(null);
+      setScreen("networks");
+    }
+  }, [screen, selectedChainId, chainList]);
 
   // Balance refresh — runs whenever the active account or active
   // chain changes. Reads from `activeChain.chainId`, which the
@@ -406,6 +435,9 @@ export default function App() {
     screen === "home" ||
     screen === "accounts" ||
     screen === "networks" ||
+    screen === "network-detail" ||
+    screen === "network-add" ||
+    screen === "network-edit" ||
     screen === "settings" ||
     screen === "receive" ||
     screen === "send" ||
@@ -532,7 +564,65 @@ export default function App() {
           current={activeChain}
           chains={chainList}
           onBack={() => setScreen("home")}
-          onPick={(chainId) => { void handlePickChain(chainId); }}
+          onOpenDetail={(chainId) => {
+            setSelectedChainId(chainId);
+            setScreen("network-detail");
+          }}
+          onOpenAddCustom={() => setScreen("network-add")}
+        />
+      )}
+
+      {screen === "network-detail" && selectedChain && (
+        <NetworkDetail
+          chain={selectedChain}
+          isActive={selectedChain.chainId === activeChainId}
+          onBack={() => {
+            setSelectedChainId(null);
+            setScreen("networks");
+          }}
+          onActivate={() => {
+            void (async () => {
+              await handlePickChain(selectedChain.chainId);
+            })();
+          }}
+          onEdit={() => setScreen("network-edit")}
+          onDeleted={() => {
+            // SW removed the chain (and reset active to Sprintnet if it
+            // was the active one). Re-fetch chain-list + active chain so
+            // the popup picks up the new state, then route back.
+            setSelectedChainId(null);
+            void (async () => {
+              await loadChainState();
+              setScreen("networks");
+            })();
+          }}
+        />
+      )}
+
+      {screen === "network-add" && (
+        <AddCustomChain
+          existingChainIds={new Set(chainList.map((c) => c.chainId))}
+          onBack={() => setScreen("networks")}
+          onAdded={(chainId) => {
+            void (async () => {
+              await loadChainState();
+              setSelectedChainId(chainId);
+              setScreen("network-detail");
+            })();
+          }}
+        />
+      )}
+
+      {screen === "network-edit" && selectedChain && (
+        <EditChain
+          chain={selectedChain}
+          onBack={() => setScreen("network-detail")}
+          onSaved={() => {
+            void (async () => {
+              await loadChainState();
+              setScreen("network-detail");
+            })();
+          }}
         />
       )}
 

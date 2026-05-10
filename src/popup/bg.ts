@@ -463,6 +463,52 @@ export async function bgChainList(): Promise<ChainEntry[]> {
   return send<ChainEntry[]>("chain-list");
 }
 
+/**
+ * Manually add a user-defined chain from the in-popup form. Skips the
+ * `gatedEnqueue` approval gate that `wallet_addEthereumChain` uses for
+ * dApp-initiated adds — the user is already in the wallet UI explicitly
+ * clicking Apply, so a redundant approval window over the popup would
+ * be worse UX than the dApp path it mirrors.
+ */
+export async function bgChainAddManual(spec: {
+  chainId: string;
+  name: string;
+  rpc: string;
+  blockExplorer?: string;
+  nativeCurrency?: { name: string; symbol: string; decimals: number };
+}): Promise<{ ok: true; chainId: string } | { ok: false; reason?: string }> {
+  return send("chain-add-manual", { chain: spec });
+}
+
+/**
+ * Edit a user-added chain. Builtin chains are rejected at the SW with
+ * reason "cannot edit builtin chain". Does NOT broadcast `chainChanged`
+ * even when the active chain's RPC is edited — chainId itself doesn't
+ * change, so EIP-1193 says the event is wrong.
+ */
+export async function bgChainEdit(
+  chainId: string,
+  patch: {
+    name?: string;
+    rpc?: string;
+    blockExplorer?: string | null;
+    nativeCurrency?: { name: string; symbol: string; decimals: number } | null;
+  },
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("chain-edit", { chainId, patch });
+}
+
+/**
+ * Delete a user-added chain. Builtin chains are rejected. If the deleted
+ * chain was active, the SW resets `session.chainId` to Sprintnet and
+ * broadcasts `chainChanged` so connected dApps re-prompt for the chain.
+ */
+export async function bgChainDelete(
+  chainId: string,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("chain-delete", { chainId });
+}
+
 export async function bgGetAutoLockMinutes(): Promise<{
   autoLockMinutes: number;
   options: readonly number[];

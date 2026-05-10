@@ -252,6 +252,23 @@ function dispatch(method: string, params: unknown[] = [], origin = "https://dapp
   });
 }
 
+// Popup IPC dispatcher — same captured listener, but the envelope shape is
+// `{ kind: "popup", op, payload }`, used by Settings / Networks / Send and
+// the new Phase 4.3 chain-add-manual / chain-edit / chain-delete ops.
+function popupDispatch<T = unknown>(op: string, payload?: unknown): Promise<T> {
+  const handler = capturedOnMessage;
+  if (!handler) throw new Error("service worker did not register onMessage listener");
+  return new Promise((resolve) => {
+    const envelope = { kind: "popup", op, payload } as unknown;
+    const handled = handler(envelope, undefined, (response: unknown) => {
+      resolve(response as T);
+    });
+    if (handled !== true) {
+      resolve({ ok: false, reason: "handler did not signal async response" } as T);
+    }
+  });
+}
+
 // Helper: open an origin connection so the gated methods (sign/sendTx) work.
 async function connectOrigin(origin = "https://dapp.example"): Promise<void> {
   const r = await dispatch("eth_requestAccounts", [], origin);
@@ -482,5 +499,171 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     const callShape = (estimate!.params[0] as Record<string, string>);
     expect(callShape).toHaveProperty("from");
     expect(callShape).toHaveProperty("to", "0x0000000000000000000000000000000000000002");
+  });
+
+  // ---- Phase 4.3 — popup-IPC chain management ops ----
+  describe("popup-IPC chain management", () => {
+    const FOREIGN_CHAIN = "0x1234";
+
+    it("chain-add-manual rejects collision with an existing chain", async () => {
+      // Pre-populate via the dApp path (auto-approved by the approvals mock).
+      await dispatch("wallet_addEthereumChain", [{
+        chainId: FOREIGN_CHAIN,
+        chainName: "Existing chain",
+        rpcUrls: ["https://rpc.existing.example"],
+      }], "https://dapp-add.example");
+      // Now try to add the same chainId via the popup path.
+      const r = await popupDispatch<{ ok: boolean; reason?: string }>(
+        "chain-add-manual",
+        {
+          chain: {
+            chainId: FOREIGN_CHAIN,
+            name: "Duplicate",
+            rpc: "https://rpc.duplicate.example",
+          },
+        },
+      );
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/already exists/);
+    });
+
+    it("chain-add-manual stores a valid spec and surfaces it via chain-list", async () => {
+      const NEW_CHAIN = "0x5678";
+      const r = await popupDispatch<{ ok: boolean; chainId?: string }>(
+        "chain-add-manual",
+        {
+          chain: {
+            chainId: NEW_CHAIN,
+            name: "Popup-added",
+            rpc: "https://popup.example",
+            blockExplorer: "https://explorer.example",
+            nativeCurrency: { name: "Token", symbol: "TKN", decimals: 18 },
+          },
+        },
+      );
+      expect(r.ok).toBe(true);
+      expect(r.chainId).toBe("0x5678");
+      const list = await popupDispatch<Array<{ chainId: string; name: string; builtin: boolean }>>("chain-list");
+      const added = list.find((c) => c.chainId === "0x5678");
+      expect(added).toBeDefined();
+      expect(added?.name).toBe("Popup-added");
+      expect(added?.builtin).toBe(false);
+    });
+
+    it("chain-add-manual rejects malformed input shapes", async () => {
+      const cases = [
+        { chain: {} },
+        { chain: { chainId: "not-hex", name: "x", rpc: "https://x.example" } },
+        { chain: { chainId: "0x0", name: "x", rpc: "https://x.example" } },
+        { chain: { chainId: "0xABCDEF", name: "", rpc: "https://x.example" } },
+        { chain: { chainId: "0xABCDEF", name: "x", rpc: "not-a-url" } },
+      ];
+      for (const c of cases) {
+        const r = await popupDispatch<{ ok: boolean }>("chain-add-manual", c);
+        expect(r.ok).toBe(false);
+      }
+    });
+
+    it("chain-edit rejects builtin chains", async () => {
+      const r = await popupDispatch<{ ok: boolean; reason?: string }>(
+        "chain-edit",
+        {
+          chainId: TESTNET_CHAIN_ID_HEX,
+          patch: { name: "Hijacked Sprintnet" },
+        },
+      );
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/builtin/);
+    });
+
+    it("chain-edit mutates a user-added chain", async () => {
+      const KEY = "0x9ABC";
+      await popupDispatch("chain-add-manual", {
+        chain: { chainId: KEY, name: "Original", rpc: "https://orig.example" },
+      });
+      const r = await popupDispatch<{ ok: boolean }>("chain-edit", {
+        chainId: KEY,
+        patch: {
+          name: "Renamed",
+          rpc: "https://updated.example",
+          blockExplorer: "https://explorer.example",
+        },
+      });
+      expect(r.ok).toBe(true);
+      const list = await popupDispatch<Array<{ chainId: string; name: string; rpc: string; blockExplorer?: string }>>("chain-list");
+      const edited = list.find((c) => c.chainId === KEY);
+      expect(edited?.name).toBe("Renamed");
+      expect(edited?.rpc).toBe("https://updated.example");
+      expect(edited?.blockExplorer).toBe("https://explorer.example");
+    });
+
+    it("chain-edit nullifies blockExplorer when patch sets it to null", async () => {
+      const KEY = "0xDEAD";
+      await popupDispatch("chain-add-manual", {
+        chain: {
+          chainId: KEY,
+          name: "Has explorer",
+          rpc: "https://x.example",
+          blockExplorer: "https://explorer.example",
+        },
+      });
+      const r = await popupDispatch<{ ok: boolean }>("chain-edit", {
+        chainId: KEY,
+        patch: { blockExplorer: null },
+      });
+      expect(r.ok).toBe(true);
+      const list = await popupDispatch<Array<{ chainId: string; blockExplorer?: string }>>("chain-list");
+      const edited = list.find((c) => c.chainId === KEY);
+      expect(edited?.blockExplorer).toBeUndefined();
+    });
+
+    it("chain-delete rejects builtin chains", async () => {
+      const r = await popupDispatch<{ ok: boolean; reason?: string }>(
+        "chain-delete",
+        { chainId: TESTNET_CHAIN_ID_HEX },
+      );
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/builtin/);
+    });
+
+    it("chain-delete removes a user-added chain", async () => {
+      const KEY = "0xBEEF";
+      await popupDispatch("chain-add-manual", {
+        chain: { chainId: KEY, name: "Doomed", rpc: "https://doomed.example" },
+      });
+      const r = await popupDispatch<{ ok: boolean }>("chain-delete", { chainId: KEY });
+      expect(r.ok).toBe(true);
+      const list = await popupDispatch<Array<{ chainId: string }>>("chain-list");
+      expect(list.find((c) => c.chainId === KEY)).toBeUndefined();
+    });
+
+    it("chain-delete on the active chain resets to Sprintnet and broadcasts chainChanged", async () => {
+      const KEY = "0xCAFE";
+      await popupDispatch("chain-add-manual", {
+        chain: { chainId: KEY, name: "Active-then-deleted", rpc: "https://cafe.example" },
+      });
+      // Switch to it.
+      await popupDispatch("wallet-set-active-chain", { chainId: KEY });
+      // Clear prior broadcast events from the switch step.
+      broadcastEvents.length = 0;
+      const r = await popupDispatch<{ ok: boolean }>("chain-delete", { chainId: KEY });
+      expect(r.ok).toBe(true);
+      // Active chain must reset to Sprintnet and chainChanged must fire.
+      const active = await popupDispatch<{ ok: boolean; chainId: string }>("wallet-active-chain");
+      expect(active.chainId).toBe(TESTNET_CHAIN_ID_HEX);
+      expect(broadcastEvents.some((e) => e.event === "chainChanged" && e.payload === TESTNET_CHAIN_ID_HEX)).toBe(true);
+    });
+
+    it("chain-delete on a non-active chain does NOT broadcast chainChanged", async () => {
+      const KEY = "0xFADE";
+      await popupDispatch("chain-add-manual", {
+        chain: { chainId: KEY, name: "Bystander", rpc: "https://bystander.example" },
+      });
+      // Active chain stays as whatever was already active (Sprintnet, given test isolation).
+      broadcastEvents.length = 0;
+      const r = await popupDispatch<{ ok: boolean }>("chain-delete", { chainId: KEY });
+      expect(r.ok).toBe(true);
+      expect(broadcastEvents.some((e) => e.event === "chainChanged")).toBe(false);
+    });
   });
 });
