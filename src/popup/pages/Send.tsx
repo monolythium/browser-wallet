@@ -18,6 +18,7 @@ import {
   type FeeSuggestion,
 } from "../bg";
 import type { Account } from "../demo-data";
+import { addressToBech32m, bech32mToAddress } from "../../shared/bech32m";
 
 interface SendProps {
   account: Account;
@@ -113,7 +114,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
   const tierMultiplier = TIER_MULTIPLIERS[tier];
   const estimatedFeeWei = computeEstimatedFeeWei(feeSuggestion, tierMultiplier);
 
-  const toError = validateToAddress(to);
+  const parsedRecipient = validateToAddress(to);
   const amountError = validateAmount(amountStr);
   const amountWei = amountError === null && amountStr.length > 0
     ? safeLythToWeiBigInt(amountStr)
@@ -130,7 +131,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
     amountWei + estimatedFeeWei > balanceWei;
 
   const canContinue =
-    toError === null &&
+    parsedRecipient.addr0x !== null &&
     amountError === null &&
     amountStr.length > 0 &&
     parseFloat(amountStr) > 0 &&
@@ -163,12 +164,17 @@ export function Send({ account, chainId, onBack }: SendProps) {
 
   const handleConfirm = async () => {
     if (amountWei === null) return;
+    if (parsedRecipient.addr0x === null) return; // form button is gated; defensive
     setStep("sending");
     setSubmitError(null);
     setTxHash(null);
     try {
       const valueWeiHex = "0x" + amountWei.toString(16);
-      const r = await bgWalletSendTx({ to, valueWeiHex, chainIdHex: chainId });
+      const r = await bgWalletSendTx({
+        to: parsedRecipient.addr0x,
+        valueWeiHex,
+        chainIdHex: chainId,
+      });
       if (r.ok) {
         setTxHash(r.result.txHash);
         setStep("success");
@@ -204,7 +210,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
   if (step === "preview") {
     return (
       <PreviewView
-        to={to}
+        to={parsedRecipient.addr0x ?? to}
         amountWei={amountWei}
         estimatedFeeWei={estimatedFeeWei}
         tier={tier}
@@ -265,7 +271,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
               type="text"
               value={to}
               onChange={(e) => setTo(e.target.value.trim())}
-              placeholder="0x…"
+              placeholder="0x… or mono1…"
               spellCheck={false}
               autoComplete="off"
               style={{ ...addressInputStyle, flex: 1 }}
@@ -278,7 +284,19 @@ export function Send({ account, chainId, onBack }: SendProps) {
               Paste
             </button>
           </div>
-          {toError && <div style={inlineError}>{toError}</div>}
+          {parsedRecipient.error && (
+            <div style={inlineError}>{parsedRecipient.error}</div>
+          )}
+          {parsedRecipient.inputForm === "0x" && parsedRecipient.bech && (
+            <div style={dualFormatHint}>
+              Mono form: {parsedRecipient.bech}
+            </div>
+          )}
+          {parsedRecipient.inputForm === "mono1" && parsedRecipient.addr0x && (
+            <div style={dualFormatHint}>
+              Will send to: {middleTruncate(parsedRecipient.addr0x, 10, 8)}
+            </div>
+          )}
         </FormCard>
 
         <FormCard label="Amount">
@@ -494,6 +512,14 @@ const inlineError: CSSProperties = {
   marginTop: 6,
 };
 
+const dualFormatHint: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  color: "var(--fg-400)",
+  marginTop: 6,
+  wordBreak: "break-all",
+};
+
 const fromHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
   fontSize: 10,
@@ -503,12 +529,103 @@ const fromHint: CSSProperties = {
 
 // ---- validation ----
 
-export function validateToAddress(s: string): string | null {
-  if (s.length === 0) return null; // empty = "unfilled", not yet an error
-  if (!s.startsWith("0x")) return "address must start with 0x";
-  if (s.length !== 42) return `address must be 42 chars (got ${s.length})`;
-  if (!/^0x[0-9a-fA-F]{40}$/.test(s)) return "address must be 0x + 40 hex chars";
-  return null;
+/**
+ * Recipient input parser. Accepts both 0x hex and bech32m (mono1…) per
+ * whitepaper §22.7. The IPC contract stays 0x-only; the popup is the
+ * codec boundary. Empty / partial input returns no error so the form
+ * stays quiet while the user is still typing.
+ */
+export interface RecipientParse {
+  /** Human-readable error to surface under the input. null = no error. */
+  error: string | null;
+  /** Canonical 0x lowercase form, used for IPC. null when input is invalid
+   *  or incomplete. */
+  addr0x: string | null;
+  /** Canonical bech32m form, used for the dual-format hint. null when
+   *  input is invalid or incomplete. */
+  bech: string | null;
+  /** Which input shape the user is in:
+   *   - "empty": input is empty
+   *   - "partial": prefix matches but length is short of canonical (still typing)
+   *   - "0x": complete 0x form (valid or invalid)
+   *   - "mono1": complete bech32m form (valid or invalid)
+   *   - "unknown": prefix doesn't match either shape */
+  inputForm: "empty" | "partial" | "0x" | "mono1" | "unknown";
+}
+
+export function validateToAddress(s: string): RecipientParse {
+  if (s.length === 0) {
+    return { error: null, addr0x: null, bech: null, inputForm: "empty" };
+  }
+  // 0x branch
+  if (s.startsWith("0x") || s.startsWith("0X")) {
+    if (s.length < 42) {
+      return { error: null, addr0x: null, bech: null, inputForm: "partial" };
+    }
+    if (s.length !== 42) {
+      return {
+        error: `address must be 42 chars (got ${s.length})`,
+        addr0x: null,
+        bech: null,
+        inputForm: "0x",
+      };
+    }
+    if (!/^0[xX][0-9a-fA-F]{40}$/.test(s)) {
+      return {
+        error: "address must be 0x + 40 hex chars",
+        addr0x: null,
+        bech: null,
+        inputForm: "0x",
+      };
+    }
+    const addr0x = s.toLowerCase();
+    let bech: string | null;
+    try {
+      bech = addressToBech32m(addr0x);
+    } catch {
+      bech = null;
+    }
+    return { error: null, addr0x, bech, inputForm: "0x" };
+  }
+  // mono1 branch — accept both lowercase and all-uppercase per BIP-350.
+  // The codec rejects mixed-case; we let it surface that as the error.
+  // A 20-byte payload encodes to exactly 43 chars: 4 HRP + 1 separator +
+  // 32 data + 6 checksum. Anything shorter is "still typing" (no error).
+  if (s.startsWith("mono1") || s.startsWith("MONO1")) {
+    if (s.length < 43) {
+      return { error: null, addr0x: null, bech: null, inputForm: "partial" };
+    }
+    try {
+      const addr0x = bech32mToAddress(s);
+      return {
+        error: null,
+        addr0x: addr0x.toLowerCase(),
+        bech: s.toLowerCase(),
+        inputForm: "mono1",
+      };
+    } catch (e) {
+      return {
+        error: (e as Error).message ?? "invalid mono1 address",
+        addr0x: null,
+        bech: null,
+        inputForm: "mono1",
+      };
+    }
+  }
+  return {
+    error: "address must start with 0x or mono1",
+    addr0x: null,
+    bech: null,
+    inputForm: "unknown",
+  };
+}
+
+/** Middle-truncate a string keeping `head` leading chars and `tail` trailing
+ *  chars with an ellipsis in between. Used by the dual-format hint to fit
+ *  long 0x forms into the popup's narrow column. */
+function middleTruncate(s: string, head: number, tail: number): string {
+  if (s.length <= head + tail + 1) return s;
+  return s.slice(0, head) + "…" + s.slice(-tail);
 }
 
 export function validateAmount(s: string): string | null {
