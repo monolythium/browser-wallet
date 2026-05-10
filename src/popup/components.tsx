@@ -1185,11 +1185,11 @@ interface NetworksProps {
   current: ChainEntry;
   chains: ChainEntry[];
   onBack: () => void;
-  onPick: (chainId: string) => void;
+  onOpenDetail: (chainId: string) => void;
+  onOpenAddCustom: () => void;
 }
 
-export function Networks({ current, chains, onBack, onPick }: NetworksProps) {
-  const [comingSoon, setComingSoon] = useState(false);
+export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCustom }: NetworksProps) {
   const builtin = chains.filter((c) => c.builtin);
   const custom = chains.filter((c) => !c.builtin);
   return (
@@ -1204,41 +1204,23 @@ export function Networks({ current, chains, onBack, onPick }: NetworksProps) {
           title="Official"
           chains={builtin}
           currentChainId={current.chainId}
-          onPick={onPick}
+          onOpenDetail={onOpenDetail}
           emptyHint={null}
         />
         <NetworksSection
           title="Custom"
           chains={custom}
           currentChainId={current.chainId}
-          onPick={onPick}
+          onOpenDetail={onOpenDetail}
           emptyHint="No custom chains added yet."
         />
         <button
           className="ext-act"
-          onClick={() => setComingSoon(true)}
+          onClick={onOpenAddCustom}
           style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
         >
           <Icon name="plus" size={13} /> Add custom chain
         </button>
-        {comingSoon && (
-          <div
-            style={{
-              marginTop: 10,
-              padding: "10px 12px",
-              borderRadius: 10,
-              background: "rgba(124,127,255,0.08)",
-              border: "1px solid rgba(124,127,255,0.3)",
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "var(--fg-100)",
-            }}
-          >
-            Coming soon. dApps can already add custom chains via{" "}
-            <span style={{ fontFamily: "var(--f-mono)" }}>wallet_addEthereumChain</span>;
-            an in-wallet add UI lands in a follow-up.
-          </div>
-        )}
       </div>
     </>
   );
@@ -1248,11 +1230,11 @@ interface NetworksSectionProps {
   title: string;
   chains: ChainEntry[];
   currentChainId: string;
-  onPick: (chainId: string) => void;
+  onOpenDetail: (chainId: string) => void;
   emptyHint: string | null;
 }
 
-function NetworksSection({ title, chains, currentChainId, onPick, emptyHint }: NetworksSectionProps) {
+function NetworksSection({ title, chains, currentChainId, onOpenDetail, emptyHint }: NetworksSectionProps) {
   return (
     <div style={{ marginBottom: 12 }}>
       <div
@@ -1287,7 +1269,7 @@ function NetworksSection({ title, chains, currentChainId, onPick, emptyHint }: N
             return (
               <div
                 key={c.chainId}
-                onClick={() => onPick(c.chainId)}
+                onClick={() => onOpenDetail(c.chainId)}
                 style={{
                   padding: "12px 6px",
                   borderRadius: 10,

@@ -1131,6 +1131,161 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       broadcastEvent("chainChanged", session.chainId);
       return { ok: true, chainId: session.chainId };
     }
+    case "chain-add-manual": {
+      // In-popup manual add. Skips `gatedEnqueue` because the user is
+      // already in the wallet UI clicking Apply — routing through the
+      // approval window would surface a redundant dialog. The dApp
+      // wallet_addEthereumChain path keeps its gate for cross-origin trust.
+      const p = message.payload as
+        | {
+            chain?: {
+              chainId?: string;
+              name?: string;
+              rpc?: string;
+              blockExplorer?: string;
+              nativeCurrency?: { name: string; symbol: string; decimals: number };
+            };
+          }
+        | undefined;
+      const c = p?.chain;
+      if (!c || typeof c.chainId !== "string" || typeof c.name !== "string" || typeof c.rpc !== "string") {
+        return { ok: false, reason: "missing chainId, name, or rpc" };
+      }
+      if (!/^0x[0-9a-fA-F]+$/.test(c.chainId)) {
+        return { ok: false, reason: "chainId must be 0x-prefixed hex" };
+      }
+      const chainIdNum = parseHexQuantity(c.chainId);
+      if (chainIdNum <= 0) {
+        return { ok: false, reason: "chainId must be a positive integer" };
+      }
+      const key = canonicalChainKey(c.chainId);
+      if (lookupChain(key)) {
+        return { ok: false, reason: "chain id already exists" };
+      }
+      const trimmedName = c.name.trim();
+      if (trimmedName.length === 0 || trimmedName.length > 64) {
+        return { ok: false, reason: "name must be 1-64 chars" };
+      }
+      try {
+        // eslint-disable-next-line no-new
+        new URL(c.rpc);
+      } catch {
+        return { ok: false, reason: "rpc must be a valid URL" };
+      }
+      if (c.blockExplorer) {
+        try {
+          // eslint-disable-next-line no-new
+          new URL(c.blockExplorer);
+        } catch {
+          return { ok: false, reason: "blockExplorer must be a valid URL" };
+        }
+      }
+      userChains[key] = {
+        name: trimmedName,
+        rpc: c.rpc,
+        chainIdNum,
+        ...(c.blockExplorer ? { blockExplorer: c.blockExplorer } : {}),
+        ...(c.nativeCurrency ? { nativeCurrency: c.nativeCurrency } : {}),
+      };
+      await persistUserChains();
+      return { ok: true, chainId: key };
+    }
+    case "chain-edit": {
+      // Mutate a user-added chain. Builtin keys are rejected. No
+      // chainChanged broadcast — even when the active chain's RPC is
+      // edited, the chainId itself doesn't change, so EIP-1193
+      // chainChanged would be incorrect. Downstream RPC calls pick up
+      // the new RPC on the next probe.
+      const p = message.payload as
+        | {
+            chainId?: string;
+            patch?: {
+              name?: string;
+              rpc?: string;
+              blockExplorer?: string | null;
+              nativeCurrency?: { name: string; symbol: string; decimals: number } | null;
+            };
+          }
+        | undefined;
+      if (!p || typeof p.chainId !== "string" || !p.patch) {
+        return { ok: false, reason: "missing chainId or patch" };
+      }
+      const key = canonicalChainKey(p.chainId);
+      if (BUILTIN_CHAINS[key]) {
+        return { ok: false, reason: "cannot edit builtin chain" };
+      }
+      const existing = userChains[key];
+      if (!existing) {
+        return { ok: false, reason: "unknown chain" };
+      }
+      const patch = p.patch;
+      if (patch.name !== undefined) {
+        const t = patch.name.trim();
+        if (t.length === 0 || t.length > 64) {
+          return { ok: false, reason: "name must be 1-64 chars" };
+        }
+      }
+      if (patch.rpc !== undefined) {
+        try {
+          // eslint-disable-next-line no-new
+          new URL(patch.rpc);
+        } catch {
+          return { ok: false, reason: "rpc must be a valid URL" };
+        }
+      }
+      if (typeof patch.blockExplorer === "string" && patch.blockExplorer.length > 0) {
+        try {
+          // eslint-disable-next-line no-new
+          new URL(patch.blockExplorer);
+        } catch {
+          return { ok: false, reason: "blockExplorer must be a valid URL" };
+        }
+      }
+      const next: NetInfo = {
+        ...existing,
+        ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+        ...(patch.rpc !== undefined ? { rpc: patch.rpc } : {}),
+      };
+      // blockExplorer / nativeCurrency are explicitly nullable in the patch:
+      // null → remove the field; string/object → set it; undefined → keep.
+      if (patch.blockExplorer === null) {
+        delete next.blockExplorer;
+      } else if (typeof patch.blockExplorer === "string" && patch.blockExplorer.length > 0) {
+        next.blockExplorer = patch.blockExplorer;
+      }
+      if (patch.nativeCurrency === null) {
+        delete next.nativeCurrency;
+      } else if (patch.nativeCurrency) {
+        next.nativeCurrency = patch.nativeCurrency;
+      }
+      userChains[key] = next;
+      await persistUserChains();
+      return { ok: true };
+    }
+    case "chain-delete": {
+      // Remove a user-added chain. If it was the active chain, reset to
+      // Sprintnet and broadcast chainChanged so connected dApps learn the
+      // chain they think the wallet is on no longer exists.
+      const p = message.payload as { chainId?: string } | undefined;
+      if (!p || typeof p.chainId !== "string") {
+        return { ok: false, reason: "missing chainId" };
+      }
+      const key = canonicalChainKey(p.chainId);
+      if (BUILTIN_CHAINS[key]) {
+        return { ok: false, reason: "cannot delete builtin chain" };
+      }
+      if (!userChains[key]) {
+        return { ok: false, reason: "unknown chain" };
+      }
+      delete userChains[key];
+      await persistUserChains();
+      if (session.chainId === key) {
+        session.chainId = TESTNET_CHAIN_ID_HEX;
+        await persistActiveChainId(session.chainId);
+        broadcastEvent("chainChanged", session.chainId);
+      }
+      return { ok: true };
+    }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
       // Route to v3 when the v3 envelope is on disk; otherwise fall through
