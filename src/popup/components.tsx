@@ -15,7 +15,7 @@ import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import {
-  ACCOUNTS, DAPPS, ACTIVITY, PENDING, NODE,
+  ACCOUNTS, DAPPS, PENDING, NODE,
 } from "./demo-data";
 import type {
   Account, Custody, Algo, PendingSign,
@@ -28,11 +28,11 @@ import type {
   AddChainRequest,
   ChainEntry,
   PendingApproval,
-  WalletAddressActivityRow,
   WalletIndexerSnapshot,
 } from "./bg";
 import { bgWalletOperatorStatus, bgWalletChainBlockNumber, bgFocusApproval } from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
+import { ActivityList } from "./components/ActivityList";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -394,97 +394,16 @@ function AssetList({ account, network, indexer }: AssetListProps) {
 
 // ---- Activity list ----
 //
-// Empty until the wallet indexes its own tx history. The Send screen
-// already submits real transactions against the live operators; this
-// view just doesn't query them back yet. Framed as "No transactions
-// yet" (real-but-not-surfaced) rather than "coming soon" (planned-but-
-// not-shipped).
-function ActivityList({ rows }: { rows: WalletAddressActivityRow[] }) {
-  if (rows.length > 0) {
-    return (
-      <div>
-        {rows.map((row) => (
-          <div className="ext-act-row" key={`${row.blockHeight}-${row.txIndex}-${row.logIndex}`}>
-            <div className={`dir ${row.direction === "in" ? "in" : "out"}`}>
-              <Icon name={row.direction === "in" ? "receive" : "send"} size={13} />
-            </div>
-            <div className="ext-act-row__main">
-              <div className="ext-act-row__who">{formatActivityTitle(row)}</div>
-              <div className="ext-act-row__meta">
-                <span>block {row.blockHeight.toLocaleString()}</span>
-                <span>·</span>
-                <span>tx {row.txIndex}</span>
-                <span style={{ color: "var(--ok)" }}>● Indexed</span>
-              </div>
-            </div>
-            <div className="ext-act-row__right">
-              <div className={`amt ${row.direction === "in" ? "in" : ""}`}>{formatActivityAmount(row)}</div>
-              <div className="sym">{row.tokenId ? shortHex(row.tokenId) : row.kind}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (ACTIVITY.length === 0) {
-    return (
-      <div
-        style={{
-          padding: "32px 18px",
-          textAlign: "center",
-          fontSize: 12,
-          color: "var(--fg-500)",
-          lineHeight: 1.5,
-        }}
-      >
-        No transactions yet
-      </div>
-    );
-  }
-  return (
-    <div>
-      {ACTIVITY.map((t) => (
-        <div className="ext-act-row" key={t.id}>
-          <div className={`dir ${t.dir}`}><Icon name={t.dir === "in" ? "receive" : "send"} size={13} /></div>
-          <div className="ext-act-row__main">
-            <div className="ext-act-row__who">{t.who}</div>
-            <div className="ext-act-row__meta">
-              <span>{t.when}</span>
-              <span>·</span>
-              <span>{t.round}</span>
-              <span style={{ color: t.attest === "attested" ? "var(--ok)" : "var(--warn)" }}>
-                ● {t.attest === "attested" ? "Att" : "Q " + t.attest.split("-")[1]}
-              </span>
-              {t.dapp && <><span>·</span><span style={{ color: "var(--fg-200)" }}>{DAPPS.find((d) => d.id === t.dapp)?.name}</span></>}
-            </div>
-          </div>
-          <div className="ext-act-row__right">
-            {t.opaque
-              ? <div className="amt opaque">hidden</div>
-              : <div className={`amt ${t.dir === "in" ? "in" : ""}`}>{t.dir === "in" ? "+" : "−"}{fmt(t.amount)}</div>}
-            <div className="sym">{t.sym}</div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+// Phase 4.4 wired the Activity tab body to live indexer data via three
+// hooks (useActivity / useNameResolution / useIndexerStatus). The
+// implementation lives in src/popup/components/ActivityList.tsx — see
+// there for the kind dispatch + IndexerStaleBanner + empty/error/stale
+// state copy. The pre-Phase-4.4 inline list (+ its formatActivityTitle
+// / formatActivityAmount / shortHex helpers) was removed in commit
+// 13/13 of the Phase 4.4 ship.
 
 function shortHex(value: string): string {
   return value.length > 26 ? `${value.slice(0, 14)}…${value.slice(-8)}` : value;
-}
-
-function formatActivityTitle(row: WalletAddressActivityRow): string {
-  const kind = row.subKind ? `${row.kind} · ${row.subKind}` : row.kind;
-  if (row.counterparty) return `${kind} · ${shortHex(row.counterparty)}`;
-  if (row.cluster !== null) return `${kind} · C-${String(row.cluster + 1).padStart(3, "0")}`;
-  return kind;
-}
-
-function formatActivityAmount(row: WalletAddressActivityRow): string {
-  if (row.amount) return `${row.direction === "out" ? "-" : "+"}${row.amount}`;
-  if (row.weightBps !== null) return `${row.weightBps} bps`;
-  return "indexed";
 }
 
 // ---- Pending requests shelf ----
@@ -673,7 +592,10 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
-  const liveActivity = indexer?.addressActivity ?? [];
+  // Activity rows now flow through useActivity() inside ActivityList —
+  // see src/popup/components/ActivityList.tsx. The Home component no
+  // longer reads `indexer?.addressActivity` directly. `liveLabel` is
+  // still used for the Hero card's account-name display.
   const liveLabel = indexer?.addressLabel;
   const latestDelegation = indexer?.delegationHistory[0] ?? null;
   // Staked is hardcoded zero until the delegation precompile (0x100A)
@@ -836,7 +758,14 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
             <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
             <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
           </div>
-          {tab === "assets" ? <AssetList account={account} network={network} indexer={indexer} /> : <ActivityList rows={liveActivity} />}
+          {tab === "assets" ? (
+            <AssetList account={account} network={network} indexer={indexer} />
+          ) : (
+            <ActivityList
+              addr={account.addr.startsWith("0x") ? account.addr : null}
+              chainIdHex={network.chainId}
+            />
+          )}
         </div>
 
         {/* First-run onboarding link */}
