@@ -84,6 +84,19 @@
   --algo-ed25519: #b8aaff;
   --algo-passkey: #7ee3c1;
 
+  /* ---------- Phase 4.4 — AddressLabelRecord.category palette ----------
+     Six known categories surfaced by lyth_getAddressLabel today
+     (foundation / exchange / bridge / treasury / contract / operator).
+     CategoryBadge consumes these via var() so future theme overrides
+     and the §22.8 hierarchical-name palette expansion don't require
+     editing the component. */
+  --cat-foundation-fg: #f4c97a;  --cat-foundation-bg: rgba(244,201,122,0.16);
+  --cat-exchange-fg:   #7ec7d8;  --cat-exchange-bg:   rgba(126,199,216,0.16);
+  --cat-bridge-fg:     #7ee3c1;  --cat-bridge-bg:     rgba(126,227,193,0.16);
+  --cat-treasury-fg:   #9ad88a;  --cat-treasury-bg:   rgba(154,216,138,0.16);
+  --cat-contract-fg:   #c9ccd8;  --cat-contract-bg:   rgba(201,204,216,0.12);
+  --cat-operator-fg:   #b8aaff;  --cat-operator-bg:   rgba(184,170,255,0.16);
+
   /* ---------- Radii ---------- */
   --r-2: 4px; --r-4: 6px; --r-6: 8px; --r-8: 12px; --r-10: 14px;
   --r-sm: 14px; --r-md: 18px; --r-14: 18px; --r-lg: 22px; --r-20: 24px; --r-xl: 30px;

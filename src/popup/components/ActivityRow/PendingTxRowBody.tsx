@@ -3,9 +3,8 @@
 // indexer surfaces the matching tx_send (heuristic match in commit 1)
 // or the 5-minute PENDING_TTL_MS backstop fires.
 //
-// Static amber dot for the pending indicator. Spin animation deferred
-// to commit 12 — the commit 11 CSS-reuse constraint rules out adding
-// a @keyframes rule here.
+// The .ext-pending-dot class (ext.css, added in commit 12) gives the
+// rotating amber ring indicator.
 
 import { Icon } from "../../Icon.js";
 import { renderCounterparty } from "../ActivityRow.js";
@@ -29,19 +28,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
     <div className="ext-act-row">
       <div className="dir out" style={{ position: "relative" }}>
         <Icon name="send" size={13} />
-        <span
-          aria-label="pending"
-          style={{
-            position: "absolute",
-            top: -2,
-            right: -2,
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            background: "var(--warn, #e1af5a)",
-            border: "1.5px solid var(--bg-100, #1a1a24)",
-          }}
-        />
+        <span className="ext-pending-dot" aria-label="pending" />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
