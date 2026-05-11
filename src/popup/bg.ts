@@ -364,6 +364,24 @@ export async function bgWalletActivityGet(
   return send("wallet-activity-get", { address, chainIdHex });
 }
 
+// Phase 4.4 — batched name resolution via lyth_getAddressLabel.
+// Re-export the wallet-internal label types so popup callers don't
+// need to reach into shared/.
+export type { NameLabel, NameLabelRecord } from "../shared/name-resolution.js";
+
+export async function bgWalletResolveNames(
+  addresses: string[],
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      resolved: Record<string, import("../shared/name-resolution.js").NameLabel>;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-resolve-names", { addresses, chainIdHex });
+}
+
 /** Fee strategy returned by `bgWalletFeeSuggestion`. */
 export interface FeeSuggestion {
   /** Hex wei — sender's tip target (the only revenue path on Sprintnet). */

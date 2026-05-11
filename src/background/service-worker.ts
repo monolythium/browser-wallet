@@ -95,6 +95,15 @@ import {
   type RawDelegationHistory,
 } from "../shared/activity.js";
 import {
+  STORAGE_KEY_NAME_CACHE,
+  mergeNameCache,
+  evictExpiredNames,
+  validateNameCache,
+  type NameLabelRecord,
+  type NameLabel,
+  type NameCache,
+} from "../shared/name-resolution.js";
+import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
 } from "./tx-mldsa.js";
@@ -1232,6 +1241,131 @@ async function readActivityStorage(
   };
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Name-resolution helpers for `wallet-resolve-names`. Pairs with
+// shared/name-resolution.ts: that module owns the storage schema +
+// TTL + merge; the SW handler owns the wire shape validation +
+// per-chain method-availability gate.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** Per-chain "lyth_getAddressLabel not supported" marker. Written when a
+ *  per-address call returns JSON-RPC error -32601 (method not found),
+ *  read on every subsequent call within the 5-minute TTL to skip RPC
+ *  entirely on miss. Cached hits still serve; only the FETCH path is
+ *  gated. */
+const STORAGE_KEY_NAMES_METHOD_GATE = "mono.names.method-gate";
+const METHOD_GATE_TTL_MS = 5 * 60 * 1000;
+
+interface MethodGateEntry {
+  /** Always false in v1 — the gate only stores known-unsupported. A
+   *  successful call clears the entry rather than writing `true`. */
+  supported: false;
+  checkedAtMs: number;
+}
+
+type MethodGateMap = Record<string, MethodGateEntry>;
+
+async function readMethodGate(): Promise<MethodGateMap> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([STORAGE_KEY_NAMES_METHOD_GATE], (res) => {
+      const raw = res?.[STORAGE_KEY_NAMES_METHOD_GATE];
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        resolve({});
+        return;
+      }
+      const out: MethodGateMap = {};
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (
+          v !== null &&
+          typeof v === "object" &&
+          (v as { supported?: unknown }).supported === false &&
+          typeof (v as { checkedAtMs?: unknown }).checkedAtMs === "number" &&
+          Number.isFinite((v as { checkedAtMs: number }).checkedAtMs)
+        ) {
+          out[k] = {
+            supported: false,
+            checkedAtMs: (v as { checkedAtMs: number }).checkedAtMs,
+          };
+        }
+      }
+      resolve(out);
+    });
+  });
+}
+
+async function setMethodGate(
+  chainIdHex: string,
+  entry: MethodGateEntry | null,
+): Promise<void> {
+  const gate = await readMethodGate();
+  if (entry === null) {
+    delete gate[chainIdHex];
+  } else {
+    gate[chainIdHex] = entry;
+  }
+  return new Promise((resolve) => {
+    chrome.storage.local.set(
+      { [STORAGE_KEY_NAMES_METHOD_GATE]: gate },
+      () => resolve(),
+    );
+  });
+}
+
+function methodGateTripped(
+  gate: MethodGateMap,
+  chainIdHex: string,
+  now: number,
+): boolean {
+  const entry = gate[chainIdHex];
+  if (entry === undefined) return false;
+  return now - entry.checkedAtMs < METHOD_GATE_TTL_MS;
+}
+
+/** Validate the wire shape of `lyth_getAddressLabel`. Returns the
+ *  wallet-internal `NameLabelRecord` (number-flavored updatedAtBlock)
+ *  or null on any structural failure. The chain returns null for
+ *  unlabeled addresses; null is handled at the caller (it's not a
+ *  validation failure — it's a valid "checked, no label" result). */
+function validateRawNameLabel(input: unknown): NameLabelRecord | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (typeof r.address !== "string" || r.address.length === 0) return null;
+  if (typeof r.category !== "string") return null;
+  if (r.displayName !== null && typeof r.displayName !== "string") return null;
+  if (typeof r.updatedAtBlock !== "number" || !Number.isFinite(r.updatedAtBlock)) {
+    return null;
+  }
+  return {
+    address: r.address,
+    category: r.category,
+    displayName: r.displayName,
+    updatedAtBlock: r.updatedAtBlock,
+  };
+}
+
+/** Per-address fetch. Returns the resolved label (null = chain has no
+ *  entry for this address) or a methodNotFound flag when the operator
+ *  returned JSON-RPC -32601. Other RPC errors map to `label: null`
+ *  without setting the flag — they're transient, not chain-wide. */
+async function fetchOneAddressLabel(
+  addr: string,
+): Promise<{ label: NameLabel; methodNotFound: boolean }> {
+  try {
+    const { result } = await sprintnetJsonRpc<unknown>(
+      "lyth_getAddressLabel",
+      [addr],
+    );
+    if (result === null) return { label: null, methodNotFound: false };
+    return { label: validateRawNameLabel(result), methodNotFound: false };
+  } catch (e) {
+    const err = e as Error & { code?: number };
+    if (err.code === -32601) {
+      return { label: null, methodNotFound: true };
+    }
+    return { label: null, methodNotFound: false };
+  }
+}
+
 /** Persist the merged cache. Pending key only writes when its contents
  *  changed, so chrome.storage.onChanged doesn't fire spuriously on
  *  no-op reconciliations. */
@@ -2052,6 +2186,125 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const nextPending = evictExpiredPending(reconciled, now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
       return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
+    }
+    case "wallet-resolve-names": {
+      // Phase 4.4 batched name resolution. The de facto naming source on
+      // Sprintnet is `lyth_getAddressLabel` (per the §22.8 GAP-OPEN
+      // decision); resolveName-style hierarchical names land later
+      // without a wallet code change.
+      //
+      // Flow:
+      //   1. Validate input. Dedupe + lowercase defensively (the popup
+      //      hook should pre-process, but the SW boundary doesn't trust).
+      //   2. Read the name cache, evict TTL-expired entries.
+      //   3. Read the per-chain method-gate. If the chain is marked
+      //      "lyth_getAddressLabel unsupported" within the last 5 minutes,
+      //      skip the fetch entirely — cached hits still serve, misses
+      //      return absent. Prevents operator hammering on a chain that
+      //      doesn't have the method.
+      //   4. Otherwise, parallel-fetch every miss via Promise.all.
+      //   5. If ANY per-address call returned JSON-RPC -32601, mark the
+      //      chain unsupported and skip writing those entries into the
+      //      cache (they'd just expire as nulls). If a previously-tripped
+      //      chain succeeds, clear the marker.
+      //   6. Merge fresh resolutions (including `null` for "checked, no
+      //      label") into the cache, persist, return resolved bundle.
+      const p = message.payload as { addresses?: unknown; chainIdHex?: unknown };
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!Array.isArray(p.addresses)) {
+        return { ok: false, reason: "addresses must be an array" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "resolve-names is only wired for Sprintnet today" };
+      }
+      const requested: string[] = [];
+      const seen = new Set<string>();
+      for (const a of p.addresses) {
+        if (typeof a !== "string") continue;
+        const lower = a.toLowerCase();
+        if (seen.has(lower)) continue;
+        if (!lower.startsWith("0x")) continue;
+        seen.add(lower);
+        requested.push(lower);
+      }
+      if (requested.length === 0) {
+        return { ok: true, resolved: {} };
+      }
+      const now = Date.now();
+      // Cache read + TTL eviction.
+      const storedRaw = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_NAME_CACHE], (res) =>
+          resolve(res?.[STORAGE_KEY_NAME_CACHE]),
+        );
+      });
+      const prevCache: NameCache = validateNameCache(storedRaw) ?? {};
+      const liveCache = evictExpiredNames(prevCache, now);
+      // Build resolved-from-cache and the miss list.
+      const resolved: Record<string, NameLabel> = {};
+      const misses: string[] = [];
+      for (const addr of requested) {
+        const hit = liveCache[addr];
+        if (hit !== undefined) {
+          resolved[addr] = hit.label;
+        } else {
+          misses.push(addr);
+        }
+      }
+      // Method-gate check. If tripped, return whatever cache had and
+      // skip RPC for the misses entirely.
+      const methodGate = await readMethodGate();
+      const gated = methodGateTripped(methodGate, p.chainIdHex, now);
+      if (gated || misses.length === 0) {
+        // Persist the post-eviction cache only if eviction actually
+        // removed entries (avoids spurious onChanged fires).
+        const evictionShrank =
+          Object.keys(liveCache).length < Object.keys(prevCache).length;
+        if (evictionShrank) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [STORAGE_KEY_NAME_CACHE]: liveCache },
+              () => resolve(),
+            );
+          });
+        }
+        return { ok: true, resolved };
+      }
+      // Fetch misses in parallel.
+      const fetched = await Promise.all(misses.map(fetchOneAddressLabel));
+      const anyMethodNotFound = fetched.some((r) => r.methodNotFound);
+      const fresh: Record<string, NameLabel> = {};
+      for (let i = 0; i < misses.length; i++) {
+        const addr = misses[i]!;
+        const r = fetched[i]!;
+        if (r.methodNotFound) {
+          // Don't cache anything for this address — the chain doesn't
+          // support the method, no point storing null entries that
+          // would just expire.
+          continue;
+        }
+        fresh[addr] = r.label;
+        resolved[addr] = r.label;
+      }
+      // Method-gate write: trip if any call returned -32601, clear if
+      // we got at least one successful response while the gate was
+      // previously set.
+      if (anyMethodNotFound) {
+        await setMethodGate(p.chainIdHex, { supported: false, checkedAtMs: now });
+      } else if (methodGate[p.chainIdHex] !== undefined) {
+        await setMethodGate(p.chainIdHex, null);
+      }
+      // Merge + persist. mergeNameCache is pure; we're writing the new
+      // cache atomically.
+      const nextCache = mergeNameCache(liveCache, fresh, now);
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [STORAGE_KEY_NAME_CACHE]: nextCache },
+          () => resolve(),
+        );
+      });
+      return { ok: true, resolved };
     }
     case "wallet-fee-suggestion": {
       const p = message.payload as { chainIdHex?: string };
