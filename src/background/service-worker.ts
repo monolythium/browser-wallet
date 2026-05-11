@@ -82,6 +82,19 @@ import {
   validateOperatorList,
 } from "../shared/operators.js";
 import {
+  activityCacheKey,
+  activityPendingKey,
+  mergeIndexerSnapshot,
+  evictExpiredPending,
+  reconcilePending,
+  validateActivityCache,
+  validatePendingActivityCache,
+  type ActivityCache,
+  type PendingTxRow,
+  type RawAddressActivity,
+  type RawDelegationHistory,
+} from "../shared/activity.js";
+import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
 } from "./tx-mldsa.js";
@@ -1071,6 +1084,176 @@ async function settleSprintnetRpc<T>(method: string, params: unknown[]): Promise
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Indexer-snapshot helpers shared by `wallet-indexer-snapshot` and
+// `wallet-activity-get`. The first preserves its v3 wire shape verbatim for
+// existing consumers (`WalletAddressActivityRow` in popup/bg.ts:313-325);
+// the second adds caching, dedupe, and reconciliation on top of the same
+// fetch path.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** Cache-staleness threshold for `wallet-activity-get`. A cache fresher
+ *  than this returns without hitting the indexer; older than this triggers
+ *  a fetch + merge + persist cycle. */
+const CACHE_STALENESS_MS = 30 * 1000;
+
+interface IndexerSnapshotRaw {
+  tokenBalances: unknown[];
+  addressLabel: unknown | null;
+  delegationHistory: unknown[];
+  addressActivity: unknown[];
+  errors: Record<string, string>;
+}
+
+/** Parallel-fetch the four indexer streams used by both popup-facing
+ *  snapshots. Returns the raw `unknown`-typed shapes the existing
+ *  `wallet-indexer-snapshot` consumer expects — validation is the caller's
+ *  responsibility when a typed shape is needed. */
+async function fetchIndexerSnapshot(
+  address: string,
+  _chainIdHex: string,
+): Promise<IndexerSnapshotRaw> {
+  const [tokenBalances, addressLabel, delegationHistory, addressActivity] = await Promise.all([
+    settleSprintnetRpc<unknown[]>("lyth_getTokenBalances", [address]),
+    settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
+    settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
+    settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
+  ]);
+  const errors: Record<string, string> = {};
+  if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
+  if (addressLabel.error) errors.addressLabel = addressLabel.error;
+  if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
+  if (addressActivity.error) errors.addressActivity = addressActivity.error;
+  return {
+    tokenBalances: Array.isArray(tokenBalances.value) ? tokenBalances.value : [],
+    addressLabel: addressLabel.value ?? null,
+    delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
+    addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
+    errors,
+  };
+}
+
+// Structural validators for the raw wire shapes. These guard the SW
+// boundary — chrome.storage and popup callers downstream see only typed
+// rows, so a malformed indexer response can't propagate. Partial-data
+// preferred: a single bad entry is dropped, the rest of the array survives.
+
+function isFiniteNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function validateRawAddressActivity(input: unknown): RawAddressActivity | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!isFiniteNum(r.blockHeight)) return null;
+  if (!isFiniteNum(r.txIndex)) return null;
+  if (!isFiniteNum(r.logIndex)) return null;
+  if (typeof r.kind !== "string") return null;
+  if (r.direction !== "in" && r.direction !== "out" && r.direction !== null) {
+    return null;
+  }
+  if (r.counterparty !== null && typeof r.counterparty !== "string") return null;
+  if (r.tokenId !== null && typeof r.tokenId !== "string") return null;
+  if (r.amount !== null && typeof r.amount !== "string") return null;
+  if (r.cluster !== null && !isFiniteNum(r.cluster)) return null;
+  if (r.weightBps !== null && !isFiniteNum(r.weightBps)) return null;
+  if (r.subKind !== null && typeof r.subKind !== "string") return null;
+  return {
+    blockHeight: r.blockHeight,
+    txIndex: r.txIndex,
+    logIndex: r.logIndex,
+    kind: r.kind,
+    direction: r.direction,
+    counterparty: r.counterparty,
+    tokenId: r.tokenId,
+    amount: r.amount,
+    cluster: r.cluster,
+    weightBps: r.weightBps,
+    subKind: r.subKind,
+  };
+}
+
+function validateRawDelegationHistory(input: unknown): RawDelegationHistory | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!isFiniteNum(r.blockHeight)) return null;
+  if (!isFiniteNum(r.txIndex)) return null;
+  if (!isFiniteNum(r.logIndex)) return null;
+  if (typeof r.wallet !== "string") return null;
+  if (!isFiniteNum(r.cluster)) return null;
+  if (r.toCluster !== null && !isFiniteNum(r.toCluster)) return null;
+  if (typeof r.kind !== "string") return null;
+  if (!isFiniteNum(r.weightBps)) return null;
+  if (r.walletTotalBps !== null && !isFiniteNum(r.walletTotalBps)) return null;
+  return {
+    blockHeight: r.blockHeight,
+    txIndex: r.txIndex,
+    logIndex: r.logIndex,
+    wallet: r.wallet,
+    cluster: r.cluster,
+    toCluster: r.toCluster,
+    kind: r.kind,
+    weightBps: r.weightBps,
+    walletTotalBps: r.walletTotalBps,
+  };
+}
+
+function validateRawActivityList(input: unknown[]): RawAddressActivity[] {
+  const out: RawAddressActivity[] = [];
+  for (const raw of input) {
+    const v = validateRawAddressActivity(raw);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+function validateRawDelegationList(input: unknown[]): RawDelegationHistory[] {
+  const out: RawDelegationHistory[] = [];
+  for (const raw of input) {
+    const v = validateRawDelegationHistory(raw);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+/** Read both per-(addr, chain) cache keys in one chrome.storage.local
+ *  round-trip. Returns null/empty for missing or malformed entries; the
+ *  caller treats null as "no cache yet". */
+async function readActivityStorage(
+  cacheKey: string,
+  pendingKey: string,
+): Promise<{ cache: ActivityCache | null; pending: PendingTxRow[] }> {
+  const stored = await new Promise<Record<string, unknown>>((resolve) => {
+    chrome.storage.local.get([cacheKey, pendingKey], (res) => resolve(res ?? {}));
+  });
+  return {
+    cache: validateActivityCache(stored[cacheKey]),
+    pending: validatePendingActivityCache(stored[pendingKey])?.pending ?? [],
+  };
+}
+
+/** Persist the merged cache. Pending key only writes when its contents
+ *  changed, so chrome.storage.onChanged doesn't fire spuriously on
+ *  no-op reconciliations. */
+async function writeActivityStorage(
+  cacheKey: string,
+  pendingKey: string,
+  nextCache: ActivityCache,
+  prevPending: PendingTxRow[],
+  nextPending: PendingTxRow[],
+): Promise<void> {
+  return new Promise((resolve) => {
+    const writes: Record<string, unknown> = { [cacheKey]: nextCache };
+    const pendingChanged =
+      nextPending.length !== prevPending.length ||
+      nextPending.some((row, i) => row !== prevPending[i]);
+    if (pendingChanged) {
+      writes[pendingKey] = { pending: nextPending };
+    }
+    chrome.storage.local.set(writes, () => resolve());
+  });
+}
+
 async function handlePopup(message: PopupMessage): Promise<unknown> {
   switch (message.op) {
     case "list-pending":
@@ -1775,6 +1958,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-indexer-snapshot": {
+      // Existing consumer (popup Home) shape: passes `unknown[]` through
+      // verbatim, no caching. Phase 4.4 added `wallet-activity-get` which
+      // layers caching + dedupe on top of the same fetch path. This case
+      // is preserved bit-for-bit for backward compatibility until commit
+      // 13 swaps Home over to the new pipeline.
       const p = message.payload as { address?: string; chainIdHex?: string };
       if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing address or chainIdHex" };
@@ -1782,27 +1970,88 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "indexer snapshot is only wired for Sprintnet today" };
       }
-      const [tokenBalances, addressLabel, delegationHistory, addressActivity] = await Promise.all([
-        settleSprintnetRpc<unknown[]>("lyth_getTokenBalances", [p.address]),
-        settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [p.address]),
-        settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [p.address, 20]),
-        settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [p.address, 30]),
-      ]);
-      const errors: Record<string, string> = {};
-      if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
-      if (addressLabel.error) errors.addressLabel = addressLabel.error;
-      if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
-      if (addressActivity.error) errors.addressActivity = addressActivity.error;
+      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex);
       return {
         ok: true,
         snapshot: {
-          tokenBalances: Array.isArray(tokenBalances.value) ? tokenBalances.value : [],
-          addressLabel: addressLabel.value ?? null,
-          delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
-          addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
-          errors,
+          tokenBalances: fresh.tokenBalances,
+          addressLabel: fresh.addressLabel,
+          delegationHistory: fresh.delegationHistory,
+          addressActivity: fresh.addressActivity,
+          errors: fresh.errors,
         },
       };
+    }
+    case "wallet-activity-get": {
+      // Phase 4.4 read-through cache. Hits chrome.storage.local first;
+      // if the cache is fresher than CACHE_STALENESS_MS, returns it
+      // without an RPC round-trip. Otherwise re-fetches via
+      // fetchIndexerSnapshot, validates raw RPC shapes against the
+      // wallet-internal Raw* types, merges with delegation-stream priority
+      // dedupe per shared/activity.ts, reconciles outstanding pending
+      // rows against the freshly merged confirmed list, evicts by TTL,
+      // and persists. Returns the merged cache + reconciled pending list
+      // + errors-by-key bundle from the four indexer streams.
+      //
+      // Failure handling: when BOTH activity and delegation streams fail,
+      // the previous cache is preserved (no overwrite with empty data)
+      // and the errors map is surfaced so the popup can show a partial-
+      // data indicator. When at least one stream succeeds the new merge
+      // is written — losing rows for a momentarily-failed stream is
+      // acceptable; the next refresh recovers.
+      const p = message.payload as { address?: string; chainIdHex?: string };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "activity-get is only wired for Sprintnet today" };
+      }
+      const addressLower = p.address.toLowerCase();
+      const cacheKey = activityCacheKey(addressLower, p.chainIdHex);
+      const pendingKey = activityPendingKey(addressLower, p.chainIdHex);
+      const now = Date.now();
+      const { cache: prevCache, pending: prevPending } = await readActivityStorage(
+        cacheKey,
+        pendingKey,
+      );
+      const isFresh =
+        prevCache !== null && now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS;
+      if (isFresh) {
+        const pending = evictExpiredPending(prevPending, now);
+        if (pending.length !== prevPending.length) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [pendingKey]: { pending } },
+              () => resolve(),
+            );
+          });
+        }
+        return { ok: true, cache: prevCache, pending, errors: {} };
+      }
+      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex);
+      const activityOk = fresh.errors.addressActivity === undefined;
+      const delegationOk = fresh.errors.delegationHistory === undefined;
+      if (!activityOk && !delegationOk && prevCache !== null) {
+        // Total indexer outage with a usable prev cache — preserve and
+        // surface. TTL backstop still runs on the pending list.
+        const pending = evictExpiredPending(prevPending, now);
+        if (pending.length !== prevPending.length) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [pendingKey]: { pending } },
+              () => resolve(),
+            );
+          });
+        }
+        return { ok: true, cache: prevCache, pending, errors: fresh.errors };
+      }
+      const activity = validateRawActivityList(fresh.addressActivity);
+      const delegation = validateRawDelegationList(fresh.delegationHistory);
+      const nextCache = mergeIndexerSnapshot({ activity, delegation }, now);
+      const reconciled = reconcilePending(prevPending, nextCache.confirmed);
+      const nextPending = evictExpiredPending(reconciled, now);
+      await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
+      return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
     }
     case "wallet-fee-suggestion": {
       const p = message.payload as { chainIdHex?: string };
