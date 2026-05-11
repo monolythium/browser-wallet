@@ -1248,12 +1248,16 @@ async function readActivityStorage(
 // per-chain method-availability gate.
 // ──────────────────────────────────────────────────────────────────────────────
 
-/** Per-chain "lyth_getAddressLabel not supported" marker. Written when a
- *  per-address call returns JSON-RPC error -32601 (method not found),
- *  read on every subsequent call within the 5-minute TTL to skip RPC
- *  entirely on miss. Cached hits still serve; only the FETCH path is
- *  gated. */
+// Per-chain method-availability gate. Written when a JSON-RPC call
+// returns error -32601 (method not found); read on every subsequent
+// call within METHOD_GATE_TTL_MS to skip the RPC. Cached state at
+// the consumer (e.g. name cache hits) still serves — only the FETCH
+// path is gated. Consumers pass their own storage key so each gated
+// method has its own namespace; full `(chainIdHex, methodName)`-keyed
+// generalization is deferred until a third consumer arrives. (Rule
+// of three.)
 const STORAGE_KEY_NAMES_METHOD_GATE = "mono.names.method-gate";
+const STORAGE_KEY_INDEXER_STATUS_METHOD_GATE = "mono.indexerStatus.method-gate";
 const METHOD_GATE_TTL_MS = 5 * 60 * 1000;
 
 interface MethodGateEntry {
@@ -1265,10 +1269,10 @@ interface MethodGateEntry {
 
 type MethodGateMap = Record<string, MethodGateEntry>;
 
-async function readMethodGate(): Promise<MethodGateMap> {
+async function readMethodGate(storageKey: string): Promise<MethodGateMap> {
   return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEY_NAMES_METHOD_GATE], (res) => {
-      const raw = res?.[STORAGE_KEY_NAMES_METHOD_GATE];
+    chrome.storage.local.get([storageKey], (res) => {
+      const raw = res?.[storageKey];
       if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
         resolve({});
         return;
@@ -1294,20 +1298,18 @@ async function readMethodGate(): Promise<MethodGateMap> {
 }
 
 async function setMethodGate(
+  storageKey: string,
   chainIdHex: string,
   entry: MethodGateEntry | null,
 ): Promise<void> {
-  const gate = await readMethodGate();
+  const gate = await readMethodGate(storageKey);
   if (entry === null) {
     delete gate[chainIdHex];
   } else {
     gate[chainIdHex] = entry;
   }
   return new Promise((resolve) => {
-    chrome.storage.local.set(
-      { [STORAGE_KEY_NAMES_METHOD_GATE]: gate },
-      () => resolve(),
-    );
+    chrome.storage.local.set({ [storageKey]: gate }, () => resolve());
   });
 }
 
@@ -1341,6 +1343,39 @@ function validateRawNameLabel(input: unknown): NameLabelRecord | null {
     displayName: r.displayName,
     updatedAtBlock: r.updatedAtBlock,
   };
+}
+
+// Indexer-staleness threshold for the §28.2.1 banner. The indexer is
+// considered "stale" when latestHeight - currentHeight exceeds this
+// many blocks. At Sprintnet's 3-second cadence (ADR-0031), 10 blocks
+// is ~30 s of indexer lag — wider than normal ingestion variance,
+// narrow enough to flag a real backlog before it becomes user-visible.
+const INDEXER_LAG_STALE_THRESHOLD = 10;
+
+interface IndexerStatusValidated {
+  currentHeight: number;
+  latestHeight: number | null;
+}
+
+/** Validate the wire shape of `lyth_indexerStatus`. The chain may
+ *  serialize heights as JSON numbers (the wire reality) even though
+ *  the SDK's ts-rs binding labels them bigint — see activity.ts for
+ *  the same rationale. `latestHeight` is optional in the binding;
+ *  null when not yet observed. */
+function validateIndexerStatus(input: unknown): IndexerStatusValidated | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (typeof r.currentHeight !== "number" || !Number.isFinite(r.currentHeight)) {
+    return null;
+  }
+  let latestHeight: number | null = null;
+  if (r.latestHeight !== undefined && r.latestHeight !== null) {
+    if (typeof r.latestHeight !== "number" || !Number.isFinite(r.latestHeight)) {
+      return null;
+    }
+    latestHeight = r.latestHeight;
+  }
+  return { currentHeight: r.currentHeight, latestHeight };
 }
 
 /** Per-address fetch. Returns the resolved label (null = chain has no
@@ -2254,7 +2289,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       // Method-gate check. If tripped, return whatever cache had and
       // skip RPC for the misses entirely.
-      const methodGate = await readMethodGate();
+      const methodGate = await readMethodGate(STORAGE_KEY_NAMES_METHOD_GATE);
       const gated = methodGateTripped(methodGate, p.chainIdHex, now);
       if (gated || misses.length === 0) {
         // Persist the post-eviction cache only if eviction actually
@@ -2291,9 +2326,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // we got at least one successful response while the gate was
       // previously set.
       if (anyMethodNotFound) {
-        await setMethodGate(p.chainIdHex, { supported: false, checkedAtMs: now });
+        await setMethodGate(
+          STORAGE_KEY_NAMES_METHOD_GATE,
+          p.chainIdHex,
+          { supported: false, checkedAtMs: now },
+        );
       } else if (methodGate[p.chainIdHex] !== undefined) {
-        await setMethodGate(p.chainIdHex, null);
+        await setMethodGate(STORAGE_KEY_NAMES_METHOD_GATE, p.chainIdHex, null);
       }
       // Merge + persist. mergeNameCache is pure; we're writing the new
       // cache atomically.
@@ -2305,6 +2344,85 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         );
       });
       return { ok: true, resolved };
+    }
+    case "wallet-indexer-status": {
+      // Phase 4.4 — drives the §28.2.1 indexer-staleness banner.
+      // Calls `lyth_indexerStatus`, validates the wire shape, returns
+      // { stale, lagBlocks, currentHeight, latestHeight }. Stale is
+      // true when the lag exceeds INDEXER_LAG_STALE_THRESHOLD.
+      //
+      // Defensive posture on every failure path (method-not-found,
+      // RPC transient error, malformed response): return
+      // { ok: true, stale: false, lagBlocks: null, ... }. "Stale: true"
+      // would surface a false-positive banner that misleads the user
+      // when the real issue is "method missing" or "operator down."
+      // The wallet stays useful when the indicator is unavailable.
+      //
+      // Method-gate (mono.indexerStatus.method-gate) uses the same
+      // helpers as wallet-resolve-names but a distinct storage key.
+      const p = message.payload as { chainIdHex?: string };
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "indexer-status is only wired for Sprintnet today" };
+      }
+      const now = Date.now();
+      const gate = await readMethodGate(STORAGE_KEY_INDEXER_STATUS_METHOD_GATE);
+      if (methodGateTripped(gate, p.chainIdHex, now)) {
+        return { ok: true, stale: false, lagBlocks: null, currentHeight: null, latestHeight: null };
+      }
+      try {
+        const { result } = await sprintnetJsonRpc<unknown>("lyth_indexerStatus", []);
+        const validated = validateIndexerStatus(result);
+        if (validated === null) {
+          // Malformed response — defensive default, no gate trip
+          // (the method is responding, just with garbage; transient).
+          return {
+            ok: true,
+            stale: false,
+            lagBlocks: null,
+            currentHeight: null,
+            latestHeight: null,
+          };
+        }
+        // Recovery: clear the gate if it was previously tripped.
+        if (gate[p.chainIdHex] !== undefined) {
+          await setMethodGate(
+            STORAGE_KEY_INDEXER_STATUS_METHOD_GATE,
+            p.chainIdHex,
+            null,
+          );
+        }
+        const lagBlocks =
+          validated.latestHeight === null
+            ? 0
+            : Math.max(0, validated.latestHeight - validated.currentHeight);
+        const stale = lagBlocks > INDEXER_LAG_STALE_THRESHOLD;
+        return {
+          ok: true,
+          stale,
+          lagBlocks,
+          currentHeight: validated.currentHeight,
+          latestHeight: validated.latestHeight,
+        };
+      } catch (e) {
+        const err = e as Error & { code?: number };
+        if (err.code === -32601) {
+          await setMethodGate(
+            STORAGE_KEY_INDEXER_STATUS_METHOD_GATE,
+            p.chainIdHex,
+            { supported: false, checkedAtMs: now },
+          );
+        }
+        return {
+          ok: true,
+          stale: false,
+          lagBlocks: null,
+          currentHeight: null,
+          latestHeight: null,
+        };
+      }
     }
     case "wallet-fee-suggestion": {
       const p = message.payload as { chainIdHex?: string };

@@ -382,6 +382,37 @@ export async function bgWalletResolveNames(
   return send("wallet-resolve-names", { addresses, chainIdHex });
 }
 
+// Phase 4.4 — indexer-status polling for the §28.2.1 staleness banner.
+// All success-path fields nullable: when the method is unavailable or
+// the response is malformed, the handler returns the defensive
+// { stale: false, lagBlocks: null, currentHeight: null, latestHeight: null }
+// rather than surfacing a false-positive stale flag to the user.
+export interface IndexerStatusView {
+  stale: boolean;
+  lagBlocks: number | null;
+  currentHeight: number | null;
+  latestHeight: number | null;
+}
+
+export async function bgWalletIndexerStatus(
+  chainIdHex: string,
+): Promise<{ ok: true; status: IndexerStatusView } | { ok: false; reason?: string }> {
+  type Reply =
+    | ({ ok: true } & IndexerStatusView)
+    | { ok: false; reason?: string };
+  const r = await send<Reply>("wallet-indexer-status", { chainIdHex });
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    status: {
+      stale: r.stale,
+      lagBlocks: r.lagBlocks,
+      currentHeight: r.currentHeight,
+      latestHeight: r.latestHeight,
+    },
+  };
+}
+
 /** Fee strategy returned by `bgWalletFeeSuggestion`. */
 export interface FeeSuggestion {
   /** Hex wei — sender's tip target (the only revenue path on Sprintnet). */
