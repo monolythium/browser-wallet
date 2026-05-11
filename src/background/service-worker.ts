@@ -107,6 +107,7 @@ import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
 } from "./tx-mldsa.js";
+import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
   saveConnectedSite,
@@ -1399,30 +1400,6 @@ async function fetchOneAddressLabel(
     }
     return { label: null, methodNotFound: false };
   }
-}
-
-/** Hex wei → decimal LYTH string (trimming trailing zeros, no decimal
- *  point when fractional part is zero). Mirrors weiToLythString in
- *  popup/pages/Send.tsx but lives SW-side because the broadcast pending-
- *  prepend hook runs in the service worker. The popup uses the same
- *  conversion to display amounts in confirmed rows; both must produce
- *  byte-identical output so the heuristic match in reconcilePending
- *  finds the (counterparty, amountDecimal) pair. */
-function weiHexToLythDecimal(weiHex: string): string {
-  let wei: bigint;
-  try {
-    wei = BigInt(weiHex);
-  } catch {
-    return "0";
-  }
-  if (wei < 0n) return "0";
-  const intPart = wei / 10n ** 18n;
-  const fracPart = wei % 10n ** 18n;
-  if (fracPart === 0n) return intPart.toString();
-  const fracStr = fracPart.toString().padStart(18, "0").replace(/0+$/, "");
-  return fracStr.length === 0
-    ? intPart.toString()
-    : `${intPart.toString()}.${fracStr}`;
 }
 
 /** Fire-and-forget pending-row writer called from wallet-send-tx after
