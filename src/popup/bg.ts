@@ -339,6 +339,31 @@ export async function bgWalletIndexerSnapshot(
   return send("wallet-indexer-snapshot", { address, chainIdHex });
 }
 
+// Phase 4.4 — cached, kind-dispatched activity feed (Layer 2 in the plan).
+// Re-exports the wallet-internal cache and pending-row types from
+// shared/activity.ts so callers don't need to import from two paths.
+export type {
+  ActivityCache,
+  ActivityRow,
+  ConfirmedRow,
+  PendingTxRow,
+} from "../shared/activity.js";
+
+export async function bgWalletActivityGet(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      cache: import("../shared/activity.js").ActivityCache;
+      pending: import("../shared/activity.js").PendingTxRow[];
+      errors: Record<string, string>;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-get", { address, chainIdHex });
+}
+
 /** Fee strategy returned by `bgWalletFeeSuggestion`. */
 export interface FeeSuggestion {
   /** Hex wei — sender's tip target (the only revenue path on Sprintnet). */
