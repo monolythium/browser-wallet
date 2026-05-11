@@ -1401,6 +1401,109 @@ async function fetchOneAddressLabel(
   }
 }
 
+/** Hex wei → decimal LYTH string (trimming trailing zeros, no decimal
+ *  point when fractional part is zero). Mirrors weiToLythString in
+ *  popup/pages/Send.tsx but lives SW-side because the broadcast pending-
+ *  prepend hook runs in the service worker. The popup uses the same
+ *  conversion to display amounts in confirmed rows; both must produce
+ *  byte-identical output so the heuristic match in reconcilePending
+ *  finds the (counterparty, amountDecimal) pair. */
+function weiHexToLythDecimal(weiHex: string): string {
+  let wei: bigint;
+  try {
+    wei = BigInt(weiHex);
+  } catch {
+    return "0";
+  }
+  if (wei < 0n) return "0";
+  const intPart = wei / 10n ** 18n;
+  const fracPart = wei % 10n ** 18n;
+  if (fracPart === 0n) return intPart.toString();
+  const fracStr = fracPart.toString().padStart(18, "0").replace(/0+$/, "");
+  return fracStr.length === 0
+    ? intPart.toString()
+    : `${intPart.toString()}.${fracStr}`;
+}
+
+/** Fire-and-forget pending-row writer called from wallet-send-tx after
+ *  submitEncryptedMlDsaTx resolves. Designed so a failure here CANNOT
+ *  affect the broadcast handler — that handler has already returned to
+ *  the popup with the tx hash by the time this runs. Two protection
+ *  layers:
+ *
+ *  1. Outer try/catch swallows ALL errors (chrome.storage failures, RPC
+ *     timeouts on the eth_blockNumber anchor, validator returning null
+ *     on corrupted prior pending list). The caller uses `void` so no
+ *     unhandled rejection can ever surface to the MV3 runtime.
+ *  2. Inner try/catch around the eth_blockNumber RPC: anchor fetch is
+ *     best-effort; on failure we write the row with
+ *     broadcastBlockHeight: null, which makes pendingMatchesConfirmed
+ *     in shared/activity.ts skip the heuristic match. The PENDING_TTL_MS
+ *     backstop still evicts the row after 5 minutes regardless.
+ *
+ *  Wei → decimal LYTH conversion happens inline via weiHexToLythDecimal
+ *  so the amountDecimal field is consistent with what mergeIndexerSnapshot
+ *  receives on the confirmed side (AddressActivityEntry.amount is
+ *  already a decimal string per the SDK binding). */
+async function persistPendingRowBackground(args: {
+  address: string;
+  chainIdHex: string;
+  txHash: string;
+  to: string;
+  valueWeiHex: string;
+  via: string;
+}): Promise<void> {
+  try {
+    const now = Date.now();
+    let broadcastBlockHeight: number | null = null;
+    try {
+      const { result } = await sprintnetJsonRpc<unknown>("eth_blockNumber", []);
+      if (typeof result === "string" && result.startsWith("0x")) {
+        const n = Number.parseInt(result, 16);
+        if (Number.isFinite(n)) broadcastBlockHeight = n;
+      }
+    } catch {
+      // Anchor unavailable — fall through with null. TTL is the sole
+      // eviction path for null-anchor rows; reconcilePending in
+      // shared/activity.ts skips heuristic matching when the anchor
+      // is null.
+    }
+    const amountDecimal = weiHexToLythDecimal(args.valueWeiHex);
+    const addrLower = args.address.toLowerCase();
+    const pendingKey = activityPendingKey(addrLower, args.chainIdHex);
+    const stored = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([pendingKey], (res) =>
+        resolve(res?.[pendingKey]),
+      );
+    });
+    const prev = validatePendingActivityCache(stored)?.pending ?? [];
+    const row: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: args.txHash,
+      to: args.to.toLowerCase(),
+      amountDecimal,
+      broadcastedAtMs: now,
+      broadcastBlockHeight,
+      via: args.via,
+    };
+    const evicted = evictExpiredPending(prev, now);
+    const next = [row, ...evicted];
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set(
+        { [pendingKey]: { pending: next } },
+        () => resolve(),
+      );
+    });
+  } catch {
+    // Swallow. The broadcast handler has already returned. A
+    // pending-write failure is silent UX degradation only — the user
+    // already has their tx hash; on the next refresh the confirmed
+    // row will surface from the indexer (or not, if the broadcast
+    // itself was the issue, but that path is the broadcast handler's
+    // catch block, not ours).
+  }
+}
+
 /** Persist the merged cache. Pending key only writes when its contents
  *  changed, so chrome.storage.onChanged doesn't fire spuriously on
  *  no-op reconciliations. */
@@ -2485,6 +2588,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxFeePerGas: fee.maxFeePerGas,
           maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
+        });
+        // Phase 4.4 — fire-and-forget pending-row write. Unawaited so
+        // Send-screen response latency is preserved (pending row lands
+        // ~50-200ms after the popup receives txHash). Errors are
+        // swallowed inside the helper; a pending-write failure is
+        // silent UX degradation only. Reached only on the success path:
+        // a failed broadcast jumps to the catch block below and never
+        // executes this line.
+        void persistPendingRowBackground({
+          address: fromAddr,
+          chainIdHex: p.chainIdHex,
+          txHash,
+          to: p.to,
+          valueWeiHex: p.valueWeiHex,
+          via,
         });
         return { ok: true, txHash, via };
       } catch (e) {
