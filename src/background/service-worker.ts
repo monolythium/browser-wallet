@@ -82,9 +82,32 @@ import {
   validateOperatorList,
 } from "../shared/operators.js";
 import {
+  activityCacheKey,
+  activityPendingKey,
+  mergeIndexerSnapshot,
+  evictExpiredPending,
+  reconcilePending,
+  validateActivityCache,
+  validatePendingActivityCache,
+  type ActivityCache,
+  type PendingTxRow,
+  type RawAddressActivity,
+  type RawDelegationHistory,
+} from "../shared/activity.js";
+import {
+  STORAGE_KEY_NAME_CACHE,
+  mergeNameCache,
+  evictExpiredNames,
+  validateNameCache,
+  type NameLabelRecord,
+  type NameLabel,
+  type NameCache,
+} from "../shared/name-resolution.js";
+import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
 } from "./tx-mldsa.js";
+import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
   saveConnectedSite,
@@ -1071,6 +1094,415 @@ async function settleSprintnetRpc<T>(method: string, params: unknown[]): Promise
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Indexer-snapshot helpers shared by `wallet-indexer-snapshot` and
+// `wallet-activity-get`. The first preserves its v3 wire shape verbatim for
+// existing consumers (`WalletAddressActivityRow` in popup/bg.ts:313-325);
+// the second adds caching, dedupe, and reconciliation on top of the same
+// fetch path.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** Cache-staleness threshold for `wallet-activity-get`. A cache fresher
+ *  than this returns without hitting the indexer; older than this triggers
+ *  a fetch + merge + persist cycle. */
+const CACHE_STALENESS_MS = 30 * 1000;
+
+interface IndexerSnapshotRaw {
+  tokenBalances: unknown[];
+  addressLabel: unknown | null;
+  delegationHistory: unknown[];
+  addressActivity: unknown[];
+  errors: Record<string, string>;
+}
+
+/** Parallel-fetch the four indexer streams used by both popup-facing
+ *  snapshots. Returns the raw `unknown`-typed shapes the existing
+ *  `wallet-indexer-snapshot` consumer expects — validation is the caller's
+ *  responsibility when a typed shape is needed. */
+async function fetchIndexerSnapshot(
+  address: string,
+  _chainIdHex: string,
+): Promise<IndexerSnapshotRaw> {
+  const [tokenBalances, addressLabel, delegationHistory, addressActivity] = await Promise.all([
+    settleSprintnetRpc<unknown[]>("lyth_getTokenBalances", [address]),
+    settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
+    settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
+    settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
+  ]);
+  const errors: Record<string, string> = {};
+  if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
+  if (addressLabel.error) errors.addressLabel = addressLabel.error;
+  if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
+  if (addressActivity.error) errors.addressActivity = addressActivity.error;
+  return {
+    tokenBalances: Array.isArray(tokenBalances.value) ? tokenBalances.value : [],
+    addressLabel: addressLabel.value ?? null,
+    delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
+    addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
+    errors,
+  };
+}
+
+// Structural validators for the raw wire shapes. These guard the SW
+// boundary — chrome.storage and popup callers downstream see only typed
+// rows, so a malformed indexer response can't propagate. Partial-data
+// preferred: a single bad entry is dropped, the rest of the array survives.
+
+function isFiniteNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function validateRawAddressActivity(input: unknown): RawAddressActivity | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!isFiniteNum(r.blockHeight)) return null;
+  if (!isFiniteNum(r.txIndex)) return null;
+  if (!isFiniteNum(r.logIndex)) return null;
+  if (typeof r.kind !== "string") return null;
+  if (r.direction !== "in" && r.direction !== "out" && r.direction !== null) {
+    return null;
+  }
+  if (r.counterparty !== null && typeof r.counterparty !== "string") return null;
+  if (r.tokenId !== null && typeof r.tokenId !== "string") return null;
+  if (r.amount !== null && typeof r.amount !== "string") return null;
+  if (r.cluster !== null && !isFiniteNum(r.cluster)) return null;
+  if (r.weightBps !== null && !isFiniteNum(r.weightBps)) return null;
+  if (r.subKind !== null && typeof r.subKind !== "string") return null;
+  return {
+    blockHeight: r.blockHeight,
+    txIndex: r.txIndex,
+    logIndex: r.logIndex,
+    kind: r.kind,
+    direction: r.direction,
+    counterparty: r.counterparty,
+    tokenId: r.tokenId,
+    amount: r.amount,
+    cluster: r.cluster,
+    weightBps: r.weightBps,
+    subKind: r.subKind,
+  };
+}
+
+function validateRawDelegationHistory(input: unknown): RawDelegationHistory | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!isFiniteNum(r.blockHeight)) return null;
+  if (!isFiniteNum(r.txIndex)) return null;
+  if (!isFiniteNum(r.logIndex)) return null;
+  if (typeof r.wallet !== "string") return null;
+  if (!isFiniteNum(r.cluster)) return null;
+  if (r.toCluster !== null && !isFiniteNum(r.toCluster)) return null;
+  if (typeof r.kind !== "string") return null;
+  if (!isFiniteNum(r.weightBps)) return null;
+  if (r.walletTotalBps !== null && !isFiniteNum(r.walletTotalBps)) return null;
+  return {
+    blockHeight: r.blockHeight,
+    txIndex: r.txIndex,
+    logIndex: r.logIndex,
+    wallet: r.wallet,
+    cluster: r.cluster,
+    toCluster: r.toCluster,
+    kind: r.kind,
+    weightBps: r.weightBps,
+    walletTotalBps: r.walletTotalBps,
+  };
+}
+
+function validateRawActivityList(input: unknown[]): RawAddressActivity[] {
+  const out: RawAddressActivity[] = [];
+  for (const raw of input) {
+    const v = validateRawAddressActivity(raw);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+function validateRawDelegationList(input: unknown[]): RawDelegationHistory[] {
+  const out: RawDelegationHistory[] = [];
+  for (const raw of input) {
+    const v = validateRawDelegationHistory(raw);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+/** Read both per-(addr, chain) cache keys in one chrome.storage.local
+ *  round-trip. Returns null/empty for missing or malformed entries; the
+ *  caller treats null as "no cache yet". */
+async function readActivityStorage(
+  cacheKey: string,
+  pendingKey: string,
+): Promise<{ cache: ActivityCache | null; pending: PendingTxRow[] }> {
+  const stored = await new Promise<Record<string, unknown>>((resolve) => {
+    chrome.storage.local.get([cacheKey, pendingKey], (res) => resolve(res ?? {}));
+  });
+  return {
+    cache: validateActivityCache(stored[cacheKey]),
+    pending: validatePendingActivityCache(stored[pendingKey])?.pending ?? [],
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Name-resolution helpers for `wallet-resolve-names`. Pairs with
+// shared/name-resolution.ts: that module owns the storage schema +
+// TTL + merge; the SW handler owns the wire shape validation +
+// per-chain method-availability gate.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Per-chain method-availability gate. Written when a JSON-RPC call
+// returns error -32601 (method not found); read on every subsequent
+// call within METHOD_GATE_TTL_MS to skip the RPC. Cached state at
+// the consumer (e.g. name cache hits) still serves — only the FETCH
+// path is gated. Consumers pass their own storage key so each gated
+// method has its own namespace; full `(chainIdHex, methodName)`-keyed
+// generalization is deferred until a third consumer arrives. (Rule
+// of three.)
+const STORAGE_KEY_NAMES_METHOD_GATE = "mono.names.method-gate";
+const STORAGE_KEY_INDEXER_STATUS_METHOD_GATE = "mono.indexerStatus.method-gate";
+const METHOD_GATE_TTL_MS = 5 * 60 * 1000;
+
+interface MethodGateEntry {
+  /** Always false in v1 — the gate only stores known-unsupported. A
+   *  successful call clears the entry rather than writing `true`. */
+  supported: false;
+  checkedAtMs: number;
+}
+
+type MethodGateMap = Record<string, MethodGateEntry>;
+
+async function readMethodGate(storageKey: string): Promise<MethodGateMap> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([storageKey], (res) => {
+      const raw = res?.[storageKey];
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        resolve({});
+        return;
+      }
+      const out: MethodGateMap = {};
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (
+          v !== null &&
+          typeof v === "object" &&
+          (v as { supported?: unknown }).supported === false &&
+          typeof (v as { checkedAtMs?: unknown }).checkedAtMs === "number" &&
+          Number.isFinite((v as { checkedAtMs: number }).checkedAtMs)
+        ) {
+          out[k] = {
+            supported: false,
+            checkedAtMs: (v as { checkedAtMs: number }).checkedAtMs,
+          };
+        }
+      }
+      resolve(out);
+    });
+  });
+}
+
+async function setMethodGate(
+  storageKey: string,
+  chainIdHex: string,
+  entry: MethodGateEntry | null,
+): Promise<void> {
+  const gate = await readMethodGate(storageKey);
+  if (entry === null) {
+    delete gate[chainIdHex];
+  } else {
+    gate[chainIdHex] = entry;
+  }
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [storageKey]: gate }, () => resolve());
+  });
+}
+
+function methodGateTripped(
+  gate: MethodGateMap,
+  chainIdHex: string,
+  now: number,
+): boolean {
+  const entry = gate[chainIdHex];
+  if (entry === undefined) return false;
+  return now - entry.checkedAtMs < METHOD_GATE_TTL_MS;
+}
+
+/** Validate the wire shape of `lyth_getAddressLabel`. Returns the
+ *  wallet-internal `NameLabelRecord` (number-flavored updatedAtBlock)
+ *  or null on any structural failure. The chain returns null for
+ *  unlabeled addresses; null is handled at the caller (it's not a
+ *  validation failure — it's a valid "checked, no label" result). */
+function validateRawNameLabel(input: unknown): NameLabelRecord | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (typeof r.address !== "string" || r.address.length === 0) return null;
+  if (typeof r.category !== "string") return null;
+  if (r.displayName !== null && typeof r.displayName !== "string") return null;
+  if (typeof r.updatedAtBlock !== "number" || !Number.isFinite(r.updatedAtBlock)) {
+    return null;
+  }
+  return {
+    address: r.address,
+    category: r.category,
+    displayName: r.displayName,
+    updatedAtBlock: r.updatedAtBlock,
+  };
+}
+
+// Indexer-staleness threshold for the §28.2.1 banner. The indexer is
+// considered "stale" when latestHeight - currentHeight exceeds this
+// many blocks. At Sprintnet's 3-second cadence (ADR-0031), 10 blocks
+// is ~30 s of indexer lag — wider than normal ingestion variance,
+// narrow enough to flag a real backlog before it becomes user-visible.
+const INDEXER_LAG_STALE_THRESHOLD = 10;
+
+interface IndexerStatusValidated {
+  currentHeight: number;
+  latestHeight: number | null;
+}
+
+/** Validate the wire shape of `lyth_indexerStatus`. The chain may
+ *  serialize heights as JSON numbers (the wire reality) even though
+ *  the SDK's ts-rs binding labels them bigint — see activity.ts for
+ *  the same rationale. `latestHeight` is optional in the binding;
+ *  null when not yet observed. */
+function validateIndexerStatus(input: unknown): IndexerStatusValidated | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (typeof r.currentHeight !== "number" || !Number.isFinite(r.currentHeight)) {
+    return null;
+  }
+  let latestHeight: number | null = null;
+  if (r.latestHeight !== undefined && r.latestHeight !== null) {
+    if (typeof r.latestHeight !== "number" || !Number.isFinite(r.latestHeight)) {
+      return null;
+    }
+    latestHeight = r.latestHeight;
+  }
+  return { currentHeight: r.currentHeight, latestHeight };
+}
+
+/** Per-address fetch. Returns the resolved label (null = chain has no
+ *  entry for this address) or a methodNotFound flag when the operator
+ *  returned JSON-RPC -32601. Other RPC errors map to `label: null`
+ *  without setting the flag — they're transient, not chain-wide. */
+async function fetchOneAddressLabel(
+  addr: string,
+): Promise<{ label: NameLabel; methodNotFound: boolean }> {
+  try {
+    const { result } = await sprintnetJsonRpc<unknown>(
+      "lyth_getAddressLabel",
+      [addr],
+    );
+    if (result === null) return { label: null, methodNotFound: false };
+    return { label: validateRawNameLabel(result), methodNotFound: false };
+  } catch (e) {
+    const err = e as Error & { code?: number };
+    if (err.code === -32601) {
+      return { label: null, methodNotFound: true };
+    }
+    return { label: null, methodNotFound: false };
+  }
+}
+
+/** Fire-and-forget pending-row writer called from wallet-send-tx after
+ *  submitEncryptedMlDsaTx resolves. Designed so a failure here CANNOT
+ *  affect the broadcast handler — that handler has already returned to
+ *  the popup with the tx hash by the time this runs. Two protection
+ *  layers:
+ *
+ *  1. Outer try/catch swallows ALL errors (chrome.storage failures, RPC
+ *     timeouts on the eth_blockNumber anchor, validator returning null
+ *     on corrupted prior pending list). The caller uses `void` so no
+ *     unhandled rejection can ever surface to the MV3 runtime.
+ *  2. Inner try/catch around the eth_blockNumber RPC: anchor fetch is
+ *     best-effort; on failure we write the row with
+ *     broadcastBlockHeight: null, which makes pendingMatchesConfirmed
+ *     in shared/activity.ts skip the heuristic match. The PENDING_TTL_MS
+ *     backstop still evicts the row after 5 minutes regardless.
+ *
+ *  Wei → decimal LYTH conversion happens inline via weiHexToLythDecimal
+ *  so the amountDecimal field is consistent with what mergeIndexerSnapshot
+ *  receives on the confirmed side (AddressActivityEntry.amount is
+ *  already a decimal string per the SDK binding). */
+async function persistPendingRowBackground(args: {
+  address: string;
+  chainIdHex: string;
+  txHash: string;
+  to: string;
+  valueWeiHex: string;
+  via: string;
+}): Promise<void> {
+  try {
+    const now = Date.now();
+    let broadcastBlockHeight: number | null = null;
+    try {
+      const { result } = await sprintnetJsonRpc<unknown>("eth_blockNumber", []);
+      if (typeof result === "string" && result.startsWith("0x")) {
+        const n = Number.parseInt(result, 16);
+        if (Number.isFinite(n)) broadcastBlockHeight = n;
+      }
+    } catch {
+      // Anchor unavailable — fall through with null. TTL is the sole
+      // eviction path for null-anchor rows; reconcilePending in
+      // shared/activity.ts skips heuristic matching when the anchor
+      // is null.
+    }
+    const amountDecimal = weiHexToLythDecimal(args.valueWeiHex);
+    const addrLower = args.address.toLowerCase();
+    const pendingKey = activityPendingKey(addrLower, args.chainIdHex);
+    const stored = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([pendingKey], (res) =>
+        resolve(res?.[pendingKey]),
+      );
+    });
+    const prev = validatePendingActivityCache(stored)?.pending ?? [];
+    const row: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: args.txHash,
+      to: args.to.toLowerCase(),
+      amountDecimal,
+      broadcastedAtMs: now,
+      broadcastBlockHeight,
+      via: args.via,
+    };
+    const evicted = evictExpiredPending(prev, now);
+    const next = [row, ...evicted];
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set(
+        { [pendingKey]: { pending: next } },
+        () => resolve(),
+      );
+    });
+  } catch {
+    // Swallow. The broadcast handler has already returned. A
+    // pending-write failure is silent UX degradation only — the user
+    // already has their tx hash; on the next refresh the confirmed
+    // row will surface from the indexer (or not, if the broadcast
+    // itself was the issue, but that path is the broadcast handler's
+    // catch block, not ours).
+  }
+}
+
+/** Persist the merged cache. Pending key only writes when its contents
+ *  changed, so chrome.storage.onChanged doesn't fire spuriously on
+ *  no-op reconciliations. */
+async function writeActivityStorage(
+  cacheKey: string,
+  pendingKey: string,
+  nextCache: ActivityCache,
+  prevPending: PendingTxRow[],
+  nextPending: PendingTxRow[],
+): Promise<void> {
+  return new Promise((resolve) => {
+    const writes: Record<string, unknown> = { [cacheKey]: nextCache };
+    const pendingChanged =
+      nextPending.length !== prevPending.length ||
+      nextPending.some((row, i) => row !== prevPending[i]);
+    if (pendingChanged) {
+      writes[pendingKey] = { pending: nextPending };
+    }
+    chrome.storage.local.set(writes, () => resolve());
+  });
+}
+
 async function handlePopup(message: PopupMessage): Promise<unknown> {
   switch (message.op) {
     case "list-pending":
@@ -1775,6 +2207,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-indexer-snapshot": {
+      // Existing consumer (popup Home) shape: passes `unknown[]` through
+      // verbatim, no caching. Phase 4.4 added `wallet-activity-get` which
+      // layers caching + dedupe on top of the same fetch path. This case
+      // is preserved bit-for-bit for backward compatibility until commit
+      // 13 swaps Home over to the new pipeline.
       const p = message.payload as { address?: string; chainIdHex?: string };
       if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing address or chainIdHex" };
@@ -1782,27 +2219,290 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "indexer snapshot is only wired for Sprintnet today" };
       }
-      const [tokenBalances, addressLabel, delegationHistory, addressActivity] = await Promise.all([
-        settleSprintnetRpc<unknown[]>("lyth_getTokenBalances", [p.address]),
-        settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [p.address]),
-        settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [p.address, 20]),
-        settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [p.address, 30]),
-      ]);
-      const errors: Record<string, string> = {};
-      if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
-      if (addressLabel.error) errors.addressLabel = addressLabel.error;
-      if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
-      if (addressActivity.error) errors.addressActivity = addressActivity.error;
+      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex);
       return {
         ok: true,
         snapshot: {
-          tokenBalances: Array.isArray(tokenBalances.value) ? tokenBalances.value : [],
-          addressLabel: addressLabel.value ?? null,
-          delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
-          addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
-          errors,
+          tokenBalances: fresh.tokenBalances,
+          addressLabel: fresh.addressLabel,
+          delegationHistory: fresh.delegationHistory,
+          addressActivity: fresh.addressActivity,
+          errors: fresh.errors,
         },
       };
+    }
+    case "wallet-activity-get": {
+      // Phase 4.4 read-through cache. Hits chrome.storage.local first;
+      // if the cache is fresher than CACHE_STALENESS_MS, returns it
+      // without an RPC round-trip. Otherwise re-fetches via
+      // fetchIndexerSnapshot, validates raw RPC shapes against the
+      // wallet-internal Raw* types, merges with delegation-stream priority
+      // dedupe per shared/activity.ts, reconciles outstanding pending
+      // rows against the freshly merged confirmed list, evicts by TTL,
+      // and persists. Returns the merged cache + reconciled pending list
+      // + errors-by-key bundle from the four indexer streams.
+      //
+      // Failure handling: when BOTH activity and delegation streams fail,
+      // the previous cache is preserved (no overwrite with empty data)
+      // and the errors map is surfaced so the popup can show a partial-
+      // data indicator. When at least one stream succeeds the new merge
+      // is written — losing rows for a momentarily-failed stream is
+      // acceptable; the next refresh recovers.
+      const p = message.payload as { address?: string; chainIdHex?: string };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "activity-get is only wired for Sprintnet today" };
+      }
+      const addressLower = p.address.toLowerCase();
+      const cacheKey = activityCacheKey(addressLower, p.chainIdHex);
+      const pendingKey = activityPendingKey(addressLower, p.chainIdHex);
+      const now = Date.now();
+      const { cache: prevCache, pending: prevPending } = await readActivityStorage(
+        cacheKey,
+        pendingKey,
+      );
+      const isFresh =
+        prevCache !== null && now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS;
+      if (isFresh) {
+        const pending = evictExpiredPending(prevPending, now);
+        if (pending.length !== prevPending.length) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [pendingKey]: { pending } },
+              () => resolve(),
+            );
+          });
+        }
+        return { ok: true, cache: prevCache, pending, errors: {} };
+      }
+      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex);
+      const activityOk = fresh.errors.addressActivity === undefined;
+      const delegationOk = fresh.errors.delegationHistory === undefined;
+      if (!activityOk && !delegationOk && prevCache !== null) {
+        // Total indexer outage with a usable prev cache — preserve and
+        // surface. TTL backstop still runs on the pending list.
+        const pending = evictExpiredPending(prevPending, now);
+        if (pending.length !== prevPending.length) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [pendingKey]: { pending } },
+              () => resolve(),
+            );
+          });
+        }
+        return { ok: true, cache: prevCache, pending, errors: fresh.errors };
+      }
+      const activity = validateRawActivityList(fresh.addressActivity);
+      const delegation = validateRawDelegationList(fresh.delegationHistory);
+      const nextCache = mergeIndexerSnapshot({ activity, delegation }, now);
+      const reconciled = reconcilePending(prevPending, nextCache.confirmed);
+      const nextPending = evictExpiredPending(reconciled, now);
+      await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
+      return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
+    }
+    case "wallet-resolve-names": {
+      // Phase 4.4 batched name resolution. The de facto naming source on
+      // Sprintnet is `lyth_getAddressLabel` (per the §22.8 GAP-OPEN
+      // decision); resolveName-style hierarchical names land later
+      // without a wallet code change.
+      //
+      // Flow:
+      //   1. Validate input. Dedupe + lowercase defensively (the popup
+      //      hook should pre-process, but the SW boundary doesn't trust).
+      //   2. Read the name cache, evict TTL-expired entries.
+      //   3. Read the per-chain method-gate. If the chain is marked
+      //      "lyth_getAddressLabel unsupported" within the last 5 minutes,
+      //      skip the fetch entirely — cached hits still serve, misses
+      //      return absent. Prevents operator hammering on a chain that
+      //      doesn't have the method.
+      //   4. Otherwise, parallel-fetch every miss via Promise.all.
+      //   5. If ANY per-address call returned JSON-RPC -32601, mark the
+      //      chain unsupported and skip writing those entries into the
+      //      cache (they'd just expire as nulls). If a previously-tripped
+      //      chain succeeds, clear the marker.
+      //   6. Merge fresh resolutions (including `null` for "checked, no
+      //      label") into the cache, persist, return resolved bundle.
+      const p = message.payload as { addresses?: unknown; chainIdHex?: unknown };
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!Array.isArray(p.addresses)) {
+        return { ok: false, reason: "addresses must be an array" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "resolve-names is only wired for Sprintnet today" };
+      }
+      const requested: string[] = [];
+      const seen = new Set<string>();
+      for (const a of p.addresses) {
+        if (typeof a !== "string") continue;
+        const lower = a.toLowerCase();
+        if (seen.has(lower)) continue;
+        if (!lower.startsWith("0x")) continue;
+        seen.add(lower);
+        requested.push(lower);
+      }
+      if (requested.length === 0) {
+        return { ok: true, resolved: {} };
+      }
+      const now = Date.now();
+      // Cache read + TTL eviction.
+      const storedRaw = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_NAME_CACHE], (res) =>
+          resolve(res?.[STORAGE_KEY_NAME_CACHE]),
+        );
+      });
+      const prevCache: NameCache = validateNameCache(storedRaw) ?? {};
+      const liveCache = evictExpiredNames(prevCache, now);
+      // Build resolved-from-cache and the miss list.
+      const resolved: Record<string, NameLabel> = {};
+      const misses: string[] = [];
+      for (const addr of requested) {
+        const hit = liveCache[addr];
+        if (hit !== undefined) {
+          resolved[addr] = hit.label;
+        } else {
+          misses.push(addr);
+        }
+      }
+      // Method-gate check. If tripped, return whatever cache had and
+      // skip RPC for the misses entirely.
+      const methodGate = await readMethodGate(STORAGE_KEY_NAMES_METHOD_GATE);
+      const gated = methodGateTripped(methodGate, p.chainIdHex, now);
+      if (gated || misses.length === 0) {
+        // Persist the post-eviction cache only if eviction actually
+        // removed entries (avoids spurious onChanged fires).
+        const evictionShrank =
+          Object.keys(liveCache).length < Object.keys(prevCache).length;
+        if (evictionShrank) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [STORAGE_KEY_NAME_CACHE]: liveCache },
+              () => resolve(),
+            );
+          });
+        }
+        return { ok: true, resolved };
+      }
+      // Fetch misses in parallel.
+      const fetched = await Promise.all(misses.map(fetchOneAddressLabel));
+      const anyMethodNotFound = fetched.some((r) => r.methodNotFound);
+      const fresh: Record<string, NameLabel> = {};
+      for (let i = 0; i < misses.length; i++) {
+        const addr = misses[i]!;
+        const r = fetched[i]!;
+        if (r.methodNotFound) {
+          // Don't cache anything for this address — the chain doesn't
+          // support the method, no point storing null entries that
+          // would just expire.
+          continue;
+        }
+        fresh[addr] = r.label;
+        resolved[addr] = r.label;
+      }
+      // Method-gate write: trip if any call returned -32601, clear if
+      // we got at least one successful response while the gate was
+      // previously set.
+      if (anyMethodNotFound) {
+        await setMethodGate(
+          STORAGE_KEY_NAMES_METHOD_GATE,
+          p.chainIdHex,
+          { supported: false, checkedAtMs: now },
+        );
+      } else if (methodGate[p.chainIdHex] !== undefined) {
+        await setMethodGate(STORAGE_KEY_NAMES_METHOD_GATE, p.chainIdHex, null);
+      }
+      // Merge + persist. mergeNameCache is pure; we're writing the new
+      // cache atomically.
+      const nextCache = mergeNameCache(liveCache, fresh, now);
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [STORAGE_KEY_NAME_CACHE]: nextCache },
+          () => resolve(),
+        );
+      });
+      return { ok: true, resolved };
+    }
+    case "wallet-indexer-status": {
+      // Phase 4.4 — drives the §28.2.1 indexer-staleness banner.
+      // Calls `lyth_indexerStatus`, validates the wire shape, returns
+      // { stale, lagBlocks, currentHeight, latestHeight }. Stale is
+      // true when the lag exceeds INDEXER_LAG_STALE_THRESHOLD.
+      //
+      // Defensive posture on every failure path (method-not-found,
+      // RPC transient error, malformed response): return
+      // { ok: true, stale: false, lagBlocks: null, ... }. "Stale: true"
+      // would surface a false-positive banner that misleads the user
+      // when the real issue is "method missing" or "operator down."
+      // The wallet stays useful when the indicator is unavailable.
+      //
+      // Method-gate (mono.indexerStatus.method-gate) uses the same
+      // helpers as wallet-resolve-names but a distinct storage key.
+      const p = message.payload as { chainIdHex?: string };
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "indexer-status is only wired for Sprintnet today" };
+      }
+      const now = Date.now();
+      const gate = await readMethodGate(STORAGE_KEY_INDEXER_STATUS_METHOD_GATE);
+      if (methodGateTripped(gate, p.chainIdHex, now)) {
+        return { ok: true, stale: false, lagBlocks: null, currentHeight: null, latestHeight: null };
+      }
+      try {
+        const { result } = await sprintnetJsonRpc<unknown>("lyth_indexerStatus", []);
+        const validated = validateIndexerStatus(result);
+        if (validated === null) {
+          // Malformed response — defensive default, no gate trip
+          // (the method is responding, just with garbage; transient).
+          return {
+            ok: true,
+            stale: false,
+            lagBlocks: null,
+            currentHeight: null,
+            latestHeight: null,
+          };
+        }
+        // Recovery: clear the gate if it was previously tripped.
+        if (gate[p.chainIdHex] !== undefined) {
+          await setMethodGate(
+            STORAGE_KEY_INDEXER_STATUS_METHOD_GATE,
+            p.chainIdHex,
+            null,
+          );
+        }
+        const lagBlocks =
+          validated.latestHeight === null
+            ? 0
+            : Math.max(0, validated.latestHeight - validated.currentHeight);
+        const stale = lagBlocks > INDEXER_LAG_STALE_THRESHOLD;
+        return {
+          ok: true,
+          stale,
+          lagBlocks,
+          currentHeight: validated.currentHeight,
+          latestHeight: validated.latestHeight,
+        };
+      } catch (e) {
+        const err = e as Error & { code?: number };
+        if (err.code === -32601) {
+          await setMethodGate(
+            STORAGE_KEY_INDEXER_STATUS_METHOD_GATE,
+            p.chainIdHex,
+            { supported: false, checkedAtMs: now },
+          );
+        }
+        return {
+          ok: true,
+          stale: false,
+          lagBlocks: null,
+          currentHeight: null,
+          latestHeight: null,
+        };
+      }
     }
     case "wallet-fee-suggestion": {
       const p = message.payload as { chainIdHex?: string };
@@ -1865,6 +2565,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxFeePerGas: fee.maxFeePerGas,
           maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
+        });
+        // Phase 4.4 — fire-and-forget pending-row write. Unawaited so
+        // Send-screen response latency is preserved (pending row lands
+        // ~50-200ms after the popup receives txHash). Errors are
+        // swallowed inside the helper; a pending-write failure is
+        // silent UX degradation only. Reached only on the success path:
+        // a failed broadcast jumps to the catch block below and never
+        // executes this line.
+        void persistPendingRowBackground({
+          address: fromAddr,
+          chainIdHex: p.chainIdHex,
+          txHash,
+          to: p.to,
+          valueWeiHex: p.valueWeiHex,
+          via,
         });
         return { ok: true, txHash, via };
       } catch (e) {

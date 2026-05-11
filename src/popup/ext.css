@@ -272,6 +272,56 @@ body { margin:0; background:#0a0815; color:#fff; font-family: var(--f-sans); ove
 .ext-act-row__right .amt.opaque { color: var(--fg-400); font-size:11.5px; font-family: var(--f-sans); font-style:italic; }
 .ext-act-row__right .sym { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:2px; letter-spacing:0.04em; }
 
+/* Phase 4.4 — pending-row indicator (commit 12: spin animation deferred
+   here from commit 11 per the CSS-reuse constraint). The dot sits in the
+   icon slot's top-right corner; the rotating ring gives a "work in
+   progress" cue distinct from the static row chrome. Single keyframe
+   rule, scoped class — no impact on existing .ext-* rules. */
+@keyframes ext-pending-spin {
+  to { transform: rotate(360deg); }
+}
+.ext-pending-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-100, #1a1a24);
+  background: conic-gradient(var(--warn) 0deg, var(--warn) 270deg, transparent 270deg, transparent 360deg);
+  animation: ext-pending-spin 1.2s linear infinite;
+}
+
+/* Phase 4.4 — indexer-staleness banner (§28.2.1). Yellow warn-tinted
+   surface above the activity list. Dismiss button is per-session
+   (component-level useState, not persisted to chrome.storage). */
+.ext-indexer-stale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  margin: 6px 0;
+  border-radius: 8px;
+  background: rgba(244, 201, 122, 0.10);
+  border: 1px solid rgba(244, 201, 122, 0.25);
+  color: var(--warn);
+  font-size: 11px;
+  font-family: var(--f-sans);
+  line-height: 1.35;
+}
+.ext-indexer-stale .text { flex: 1; }
+.ext-indexer-stale .close {
+  background: transparent;
+  border: 0;
+  color: var(--warn);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: 0.7;
+}
+.ext-indexer-stale .close:hover { opacity: 1; }
+
 /* Bottom hint bar — glass foot */
 .ext-hintbar { background: rgba(10,10,20,0.55); backdrop-filter: blur(24px) saturate(160%); -webkit-backdrop-filter: blur(24px) saturate(160%); border-top:1px solid var(--glass-stroke); padding: 6px 14px; font-family: var(--f-mono); font-size:9px; color: var(--fg-500); letter-spacing:0.1em; text-transform:uppercase; display:flex; justify-content:space-between; align-items:center; gap:8px; box-shadow: inset 0 1px 0 var(--glass-inner); }
 .ext.light .ext-hintbar { background: rgba(255,255,255,0.6); border-top:1px solid #e3e3ea; color:#606369; }

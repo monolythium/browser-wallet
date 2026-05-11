@@ -49,6 +49,7 @@ import {
   bgResolveApproval,
   bgWalletActiveAccount,
   bgWalletBalance,
+  bgWalletActivityGet,
   bgWalletIndexerSnapshot,
   bgWalletActiveChain,
   bgWalletSetActiveChain,
@@ -239,6 +240,26 @@ export default function App() {
     }
   }, [acc.addr, activeChain.chainId]);
 
+  // Phase 4.4 — activity refresh trigger. Verbatim mirror of the
+  // balance pattern above. The actual cache state lives inside
+  // useActivity (src/popup/hooks/useActivity.ts) which is mounted by
+  // the Activity tab body. This callback fires bgWalletActivityGet
+  // directly; the SW writes the result to chrome.storage, and the
+  // hook's onChanged listener picks up the write and re-renders.
+  // No prop drilling needed.
+  const activityTokenRef = useRef(0);
+  const refreshActivity = useCallback(async () => {
+    if (!acc.addr.startsWith("0x")) return;
+    const myToken = ++activityTokenRef.current;
+    const r = await bgWalletActivityGet(acc.addr, activeChain.chainId);
+    if (myToken !== activityTokenRef.current) return;
+    // No local state to write — the SW persisted the cache to
+    // chrome.storage on success, and the hook's storage listener
+    // dispatches the result. On failure the hook surfaces an error
+    // state of its own.
+    void r;
+  }, [acc.addr, activeChain.chainId]);
+
   // ---- mount-time bootstrap ----
   useEffect(() => {
     void (async () => {
@@ -318,10 +339,11 @@ export default function App() {
       if (document.visibilityState !== "visible") return;
       void refreshKeystoreStatus();
       void refreshBalance();
+      void refreshActivity();
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [refreshKeystoreStatus, refreshBalance]);
+  }, [refreshKeystoreStatus, refreshBalance, refreshActivity]);
 
   // Defensive: if the user is on a detail / edit screen but the selected
   // chain is no longer in the list (e.g. dApp removed it via a future
@@ -346,13 +368,23 @@ export default function App() {
     void refreshBalance();
   }, [refreshBalance]);
 
+  // Phase 4.4 — dep-driven activity refresh. Same shape as the balance
+  // effect above. When (acc.addr, activeChain.chainId) changes, the
+  // useCallback identity flips and this effect re-fires.
+  useEffect(() => {
+    void refreshActivity();
+  }, [refreshActivity]);
+
   // Refetch balance when the user lands on Home so in-popup navigations
   // (Send → Home, Networks → Home, etc.) reflect a balance that may have
   // changed while the user was on another screen. Also covers the post-send
   // bounce-back, which Send.tsx itself doesn't trigger on the parent state.
   useEffect(() => {
-    if (screen === "home") void refreshBalance();
-  }, [screen, refreshBalance]);
+    if (screen === "home") {
+      void refreshBalance();
+      void refreshActivity();
+    }
+  }, [screen, refreshBalance, refreshActivity]);
 
   // Indexer-backed wallet enrichments. These are partial and best-effort:
   // older testnet nodes return method-not-found until the latest mono-core

@@ -339,6 +339,80 @@ export async function bgWalletIndexerSnapshot(
   return send("wallet-indexer-snapshot", { address, chainIdHex });
 }
 
+// Phase 4.4 — cached, kind-dispatched activity feed (Layer 2 in the plan).
+// Re-exports the wallet-internal cache and pending-row types from
+// shared/activity.ts so callers don't need to import from two paths.
+export type {
+  ActivityCache,
+  ActivityRow,
+  ConfirmedRow,
+  PendingTxRow,
+} from "../shared/activity.js";
+
+export async function bgWalletActivityGet(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      cache: import("../shared/activity.js").ActivityCache;
+      pending: import("../shared/activity.js").PendingTxRow[];
+      errors: Record<string, string>;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-get", { address, chainIdHex });
+}
+
+// Phase 4.4 — batched name resolution via lyth_getAddressLabel.
+// Re-export the wallet-internal label types so popup callers don't
+// need to reach into shared/.
+export type { NameLabel, NameLabelRecord } from "../shared/name-resolution.js";
+
+export async function bgWalletResolveNames(
+  addresses: string[],
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      resolved: Record<string, import("../shared/name-resolution.js").NameLabel>;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-resolve-names", { addresses, chainIdHex });
+}
+
+// Phase 4.4 — indexer-status polling for the §28.2.1 staleness banner.
+// All success-path fields nullable: when the method is unavailable or
+// the response is malformed, the handler returns the defensive
+// { stale: false, lagBlocks: null, currentHeight: null, latestHeight: null }
+// rather than surfacing a false-positive stale flag to the user.
+export interface IndexerStatusView {
+  stale: boolean;
+  lagBlocks: number | null;
+  currentHeight: number | null;
+  latestHeight: number | null;
+}
+
+export async function bgWalletIndexerStatus(
+  chainIdHex: string,
+): Promise<{ ok: true; status: IndexerStatusView } | { ok: false; reason?: string }> {
+  type Reply =
+    | ({ ok: true } & IndexerStatusView)
+    | { ok: false; reason?: string };
+  const r = await send<Reply>("wallet-indexer-status", { chainIdHex });
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    status: {
+      stale: r.stale,
+      lagBlocks: r.lagBlocks,
+      currentHeight: r.currentHeight,
+      latestHeight: r.latestHeight,
+    },
+  };
+}
+
 /** Fee strategy returned by `bgWalletFeeSuggestion`. */
 export interface FeeSuggestion {
   /** Hex wei — sender's tip target (the only revenue path on Sprintnet). */

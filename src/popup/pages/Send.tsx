@@ -664,7 +664,12 @@ function safeLythToWeiBigInt(amountStr: string): bigint {
   return intBig * 10n ** 18n + fracBig;
 }
 
-/** wei → decimal LYTH string, trimming trailing zeros and the decimal point. */
+/** wei → decimal LYTH string, trimming trailing zeros and the decimal point.
+ *
+ *  Re-exported at the bottom of this file. The byte-equality golden test
+ *  in src/background/wei-decimal.test.ts pairs this helper with the SW's
+ *  weiHexToLythDecimal — both must produce byte-identical strings or the
+ *  reconcilePending heuristic match in shared/activity.ts fails silently. */
 function weiToLythString(wei: bigint): string {
   if (wei < 0n) return "0";
   const intPart = wei / 10n ** 18n;
