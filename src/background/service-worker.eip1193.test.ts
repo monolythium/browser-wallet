@@ -683,7 +683,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       }>("sprintnet-operators-get");
       expect(r.ok).toBe(true);
       expect(r.override).toBeNull();
-      expect(r.defaults.length).toBe(7); // val-1 through val-7
+      expect(r.defaults.length).toBe(6); // val-2 through val-7, val-1 dropped per regenesis 2026-05-11
       expect(r.effective).toEqual(r.defaults);
     });
 
