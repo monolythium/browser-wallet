@@ -72,6 +72,8 @@ export function Send({ account, chainId, onBack }: SendProps) {
   const [submitError, setSubmitError] = useState<{
     message: string;
     code: number | null;
+    method: string | null;
+    via: string | null;
   } | null>(null);
 
   // Fetch fee suggestion when the screen opens or the chain changes.
@@ -182,6 +184,8 @@ export function Send({ account, chainId, onBack }: SendProps) {
         setSubmitError({
           message: r.reason ?? "send failed",
           code: typeof r.code === "number" ? r.code : null,
+          method: typeof r.method === "string" ? r.method : null,
+          via: typeof r.via === "string" ? r.via : null,
         });
         setStep("error");
       }
@@ -189,6 +193,8 @@ export function Send({ account, chainId, onBack }: SendProps) {
       setSubmitError({
         message: (e as Error).message ?? "send failed",
         code: null,
+        method: null,
+        via: null,
       });
       setStep("error");
     }
@@ -241,6 +247,8 @@ export function Send({ account, chainId, onBack }: SendProps) {
       <ErrorView
         message={submitError.message}
         code={submitError.code}
+        method={submitError.method}
+        via={submitError.via}
         onRetry={() => {
           setSubmitError(null);
           setStep("form");
@@ -1060,19 +1068,66 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
   );
 }
 
-interface ErrorViewProps {
+/**
+ * Format the user-facing error string for a Send failure. Method-aware
+ * so pre-submit RPC failures (lyth_getEncryptionKey, eth_feeHistory,
+ * eth_getTransactionCount) read distinctly from real submission rejects
+ * (lyth_submitEncrypted) — Phase 4.3 smoke testing showed "Chain rejected:"
+ * was the misleading prefix that conflated these. When method is missing
+ * (SW lags popup), falls back to the legacy verbatim shape so the popup
+ * never breaks. Exported for unit testing in Send.test.ts.
+ */
+export function formatSendError(args: {
   message: string;
   code: number | null;
-  onRetry: () => void;
-  onCancel: () => void;
-}
-
-function ErrorView({ message, code, onRetry, onCancel }: ErrorViewProps) {
+  method: string | null;
+  via: string | null;
+}): string {
+  const { message, code, method, via } = args;
   const isAdmissionReject =
     code !== null &&
     code >= ADMISSION_REJECT_CODE_LO &&
     code <= ADMISSION_REJECT_CODE_HI;
-  const display = isAdmissionReject ? `Chain rejected: ${message}` : message;
+  const viaSuffix = via ? ` via ${via}` : "";
+  const viaParen = via ? ` (via ${via})` : "";
+  switch (method) {
+    case "lyth_submitEncrypted":
+      return isAdmissionReject
+        ? `Mempool rejected: ${message}${viaParen}`
+        : `Submission failed: ${message}${viaParen}`;
+    case "lyth_getEncryptionKey":
+      return `Couldn't fetch encryption key. The cluster may be unavailable. (lyth_getEncryptionKey${viaSuffix})`;
+    case "eth_feeHistory":
+      return `Fee history fetch failed (eth_feeHistory${viaSuffix})`;
+    case "eth_getTransactionCount":
+      return `Couldn't fetch account nonce (eth_getTransactionCount${viaSuffix})`;
+    case null:
+      // Back-compat: SW lags popup and didn't stamp method. Use the
+      // legacy verbatim shape so the popup never breaks for older SWs.
+      return isAdmissionReject ? `Chain rejected: ${message}` : message;
+    default: {
+      // Unknown method (e.g. lyth_estimateGas if ever added): retain the
+      // legacy "Chain rejected" prefix for admission codes but append an
+      // attribution suffix so the operator + method are visible.
+      const suffix = `(${method}${viaSuffix})`;
+      return isAdmissionReject
+        ? `Chain rejected: ${message} ${suffix}`
+        : `${message} ${suffix}`;
+    }
+  }
+}
+
+interface ErrorViewProps {
+  message: string;
+  code: number | null;
+  method: string | null;
+  via: string | null;
+  onRetry: () => void;
+  onCancel: () => void;
+}
+
+function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewProps) {
+  const display = formatSendError({ message, code, method, via });
   return (
     <>
       <div className="ext-top">

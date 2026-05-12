@@ -88,9 +88,11 @@ export async function sprintnetJsonRpc<T>(
       const err = new Error(body.error.message ?? `rpc error from ${v.name}`) as Error & {
         code?: number;
         via?: string;
+        method?: string;
       };
       if (typeof body.error.code === "number") err.code = body.error.code;
       err.via = v.name;
+      err.method = method;
       throw err;
     }
     if (body.result === undefined) {

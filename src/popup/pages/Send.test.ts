@@ -5,7 +5,7 @@
 // for mixed-case, wrong-HRP, and malformed inputs.
 
 import { describe, expect, it } from "vitest";
-import { validateToAddress } from "./Send.js";
+import { formatSendError, validateToAddress } from "./Send.js";
 import { addressToBech32m } from "../../shared/bech32m.js";
 
 const ADDR0X = "0x2aa6a8c4e2f64c4d8b1c3e9b3e1f4d2a8c5e7d3f";
@@ -132,5 +132,110 @@ describe("validateToAddress — unknown / garbage", () => {
   it("ENS-style names are rejected (no resolver yet)", () => {
     const r = validateToAddress("alice.mono");
     expect(r.error).toMatch(/0x or mono1/);
+  });
+});
+
+// Phase 4.3.1 — method-aware error rendering. The smoke testing on
+// Phase 4.3 revealed "Chain rejected:" was being prefixed to every
+// admission-reject code in [-32049, -32020] regardless of which RPC
+// method actually threw, conflating pre-submit lookup failures with
+// real lyth_submitEncrypted rejects. These cases pin the per-method
+// copy produced by formatSendError.
+describe("formatSendError — method-aware copy", () => {
+  const ADMISSION = -32030; // anywhere in [-32049, -32020]
+  const NON_ADMISSION = -32600;
+
+  it("lyth_submitEncrypted + admission code → 'Mempool rejected', not 'Chain rejected'", () => {
+    const s = formatSendError({
+      message: "mempool: decryption failed",
+      code: ADMISSION,
+      method: "lyth_submitEncrypted",
+      via: "val-2",
+    });
+    expect(s).toContain("Mempool rejected");
+    expect(s).not.toContain("Chain rejected");
+    expect(s).toContain("via val-2");
+  });
+
+  it("lyth_submitEncrypted + non-admission code → 'Submission failed'", () => {
+    const s = formatSendError({
+      message: "internal error",
+      code: NON_ADMISSION,
+      method: "lyth_submitEncrypted",
+      via: "val-3",
+    });
+    expect(s).toContain("Submission failed");
+    expect(s).not.toContain("Mempool rejected");
+  });
+
+  it("lyth_getEncryptionKey → 'Couldn't fetch encryption key'", () => {
+    const s = formatSendError({
+      message: "upstream unavailable: mempool: decryption failed",
+      code: ADMISSION,
+      method: "lyth_getEncryptionKey",
+      via: "val-2",
+    });
+    expect(s).toContain("Couldn't fetch encryption key");
+    expect(s).toContain("lyth_getEncryptionKey");
+    expect(s).toContain("via val-2");
+    expect(s).not.toContain("Chain rejected");
+  });
+
+  it("eth_feeHistory → 'Fee history fetch failed'", () => {
+    const s = formatSendError({
+      message: "feeHistory unavailable",
+      code: ADMISSION,
+      method: "eth_feeHistory",
+      via: "val-4",
+    });
+    expect(s).toContain("Fee history fetch failed");
+    expect(s).toContain("eth_feeHistory");
+    expect(s).toContain("via val-4");
+  });
+
+  it("eth_getTransactionCount → 'Couldn't fetch account nonce'", () => {
+    const s = formatSendError({
+      message: "internal",
+      code: ADMISSION,
+      method: "eth_getTransactionCount",
+      via: "val-5",
+    });
+    expect(s).toContain("Couldn't fetch account nonce");
+    expect(s).toContain("eth_getTransactionCount");
+    expect(s).toContain("via val-5");
+  });
+
+  it("unknown method + admission code → 'Chain rejected' fallback with method + via suffix", () => {
+    const s = formatSendError({
+      message: "some chain error",
+      code: ADMISSION,
+      method: "lyth_estimateGas",
+      via: "val-2",
+    });
+    expect(s).toContain("Chain rejected");
+    expect(s).toContain("lyth_estimateGas");
+    expect(s).toContain("via val-2");
+  });
+
+  it("method missing + admission code → legacy verbatim 'Chain rejected: ${message}'", () => {
+    const s = formatSendError({
+      message: "decryption failed",
+      code: ADMISSION,
+      method: null,
+      via: null,
+    });
+    // Exact match — back-compat with SWs that lag the popup version.
+    expect(s).toBe("Chain rejected: decryption failed");
+  });
+
+  it("via === null → output does not contain ' via ' (graceful degradation)", () => {
+    const s = formatSendError({
+      message: "x",
+      code: ADMISSION,
+      method: "lyth_getEncryptionKey",
+      via: null,
+    });
+    expect(s).not.toContain(" via ");
+    expect(s).toContain("lyth_getEncryptionKey");
   });
 });
