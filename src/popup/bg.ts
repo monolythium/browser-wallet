@@ -508,11 +508,23 @@ export async function bgWalletSendTx(args: {
   chainIdHex: string;
 }): Promise<
   { ok: true; result: SendTxResult }
-  | { ok: false; reason?: string; code?: number }
+  | {
+      ok: false;
+      reason?: string;
+      code?: number;
+      method?: string;
+      via?: string;
+    }
 > {
   type Reply =
     | { ok: true; txHash: string; via: string }
-    | { ok: false; reason?: string; code?: number };
+    | {
+        ok: false;
+        reason?: string;
+        code?: number;
+        method?: string;
+        via?: string;
+      };
   const r = await send<Reply>("wallet-send-tx", args);
   if (!r.ok) return r;
   return { ok: true, result: { txHash: r.txHash, via: r.via } };
