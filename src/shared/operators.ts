@@ -2,8 +2,9 @@
 // shared between the service worker (which iterates operators on RPC dispatch)
 // and the popup (which renders the override-management UI).
 //
-// Sprintnet has 7 hardcoded default operator RPCs (see networks.ts:
-// SPRINTNET_OPERATOR_RPCS_DEFAULTS). Power users can override that list with
+// Sprintnet has 6 hardcoded default operator RPCs (see networks.ts:
+// SPRINTNET_OPERATOR_RPCS_DEFAULTS; val-1 dropped per 2026-05-11
+// regenesis, see that file's docstring). Power users can override that list with
 // their own validator nodes; the override is persisted to chrome.storage.local
 // and merged at lookup time. Absence of the key (or null value) means
 // "use the defaults".
