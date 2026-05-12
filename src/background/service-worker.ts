@@ -2583,13 +2583,26 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         });
         return { ok: true, txHash, via };
       } catch (e) {
-        const err = e as Error & { code?: number };
+        // Forward method + via when sprintnetJsonRpc stamped them onto
+        // the error (see tx-mldsa.ts body.error branch). Popup's Send
+        // ErrorView uses these for method-aware copy that distinguishes
+        // pre-submit RPC failures from real submission rejects.
+        const err = e as Error & {
+          code?: number;
+          via?: string;
+          method?: string;
+        };
         const code = typeof err.code === "number" ? err.code : undefined;
+        const method = typeof err.method === "string" ? err.method : undefined;
+        const via = typeof err.via === "string" ? err.via : undefined;
         const reason = err.message ?? "send failed";
-        if (code !== undefined) {
-          return { ok: false, reason, code };
-        }
-        return { ok: false, reason };
+        return {
+          ok: false,
+          reason,
+          ...(code !== undefined && { code }),
+          ...(method !== undefined && { method }),
+          ...(via !== undefined && { via }),
+        };
       }
     }
     default:
