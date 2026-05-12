@@ -44,9 +44,17 @@ export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
  * override via chrome.storage.local["mono.operators.override"]. RPC
  * dispatch uses `getActiveOperators()` which merges the override with
  * these defaults at lookup time.
+ *
+ * Regenesis 2026-05-11 (chain-registry commit 834a876): val-1's bls.key
+ * was destroyed during a debugging triple-wipe, dropping the cluster to
+ * 6/7 (BFT floor 5/7). val-1 was removed from chain-registry's [[rpc]]
+ * and [[p2p]] lists, so we drop it here too — val-2 (also fsn1) takes
+ * position 0. val-1 returns to this list once its operator key is
+ * regenerated; until then the wallet's `BUILTIN_CHAINS[0].rpc` (which
+ * auto-derives from index 0 below) and `SPRINTNET_FALLBACK.rpc` in
+ * App.tsx both point at val-2.
  */
 export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> = [
-  { name: "val-1", region: "fsn1", rpc: "http://192.0.2.7:8545" },
   { name: "val-2", region: "fsn1", rpc: "http://192.0.2.1:8545" },
   { name: "val-3", region: "nbg1", rpc: "http://192.0.2.2:8545" },
   { name: "val-4", region: "hel1", rpc: "http://192.0.2.3:8545" },
