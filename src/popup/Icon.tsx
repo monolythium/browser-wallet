@@ -4,7 +4,7 @@ export type IconName =
   | "send" | "qr" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "close" | "back" | "settings" | "lock" | "eye" | "search"
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
-  | "vote" | "contract" | "plus" | "more";
+  | "contract" | "plus" | "more";
 
 interface IconProps {
   name: IconName;
@@ -170,13 +170,6 @@ export function Icon({ name, size = 16 }: IconProps) {
         <svg {...props}>
           <path d="M2 17c2-4 4-4 6-4s3 4 8 4" />
           <path d="M2 13c2-4 4-4 6-4s4 4 8 4" />
-        </svg>
-      );
-    case "vote":
-      return (
-        <svg {...props}>
-          <path d="M4 21h16M6 21V9l6-4 6 4v12" />
-          <path d="M10 21v-6h4v6" />
         </svg>
       );
     case "contract":

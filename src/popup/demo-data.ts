@@ -81,7 +81,7 @@ export interface PendingConnect {
 export interface PendingSign {
   dappId: string;
   origin: string;
-  type: "swap" | "stake" | "vote" | "bridge" | "contract";
+  type: "swap" | "stake" | "bridge" | "contract";
   summary: Record<string, unknown>;
   sim: { willReceive?: { amount: number; sym: string }; willPay?: { amount: number; sym: string }; net?: string; warnings: string[] } | null;
   fee: { amount: number; sym: string; denom: Denom };
@@ -129,7 +129,6 @@ export const DAPPS: Dapp[] = [
   { id: "monoscan", name: "Monoscan", url: "https://monoscan.xyz", icon: "M", verified: true, lastUsed: "now", perms: ["read:address", "read:activity"] },
   { id: "stake", name: "LYTH Stake", url: "https://stake.monolythium.xyz", icon: "S", verified: true, lastUsed: "2h ago", perms: ["read:address", "sign:stake"] },
   { id: "monohub", name: "MonoHub", url: "https://app.monohub.xyz", icon: "C", glyph: "M", verified: false, lastUsed: "5d ago", perms: ["read:address", "sign:tx", "sign:message"] },
-  { id: "gov", name: "LYTH Gov", url: "https://gov.monolythium.xyz", icon: "G", verified: true, lastUsed: "yesterday", perms: ["read:address", "sign:message", "sign:vote"] },
 ];
 
 // Empty until the wallet queries its own tx history. The Send screen
@@ -189,21 +188,6 @@ export const PENDING = {
     ],
     raw: "0x21c5e9d300000000000000000000000000000000000000000000000000000000c0210000000000000000000000000000000000000000000000000000001dcd65000000000000000000000000000000000000000000000000000000000000000001",
   } as PendingSign,
-  signVote: {
-    dappId: "gov",
-    origin: "https://gov.monolythium.xyz",
-    type: "vote" as const,
-    summary: { proposal: "PROP-43", title: "Adopt ML-DSA-65 as non-optional dual signature post-2027", choice: "YES", weight: "1,500 LYTH (staked @ C-003)" },
-    sim: null,
-    fee: { amount: 0.0082, sym: "LYTH", denom: "public" as const },
-    algo: "slhdsa" as const,
-    decoded: [
-      { k: "method", v: "castVote(bytes32,uint8)" },
-      { k: "proposal", v: "0xPROP-43" },
-      { k: "choice", v: "1 = YES" },
-    ],
-    raw: "0x3f4b7b8400000000000000000000000000000000000000000000000000002b0000000000000000000000000000000000000000000000000000000000000001",
-  } as PendingSign,
   signBridge: {
     dappId: "monohub",
     origin: "https://bridge.monolythium.xyz",
@@ -235,16 +219,16 @@ export const PENDING = {
     raw: "0x095ea7b30000000000000000000000003a12cfe0d8ff23cf4e62d1a8f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
   } as PendingSign,
   signMessage: {
-    dappId: "gov",
-    origin: "https://gov.monolythium.xyz",
+    dappId: "monohub",
+    origin: "https://app.monohub.xyz",
     type: "message" as const,
-    summary: { purpose: "Sign in to LYTH Gov", expires: "10 minutes" },
+    summary: { purpose: "Sign in to MonoHub", expires: "10 minutes" },
     humanPayload: {
-      domain: "gov.monolythium.xyz",
+      domain: "app.monohub.xyz",
       nonce: "b7f2…99ae",
       issuedAt: "2026-04-21T14:02:00Z",
       expiresAt: "2026-04-21T14:12:00Z",
-      statement: "I agree to the LYTH Gov terms · no value transfer · account binding only.",
+      statement: "I agree to the MonoHub terms · no value transfer · account binding only.",
     },
     algo: "slhdsa" as const,
     raw: "lyth:msg:0xb7f29f…",
