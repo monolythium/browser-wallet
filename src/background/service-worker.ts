@@ -114,6 +114,7 @@ import {
 import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
+  sprintnetMaxBalanceConsensus,
 } from "./tx-mldsa.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
@@ -2265,44 +2266,35 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-balance": {
       // Read-only `eth_getBalance` for the popup Home balance pill.
-      // Sprintnet routes through the operator-fallback helper from the
-      // SDK-bundled registry; every other chain id flows through `providerFor` so user-added
-      // chains via wallet_addEthereumChain just work.
+      // Sprintnet uses MAX-consensus across all active operators (see
+      // `sprintnetMaxBalanceConsensus`): a lagging operator can only
+      // under-report balance, so taking the max across responding
+      // operators is the safe resilience strategy. Other Sprintnet RPC
+      // methods (eth_call, nonce, fee, indexer) keep the single-
+      // operator-with-failover path in `sprintnetJsonRpc`, where max()
+      // would not be meaningful.
       //
-      // Sprintnet returns a NON-STANDARD `eth_getBalance` shape — instead
-      // of `{ result: "0x..." }` it returns `{ result: { value: "0x...",
-      // blockNumber, proof, stateRoot } }` so light clients can verify
-      // the balance against `stateRoot`. We accept both shapes here:
-      // `value` field for the proof variant, raw hex string for plain
-      // chains. Other Sprintnet RPC methods stay standard.
+      // Every other chain id flows through `providerFor` so user-added
+      // chains via wallet_addEthereumChain just work; those use the
+      // standard `eth_getBalance` hex-string return.
       const p = message.payload as { address?: string; chainIdHex?: string };
       if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing address or chainIdHex" };
       }
       try {
         if (chainRequiresMlDsa(p.chainIdHex)) {
-          const { result } = await sprintnetJsonRpc<unknown>("eth_getBalance", [
-            p.address,
-            "latest",
-          ]);
+          const consensus = await sprintnetMaxBalanceConsensus(p.address);
+          const total = consensus.contributing.length + consensus.failing.length;
+          const failSummary =
+            consensus.failing.length > 0
+              ? ` (failing: ${consensus.failing
+                  .map((f) => `${f.name}: ${f.reason}`)
+                  .join(", ")})`
+              : "";
           console.log(
-            "[wallet] balance shape:",
-            typeof result === "string"
-              ? "hex"
-              : Object.keys((result as object | null) ?? {}).join(","),
+            `[wallet] balance consensus: max=${consensus.balanceHex} from ${consensus.contributing.length}/${total} operators${failSummary}`,
           );
-          if (typeof result === "string" && result.startsWith("0x")) {
-            return { ok: true, balanceHex: result };
-          }
-          if (
-            result !== null &&
-            typeof result === "object" &&
-            typeof (result as { value?: unknown }).value === "string" &&
-            ((result as { value: string }).value).startsWith("0x")
-          ) {
-            return { ok: true, balanceHex: (result as { value: string }).value };
-          }
-          return { ok: false, reason: "unexpected balance shape" };
+          return { ok: true, balanceHex: consensus.balanceHex };
         }
         const provider = providerFor(p.chainIdHex);
         const balanceHex = await rpcSend<string>(provider, "eth_getBalance", [
