@@ -27,6 +27,7 @@ import { Icon } from "../Icon";
 import { NftCard, type NftCardEntry } from "./NftCard";
 import { NftDetail, type NftDetailEntry, type NftStandard } from "./NftDetail";
 import { NftAddModal } from "./NftAddModal";
+import type { SendNftTarget } from "../pages/SendNft";
 import {
   fetchOrCacheNftMetadata,
   getCachedNftMetadata,
@@ -49,6 +50,10 @@ interface NftTabProps {
   chainId: number;
   /** Active chain id in `0x`-hex form, threaded into bgEthCall. */
   chainIdHex: string;
+  /** Phase 5 Commit 7 — fired when NftDetail's Send CTA is clicked.
+   *  Optional so test harnesses without the SendNft route still
+   *  compile; when omitted the Send button is a no-op. */
+  onOpenSendNft?: (target: SendNftTarget) => void;
 }
 
 /** In-memory NFT row joined from a PinnedNft + the metadata cache /
@@ -63,7 +68,7 @@ interface NftRow {
 const SPRINTNET_FOOTNOTE =
   "NFT discovery uses on-chain event indexing, which is currently disabled on Sprintnet. You can still pin any NFT you own by contract address — sending and receiving work normally.";
 
-export function NftTab({ ownerAddress, chainId, chainIdHex }: NftTabProps) {
+export function NftTab({ ownerAddress, chainId, chainIdHex, onOpenSendNft }: NftTabProps) {
   const caller: EthCaller = useMemo(
     () => ({
       ethCall: async (req) => {
@@ -80,6 +85,11 @@ export function NftTab({ ownerAddress, chainId, chainIdHex }: NftTabProps) {
   const [selected, setSelected] = useState<NftRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [highlightKey, setHighlightKey] = useState<string | null>(null);
+  // Phase 5 Commit 7 — Send navigation bubbles to App.tsx via the
+  // `onOpenSendNft` callback so SendNft renders as a top-level
+  // popup screen (matching Send.tsx). Rendering it inside the NFT
+  // tab card breaks SendNft's `.ext-top` / `.ext-body` layout, which
+  // expects to live at the popup root.
 
   // A monotonic ref so out-of-order Phase-2 results from a previous
   // refresh don't clobber the current view.
@@ -200,7 +210,18 @@ export function NftTab({ ownerAddress, chainId, chainIdHex }: NftTabProps) {
         nft={detail}
         onBack={() => setSelected(null)}
         onSend={() => {
-          // TODO Commit 7: open SendNft.
+          // Phase 5 Commit 7 — bubble to App.tsx, which stashes the
+          // target NFT and routes to the SendNft screen so the page
+          // renders at the popup root (not inside the NFT tab card).
+          // No-op when the route isn't wired (test harnesses).
+          if (!onOpenSendNft) return;
+          onOpenSendNft({
+            contractAddress: selected.pinned.address,
+            tokenId: selected.pinned.tokenId,
+            collectionName: detail.collectionName,
+            standard: selected.standard,
+            ...(selected.metadata !== undefined ? { metadata: selected.metadata } : {}),
+          });
         }}
         onRemove={() => {
           void handleUnpin(selected).then(() => setSelected(null));

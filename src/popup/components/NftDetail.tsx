@@ -35,7 +35,7 @@ export interface NftDetailEntry {
 interface NftDetailProps {
   nft: NftDetailEntry;
   onBack: () => void;
-  /** TODO Commit 7: open SendNft. No-op until then. */
+  /** Open the SendNft sub-view in the parent. Wired in Commit 7. */
   onSend: () => void;
   /** Optional unpin handler — when provided, surfaces a secondary
    *  "Remove" button alongside Send. */
@@ -289,7 +289,6 @@ export function NftDetail({ nft, onBack, onSend, onRemove }: NftDetailProps) {
         }}
       >
         {onRemove && <button onClick={onRemove}>Remove</button>}
-        {/* TODO Commit 7: open SendNft. */}
         <button className="prim" onClick={onSend}>
           Send
         </button>

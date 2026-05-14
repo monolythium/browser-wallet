@@ -35,6 +35,7 @@ import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
 import { NftTab } from "./components/NftTab";
+import type { SendNftTarget } from "./pages/SendNft";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -570,10 +571,13 @@ interface HomeProps {
   onOpenSend?: () => void;
   onOpenStake?: () => void;
   onOpenBridge?: () => void;
+  /** Phase 5 Commit 7 — fired by NftDetail's Send CTA. App.tsx
+   *  stashes the target NFT and routes to the SendNft screen. */
+  onOpenSendNft?: (target: SendNftTarget) => void;
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, onOpenOnboard }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -759,6 +763,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
               chainId={network.chainIdNum}
               chainIdHex={network.chainId}
+              {...(onOpenSendNft ? { onOpenSendNft } : {})}
             />
           )}
         </div>

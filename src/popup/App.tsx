@@ -25,6 +25,7 @@ import {
 } from "./components";
 import { Receive } from "./pages/Receive";
 import { Send } from "./pages/Send";
+import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
 import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
@@ -87,6 +88,7 @@ type Screen =
   | "reset-wallet"
   | "receive"
   | "send"
+  | "send-nft"
   | "stake"
   | "bridge"
   | "approval"
@@ -166,6 +168,11 @@ export default function App() {
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
   // taps a row on the Networks list; cleared when they back out.
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
+  // Phase 5 Commit 7 — selected NFT for the SendNft route. Set when
+  // NftDetail's Send CTA fires; cleared when SendNft routes back to
+  // Home or the user navigates away. Lives at App-level because
+  // NftTab → NftDetail → SendNft spans the Home/page boundary.
+  const [pendingSendNft, setPendingSendNft] = useState<SendNftTarget | null>(null);
   const selectedChain: ChainEntry | null =
     selectedChainId !== null
       ? (chainList.find((c) => c.chainId === selectedChainId) ?? null)
@@ -605,6 +612,10 @@ export default function App() {
           onOpenSend={() => setScreen("send")}
           onOpenStake={() => setScreen("stake")}
           onOpenBridge={() => setScreen("bridge")}
+          onOpenSendNft={(target) => {
+            setPendingSendNft(target);
+            setScreen("send-nft");
+          }}
           onOpenOnboard={() => setScreen("welcome")}
         />
       )}
@@ -734,6 +745,18 @@ export default function App() {
           account={acc}
           chainId={activeChain.chainId}
           onBack={() => setScreen("home")}
+        />
+      )}
+
+      {screen === "send-nft" && pendingSendNft && (
+        <SendNft
+          fromAddress={acc.addr.startsWith("0x") ? acc.addr : null}
+          chainId={activeChain.chainId}
+          nft={pendingSendNft}
+          onBack={() => {
+            setPendingSendNft(null);
+            setScreen("home");
+          }}
         />
       )}
 
