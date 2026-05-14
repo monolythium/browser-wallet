@@ -4,7 +4,7 @@
 // ML-DSA-65 is mandatory on Monolythium Sprintnet (chain_id 69420);
 // other Ethereum-compatible chains keep the legacy secp256k1 path.
 
-import { MONOLYTHIUM_TESTNET_CHAIN_ID } from "@monolythium/core-sdk";
+import { MONOLYTHIUM_TESTNET_CHAIN_ID, getRpcEndpoints } from "@monolythium/core-sdk";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
   validateOperatorList,
@@ -21,7 +21,7 @@ export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 
 /**
  * Minimum intrinsic gas for a plain LYTH transfer on Sprintnet.
- * Empirically verified via admission rejection at val-1: the chain
+ * Empirically verified via admission rejection on a foundation operator: the chain
  * enforces a floor of 24309 (presumably ML-DSA-65 verify + envelope
  * decrypt + state proof overhead). 30000 = 0x7530 leaves headroom.
  * If the floor moves above this, the wallet needs a bump.
@@ -34,34 +34,32 @@ export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
 
 /**
- * Sprintnet operator RPC endpoints — published by Nayiem 2026-04-29.
- * The hardcoded `node-tnt.monolythium.xyz` alias resolves to NXDOMAIN as
- * of audit; broadcast paths must iterate this list and use the first
- * responder. Order is intentional — fsn1 hosts are geographically closer
- * to most EU/US users; ash + sin are the long-haul fallbacks.
+ * Sprintnet operator RPC endpoints — sourced from the SDK-bundled chain
+ * registry (`@monolythium/core-sdk` `getRpcEndpoints("testnet-69420")`).
+ * Broadcast paths iterate this list and use the first responder. Registry
+ * order is intentional (fsn1 hosts geographically closer to most EU/US
+ * users; ash + sin are the long-haul fallbacks) and is refreshed by
+ * bumping the SDK package.
  *
- * Phase 4.3 Change 2: this is now the *defaults* list. Power users can
+ * Phase 4.3 Change 2: this is the *defaults* list. Power users can
  * override via chrome.storage.local["mono.operators.override"]. RPC
  * dispatch uses `getActiveOperators()` which merges the override with
  * these defaults at lookup time.
  *
- * Regenesis 2026-05-11 (chain-registry commit 834a876): val-1's bls.key
- * was destroyed during a debugging triple-wipe, dropping the cluster to
- * 6/7 (BFT floor 5/7). val-1 was removed from chain-registry's [[rpc]]
- * and [[p2p]] lists, so we drop it here too — val-2 (also fsn1) takes
- * position 0. val-1 returns to this list once its operator key is
- * regenerated; until then the wallet's `BUILTIN_CHAINS[0].rpc` (which
- * auto-derives from index 0 below) and `SPRINTNET_FALLBACK.rpc` in
- * App.tsx both point at val-2.
+ * Naming: the registry-sourced endpoints are labelled `operator-N` (1-
+ * indexed, matching the SDK snapshot's ordering). Prior to the 2026-05-14
+ * sync the wallet shipped `val-N` labels with val-1 explicitly dropped
+ * (regenesis 2026-05-11, val-1's bls.key destroyed during a debugging
+ * triple-wipe → cluster dropped to 6/7, BFT floor 5/7). The SDK registry
+ * already excludes that endpoint, so the wallet inherits the drop
+ * automatically and no longer hardcodes the exclusion.
  */
-export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> = [
-  { name: "val-2", region: "fsn1", rpc: "http://192.0.2.1:8545" },
-  { name: "val-3", region: "nbg1", rpc: "http://192.0.2.2:8545" },
-  { name: "val-4", region: "hel1", rpc: "http://192.0.2.3:8545" },
-  { name: "val-5", region: "hel1", rpc: "http://192.0.2.4:8545" },
-  { name: "val-6", region: "ash",  rpc: "http://192.0.2.5:8545" },
-  { name: "val-7", region: "sin",  rpc: "http://192.0.2.6:8545" },
-];
+export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
+  getRpcEndpoints("testnet-69420").map((endpoint, i) => ({
+    name: `operator-${i + 1}`,
+    region: endpoint.region ?? "unknown",
+    rpc: endpoint.url,
+  }));
 
 /** In-memory active operator list. Hydrated from storage at SW boot via
  *  `loadOperatorOverride()` and updated by `setOperatorOverride()` and
@@ -155,11 +153,10 @@ export interface BuiltinChain {
  * Sprintnet (chain_id 69420). All other chains are user-added at
  * runtime via `wallet_addEthereumChain`.
  *
- * Note: the legacy "Local devnet" (0x7A69) and "LythiumDAG-BFT Testnet"
- * with the NXDOMAIN `node-tnt.monolythium.xyz` alias have been removed.
- * Sprintnet IS the testnet, and the canonical RPC is the operator
- * fallback list (`SPRINTNET_OPERATOR_RPCS`) — the `rpc` field below
- * is the first operator, kept for legacy `MonolythiumProvider`
+ * Note: the legacy "Local devnet" (0x7A69) and old DNS alias have been
+ * removed. Sprintnet IS the testnet, and the canonical RPC list comes from
+ * the SDK-bundled chain registry (`SPRINTNET_OPERATOR_RPCS`) — the `rpc`
+ * field below is the first operator, kept for legacy `MonolythiumProvider`
  * consumers; the read/write hot path goes through `sprintnetJsonRpc`.
  */
 export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
