@@ -134,6 +134,13 @@ interface UnlockedState {
 
 let unlocked: UnlockedState | null = null;
 
+// Cached after a successful unlockContainerV4(). Used by
+// selectActiveVaultV4 / addVaultFreshV4 / addVaultImportV4 so vault
+// switches and additions don't pay the ~1 second Argon2id-MEK cost
+// per operation. Cleared by lockV4(). Never leaves this module.
+let mekCache: Uint8Array | null = null;
+let activeContainerVaultId: string | null = null;
+
 // ---- v4-multi container types (Phase 5) ----
 
 /** Argon2id parameters for the master encryption key. One set per
@@ -557,6 +564,240 @@ async function migrateLegacyToContainerV4(
   return container;
 }
 
+// ---- v4-multi public API (Phase 5 Commit 2) ----
+
+/** Summary projection over a VaultRecordV4 — what the popup needs to
+ *  render the vault picker. Excludes the wrappedKey / envelope (key
+ *  material stays inside the keystore). */
+export interface VaultSummaryV4 {
+  id: string;
+  label: string;
+  addr: string;
+  createdAt: number;
+  isActive: boolean;
+}
+
+export async function hasContainerV4(): Promise<boolean> {
+  return (await loadVaultsContainerV4()) !== null;
+}
+
+/** Wipe the multi-vault container from chrome.storage.local. Used by
+ *  the Settings → Reset wallet path in conjunction with
+ *  {@link wipeVaultV4} to remove both the legacy entry and the
+ *  container. Also clears the unlocked + MEK cache. */
+export async function wipeContainerV4(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    chrome.storage.local.remove(VAULTS_CONTAINER_KEY_V4, () => resolve());
+  });
+  lockV4();
+}
+
+/** Internal: unwrap a vault's VEK, open its envelope, build the
+ *  backend, return the unlocked-state record. Used by both
+ *  {@link unlockContainerV4} and {@link selectActiveVaultV4} — both
+ *  paths share the same "unwrap → open → instantiate" pipeline. */
+async function loadVaultBackend(
+  mek: Uint8Array,
+  vault: VaultRecordV4,
+): Promise<UnlockedState> {
+  const vek = unwrapVekV4(mek, vault.wrappedKey);
+  let seed: Uint8Array;
+  try {
+    const opened = openVaultEnvelopeV4(vek, vault.envelope);
+    seed = opened.seed;
+    // mnemonic not needed for backend instantiation; let it fall out of scope.
+  } finally {
+    vek.fill(0);
+  }
+  const backend = MlDsa65Backend.fromSeed(seed);
+  const address = await backend.getAddress();
+  seed.fill(0);
+  return { backend, address };
+}
+
+/**
+ * Container-aware unlock. Runs migration from the legacy
+ * `mono.vault.v4` envelope opportunistically if no container exists
+ * yet, then derives the MEK from the master password, unwraps the
+ * active vault's VEK, opens the envelope, and loads the backend.
+ *
+ * Throws `"wrong password"` on AEAD failure at any step. Same error
+ * contract as {@link unlockV4}; the dispatcher's rate-limit handling
+ * applies identically.
+ *
+ * Caches the derived MEK in module state for the unlock session so
+ * subsequent {@link selectActiveVaultV4} / {@link addVaultFreshV4} /
+ * {@link addVaultImportV4} calls skip Argon2id.
+ */
+export async function unlockContainerV4(
+  password: string,
+): Promise<{ address: string; vaultId: string }> {
+  let container = await loadVaultsContainerV4();
+  if (!container) {
+    container = await migrateLegacyToContainerV4(password);
+  }
+  if (!container) {
+    throw new Error("no v4 vault — run onboarding first");
+  }
+
+  const mek = await deriveMekV4(password, container.masterKdf);
+  const active = container.vaults.find(
+    (v) => v.id === container!.activeVaultId,
+  );
+  if (!active) {
+    mek.fill(0);
+    throw new Error("container is missing its active vault");
+  }
+
+  let state: UnlockedState;
+  try {
+    state = await loadVaultBackend(mek, active);
+  } catch (e) {
+    mek.fill(0);
+    throw e; // "wrong password" surfaces here on legitimate AEAD failure
+  }
+
+  // Successful unlock — replace cached state.
+  if (mekCache) mekCache.fill(0);
+  mekCache = mek;
+  unlocked = state;
+  activeContainerVaultId = active.id;
+  return { address: state.address, vaultId: active.id };
+}
+
+/** Switch the active vault using the cached MEK. Requires the
+ *  container to be unlocked (i.e., MEK cached by a prior
+ *  {@link unlockContainerV4}). Updates `container.activeVaultId` on
+ *  disk and swaps the in-memory backend. The dispatcher broadcasts
+ *  `accountsChanged` after this returns. */
+export async function selectActiveVaultV4(
+  vaultId: string,
+): Promise<{ address: string }> {
+  if (!mekCache) throw new Error("container is locked");
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
+  // No-op fast path: already the active vault.
+  if (vaultId === activeContainerVaultId && unlocked) {
+    return { address: unlocked.address };
+  }
+  const state = await loadVaultBackend(mekCache, target);
+  container.activeVaultId = vaultId;
+  await saveVaultsContainerV4(container);
+  unlocked = state;
+  activeContainerVaultId = vaultId;
+  return { address: state.address };
+}
+
+/** Read-only list of vault summaries. No unlock required — labels and
+ *  addresses are non-sensitive metadata. Returns `null` when no
+ *  container exists (so the popup can branch on "still single-vault
+ *  legacy" during the migration window). */
+export async function listVaultsV4(): Promise<VaultSummaryV4[] | null> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return null;
+  return container.vaults.map((v) => ({
+    id: v.id,
+    label: v.label,
+    addr: v.addr,
+    createdAt: v.createdAt,
+    isActive: v.id === container.activeVaultId,
+  }));
+}
+
+/** Rename a vault. No unlock required — labels are non-sensitive UI
+ *  metadata. Validates: trim, 1-32 chars, non-empty after trim. */
+export async function renameVaultV4(
+  vaultId: string,
+  newLabel: string,
+): Promise<void> {
+  const trimmed = newLabel.trim();
+  if (trimmed.length === 0) throw new Error("label must be non-empty");
+  if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
+  target.label = trimmed;
+  await saveVaultsContainerV4(container);
+}
+
+/** Generate a fresh PQM-1 mnemonic and add a new vault to the
+ *  container. Requires the container to be unlocked. Returns the new
+ *  vault id, the mnemonic (one-time — treat like a private key), and
+ *  the derived address. Does NOT change `activeVaultId`. */
+export async function addVaultFreshV4(): Promise<{
+  vaultId: string;
+  mnemonic: string;
+  address: string;
+}> {
+  if (!mekCache) throw new Error("container is locked");
+  const mnemonic = generatePqm1Mnemonic((out) => {
+    out.set(randomBytes(out.length));
+  });
+  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  try {
+    return await appendVaultRecord(mekCache, seed, mnemonic);
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Import a user-supplied PQM-1 mnemonic and add it to the container.
+ *  Requires the container to be unlocked. Rejects if the derived
+ *  address already matches a vault in the container (duplicate seed). */
+export async function addVaultImportV4(
+  mnemonic: string,
+): Promise<{ vaultId: string; address: string }> {
+  if (!mekCache) throw new Error("container is locked");
+  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  try {
+    const r = await appendVaultRecord(mekCache, seed, mnemonic);
+    return { vaultId: r.vaultId, address: r.address };
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Shared body for {@link addVaultFreshV4} + {@link addVaultImportV4}.
+ *  Generates a VEK, seals the seed + mnemonic, wraps the VEK with the
+ *  cached MEK, rejects duplicate addresses, appends, saves. */
+async function appendVaultRecord(
+  mek: Uint8Array,
+  seed: Uint8Array,
+  mnemonic: string,
+): Promise<{ vaultId: string; mnemonic: string; address: string }> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const backend = MlDsa65Backend.fromSeed(seed);
+  const address = await backend.getAddress();
+  if (container.vaults.some((v) => v.addr === address)) {
+    throw new Error("vault with this address already exists in the container");
+  }
+  const vek = generateVekV4();
+  let wrappedKey: WrappedVekV4;
+  let envelope: SealedSeedRecordV4;
+  try {
+    wrappedKey = wrapVekV4(mek, vek);
+    envelope = sealVaultEnvelopeV4(vek, seed, mnemonic);
+  } finally {
+    vek.fill(0);
+  }
+  const label = `Vault ${container.vaults.length + 1}`;
+  const record: VaultRecordV4 = {
+    id: crypto.randomUUID(),
+    label,
+    createdAt: Date.now(),
+    wrappedKey,
+    envelope,
+    addr: address,
+  };
+  container.vaults.push(record);
+  await saveVaultsContainerV4(container);
+  return { vaultId: record.id, mnemonic, address };
+}
+
 // ---- chrome.storage helpers ----
 
 async function loadRawV4(): Promise<unknown | null> {
@@ -623,9 +864,18 @@ export function getUnlockedAddressV4(): string | null {
 
 /** Lock — drop the in-memory backend reference. The backend's secret key
  * is held by the SDK in private fields; we cannot zero it deterministically,
- * but releasing the reference makes it eligible for GC. */
+ * but releasing the reference makes it eligible for GC.
+ *
+ * Also zeros + drops the cached MEK and forgets the active vault id (Phase
+ * 5 multi-vault state). After lock, any vault-switch or vault-add call
+ * fails until the user re-unlocks the container. */
 export function lockV4(): void {
   unlocked = null;
+  if (mekCache) {
+    mekCache.fill(0);
+    mekCache = null;
+  }
+  activeContainerVaultId = null;
 }
 
 /**

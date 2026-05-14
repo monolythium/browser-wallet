@@ -324,3 +324,190 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
     10_000,
   );
 });
+
+describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
+  let storage: StorageMap;
+
+  beforeEach(() => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it(
+    "unlockContainerV4 migrates the legacy entry on first call and loads the active backend",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "vault-unlock-password";
+      const { address: legacyAddress } =
+        await ks.createVaultFromNewMnemonic(password);
+      expect(storage["mono.vault.v4"]).toBeDefined();
+      expect(storage["mono.vaults.v4"]).toBeUndefined();
+
+      // First container unlock — migration runs, MEK is cached, active
+      // vault's backend is loaded.
+      const r = await ks.unlockContainerV4(password);
+      expect(r.address).toBe(legacyAddress);
+      expect(typeof r.vaultId).toBe("string");
+      expect(storage["mono.vaults.v4"]).toBeDefined();
+      expect(storage["mono.vault.v4"]).toBeDefined(); // legacy preserved
+      expect(ks.isUnlockedV4()).toBe(true);
+      expect(ks.getUnlockedAddressV4()).toBe(legacyAddress);
+
+      // Wrong password rejects.
+      ks.lockV4();
+      await expect(ks.unlockContainerV4("wrong")).rejects.toThrow();
+      expect(ks.isUnlockedV4()).toBe(false);
+    },
+    60_000,
+  );
+
+  it(
+    "listVaultsV4 returns null pre-migration and one summary post-migration",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      expect(await ks.listVaultsV4()).toBeNull();
+
+      const password = "list-password";
+      const { address } = await ks.createVaultFromNewMnemonic(password);
+      // listVaultsV4 still null until migration runs.
+      expect(await ks.listVaultsV4()).toBeNull();
+
+      await ks.unlockContainerV4(password);
+      const list = await ks.listVaultsV4();
+      expect(list).not.toBeNull();
+      expect(list!.length).toBe(1);
+      expect(list![0]!.addr).toBe(address);
+      expect(list![0]!.label).toBe("Vault 1");
+      expect(list![0]!.isActive).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
+    "addVaultFreshV4 appends a second vault; its mnemonic re-derives to the same address",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "add-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      const before = (await ks.listVaultsV4())!;
+      expect(before.length).toBe(1);
+
+      const added = await ks.addVaultFreshV4();
+      expect(added.vaultId).not.toBe(before[0]!.id);
+      expect(added.mnemonic.split(" ").length).toBe(24);
+      expect(added.address).toMatch(/^0x[0-9a-f]{40}$/);
+
+      const after = (await ks.listVaultsV4())!;
+      expect(after.length).toBe(2);
+      expect(after[1]!.label).toBe("Vault 2");
+      expect(after[1]!.addr).toBe(added.address);
+      // Active should NOT have switched — add is non-destructive.
+      expect(after[0]!.isActive).toBe(true);
+      expect(after[1]!.isActive).toBe(false);
+    },
+    90_000,
+  );
+
+  it(
+    "addVaultImportV4 rejects a duplicate-address mnemonic",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "import-password";
+      const { mnemonic: firstMnemonic } =
+        await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      // Importing the same mnemonic that backs Vault 1 → derives the same
+      // address → must reject.
+      await expect(ks.addVaultImportV4(firstMnemonic)).rejects.toThrow(
+        /already exists/i,
+      );
+      const list = (await ks.listVaultsV4())!;
+      expect(list.length).toBe(1);
+    },
+    90_000,
+  );
+
+  it(
+    "selectActiveVaultV4 switches active vault; lock clears MEK cache",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "select-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      const added = await ks.addVaultFreshV4();
+      const before = (await ks.listVaultsV4())!;
+      const firstId = before.find((v) => v.isActive)!.id;
+
+      const sel = await ks.selectActiveVaultV4(added.vaultId);
+      expect(sel.address).toBe(added.address);
+      expect(ks.getUnlockedAddressV4()).toBe(added.address);
+
+      const after = (await ks.listVaultsV4())!;
+      expect(after.find((v) => v.id === added.vaultId)!.isActive).toBe(true);
+      expect(after.find((v) => v.id === firstId)!.isActive).toBe(false);
+
+      // Lock clears the MEK cache; subsequent select MUST refuse.
+      ks.lockV4();
+      await expect(ks.selectActiveVaultV4(firstId)).rejects.toThrow(/locked/i);
+      await expect(ks.addVaultFreshV4()).rejects.toThrow(/locked/i);
+    },
+    120_000,
+  );
+
+  it(
+    "renameVaultV4 trims; rejects empty + over-32-char labels; no unlock required",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "rename-password";
+      await ks.createVaultFromNewMnemonic(password);
+      // Migrate without unlocking the unit under test — rename is supposed
+      // to work pre-unlock. We need the container on disk, so trigger
+      // migration via the internal helper.
+      const { migrateLegacyToContainerV4 } = ks.__internalV4Multi;
+      const container = await migrateLegacyToContainerV4(password);
+      expect(container).not.toBeNull();
+      const vaultId = container!.vaults[0]!.id;
+
+      // Lock keeps the MEK out of memory; rename still works.
+      ks.lockV4();
+      expect(ks.isUnlockedV4()).toBe(false);
+
+      await ks.renameVaultV4(vaultId, "  My Daily  ");
+      const list1 = (await ks.listVaultsV4())!;
+      expect(list1[0]!.label).toBe("My Daily");
+
+      await expect(ks.renameVaultV4(vaultId, "   ")).rejects.toThrow(
+        /non-empty/i,
+      );
+      await expect(
+        ks.renameVaultV4(vaultId, "x".repeat(33)),
+      ).rejects.toThrow(/1-32/);
+      await expect(
+        ks.renameVaultV4("unknown-id", "whatever"),
+      ).rejects.toThrow(/unknown vault id/);
+    },
+    60_000,
+  );
+
+  it(
+    "selectActiveVaultV4 on the already-active vault is a no-op fast path",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "noop-password";
+      await ks.createVaultFromNewMnemonic(password);
+      const r = await ks.unlockContainerV4(password);
+      const noop = await ks.selectActiveVaultV4(r.vaultId);
+      expect(noop.address).toBe(r.address);
+      expect(ks.getUnlockedAddressV4()).toBe(r.address);
+    },
+    60_000,
+  );
+});

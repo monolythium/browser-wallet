@@ -660,3 +660,90 @@ export async function bgSetAutoLockMinutes(
 > {
   return send("set-auto-lock-minutes", { minutes });
 }
+
+// ---- Phase 5 multi-vault container surface ----
+//
+// The popup vault picker (VaultPicker component, Commit 3) reads these
+// to render the list + switch active vault. Add/rename land via the
+// same channel. Whitepaper §21.2.1 endorses the "wallet that manages
+// many keystores" pattern that backs this surface.
+
+export interface VaultSummary {
+  id: string;
+  label: string;
+  /** EVM-style hex address (`0x` + 40 hex chars). Cached in the
+   *  container alongside the encrypted vault record so the picker
+   *  can render addresses without unlocking. */
+  addr: string;
+  createdAt: number;
+  isActive: boolean;
+}
+
+/**
+ * List the multi-vault container's vaults. `vaults` is `null` (not
+ * `[]`) when no container exists yet — that signal lets the picker
+ * branch on "still single-vault legacy, no picker UI yet" vs "empty
+ * container shouldn't happen post-migration". Returns array of
+ * summaries once the container has been initialized.
+ */
+export async function bgVaultsList(): Promise<
+  | { ok: true; vaults: VaultSummary[] | null }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-list");
+}
+
+/**
+ * Switch the active vault. The service worker broadcasts EIP-1193
+ * `accountsChanged` with the new address — connected dApps re-fetch
+ * state. Requires an unlocked container (MEK cached).
+ */
+export async function bgVaultSelect(
+  vaultId: string,
+): Promise<
+  { ok: true; address: string } | { ok: false; reason?: string }
+> {
+  return send("vault-select", { vaultId });
+}
+
+/**
+ * Update a vault's label. No re-auth required — labels are non-
+ * sensitive UI metadata in the plaintext container. Validates 1-32
+ * chars after trim at the SW; surfaces the validation message back
+ * in `reason` on failure.
+ */
+export async function bgVaultRename(
+  vaultId: string,
+  label: string,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("vault-rename", { vaultId, label });
+}
+
+/**
+ * Generate a fresh PQM-1 mnemonic and append a new vault. Caller
+ * receives the mnemonic for one-time display (Settings → Show
+ * recovery phrase later requires re-auth). Does NOT switch the active
+ * vault — the popup decides whether to follow up with `bgVaultSelect`.
+ * Requires an unlocked container.
+ */
+export async function bgVaultAddFresh(): Promise<
+  | { ok: true; vaultId: string; mnemonic: string; address: string }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-add-fresh");
+}
+
+/**
+ * Import a user-supplied PQM-1 mnemonic. Rejects duplicate-address
+ * imports (the importing mnemonic would derive the same address as
+ * an existing vault) with `reason: "vault already exists"`. Same
+ * no-auto-switch + requires-unlock semantics as bgVaultAddFresh.
+ */
+export async function bgVaultAddImport(
+  mnemonic: string,
+): Promise<
+  | { ok: true; vaultId: string; address: string }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-add-import", { mnemonic });
+}

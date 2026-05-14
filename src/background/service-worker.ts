@@ -57,7 +57,6 @@ import {
   getUnlockedAddressV4,
   hasVaultV4,
   getStoredAddressV4,
-  unlockV4,
   lockV4,
   createVaultFromNewMnemonic,
   createVaultFromMnemonic,
@@ -65,6 +64,15 @@ import {
   wipeVaultV4,
   personalSignV4,
   signTypedDataV4FromV4,
+  // Phase 5 multi-vault surface (Commit 2).
+  hasContainerV4,
+  unlockContainerV4,
+  selectActiveVaultV4,
+  listVaultsV4,
+  renameVaultV4,
+  addVaultFreshV4,
+  addVaultImportV4,
+  wipeContainerV4,
 } from "./keystore-mldsa.js";
 import {
   chainRequiresMlDsa,
@@ -1551,7 +1559,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // upgraded — re-import your seed"). It fires whenever any
       // non-current vault is on disk: v1 always, plus v2 once v4 is
       // the new primary or once we've deprecated v2.
-      const v4Exists = await hasVaultV4();
+      // Either a legacy single-vault entry (mono.vault.v4) OR a Phase
+      // 5 container (mono.vaults.v4) counts as "v4 present" for the
+      // popup's gating purposes — both unlock through the same dispatcher
+      // handler.
+      const v4Exists = (await hasVaultV4()) || (await hasContainerV4());
       const v2Exists = await hasVault();
       const v1Exists = await hasLegacyVault();
       if (v4Exists) {
@@ -1798,12 +1810,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
-      // Route to v3 when the v3 envelope is on disk; otherwise fall through
-      // to legacy v2 unlock so a user with only an old vault can still
-      // operate on non-Sprintnet chains. Lockout gates the v3 path only —
-      // v2 is sunset and getting wired through it would muddy the threshold
-      // accounting.
-      if (await hasVaultV4()) {
+      // Phase 5: prefer the multi-vault container path. unlockContainerV4
+      // runs migration opportunistically when a legacy mono.vault.v4
+      // entry exists and no container does — the user's existing
+      // password is used to decrypt legacy, then the same password
+      // derives MEK + wraps a fresh VEK over the migrated seed. Rate
+      // limiting wraps both branches identically; every wrong-password
+      // attempt counts against the shared SESSION_KEY_UNLOCK_FAIL_COUNT.
+      if ((await hasVaultV4()) || (await hasContainerV4())) {
         const ses = await chrome.storage.session.get([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1826,7 +1840,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           };
         }
         try {
-          const r = await unlockV4(p.password);
+          const r = await unlockContainerV4(p.password);
           await chrome.storage.session.remove([
             SESSION_KEY_UNLOCK_FAIL_COUNT,
             SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1968,7 +1982,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       try {
-        await unlockV4(p.password);
+        await unlockContainerV4(p.password);
       } catch {
         failCount += 1;
         const ms = lockoutMsFor(failCount);
@@ -1984,8 +1998,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
         };
       }
-      // Password verified — wipe and broadcast lock.
+      // Password verified — wipe both legacy single-vault entry and the
+      // multi-vault container, then broadcast lock. Phase 5 doubles the
+      // wipe surface; either entry left behind would let a reset user
+      // re-unlock with their old password.
       await wipeVaultV4();
+      await wipeContainerV4();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -2012,13 +2030,92 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await chrome.storage.session.set({
         [SESSION_KEY_LAST_WIPE_UNAUTH_AT]: now,
       });
+      // Phase 5: same dual-wipe as keystore-reset — legacy entry plus
+      // the multi-vault container. Forgot-password → Reset & Import
+      // must leave no recoverable key material on disk.
       await wipeVaultV4();
+      await wipeContainerV4();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
       ]);
       await triggerAutoLock();
       return { ok: true };
+    }
+    case "vault-list": {
+      // No unlock required — labels and addresses are non-sensitive
+      // metadata (the encrypted seed lives in each vault's per-vault
+      // envelope, not in the summary surface). Returns an empty array
+      // (NOT null) when no container exists yet so the popup can
+      // render "no vaults" uniformly without a null branch.
+      try {
+        const vaults = await listVaultsV4();
+        return { ok: true, vaults: vaults ?? [] };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-select": {
+      const p = message.payload as { vaultId?: string };
+      if (typeof p?.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const r = await selectActiveVaultV4(p.vaultId);
+        await resetAutoLock();
+        // EIP-1193 contract: accountsChanged broadcast on active-
+        // account change. Connected dApps re-fetch state with the
+        // new address; unconnected tabs receive the event and drop it
+        // (same pattern as the eth_requestAccounts broadcast).
+        broadcastEvent("accountsChanged", [r.address]);
+        return { ok: true, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-rename": {
+      const p = message.payload as { vaultId?: string; label?: string };
+      if (typeof p?.vaultId !== "string" || typeof p?.label !== "string") {
+        return { ok: false, reason: "missing vaultId or label" };
+      }
+      try {
+        await renameVaultV4(p.vaultId, p.label);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-add-fresh": {
+      // Requires an unlocked container (MEK cached). Generates a fresh
+      // PQM-1 mnemonic and appends a new VaultRecordV4. Does NOT
+      // switch the active vault — caller invokes vault-select if
+      // desired (gives the popup room to show "Vault N added — switch
+      // to it now? [Yes / Keep current]").
+      try {
+        const r = await addVaultFreshV4();
+        await resetAutoLock();
+        return {
+          ok: true,
+          vaultId: r.vaultId,
+          mnemonic: r.mnemonic,
+          address: r.address,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-add-import": {
+      const p = message.payload as { mnemonic?: string };
+      if (typeof p?.mnemonic !== "string") {
+        return { ok: false, reason: "missing mnemonic" };
+      }
+      try {
+        const r = await addVaultImportV4(p.mnemonic);
+        await resetAutoLock();
+        return { ok: true, vaultId: r.vaultId, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
     }
     case "set-auto-lock-minutes": {
       const p = message.payload as { minutes?: unknown };
@@ -2137,7 +2234,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // the real ML-DSA-65 address instead of the demo `mono1:…` placeholder.
       // Stays scoped to v3 — the legacy v2 keystore goes through the
       // existing demo-data path until the Networks list switch lands.
-      if (!(await hasVaultV4())) {
+      //
+      // Phase 5: either a legacy single envelope OR a container counts;
+      // unlockContainerV4 sets `unlocked` to the active vault's backend
+      // either way, so getUnlockedAddressV4() returns the right address.
+      if (!(await hasVaultV4()) && !(await hasContainerV4())) {
         return { ok: false, reason: "no v3 vault" };
       }
       if (!isUnlockedV4()) {
