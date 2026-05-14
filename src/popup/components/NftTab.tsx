@@ -19,7 +19,12 @@
 //     visits — Phase 2 is a no-op when every pin has a fresh hit.
 //
 // Sprintnet footnote (always visible) is the locked v1 educational
-// copy from plan B.6 Q4. Polish lands in Commit 8.
+// copy from plan B.6 Q4 + Q5: text-only, dimmer in non-empty state,
+// reframes "indexer disabled" as "discovery off — pinning + transfers
+// work normally" so users don't read the missing auto-discovery as
+// the feature being broken. Commit 8 polished the typography to the
+// locked spec (text-only, fg-500, 11 px, lh 1.4, max-width 320 px,
+// centered).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -373,7 +378,7 @@ export function NftTab({ ownerAddress, chainId, chainIdHex, onOpenSendNft }: Nft
           </button>
         </div>
       </div>
-      <Footnote />
+      <Footnote compact />
       <NftAddModal
         open={adding}
         caller={caller}
@@ -386,18 +391,23 @@ export function NftTab({ ownerAddress, chainId, chainIdHex, onOpenSendNft }: Nft
   );
 }
 
-function Footnote() {
+/** Always-visible educational footnote per plan B.6 Q4 + Q5.
+ *  `compact` renders the slightly smaller / dimmer variant below the
+ *  populated grid (the non-empty state); the empty state uses the
+ *  locked-spec dimensions verbatim. */
+function Footnote({ compact = false }: { compact?: boolean }) {
   return (
     <div
       style={{
         marginTop: 12,
-        padding: "8px 10px",
-        borderRadius: 8,
-        background: "rgba(255,255,255,0.03)",
-        border: "1px dashed var(--fg-700)",
-        fontSize: 10.5,
-        color: "var(--fg-400)",
-        lineHeight: 1.5,
+        marginLeft: "auto",
+        marginRight: "auto",
+        maxWidth: 320,
+        fontSize: compact ? 10 : 11,
+        lineHeight: 1.4,
+        color: "var(--fg-500)",
+        textAlign: "center",
+        opacity: compact ? 0.85 : 1,
       }}
     >
       {SPRINTNET_FOOTNOTE}
