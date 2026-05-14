@@ -104,6 +104,151 @@ export async function sprintnetJsonRpc<T>(
   throw lastTransportErr ?? new Error("no Sprintnet operator reachable");
 }
 
+/**
+ * Result of `sprintnetMaxBalanceConsensus`. `contributing` and `failing`
+ * sum to the active-operator-list length; the consensus value is the
+ * MAX across `contributing`.
+ */
+export interface BalanceConsensusResult {
+  /** Max balance across responding operators, hex-quantity. */
+  balanceHex: string;
+  /** Operators that returned a valid balance envelope. */
+  contributing: ReadonlyArray<{ name: string; balanceHex: string }>;
+  /** Operators that didn't contribute, with one-line reason each. */
+  failing: ReadonlyArray<{ name: string; reason: string }>;
+}
+
+/** Per-operator timeout for the parallel balance probe. */
+const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
+
+/** Accept both the proof-envelope shape `{ value, blockNumber, proof,
+ *  stateRoot }` and the plain hex-string shape; reject everything else. */
+function parseBalanceFromRpcResult(result: unknown): string | null {
+  if (typeof result === "string" && result.startsWith("0x")) {
+    return result;
+  }
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    typeof (result as { value?: unknown }).value === "string" &&
+    (result as { value: string }).value.startsWith("0x")
+  ) {
+    return (result as { value: string }).value;
+  }
+  return null;
+}
+
+/**
+ * Query every active Sprintnet operator in parallel for `eth_getBalance`
+ * and return the MAX value across responses.
+ *
+ * Operators may briefly lag behind each other after a regenesis or
+ * binary rollout. The single-operator-with-failover pattern in
+ * `sprintnetJsonRpc` latches onto the first responder, which for
+ * balance reads can be a stale `0x0` envelope that hides the correct
+ * value reported by other operators (observed 2026-05-15:
+ * 192.0.2.1 returned `0x0` for a freshly funded address while
+ * other operators returned the correct `0x16345785d8a0000`).
+ *
+ * Max() is safe specifically for balance because balance grows
+ * monotonically until a tx spends from the address — a lagging
+ * operator can only under-report, never over-report. Do NOT
+ * generalize this to `eth_call`, nonce, fee, or indexer methods,
+ * where max() is not meaningful; those keep `sprintnetJsonRpc`
+ * first-responder semantics.
+ */
+export async function sprintnetMaxBalanceConsensus(
+  address: string,
+): Promise<BalanceConsensusResult> {
+  const operators = getActiveOperators();
+  if (operators.length === 0) {
+    throw new Error("no Sprintnet operators configured");
+  }
+
+  const probes = operators.map(async (op) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), BALANCE_CONSENSUS_TIMEOUT_MS);
+    try {
+      const res = await fetch(op.rpc, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "eth_getBalance",
+          params: [address, "latest"],
+        }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        return { name: op.name, balanceHex: null, reason: `HTTP ${res.status}` };
+      }
+      const body = (await res.json()) as {
+        result?: unknown;
+        error?: { code?: number; message?: string };
+      };
+      if (body.error) {
+        return {
+          name: op.name,
+          balanceHex: null,
+          reason: body.error.message ?? "rpc error",
+        };
+      }
+      const parsed = parseBalanceFromRpcResult(body.result);
+      if (parsed === null) {
+        return { name: op.name, balanceHex: null, reason: "malformed shape" };
+      }
+      return { name: op.name, balanceHex: parsed, reason: null };
+    } catch (e) {
+      const err = e as Error;
+      return {
+        name: op.name,
+        balanceHex: null,
+        reason: err.name === "AbortError" ? "timeout" : err.message,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  const responses = await Promise.all(probes);
+  const contributing: Array<{ name: string; balanceHex: string; value: bigint }> = [];
+  const failing: Array<{ name: string; reason: string }> = [];
+  for (const r of responses) {
+    if (r.balanceHex === null) {
+      failing.push({ name: r.name, reason: r.reason ?? "unknown" });
+      continue;
+    }
+    try {
+      contributing.push({
+        name: r.name,
+        balanceHex: r.balanceHex,
+        value: BigInt(r.balanceHex),
+      });
+    } catch {
+      failing.push({ name: r.name, reason: "invalid bigint hex" });
+    }
+  }
+
+  if (contributing.length === 0) {
+    const summary = failing.map((f) => `${f.name}: ${f.reason}`).join("; ");
+    throw new Error(
+      `all ${operators.length} Sprintnet operators failed eth_getBalance: ${summary}`,
+    );
+  }
+
+  let max = contributing[0]!;
+  for (let i = 1; i < contributing.length; i++) {
+    if (contributing[i]!.value > max.value) max = contributing[i]!;
+  }
+
+  return {
+    balanceHex: max.balanceHex,
+    contributing: contributing.map((c) => ({ name: c.name, balanceHex: c.balanceHex })),
+    failing,
+  };
+}
+
 /** Fetch the cluster's current ML-KEM-768 encapsulation key. */
 export async function fetchSprintnetEncryptionKey(): Promise<SprintnetEncryptionKey> {
   const { result } = await sprintnetJsonRpc<SprintnetEncryptionKeyJson>(
