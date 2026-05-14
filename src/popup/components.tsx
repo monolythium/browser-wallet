@@ -464,9 +464,17 @@ function describeApproval(item: PendingApproval): ApprovalDisplay {
 }
 
 function PendingShelf() {
+<<<<<<< HEAD
   const { queue, loading } = useApprovalQueue();
   if (loading || queue.length === 0) return null;
 
+=======
+  const items: Array<{ id: string; title: string; hint: string; icon: string }> = [
+    { id: "connect", title: "Connect · MonoHub", hint: "3 permissions", icon: "M" },
+    { id: "sign", title: "Sign · swap 500 LYTH → USDC", hint: "simulated", icon: "C" },
+    { id: "message", title: "Sign-in · app.monohub.xyz", hint: "no value", icon: "M" },
+  ];
+>>>>>>> upstream/master
   return (
     <div className="ext-card" style={{ marginTop: 6 }}>
       <div className="ext-card__head">
@@ -865,7 +873,7 @@ export function Accounts({ current, onBack, onPick }: AccountsProps) {
 // ---- Stake sheet ----
 //
 // Pre-stage of the cluster-delegation surface (whitepaper §23 + §23.9
-// autovote). Pure presentational right now — no RPC plumbing — because
+// auto-compound). Pure presentational right now — no RPC plumbing — because
 // the delegation precompile (DELEGATION_ADDRESS = 0x100A) is gateable
 // per ADR-0015 and not activated on Sprintnet yet (verified: 0x100A
 // returns "0x" empty success). The four-strategy grid is fixed by §23.9
@@ -1003,7 +1011,7 @@ export function Stake({ onBack }: StakeProps) {
             marginTop: 4,
           }}
         >
-          — Per Monolythium v2 §23
+          — Per Monolythium v4.0 §23
         </div>
       </div>
     </>
@@ -1153,7 +1161,7 @@ export function Bridge({ onBack }: BridgeProps) {
             marginTop: 4,
           }}
         >
-          — Per Monolythium v2 §26
+          — Per Monolythium v4.0 §26
         </div>
       </div>
     </>
@@ -1314,7 +1322,7 @@ interface ReqSheetProps {
 }
 
 function ReqSheet({ onBack, children, type, showTypeTabs, onChangeSignType }: ReqSheetProps) {
-  const types: PendingSign["type"][] = ["swap", "stake", "vote", "bridge", "contract"];
+  const types: PendingSign["type"][] = ["swap", "stake", "bridge", "contract"];
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px 0" }}>
@@ -1481,17 +1489,15 @@ interface ReqSignProps {
 
 interface SwapSummary { pay: { amount: number; sym: string }; receive: { amount: number; sym: string }; rate: string; slippage: string; route: string }
 interface StakeSummary { action: string; amount: { amount: number; sym: string }; target: string; apr: string; autoCompound: boolean; unlockEst: string }
-interface VoteSummary { proposal: string; title: string; choice: string; weight: string }
 interface BridgeSummary { action: string; amount: { amount: number; sym: string }; from: string; to: string; receive: { amount: number; sym: string }; rate: string; relays: string; etaMin: number }
 interface ContractSummary { action: string; token: string; spender: string; risk: string }
 
 export function ReqSign({ type, custody, algo: initAlgo, onApprove, onReject }: ReqSignProps) {
   const key = type === "swap" ? "signSwap"
     : type === "stake" ? "signStake"
-    : type === "vote" ? "signVote"
     : type === "bridge" ? "signBridge"
     : "signContract";
-  const r = PENDING[key as "signSwap" | "signStake" | "signVote" | "signBridge" | "signContract"];
+  const r = PENDING[key as "signSwap" | "signStake" | "signBridge" | "signContract"];
   const [algo, setAlgo] = useState<Algo>(initAlgo || r.algo);
   const [showDecoded, setShowDecoded] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
@@ -1531,19 +1537,6 @@ export function ReqSign({ type, custody, algo: initAlgo, onApprove, onReject }: 
             <div className="req-sum__amt">{fmt(s.amount.amount, 0)}<span className="sym">{s.amount.sym}</span></div>
             <div className="req-sum__meta">→ {s.target} · APR {s.apr}{s.autoCompound ? " · auto" : ""}</div>
             <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", marginTop: 4 }}>unlock est · {s.unlockEst}</div>
-          </div>
-        );
-      })()}
-      {type === "vote" && (() => {
-        const s = r.summary as unknown as VoteSummary;
-        return (
-          <div className="req-sum">
-            <div className="req-sum__action">Cast vote · {s.proposal}</div>
-            <div style={{ fontSize: 14, fontWeight: 500, padding: "8px 14px", lineHeight: 1.4, marginTop: 4 }}>{s.title}</div>
-            <div className="req-sum__amt" style={{ fontSize: 28, marginTop: 6 }}>
-              <span style={{ color: "var(--ok)", fontFamily: "var(--f-mono)", letterSpacing: "0.08em" }}>{s.choice}</span>
-            </div>
-            <div className="req-sum__meta">weight · {s.weight}</div>
           </div>
         );
       })()}

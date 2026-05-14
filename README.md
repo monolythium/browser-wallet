@@ -8,7 +8,7 @@ Monolythium browser wallet (Chrome, Firefox, Brave — Manifest V3)
 
 ## What this is
 
-A Manifest V3 browser extension that holds Monolythium v2 keys and signs transactions for dapps via an EIP-1193 provider. Built on a Rust-native L1 (LythiumDAG-BFT consensus); the wallet talks to any Monolythium node through the `@monolythium/core-sdk` typed client. Early scaffold — features arrive in stages.
+A Manifest V3 browser extension that holds Monolythium v4.0 keys and signs transactions for dapps via an EIP-1193 provider. Built on a Rust-native L1 (LythiumDAG-BFT consensus); the wallet talks to any Monolythium node through the `@monolythium/core-sdk` typed client. Early scaffold — features arrive in stages.
 
 ## Who this is for
 
