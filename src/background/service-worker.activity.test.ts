@@ -164,6 +164,9 @@ vi.mock("@monolythium/core-sdk", () => ({
     }
   },
   MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
+  getRpcEndpoints: () => [
+    { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
+  ],
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
