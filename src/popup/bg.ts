@@ -141,20 +141,64 @@ export interface ChainEntry {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-function send<T>(op: string, payload?: unknown): Promise<T> {
+/** Phase 5.0.1 — error-message fragments that indicate the SW was
+ *  idle/asleep when sendMessage fired. Chrome MV3 wakes the worker
+ *  on demand, but the wake race can drop the first message; the
+ *  retry path below catches these classes. */
+const SW_IDLE_ERROR_MARKERS = [
+  "No SW",
+  "message port closed",
+  "receiving end does not exist",
+  "Could not establish connection",
+];
+
+function isSwIdleError(message: string): boolean {
+  return SW_IDLE_ERROR_MARKERS.some((m) => message.includes(m));
+}
+
+function rawSendMessage(message: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     try {
-      chrome.runtime.sendMessage({ kind: "popup", op, payload }, (resp) => {
+      chrome.runtime.sendMessage(message, (resp) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
-        resolve(resp as T);
+        resolve(resp);
       });
     } catch (e) {
       reject(e as Error);
     }
   });
+}
+
+function send<T>(op: string, payload?: unknown): Promise<T> {
+  // Single retry against the MV3 idle/wake race. Pure transport-
+  // level retry — application-level errors (`{ ok: false, ... }`
+  // payloads) reach the caller unchanged on the first attempt.
+  const envelope = { kind: "popup", op, payload };
+  return (async () => {
+    try {
+      return (await rawSendMessage(envelope)) as T;
+    } catch (e) {
+      const msg = (e as Error).message ?? "";
+      if (!isSwIdleError(msg)) throw e;
+      await new Promise((r) => setTimeout(r, 100));
+      return (await rawSendMessage(envelope)) as T;
+    }
+  })();
+}
+
+/** Wake the SW. Cheap no-op response from the SW's `ping` handler;
+ *  the only purpose is to flip the worker out of MV3 idle before any
+ *  real call lands. Caller does not need the result; failures are
+ *  swallowed because the followup real call carries its own retry. */
+export async function bgPing(): Promise<void> {
+  try {
+    await rawSendMessage({ kind: "ping" });
+  } catch {
+    /* swallow — followup calls carry their own retry. */
+  }
 }
 
 export async function bgKeystoreStatus(): Promise<KeystoreStatus> {
