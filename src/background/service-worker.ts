@@ -2156,9 +2156,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-balance": {
       // Read-only `eth_getBalance` for the popup Home balance pill.
-      // Sprintnet routes through the operator-fallback helper because
-      // the canonical alias `node-tnt.monolythium.xyz` resolves NXDOMAIN;
-      // every other chain id flows through `providerFor` so user-added
+      // Sprintnet routes through the operator-fallback helper from the
+      // SDK-bundled registry; every other chain id flows through `providerFor` so user-added
       // chains via wallet_addEthereumChain just work.
       //
       // Sprintnet returns a NON-STANDARD `eth_getBalance` shape — instead
