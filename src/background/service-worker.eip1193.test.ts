@@ -57,7 +57,17 @@ vi.mock("@monolythium/core-sdk", () => {
   return {
     MonolythiumProvider: FakeMonolythiumProvider,
     MONOLYTHIUM_TESTNET_CHAIN_ID: TESTNET_CHAIN_ID_BIGINT,
-    getRpcEndpoints: () => [{ url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" }],
+    // 6 endpoints — matches SDK chain-registry snapshot post-regenesis
+    // 2026-05-11 (val-1 dropped). Tests pin defaults.length === 6 so the
+    // mock must mirror the registry cardinality, not stub a single entry.
+    getRpcEndpoints: () => [
+      { url: "http://test.invalid:8545", provider: "test", region: "fsn1", tier: "official" },
+      { url: "http://test.invalid:8546", provider: "test", region: "nbg1", tier: "official" },
+      { url: "http://test.invalid:8547", provider: "test", region: "hel1", tier: "official" },
+      { url: "http://test.invalid:8548", provider: "test", region: "hel1", tier: "official" },
+      { url: "http://test.invalid:8549", provider: "test", region: "ash",  tier: "official" },
+      { url: "http://test.invalid:8550", provider: "test", region: "sin",  tier: "official" },
+    ],
   };
 });
 
