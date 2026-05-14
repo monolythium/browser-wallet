@@ -33,6 +33,7 @@ import type {
 import { bgWalletOperatorStatus, bgWalletChainBlockNumber, bgFocusApproval } from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
+import { VaultPicker } from "./components/VaultPicker";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -290,32 +291,16 @@ interface TopProps {
   onSettings: () => void;
 }
 
-export function Top({ account, onOpenAccounts, onSettings }: TopProps) {
+// Phase 5 Commit 3: chip replaced with <VaultPicker /> (multi-vault
+// dropdown). `onOpenAccounts` is preserved on TopProps for caller
+// compatibility but no longer consumed here — the legacy Accounts
+// screen navigation is vestigial since BIP-32/44 HD derivation was
+// removed (whitepaper §21.2.1). Full deletion of the prop chain
+// (HomeProps + App.tsx) is a Phase 8 cleanup.
+export function Top({ account, onSettings }: TopProps) {
   return (
     <div className="ext-top">
-      <div className="ext-acc" onClick={onOpenAccounts}>
-        <div className="ext-acc__lbl">
-          <div
-            className="n"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {account.label}
-            </span>
-            <span style={{ color: "var(--fg-300)", flexShrink: 0, display: "inline-flex" }}>
-              <Icon name="chev-d" size={12} />
-            </span>
-          </div>
-          <div className="a" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <RevealableAddressBlock addr0x={account.addr} />
-          </div>
-        </div>
-      </div>
+      <VaultPicker activeAccount={account} />
       <button className="ext-iconbtn" onClick={onSettings}><Icon name="settings" size={16} /></button>
     </div>
   );
