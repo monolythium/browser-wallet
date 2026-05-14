@@ -57,6 +57,7 @@ vi.mock("@monolythium/core-sdk", () => {
   return {
     MonolythiumProvider: FakeMonolythiumProvider,
     MONOLYTHIUM_TESTNET_CHAIN_ID: TESTNET_CHAIN_ID_BIGINT,
+    getRpcEndpoints: () => [{ url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" }],
   };
 });
 
