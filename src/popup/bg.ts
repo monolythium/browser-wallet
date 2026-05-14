@@ -725,25 +725,36 @@ export async function bgVaultRename(
  * recovery phrase later requires re-auth). Does NOT switch the active
  * vault — the popup decides whether to follow up with `bgVaultSelect`.
  * Requires an unlocked container.
+ *
+ * Optional `label` lets the popup thread a user-edited name through
+ * the same call (validated 1-32 chars at the SW). When omitted the
+ * keystore assigns `"Vault N"` based on post-append vault count.
  */
-export async function bgVaultAddFresh(): Promise<
+export async function bgVaultAddFresh(
+  label?: string,
+): Promise<
   | { ok: true; vaultId: string; mnemonic: string; address: string }
   | { ok: false; reason?: string }
 > {
-  return send("vault-add-fresh");
+  return send("vault-add-fresh", label !== undefined ? { label } : {});
 }
 
 /**
  * Import a user-supplied PQM-1 mnemonic. Rejects duplicate-address
  * imports (the importing mnemonic would derive the same address as
- * an existing vault) with `reason: "vault already exists"`. Same
- * no-auto-switch + requires-unlock semantics as bgVaultAddFresh.
+ * an existing vault) with `reason: "vault with this address already
+ * exists in the container"`. Same no-auto-switch + requires-unlock
+ * semantics as bgVaultAddFresh; same optional `label` handling.
  */
 export async function bgVaultAddImport(
   mnemonic: string,
+  label?: string,
 ): Promise<
   | { ok: true; vaultId: string; address: string }
   | { ok: false; reason?: string }
 > {
-  return send("vault-add-import", { mnemonic });
+  return send(
+    "vault-add-import",
+    label !== undefined ? { mnemonic, label } : { mnemonic },
+  );
 }

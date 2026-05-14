@@ -726,8 +726,12 @@ export async function renameVaultV4(
 /** Generate a fresh PQM-1 mnemonic and add a new vault to the
  *  container. Requires the container to be unlocked. Returns the new
  *  vault id, the mnemonic (one-time — treat like a private key), and
- *  the derived address. Does NOT change `activeVaultId`. */
-export async function addVaultFreshV4(): Promise<{
+ *  the derived address. Does NOT change `activeVaultId`.
+ *
+ *  When `label` is provided it is trimmed and validated to 1-32 chars
+ *  (matches {@link renameVaultV4}); when omitted the SW assigns
+ *  `"Vault N"` where N is the post-append vault count. */
+export async function addVaultFreshV4(label?: string): Promise<{
   vaultId: string;
   mnemonic: string;
   address: string;
@@ -738,7 +742,7 @@ export async function addVaultFreshV4(): Promise<{
   });
   const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
   try {
-    return await appendVaultRecord(mekCache, seed, mnemonic);
+    return await appendVaultRecord(mekCache, seed, mnemonic, label);
   } finally {
     seed.fill(0);
   }
@@ -746,14 +750,16 @@ export async function addVaultFreshV4(): Promise<{
 
 /** Import a user-supplied PQM-1 mnemonic and add it to the container.
  *  Requires the container to be unlocked. Rejects if the derived
- *  address already matches a vault in the container (duplicate seed). */
+ *  address already matches a vault in the container (duplicate seed).
+ *  See {@link addVaultFreshV4} for label semantics. */
 export async function addVaultImportV4(
   mnemonic: string,
+  label?: string,
 ): Promise<{ vaultId: string; address: string }> {
   if (!mekCache) throw new Error("container is locked");
   const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
   try {
-    const r = await appendVaultRecord(mekCache, seed, mnemonic);
+    const r = await appendVaultRecord(mekCache, seed, mnemonic, label);
     return { vaultId: r.vaultId, address: r.address };
   } finally {
     seed.fill(0);
@@ -762,11 +768,15 @@ export async function addVaultImportV4(
 
 /** Shared body for {@link addVaultFreshV4} + {@link addVaultImportV4}.
  *  Generates a VEK, seals the seed + mnemonic, wraps the VEK with the
- *  cached MEK, rejects duplicate addresses, appends, saves. */
+ *  cached MEK, rejects duplicate addresses, appends, saves. Validates
+ *  the optional caller-supplied label with the same rules as
+ *  {@link renameVaultV4}; falls back to `"Vault N"` (where N is the
+ *  post-append vault count) when the caller passes no label. */
 async function appendVaultRecord(
   mek: Uint8Array,
   seed: Uint8Array,
   mnemonic: string,
+  requestedLabel?: string,
 ): Promise<{ vaultId: string; mnemonic: string; address: string }> {
   const container = await loadVaultsContainerV4();
   if (!container) throw new Error("no v4 vaults container");
@@ -774,6 +784,15 @@ async function appendVaultRecord(
   const address = await backend.getAddress();
   if (container.vaults.some((v) => v.addr === address)) {
     throw new Error("vault with this address already exists in the container");
+  }
+  let label: string;
+  if (requestedLabel !== undefined) {
+    const trimmed = requestedLabel.trim();
+    if (trimmed.length === 0) throw new Error("label must be non-empty");
+    if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
+    label = trimmed;
+  } else {
+    label = `Vault ${container.vaults.length + 1}`;
   }
   const vek = generateVekV4();
   let wrappedKey: WrappedVekV4;
@@ -784,7 +803,6 @@ async function appendVaultRecord(
   } finally {
     vek.fill(0);
   }
-  const label = `Vault ${container.vaults.length + 1}`;
   const record: VaultRecordV4 = {
     id: crypto.randomUUID(),
     label,
