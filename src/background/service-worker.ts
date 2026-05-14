@@ -2672,6 +2672,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         to?: string;
         valueWeiHex?: string;
         chainIdHex?: string;
+        // Phase 5 Commit 7 — optional contract-call fields. Omit
+        // both for native LYTH transfers and the handler behaves
+        // exactly as it did before; supply them for NFT
+        // safeTransferFrom and the data is forwarded verbatim into
+        // the ML-DSA-65 envelope.
+        data?: string;
+        gasLimitHex?: string;
       };
       if (
         typeof p?.to !== "string" ||
@@ -2679,6 +2686,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         typeof p?.chainIdHex !== "string"
       ) {
         return { ok: false, reason: "missing to, valueWeiHex, or chainIdHex" };
+      }
+      if (
+        p.data !== undefined &&
+        (typeof p.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(p.data))
+      ) {
+        return { ok: false, reason: "data must be 0x-prefixed hex" };
+      }
+      if (
+        p.gasLimitHex !== undefined &&
+        (typeof p.gasLimitHex !== "string" ||
+          !/^0x[0-9a-fA-F]+$/.test(p.gasLimitHex))
+      ) {
+        return { ok: false, reason: "gasLimitHex must be 0x-prefixed hex" };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         // Real-send through the legacy secp256k1 path is not in scope yet —
@@ -2703,14 +2723,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // Sprintnet's mempool enforces an intrinsic-gas floor (~24309 as
         // of audit) that `eth_estimateGas` doesn't reflect — it returns
         // EVM execution gas only and ignores ML-DSA verify + envelope
-        // decrypt + state proof overhead. Use the pre-resolved hex from
-        // suggestFee instead. Falls back to 0x5208 if the suggestion
-        // somehow returns null on the Sprintnet branch (shouldn't happen
-        // — defensive).
-        const gasHex = fee.gasLimit ?? "0x5208";
+        // decrypt + state proof overhead. Native transfers use the
+        // pre-resolved hex from suggestFee. Contract calls (NFT
+        // safeTransferFrom from the SendNft screen) carry their own
+        // caller-supplied estimate because the suggestFee gas hint is
+        // sized for native transfers only.
+        const gasHex = p.gasLimitHex ?? fee.gasLimit ?? "0x5208";
         const { txHash, via } = await submitEncryptedMlDsaTx({
           to: p.to,
           value: p.valueWeiHex,
+          ...(p.data !== undefined ? { data: p.data } : {}),
           gas: gasHex,
           nonce: nonceRes.result,
           maxFeePerGas: fee.maxFeePerGas,

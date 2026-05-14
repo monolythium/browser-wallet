@@ -521,6 +521,17 @@ export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
   chainIdHex: string;
+  /** Optional EVM calldata. Required for contract calls (NFT
+   *  safeTransferFrom, ERC-20 transfer, etc.); omit for native LYTH
+   *  transfers. The SW forwards the bytes verbatim into the
+   *  ML-DSA-65 envelope path; signing semantics are unchanged.
+   *  Phase 5 Commit 7 added this field for the SendNft screen. */
+  data?: string;
+  /** Optional gas-limit override (hex). When omitted the SW falls
+   *  back to its native-transfer default (Sprintnet's intrinsic-gas
+   *  floor). NFT calldata pushes that floor well past 21k, so the
+   *  Send-NFT page passes a conservative overhead-aware estimate. */
+  gasLimitHex?: string;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
