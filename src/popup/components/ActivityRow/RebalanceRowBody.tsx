@@ -14,7 +14,7 @@ export function RebalanceRowBody({ row }: RebalanceRowBodyProps) {
   return (
     <div className="ext-act-row">
       <div className="dir out">
-        <Icon name="vote" size={13} />
+        <Icon name="swap" size={13} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">Auto-rebalanced (cap tightening §23.7)</div>
