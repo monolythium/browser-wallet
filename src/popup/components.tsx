@@ -464,17 +464,9 @@ function describeApproval(item: PendingApproval): ApprovalDisplay {
 }
 
 function PendingShelf() {
-<<<<<<< HEAD
   const { queue, loading } = useApprovalQueue();
   if (loading || queue.length === 0) return null;
 
-=======
-  const items: Array<{ id: string; title: string; hint: string; icon: string }> = [
-    { id: "connect", title: "Connect · MonoHub", hint: "3 permissions", icon: "M" },
-    { id: "sign", title: "Sign · swap 500 LYTH → USDC", hint: "simulated", icon: "C" },
-    { id: "message", title: "Sign-in · app.monohub.xyz", hint: "no value", icon: "M" },
-  ];
->>>>>>> upstream/master
   return (
     <div className="ext-card" style={{ marginTop: 6 }}>
       <div className="ext-card__head">
