@@ -2787,6 +2787,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   const m = message as { kind?: string };
+  // Phase 5.0.1 — keepalive ping. The popup fires this on mount to
+  // wake the SW out of MV3 idle before any real call goes out;
+  // synchronous reply, no auth, no work, no auto-lock reset.
+  // Anything that touches state belongs in the popup or rpc branch.
+  if (m?.kind === "ping") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (m?.kind === "rpc") {
     const rpc = message as RpcMessage;
     handleRpc(rpc)

@@ -12,6 +12,16 @@
 // while the rename modal is open so the two don't double-fire. The
 // same gating applies while the VaultAddModal is open (Commit 4).
 //
+// Phase 5.0.1 — dropdown is rendered via createPortal into document.body
+// and anchored via the chip's getBoundingClientRect. The previous
+// position:absolute / zIndex:100 implementation rendered behind the
+// AVAILABLE LYTH balance card because the popup's `.ext-card` containers
+// create their own stacking contexts (position: relative + backdrop-
+// filter). Bumping zIndex inside that context did nothing; portaling
+// to <body> escapes the constraint cleanly. Position recomputes on
+// window resize. Click-outside detection now checks both the chip
+// wrapper AND the portal'd panel since they're DOM-disconnected.
+//
 // Pre-migration state — `bgVaultsList` returns `vaults: null` while the
 // wallet is still on the legacy single-vault entry. The chip renders
 // disabled (no dropdown opens) with a "Vaults appear after first
@@ -28,7 +38,8 @@
 // Coverage planned in a Phase 8 hardening pass alongside other popup
 // component tests.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties } from "react";
 
 import { Icon, shortAddr } from "../Icon";
@@ -63,7 +74,34 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
   const [open, setOpen] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [addMode, setAddMode] = useState<VaultAddMode | null>(null);
+  // wrapRef wraps the chip + portal mount point and backs the
+  // click-outside check on the chip side. portalRef is attached to
+  // the portal'd dropdown panel so the same listener can also tell
+  // "click landed on a row" from "click landed elsewhere on body".
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const chipRef = useRef<HTMLDivElement | null>(null);
+  const portalRef = useRef<HTMLDivElement | null>(null);
+  // Anchor position for the portal'd dropdown — recomputed on open
+  // + on window resize. `null` while closed; setting it to
+  // coordinates triggers the portal render.
+  const [anchor, setAnchor] = useState<
+    | { top: number; left: number; width: number }
+    | null
+  >(null);
+
+  const recomputeAnchor = useCallback(() => {
+    const el = chipRef.current;
+    if (!el) {
+      setAnchor(null);
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    setAnchor({
+      top: rect.bottom + 6,
+      left: rect.left,
+      width: rect.width,
+    });
+  }, []);
 
   const refresh = async () => {
     const r = await bgVaultsList();
@@ -74,18 +112,36 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
     void refresh();
   }, []);
 
+  // Recompute anchor on open + on window resize while open. The
+  // popup body itself doesn't scroll under the header in normal use
+  // (the header chip sits in the fixed top region), so a scroll
+  // listener isn't strictly needed for the 380 px popup viewport.
+  useEffect(() => {
+    if (!open) {
+      setAnchor(null);
+      return;
+    }
+    recomputeAnchor();
+    const onResize = () => recomputeAnchor();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [open, recomputeAnchor]);
+
   // Click-outside dismissal — bind only while the dropdown is open.
-  // The Modal primitive renders via createPortal into document.body,
-  // so clicks inside the rename modal are OUTSIDE wrapRef and would
-  // normally close the dropdown. We accept that — the rename flow
-  // already closes the dropdown implicitly when finished.
+  // The dropdown is portal'd into document.body (Phase 5.0.1), so
+  // the chip wrapper alone is no longer enough to recognise an
+  // in-bounds click — we have to also consult the portal subtree.
+  // The Modal primitive renders via createPortal too, but the
+  // rename / add modals already close the dropdown implicitly when
+  // they open, so we don't need to special-case them here.
   useEffect(() => {
     if (!open) return;
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as Node | null;
-      if (target && wrapRef.current && !wrapRef.current.contains(target)) {
-        setOpen(false);
-      }
+      if (!target) return;
+      if (wrapRef.current && wrapRef.current.contains(target)) return;
+      if (portalRef.current && portalRef.current.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
@@ -167,6 +223,7 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
   return (
     <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <div
+        ref={chipRef}
         className="ext-acc"
         onClick={handleChipClick}
         aria-disabled={!ready}
@@ -216,43 +273,46 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
         </div>
       </div>
 
-      {open && ready && (
-        <div
-          role="listbox"
-          aria-label="Vaults"
-          style={{
-            position: "absolute",
-            top: "calc(100% + 6px)",
-            left: 0,
-            right: 0,
-            zIndex: 100,
-            background: "var(--ink-100, #15161a)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 12,
-            boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
-            padding: 4,
-            maxHeight: 320,
-            overflowY: "auto",
-          }}
-        >
-          {(vaults ?? []).map((v) => (
-            <VaultRow
-              key={v.id}
-              vault={v}
-              onSelect={() => void handleRowClick(v.id)}
-              onRename={() => handleStartRename(v.id)}
-            />
-          ))}
+      {open && ready && anchor &&
+        createPortal(
           <div
+            ref={portalRef}
+            role="listbox"
+            aria-label="Vaults"
             style={{
-              borderTop: "1px solid rgba(255,255,255,0.06)",
-              margin: "4px 0",
+              position: "fixed",
+              top: anchor.top,
+              left: anchor.left,
+              width: anchor.width,
+              zIndex: 9999,
+              background: "var(--ink-100, #15161a)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 12,
+              boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+              padding: 4,
+              maxHeight: 320,
+              overflowY: "auto",
             }}
-          />
-          <FooterButton onClick={handleAddFresh} label="New vault" />
-          <FooterButton onClick={handleAddImport} label="Import existing" />
-        </div>
-      )}
+          >
+            {(vaults ?? []).map((v) => (
+              <VaultRow
+                key={v.id}
+                vault={v}
+                onSelect={() => void handleRowClick(v.id)}
+                onRename={() => handleStartRename(v.id)}
+              />
+            ))}
+            <div
+              style={{
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+                margin: "4px 0",
+              }}
+            />
+            <FooterButton onClick={handleAddFresh} label="New vault" />
+            <FooterButton onClick={handleAddImport} label="Import existing" />
+          </div>,
+          document.body,
+        )}
 
       <Modal
         open={renameId !== null}

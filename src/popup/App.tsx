@@ -45,6 +45,7 @@ import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
   bgKeystoreStatus,
+  bgPing,
   bgKeystoreCreateNew,
   bgKeystoreCreateFromMnemonic,
   bgResolveApproval,
@@ -270,6 +271,16 @@ export default function App() {
     // state of its own.
     void r;
   }, [acc.addr, activeChain.chainId]);
+
+  // Phase 5.0.1 — wake the SW out of MV3 idle BEFORE any real call
+  // goes out. Without this, the first `bgKeystoreStatus()` below
+  // (and the picker / chain banner mounts that follow) sometimes
+  // race the SW boot and surface as "Unchecked runtime.lastError:
+  // No SW receiving end" in the console. Fire-and-forget; the
+  // followup calls also retry once on the same error class.
+  useEffect(() => {
+    void bgPing();
+  }, []);
 
   // ---- mount-time bootstrap ----
   useEffect(() => {
