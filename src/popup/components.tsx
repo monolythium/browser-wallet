@@ -33,6 +33,9 @@ import type {
 import { bgWalletOperatorStatus, bgWalletChainBlockNumber, bgFocusApproval } from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
+import { VaultPicker } from "./components/VaultPicker";
+import { NftTab } from "./components/NftTab";
+import type { SendNftTarget } from "./pages/SendNft";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -290,32 +293,16 @@ interface TopProps {
   onSettings: () => void;
 }
 
-export function Top({ account, onOpenAccounts, onSettings }: TopProps) {
+// Phase 5 Commit 3: chip replaced with <VaultPicker /> (multi-vault
+// dropdown). `onOpenAccounts` is preserved on TopProps for caller
+// compatibility but no longer consumed here — the legacy Accounts
+// screen navigation is vestigial since BIP-32/44 HD derivation was
+// removed (whitepaper §21.2.1). Full deletion of the prop chain
+// (HomeProps + App.tsx) is a Phase 8 cleanup.
+export function Top({ account, onSettings }: TopProps) {
   return (
     <div className="ext-top">
-      <div className="ext-acc" onClick={onOpenAccounts}>
-        <div className="ext-acc__lbl">
-          <div
-            className="n"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {account.label}
-            </span>
-            <span style={{ color: "var(--fg-300)", flexShrink: 0, display: "inline-flex" }}>
-              <Icon name="chev-d" size={12} />
-            </span>
-          </div>
-          <div className="a" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <RevealableAddressBlock addr0x={account.addr} />
-          </div>
-        </div>
-      </div>
+      <VaultPicker activeAccount={account} />
       <button className="ext-iconbtn" onClick={onSettings}><Icon name="settings" size={16} /></button>
     </div>
   );
@@ -584,11 +571,14 @@ interface HomeProps {
   onOpenSend?: () => void;
   onOpenStake?: () => void;
   onOpenBridge?: () => void;
+  /** Phase 5 Commit 7 — fired by NftDetail's Send CTA. App.tsx
+   *  stashes the target NFT and routes to the SendNft screen. */
+  onOpenSendNft?: (target: SendNftTarget) => void;
   onOpenOnboard: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
-  const [tab, setTab] = useState<"assets" | "activity">("assets");
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, onOpenOnboard }: HomeProps) {
+  const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
@@ -757,13 +747,23 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
           <div className="ext-tabs">
             <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
             <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
+            <button className={tab === "nfts" ? "on" : ""} onClick={() => setTab("nfts")}>NFTs</button>
           </div>
-          {tab === "assets" ? (
+          {tab === "assets" && (
             <AssetList account={account} network={network} indexer={indexer} />
-          ) : (
+          )}
+          {tab === "activity" && (
             <ActivityList
               addr={account.addr.startsWith("0x") ? account.addr : null}
               chainIdHex={network.chainId}
+            />
+          )}
+          {tab === "nfts" && (
+            <NftTab
+              ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
+              chainId={network.chainIdNum}
+              chainIdHex={network.chainId}
+              {...(onOpenSendNft ? { onOpenSendNft } : {})}
             />
           )}
         </div>
