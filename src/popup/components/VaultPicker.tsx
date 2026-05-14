@@ -9,7 +9,8 @@
 // Anchored dropdown opens below the chip. Click outside or press Escape
 // to dismiss. Per-row rename via the Modal primitive — Modal handles
 // its own Escape, and the dropdown's Escape listener is gated off
-// while the rename modal is open so the two don't double-fire.
+// while the rename modal is open so the two don't double-fire. The
+// same gating applies while the VaultAddModal is open (Commit 4).
 //
 // Pre-migration state — `bgVaultsList` returns `vaults: null` while the
 // wallet is still on the legacy single-vault entry. The chip renders
@@ -17,9 +18,10 @@
 // unlock" tooltip. Same disabled treatment during the brief pre-fetch
 // loading tick before the first bgVaultsList resolves.
 //
-// Add CTAs in the dropdown footer are no-ops in this commit — the
-// VaultAddModal lands in Commit 4. Both close the dropdown so a future
-// modal can open without overlap.
+// Phase 5 Commit 4: dropdown footer CTAs open a two-mode VaultAddModal
+// (fresh / import) via `addMode` state. Each CTA closes the dropdown
+// before flipping `addMode`, so the modal lands cleanly atop the
+// header instead of overlapping the dropdown panel.
 //
 // TODO: VaultPicker test coverage — popup-side React test infra
 // (@testing-library/react + jsdom) doesn't exist in this codebase yet.
@@ -33,6 +35,7 @@ import { Icon, shortAddr } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { Modal } from "./Modal";
 import { RevealableAddressBlock } from "./RevealableAddressBlock";
+import { VaultAddModal, type VaultAddMode } from "./VaultAddModal";
 import {
   bgVaultsList,
   bgVaultSelect,
@@ -59,6 +62,7 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
   );
   const [open, setOpen] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
+  const [addMode, setAddMode] = useState<VaultAddMode | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = async () => {
@@ -87,17 +91,17 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [open]);
 
-  // Escape closes the dropdown — but only when the rename modal is
-  // NOT open. Modal's own document keydown listener handles its
-  // Escape; gating here keeps the two from racing.
+  // Escape closes the dropdown — but only when no Modal is open.
+  // Modal's own document keydown listener handles its Escape; gating
+  // here keeps the two from racing for both rename and add flows.
   useEffect(() => {
-    if (!open || renameId !== null) return;
+    if (!open || renameId !== null || addMode !== null) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, renameId]);
+  }, [open, renameId, addMode]);
 
   const ready = Array.isArray(vaults) && vaults.length > 0;
 
@@ -139,11 +143,16 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
 
   const handleAddFresh = () => {
     setOpen(false);
-    // TODO Commit 4: open VaultAddModal in fresh mode
+    setAddMode("fresh");
   };
   const handleAddImport = () => {
     setOpen(false);
-    // TODO Commit 4: open VaultAddModal in import mode
+    setAddMode("import");
+  };
+  const handleAddCancel = () => setAddMode(null);
+  const handleAddComplete = async () => {
+    setAddMode(null);
+    await refresh();
   };
 
   const chipDisabledStyle: CSSProperties = ready
@@ -258,6 +267,16 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
           />
         )}
       </Modal>
+
+      {addMode !== null && (
+        <VaultAddModal
+          open={true}
+          initialMode={addMode}
+          vaultsCount={vaults?.length ?? 0}
+          onClose={handleAddCancel}
+          onComplete={() => void handleAddComplete()}
+        />
+      )}
     </div>
   );
 }

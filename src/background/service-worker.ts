@@ -2091,8 +2091,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // switch the active vault — caller invokes vault-select if
       // desired (gives the popup room to show "Vault N added — switch
       // to it now? [Yes / Keep current]").
+      //
+      // `label` is optional; the keystore helper validates 1-32 chars
+      // when supplied and falls back to its own "Vault N" auto-label
+      // otherwise. Phase 5 Commit 4: VaultAddModal threads a
+      // user-edited label through this slot.
+      const p = (message.payload ?? {}) as { label?: string };
+      const label = typeof p.label === "string" ? p.label : undefined;
       try {
-        const r = await addVaultFreshV4();
+        const r = await addVaultFreshV4(label);
         await resetAutoLock();
         return {
           ok: true,
@@ -2105,12 +2112,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "vault-add-import": {
-      const p = message.payload as { mnemonic?: string };
+      const p = message.payload as { mnemonic?: string; label?: string };
       if (typeof p?.mnemonic !== "string") {
         return { ok: false, reason: "missing mnemonic" };
       }
+      const label = typeof p.label === "string" ? p.label : undefined;
       try {
-        const r = await addVaultImportV4(p.mnemonic);
+        const r = await addVaultImportV4(p.mnemonic, label);
         await resetAutoLock();
         return { ok: true, vaultId: r.vaultId, address: r.address };
       } catch (e) {
