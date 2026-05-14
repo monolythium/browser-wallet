@@ -64,6 +64,11 @@ vi.mock("./tx-mldsa.js", () => ({
     err.code = -32601;
     throw err;
   }),
+  sprintnetMaxBalanceConsensus: vi.fn(async (_address: string) => ({
+    balanceHex: "0x0",
+    contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
+    failing: [],
+  })),
   submitEncryptedMlDsaTx: vi.fn(async () => {
     if (submitFailure !== null) {
       throw submitFailure;
