@@ -34,6 +34,7 @@ import { bgWalletOperatorStatus, bgWalletChainBlockNumber, bgFocusApproval } fro
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
+import { NftTab } from "./components/NftTab";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -573,7 +574,7 @@ interface HomeProps {
 }
 
 export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenOnboard }: HomeProps) {
-  const [tab, setTab] = useState<"assets" | "activity">("assets");
+  const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
@@ -742,12 +743,21 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
           <div className="ext-tabs">
             <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
             <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
+            <button className={tab === "nfts" ? "on" : ""} onClick={() => setTab("nfts")}>NFTs</button>
           </div>
-          {tab === "assets" ? (
+          {tab === "assets" && (
             <AssetList account={account} network={network} indexer={indexer} />
-          ) : (
+          )}
+          {tab === "activity" && (
             <ActivityList
               addr={account.addr.startsWith("0x") ? account.addr : null}
+              chainIdHex={network.chainId}
+            />
+          )}
+          {tab === "nfts" && (
+            <NftTab
+              ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
+              chainId={network.chainIdNum}
               chainIdHex={network.chainId}
             />
           )}

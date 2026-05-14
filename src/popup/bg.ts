@@ -285,6 +285,21 @@ export async function bgWalletBalance(
   return send("wallet-balance", { address, chainIdHex });
 }
 
+/**
+ * Read-only `eth_call` proxy. The popup has no RpcClient instance of
+ * its own — every chain query goes through the SW's existing operator-
+ * failover routing (Sprintnet) or `providerFor` (everything else).
+ * The NFT tab uses this for ERC-721 / ERC-1155 ownership and metadata
+ * lookups via the `IpcEthCaller` adapter in `nftEthCaller.ts`.
+ */
+export async function bgEthCall(
+  to: string,
+  data: string,
+  chainIdHex: string,
+): Promise<{ ok: true; result: string } | { ok: false; reason?: string }> {
+  return send("wallet-eth-call", { to, data, chainIdHex });
+}
+
 export interface WalletTokenBalance {
   tokenId: string;
   balance: string;
