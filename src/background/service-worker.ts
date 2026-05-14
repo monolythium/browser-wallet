@@ -57,7 +57,6 @@ import {
   getUnlockedAddressV4,
   hasVaultV4,
   getStoredAddressV4,
-  unlockV4,
   lockV4,
   createVaultFromNewMnemonic,
   createVaultFromMnemonic,
@@ -65,6 +64,15 @@ import {
   wipeVaultV4,
   personalSignV4,
   signTypedDataV4FromV4,
+  // Phase 5 multi-vault surface (Commit 2).
+  hasContainerV4,
+  unlockContainerV4,
+  selectActiveVaultV4,
+  listVaultsV4,
+  renameVaultV4,
+  addVaultFreshV4,
+  addVaultImportV4,
+  wipeContainerV4,
 } from "./keystore-mldsa.js";
 import {
   chainRequiresMlDsa,
@@ -1551,7 +1559,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // upgraded — re-import your seed"). It fires whenever any
       // non-current vault is on disk: v1 always, plus v2 once v4 is
       // the new primary or once we've deprecated v2.
-      const v4Exists = await hasVaultV4();
+      // Either a legacy single-vault entry (mono.vault.v4) OR a Phase
+      // 5 container (mono.vaults.v4) counts as "v4 present" for the
+      // popup's gating purposes — both unlock through the same dispatcher
+      // handler.
+      const v4Exists = (await hasVaultV4()) || (await hasContainerV4());
       const v2Exists = await hasVault();
       const v1Exists = await hasLegacyVault();
       if (v4Exists) {
@@ -1798,12 +1810,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
-      // Route to v3 when the v3 envelope is on disk; otherwise fall through
-      // to legacy v2 unlock so a user with only an old vault can still
-      // operate on non-Sprintnet chains. Lockout gates the v3 path only —
-      // v2 is sunset and getting wired through it would muddy the threshold
-      // accounting.
-      if (await hasVaultV4()) {
+      // Phase 5: prefer the multi-vault container path. unlockContainerV4
+      // runs migration opportunistically when a legacy mono.vault.v4
+      // entry exists and no container does — the user's existing
+      // password is used to decrypt legacy, then the same password
+      // derives MEK + wraps a fresh VEK over the migrated seed. Rate
+      // limiting wraps both branches identically; every wrong-password
+      // attempt counts against the shared SESSION_KEY_UNLOCK_FAIL_COUNT.
+      if ((await hasVaultV4()) || (await hasContainerV4())) {
         const ses = await chrome.storage.session.get([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1826,7 +1840,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           };
         }
         try {
-          const r = await unlockV4(p.password);
+          const r = await unlockContainerV4(p.password);
           await chrome.storage.session.remove([
             SESSION_KEY_UNLOCK_FAIL_COUNT,
             SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -1968,7 +1982,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       try {
-        await unlockV4(p.password);
+        await unlockContainerV4(p.password);
       } catch {
         failCount += 1;
         const ms = lockoutMsFor(failCount);
@@ -1984,8 +1998,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
         };
       }
-      // Password verified — wipe and broadcast lock.
+      // Password verified — wipe both legacy single-vault entry and the
+      // multi-vault container, then broadcast lock. Phase 5 doubles the
+      // wipe surface; either entry left behind would let a reset user
+      // re-unlock with their old password.
       await wipeVaultV4();
+      await wipeContainerV4();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -2012,13 +2030,100 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await chrome.storage.session.set({
         [SESSION_KEY_LAST_WIPE_UNAUTH_AT]: now,
       });
+      // Phase 5: same dual-wipe as keystore-reset — legacy entry plus
+      // the multi-vault container. Forgot-password → Reset & Import
+      // must leave no recoverable key material on disk.
       await wipeVaultV4();
+      await wipeContainerV4();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
       ]);
       await triggerAutoLock();
       return { ok: true };
+    }
+    case "vault-list": {
+      // No unlock required — labels and addresses are non-sensitive
+      // metadata (the encrypted seed lives in each vault's per-vault
+      // envelope, not in the summary surface). Returns an empty array
+      // (NOT null) when no container exists yet so the popup can
+      // render "no vaults" uniformly without a null branch.
+      try {
+        const vaults = await listVaultsV4();
+        return { ok: true, vaults: vaults ?? [] };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-select": {
+      const p = message.payload as { vaultId?: string };
+      if (typeof p?.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const r = await selectActiveVaultV4(p.vaultId);
+        await resetAutoLock();
+        // EIP-1193 contract: accountsChanged broadcast on active-
+        // account change. Connected dApps re-fetch state with the
+        // new address; unconnected tabs receive the event and drop it
+        // (same pattern as the eth_requestAccounts broadcast).
+        broadcastEvent("accountsChanged", [r.address]);
+        return { ok: true, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-rename": {
+      const p = message.payload as { vaultId?: string; label?: string };
+      if (typeof p?.vaultId !== "string" || typeof p?.label !== "string") {
+        return { ok: false, reason: "missing vaultId or label" };
+      }
+      try {
+        await renameVaultV4(p.vaultId, p.label);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-add-fresh": {
+      // Requires an unlocked container (MEK cached). Generates a fresh
+      // PQM-1 mnemonic and appends a new VaultRecordV4. Does NOT
+      // switch the active vault — caller invokes vault-select if
+      // desired (gives the popup room to show "Vault N added — switch
+      // to it now? [Yes / Keep current]").
+      //
+      // `label` is optional; the keystore helper validates 1-32 chars
+      // when supplied and falls back to its own "Vault N" auto-label
+      // otherwise. Phase 5 Commit 4: VaultAddModal threads a
+      // user-edited label through this slot.
+      const p = (message.payload ?? {}) as { label?: string };
+      const label = typeof p.label === "string" ? p.label : undefined;
+      try {
+        const r = await addVaultFreshV4(label);
+        await resetAutoLock();
+        return {
+          ok: true,
+          vaultId: r.vaultId,
+          mnemonic: r.mnemonic,
+          address: r.address,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-add-import": {
+      const p = message.payload as { mnemonic?: string; label?: string };
+      if (typeof p?.mnemonic !== "string") {
+        return { ok: false, reason: "missing mnemonic" };
+      }
+      const label = typeof p.label === "string" ? p.label : undefined;
+      try {
+        const r = await addVaultImportV4(p.mnemonic, label);
+        await resetAutoLock();
+        return { ok: true, vaultId: r.vaultId, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
     }
     case "set-auto-lock-minutes": {
       const p = message.payload as { minutes?: unknown };
@@ -2137,7 +2242,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // the real ML-DSA-65 address instead of the demo `mono1:…` placeholder.
       // Stays scoped to v3 — the legacy v2 keystore goes through the
       // existing demo-data path until the Networks list switch lands.
-      if (!(await hasVaultV4())) {
+      //
+      // Phase 5: either a legacy single envelope OR a container counts;
+      // unlockContainerV4 sets `unlocked` to the active vault's backend
+      // either way, so getUnlockedAddressV4() returns the right address.
+      if (!(await hasVaultV4()) && !(await hasContainerV4())) {
         return { ok: false, reason: "no v3 vault" };
       }
       if (!isUnlockedV4()) {
@@ -2202,6 +2311,48 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           "latest",
         ]);
         return { ok: true, balanceHex };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-eth-call": {
+      // Phase 5 Commit 6: read-only `eth_call` proxy for popup consumers
+      // that need to query EVM contracts without instantiating their own
+      // RPC client. Today's consumer is the NFT tab — `nft-client.ts`
+      // helpers (ownerOf, balanceOf, supportsInterface, tokenURI) all
+      // route through the popup's `IpcEthCaller` which lands here.
+      // Same Sprintnet operator-failover routing as `wallet-balance`;
+      // other chains flow through `providerFor` so user-added EVM chains
+      // (`wallet_addEthereumChain`) still work uniformly.
+      const p = message.payload as {
+        to?: string;
+        data?: string;
+        chainIdHex?: string;
+      };
+      if (
+        typeof p?.to !== "string" ||
+        typeof p?.data !== "string" ||
+        typeof p?.chainIdHex !== "string"
+      ) {
+        return { ok: false, reason: "missing to, data, or chainIdHex" };
+      }
+      try {
+        if (chainRequiresMlDsa(p.chainIdHex)) {
+          const { result } = await sprintnetJsonRpc<string>("eth_call", [
+            { to: p.to, data: p.data },
+            "latest",
+          ]);
+          if (typeof result !== "string") {
+            return { ok: false, reason: "unexpected eth_call result shape" };
+          }
+          return { ok: true, result };
+        }
+        const provider = providerFor(p.chainIdHex);
+        const result = await rpcSend<string>(provider, "eth_call", [
+          { to: p.to, data: p.data },
+          "latest",
+        ]);
+        return { ok: true, result };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
@@ -2521,6 +2672,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         to?: string;
         valueWeiHex?: string;
         chainIdHex?: string;
+        // Phase 5 Commit 7 — optional contract-call fields. Omit
+        // both for native LYTH transfers and the handler behaves
+        // exactly as it did before; supply them for NFT
+        // safeTransferFrom and the data is forwarded verbatim into
+        // the ML-DSA-65 envelope.
+        data?: string;
+        gasLimitHex?: string;
       };
       if (
         typeof p?.to !== "string" ||
@@ -2528,6 +2686,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         typeof p?.chainIdHex !== "string"
       ) {
         return { ok: false, reason: "missing to, valueWeiHex, or chainIdHex" };
+      }
+      if (
+        p.data !== undefined &&
+        (typeof p.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(p.data))
+      ) {
+        return { ok: false, reason: "data must be 0x-prefixed hex" };
+      }
+      if (
+        p.gasLimitHex !== undefined &&
+        (typeof p.gasLimitHex !== "string" ||
+          !/^0x[0-9a-fA-F]+$/.test(p.gasLimitHex))
+      ) {
+        return { ok: false, reason: "gasLimitHex must be 0x-prefixed hex" };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         // Real-send through the legacy secp256k1 path is not in scope yet —
@@ -2552,14 +2723,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // Sprintnet's mempool enforces an intrinsic-gas floor (~24309 as
         // of audit) that `eth_estimateGas` doesn't reflect — it returns
         // EVM execution gas only and ignores ML-DSA verify + envelope
-        // decrypt + state proof overhead. Use the pre-resolved hex from
-        // suggestFee instead. Falls back to 0x5208 if the suggestion
-        // somehow returns null on the Sprintnet branch (shouldn't happen
-        // — defensive).
-        const gasHex = fee.gasLimit ?? "0x5208";
+        // decrypt + state proof overhead. Native transfers use the
+        // pre-resolved hex from suggestFee. Contract calls (NFT
+        // safeTransferFrom from the SendNft screen) carry their own
+        // caller-supplied estimate because the suggestFee gas hint is
+        // sized for native transfers only.
+        const gasHex = p.gasLimitHex ?? fee.gasLimit ?? "0x5208";
         const { txHash, via } = await submitEncryptedMlDsaTx({
           to: p.to,
           value: p.valueWeiHex,
+          ...(p.data !== undefined ? { data: p.data } : {}),
           gas: gasHex,
           nonce: nonceRes.result,
           maxFeePerGas: fee.maxFeePerGas,
@@ -2614,6 +2787,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   const m = message as { kind?: string };
+  // Phase 5.0.1 — keepalive ping. The popup fires this on mount to
+  // wake the SW out of MV3 idle before any real call goes out;
+  // synchronous reply, no auth, no work, no auto-lock reset.
+  // Anything that touches state belongs in the popup or rpc branch.
+  if (m?.kind === "ping") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (m?.kind === "rpc") {
     const rpc = message as RpcMessage;
     handleRpc(rpc)

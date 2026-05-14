@@ -34,6 +34,26 @@
 // + 20-byte address, plus a persisted mnemonic. v2 vaults are NOT
 // auto-upgraded — the user re-imports their seed (or generates fresh).
 //
+// v4-multi (Phase 5): a parallel storage entry under
+// chrome.storage.local["mono.vaults.v4"] holds a VaultsContainerV4 —
+// the multi-vault layer described in whitepaper §21.2.1 ("Power users
+// wanting multiple accounts ... use the keystore format with a wallet
+// that manages many keystores"). The container is master-password-
+// unlocked: argon2id(password, container.masterKdf) → MEK; each vault
+// holds a random VEK; MEK wraps each VEK in `wrappedKey`. To read a
+// vault's seed: unwrap VEK with MEK, then HKDF-split VEK into
+// seedKey + mnemonicKey, then XChaCha20-Poly1305 the existing envelope.
+// No BIP-32 / BIP-44 derivation paths (whitepaper §21.2.1 forbids HD in
+// v1) — each vault is an independent 24-word PQM-1 mnemonic.
+//
+// Migration from the legacy single envelope ("mono.vault.v4") to the
+// container ("mono.vaults.v4") is opportunistic, lazy, and runs inside
+// the unlock handler the first time after the Phase 5 upgrade. The
+// legacy entry is left in place for one release cycle as rollback
+// safety; later phases drop it. Commit 1 of Phase 5 lands the schema +
+// helpers + migration function only — wiring into the existing unlock
+// path is Commit 2.
+//
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
@@ -72,6 +92,24 @@ const HKDF_INFO_SEED = new TextEncoder().encode("mono-seed-v4");
 const HKDF_INFO_MNEMONIC = new TextEncoder().encode("mono-mnemonic-reveal-v4");
 const SUBKEY_LEN = 32; // XChaCha20-Poly1305 expects a 256-bit key.
 
+// ---- v4-multi container constants (Phase 5) ----
+
+const VAULTS_CONTAINER_KEY_V4 = "mono.vaults.v4";
+const VEK_LEN = 32;
+const MEK_LEN = 32;
+
+// HKDF info labels for the multi-vault layer. Distinct from the single-
+// vault `mono-seed-v4` / `mono-mnemonic-reveal-v4` labels so cross-
+// version key reuse is impossible by construction: a VEK accidentally
+// piped through the single-vault HKDF path (or vice versa) derives
+// different bytes and decryption fails closed.
+const HKDF_INFO_VAULT_SEED = new TextEncoder().encode(
+  "mono-vault-seed-vmulti-v4",
+);
+const HKDF_INFO_VAULT_MNEMONIC = new TextEncoder().encode(
+  "mono-vault-mnemonic-vmulti-v4",
+);
+
 interface VaultEnvelopeV4 {
   version: 4;
   algo: typeof ALGO_ID;
@@ -95,6 +133,70 @@ interface UnlockedState {
 }
 
 let unlocked: UnlockedState | null = null;
+
+// Cached after a successful unlockContainerV4(). Used by
+// selectActiveVaultV4 / addVaultFreshV4 / addVaultImportV4 so vault
+// switches and additions don't pay the ~1 second Argon2id-MEK cost
+// per operation. Cleared by lockV4(). Never leaves this module.
+let mekCache: Uint8Array | null = null;
+let activeContainerVaultId: string | null = null;
+
+// ---- v4-multi container types (Phase 5) ----
+
+/** Argon2id parameters for the master encryption key. One set per
+ *  container, shared across all vaults — the same MEK unwraps every
+ *  vault's wrappedKey. */
+interface MasterKdfParamsV4 {
+  kdf: typeof KDF_ID;
+  m: number;
+  t: number;
+  p: number;
+  salt: string; // base64, 16 bytes
+}
+
+/** Per-vault encryption key (32 bytes) wrapped under the MEK. */
+interface WrappedVekV4 {
+  aead: typeof AEAD_ID;
+  nonce: string; // base64, 24 bytes
+  ciphertext: string; // base64, 32-byte VEK + 16-byte Poly1305 tag
+}
+
+/** Seed + mnemonic envelope sealed by the per-vault VEK.
+ *  HKDF-SHA-256 splits the VEK into seedKey + mnemonicKey via the same
+ *  schema-bound info labels used elsewhere in this module (rotated to
+ *  `*-vmulti-v4` to keep the multi-vault layer cryptographically
+ *  isolated from the legacy single-vault layer). No per-vault KDF
+ *  section — the VEK is already 32 bytes of high-entropy random. */
+interface SealedSeedRecordV4 {
+  seedNonce: string; // base64, 24 bytes
+  seedCiphertext: string; // base64
+  mnemonicNonce: string; // base64, 24 bytes
+  mnemonicCiphertext: string; // base64
+}
+
+/** One vault inside a VaultsContainerV4. The label is user-editable
+ *  (Phase 5 commit 3 wires the rename UI); createdAt anchors stable
+ *  ordering when the container is rendered. */
+interface VaultRecordV4 {
+  id: string; // crypto.randomUUID()
+  label: string; // default "Vault N", user-editable
+  createdAt: number; // Date.now() at creation
+  wrappedKey: WrappedVekV4;
+  envelope: SealedSeedRecordV4;
+  addr: string; // 0x..., cached for locked-state display
+}
+
+/** Multi-vault container. Stored under
+ *  chrome.storage.local["mono.vaults.v4"]. */
+interface VaultsContainerV4 {
+  version: 4;
+  algo: typeof ALGO_ID;
+  kdf: typeof KDF_ID;
+  aead: typeof AEAD_ID;
+  masterKdf: MasterKdfParamsV4;
+  vaults: VaultRecordV4[];
+  activeVaultId: string;
+}
 
 // ---- base64 helpers (no Buffer in service workers) ----
 
@@ -141,6 +243,577 @@ function deriveSubKeys(dek: Uint8Array): {
     SUBKEY_LEN,
   );
   return { seedKey, mnemonicKey };
+}
+
+// ---- v4-multi crypto helpers (Phase 5) ----
+
+/** Fresh argon2id parameters for a new container. Reuses the same
+ *  cost knobs the single-vault layer uses (64 MiB / t=3 / p=1) so the
+ *  unlock-time round-trip is comparable. */
+function generateMasterKdfParamsV4(): MasterKdfParamsV4 {
+  return {
+    kdf: KDF_ID,
+    m: ARGON2_M_KIB,
+    t: ARGON2_T,
+    p: ARGON2_P,
+    salt: bytesToBase64(randomBytes(SALT_LEN)),
+  };
+}
+
+async function deriveMekV4(
+  password: string,
+  params: MasterKdfParamsV4,
+): Promise<Uint8Array> {
+  return argon2idAsync(
+    new TextEncoder().encode(password),
+    base64ToBytes(params.salt),
+    { m: params.m, t: params.t, p: params.p, dkLen: MEK_LEN },
+  );
+}
+
+function generateVekV4(): Uint8Array {
+  return randomBytes(VEK_LEN);
+}
+
+/** Encrypt a VEK under the MEK with XChaCha20-Poly1305. Fresh random
+ *  nonce per wrap. Caller owns MEK + VEK lifetimes — this helper does
+ *  not zero its inputs. */
+function wrapVekV4(mek: Uint8Array, vek: Uint8Array): WrappedVekV4 {
+  if (mek.length !== MEK_LEN) throw new Error("wrapVekV4: bad MEK length");
+  if (vek.length !== VEK_LEN) throw new Error("wrapVekV4: bad VEK length");
+  const nonce = randomBytes(XCHACHA_NONCE_LEN);
+  const cipher = xchacha20poly1305(mek, nonce);
+  const ct = cipher.encrypt(vek);
+  return {
+    aead: AEAD_ID,
+    nonce: bytesToBase64(nonce),
+    ciphertext: bytesToBase64(ct),
+  };
+}
+
+/** Decrypt the VEK using the MEK. Throws on AEAD failure (wrong MEK or
+ *  tampered ciphertext) without leaking timing about which. Returned
+ *  VEK is a fresh 32-byte buffer; caller MUST zero it after use. */
+function unwrapVekV4(mek: Uint8Array, wrapped: WrappedVekV4): Uint8Array {
+  if (mek.length !== MEK_LEN) throw new Error("unwrapVekV4: bad MEK length");
+  if (wrapped.aead !== AEAD_ID) {
+    throw new Error(`unwrapVekV4: unexpected AEAD ${wrapped.aead}`);
+  }
+  const nonce = base64ToBytes(wrapped.nonce);
+  const ct = base64ToBytes(wrapped.ciphertext);
+  const cipher = xchacha20poly1305(mek, nonce);
+  const vek = cipher.decrypt(ct);
+  if (vek.length !== VEK_LEN) {
+    vek.fill(0);
+    throw new Error("unwrapVekV4: unwrapped VEK has wrong length");
+  }
+  return vek;
+}
+
+/** Split a VEK into seedKey + mnemonicKey using HKDF-SHA-256 with the
+ *  multi-vault info labels. Mirrors `deriveSubKeys` for the single-
+ *  vault DEK but uses distinct labels so the two layers cannot
+ *  accidentally share derived material. */
+function deriveSubKeysFromVekV4(vek: Uint8Array): {
+  seedKey: Uint8Array;
+  mnemonicKey: Uint8Array;
+} {
+  const seedKey = hkdf(sha256, vek, undefined, HKDF_INFO_VAULT_SEED, SUBKEY_LEN);
+  const mnemonicKey = hkdf(
+    sha256,
+    vek,
+    undefined,
+    HKDF_INFO_VAULT_MNEMONIC,
+    SUBKEY_LEN,
+  );
+  return { seedKey, mnemonicKey };
+}
+
+/** Encrypt seed + mnemonic under a VEK. Each side gets a fresh nonce
+ *  and its own HKDF sub-key. Inputs are not zeroed by this helper. */
+function sealVaultEnvelopeV4(
+  vek: Uint8Array,
+  seed: Uint8Array,
+  mnemonic: string,
+): SealedSeedRecordV4 {
+  if (seed.length !== SEED_LEN) {
+    throw new Error(`sealVaultEnvelopeV4: seed must be ${SEED_LEN} bytes`);
+  }
+  if (mnemonic.length === 0) {
+    throw new Error("sealVaultEnvelopeV4: mnemonic must be non-empty");
+  }
+  const { seedKey, mnemonicKey } = deriveSubKeysFromVekV4(vek);
+  try {
+    const seedNonce = randomBytes(XCHACHA_NONCE_LEN);
+    const seedCt = xchacha20poly1305(seedKey, seedNonce).encrypt(seed);
+    const mnNonce = randomBytes(XCHACHA_NONCE_LEN);
+    const mnPlain = new TextEncoder().encode(mnemonic);
+    const mnCt = xchacha20poly1305(mnemonicKey, mnNonce).encrypt(mnPlain);
+    mnPlain.fill(0);
+    return {
+      seedNonce: bytesToBase64(seedNonce),
+      seedCiphertext: bytesToBase64(seedCt),
+      mnemonicNonce: bytesToBase64(mnNonce),
+      mnemonicCiphertext: bytesToBase64(mnCt),
+    };
+  } finally {
+    seedKey.fill(0);
+    mnemonicKey.fill(0);
+  }
+}
+
+/** Decrypt seed + mnemonic from a sealed envelope using the VEK.
+ *  Throws "wrong password" on AEAD failure to match the legacy
+ *  contract; the same error message is what the unlock path surfaces.
+ *  Returns fresh buffers — caller MUST zero the seed after use. */
+function openVaultEnvelopeV4(
+  vek: Uint8Array,
+  env: SealedSeedRecordV4,
+): { seed: Uint8Array; mnemonic: string } {
+  const { seedKey, mnemonicKey } = deriveSubKeysFromVekV4(vek);
+  try {
+    const seedNonce = base64ToBytes(env.seedNonce);
+    const seedCt = base64ToBytes(env.seedCiphertext);
+    const mnNonce = base64ToBytes(env.mnemonicNonce);
+    const mnCt = base64ToBytes(env.mnemonicCiphertext);
+    let seed: Uint8Array;
+    let mnPlain: Uint8Array;
+    try {
+      seed = xchacha20poly1305(seedKey, seedNonce).decrypt(seedCt);
+      mnPlain = xchacha20poly1305(mnemonicKey, mnNonce).decrypt(mnCt);
+    } catch {
+      throw new Error("wrong password");
+    }
+    if (seed.length !== SEED_LEN) {
+      seed.fill(0);
+      mnPlain.fill(0);
+      throw new Error(`openVaultEnvelopeV4: seed must be ${SEED_LEN} bytes`);
+    }
+    const mnemonic = new TextDecoder().decode(mnPlain);
+    mnPlain.fill(0);
+    return { seed, mnemonic };
+  } finally {
+    seedKey.fill(0);
+    mnemonicKey.fill(0);
+  }
+}
+
+// ---- v4-multi container storage (Phase 5) ----
+
+function isVaultsContainerV4(raw: unknown): raw is VaultsContainerV4 {
+  if (!raw || typeof raw !== "object") return false;
+  const obj = raw as Record<string, unknown>;
+  if (obj["version"] !== SCHEMA_VERSION) return false;
+  if (obj["algo"] !== ALGO_ID) return false;
+  if (obj["kdf"] !== KDF_ID) return false;
+  if (obj["aead"] !== AEAD_ID) return false;
+  const mk = obj["masterKdf"] as Record<string, unknown> | undefined;
+  if (!mk || typeof mk !== "object") return false;
+  if (mk["kdf"] !== KDF_ID) return false;
+  if (typeof mk["m"] !== "number") return false;
+  if (typeof mk["t"] !== "number") return false;
+  if (typeof mk["p"] !== "number") return false;
+  if (typeof mk["salt"] !== "string") return false;
+  const vaults = obj["vaults"];
+  if (!Array.isArray(vaults)) return false;
+  if (typeof obj["activeVaultId"] !== "string") return false;
+  // We trust the per-vault structure rather than deep-validating every
+  // record here — the unlock path's AEAD failure produces a fail-closed
+  // "wrong password" if the envelope is malformed.
+  return true;
+}
+
+async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
+  const raw = await new Promise<unknown>((resolve) => {
+    chrome.storage.local.get([VAULTS_CONTAINER_KEY_V4], (res) => {
+      resolve(res?.[VAULTS_CONTAINER_KEY_V4] ?? null);
+    });
+  });
+  if (raw === null) return null;
+  if (isVaultsContainerV4(raw)) return raw;
+  throw new Error("v4 vaults container is unrecognised — refusing to read");
+}
+
+async function saveVaultsContainerV4(
+  container: VaultsContainerV4,
+): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set(
+      { [VAULTS_CONTAINER_KEY_V4]: container },
+      () => resolve(),
+    );
+  });
+}
+
+// ---- v4-multi migration (Phase 5) ----
+
+/**
+ * Opportunistic migration from the legacy single-vault entry
+ * (mono.vault.v4) to the multi-vault container (mono.vaults.v4).
+ *
+ * Run lazily inside the unlock handler the first time after the Phase
+ * 5 upgrade: the user enters their existing password (which decrypts
+ * the legacy envelope) and the same password establishes the master
+ * KDF params + wraps a fresh VEK that re-seals the legacy seed +
+ * mnemonic.
+ *
+ * Returns the new container on successful migration; returns null if
+ * no migration was needed (no legacy entry OR container already
+ * present). Throws "wrong password" on legacy AEAD failure — same
+ * error message {@link unlockV4} surfaces, so the caller does not need
+ * special-case handling.
+ *
+ * Leaves the legacy entry in place as rollback safety. A later phase
+ * removes it once the container path is mature.
+ */
+async function migrateLegacyToContainerV4(
+  password: string,
+): Promise<VaultsContainerV4 | null> {
+  // Container already exists → no migration needed.
+  const existing = await loadVaultsContainerV4();
+  if (existing !== null) return null;
+
+  // No legacy envelope → fresh install, nothing to migrate.
+  const legacy = await loadVaultV4();
+  if (legacy === null) return null;
+
+  // Step 1: decrypt the legacy envelope using the single-vault DEK
+  // path. This is the same code unlockV4 + exportMnemonicV4 run; we
+  // duplicate the steps here rather than calling them so migration
+  // does not have the side effect of mutating module-level `unlocked`.
+  const legacySalt = base64ToBytes(legacy.kdfParams.salt);
+  const legacyDek = await argon2idAsync(
+    new TextEncoder().encode(password),
+    legacySalt,
+    {
+      m: legacy.kdfParams.m,
+      t: legacy.kdfParams.t,
+      p: legacy.kdfParams.p,
+      dkLen: ARGON2_DKLEN,
+    },
+  );
+  const { seedKey: legacySeedKey, mnemonicKey: legacyMnemonicKey } =
+    deriveSubKeys(legacyDek);
+  legacyDek.fill(0);
+
+  let legacySeed: Uint8Array;
+  let legacyMnemonic: string;
+  try {
+    const seedCipher = xchacha20poly1305(
+      legacySeedKey,
+      base64ToBytes(legacy.nonce),
+    );
+    legacySeed = seedCipher.decrypt(base64ToBytes(legacy.ciphertext));
+    const mnCipher = xchacha20poly1305(
+      legacyMnemonicKey,
+      base64ToBytes(legacy.mnemonicNonce),
+    );
+    const mnPlain = mnCipher.decrypt(base64ToBytes(legacy.mnemonicCiphertext));
+    legacyMnemonic = new TextDecoder().decode(mnPlain);
+    mnPlain.fill(0);
+  } catch {
+    throw new Error("wrong password");
+  } finally {
+    legacySeedKey.fill(0);
+    legacyMnemonicKey.fill(0);
+  }
+  if (legacySeed.length !== SEED_LEN) {
+    legacySeed.fill(0);
+    throw new Error("legacy vault payload is not a 32-byte seed");
+  }
+
+  // Step 2: establish fresh masterKdf params + derive MEK from the
+  // SAME password the user just used to unlock legacy.
+  const masterKdf = generateMasterKdfParamsV4();
+  const mek = await deriveMekV4(password, masterKdf);
+
+  // Step 3: generate fresh VEK, wrap with MEK, seal seed+mnemonic.
+  const vek = generateVekV4();
+  let wrappedKey: WrappedVekV4;
+  let envelope: SealedSeedRecordV4;
+  try {
+    wrappedKey = wrapVekV4(mek, vek);
+    envelope = sealVaultEnvelopeV4(vek, legacySeed, legacyMnemonic);
+  } finally {
+    mek.fill(0);
+    vek.fill(0);
+    legacySeed.fill(0);
+  }
+
+  const record: VaultRecordV4 = {
+    id: crypto.randomUUID(),
+    label: "Vault 1",
+    createdAt: Date.now(),
+    wrappedKey,
+    envelope,
+    addr: legacy.addr,
+  };
+  const container: VaultsContainerV4 = {
+    version: SCHEMA_VERSION,
+    algo: ALGO_ID,
+    kdf: KDF_ID,
+    aead: AEAD_ID,
+    masterKdf,
+    vaults: [record],
+    activeVaultId: record.id,
+  };
+  await saveVaultsContainerV4(container);
+  // NOTE: legacy `mono.vault.v4` entry is intentionally NOT removed
+  // here — kept as one-release-cycle rollback safety per the Phase 5
+  // plan. A later phase wipes it.
+  return container;
+}
+
+// ---- v4-multi public API (Phase 5 Commit 2) ----
+
+/** Summary projection over a VaultRecordV4 — what the popup needs to
+ *  render the vault picker. Excludes the wrappedKey / envelope (key
+ *  material stays inside the keystore). */
+export interface VaultSummaryV4 {
+  id: string;
+  label: string;
+  addr: string;
+  createdAt: number;
+  isActive: boolean;
+}
+
+export async function hasContainerV4(): Promise<boolean> {
+  return (await loadVaultsContainerV4()) !== null;
+}
+
+/** Wipe the multi-vault container from chrome.storage.local. Used by
+ *  the Settings → Reset wallet path in conjunction with
+ *  {@link wipeVaultV4} to remove both the legacy entry and the
+ *  container. Also clears the unlocked + MEK cache. */
+export async function wipeContainerV4(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    chrome.storage.local.remove(VAULTS_CONTAINER_KEY_V4, () => resolve());
+  });
+  lockV4();
+}
+
+/** Internal: unwrap a vault's VEK, open its envelope, build the
+ *  backend, return the unlocked-state record. Used by both
+ *  {@link unlockContainerV4} and {@link selectActiveVaultV4} — both
+ *  paths share the same "unwrap → open → instantiate" pipeline. */
+async function loadVaultBackend(
+  mek: Uint8Array,
+  vault: VaultRecordV4,
+): Promise<UnlockedState> {
+  const vek = unwrapVekV4(mek, vault.wrappedKey);
+  let seed: Uint8Array;
+  try {
+    const opened = openVaultEnvelopeV4(vek, vault.envelope);
+    seed = opened.seed;
+    // mnemonic not needed for backend instantiation; let it fall out of scope.
+  } finally {
+    vek.fill(0);
+  }
+  const backend = MlDsa65Backend.fromSeed(seed);
+  const address = await backend.getAddress();
+  seed.fill(0);
+  return { backend, address };
+}
+
+/**
+ * Container-aware unlock. Runs migration from the legacy
+ * `mono.vault.v4` envelope opportunistically if no container exists
+ * yet, then derives the MEK from the master password, unwraps the
+ * active vault's VEK, opens the envelope, and loads the backend.
+ *
+ * Throws `"wrong password"` on AEAD failure at any step. Same error
+ * contract as {@link unlockV4}; the dispatcher's rate-limit handling
+ * applies identically.
+ *
+ * Caches the derived MEK in module state for the unlock session so
+ * subsequent {@link selectActiveVaultV4} / {@link addVaultFreshV4} /
+ * {@link addVaultImportV4} calls skip Argon2id.
+ */
+export async function unlockContainerV4(
+  password: string,
+): Promise<{ address: string; vaultId: string }> {
+  let container = await loadVaultsContainerV4();
+  if (!container) {
+    container = await migrateLegacyToContainerV4(password);
+  }
+  if (!container) {
+    throw new Error("no v4 vault — run onboarding first");
+  }
+
+  const mek = await deriveMekV4(password, container.masterKdf);
+  const active = container.vaults.find(
+    (v) => v.id === container!.activeVaultId,
+  );
+  if (!active) {
+    mek.fill(0);
+    throw new Error("container is missing its active vault");
+  }
+
+  let state: UnlockedState;
+  try {
+    state = await loadVaultBackend(mek, active);
+  } catch (e) {
+    mek.fill(0);
+    throw e; // "wrong password" surfaces here on legitimate AEAD failure
+  }
+
+  // Successful unlock — replace cached state.
+  if (mekCache) mekCache.fill(0);
+  mekCache = mek;
+  unlocked = state;
+  activeContainerVaultId = active.id;
+  return { address: state.address, vaultId: active.id };
+}
+
+/** Switch the active vault using the cached MEK. Requires the
+ *  container to be unlocked (i.e., MEK cached by a prior
+ *  {@link unlockContainerV4}). Updates `container.activeVaultId` on
+ *  disk and swaps the in-memory backend. The dispatcher broadcasts
+ *  `accountsChanged` after this returns. */
+export async function selectActiveVaultV4(
+  vaultId: string,
+): Promise<{ address: string }> {
+  if (!mekCache) throw new Error("container is locked");
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
+  // No-op fast path: already the active vault.
+  if (vaultId === activeContainerVaultId && unlocked) {
+    return { address: unlocked.address };
+  }
+  const state = await loadVaultBackend(mekCache, target);
+  container.activeVaultId = vaultId;
+  await saveVaultsContainerV4(container);
+  unlocked = state;
+  activeContainerVaultId = vaultId;
+  return { address: state.address };
+}
+
+/** Read-only list of vault summaries. No unlock required — labels and
+ *  addresses are non-sensitive metadata. Returns `null` when no
+ *  container exists (so the popup can branch on "still single-vault
+ *  legacy" during the migration window). */
+export async function listVaultsV4(): Promise<VaultSummaryV4[] | null> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return null;
+  return container.vaults.map((v) => ({
+    id: v.id,
+    label: v.label,
+    addr: v.addr,
+    createdAt: v.createdAt,
+    isActive: v.id === container.activeVaultId,
+  }));
+}
+
+/** Rename a vault. No unlock required — labels are non-sensitive UI
+ *  metadata. Validates: trim, 1-32 chars, non-empty after trim. */
+export async function renameVaultV4(
+  vaultId: string,
+  newLabel: string,
+): Promise<void> {
+  const trimmed = newLabel.trim();
+  if (trimmed.length === 0) throw new Error("label must be non-empty");
+  if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const target = container.vaults.find((v) => v.id === vaultId);
+  if (!target) throw new Error("unknown vault id");
+  target.label = trimmed;
+  await saveVaultsContainerV4(container);
+}
+
+/** Generate a fresh PQM-1 mnemonic and add a new vault to the
+ *  container. Requires the container to be unlocked. Returns the new
+ *  vault id, the mnemonic (one-time — treat like a private key), and
+ *  the derived address. Does NOT change `activeVaultId`.
+ *
+ *  When `label` is provided it is trimmed and validated to 1-32 chars
+ *  (matches {@link renameVaultV4}); when omitted the SW assigns
+ *  `"Vault N"` where N is the post-append vault count. */
+export async function addVaultFreshV4(label?: string): Promise<{
+  vaultId: string;
+  mnemonic: string;
+  address: string;
+}> {
+  if (!mekCache) throw new Error("container is locked");
+  const mnemonic = generatePqm1Mnemonic((out) => {
+    out.set(randomBytes(out.length));
+  });
+  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  try {
+    return await appendVaultRecord(mekCache, seed, mnemonic, label);
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Import a user-supplied PQM-1 mnemonic and add it to the container.
+ *  Requires the container to be unlocked. Rejects if the derived
+ *  address already matches a vault in the container (duplicate seed).
+ *  See {@link addVaultFreshV4} for label semantics. */
+export async function addVaultImportV4(
+  mnemonic: string,
+  label?: string,
+): Promise<{ vaultId: string; address: string }> {
+  if (!mekCache) throw new Error("container is locked");
+  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  try {
+    const r = await appendVaultRecord(mekCache, seed, mnemonic, label);
+    return { vaultId: r.vaultId, address: r.address };
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Shared body for {@link addVaultFreshV4} + {@link addVaultImportV4}.
+ *  Generates a VEK, seals the seed + mnemonic, wraps the VEK with the
+ *  cached MEK, rejects duplicate addresses, appends, saves. Validates
+ *  the optional caller-supplied label with the same rules as
+ *  {@link renameVaultV4}; falls back to `"Vault N"` (where N is the
+ *  post-append vault count) when the caller passes no label. */
+async function appendVaultRecord(
+  mek: Uint8Array,
+  seed: Uint8Array,
+  mnemonic: string,
+  requestedLabel?: string,
+): Promise<{ vaultId: string; mnemonic: string; address: string }> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const backend = MlDsa65Backend.fromSeed(seed);
+  const address = await backend.getAddress();
+  if (container.vaults.some((v) => v.addr === address)) {
+    throw new Error("vault with this address already exists in the container");
+  }
+  let label: string;
+  if (requestedLabel !== undefined) {
+    const trimmed = requestedLabel.trim();
+    if (trimmed.length === 0) throw new Error("label must be non-empty");
+    if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
+    label = trimmed;
+  } else {
+    label = `Vault ${container.vaults.length + 1}`;
+  }
+  const vek = generateVekV4();
+  let wrappedKey: WrappedVekV4;
+  let envelope: SealedSeedRecordV4;
+  try {
+    wrappedKey = wrapVekV4(mek, vek);
+    envelope = sealVaultEnvelopeV4(vek, seed, mnemonic);
+  } finally {
+    vek.fill(0);
+  }
+  const record: VaultRecordV4 = {
+    id: crypto.randomUUID(),
+    label,
+    createdAt: Date.now(),
+    wrappedKey,
+    envelope,
+    addr: address,
+  };
+  container.vaults.push(record);
+  await saveVaultsContainerV4(container);
+  return { vaultId: record.id, mnemonic, address };
 }
 
 // ---- chrome.storage helpers ----
@@ -209,9 +882,18 @@ export function getUnlockedAddressV4(): string | null {
 
 /** Lock — drop the in-memory backend reference. The backend's secret key
  * is held by the SDK in private fields; we cannot zero it deterministically,
- * but releasing the reference makes it eligible for GC. */
+ * but releasing the reference makes it eligible for GC.
+ *
+ * Also zeros + drops the cached MEK and forgets the active vault id (Phase
+ * 5 multi-vault state). After lock, any vault-switch or vault-add call
+ * fails until the user re-unlocks the container. */
 export function lockV4(): void {
   unlocked = null;
+  if (mekCache) {
+    mekCache.fill(0);
+    mekCache = null;
+  }
+  activeContainerVaultId = null;
 }
 
 /**
@@ -563,3 +1245,23 @@ function bytesToHex(b: Uint8Array): string {
   for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
   return s;
 }
+
+// ---- test-only exports (Phase 5) ----
+//
+// Mirrors the `__internal` pattern in keystore.ts — lets the vitest
+// suite reach into the multi-vault helpers without exposing them on
+// the public module API surface.
+export const __internalV4Multi = {
+  VAULTS_CONTAINER_KEY_V4,
+  generateMasterKdfParamsV4,
+  deriveMekV4,
+  generateVekV4,
+  wrapVekV4,
+  unwrapVekV4,
+  sealVaultEnvelopeV4,
+  openVaultEnvelopeV4,
+  isVaultsContainerV4,
+  loadVaultsContainerV4,
+  saveVaultsContainerV4,
+  migrateLegacyToContainerV4,
+};

@@ -141,20 +141,64 @@ export interface ChainEntry {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-function send<T>(op: string, payload?: unknown): Promise<T> {
+/** Phase 5.0.1 — error-message fragments that indicate the SW was
+ *  idle/asleep when sendMessage fired. Chrome MV3 wakes the worker
+ *  on demand, but the wake race can drop the first message; the
+ *  retry path below catches these classes. */
+const SW_IDLE_ERROR_MARKERS = [
+  "No SW",
+  "message port closed",
+  "receiving end does not exist",
+  "Could not establish connection",
+];
+
+function isSwIdleError(message: string): boolean {
+  return SW_IDLE_ERROR_MARKERS.some((m) => message.includes(m));
+}
+
+function rawSendMessage(message: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     try {
-      chrome.runtime.sendMessage({ kind: "popup", op, payload }, (resp) => {
+      chrome.runtime.sendMessage(message, (resp) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
-        resolve(resp as T);
+        resolve(resp);
       });
     } catch (e) {
       reject(e as Error);
     }
   });
+}
+
+function send<T>(op: string, payload?: unknown): Promise<T> {
+  // Single retry against the MV3 idle/wake race. Pure transport-
+  // level retry — application-level errors (`{ ok: false, ... }`
+  // payloads) reach the caller unchanged on the first attempt.
+  const envelope = { kind: "popup", op, payload };
+  return (async () => {
+    try {
+      return (await rawSendMessage(envelope)) as T;
+    } catch (e) {
+      const msg = (e as Error).message ?? "";
+      if (!isSwIdleError(msg)) throw e;
+      await new Promise((r) => setTimeout(r, 100));
+      return (await rawSendMessage(envelope)) as T;
+    }
+  })();
+}
+
+/** Wake the SW. Cheap no-op response from the SW's `ping` handler;
+ *  the only purpose is to flip the worker out of MV3 idle before any
+ *  real call lands. Caller does not need the result; failures are
+ *  swallowed because the followup real call carries its own retry. */
+export async function bgPing(): Promise<void> {
+  try {
+    await rawSendMessage({ kind: "ping" });
+  } catch {
+    /* swallow — followup calls carry their own retry. */
+  }
 }
 
 export async function bgKeystoreStatus(): Promise<KeystoreStatus> {
@@ -283,6 +327,21 @@ export async function bgWalletBalance(
   chainIdHex: string,
 ): Promise<{ ok: true; balanceHex: string } | { ok: false; reason?: string }> {
   return send("wallet-balance", { address, chainIdHex });
+}
+
+/**
+ * Read-only `eth_call` proxy. The popup has no RpcClient instance of
+ * its own — every chain query goes through the SW's existing operator-
+ * failover routing (Sprintnet) or `providerFor` (everything else).
+ * The NFT tab uses this for ERC-721 / ERC-1155 ownership and metadata
+ * lookups via the `IpcEthCaller` adapter in `nftEthCaller.ts`.
+ */
+export async function bgEthCall(
+  to: string,
+  data: string,
+  chainIdHex: string,
+): Promise<{ ok: true; result: string } | { ok: false; reason?: string }> {
+  return send("wallet-eth-call", { to, data, chainIdHex });
 }
 
 export interface WalletTokenBalance {
@@ -506,6 +565,17 @@ export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
   chainIdHex: string;
+  /** Optional EVM calldata. Required for contract calls (NFT
+   *  safeTransferFrom, ERC-20 transfer, etc.); omit for native LYTH
+   *  transfers. The SW forwards the bytes verbatim into the
+   *  ML-DSA-65 envelope path; signing semantics are unchanged.
+   *  Phase 5 Commit 7 added this field for the SendNft screen. */
+  data?: string;
+  /** Optional gas-limit override (hex). When omitted the SW falls
+   *  back to its native-transfer default (Sprintnet's intrinsic-gas
+   *  floor). NFT calldata pushes that floor well past 21k, so the
+   *  Send-NFT page passes a conservative overhead-aware estimate. */
+  gasLimitHex?: string;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -659,4 +729,102 @@ export async function bgSetAutoLockMinutes(
   | { ok: false; reason?: string }
 > {
   return send("set-auto-lock-minutes", { minutes });
+}
+
+// ---- Phase 5 multi-vault container surface ----
+//
+// The popup vault picker (VaultPicker component, Commit 3) reads these
+// to render the list + switch active vault. Add/rename land via the
+// same channel. Whitepaper §21.2.1 endorses the "wallet that manages
+// many keystores" pattern that backs this surface.
+
+export interface VaultSummary {
+  id: string;
+  label: string;
+  /** EVM-style hex address (`0x` + 40 hex chars). Cached in the
+   *  container alongside the encrypted vault record so the picker
+   *  can render addresses without unlocking. */
+  addr: string;
+  createdAt: number;
+  isActive: boolean;
+}
+
+/**
+ * List the multi-vault container's vaults. `vaults` is `null` (not
+ * `[]`) when no container exists yet — that signal lets the picker
+ * branch on "still single-vault legacy, no picker UI yet" vs "empty
+ * container shouldn't happen post-migration". Returns array of
+ * summaries once the container has been initialized.
+ */
+export async function bgVaultsList(): Promise<
+  | { ok: true; vaults: VaultSummary[] | null }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-list");
+}
+
+/**
+ * Switch the active vault. The service worker broadcasts EIP-1193
+ * `accountsChanged` with the new address — connected dApps re-fetch
+ * state. Requires an unlocked container (MEK cached).
+ */
+export async function bgVaultSelect(
+  vaultId: string,
+): Promise<
+  { ok: true; address: string } | { ok: false; reason?: string }
+> {
+  return send("vault-select", { vaultId });
+}
+
+/**
+ * Update a vault's label. No re-auth required — labels are non-
+ * sensitive UI metadata in the plaintext container. Validates 1-32
+ * chars after trim at the SW; surfaces the validation message back
+ * in `reason` on failure.
+ */
+export async function bgVaultRename(
+  vaultId: string,
+  label: string,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("vault-rename", { vaultId, label });
+}
+
+/**
+ * Generate a fresh PQM-1 mnemonic and append a new vault. Caller
+ * receives the mnemonic for one-time display (Settings → Show
+ * recovery phrase later requires re-auth). Does NOT switch the active
+ * vault — the popup decides whether to follow up with `bgVaultSelect`.
+ * Requires an unlocked container.
+ *
+ * Optional `label` lets the popup thread a user-edited name through
+ * the same call (validated 1-32 chars at the SW). When omitted the
+ * keystore assigns `"Vault N"` based on post-append vault count.
+ */
+export async function bgVaultAddFresh(
+  label?: string,
+): Promise<
+  | { ok: true; vaultId: string; mnemonic: string; address: string }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-add-fresh", label !== undefined ? { label } : {});
+}
+
+/**
+ * Import a user-supplied PQM-1 mnemonic. Rejects duplicate-address
+ * imports (the importing mnemonic would derive the same address as
+ * an existing vault) with `reason: "vault with this address already
+ * exists in the container"`. Same no-auto-switch + requires-unlock
+ * semantics as bgVaultAddFresh; same optional `label` handling.
+ */
+export async function bgVaultAddImport(
+  mnemonic: string,
+  label?: string,
+): Promise<
+  | { ok: true; vaultId: string; address: string }
+  | { ok: false; reason?: string }
+> {
+  return send(
+    "vault-add-import",
+    label !== undefined ? { mnemonic, label } : { mnemonic },
+  );
 }
