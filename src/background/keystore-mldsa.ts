@@ -78,6 +78,17 @@ import {
   validateSignerInput,
   validateThreshold,
 } from "../shared/multisig.js";
+import type {
+  PasskeyCredential,
+  PasskeyPolicy,
+  VaultPasskeyState,
+} from "../shared/passkey.js";
+import {
+  appendCredential,
+  emptyVaultPasskeyState,
+  removeCredential as removePasskeyCredential,
+  setPolicy as setPasskeyPolicy,
+} from "../shared/passkey.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -208,6 +219,14 @@ interface VaultRecordV4 {
   /** M-of-N committee + proposal queues for `kind === "multisig"`.
    *  Must be present on multisig records, absent on single records. */
   multisig?: MultisigVaultMeta;
+  /** Phase 9 — optional per-vault passkey state. Absent on legacy
+   *  vaults and on vaults that haven't run passkey registration; read
+   *  paths treat absence as "no passkey configured" (policy disabled,
+   *  no credentials). The actual WebAuthn key material lives in the
+   *  browser's authenticator; the wallet only stores credential IDs +
+   *  user-edited names + policy thresholds. See `shared/passkey.ts`
+   *  for the rationale and the on-chain GAP analysis. */
+  passkey?: VaultPasskeyState;
 }
 
 /** Multi-vault container. Stored under
@@ -1005,6 +1024,82 @@ function cloneGovernanceAction(
     };
   }
   return { ...a };
+}
+
+// ---- Passkey per-vault state (Phase 9) ----
+
+/** Read a vault's passkey state. Returns an empty (disabled, no
+ *  credentials) state when the vault is unknown or has never
+ *  configured passkeys — caller never needs a presence check. */
+export async function readPasskeyStateV4(
+  vaultId: string,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return emptyVaultPasskeyState();
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.passkey) return emptyVaultPasskeyState();
+  return clonePasskeyState(v.passkey);
+}
+
+/** Append a fresh credential to the targeted vault. Throws on
+ *  unknown id, on cap-reached, or on duplicate credentialId. */
+export async function addPasskeyCredentialV4(
+  vaultId: string,
+  cred: PasskeyCredential,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const current = v.passkey ?? emptyVaultPasskeyState();
+  const next = appendCredential(current, cred);
+  v.passkey = clonePasskeyState(next);
+  await saveVaultsContainerV4(container);
+  return clonePasskeyState(next);
+}
+
+/** Remove a credential by id. No-op if absent. Auto-disables the
+ *  policy when the last credential is removed (shared helper handles
+ *  that). */
+export async function removePasskeyCredentialV4(
+  vaultId: string,
+  credentialId: string,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const current = v.passkey ?? emptyVaultPasskeyState();
+  const next = removePasskeyCredential(current, credentialId);
+  v.passkey = clonePasskeyState(next);
+  await saveVaultsContainerV4(container);
+  return clonePasskeyState(next);
+}
+
+/** Replace the policy. Validation runs inside `setPolicy` — bad input
+ *  throws without persisting. */
+export async function setPasskeyPolicyV4(
+  vaultId: string,
+  policy: PasskeyPolicy,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const current = v.passkey ?? emptyVaultPasskeyState();
+  const next = setPasskeyPolicy(current, policy);
+  v.passkey = clonePasskeyState(next);
+  await saveVaultsContainerV4(container);
+  return clonePasskeyState(next);
+}
+
+/** Defensive copy so callers can't mutate stored state by holding a
+ *  reference to the returned record. */
+function clonePasskeyState(s: VaultPasskeyState): VaultPasskeyState {
+  return {
+    credentials: s.credentials.map((c) => ({ ...c })),
+    policy: { ...s.policy },
+  };
 }
 
 /** Shared body for {@link addVaultFreshV4} + {@link addVaultImportV4} +
