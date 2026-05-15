@@ -7,7 +7,12 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
-import { bgOperatorsHealth, type OperatorHealthRow } from "../bg";
+import {
+  bgOperatorsHealth,
+  bgRuntimeProvenance,
+  type OperatorHealthRow,
+  type RuntimeProvenanceView,
+} from "../bg";
 import {
   EXTERNAL_LINKS,
   SDK_COMMIT_SHORT,
@@ -33,6 +38,9 @@ function readWalletVersion(): string {
 export function About({ onBack }: AboutProps) {
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [provenance, setProvenance] = useState<RuntimeProvenanceView | null>(
+    null,
+  );
   const walletVersion = readWalletVersion();
 
   useEffect(() => {
@@ -48,6 +56,11 @@ export function About({ onBack }: AboutProps) {
         setProbeError((e as Error).message ?? "probe failed");
       }
     })();
+    void (async () => {
+      const r = await bgRuntimeProvenance();
+      if (cancelled) return;
+      if (r.ok) setProvenance(r.provenance);
+    })();
     return () => {
       cancelled = true;
     };
@@ -56,6 +69,14 @@ export function About({ onBack }: AboutProps) {
   const healthyCount = operators?.filter((o) => o.ok).length ?? 0;
   const trustedCount = operators?.filter((o) => o.trustedGenesis).length ?? 0;
   const totalCount = operators?.length ?? 0;
+  // Phase 7.1 — capability aggregate. Counts operators reporting each
+  // surface as "available". Surfaces the "n/m support X" header summary
+  // when at least one operator returned capability info; absent when
+  // every operator is on a pre-uplift binary.
+  const capabilitySummary =
+    operators === null
+      ? null
+      : summariseOperatorCapabilities(operators);
   const sdkRegistryMismatch =
     SDK_REGISTRY_GENESIS_HASH.toLowerCase() !==
     SPRINTNET_GENESIS_HASH.toLowerCase();
@@ -155,6 +176,93 @@ export function About({ onBack }: AboutProps) {
           )}
         </div>
 
+        {/* Runtime provenance — chain-side build info from lyth_runtimeProvenance.
+            Renders when the SW IPC returns data; absent when the chain is
+            offline. The wallet still mounts the About page; this card just
+            doesn't show. */}
+        {provenance !== null && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Runtime</h3>
+              <div className="spacer" />
+              <span
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 10,
+                  color: "var(--fg-500)",
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                }}
+                title="from lyth_runtimeProvenance"
+              >
+                chain-reported
+              </span>
+            </div>
+            <KvList
+              rows={[
+                {
+                  k: "Client",
+                  v: `${provenance.clientName} v${provenance.version}`,
+                },
+                {
+                  k: "Commit",
+                  v: (
+                    <Mono>
+                      {provenance.gitCommit.slice(0, 12)}
+                      {provenance.gitDirty ? "-dirty" : ""}
+                    </Mono>
+                  ),
+                  title: provenance.gitCommit,
+                },
+                ...(provenance.p2pProtocolVersion !== null
+                  ? [
+                      {
+                        k: "P2P",
+                        v: `v${provenance.p2pProtocolVersion}`,
+                      },
+                    ]
+                  : []),
+                ...(provenance.latestHeight !== null
+                  ? [
+                      {
+                        k: "Tip",
+                        v: <Mono>#{provenance.latestHeight}</Mono>,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+            {provenance.features.length > 0 && (
+              <div
+                style={{
+                  marginTop: 10,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 4,
+                }}
+              >
+                {provenance.features.split(/[,\s]+/).filter(Boolean).map((f) => (
+                  <span
+                    key={f}
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 9.5,
+                      color: "var(--fg-200)",
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid var(--fg-700)",
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    {f}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Operator table */}
         <div className="ext-card">
           <div className="ext-card__head">
@@ -184,6 +292,40 @@ export function About({ onBack }: AboutProps) {
               }}
             >
               {probeError}
+            </div>
+          )}
+          {capabilitySummary !== null && capabilitySummary.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 4,
+                marginBottom: 8,
+              }}
+              title="Operator-reported capability availability (lyth_operatorCapabilities)"
+            >
+              {capabilitySummary.map((s) => (
+                <span
+                  key={s.surface}
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 9.5,
+                    color:
+                      s.available === totalCount
+                        ? "var(--ok)"
+                        : s.available === 0
+                          ? "var(--fg-500)"
+                          : "var(--warn)",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid var(--fg-700)",
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  {s.available}/{totalCount} {s.surface}
+                </span>
+              ))}
             </div>
           )}
           <div
@@ -468,13 +610,101 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
                 #{parseHex(row.blockHex)}
               </div>
             )}
+            {/* Phase 7.1 — indexer lag readout when the operator reports
+                an indexer height. Lag = latest - current (one-way; the
+                indexer can't be ahead of the chain). */}
+            {row.indexerHeight !== null && (
+              <div
+                style={{ color: "var(--fg-500)" }}
+                title="lyth_indexerStatus current/latest height"
+              >
+                idx #{row.indexerHeight}
+                {row.indexerLatest !== null &&
+                  row.indexerLatest > row.indexerHeight && (
+                    <span style={{ color: "var(--warn)" }}>
+                      {" "}
+                      ({row.indexerLatest - row.indexerHeight} lag)
+                    </span>
+                  )}
+              </div>
+            )}
           </>
         ) : (
           <div>{row.reason}</div>
         )}
       </div>
+      {/* Phase 7.1 — per-operator capability badge strip. Spans all 3
+          columns when present; absent when the operator's response had
+          no capabilities or returned an error for `lyth_operatorCapabilities`. */}
+      {row.capabilities !== null &&
+        Object.keys(row.capabilities).length > 0 && (
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 3,
+              marginTop: 4,
+              paddingTop: 6,
+              borderTop: "1px solid rgba(255,255,255,0.05)",
+            }}
+          >
+            {Object.entries(row.capabilities).map(([surface, status]) => (
+              <span
+                key={surface}
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 8.5,
+                  color:
+                    status === "available"
+                      ? "var(--ok)"
+                      : status === "ws_only"
+                        ? "var(--warn)"
+                        : "var(--fg-500)",
+                  background: "rgba(255,255,255,0.02)",
+                  border: "1px solid var(--fg-700)",
+                  padding: "1px 4px",
+                  borderRadius: 3,
+                  letterSpacing: "0.04em",
+                }}
+                title={`${surface}: ${status}`}
+              >
+                {surface}
+              </span>
+            ))}
+          </div>
+        )}
     </div>
   );
+}
+
+interface CapabilitySummaryEntry {
+  surface: string;
+  available: number;
+}
+
+/** Reduce per-operator capability maps to "n operators report X as
+ *  available" entries, sorted so the most-supported surfaces lead. Only
+ *  considers surfaces seen on at least one operator — operators on
+ *  pre-uplift binaries contribute nothing rather than dragging the
+ *  denominator. */
+function summariseOperatorCapabilities(
+  operators: ReadonlyArray<OperatorHealthRow>,
+): CapabilitySummaryEntry[] {
+  const counts = new Map<string, number>();
+  for (const op of operators) {
+    if (op.capabilities === null) continue;
+    for (const [surface, status] of Object.entries(op.capabilities)) {
+      if (status === "available") {
+        counts.set(surface, (counts.get(surface) ?? 0) + 1);
+      } else if (!counts.has(surface)) {
+        counts.set(surface, 0);
+      }
+    }
+  }
+  return Array.from(counts.entries())
+    .map(([surface, available]) => ({ surface, available }))
+    .sort((a, b) => b.available - a.available || a.surface.localeCompare(b.surface));
 }
 
 function parseHex(hex: string): string {

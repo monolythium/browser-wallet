@@ -732,6 +732,19 @@ export interface OperatorHealthRowCommon {
   /** Block-0 hash returned by `eth_getBlockByNumber("0x0", false)`;
    *  null when the probe failed or the response was malformed. */
   observedGenesis: string | null;
+  /** Phase 7.1 — operator-surface availability from
+   *  `lyth_operatorCapabilities` (SDK commit 0f483b8). Keys are surface
+   *  names ("ferveo", "streams", "indexer", "prover", "websocket", etc.);
+   *  values are the chain-reported status string. `null` when the
+   *  capability probe failed or the operator doesn't expose the method
+   *  — RPC dispatch is not gated on this; it's a display-only hint. */
+  capabilities: Record<string, string> | null;
+  /** Phase 7.1 — indexer height summary from `lyth_indexerStatus`. `null`
+   *  when the operator's indexer is disabled or the probe failed.
+   *  Surfaces as a "indexer #N (lag N)" line under the row. */
+  indexerHeight: number | null;
+  /** Highest block the indexer observed, for the lag computation. */
+  indexerLatest: number | null;
 }
 
 export type OperatorHealthRow =
@@ -754,6 +767,29 @@ export async function bgOperatorsHealth(): Promise<{
   operators: OperatorHealthRow[];
 }> {
   return send("sprintnet-operators-health");
+}
+
+/** Phase 7.1 — runtime provenance for the About page. Subset of
+ *  `RuntimeProvenanceResponse` (SDK commit f67cf0e), pulled once at
+ *  About-card mount via the existing operator-iteration path (GAP #11
+ *  trust still applies). `null` on every chain-offline / malformed
+ *  response — the About page renders a placeholder rather than failing
+ *  to mount. */
+export interface RuntimeProvenanceView {
+  clientName: string;
+  version: string;
+  gitCommit: string;
+  gitDirty: boolean;
+  features: string;
+  p2pProtocolVersion: number | null;
+  buildTimestampUtc: number | null;
+  latestHeight: number | null;
+}
+
+export async function bgRuntimeProvenance(): Promise<
+  { ok: true; provenance: RuntimeProvenanceView } | { ok: false; reason?: string }
+> {
+  return send("sprintnet-runtime-provenance");
 }
 
 export async function bgGetAutoLockMinutes(): Promise<{
@@ -881,12 +917,15 @@ export async function bgVaultAddImport(
 // aren't authoritative.
 
 export type {
+  ClusterDelegatorsView,
   ClusterDirectoryEntry,
   ClusterDirectoryPage,
   ClusterHealth,
   ClusterMember,
   ClusterStatus,
   DelegationCap,
+  DelegationHistoryRow,
+  DelegationHistoryView,
   DelegationRow,
   DelegationsView,
   PendingRewardsRow,
@@ -897,9 +936,11 @@ export type {
 } from "../shared/staking.js";
 
 import type {
+  ClusterDelegatorsView,
   ClusterDirectoryPage,
   ClusterStatus,
   DelegationCap,
+  DelegationHistoryView,
   DelegationRow,
   DelegationsView,
   PendingRewardsView,
@@ -954,6 +995,31 @@ export async function bgStakingRedemptionQueue(
   wallet: string,
 ): Promise<StakingResult<RedemptionQueueView>> {
   return send("staking-redemption-queue", { wallet });
+}
+
+/** Read the per-wallet delegation event timeline (delegate / undelegate /
+ *  redelegate events). Surfaces in the Delegations page's "Recent
+ *  activity" panel. Pages via opaque cursor — first call omits, follow-
+ *  ups echo the cursor from the previous reply. */
+export async function bgStakingDelegationHistory(
+  wallet: string,
+  limit = 50,
+  cursor?: string,
+): Promise<StakingResult<DelegationHistoryView>> {
+  return send(
+    "staking-delegation-history",
+    cursor === undefined ? { wallet, limit } : { wallet, limit, cursor },
+  );
+}
+
+/** Read the co-delegator list for a single cluster — used by the
+ *  cluster-detail expand panel to surface demand-profile context
+ *  ("47 wallets delegate here"). Returns `{ delegators: [], count: 0 }`
+ *  with `via: "mock"` when the chain is offline. */
+export async function bgStakingClusterDelegators(
+  clusterId: number,
+): Promise<StakingResult<ClusterDelegatorsView>> {
+  return send("staking-cluster-delegators", { clusterId });
 }
 
 /** Derive the per-user autovote entropy seed (§23.9). The SW derives
