@@ -1065,6 +1065,78 @@ export async function bgMultisigExecute(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Phase 8 Commit 5 — signer governance (§28.5 Q75)
+// ─────────────────────────────────────────────────────────────────────
+
+import type { GovernanceAction } from "../shared/multisig.js";
+
+export type {
+  GovernanceAction,
+  GovernanceProposal,
+  GovernanceStatus,
+} from "../shared/multisig.js";
+
+/** Propose a signer-set or threshold change. Dry-runs the action
+ *  against current state before persisting — surfaces "would leave
+ *  roster below threshold" etc. as a synchronous IPC error rather
+ *  than an execute-time surprise. */
+export async function bgMultisigProposeGovernance(args: {
+  vaultId: string;
+  action: GovernanceAction;
+}): Promise<
+  | { ok: true; proposalId: string; proposerId: string }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-propose-governance", args);
+}
+
+export async function bgMultisigSignGovernance(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").GovernanceStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-sign-governance", args);
+}
+
+export async function bgMultisigRejectGovernance(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").GovernanceStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-reject-governance", args);
+}
+
+/** Apply a governance proposal's action to the meta block. The
+ *  wallet enforces M-of-N at the IPC boundary; chain enforcement is
+ *  out of scope (governance lives entirely in the wallet today —
+ *  see shared/multisig.ts for the chain GAP). */
+export async function bgMultisigExecuteGovernance(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | { ok: true; signers: number; threshold: number }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-execute-governance", args);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Phase 7 — staking + delegation reads (§23 whitepaper)
 // ─────────────────────────────────────────────────────────────────────
 //
