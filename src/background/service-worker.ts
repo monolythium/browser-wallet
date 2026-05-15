@@ -74,7 +74,37 @@ import {
   addVaultFreshV4,
   addVaultImportV4,
   wipeContainerV4,
+  // Phase 8 multisig surface (Commit 1).
+  addVaultMultisigV4,
+  readMultisigMetaV4,
+  writeMultisigMetaV4,
+  getVaultPubkeyV4,
+  signWithVaultV4,
 } from "./keystore-mldsa.js";
+import {
+  DEFAULT_GOV_PROPOSAL_TTL_MS,
+  DEFAULT_TX_PROPOSAL_TTL_MS,
+  applyGovernance,
+  deserializeSharedProposal,
+  hashGovernanceProposal,
+  hashTxProposal,
+  isExecutable,
+  isGovernanceExecutable,
+  mergeGovernanceSignatures,
+  mergeProposalSignatures,
+  pickFirstSelfSigner,
+  pickNextLocalVoter,
+  reconcileGovernanceStatus,
+  reconcileProposalStatus,
+  serializeProposalForShare,
+  verifyGovernanceApprovals,
+  verifyProposalApprovals,
+  type GovernanceAction,
+  type GovernanceProposal,
+  type PendingProposal,
+  type ProposalAction,
+  type ProposalSignature,
+} from "../shared/multisig.js";
 import { shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
@@ -2359,6 +2389,776 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const r = await addVaultImportV4(p.mnemonic, label);
         await resetAutoLock();
         return { ok: true, vaultId: r.vaultId, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-add-multisig": {
+      // Phase 8 Commit 2 — create a multisig vault inside the
+      // container. Requires an unlocked container (MEK cached). The
+      // caller passes the N signer pubkeys + threshold + optional
+      // label; the keystore helper validates the roster + threshold,
+      // generates the multisig vault's own ML-DSA-65 keypair, and
+      // returns the new vault id + executor mnemonic + address.
+      //
+      // The mnemonic returned is the recovery secret for the
+      // *multisig vault itself* (the keypair that submits executed
+      // proposals on-chain) — NOT for any of the signers. Treat it
+      // like a single-vault mnemonic; the popup surfaces it in the
+      // same backup-checkbox reveal step.
+      const p = (message.payload ?? {}) as {
+        signers?: unknown;
+        threshold?: unknown;
+        label?: unknown;
+      };
+      if (!Array.isArray(p.signers)) {
+        return { ok: false, reason: "missing signers array" };
+      }
+      if (typeof p.threshold !== "number") {
+        return { ok: false, reason: "missing threshold" };
+      }
+      const label = typeof p.label === "string" ? p.label : undefined;
+      try {
+        const r = await addVaultMultisigV4({
+          signers: p.signers as Parameters<typeof addVaultMultisigV4>[0]["signers"],
+          threshold: p.threshold,
+          ...(label !== undefined ? { label } : {}),
+        });
+        await resetAutoLock();
+        return {
+          ok: true,
+          vaultId: r.vaultId,
+          mnemonic: r.mnemonic,
+          address: r.address,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-pubkey": {
+      // Phase 8 Commit 2 — read a vault's 1952-byte ML-DSA-65 pubkey
+      // as 0x-prefixed hex. Requires unlocked container; used by the
+      // MultisigCreateModal to populate self-signer entries without
+      // forcing the user to switch the active vault.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const pubkey = await getVaultPubkeyV4(p.vaultId);
+        return { ok: true, pubkey };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-multisig-meta": {
+      // Read the multisig meta (signer roster + threshold + queues)
+      // for a specific vault. Returns `meta: null` when the target is
+      // a single-key vault or unknown — the popup branches on that
+      // signal rather than treating absence as an error. No unlock
+      // required: signer pubkeys + proposal payloads are intentionally
+      // non-secret (only the multisig vault's seed lives in the
+      // encrypted envelope).
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        return { ok: true, meta };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-propose": {
+      // Phase 8 Commit 3 — create a tx proposal inside a multisig
+      // vault's meta. The proposer is the first self-signer in the
+      // roster (Commit 4 adds a picker when multiple self-signers
+      // exist). The proposer's vault key signs the canonical
+      // proposal hash; the signature lands in `approvals[0]` so the
+      // M-of-N count is honest from creation.
+      //
+      // Container must be unlocked (cached MEK). Returns the new
+      // proposal id + the proposer's signer id (so the popup can
+      // mark the row as "you approved" immediately).
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        action?: ProposalAction;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      if (!p.action || typeof p.action !== "object") {
+        return { ok: false, reason: "missing action" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposer = pickFirstSelfSigner(meta.signers);
+        if (!proposer) {
+          return {
+            ok: false,
+            reason:
+              "no local signer available to propose — at least one " +
+              "self-signer must live in this container",
+          };
+        }
+        // Resolve the multisig vault's address — used as the
+        // vaultAddress field on the proposal record so hashes bind
+        // to the right vault.
+        const summaries = (await listVaultsV4()) ?? [];
+        const target = summaries.find((v) => v.id === p.vaultId);
+        if (!target) {
+          return { ok: false, reason: "unknown vault id" };
+        }
+        const now = Date.now();
+        const proposal: PendingProposal = {
+          id: crypto.randomUUID(),
+          proposedBy: proposer.id,
+          createdAt: now,
+          expiresAt: now + DEFAULT_TX_PROPOSAL_TTL_MS,
+          vaultAddress: target.addr,
+          action: p.action,
+          approvals: [],
+          rejections: [],
+          status: "pending",
+          txHash: null,
+        };
+        const digest = hashTxProposal(proposal);
+        const sigBytes = await signWithVaultV4(proposer.vaultId!, digest);
+        const approval: ProposalSignature = {
+          signerId: proposer.id,
+          signature: "0x" + bytesToHex(sigBytes),
+          signedAt: now,
+        };
+        proposal.approvals.push(approval);
+        meta.proposals = [proposal, ...meta.proposals];
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          proposalId: proposal.id,
+          proposerId: proposer.id,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-list-proposals": {
+      // Convenience read: returns the proposals array for a vault.
+      // Equivalent to bgVaultMultisigMeta().meta.proposals but cheaper
+      // for callers that only want the proposal list (skips the
+      // governance + signers payload). `proposals: null` for single
+      // vaults / unknown ids.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        return {
+          ok: true,
+          proposals: meta?.proposals ?? null,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-sign":
+    case "multisig-reject": {
+      // Phase 8 Commit 4 — add this wallet's signature to a pending
+      // proposal as either approval (`multisig-sign`) or rejection
+      // (`multisig-reject`). The signer is the first local self-
+      // signer who has NOT already voted on this proposal; v1
+      // assumes a one-vote-per-self-signer model. Requires unlocked
+      // container.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
+        return { ok: false, reason: "missing vaultId or proposalId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal = meta.proposals.find((pp) => pp.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown proposal" };
+        }
+        const now = Date.now();
+        const status = reconcileProposalStatus(proposal, meta.threshold, now);
+        if (status !== "pending") {
+          return {
+            ok: false,
+            reason: `proposal is ${status}; cannot vote`,
+          };
+        }
+        const approvedIds = new Set(proposal.approvals.map((a) => a.signerId));
+        const rejectedIds = new Set(proposal.rejections.map((a) => a.signerId));
+        const voter = pickNextLocalVoter(
+          meta.signers,
+          approvedIds,
+          rejectedIds,
+        );
+        if (!voter) {
+          return {
+            ok: false,
+            reason:
+              "no local signer is eligible to vote — either every " +
+              "local signer has already voted, or this vault has no " +
+              "self-signers in the container",
+          };
+        }
+        const digest = hashTxProposal(proposal);
+        const sigBytes = await signWithVaultV4(voter.vaultId!, digest);
+        const signature: ProposalSignature = {
+          signerId: voter.id,
+          signature: "0x" + bytesToHex(sigBytes),
+          signedAt: now,
+        };
+        if (message.op === "multisig-sign") {
+          proposal.approvals.push(signature);
+        } else {
+          proposal.rejections.push(signature);
+          // Re-derive status post-rejection — may flip the proposal
+          // to "rejected" if this vote crosses the threshold.
+          proposal.status = reconcileProposalStatus(
+            proposal,
+            meta.threshold,
+            now,
+          );
+        }
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          signerId: voter.id,
+          status: proposal.status,
+          approvals: proposal.approvals.length,
+          rejections: proposal.rejections.length,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-execute": {
+      // Phase 8 Commit 4 — broadcast a proposal that has collected
+      // its threshold of approvals. The submitter is the multisig
+      // vault's own keypair (the "executor"). The proposal's
+      // approvals[] array is the off-chain audit trail; the chain
+      // only verifies the single executor signature today
+      // (chain GAP — see shared/multisig.ts).
+      //
+      // Side effect: temporarily switches the active vault to the
+      // multisig vault for the duration of the submit, then restores
+      // the previous active vault. The wallet broadcasts
+      // `accountsChanged` twice as a side effect; connected dApps
+      // observe a flip-back to the same address they had before, so
+      // the visible state is unchanged.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
+        return { ok: false, reason: "missing vaultId or proposalId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal = meta.proposals.find((pp) => pp.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown proposal" };
+        }
+        const now = Date.now();
+        if (!isExecutable(proposal, meta.threshold, now)) {
+          return {
+            ok: false,
+            reason:
+              `proposal not executable: status=${proposal.status}, ` +
+              `${proposal.approvals.length}/${meta.threshold} approvals, ` +
+              `${proposal.rejections.length} rejections, ` +
+              `expires ${new Date(proposal.expiresAt).toISOString()}`,
+          };
+        }
+        // Capture the current active vault so we can restore it
+        // after broadcasting via the multisig's keypair. Skipping
+        // the restore would silently change which vault the popup
+        // is "looking at" — confusing UX.
+        const before = (await listVaultsV4()) ?? [];
+        const previouslyActive = before.find((v) => v.isActive);
+
+        // Switch to the multisig vault so submitEncryptedMlDsaTx
+        // uses the multisig's keypair as the "from" account; then
+        // restore the prior active vault on exit. accountsChanged
+        // broadcasts cover both transitions so connected dApps see
+        // the round-trip.
+        await selectActiveVaultV4(p.vaultId);
+        broadcastEvent("accountsChanged", [
+          before.find((v) => v.id === p.vaultId)?.addr ?? "",
+        ]);
+        const action = proposal.action;
+        const fromAddr = getUnlockedAddressV4();
+        if (!fromAddr) {
+          if (previouslyActive && previouslyActive.id !== p.vaultId) {
+            await selectActiveVaultV4(previouslyActive.id);
+            broadcastEvent("accountsChanged", [previouslyActive.addr]);
+          }
+          return { ok: false, reason: "multisig vault has no unlocked address" };
+        }
+        let txHash: string | null = null;
+        let broadcastError: string | null = null;
+        try {
+          const nonceRes = await sprintnetJsonRpc<string>(
+            "eth_getTransactionCount",
+            [fromAddr, "latest"],
+          );
+          const fee = await suggestFee(action.chainIdHex);
+          const gasHex =
+            action.gasLimitHex ?? fee.gasLimit ?? "0x5208";
+          const valueWeiHex =
+            action.kind === "send"
+              ? action.valueWeiHex
+              : action.valueWeiHex ?? "0x0";
+          const data = action.kind === "contract" ? action.data : action.data;
+          const r = await submitEncryptedMlDsaTx({
+            to: action.to,
+            value: valueWeiHex,
+            ...(data !== undefined ? { data } : {}),
+            gas: gasHex,
+            nonce: nonceRes.result,
+            maxFeePerGas: fee.maxFeePerGas,
+            maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+            chainIdHex: action.chainIdHex,
+          });
+          txHash = r.txHash;
+        } catch (e) {
+          broadcastError = (e as Error).message ?? "send failed";
+        } finally {
+          if (previouslyActive && previouslyActive.id !== p.vaultId) {
+            await selectActiveVaultV4(previouslyActive.id);
+            broadcastEvent("accountsChanged", [previouslyActive.addr]);
+          }
+        }
+        if (broadcastError) {
+          return { ok: false, reason: broadcastError };
+        }
+        if (txHash) {
+          // Re-read meta in case the active-vault swap raced with
+          // another mutation; defensive but cheap.
+          const freshMeta = await readMultisigMetaV4(p.vaultId);
+          if (freshMeta) {
+            const target = freshMeta.proposals.find(
+              (pp) => pp.id === p.proposalId,
+            );
+            if (target) {
+              target.status = "executed";
+              target.txHash = txHash;
+              await writeMultisigMetaV4(p.vaultId, freshMeta);
+            }
+          }
+        }
+        await resetAutoLock();
+        return { ok: true, txHash };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-propose-governance": {
+      // Phase 8 Commit 5 — propose a signer-set change (add /
+      // remove / replace) or a threshold change. Same M-of-current-
+      // signers approval rule as tx proposals, but lives in a
+      // separate queue (meta.governance) with a longer TTL and
+      // distinct hash domain. The first local self-signer signs as
+      // proposer; their signature lands in approvals[0].
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        action?: GovernanceAction;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      if (!p.action || typeof p.action !== "object") {
+        return { ok: false, reason: "missing action" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        // Dry-run the action against current state — surfaces "would
+        // leave roster below threshold", "unknown signerId", etc.
+        // BEFORE the proposal is persisted, so the user sees the
+        // rejection inline rather than discovering it at execute time.
+        applyGovernance(
+          meta.signers,
+          meta.threshold,
+          p.action,
+          () => "dry-run",
+        );
+        const proposer = pickFirstSelfSigner(meta.signers);
+        if (!proposer) {
+          return {
+            ok: false,
+            reason:
+              "no local signer available to propose — at least one " +
+              "self-signer must live in this container",
+          };
+        }
+        const summaries = (await listVaultsV4()) ?? [];
+        const target = summaries.find((v) => v.id === p.vaultId);
+        if (!target) {
+          return { ok: false, reason: "unknown vault id" };
+        }
+        const now = Date.now();
+        const proposal: GovernanceProposal = {
+          id: crypto.randomUUID(),
+          proposedBy: proposer.id,
+          createdAt: now,
+          expiresAt: now + DEFAULT_GOV_PROPOSAL_TTL_MS,
+          vaultAddress: target.addr,
+          action: p.action,
+          approvals: [],
+          rejections: [],
+          status: "pending",
+        };
+        const digest = hashGovernanceProposal(proposal);
+        const sigBytes = await signWithVaultV4(proposer.vaultId!, digest);
+        proposal.approvals.push({
+          signerId: proposer.id,
+          signature: "0x" + bytesToHex(sigBytes),
+          signedAt: now,
+        });
+        meta.governance = [proposal, ...meta.governance];
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          proposalId: proposal.id,
+          proposerId: proposer.id,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-sign-governance":
+    case "multisig-reject-governance": {
+      // Approve/reject a governance proposal. Same shape as the tx
+      // sign/reject path but operates on meta.governance + the
+      // governance hash domain. Body intentionally mirrors the tx
+      // sign/reject handler so future extensions (e.g. multi-signer
+      // picker) can be lifted once.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
+        return { ok: false, reason: "missing vaultId or proposalId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal = meta.governance.find((g) => g.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown governance proposal" };
+        }
+        const now = Date.now();
+        const status = reconcileGovernanceStatus(
+          proposal,
+          meta.threshold,
+          now,
+        );
+        if (status !== "pending") {
+          return {
+            ok: false,
+            reason: `proposal is ${status}; cannot vote`,
+          };
+        }
+        const approvedIds = new Set(proposal.approvals.map((a) => a.signerId));
+        const rejectedIds = new Set(proposal.rejections.map((a) => a.signerId));
+        const voter = pickNextLocalVoter(
+          meta.signers,
+          approvedIds,
+          rejectedIds,
+        );
+        if (!voter) {
+          return {
+            ok: false,
+            reason:
+              "no local signer is eligible to vote — either every " +
+              "local signer has already voted, or this vault has no " +
+              "self-signers in the container",
+          };
+        }
+        const digest = hashGovernanceProposal(proposal);
+        const sigBytes = await signWithVaultV4(voter.vaultId!, digest);
+        const signature: ProposalSignature = {
+          signerId: voter.id,
+          signature: "0x" + bytesToHex(sigBytes),
+          signedAt: now,
+        };
+        if (message.op === "multisig-sign-governance") {
+          proposal.approvals.push(signature);
+        } else {
+          proposal.rejections.push(signature);
+          proposal.status = reconcileGovernanceStatus(
+            proposal,
+            meta.threshold,
+            now,
+          );
+        }
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          signerId: voter.id,
+          status: proposal.status,
+          approvals: proposal.approvals.length,
+          rejections: proposal.rejections.length,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-export-proposal": {
+      // Phase 8 Commit 7 — serialize a proposal (tx or governance)
+      // into a base64-encoded JSON blob suitable for out-of-band
+      // sharing (paste into chat / email / QR code). The blob carries
+      // the full proposal record including current approvals/
+      // rejections so the recipient can merge without losing
+      // signatures already collected.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+        kind?: "tx" | "gov";
+      };
+      if (
+        typeof p.vaultId !== "string" ||
+        typeof p.proposalId !== "string" ||
+        (p.kind !== "tx" && p.kind !== "gov")
+      ) {
+        return {
+          ok: false,
+          reason: "missing vaultId / proposalId / kind",
+        };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal =
+          p.kind === "tx"
+            ? meta.proposals.find((pp) => pp.id === p.proposalId)
+            : meta.governance.find((g) => g.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown proposal" };
+        }
+        const blob = serializeProposalForShare(proposal, p.kind);
+        return { ok: true, blob };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-import-proposal": {
+      // Phase 8 Commit 7 — accept a base64 blob from another signer's
+      // wallet. Verifies every signature in the incoming proposal
+      // against the local signer roster (pubkeys + hashTxProposal /
+      // hashGovernanceProposal). If the proposal id already exists
+      // locally, merge approvals/rejections (dedupe by signerId,
+      // first-wins). If new, append after running the same signature
+      // verification + structural check.
+      //
+      // Returns the merged proposal id + status; the popup refreshes
+      // its meta-read and the UI updates uniformly.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        blob?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.blob !== "string") {
+        return { ok: false, reason: "missing vaultId or blob" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const envelope = deserializeSharedProposal(p.blob);
+
+        if (envelope.kind === "tx") {
+          const incoming = envelope.proposal as PendingProposal;
+          // Vault binding: the incoming proposal must reference this
+          // multisig vault. Otherwise an attacker could craft a
+          // proposal for a different vault that this signer hasn't
+          // opted into.
+          if (
+            incoming.vaultAddress.toLowerCase() !==
+            (await listVaultsV4())
+              ?.find((v) => v.id === p.vaultId)
+              ?.addr.toLowerCase()
+          ) {
+            return {
+              ok: false,
+              reason: "imported proposal targets a different vault address",
+            };
+          }
+          const existing = meta.proposals.find((pp) => pp.id === incoming.id);
+          if (existing) {
+            const merged = mergeProposalSignatures(
+              existing,
+              incoming,
+              meta.signers,
+            );
+            meta.proposals = meta.proposals.map((pp) =>
+              pp.id === merged.id ? merged : pp,
+            );
+          } else {
+            // Brand-new proposal — drop any signatures whose pubkeys
+            // don't match the local roster (defense-in-depth; the
+            // merge path applies the same filter).
+            const verified = verifyProposalApprovals(incoming, meta.signers);
+            const sanitized: PendingProposal = {
+              ...incoming,
+              approvals: incoming.approvals.filter((a) =>
+                verified.validApprovals.has(a.signerId),
+              ),
+              rejections: incoming.rejections.filter((r) =>
+                verified.validRejections.has(r.signerId),
+              ),
+            };
+            meta.proposals = [sanitized, ...meta.proposals];
+          }
+        } else {
+          const incoming = envelope.proposal as GovernanceProposal;
+          if (
+            incoming.vaultAddress.toLowerCase() !==
+            (await listVaultsV4())
+              ?.find((v) => v.id === p.vaultId)
+              ?.addr.toLowerCase()
+          ) {
+            return {
+              ok: false,
+              reason: "imported proposal targets a different vault address",
+            };
+          }
+          const existing = meta.governance.find((g) => g.id === incoming.id);
+          if (existing) {
+            const merged = mergeGovernanceSignatures(
+              existing,
+              incoming,
+              meta.signers,
+            );
+            meta.governance = meta.governance.map((g) =>
+              g.id === merged.id ? merged : g,
+            );
+          } else {
+            const verified = verifyGovernanceApprovals(
+              incoming,
+              meta.signers,
+            );
+            const sanitized: GovernanceProposal = {
+              ...incoming,
+              approvals: incoming.approvals.filter((a) =>
+                verified.validApprovals.has(a.signerId),
+              ),
+              rejections: incoming.rejections.filter((r) =>
+                verified.validRejections.has(r.signerId),
+              ),
+            };
+            meta.governance = [sanitized, ...meta.governance];
+          }
+        }
+
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          kind: envelope.kind,
+          proposalId: envelope.proposal.id,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-execute-governance": {
+      // Apply the governance action atomically: re-run applyGovernance
+      // against the current (signers, threshold), persist the result,
+      // mark the proposal as "applied". No on-chain interaction —
+      // governance lives entirely in the wallet's meta block.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
+        return { ok: false, reason: "missing vaultId or proposalId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal = meta.governance.find((g) => g.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown governance proposal" };
+        }
+        const now = Date.now();
+        if (!isGovernanceExecutable(proposal, meta.threshold, now)) {
+          return {
+            ok: false,
+            reason:
+              `governance proposal not executable: status=${proposal.status}, ` +
+              `${proposal.approvals.length}/${meta.threshold} approvals, ` +
+              `${proposal.rejections.length} rejections`,
+          };
+        }
+        const next = applyGovernance(
+          meta.signers,
+          meta.threshold,
+          proposal.action,
+          () => crypto.randomUUID(),
+        );
+        meta.signers = next.signers;
+        meta.threshold = next.threshold;
+        proposal.status = "applied";
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          signers: meta.signers.length,
+          threshold: meta.threshold,
+        };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
