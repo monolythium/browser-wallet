@@ -1364,6 +1364,40 @@ export async function bgPasskeySetPolicy(args: {
   return send("passkey-set-policy", args);
 }
 
+/** Wire-format passkey decision — mirrors `PolicyDecision` in
+ *  `shared/passkey.ts` with bigint values encoded as hex strings. */
+export type BgPasskeyDecision =
+  | { kind: "passkey-ok"; credentials: BgPasskeyCredential[] }
+  | { kind: "password-required"; reason: "disabled" | "no-credential" }
+  | {
+      kind: "over-limit";
+      mode: BgPolicyMode;
+      thresholdWeiHex: string;
+      attemptedWeiHex: string;
+    };
+
+/** Consult the policy for a tx value. The wallet UI runs this before
+ *  the preview screen so the user sees which unlock path applies. */
+export async function bgPasskeyEvaluate(args: {
+  vaultId: string;
+  valueWeiHex: string;
+}): Promise<
+  | { ok: true; decision: BgPasskeyDecision }
+  | { ok: false; reason: string }
+> {
+  return send("passkey-evaluate", args);
+}
+
+/** Append to the in-memory daily-cap ledger after a successful
+ *  passkey-unlocked tx submit. Caller is the popup Send flow on the
+ *  Confirm → submit → success transition. */
+export async function bgPasskeyRecordUsage(args: {
+  vaultId: string;
+  valueWeiHex: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return send("passkey-record-usage", args);
+}
+
 // Two-tier UX feature toggles
 import type {
   FeatureFlag as TwoTierFlag,

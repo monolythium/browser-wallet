@@ -13,11 +13,16 @@ import { useEffect, useMemo, useState } from "react";
 import { Icon, shortAddr } from "../Icon";
 import {
   bgMultisigPropose,
+  bgPasskeyEvaluate,
+  bgPasskeyRecordUsage,
   bgWalletBalance,
   bgWalletFeeSuggestion,
   bgWalletSendTx,
+  type BgPasskeyDecision,
   type FeeSuggestion,
 } from "../bg";
+import { PasskeySignModal } from "../components/PasskeySignModal";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
 import { addressToBech32m, bech32mToAddress } from "../../shared/bech32m";
 import {
@@ -48,6 +53,13 @@ interface SendProps {
    *  the vault summary) lands in Commit 6; absent prop = unchanged
    *  single-vault behavior. */
   multisigVaultId?: string;
+  /** Phase 9 — when set (and `multisigVaultId` is NOT set), Send
+   *  consults the per-vault passkey policy and shows the appropriate
+   *  unlock-mode badge on the preview screen. Below-limit txs that
+   *  evaluate to `passkey-ok` trigger the WebAuthn ceremony on
+   *  Confirm; over-limit / password-required txs proceed as today.
+   *  Absent prop = unchanged behavior (no policy consultation). */
+  singleVaultId?: string;
 }
 
 type Step = "form" | "preview" | "sending" | "success" | "error";
@@ -79,8 +91,11 @@ export function Send({
   chainId,
   onBack,
   multisigVaultId,
+  singleVaultId,
 }: SendProps) {
   const [step, setStep] = useState<Step>("form");
+  const [passkeyDecision, setPasskeyDecision] = useState<BgPasskeyDecision | null>(null);
+  const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
 
   // Form state — single source of truth so preview and "Try again" can
   // round-trip without prop drilling.
@@ -196,8 +211,26 @@ export function Send({
     setAmountStr(weiToLythString(maxWei));
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (!canContinue) return;
+    // Consult the passkey policy when this is a single-vault send. The
+    // decision drives the preview screen's unlock-mode badge + the
+    // post-Confirm path (passkey ceremony vs straight submit). Multisig
+    // sends skip this — the proposal flow doesn't need a per-tx
+    // signing-mode badge.
+    if (
+      singleVaultId !== undefined &&
+      multisigVaultId === undefined &&
+      amountWei !== null
+    ) {
+      const r = await bgPasskeyEvaluate({
+        vaultId: singleVaultId,
+        valueWeiHex: "0x" + amountWei.toString(16),
+      });
+      setPasskeyDecision(r.ok ? r.decision : null);
+    } else {
+      setPasskeyDecision(null);
+    }
     setStep("preview");
   };
 
@@ -249,6 +282,20 @@ export function Send({
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
+        // Record passkey-unlocked txs against the daily-cap ledger.
+        // The SW prunes on read; this fire-and-forget call appends.
+        // Only fires when the policy decision was passkey-ok and a
+        // passkey assertion succeeded — over-limit / password-required
+        // txs do not contribute to the cap.
+        if (
+          singleVaultId !== undefined &&
+          passkeyDecision?.kind === "passkey-ok"
+        ) {
+          void bgPasskeyRecordUsage({
+            vaultId: singleVaultId,
+            valueWeiHex,
+          });
+        }
         setStep("success");
       } else {
         setSubmitError({
@@ -284,17 +331,58 @@ export function Send({
   // ---- render ----
 
   if (step === "preview") {
+    const needsPasskey = passkeyDecision?.kind === "passkey-ok";
+    const onPreviewConfirm = () => {
+      if (needsPasskey) {
+        setPasskeyModalOpen(true);
+      } else {
+        void handleConfirm();
+      }
+    };
+
+    // Build a stable tx digest for the WebAuthn challenge. Binds the
+    // assertion to the specific (to, value, chainId) so a captured
+    // assertion cannot be replayed for a different tx via the same
+    // wallet. We hash the wire-format strings — close enough for the
+    // local-presence-check the wallet uses today; the future
+    // chain-side passkey precompile (Phase 9.1) will use the chain's
+    // canonical txHash for the same binding.
+    const txDigest =
+      needsPasskey && effectiveAddr0x !== null && amountWei !== null
+        ? keccak_256(
+            new TextEncoder().encode(
+              `${effectiveAddr0x}|${amountWei.toString(16)}|${chainId}`,
+            ),
+          )
+        : new Uint8Array(32);
+
     return (
-      <PreviewView
-        to={effectiveAddr0x ?? to}
-        amountWei={amountWei}
-        estimatedFeeWei={estimatedFeeWei}
-        tier={tier}
-        fromAddr={account.addr}
-        onConfirm={() => void handleConfirm()}
-        onBack={() => setStep("form")}
-        isMultisig={multisigVaultId !== undefined}
-      />
+      <>
+        <PreviewView
+          to={effectiveAddr0x ?? to}
+          amountWei={amountWei}
+          estimatedFeeWei={estimatedFeeWei}
+          tier={tier}
+          fromAddr={account.addr}
+          onConfirm={onPreviewConfirm}
+          onBack={() => setStep("form")}
+          isMultisig={multisigVaultId !== undefined}
+          passkeyDecision={passkeyDecision}
+        />
+        {needsPasskey && passkeyDecision?.kind === "passkey-ok" && (
+          <PasskeySignModal
+            open={passkeyModalOpen}
+            vaultAddress={account.addr}
+            credentials={passkeyDecision.credentials}
+            txDigest={txDigest}
+            onCancel={() => setPasskeyModalOpen(false)}
+            onSuccess={() => {
+              setPasskeyModalOpen(false);
+              void handleConfirm();
+            }}
+          />
+        )}
+      </>
     );
   }
 
@@ -564,7 +652,7 @@ export function Send({
 
         <button
           className="ext-act prim"
-          onClick={handleContinue}
+          onClick={() => void handleContinue()}
           disabled={!canContinue}
           style={{
             width: "100%",
@@ -1141,6 +1229,85 @@ interface PreviewViewProps {
    *  header, "Submit as proposal" CTA, multisig-aware warning copy.
    *  Default behavior (single-vault send) is unchanged when false. */
   isMultisig?: boolean;
+  /** Phase 9 — passkey policy decision for the current tx. When
+   *  present and the decision is `passkey-ok`, render a "passkey
+   *  unlock" badge above the warning card so the user knows which
+   *  unlock path the Confirm CTA will trigger. */
+  passkeyDecision?: BgPasskeyDecision | null;
+}
+
+/** Phase 9 — preview-screen badge that tells the user which unlock
+ *  the Confirm CTA will trigger.
+ *
+ *  passkey-ok       → green "Passkey unlock" pill
+ *  password-required → no badge (default behaviour, password works as today)
+ *  over-limit        → amber "Above passkey limit" pill explaining the
+ *                       per-tx / daily-cap threshold that was tripped
+ */
+function PasskeyDecisionBadge({
+  decision,
+}: {
+  decision: BgPasskeyDecision;
+}) {
+  if (decision.kind === "password-required") return null;
+
+  if (decision.kind === "passkey-ok") {
+    return (
+      <div
+        style={{
+          padding: "8px 10px",
+          borderRadius: 8,
+          background: "rgba(126,227,193,0.08)",
+          border: "1px solid rgba(126,227,193,0.4)",
+          color: "var(--fg-100)",
+          fontSize: 11.5,
+          lineHeight: 1.5,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <Icon name="passkey" size={12} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600 }}>Passkey unlock</div>
+          <div style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
+            Below the configured limit — Confirm will use your passkey instead
+            of asking for your password.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // over-limit
+  const lyth = (() => {
+    try {
+      const wei = BigInt(decision.thresholdWeiHex);
+      return (wei / 1_000_000_000_000_000_000n).toString();
+    } catch {
+      return "?";
+    }
+  })();
+  return (
+    <div
+      style={{
+        padding: "8px 10px",
+        borderRadius: 8,
+        background: "rgba(242,180,65,0.08)",
+        border: "1px solid rgba(242,180,65,0.4)",
+        color: "var(--fg-100)",
+        fontSize: 11.5,
+        lineHeight: 1.5,
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>Above passkey limit</div>
+      <div style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
+        {decision.mode === "per-tx"
+          ? `Per-tx limit is ${lyth} LYTH — this tx requires password unlock.`
+          : `Daily cap is ${lyth} LYTH — this tx requires password unlock.`}
+      </div>
+    </div>
+  );
 }
 
 function PreviewView({
@@ -1152,6 +1319,7 @@ function PreviewView({
   onConfirm,
   onBack,
   isMultisig,
+  passkeyDecision,
 }: PreviewViewProps) {
   const total = amountWei !== null && estimatedFeeWei !== null
     ? amountWei + estimatedFeeWei
@@ -1203,6 +1371,10 @@ function PreviewView({
             />
           </div>
         </div>
+
+        {passkeyDecision && !isMultisig && (
+          <PasskeyDecisionBadge decision={passkeyDecision} />
+        )}
 
         <div
           className="ext-card"
