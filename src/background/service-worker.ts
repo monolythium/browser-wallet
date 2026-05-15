@@ -80,7 +80,22 @@ import {
   writeMultisigMetaV4,
   getVaultPubkeyV4,
   signWithVaultV4,
+  // Phase 9 passkey surface (Commit 1).
+  readPasskeyStateV4,
+  addPasskeyCredentialV4,
+  removePasskeyCredentialV4,
+  setPasskeyPolicyV4,
 } from "./keystore-mldsa.js";
+import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
+import { validateCredentialName, validatePasskeyPolicy } from "../shared/passkey.js";
+import {
+  loadTwoTierState,
+  setTwoTierFeature,
+} from "./two-tier-features-store.js";
+import {
+  FEATURE_FLAGS,
+  type FeatureFlag,
+} from "../shared/two-tier-features.js";
 import {
   DEFAULT_GOV_PROPOSAL_TTL_MS,
   DEFAULT_TX_PROPOSAL_TTL_MS,
@@ -1128,6 +1143,72 @@ async function suggestFee(chainIdHex: string): Promise<{
     maxFeePerGas: gasPriceHex,
     gasLimit: null,
   };
+}
+
+// ---- Phase 9 passkey IPC marshalling ----
+//
+// `bigint` does not survive `chrome.runtime.sendMessage` — the
+// structured-clone algorithm preserves it in DOM contexts but the
+// extension messaging layer JSON-serialises payloads. Encode every
+// wei value as a decimal string on the wire; parse back on receive.
+
+interface SerializedPasskeyPolicy {
+  enabled: boolean;
+  mode: "per-tx" | "daily";
+  limitWei: string;
+  dailyCapWei: string;
+}
+
+interface SerializedPasskeyState {
+  credentials: PasskeyCredential[];
+  policy: SerializedPasskeyPolicy;
+}
+
+function serializePasskeyState(s: {
+  credentials: PasskeyCredential[];
+  policy: PasskeyPolicy;
+}): SerializedPasskeyState {
+  return {
+    credentials: s.credentials.map((c) => ({ ...c })),
+    policy: {
+      enabled: s.policy.enabled,
+      mode: s.policy.mode,
+      limitWei: s.policy.limitWei.toString(),
+      dailyCapWei: s.policy.dailyCapWei.toString(),
+    },
+  };
+}
+
+function parsePasskeyCredential(raw: unknown): PasskeyCredential | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.credentialId !== "string" || r.credentialId.length === 0) return null;
+  if (typeof r.name !== "string") return null;
+  if (r.kind !== "platform" && r.kind !== "cross-platform") return null;
+  if (typeof r.createdAt !== "number") return null;
+  return {
+    credentialId: r.credentialId,
+    name: r.name,
+    kind: r.kind,
+    createdAt: r.createdAt,
+  };
+}
+
+function parsePasskeyPolicy(raw: unknown): PasskeyPolicy | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.enabled !== "boolean") return null;
+  if (r.mode !== "per-tx" && r.mode !== "daily") return null;
+  if (typeof r.limitWei !== "string" || typeof r.dailyCapWei !== "string") return null;
+  let limitWei: bigint;
+  let dailyCapWei: bigint;
+  try {
+    limitWei = BigInt(r.limitWei);
+    dailyCapWei = BigInt(r.dailyCapWei);
+  } catch {
+    return null;
+  }
+  return { enabled: r.enabled, mode: r.mode, limitWei, dailyCapWei };
 }
 
 // ---- internal popup messages ----
@@ -3159,6 +3240,136 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           signers: meta.signers.length,
           threshold: meta.threshold,
         };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
+    // Phase 9 — passkey IPCs (§28.5 Q30 + Q31)
+    // ────────────────────────────────────────────────────────────────
+    case "passkey-get-state": {
+      // Read the per-vault passkey state — credentials + policy.
+      // No unlock required: the popup uses this to render Settings →
+      // Security and the Send-flow signing-mode badge whether or not
+      // the user is currently unlocked. The credential IDs are public
+      // (the actual secret lives in the browser's authenticator), and
+      // the policy thresholds aren't sensitive.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const state = await readPasskeyStateV4(p.vaultId);
+        return {
+          ok: true,
+          state: serializePasskeyState(state),
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-add-credential": {
+      // Persist a freshly-registered credential. The popup ran the
+      // WebAuthn `.create()` call (only possible in the popup window
+      // context per MV3 rules) and forwards the resulting credentialId
+      // + user-edited name + authenticator kind here. The wallet never
+      // sees the private key material — that lives inside the
+      // browser's authenticator.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        credential?: unknown;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      const cred = parsePasskeyCredential(p.credential);
+      if (!cred) {
+        return { ok: false, reason: "invalid credential shape" };
+      }
+      if (!validateCredentialName(cred.name)) {
+        return { ok: false, reason: "invalid credential name" };
+      }
+      try {
+        const state = await addPasskeyCredentialV4(p.vaultId, cred);
+        return { ok: true, state: serializePasskeyState(state) };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-remove-credential": {
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        credentialId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.credentialId !== "string") {
+        return { ok: false, reason: "missing vaultId or credentialId" };
+      }
+      try {
+        const state = await removePasskeyCredentialV4(
+          p.vaultId,
+          p.credentialId,
+        );
+        return { ok: true, state: serializePasskeyState(state) };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-set-policy": {
+      // Replace the policy atomically. The wallet enforces the
+      // resulting threshold at signing time (Commit 4). There is NO
+      // chain-side enforcement today — see the chain-GAP note in
+      // shared/passkey.ts. The validator inside the shared module
+      // rejects bogus inputs; bad payloads round-trip a typed reason.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        policy?: unknown;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      const policy = parsePasskeyPolicy(p.policy);
+      if (!policy) {
+        return { ok: false, reason: "invalid policy shape" };
+      }
+      const validationError = validatePasskeyPolicy(policy);
+      if (validationError) {
+        return { ok: false, reason: `invalid policy: ${validationError}` };
+      }
+      try {
+        const state = await setPasskeyPolicyV4(p.vaultId, policy);
+        return { ok: true, state: serializePasskeyState(state) };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
+    // Phase 9 — two-tier UX feature toggle IPCs (§28.5 Q29)
+    // ────────────────────────────────────────────────────────────────
+    case "two-tier-get-state": {
+      try {
+        const state = await loadTwoTierState();
+        return { ok: true, state };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "two-tier-set-feature": {
+      const p = (message.payload ?? {}) as {
+        flag?: string;
+        enabled?: unknown;
+      };
+      if (typeof p.flag !== "string" || typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "missing flag or enabled bool" };
+      }
+      if (!(FEATURE_FLAGS as readonly string[]).includes(p.flag)) {
+        return { ok: false, reason: "unknown feature flag" };
+      }
+      try {
+        const state = await setTwoTierFeature(
+          p.flag as FeatureFlag,
+          p.enabled,
+        );
+        return { ok: true, state };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
