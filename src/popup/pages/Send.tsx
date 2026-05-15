@@ -12,6 +12,7 @@ import type { ReactNode, CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Icon, shortAddr } from "../Icon";
 import {
+  bgMultisigPropose,
   bgWalletBalance,
   bgWalletFeeSuggestion,
   bgWalletSendTx,
@@ -40,6 +41,13 @@ interface SendProps {
    *  fee-suggestion fetch. */
   chainId: string;
   onBack: () => void;
+  /** Phase 8 — when set, the active vault is a multisig vault and Send
+   *  routes the submit to `bgMultisigPropose` instead of `bgWalletSendTx`.
+   *  The form layout stays the same; only the CTA copy + submit path
+   *  change. The App-side detection (read `kind === "multisig"` from
+   *  the vault summary) lands in Commit 6; absent prop = unchanged
+   *  single-vault behavior. */
+  multisigVaultId?: string;
 }
 
 type Step = "form" | "preview" | "sending" | "success" | "error";
@@ -66,7 +74,12 @@ const ADMISSION_REJECT_CODE_HI = -32020;
 // chains may omit it). Hex.
 const FALLBACK_TRANSFER_GAS_LIMIT_HEX = "0x5208"; // 21000
 
-export function Send({ account, chainId, onBack }: SendProps) {
+export function Send({
+  account,
+  chainId,
+  onBack,
+  multisigVaultId,
+}: SendProps) {
   const [step, setStep] = useState<Step>("form");
 
   // Form state — single source of truth so preview and "Try again" can
@@ -196,6 +209,39 @@ export function Send({ account, chainId, onBack }: SendProps) {
     setTxHash(null);
     try {
       const valueWeiHex = "0x" + amountWei.toString(16);
+      if (multisigVaultId !== undefined) {
+        // Multisig path — create a proposal rather than broadcasting
+        // a tx. Other signers approve via the Pending dashboard
+        // (Commit 4); once the threshold is reached the executor
+        // submits the underlying tx (Commit 4 too).
+        const r = await bgMultisigPropose({
+          vaultId: multisigVaultId,
+          action: {
+            kind: "send",
+            to: effectiveAddr0x,
+            valueWeiHex,
+            chainIdHex: chainId,
+          },
+        });
+        if (r.ok) {
+          // Reuse the txHash state slot to carry the proposalId
+          // through to the success view — the UI distinguishes via
+          // `multisigVaultId !== undefined`. Cleaner separation lands
+          // in Commit 6 alongside the dedicated multisig success
+          // view + Pending dashboard link.
+          setTxHash(r.proposalId);
+          setStep("success");
+        } else {
+          setSubmitError({
+            message: r.reason ?? "propose failed",
+            code: null,
+            method: null,
+            via: null,
+          });
+          setStep("error");
+        }
+        return;
+      }
       const r = await bgWalletSendTx({
         to: effectiveAddr0x,
         valueWeiHex,
@@ -247,6 +293,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
         fromAddr={account.addr}
         onConfirm={() => void handleConfirm()}
         onBack={() => setStep("form")}
+        isMultisig={multisigVaultId !== undefined}
       />
     );
   }
@@ -297,6 +344,22 @@ export function Send({ account, chainId, onBack }: SendProps) {
       </div>
 
       <div className="ext-body">
+        {multisigVaultId !== undefined && (
+          <div
+            style={{
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: "rgba(124,127,255,0.06)",
+              border: "1px solid rgba(124,127,255,0.4)",
+              color: "var(--fg-100)",
+              fontSize: 11.5,
+              lineHeight: 1.5,
+            }}
+          >
+            This is a multisig vault — Send creates a proposal that
+            co-signers must approve before execution.
+          </div>
+        )}
         <FormCard label="Recipient">
           <div style={{ display: "flex", gap: 8 }}>
             <input
@@ -1074,6 +1137,10 @@ interface PreviewViewProps {
   fromAddr: string;
   onConfirm: () => void;
   onBack: () => void;
+  /** When true, render the multisig copy variants: "Review proposal"
+   *  header, "Submit as proposal" CTA, multisig-aware warning copy.
+   *  Default behavior (single-vault send) is unchanged when false. */
+  isMultisig?: boolean;
 }
 
 function PreviewView({
@@ -1084,6 +1151,7 @@ function PreviewView({
   fromAddr,
   onConfirm,
   onBack,
+  isMultisig,
 }: PreviewViewProps) {
   const total = amountWei !== null && estimatedFeeWei !== null
     ? amountWei + estimatedFeeWei
@@ -1097,7 +1165,7 @@ function PreviewView({
         <div
           style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
         >
-          Review send
+          {isMultisig ? "Review proposal" : "Review send"}
         </div>
         <div style={{ width: 28 }} />
       </div>
@@ -1145,8 +1213,9 @@ function PreviewView({
           }}
         >
           <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg-100)" }}>
-            Transactions are irreversible. Confirm the recipient and amount
-            carefully.
+            {isMultisig
+              ? "This creates a proposal in the multisig vault. Other signers will see it on the Pending tab and approve or reject. Execution only happens once the configured threshold is met."
+              : "Transactions are irreversible. Confirm the recipient and amount carefully."}
           </div>
         </div>
 
@@ -1177,7 +1246,7 @@ function PreviewView({
               gap: 8,
             }}
           >
-            Confirm
+            {isMultisig ? "Submit as proposal" : "Confirm"}
           </button>
         </div>
       </div>

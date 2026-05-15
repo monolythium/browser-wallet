@@ -233,6 +233,21 @@ export interface GovernanceProposal {
 // Pure helpers
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Find the first self-signer in a roster — the one whose ML-DSA-65
+ *  keypair lives in a vault inside this container. Used by the
+ *  multisig propose/sign IPC paths to pick a default proposer/approver
+ *  when the user doesn't supply an explicit signer id. Returns
+ *  undefined when the roster is all-external (the wallet cannot
+ *  propose locally and must surface "no local signer available" UX).
+ *
+ *  Commit 4 introduces a multi-self-signer picker; the v1 default
+ *  "first match" suffices for the common one-self-signer case. */
+export function pickFirstSelfSigner(
+  signers: readonly MultisigSigner[],
+): MultisigSigner | undefined {
+  return signers.find((s) => s.role === "self" && s.vaultId !== undefined);
+}
+
 /** Default threshold for an N-signer multisig — simple majority
  *  (floor(N/2) + 1). The spec calls this out as the default; users
  *  can override at creation time. Concrete values:

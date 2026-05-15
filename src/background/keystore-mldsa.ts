@@ -876,6 +876,41 @@ export async function addVaultMultisigV4(args: {
   }
 }
 
+/** Sign a 32-byte prehash with a target vault's ML-DSA-65 keypair.
+ *  Requires the container to be unlocked (cached MEK). Used by the
+ *  multisig proposal flow so the proposer's self-signer key signs
+ *  approval signatures without forcing an active-vault swap. Does
+ *  NOT swap the active vault — caller's `unlocked` state is
+ *  unchanged. Returns the raw signature bytes (~3309 bytes for
+ *  ML-DSA-65). */
+export async function signWithVaultV4(
+  vaultId: string,
+  digest: Uint8Array,
+): Promise<Uint8Array> {
+  if (!mekCache) throw new Error("container is locked");
+  if (digest.length !== 32) {
+    throw new Error(`digest must be 32 bytes, got ${digest.length}`);
+  }
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  let seed: Uint8Array;
+  try {
+    const opened = openVaultEnvelopeV4(vek, v.envelope);
+    seed = opened.seed;
+  } finally {
+    vek.fill(0);
+  }
+  try {
+    const backend = MlDsa65Backend.fromSeed(seed);
+    return backend.signPrehash(digest);
+  } finally {
+    seed.fill(0);
+  }
+}
+
 /** Read a target vault's 1952-byte ML-DSA-65 pubkey as a 0x-prefixed
  *  hex string. Requires the container to be unlocked (cached MEK).
  *  Used by the MultisigCreateModal to populate self-signer pubkey

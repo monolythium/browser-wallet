@@ -77,8 +77,18 @@ import {
   // Phase 8 multisig surface (Commit 1).
   addVaultMultisigV4,
   readMultisigMetaV4,
+  writeMultisigMetaV4,
   getVaultPubkeyV4,
+  signWithVaultV4,
 } from "./keystore-mldsa.js";
+import {
+  DEFAULT_TX_PROPOSAL_TTL_MS,
+  hashTxProposal,
+  pickFirstSelfSigner,
+  type PendingProposal,
+  type ProposalAction,
+  type ProposalSignature,
+} from "../shared/multisig.js";
 import { shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
@@ -2440,6 +2450,105 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const meta = await readMultisigMetaV4(p.vaultId);
         return { ok: true, meta };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-propose": {
+      // Phase 8 Commit 3 — create a tx proposal inside a multisig
+      // vault's meta. The proposer is the first self-signer in the
+      // roster (Commit 4 adds a picker when multiple self-signers
+      // exist). The proposer's vault key signs the canonical
+      // proposal hash; the signature lands in `approvals[0]` so the
+      // M-of-N count is honest from creation.
+      //
+      // Container must be unlocked (cached MEK). Returns the new
+      // proposal id + the proposer's signer id (so the popup can
+      // mark the row as "you approved" immediately).
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        action?: ProposalAction;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      if (!p.action || typeof p.action !== "object") {
+        return { ok: false, reason: "missing action" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposer = pickFirstSelfSigner(meta.signers);
+        if (!proposer) {
+          return {
+            ok: false,
+            reason:
+              "no local signer available to propose — at least one " +
+              "self-signer must live in this container",
+          };
+        }
+        // Resolve the multisig vault's address — used as the
+        // vaultAddress field on the proposal record so hashes bind
+        // to the right vault.
+        const summaries = (await listVaultsV4()) ?? [];
+        const target = summaries.find((v) => v.id === p.vaultId);
+        if (!target) {
+          return { ok: false, reason: "unknown vault id" };
+        }
+        const now = Date.now();
+        const proposal: PendingProposal = {
+          id: crypto.randomUUID(),
+          proposedBy: proposer.id,
+          createdAt: now,
+          expiresAt: now + DEFAULT_TX_PROPOSAL_TTL_MS,
+          vaultAddress: target.addr,
+          action: p.action,
+          approvals: [],
+          rejections: [],
+          status: "pending",
+          txHash: null,
+        };
+        const digest = hashTxProposal(proposal);
+        const sigBytes = await signWithVaultV4(proposer.vaultId!, digest);
+        const approval: ProposalSignature = {
+          signerId: proposer.id,
+          signature: "0x" + bytesToHex(sigBytes),
+          signedAt: now,
+        };
+        proposal.approvals.push(approval);
+        meta.proposals = [proposal, ...meta.proposals];
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          proposalId: proposal.id,
+          proposerId: proposer.id,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-list-proposals": {
+      // Convenience read: returns the proposals array for a vault.
+      // Equivalent to bgVaultMultisigMeta().meta.proposals but cheaper
+      // for callers that only want the proposal list (skips the
+      // governance + signers payload). `proposals: null` for single
+      // vaults / unknown ids.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        return {
+          ok: true,
+          proposals: meta?.proposals ?? null,
+        };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }

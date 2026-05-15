@@ -15,6 +15,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+function bytesToHexLower(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
+  return s;
+}
+
 interface StorageMap {
   [k: string]: unknown;
 }
@@ -727,6 +733,80 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
       ).rejects.toThrow(/locked/);
     },
     30_000,
+  );
+
+  it(
+    "signWithVaultV4 produces a signature verifiable against that vault's pubkey",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const {
+        MlDsa65Backend,
+        pqm1MnemonicToMlDsa65Seed,
+      } = await import("@monolythium/core-sdk/crypto");
+
+      const password = "ms-sign-password";
+      const { mnemonic } = await ks.createVaultFromNewMnemonic(password);
+      const r = await ks.unlockContainerV4(password);
+      const activeVaultId = r.vaultId;
+
+      // Pubkey of the active vault (the one that will be signing).
+      const pubkeyHex = await ks.getVaultPubkeyV4(activeVaultId);
+      expect(pubkeyHex).toMatch(/^0x[0-9a-f]+$/);
+      expect(pubkeyHex.length).toBe(2 + 1952 * 2);
+
+      const digest = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) digest[i] = i;
+
+      const sig = await ks.signWithVaultV4(activeVaultId, digest);
+      expect(sig.length).toBe(3309);
+
+      // Re-derive the backend from the known mnemonic and verify the
+      // signature against its own pubkey. The SDK's MlDsa65Backend
+      // wraps @noble/post-quantum's ml_dsa65.verify — this is the
+      // same verifier path a future on-chain precompile would use.
+      const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+      const backend = MlDsa65Backend.fromSeed(seed);
+      // Pubkey from the re-derivation must match what the keystore
+      // returns; pins that signWithVaultV4 doesn't accidentally
+      // swap vaults under us.
+      const expected = "0x" + bytesToHexLower(backend.publicKey());
+      expect(expected).toBe(pubkeyHex);
+      expect(backend.verify(digest, sig)).toBe(true);
+
+      // Tampered digest → verify fails.
+      const tampered = new Uint8Array(32);
+      tampered.set(digest);
+      tampered[0] = (tampered[0] ?? 0) ^ 0xff;
+      expect(backend.verify(tampered, sig)).toBe(false);
+    },
+    120_000,
+  );
+
+  it(
+    "signWithVaultV4 requires unlocked container + valid digest length",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "ms-sign-gate-password";
+      await ks.createVaultFromNewMnemonic(password);
+
+      // No unlock yet.
+      await expect(
+        ks.signWithVaultV4("any", new Uint8Array(32)),
+      ).rejects.toThrow(/locked/);
+
+      await ks.unlockContainerV4(password);
+
+      // Bad digest length.
+      await expect(
+        ks.signWithVaultV4("any", new Uint8Array(31)),
+      ).rejects.toThrow(/32 bytes/);
+
+      // Unknown vault id.
+      await expect(
+        ks.signWithVaultV4("not-a-vault", new Uint8Array(32)),
+      ).rejects.toThrow(/unknown vault id/);
+    },
+    60_000,
   );
 
   it(
