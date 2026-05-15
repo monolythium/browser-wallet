@@ -756,6 +756,29 @@ export async function bgOperatorsHealth(): Promise<{
   return send("sprintnet-operators-health");
 }
 
+/** Phase 7.1 — runtime provenance for the About page. Subset of
+ *  `RuntimeProvenanceResponse` (SDK commit f67cf0e), pulled once at
+ *  About-card mount via the existing operator-iteration path (GAP #11
+ *  trust still applies). `null` on every chain-offline / malformed
+ *  response — the About page renders a placeholder rather than failing
+ *  to mount. */
+export interface RuntimeProvenanceView {
+  clientName: string;
+  version: string;
+  gitCommit: string;
+  gitDirty: boolean;
+  features: string;
+  p2pProtocolVersion: number | null;
+  buildTimestampUtc: number | null;
+  latestHeight: number | null;
+}
+
+export async function bgRuntimeProvenance(): Promise<
+  { ok: true; provenance: RuntimeProvenanceView } | { ok: false; reason?: string }
+> {
+  return send("sprintnet-runtime-provenance");
+}
+
 export async function bgGetAutoLockMinutes(): Promise<{
   autoLockMinutes: number;
   options: readonly number[];

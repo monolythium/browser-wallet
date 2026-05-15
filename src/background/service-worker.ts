@@ -1891,6 +1891,56 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       );
       return { ok: true, operators: results };
     }
+    case "sprintnet-runtime-provenance": {
+      // Phase 7.1 — About-page runtime card. Calls `lyth_runtimeProvenance`
+      // (SDK commit f67cf0e) via the existing operator-iteration path so
+      // the genesis-pin trust check (GAP #11) still applies. Returns a
+      // subset of `RuntimeProvenanceResponse` — only fields the About
+      // card renders. On chain-offline returns `{ ok: false, reason }`;
+      // the About page falls back to a placeholder.
+      try {
+        const { result, via } = await sprintnetJsonRpc<{
+          schemaVersion?: number;
+          chainId?: number;
+          latestHeight?: number;
+          runtime?: {
+            clientName?: string;
+            version?: string;
+            gitCommit?: string;
+            gitDirty?: boolean;
+            features?: string;
+            p2pProtocolVersion?: number;
+            buildTimestampUtc?: number;
+          };
+        }>("lyth_runtimeProvenance", []);
+        const rt = result?.runtime;
+        if (!rt || typeof rt !== "object") {
+          return { ok: false, reason: "malformed lyth_runtimeProvenance response" };
+        }
+        return {
+          ok: true,
+          via,
+          provenance: {
+            clientName: typeof rt.clientName === "string" ? rt.clientName : "unknown",
+            version: typeof rt.version === "string" ? rt.version : "unknown",
+            gitCommit: typeof rt.gitCommit === "string" ? rt.gitCommit : "unknown",
+            gitDirty: rt.gitDirty === true,
+            features: typeof rt.features === "string" ? rt.features : "",
+            p2pProtocolVersion:
+              typeof rt.p2pProtocolVersion === "number" ? rt.p2pProtocolVersion : null,
+            buildTimestampUtc:
+              typeof rt.buildTimestampUtc === "number" ? rt.buildTimestampUtc : null,
+            latestHeight:
+              typeof result?.latestHeight === "number" ? result.latestHeight : null,
+          },
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          reason: (e as Error)?.message ?? "lyth_runtimeProvenance unreachable",
+        };
+      }
+    }
     case "sprintnet-operators-set": {
       // Payload: { operators: OperatorEntry[] | null }. Null clears the
       // override and reverts to defaults; non-null persists the override.

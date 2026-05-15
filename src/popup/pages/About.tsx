@@ -7,7 +7,12 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
-import { bgOperatorsHealth, type OperatorHealthRow } from "../bg";
+import {
+  bgOperatorsHealth,
+  bgRuntimeProvenance,
+  type OperatorHealthRow,
+  type RuntimeProvenanceView,
+} from "../bg";
 import {
   EXTERNAL_LINKS,
   SDK_COMMIT_SHORT,
@@ -33,6 +38,9 @@ function readWalletVersion(): string {
 export function About({ onBack }: AboutProps) {
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [provenance, setProvenance] = useState<RuntimeProvenanceView | null>(
+    null,
+  );
   const walletVersion = readWalletVersion();
 
   useEffect(() => {
@@ -47,6 +55,11 @@ export function About({ onBack }: AboutProps) {
         if (cancelled) return;
         setProbeError((e as Error).message ?? "probe failed");
       }
+    })();
+    void (async () => {
+      const r = await bgRuntimeProvenance();
+      if (cancelled) return;
+      if (r.ok) setProvenance(r.provenance);
     })();
     return () => {
       cancelled = true;
@@ -154,6 +167,93 @@ export function About({ onBack }: AboutProps) {
             </div>
           )}
         </div>
+
+        {/* Runtime provenance — chain-side build info from lyth_runtimeProvenance.
+            Renders when the SW IPC returns data; absent when the chain is
+            offline. The wallet still mounts the About page; this card just
+            doesn't show. */}
+        {provenance !== null && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Runtime</h3>
+              <div className="spacer" />
+              <span
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 10,
+                  color: "var(--fg-500)",
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                }}
+                title="from lyth_runtimeProvenance"
+              >
+                chain-reported
+              </span>
+            </div>
+            <KvList
+              rows={[
+                {
+                  k: "Client",
+                  v: `${provenance.clientName} v${provenance.version}`,
+                },
+                {
+                  k: "Commit",
+                  v: (
+                    <Mono>
+                      {provenance.gitCommit.slice(0, 12)}
+                      {provenance.gitDirty ? "-dirty" : ""}
+                    </Mono>
+                  ),
+                  title: provenance.gitCommit,
+                },
+                ...(provenance.p2pProtocolVersion !== null
+                  ? [
+                      {
+                        k: "P2P",
+                        v: `v${provenance.p2pProtocolVersion}`,
+                      },
+                    ]
+                  : []),
+                ...(provenance.latestHeight !== null
+                  ? [
+                      {
+                        k: "Tip",
+                        v: <Mono>#{provenance.latestHeight}</Mono>,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+            {provenance.features.length > 0 && (
+              <div
+                style={{
+                  marginTop: 10,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 4,
+                }}
+              >
+                {provenance.features.split(/[,\s]+/).filter(Boolean).map((f) => (
+                  <span
+                    key={f}
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 9.5,
+                      color: "var(--fg-200)",
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid var(--fg-700)",
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    {f}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Operator table */}
         <div className="ext-card">
