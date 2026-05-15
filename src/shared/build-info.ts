@@ -17,10 +17,23 @@ export const SDK_PACKAGE_VERSION = "0.1.0";
  *  constant exists purely for the About-page version readout. */
 export const SDK_COMMIT_SHORT = "fdd3844";
 
-/** Expected Sprintnet genesis hash sourced from the SDK chain registry
- *  snapshot. The About page renders this and Commit 5 (GAP #11) makes
- *  the operator-health probe assert against it. */
-export const SPRINTNET_GENESIS_HASH: string = TESTNET_69420.genesis_hash;
+/** Expected Sprintnet genesis hash — the wallet's authoritative pin for
+ *  GAP #11 (orphan-fork defense). Operator probes that return a
+ *  different hash for block 0 are marked "untrusted chain" and skipped
+ *  by every RPC-dispatch path (balance, fee, send, indexer).
+ *
+ *  Phase 6 ships the post-2026-05-12 regenesis hash; the SDK chain
+ *  registry currently snapshots an older genesis (see
+ *  SDK_REGISTRY_GENESIS_HASH below) and is updated on a slower cadence
+ *  than the wallet — keep this constant as the source of truth until
+ *  the registry catches up. */
+export const SPRINTNET_GENESIS_HASH =
+  "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2";
+
+/** SDK chain-registry's current snapshot of the same hash. Surfaced on
+ *  the About page when this differs from SPRINTNET_GENESIS_HASH so the
+ *  reviewer notices the wallet's pin has drifted from the registry. */
+export const SDK_REGISTRY_GENESIS_HASH: string = TESTNET_69420.genesis_hash;
 
 /** Sprintnet chain id (decimal, for display). */
 export const SPRINTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;

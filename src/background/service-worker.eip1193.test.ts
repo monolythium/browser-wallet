@@ -68,6 +68,14 @@ vi.mock("@monolythium/core-sdk", () => {
       { url: "http://test.invalid:8549", provider: "test", region: "ash",  tier: "official" },
       { url: "http://test.invalid:8550", provider: "test", region: "sin",  tier: "official" },
     ],
+    // GAP #11: shared/build-info.ts pulls TESTNET_69420 from the SDK to
+    // surface the registry's genesis on the About page; stub just the
+    // genesis_hash + chain_id fields we read at module-init time.
+    TESTNET_69420: {
+      chain_id: 69420,
+      genesis_hash:
+        "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
+    },
   };
 });
 

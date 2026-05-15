@@ -11,6 +11,7 @@ import {
   mergeOperatorOverride,
   type OperatorEntry,
 } from "../shared/operators.js";
+import { SPRINTNET_GENESIS_HASH } from "../shared/build-info.js";
 
 /** Sprintnet (Monolythium L1 testnet) chain id, exposed as 0x-quantity hex. */
 export const SPRINTNET_CHAIN_ID_HEX =
@@ -189,6 +190,11 @@ export function chainRequiresMlDsa(chainIdHex: string): boolean {
  * Returns null when every operator is unreachable or returns the wrong
  * chain id (regenesis-with-different-id case — operator should be told
  * to reconfigure).
+ *
+ * Phase 6 GAP #11: operators with a mismatched genesis hash (orphan-
+ * fork attack surface) are also skipped. The genesis check is cached
+ * forever in-memory per RPC URL — genesis is immutable per chain, so a
+ * one-time probe per operator suffices for the SW lifetime.
  */
 export async function probeFirstAliveOperator(
   expectedChainIdDec: number = SPRINTNET_CHAIN_ID,
@@ -213,12 +219,116 @@ export async function probeFirstAliveOperator(
       if (!res.ok) continue;
       const body = (await res.json()) as { result?: string };
       const reportedChainId = Number(body?.result ?? 0);
-      if (reportedChainId === expectedChainIdDec) {
-        return { name: v.name, rpc: v.rpc };
-      }
+      if (reportedChainId !== expectedChainIdDec) continue;
+      // Genesis check (GAP #11). On mismatch the operator is excluded
+      // from RPC dispatch for the rest of the SW lifetime.
+      const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
+      if (!genesisOk) continue;
+      return { name: v.name, rpc: v.rpc };
     } catch {
       // unreachable / timeout — try next
     }
   }
   return null;
+}
+
+/**
+ * Per-operator genesis-hash cache. Key is the RPC URL; value is the
+ * verification result. Entries are written once and never expired:
+ * genesis is immutable per chain, so a cached `false` survives across
+ * reconnects until the user clears the operator override or the SW
+ * restarts.
+ */
+interface GenesisCacheEntry {
+  /** `true` when block 0's hash equals SPRINTNET_GENESIS_HASH. */
+  ok: boolean;
+  /** Observed hash from `eth_getBlockByNumber("0x0", false)`. `null`
+   *  when the probe failed (transport error, malformed response). */
+  observed: string | null;
+  checkedAt: number;
+}
+
+const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
+
+/**
+ * Verify an operator's block-0 hash matches SPRINTNET_GENESIS_HASH.
+ * Returns true on match (or cache-hit "true"); false on mismatch,
+ * unreachable, or malformed response. Result is cached forever (see
+ * cache docstring). The cached false is the load-bearing behavior:
+ * one mismatch and we never route RPC to that operator again.
+ *
+ * Used by:
+ *  - probeFirstAliveOperator (defense-in-depth against orphan fork)
+ *  - sprintnet-operators-health IPC (About-page table)
+ *  - tx-mldsa.sprintnetJsonRpc (read/write dispatch skip-list)
+ */
+export async function verifyOperatorGenesis(
+  rpc: string,
+  timeoutMs: number = 3_000,
+): Promise<boolean> {
+  const cached = operatorGenesisCache.get(rpc);
+  if (cached !== undefined) return cached.ok;
+  const result = await probeOperatorGenesis(rpc, timeoutMs);
+  operatorGenesisCache.set(rpc, result);
+  return result.ok;
+}
+
+/** Force-refresh a single operator's genesis check. Surfaced via the
+ *  About-page probe so the user can re-evaluate after a regenesis. */
+export function clearGenesisCache(rpc?: string): void {
+  if (rpc === undefined) {
+    operatorGenesisCache.clear();
+  } else {
+    operatorGenesisCache.delete(rpc);
+  }
+}
+
+/** Snapshot of the current cache state. Used by
+ *  sprintnet-operators-health to assemble the per-operator response
+ *  without re-probing when the entry is fresh in-memory. */
+export function snapshotGenesisCache(): Map<string, GenesisCacheEntry> {
+  return new Map(operatorGenesisCache);
+}
+
+/** One-shot fetch + compare. Always returns a cache entry — never
+ *  throws — so the cache write path is non-throwing too. */
+async function probeOperatorGenesis(
+  rpc: string,
+  timeoutMs: number,
+): Promise<GenesisCacheEntry> {
+  const now = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const res = await fetch(rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_getBlockByNumber",
+        params: ["0x0", false],
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      return { ok: false, observed: null, checkedAt: now };
+    }
+    const body = (await res.json()) as {
+      result?: { hash?: string } | null;
+    };
+    const observed =
+      typeof body?.result?.hash === "string" ? body.result.hash.toLowerCase() : null;
+    if (observed === null) {
+      return { ok: false, observed: null, checkedAt: now };
+    }
+    return {
+      ok: observed === SPRINTNET_GENESIS_HASH.toLowerCase(),
+      observed,
+      checkedAt: now,
+    };
+  } catch {
+    return { ok: false, observed: null, checkedAt: now };
+  }
 }
