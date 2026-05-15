@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
 import {
   bgGetAutoLockMinutes,
@@ -28,6 +29,17 @@ interface SettingsProps {
    *  stake breakdown, pending rewards, unstake / redelegate / claim
    *  actions per §23. */
   onOpenDelegations: () => void;
+  /** Phase 8 — passed only when the active vault is a multisig vault.
+   *  When set, Settings renders the Multisig card with M-of-N pill +
+   *  pending count + entry points to the Pending dashboard and
+   *  Governance pages. */
+  multisig?: {
+    signerCount: number;
+    threshold: number;
+    pendingCount: number;
+    onOpenPending: () => void;
+    onOpenGovernance: () => void;
+  };
 }
 
 const ALGO_LABEL: Record<SignAlgo, string> = {
@@ -56,6 +68,7 @@ export function Settings({
   onOpenOperators,
   onOpenAbout,
   onOpenDelegations,
+  multisig,
 }: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
@@ -298,6 +311,78 @@ export function Settings({
           </div>
         </div>
 
+        {multisig && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Multisig</h3>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginBottom: 10,
+              }}
+            >
+              <div
+                style={{
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(124,127,255,0.4)",
+                  background: "rgba(124,127,255,0.08)",
+                  color: "var(--fg-100)",
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 11,
+                }}
+              >
+                {multisig.threshold} of {multisig.signerCount}
+              </div>
+              {multisig.pendingCount > 0 && (
+                <div
+                  style={{
+                    padding: "3px 8px",
+                    borderRadius: 6,
+                    border: "1px solid rgba(242,180,65,0.4)",
+                    background: "rgba(242,180,65,0.08)",
+                    color: "var(--fg-100)",
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 11,
+                  }}
+                >
+                  {multisig.pendingCount} pending
+                </div>
+              )}
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                marginBottom: 10,
+              }}
+            >
+              This vault is a multisig — sends create proposals that
+              the signer committee approves before execution.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                onClick={multisig.onOpenPending}
+                style={multisigBtnStyle}
+              >
+                <span>Pending proposals</span>
+                <Icon name="chev" size={12} />
+              </button>
+              <button
+                onClick={multisig.onOpenGovernance}
+                style={multisigBtnStyle}
+              >
+                <span>Signers + governance</span>
+                <Icon name="chev" size={12} />
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Staking</h3>
@@ -419,3 +504,20 @@ export function Settings({
     </>
   );
 }
+
+const multisigBtnStyle: CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.04)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12.5,
+  fontWeight: 500,
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+};

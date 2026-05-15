@@ -69,6 +69,15 @@ import {
   computeTypedDataDigest,
   hexOrUtf8ToBytes,
 } from "./keystore.js";
+import type {
+  MultisigSigner,
+  MultisigVaultMeta,
+} from "../shared/multisig.js";
+import {
+  assertSignerSetUnique,
+  validateSignerInput,
+  validateThreshold,
+} from "../shared/multisig.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -176,7 +185,16 @@ interface SealedSeedRecordV4 {
 
 /** One vault inside a VaultsContainerV4. The label is user-editable
  *  (Phase 5 commit 3 wires the rename UI); createdAt anchors stable
- *  ordering when the container is rendered. */
+ *  ordering when the container is rendered.
+ *
+ *  Phase 8 added the `kind` discriminant. `"single"` is the legacy
+ *  shape — one mnemonic, one ML-DSA-65 keypair, one address. Vault
+ *  records persisted before Phase 8 carry no `kind` field on disk and
+ *  are treated as `"single"` by every read path. `"multisig"` records
+ *  reuse the same wrappedKey + envelope (the multisig vault has its
+ *  own ML-DSA-65 keypair that submits executed proposals on-chain)
+ *  and additionally carry the M-of-N committee + proposal queues in
+ *  `multisig`. */
 interface VaultRecordV4 {
   id: string; // crypto.randomUUID()
   label: string; // default "Vault N", user-editable
@@ -184,6 +202,12 @@ interface VaultRecordV4 {
   wrappedKey: WrappedVekV4;
   envelope: SealedSeedRecordV4;
   addr: string; // 0x..., cached for locked-state display
+  /** Vault kind. Optional on disk for backward compat — absence
+   *  means `"single"`. */
+  kind?: "single" | "multisig";
+  /** M-of-N committee + proposal queues for `kind === "multisig"`.
+   *  Must be present on multisig records, absent on single records. */
+  multisig?: MultisigVaultMeta;
 }
 
 /** Multi-vault container. Stored under
@@ -568,13 +592,31 @@ async function migrateLegacyToContainerV4(
 
 /** Summary projection over a VaultRecordV4 — what the popup needs to
  *  render the vault picker. Excludes the wrappedKey / envelope (key
- *  material stays inside the keystore). */
+ *  material stays inside the keystore).
+ *
+ *  Phase 8 added the multisig fields (`kind`, `signerCount`,
+ *  `threshold`, `pendingCount`) so the picker can render a multisig
+ *  badge + "M-of-N · K pending" without a second IPC roundtrip. The
+ *  full signer roster + proposal queue is read separately via the
+ *  multisig-meta IPC handlers — those carry sensitive(-ish) data and
+ *  the list-vaults call should stay cheap. */
 export interface VaultSummaryV4 {
   id: string;
   label: string;
   addr: string;
   createdAt: number;
   isActive: boolean;
+  /** "single" for legacy + freshly-created single-key vaults;
+   *  "multisig" for vaults created via {@link addVaultMultisigV4}. */
+  kind: "single" | "multisig";
+  /** Number of signers (multisig only; 0 for single). */
+  signerCount: number;
+  /** M in M-of-N (multisig only; 0 for single). */
+  threshold: number;
+  /** Pending proposal count — tx proposals + governance proposals
+   *  that are still in the `pending` status (multisig only; 0 for
+   *  single). The popup surfaces this in the home pill. */
+  pendingCount: number;
 }
 
 export async function hasContainerV4(): Promise<boolean> {
@@ -693,17 +735,39 @@ export async function selectActiveVaultV4(
 /** Read-only list of vault summaries. No unlock required — labels and
  *  addresses are non-sensitive metadata. Returns `null` when no
  *  container exists (so the popup can branch on "still single-vault
- *  legacy" during the migration window). */
+ *  legacy" during the migration window).
+ *
+ *  Phase 8 — the multisig summary fields are populated from the
+ *  per-vault `multisig` block. Pending count counts both tx and
+ *  governance proposals in `pending` status (the popup surfaces a
+ *  combined number; the per-page views render the two queues
+ *  separately). */
 export async function listVaultsV4(): Promise<VaultSummaryV4[] | null> {
   const container = await loadVaultsContainerV4();
   if (!container) return null;
-  return container.vaults.map((v) => ({
+  return container.vaults.map((v) => summarizeVault(v, container.activeVaultId));
+}
+
+function summarizeVault(
+  v: VaultRecordV4,
+  activeVaultId: string,
+): VaultSummaryV4 {
+  const kind = v.kind === "multisig" ? "multisig" : "single";
+  const m = kind === "multisig" ? v.multisig : undefined;
+  const pendingTx = m?.proposals.filter((p) => p.status === "pending").length ?? 0;
+  const pendingGov =
+    m?.governance.filter((g) => g.status === "pending").length ?? 0;
+  return {
     id: v.id,
     label: v.label,
     addr: v.addr,
     createdAt: v.createdAt,
-    isActive: v.id === container.activeVaultId,
-  }));
+    isActive: v.id === activeVaultId,
+    kind,
+    signerCount: m?.signers.length ?? 0,
+    threshold: m?.threshold ?? 0,
+    pendingCount: pendingTx + pendingGov,
+  };
 }
 
 /** Rename a vault. No unlock required — labels are non-sensitive UI
@@ -766,17 +830,197 @@ export async function addVaultImportV4(
   }
 }
 
-/** Shared body for {@link addVaultFreshV4} + {@link addVaultImportV4}.
- *  Generates a VEK, seals the seed + mnemonic, wraps the VEK with the
- *  cached MEK, rejects duplicate addresses, appends, saves. Validates
- *  the optional caller-supplied label with the same rules as
- *  {@link renameVaultV4}; falls back to `"Vault N"` (where N is the
- *  post-append vault count) when the caller passes no label. */
+/** Generate a fresh multisig vault. Creates a new ML-DSA-65 keypair
+ *  for the multisig vault itself (this is the keypair that submits
+ *  executed proposals on-chain) and attaches the supplied signer
+ *  roster + threshold as the M-of-N policy.
+ *
+ *  Whitepaper §28.5 Q70 — N up to {@link MAX_SIGNERS} (16); threshold
+ *  in [1, N]. The wallet enforces the policy at the IPC boundary;
+ *  chain enforcement is a GAP (`TODO: chain GAP — needs Nayiem`),
+ *  see shared/multisig.ts module doc-block for the off-chain story.
+ *
+ *  Returns the new vault id, the multisig vault's mnemonic (the
+ *  "executor" recovery phrase — treat like a single-vault mnemonic),
+ *  and its on-chain address. */
+export async function addVaultMultisigV4(args: {
+  signers: MultisigSigner[];
+  threshold: number;
+  label?: string;
+}): Promise<{
+  vaultId: string;
+  mnemonic: string;
+  address: string;
+}> {
+  if (!mekCache) throw new Error("container is locked");
+  for (const s of args.signers) validateSignerInput(s);
+  assertSignerSetUnique(args.signers);
+  validateThreshold(args.threshold, args.signers.length);
+
+  const mnemonic = generatePqm1Mnemonic((out) => {
+    out.set(randomBytes(out.length));
+  });
+  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  try {
+    return await appendVaultRecord(mekCache, seed, mnemonic, args.label, {
+      kind: "multisig",
+      multisig: {
+        signers: args.signers,
+        threshold: args.threshold,
+        proposals: [],
+        governance: [],
+      },
+    });
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Sign a 32-byte prehash with a target vault's ML-DSA-65 keypair.
+ *  Requires the container to be unlocked (cached MEK). Used by the
+ *  multisig proposal flow so the proposer's self-signer key signs
+ *  approval signatures without forcing an active-vault swap. Does
+ *  NOT swap the active vault — caller's `unlocked` state is
+ *  unchanged. Returns the raw signature bytes (~3309 bytes for
+ *  ML-DSA-65). */
+export async function signWithVaultV4(
+  vaultId: string,
+  digest: Uint8Array,
+): Promise<Uint8Array> {
+  if (!mekCache) throw new Error("container is locked");
+  if (digest.length !== 32) {
+    throw new Error(`digest must be 32 bytes, got ${digest.length}`);
+  }
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  let seed: Uint8Array;
+  try {
+    const opened = openVaultEnvelopeV4(vek, v.envelope);
+    seed = opened.seed;
+  } finally {
+    vek.fill(0);
+  }
+  try {
+    const backend = MlDsa65Backend.fromSeed(seed);
+    return backend.signPrehash(digest);
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Read a target vault's 1952-byte ML-DSA-65 pubkey as a 0x-prefixed
+ *  hex string. Requires the container to be unlocked (cached MEK).
+ *  Used by the MultisigCreateModal to populate self-signer pubkey
+ *  fields without forcing the user to switch active vaults. Does NOT
+ *  swap the active vault — caller's `unlocked` state is unchanged. */
+export async function getVaultPubkeyV4(vaultId: string): Promise<string> {
+  if (!mekCache) throw new Error("container is locked");
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  let seed: Uint8Array;
+  try {
+    const opened = openVaultEnvelopeV4(vek, v.envelope);
+    seed = opened.seed;
+  } finally {
+    vek.fill(0);
+  }
+  try {
+    const backend = MlDsa65Backend.fromSeed(seed);
+    return "0x" + bytesToHex(backend.publicKey());
+  } finally {
+    seed.fill(0);
+  }
+}
+
+/** Read a vault's multisig meta. Returns null for single vaults or
+ *  unknown ids. No unlock required — the meta is plaintext alongside
+ *  the encrypted envelope (signer pubkeys + proposal payloads are
+ *  intentionally non-secret; only the multisig vault's own seed is
+ *  encrypted). */
+export async function readMultisigMetaV4(
+  vaultId: string,
+): Promise<MultisigVaultMeta | null> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return null;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || v.kind !== "multisig" || !v.multisig) return null;
+  return cloneMultisigMeta(v.multisig);
+}
+
+/** Replace a multisig vault's meta atomically. Caller is expected to
+ *  have validated the new meta (signer roster unique, threshold in
+ *  range, etc.); this helper just persists. Throws on unknown id or
+ *  non-multisig vault. */
+export async function writeMultisigMetaV4(
+  vaultId: string,
+  meta: MultisigVaultMeta,
+): Promise<void> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  if (v.kind !== "multisig") {
+    throw new Error("target vault is not a multisig vault");
+  }
+  validateThreshold(meta.threshold, meta.signers.length);
+  assertSignerSetUnique(meta.signers);
+  v.multisig = cloneMultisigMeta(meta);
+  await saveVaultsContainerV4(container);
+}
+
+function cloneMultisigMeta(meta: MultisigVaultMeta): MultisigVaultMeta {
+  return {
+    signers: meta.signers.map((s) => ({ ...s })),
+    threshold: meta.threshold,
+    proposals: meta.proposals.map((p) => ({
+      ...p,
+      approvals: p.approvals.map((a) => ({ ...a })),
+      rejections: p.rejections.map((a) => ({ ...a })),
+      action: { ...p.action },
+    })),
+    governance: meta.governance.map((g) => ({
+      ...g,
+      approvals: g.approvals.map((a) => ({ ...a })),
+      rejections: g.rejections.map((a) => ({ ...a })),
+      action: cloneGovernanceAction(g.action),
+    })),
+  };
+}
+
+function cloneGovernanceAction(
+  a: MultisigVaultMeta["governance"][number]["action"],
+): MultisigVaultMeta["governance"][number]["action"] {
+  if (a.kind === "add-signer") return { kind: "add-signer", signer: { ...a.signer } };
+  if (a.kind === "replace-signer") {
+    return {
+      kind: "replace-signer",
+      signerId: a.signerId,
+      replacement: { ...a.replacement },
+    };
+  }
+  return { ...a };
+}
+
+/** Shared body for {@link addVaultFreshV4} + {@link addVaultImportV4} +
+ *  {@link addVaultMultisigV4}. Generates a VEK, seals the seed +
+ *  mnemonic, wraps the VEK with the cached MEK, rejects duplicate
+ *  addresses, appends, saves. Validates the optional caller-supplied
+ *  label with the same rules as {@link renameVaultV4}; falls back to
+ *  `"Vault N"` (where N is the post-append vault count) when the
+ *  caller passes no label. Optional `extra` block attaches multisig
+ *  metadata for the multisig path. */
 async function appendVaultRecord(
   mek: Uint8Array,
   seed: Uint8Array,
   mnemonic: string,
   requestedLabel?: string,
+  extra?: { kind: "single" | "multisig"; multisig?: MultisigVaultMeta },
 ): Promise<{ vaultId: string; mnemonic: string; address: string }> {
   const container = await loadVaultsContainerV4();
   if (!container) throw new Error("no v4 vaults container");
@@ -811,6 +1055,13 @@ async function appendVaultRecord(
     envelope,
     addr: address,
   };
+  if (extra?.kind === "multisig") {
+    record.kind = "multisig";
+    if (!extra.multisig) {
+      throw new Error("multisig kind requires multisig meta");
+    }
+    record.multisig = extra.multisig;
+  }
   container.vaults.push(record);
   await saveVaultsContainerV4(container);
   return { vaultId: record.id, mnemonic, address };

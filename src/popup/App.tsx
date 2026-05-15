@@ -44,6 +44,8 @@ import { RevealPhrase } from "./pages/RevealPhrase";
 import { ResetWallet } from "./pages/ResetWallet";
 import { ConnectedSites } from "./pages/ConnectedSites";
 import { ForgotPassword } from "./pages/ForgotPassword";
+import { Pending as MultisigPending } from "./pages/Pending";
+import { MultisigGovernance } from "./components/MultisigGovernance";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
@@ -52,6 +54,7 @@ import {
   bgKeystoreCreateNew,
   bgKeystoreCreateFromMnemonic,
   bgResolveApproval,
+  bgVaultsList,
   bgWalletActiveAccount,
   bgWalletBalance,
   bgWalletActivityGet,
@@ -59,6 +62,7 @@ import {
   bgWalletActiveChain,
   bgWalletSetActiveChain,
   bgChainList,
+  type VaultSummary,
   type PendingApproval,
   type KeystoreStatus,
   type ConnectRequest,
@@ -98,7 +102,9 @@ type Screen =
   | "delegations"
   | "bridge"
   | "approval"
-  | "connected-sites";
+  | "connected-sites"
+  | "multisig-pending"
+  | "multisig-governance";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -221,6 +227,21 @@ export default function App() {
     }));
   };
 
+  // Phase 8 — track the active vault summary so we can detect when
+  // the user is "on" a multisig vault (Send must propose, Settings
+  // surfaces multisig section, Home pill renders M-of-N · K pending).
+  const [activeVaultSummary, setActiveVaultSummary] =
+    useState<VaultSummary | null>(null);
+  const loadActiveVaultSummary = async () => {
+    const r = await bgVaultsList();
+    if (!r.ok) {
+      setActiveVaultSummary(null);
+      return;
+    }
+    const active = (r.vaults ?? []).find((v) => v.isActive);
+    setActiveVaultSummary(active ?? null);
+  };
+
   // Re-fetch keystore status + dependent identity/chain state. Used by the
   // mount bootstrap, the unlock/create flows, and the SW-pushed lock signal.
   // Empty deps deliberately — this captures the first-render closures and
@@ -230,6 +251,7 @@ export default function App() {
     setKeystore(ks);
     if (ks.algo === "mldsa") {
       await loadActiveAccount();
+      await loadActiveVaultSummary();
     }
     await loadChainState();
     return ks;
@@ -420,6 +442,18 @@ export default function App() {
       void refreshActivity();
     }
   }, [screen, refreshBalance, refreshActivity]);
+
+  // Phase 8 — re-fetch the active vault summary whenever the user
+  // navigates. Cheap (one IPC) and covers the cases where the user
+  // switches active vault via VaultPicker (which doesn't have a
+  // parent-callback hook today). Multisig-aware screens depend on
+  // this state being current.
+  useEffect(() => {
+    if (keystore?.unlocked && keystore.algo === "mldsa") {
+      void loadActiveVaultSummary();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, keystore?.unlocked, keystore?.algo]);
 
   // Indexer-backed wallet enrichments. These are partial and best-effort:
   // older testnet nodes return method-not-found until the latest mono-core
@@ -730,6 +764,17 @@ export default function App() {
           onOpenOperators={() => setScreen("operators")}
           onOpenAbout={() => setScreen("about")}
           onOpenDelegations={() => setScreen("delegations")}
+          {...(activeVaultSummary?.kind === "multisig"
+            ? {
+                multisig: {
+                  signerCount: activeVaultSummary.signerCount,
+                  threshold: activeVaultSummary.threshold,
+                  pendingCount: activeVaultSummary.pendingCount,
+                  onOpenPending: () => setScreen("multisig-pending"),
+                  onOpenGovernance: () => setScreen("multisig-governance"),
+                },
+              }
+            : {})}
         />
       )}
 
@@ -738,7 +783,20 @@ export default function App() {
       )}
 
       {screen === "about" && (
-        <About onBack={() => setScreen("settings")} />
+        <About
+          onBack={() => setScreen("settings")}
+          {...(activeVaultSummary?.kind === "multisig"
+            ? {
+                multisig: {
+                  label: activeVaultSummary.label,
+                  signerCount: activeVaultSummary.signerCount,
+                  threshold: activeVaultSummary.threshold,
+                  pendingCount: activeVaultSummary.pendingCount,
+                  onOpenGovernance: () => setScreen("multisig-governance"),
+                },
+              }
+            : {})}
+        />
       )}
 
       {screen === "reveal-phrase" && (
@@ -775,6 +833,23 @@ export default function App() {
           account={acc}
           chainId={activeChain.chainId}
           onBack={() => setScreen("home")}
+          {...(activeVaultSummary?.kind === "multisig"
+            ? { multisigVaultId: activeVaultSummary.id }
+            : {})}
+        />
+      )}
+
+      {screen === "multisig-pending" && activeVaultSummary !== null && (
+        <MultisigPending
+          vaultId={activeVaultSummary.id}
+          onBack={() => setScreen("settings")}
+        />
+      )}
+
+      {screen === "multisig-governance" && activeVaultSummary !== null && (
+        <MultisigGovernance
+          vaultId={activeVaultSummary.id}
+          onBack={() => setScreen("settings")}
         />
       )}
 

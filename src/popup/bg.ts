@@ -824,6 +824,16 @@ export interface VaultSummary {
   addr: string;
   createdAt: number;
   isActive: boolean;
+  /** Phase 8 — "single" for legacy single-key vaults, "multisig" for
+   *  vaults created via {@link bgVaultAddMultisig}. */
+  kind: "single" | "multisig";
+  /** Phase 8 — N in M-of-N (0 for single vaults). */
+  signerCount: number;
+  /** Phase 8 — M in M-of-N (0 for single vaults). */
+  threshold: number;
+  /** Phase 8 — count of pending tx + governance proposals (0 for
+   *  single vaults). The picker surfaces "M-of-N · K pending" pill. */
+  pendingCount: number;
 }
 
 /**
@@ -904,6 +914,270 @@ export async function bgVaultAddImport(
     "vault-add-import",
     label !== undefined ? { mnemonic, label } : { mnemonic },
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 8 — multisig vault surface (§28.5 Q70+Q75)
+// ─────────────────────────────────────────────────────────────────────
+//
+// `bgVaultAddMultisig` creates a new multisig vault inside the
+// container. The caller supplies the N signer roster (each entry
+// must carry a label + 0x-address + 0x-pubkey + role) and the
+// threshold M. The keystore validates + generates a fresh keypair
+// for the multisig vault itself (the "executor" keypair) and
+// returns its mnemonic + address — treat the mnemonic like a
+// single-vault recovery phrase.
+//
+// `bgVaultMultisigMeta` reads the per-vault meta (signers, threshold,
+// pending proposals, governance). `meta: null` means the target is a
+// single-key vault or the id is unknown — both are non-errors.
+
+import type {
+  MultisigSigner,
+  MultisigVaultMeta,
+} from "../shared/multisig.js";
+
+export type { MultisigSigner, MultisigVaultMeta } from "../shared/multisig.js";
+
+export async function bgVaultAddMultisig(args: {
+  signers: MultisigSigner[];
+  threshold: number;
+  label?: string;
+}): Promise<
+  | { ok: true; vaultId: string; mnemonic: string; address: string }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-add-multisig", args);
+}
+
+export async function bgVaultMultisigMeta(
+  vaultId: string,
+): Promise<
+  | { ok: true; meta: MultisigVaultMeta | null }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-multisig-meta", { vaultId });
+}
+
+/** Read a vault's ML-DSA-65 pubkey (0x + 3904 hex chars). Requires
+ *  an unlocked container. Used by the MultisigCreateModal to fill
+ *  self-signer entries from existing vaults. */
+export async function bgVaultPubkey(
+  vaultId: string,
+): Promise<{ ok: true; pubkey: string } | { ok: false; reason?: string }> {
+  return send("vault-pubkey", { vaultId });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 8 Commit 3 — proposal creation surface
+// ─────────────────────────────────────────────────────────────────────
+//
+// `bgMultisigPropose` creates a new transaction proposal inside a
+// multisig vault's meta. The first self-signer in the roster acts as
+// proposer; their vault key signs the canonical proposal hash and
+// the signature lands in approvals[0]. Container must be unlocked.
+//
+// `bgMultisigListProposals` is a thin convenience wrapper around the
+// proposals array — saves callers from pulling the full meta when
+// they only need the proposal list.
+
+import type {
+  PendingProposal,
+  ProposalAction,
+} from "../shared/multisig.js";
+
+export type {
+  PendingProposal,
+  ProposalAction,
+  ProposalSignature,
+  ProposalStatus,
+} from "../shared/multisig.js";
+
+export async function bgMultisigPropose(args: {
+  vaultId: string;
+  action: ProposalAction;
+}): Promise<
+  | { ok: true; proposalId: string; proposerId: string }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-propose", args);
+}
+
+export async function bgMultisigListProposals(
+  vaultId: string,
+): Promise<
+  | { ok: true; proposals: PendingProposal[] | null }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-list-proposals", { vaultId });
+}
+
+/** Add an approval signature to a pending proposal. Returns the new
+ *  approval/rejection counts so the popup can reconcile the UI
+ *  without a refetch. Requires unlocked container. */
+export async function bgMultisigSign(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").ProposalStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-sign", args);
+}
+
+/** Add a rejection signature. Mirrors bgMultisigSign but lands in
+ *  the proposal's rejections[] array. */
+export async function bgMultisigReject(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").ProposalStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-reject", args);
+}
+
+/** Execute a proposal whose approvals have reached threshold. Pulls
+ *  the action out of the proposal record + broadcasts via the
+ *  encrypted-envelope path using the multisig vault's own keypair.
+ *  Returns the tx hash on success; updates the proposal record's
+ *  status + txHash atomically. */
+export async function bgMultisigExecute(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | { ok: true; txHash: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-execute", args);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 8 Commit 5 — signer governance (§28.5 Q75)
+// ─────────────────────────────────────────────────────────────────────
+
+import type { GovernanceAction } from "../shared/multisig.js";
+
+export type {
+  GovernanceAction,
+  GovernanceProposal,
+  GovernanceStatus,
+} from "../shared/multisig.js";
+
+/** Propose a signer-set or threshold change. Dry-runs the action
+ *  against current state before persisting — surfaces "would leave
+ *  roster below threshold" etc. as a synchronous IPC error rather
+ *  than an execute-time surprise. */
+export async function bgMultisigProposeGovernance(args: {
+  vaultId: string;
+  action: GovernanceAction;
+}): Promise<
+  | { ok: true; proposalId: string; proposerId: string }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-propose-governance", args);
+}
+
+export async function bgMultisigSignGovernance(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").GovernanceStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-sign-governance", args);
+}
+
+export async function bgMultisigRejectGovernance(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").GovernanceStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-reject-governance", args);
+}
+
+/** Apply a governance proposal's action to the meta block. The
+ *  wallet enforces M-of-N at the IPC boundary; chain enforcement is
+ *  out of scope (governance lives entirely in the wallet today —
+ *  see shared/multisig.ts for the chain GAP). */
+export async function bgMultisigExecuteGovernance(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | { ok: true; signers: number; threshold: number }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-execute-governance", args);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 8 Commit 7 — cross-signer coordination
+// ─────────────────────────────────────────────────────────────────────
+//
+// Multisig signers commonly live on different machines (one per
+// hardware key, one per officer, etc.). The wallet's pending queue
+// is local-only, so a co-signer who created a proposal needs to
+// share it with the rest of the committee out-of-band. The
+// export/import IPC pair serializes a proposal record (base64 JSON)
+// for pasting into chat/email/QR code; the recipient's wallet
+// verifies every signature against the local roster's pubkeys
+// before merging.
+//
+// Chain-side coordination would supersede this when a user-multisig
+// precompile lands (see shared/multisig.ts module doc for the GAP).
+
+/** Serialize a proposal (tx or governance) as a base64 JSON blob
+ *  for out-of-band sharing. The blob carries the full proposal
+ *  record including current signatures so recipients can merge
+ *  without losing approvals already collected. */
+export async function bgMultisigExportProposal(args: {
+  vaultId: string;
+  proposalId: string;
+  kind: "tx" | "gov";
+}): Promise<
+  { ok: true; blob: string } | { ok: false; reason?: string }
+> {
+  return send("multisig-export-proposal", args);
+}
+
+/** Import a shared proposal blob from another signer. Verifies
+ *  every signature against the local roster's pubkeys; on a known
+ *  proposal id, merges approvals/rejections (dedupe by signerId);
+ *  on a new id, appends the (sanitized) proposal. */
+export async function bgMultisigImportProposal(args: {
+  vaultId: string;
+  blob: string;
+}): Promise<
+  | { ok: true; kind: "tx" | "gov"; proposalId: string }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-import-proposal", args);
 }
 
 // ─────────────────────────────────────────────────────────────────────
