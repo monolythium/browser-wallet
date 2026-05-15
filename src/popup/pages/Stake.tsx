@@ -20,6 +20,7 @@ import { Icon } from "../Icon";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
+import { RewardCard } from "../components/RewardCard";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
 import {
@@ -27,14 +28,17 @@ import {
   bgStakingClusterDirectory,
   bgStakingDelegationCap,
   bgStakingDelegations,
+  bgStakingPendingRewards,
   bgWalletBalance,
   bgWalletSendTx,
   type ClusterDirectoryEntry,
   type DelegationsView,
+  type PendingRewardsView,
 } from "../bg";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
+  encodeClaimRewards,
   encodeDelegate,
   encodeRedelegate,
   encodeUndelegate,
@@ -63,7 +67,7 @@ type Step =
 
 /** Action the user is preparing. Drives the preview/submit calldata
  *  encoding + the success copy. */
-type Action = "delegate" | "undelegate" | "redelegate";
+type Action = "delegate" | "undelegate" | "redelegate" | "claim";
 
 /** Top-level interaction mode. `"manual"` = single-cluster pick →
  *  stake form path (commit 2). The four autovote modes route through
@@ -105,6 +109,8 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
   const [capBps, setCapBps] = useState<number | null>(null);
   const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
+  const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
+  const [rewardsMock, setRewardsMock] = useState(true);
 
   // Selection + form state.
   const [entryMode, setEntryMode] = useState<EntryMode>("manual");
@@ -175,6 +181,16 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
         const seedBytes = hexToBytes(seedR.seedHex);
         if (seedBytes !== null) setAutovoteSeed(seedBytes);
       }
+      // Pending rewards: depends on the active delegation set, so we
+      // fan it out after the delegations resolve. Chain GAP today —
+      // the SW returns mock-derived figures with `via: "mock"`.
+      if (delR.ok) {
+        const rewR = await bgStakingPendingRewards(account.addr, delR.data.rows);
+        if (!cancelled && rewR.ok) {
+          setRewards(rewR.data);
+          setRewardsMock(rewR.via === "mock");
+        }
+      }
     })();
     return () => {
       cancelled = true;
@@ -226,48 +242,59 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
     [selectedClusterId, clusters],
   );
 
-  // Submission. Encodes delegate / undelegate / redelegate calldata
-  // based on the current `action` and routes through bgWalletSendTx;
-  // the SW wraps it into the ML-DSA-65 envelope path for Sprintnet.
+  // Submission. Encodes delegate / undelegate / redelegate / claim
+  // calldata based on the current `action` and routes through
+  // bgWalletSendTx; the SW wraps it into the ML-DSA-65 envelope path
+  // for Sprintnet.
   const handleConfirm = async () => {
-    if (selectedCluster === null || balanceWei === null) return;
-    if (action === "redelegate" && redelegateDstClusterId === null) return;
+    if (action !== "claim") {
+      if (selectedCluster === null || balanceWei === null) return;
+      if (action === "redelegate" && redelegateDstClusterId === null) return;
+    }
     setStep("submitting");
     setSubmitError(null);
     setTxHash(null);
     try {
-      const amountWei = parseLythAmount(amountStr);
-      if (amountWei === null) {
-        setSubmitError({
-          message: "invalid amount",
-          code: null,
-          method: null,
-          via: null,
-        });
-        setStep("error");
-        return;
+      let data: string;
+      let gasLimitHex: string;
+      if (action === "claim") {
+        data = encodeClaimRewards();
+        gasLimitHex = "0x14820"; // 84000 — selector-only, modest overhead
+      } else {
+        const amountWei = parseLythAmount(amountStr);
+        if (amountWei === null || balanceWei === null) {
+          setSubmitError({
+            message: "invalid amount",
+            code: null,
+            method: null,
+            via: null,
+          });
+          setStep("error");
+          return;
+        }
+        const bps = lythAmountToBps(amountWei, balanceWei);
+        data =
+          action === "delegate"
+            ? encodeDelegate(selectedCluster!.clusterId, bps)
+            : action === "undelegate"
+              ? encodeUndelegate(selectedCluster!.clusterId, bps)
+              : encodeRedelegate(
+                  selectedCluster!.clusterId,
+                  redelegateDstClusterId!,
+                  bps,
+                );
+        // The delegation precompile's gas budget isn't measured yet
+        // (chain GAP — needs Nayiem). Use a generous overhead-aware
+        // estimate; redelegate carries one extra uint256 arg so we
+        // bump the budget slightly for that path.
+        gasLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
       }
-      const bps = lythAmountToBps(amountWei, balanceWei);
-      const data =
-        action === "delegate"
-          ? encodeDelegate(selectedCluster.clusterId, bps)
-          : action === "undelegate"
-            ? encodeUndelegate(selectedCluster.clusterId, bps)
-            : encodeRedelegate(
-                selectedCluster.clusterId,
-                redelegateDstClusterId!,
-                bps,
-              );
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data,
-        // The delegation precompile's gas budget isn't measured yet
-        // (chain GAP — needs Nayiem). Use a generous overhead-aware
-        // estimate; redelegate carries one extra uint256 arg so we
-        // bump the budget slightly for that path.
-        gasLimitHex: action === "redelegate" ? "0x1D4C0" : "0x186A0",
+        gasLimitHex,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -284,6 +311,48 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
     } catch (e) {
       setSubmitError({
         message: (e as Error).message ?? `${action} failed`,
+        code: null,
+        method: null,
+        via: null,
+      });
+      setStep("error");
+    }
+  };
+
+  /** Initiate a claim — skips the preview step because a claim has
+   *  no parameters to confirm (it claims across every active
+   *  delegation). Submit fires directly. Inlined rather than routing
+   *  through handleConfirm because handleConfirm reads `action` from
+   *  state, which would still be the previous value at this call
+   *  point (React state updates are async). */
+  const handleClaim = async () => {
+    setAction("claim");
+    setStep("submitting");
+    setSubmitError(null);
+    setTxHash(null);
+    try {
+      const r = await bgWalletSendTx({
+        to: DELEGATION_PRECOMPILE,
+        valueWeiHex: "0x0",
+        chainIdHex: chainId,
+        data: encodeClaimRewards(),
+        gasLimitHex: "0x14820", // 84000 — selector-only
+      });
+      if (r.ok) {
+        setTxHash(r.result.txHash);
+        setStep("success");
+      } else {
+        setSubmitError({
+          message: r.reason ?? "claim rejected",
+          code: typeof r.code === "number" ? r.code : null,
+          method: typeof r.method === "string" ? r.method : null,
+          via: typeof r.via === "string" ? r.via : null,
+        });
+        setStep("error");
+      }
+    } catch (e) {
+      setSubmitError({
+        message: (e as Error).message ?? "claim failed",
         code: null,
         method: null,
         via: null,
@@ -320,13 +389,31 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
             ? "Stake"
             : step === "form"
               ? "Stake — amount"
-              : step === "preview"
-                ? "Review delegation"
-                : step === "submitting"
-                  ? "Submitting…"
-                  : step === "success"
-                    ? "Delegated"
-                    : "Error"}
+              : step === "unstake-form"
+                ? "Unstake — amount"
+                : step === "redelegate-form"
+                  ? "Redelegate"
+                  : step === "redelegate-dst-pick"
+                    ? "Redelegate — destination"
+                    : step === "preview"
+                      ? action === "delegate"
+                        ? "Review delegation"
+                        : action === "undelegate"
+                          ? "Review unstake"
+                          : "Review swap"
+                      : step === "submitting"
+                        ? action === "claim"
+                          ? "Claiming…"
+                          : "Submitting…"
+                        : step === "success"
+                          ? action === "claim"
+                            ? "Claimed"
+                            : action === "undelegate"
+                              ? "Unstaked"
+                              : action === "redelegate"
+                                ? "Swapped"
+                                : "Delegated"
+                          : "Error"}
         </div>
         <div style={{ width: 28 }} />
       </div>
@@ -335,6 +422,18 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
         {step === "pick" && (
           <>
             <SummaryBanner delegations={delegations} balanceWei={balanceWei} />
+
+            {/* Pending rewards — surfaces only when there's something
+                to claim or an active delegation that could accrue. */}
+            {delegations !== null && delegations.rows.length > 0 && (
+              <RewardCard
+                rewards={rewards}
+                isMock={rewardsMock}
+                clusters={clusters}
+                onClaim={() => void handleClaim()}
+                claimDisabled={false}
+              />
+            )}
 
             {/* Existing delegations — manage Unstake / Redelegate per row */}
             {delegations !== null && delegations.rows.length > 0 && (
@@ -533,6 +632,7 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
 
         {step === "success" && txHash !== null && (
           <SuccessView
+            action={action}
             txHash={txHash}
             copied={hashCopied}
             onCopy={() => void handleCopyHash()}
@@ -806,13 +906,22 @@ function SubmittingView() {
 }
 
 interface SuccessViewProps {
+  action: Action;
   txHash: string;
   copied: boolean;
   onCopy: () => void;
   onDone: () => void;
 }
 
-function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
+function SuccessView({ action, txHash, copied, onCopy, onDone }: SuccessViewProps) {
+  const title =
+    action === "claim"
+      ? "Rewards claim submitted"
+      : action === "undelegate"
+        ? "Unstake submitted (instant)"
+        : action === "redelegate"
+          ? "Cluster swap submitted (instant)"
+          : "Delegation submitted";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div
@@ -826,7 +935,7 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
         <div
           style={{ marginTop: 16, fontSize: 13.5, fontWeight: 600 }}
         >
-          Delegation submitted
+          {title}
         </div>
       </div>
       <div className="ext-card" style={{ padding: 12 }}>
