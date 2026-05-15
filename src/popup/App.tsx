@@ -28,6 +28,7 @@ import { Send } from "./pages/Send";
 import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
 import { Stake } from "./pages/Stake";
+import { Delegations } from "./pages/Delegations";
 import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
@@ -94,6 +95,7 @@ type Screen =
   | "send"
   | "send-nft"
   | "stake"
+  | "delegations"
   | "bridge"
   | "approval"
   | "connected-sites";
@@ -177,6 +179,14 @@ export default function App() {
   // Home or the user navigates away. Lives at App-level because
   // NftTab → NftDetail → SendNft spans the Home/page boundary.
   const [pendingSendNft, setPendingSendNft] = useState<SendNftTarget | null>(null);
+  // Phase 7 — Delegations → Stake deeplink. When a Delegations-page
+  // "Unstake" / "Redelegate" CTA fires, App stores the action + the
+  // source cluster so the Stake page can land directly on the form.
+  // Cleared on Stake → home navigation.
+  const [stakeDeepLink, setStakeDeepLink] = useState<{
+    action: "undelegate" | "redelegate";
+    clusterId: number;
+  } | null>(null);
   const selectedChain: ChainEntry | null =
     selectedChainId !== null
       ? (chainList.find((c) => c.chainId === selectedChainId) ?? null)
@@ -719,6 +729,7 @@ export default function App() {
           onResetWallet={() => setScreen("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
           onOpenAbout={() => setScreen("about")}
+          onOpenDelegations={() => setScreen("delegations")}
         />
       )}
 
@@ -783,7 +794,37 @@ export default function App() {
         <Stake
           account={acc}
           chainId={activeChain.chainId}
-          onBack={() => setScreen("home")}
+          {...(stakeDeepLink !== null
+            ? {
+                initialAction: stakeDeepLink.action,
+                initialClusterId: stakeDeepLink.clusterId,
+              }
+            : {})}
+          onBack={() => {
+            const wasDeepLinked = stakeDeepLink !== null;
+            setStakeDeepLink(null);
+            setScreen(wasDeepLinked ? "delegations" : "home");
+          }}
+        />
+      )}
+
+      {screen === "delegations" && (
+        <Delegations
+          account={acc}
+          chainId={activeChain.chainId}
+          onBack={() => setScreen("settings")}
+          onUnstake={(clusterId) => {
+            setStakeDeepLink({ action: "undelegate", clusterId });
+            setScreen("stake");
+          }}
+          onRedelegate={(clusterId) => {
+            setStakeDeepLink({ action: "redelegate", clusterId });
+            setScreen("stake");
+          }}
+          onStakeMore={() => {
+            setStakeDeepLink(null);
+            setScreen("stake");
+          }}
         />
       )}
 

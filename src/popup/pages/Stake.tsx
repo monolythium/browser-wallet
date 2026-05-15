@@ -94,11 +94,32 @@ interface StakeProps {
    *  with this id so the SW knows to take the ML-DSA-65 envelope path
    *  on Sprintnet. */
   chainId: string;
+  /** Optional entry point — when the page is opened from the
+   *  Delegations dashboard, the parent supplies a pre-selected
+   *  cluster + the unstake / redelegate-from-this-cluster action.
+   *  Resets to manual delegate on mount when omitted. */
+  initialAction?: "delegate" | "undelegate" | "redelegate";
+  initialClusterId?: number;
   onBack: () => void;
 }
 
-export function Stake({ account, chainId, onBack }: StakeProps) {
-  const [step, setStep] = useState<Step>("pick");
+export function Stake({
+  account,
+  chainId,
+  initialAction,
+  initialClusterId,
+  onBack,
+}: StakeProps) {
+  // Initial step depends on whether the parent has deep-linked us into
+  // a specific action. Delegations → "Unstake" on cluster N opens us
+  // at `unstake-form` with the cluster pre-selected.
+  const initialStep: Step =
+    initialAction === "undelegate"
+      ? "unstake-form"
+      : initialAction === "redelegate"
+        ? "redelegate-form"
+        : "pick";
+  const [step, setStep] = useState<Step>(initialStep);
 
   // Cluster directory state.
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
@@ -114,10 +135,12 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
 
   // Selection + form state.
   const [entryMode, setEntryMode] = useState<EntryMode>("manual");
-  const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
+  const [selectedClusterId, setSelectedClusterId] = useState<number | null>(
+    initialClusterId ?? null,
+  );
   const [redelegateDstClusterId, setRedelegateDstClusterId] = useState<number | null>(null);
   const [amountStr, setAmountStr] = useState("");
-  const [action, setAction] = useState<Action>("delegate");
+  const [action, setAction] = useState<Action>(initialAction ?? "delegate");
   const [autovoteTargetBps, setAutovoteTargetBps] = useState<number>(5000);
   const [autovoteSeed, setAutovoteSeed] = useState<Uint8Array | null>(null);
   const [autovotePlan, setAutovotePlan] = useState<AutovoteResult | null>(null);

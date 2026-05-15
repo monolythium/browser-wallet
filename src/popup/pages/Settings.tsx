@@ -24,6 +24,10 @@ interface SettingsProps {
   /** Routes to the About page (Phase 6 commit 4) — version stack,
    *  operator health, genesis hash, §28.5 differentiation pitch. */
   onOpenAbout: () => void;
+  /** Routes to the Delegations dashboard (Phase 7 commit 6) — active
+   *  stake breakdown, pending rewards, unstake / redelegate / claim
+   *  actions per §23. */
+  onOpenDelegations: () => void;
 }
 
 const ALGO_LABEL: Record<SignAlgo, string> = {
@@ -51,6 +55,7 @@ export function Settings({
   onResetWallet,
   onOpenOperators,
   onOpenAbout,
+  onOpenDelegations,
 }: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
@@ -291,6 +296,45 @@ export function Settings({
               Reset wallet
             </button>
           </div>
+        </div>
+
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Staking</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            View active delegations, pending rewards, and manage existing
+            positions across clusters per §23.
+          </div>
+          <button
+            onClick={onOpenDelegations}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>Delegations dashboard</span>
+            <Icon name="chev" size={12} />
+          </button>
         </div>
 
         <div className="ext-card">
