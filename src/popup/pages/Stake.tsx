@@ -17,9 +17,11 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { StakeForm } from "../components/StakeForm";
 import {
+  bgStakingAutovoteSeed,
   bgStakingClusterDirectory,
   bgStakingDelegationCap,
   bgStakingDelegations,
@@ -35,8 +37,35 @@ import {
   lythAmountToBps,
 } from "../../shared/staking-tx";
 import { MOCK_CLUSTER_APR_BPS } from "../../shared/staking";
+import {
+  pickMaxDecentralization,
+  pickMaxDiversity,
+  pickMaxYield,
+  type AutovoteAllocation,
+  type AutovoteMode,
+  type AutovoteResult,
+} from "../../shared/autovote";
 
 type Step = "pick" | "form" | "preview" | "submitting" | "success" | "error";
+
+/** Top-level interaction mode. `"manual"` = single-cluster pick →
+ *  stake form path (commit 2). The four autovote modes route through
+ *  AutovotePreview before submitting; for commit 3 only the first
+ *  allocation submits (full batch lands as a follow-up). */
+type EntryMode = "manual" | AutovoteMode;
+
+/** Parse an `0x...` hex string into 32 bytes for the autovote seed. */
+function hexToBytes(hex: string): Uint8Array | null {
+  const stripped = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (stripped.length === 0 || stripped.length % 2 !== 0) return null;
+  const out = new Uint8Array(stripped.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const b = Number.parseInt(stripped.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(b)) return null;
+    out[i] = b;
+  }
+  return out;
+}
 
 interface StakeProps {
   account: Account;
@@ -61,8 +90,12 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
   const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
 
   // Selection + form state.
+  const [entryMode, setEntryMode] = useState<EntryMode>("manual");
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
   const [amountStr, setAmountStr] = useState("");
+  const [autovoteTargetBps, setAutovoteTargetBps] = useState<number>(5000);
+  const [autovoteSeed, setAutovoteSeed] = useState<Uint8Array | null>(null);
+  const [autovotePlan, setAutovotePlan] = useState<AutovoteResult | null>(null);
 
   // Submission state.
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -96,15 +129,18 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
     };
   }, []);
 
-  // Load active delegations + cap when the account changes.
+  // Load active delegations + cap + autovote seed when the account
+  // changes. The seed comes from the SW (which has the unlocked
+  // ML-DSA-65 pubkey) so the popup never sees secret material.
   useEffect(() => {
     if (!account.addr.startsWith("0x")) return;
     let cancelled = false;
     void (async () => {
-      const [delR, capR, balR] = await Promise.all([
+      const [delR, capR, balR, seedR] = await Promise.all([
         bgStakingDelegations(account.addr),
         bgStakingDelegationCap(),
         bgWalletBalance(account.addr, chainId),
+        bgStakingAutovoteSeed(),
       ]);
       if (cancelled) return;
       if (delR.ok) setDelegations(delR.data);
@@ -116,11 +152,46 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
           // malformed hex — render with null
         }
       }
+      if (seedR.ok) {
+        const seedBytes = hexToBytes(seedR.seedHex);
+        if (seedBytes !== null) setAutovoteSeed(seedBytes);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [account.addr, chainId]);
+
+  // Recompute the autovote plan whenever inputs change. The plan
+  // doesn't submit on its own — the user reviews it on the preview
+  // screen before the chain call.
+  useEffect(() => {
+    if (entryMode === "manual" || entryMode === "custom") {
+      setAutovotePlan(null);
+      return;
+    }
+    if (clusters.length === 0 || autovoteSeed === null) {
+      setAutovotePlan(null);
+      return;
+    }
+    const input = {
+      clusters,
+      targetTotalBps: autovoteTargetBps,
+      capBps,
+      seed: autovoteSeed,
+      // §23.6 launch minimum diversification = 2 (Phase 12). The wallet
+      // can tighten this as the chain reports phase transitions via
+      // capBps — for now the static floor matches launch.
+      minDiversification: 2,
+    };
+    const plan =
+      entryMode === "max-yield"
+        ? pickMaxYield(input)
+        : entryMode === "max-diversity"
+          ? pickMaxDiversity(input)
+          : pickMaxDecentralization(input);
+    setAutovotePlan(plan);
+  }, [entryMode, autovoteTargetBps, clusters, capBps, autovoteSeed]);
 
   // Existing weight in the selected cluster.
   const existingWeightBps = useMemo(() => {
@@ -236,30 +307,70 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
         {step === "pick" && (
           <>
             <SummaryBanner delegations={delegations} balanceWei={balanceWei} />
-            {clustersError !== null ? (
-              <div style={errBanner}>{clustersError}</div>
-            ) : clusters.length === 0 ? (
-              <div
-                style={{
-                  padding: 18,
-                  textAlign: "center",
-                  fontSize: 12,
-                  color: "var(--fg-400)",
-                  fontFamily: "var(--f-mono)",
-                }}
-              >
-                Loading cluster directory…
-              </div>
-            ) : (
-              <ClusterPicker
-                clusters={clusters}
-                selectedClusterId={selectedClusterId}
-                isMock={clustersMock}
-                onSelect={(id) => {
-                  setSelectedClusterId(id);
-                  setStep("form");
+
+            {/* §23.9 four-button autovote + manual entry */}
+            <div className="ext-card" style={{ padding: 12 }}>
+              <EntryModeToggle
+                entryMode={entryMode}
+                onChange={(mode) => {
+                  setEntryMode(mode);
+                  setSelectedClusterId(null);
                 }}
               />
+            </div>
+
+            {entryMode !== "manual" && (
+              <AutovotePlanCard
+                entryMode={entryMode}
+                plan={autovotePlan}
+                clusters={clusters}
+                targetBps={autovoteTargetBps}
+                onTargetChange={setAutovoteTargetBps}
+                capBps={capBps}
+                seedAvailable={autovoteSeed !== null}
+                onProceed={() => {
+                  if (autovotePlan === null) return;
+                  if (autovotePlan.allocations.length === 0) return;
+                  // Commit 3 ships a single-tx submit of the FIRST
+                  // allocation. Multi-allocation batching lands in a
+                  // follow-up so the same `bgWalletSendTx` envelope
+                  // path keeps the audit shape simple for Phase 7.
+                  const first = autovotePlan.allocations[0]!;
+                  setSelectedClusterId(first.cluster);
+                  setAmountStr(allocationToLythAmountStr(first, balanceWei));
+                  setStep("preview");
+                }}
+              />
+            )}
+
+            {entryMode === "manual" && (
+              <>
+                {clustersError !== null ? (
+                  <div style={errBanner}>{clustersError}</div>
+                ) : clusters.length === 0 ? (
+                  <div
+                    style={{
+                      padding: 18,
+                      textAlign: "center",
+                      fontSize: 12,
+                      color: "var(--fg-400)",
+                      fontFamily: "var(--f-mono)",
+                    }}
+                  >
+                    Loading cluster directory…
+                  </div>
+                ) : (
+                  <ClusterPicker
+                    clusters={clusters}
+                    selectedClusterId={selectedClusterId}
+                    isMock={clustersMock}
+                    onSelect={(id) => {
+                      setSelectedClusterId(id);
+                      setStep("form");
+                    }}
+                  />
+                )}
+              </>
             )}
           </>
         )}
@@ -681,6 +792,368 @@ function parseLythAmount(s: string): bigint | null {
   } catch {
     return null;
   }
+}
+
+/** Convert an autovote allocation row + the wallet balance into the
+ *  LYTH-amount string the StakeForm + preview expect. Floors to 6
+ *  decimal places for display continuity with the manual flow. */
+function allocationToLythAmountStr(
+  alloc: AutovoteAllocation,
+  balanceWei: bigint | null,
+): string {
+  if (balanceWei === null || balanceWei === 0n || alloc.weightBps <= 0) return "0";
+  const wei = (balanceWei * BigInt(alloc.weightBps)) / 10_000n;
+  const whole = wei / 10n ** 18n;
+  const rem = wei % 10n ** 18n;
+  if (rem === 0n) return whole.toString();
+  const remStr = rem.toString().padStart(18, "0").slice(0, 6);
+  const trimmed = remStr.replace(/0+$/, "");
+  return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EntryModeToggle — switches between manual + four autovote modes
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface EntryModeToggleProps {
+  entryMode: EntryMode;
+  onChange: (mode: EntryMode) => void;
+}
+
+function EntryModeToggle({ entryMode, onChange }: EntryModeToggleProps) {
+  const isManual = entryMode === "manual";
+  const autovoteMode = isManual ? "max-decentralization" : (entryMode as AutovoteMode);
+  return (
+    <div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 6,
+          marginBottom: isManual ? 0 : 12,
+        }}
+      >
+        <button
+          onClick={() => onChange("manual")}
+          style={{
+            ...modeToggleBtn,
+            background: isManual ? "var(--gold-bg)" : "rgba(255,255,255,0.03)",
+            color: isManual ? "var(--gold)" : "var(--fg-200)",
+            border: isManual
+              ? "1px solid var(--gold)"
+              : "1px solid var(--fg-700)",
+          }}
+        >
+          Manual pick
+        </button>
+        <button
+          onClick={() => onChange("max-decentralization")}
+          style={{
+            ...modeToggleBtn,
+            background: !isManual ? "var(--gold-bg)" : "rgba(255,255,255,0.03)",
+            color: !isManual ? "var(--gold)" : "var(--fg-200)",
+            border: !isManual
+              ? "1px solid var(--gold)"
+              : "1px solid var(--fg-700)",
+          }}
+        >
+          Autovote
+        </button>
+      </div>
+      {!isManual && (
+        <AutovoteSelector
+          mode={autovoteMode}
+          onChange={(m) => onChange(m)}
+        />
+      )}
+    </div>
+  );
+}
+
+const modeToggleBtn: CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: 8,
+  fontFamily: "var(--f-sans)",
+  fontSize: 11.5,
+  fontWeight: 600,
+  cursor: "pointer",
+  transition: "all 100ms var(--e-out)",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AutovotePlanCard — preview the allocation plan + target slider
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface AutovotePlanCardProps {
+  entryMode: AutovoteMode;
+  plan: AutovoteResult | null;
+  clusters: ReadonlyArray<ClusterDirectoryEntry>;
+  targetBps: number;
+  onTargetChange: (bps: number) => void;
+  capBps: number | null;
+  seedAvailable: boolean;
+  onProceed: () => void;
+}
+
+function AutovotePlanCard({
+  entryMode,
+  plan,
+  clusters,
+  targetBps,
+  onTargetChange,
+  capBps,
+  seedAvailable,
+  onProceed,
+}: AutovotePlanCardProps) {
+  const clusterById = useMemo(() => {
+    const m = new Map<number, ClusterDirectoryEntry>();
+    for (const c of clusters) m.set(c.clusterId, c);
+    return m;
+  }, [clusters]);
+
+  if (entryMode === "custom") {
+    return (
+      <div className="ext-card" style={{ padding: 12 }}>
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-400)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            marginBottom: 6,
+          }}
+        >
+          Custom allocation
+        </div>
+        <div
+          style={{
+            fontSize: 11.5,
+            color: "var(--fg-300)",
+            lineHeight: 1.5,
+          }}
+        >
+          Pick clusters manually below, then enter per-cluster amounts on the
+          form. The wallet enforces the {capBps === null ? "unlimited" : `${(capBps / 100).toFixed(0)}%`}{" "}
+          per-cluster cap (§23.6) at submission time and warns before any
+          out-of-policy distribution is signed.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ext-card" style={{ padding: 12 }}>
+      {!seedAvailable && (
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10.5,
+            color: "var(--warn)",
+            padding: "6px 8px",
+            borderRadius: 6,
+            background: "rgba(244,201,122,0.08)",
+            border: "1px solid rgba(244,201,122,0.4)",
+            marginBottom: 8,
+            lineHeight: 1.5,
+          }}
+        >
+          Unlock the wallet to load the §23.9 per-user entropy seed.
+        </div>
+      )}
+
+      {/* Target slider */}
+      <div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 6,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+            }}
+          >
+            Stake target
+          </span>
+          <span
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 13,
+              fontWeight: 600,
+              color: "var(--gold)",
+            }}
+          >
+            {(targetBps / 100).toFixed(0)}%
+          </span>
+        </div>
+        <input
+          type="range"
+          min={500}
+          max={10_000}
+          step={500}
+          value={targetBps}
+          onChange={(e) => onTargetChange(Number(e.target.value))}
+          style={{ width: "100%" }}
+        />
+      </div>
+
+      {/* Plan summary */}
+      {plan === null ? (
+        <div
+          style={{
+            marginTop: 10,
+            padding: 10,
+            fontSize: 11,
+            color: "var(--fg-400)",
+            fontFamily: "var(--f-mono)",
+            textAlign: "center",
+          }}
+        >
+          Computing plan…
+        </div>
+      ) : plan.allocations.length === 0 ? (
+        <div
+          style={{
+            marginTop: 10,
+            padding: 10,
+            fontSize: 11,
+            color: "var(--err)",
+            fontFamily: "var(--f-mono)",
+            background: "rgba(220,80,80,0.08)",
+            border: "1px solid rgba(220,80,80,0.4)",
+            borderRadius: 8,
+          }}
+        >
+          {plan.reason}
+        </div>
+      ) : (
+        <div style={{ marginTop: 10 }}>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              marginBottom: 6,
+            }}
+          >
+            Proposed plan
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              maxHeight: 180,
+              overflowY: "auto",
+            }}
+          >
+            {plan.allocations.map((a) => {
+              const c = clusterById.get(a.cluster);
+              return (
+                <div
+                  key={a.cluster}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    fontSize: 11.5,
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    background: "rgba(255,255,255,0.03)",
+                    border: "1px solid var(--fg-700)",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      color: "var(--fg-100)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {c?.name ?? `cluster-${a.cluster}`}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      color: "var(--gold)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {(a.weightBps / 100).toFixed(2)}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {plan.shortfallBps > 0 && (
+            <div
+              style={{
+                marginTop: 8,
+                fontFamily: "var(--f-mono)",
+                fontSize: 9.5,
+                color: "var(--warn)",
+                lineHeight: 1.5,
+              }}
+            >
+              Shortfall: {(plan.shortfallBps / 100).toFixed(2)}% — increase
+              diversification or reduce target.
+            </div>
+          )}
+          <div
+            style={{
+              marginTop: 8,
+              fontFamily: "var(--f-mono)",
+              fontSize: 9,
+              color: "var(--fg-500)",
+              lineHeight: 1.5,
+            }}
+          >
+            {plan.reason}
+          </div>
+          <button
+            onClick={onProceed}
+            className="ext-act prim"
+            disabled={plan.allocations.length === 0}
+            style={{
+              marginTop: 10,
+              width: "100%",
+              padding: 10,
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            <Icon name="check" size={12} />
+            Review first allocation
+          </button>
+          <div
+            style={{
+              marginTop: 6,
+              fontFamily: "var(--f-mono)",
+              fontSize: 9,
+              color: "var(--fg-500)",
+              lineHeight: 1.5,
+              textAlign: "center",
+            }}
+          >
+            Submits one tx per allocation. Phase 7 ships the first; multi-tx
+            batching lands as a follow-up.
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function formatWei(wei: bigint, decimals = 4): string {
