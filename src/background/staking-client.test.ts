@@ -34,6 +34,7 @@ import {
   readClusterDirectory,
   readClusterStatus,
   readDelegationCap,
+  readDelegationHistory,
   readDelegations,
   readPendingRewards,
   readRedemptionQueue,
@@ -425,5 +426,106 @@ describe("readRedemptionQueue (chain GAP — §23.2 zero unbonding)", () => {
     if (!r.ok) return;
     expect(r.via).toBe("mock");
     expect(r.data.rows).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readDelegationHistory (Phase 7.1 — newly activated per-wallet timeline)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readDelegationHistory", () => {
+  const wallet = "0x" + "cc".repeat(20);
+
+  it("normalises a well-formed lyth_getDelegationHistory array (bigints stringified)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-4",
+      result: [
+        {
+          blockHeight: 1234n,
+          txIndex: 0,
+          logIndex: 2,
+          wallet,
+          cluster: 1,
+          toCluster: null,
+          kind: "delegated",
+          weightBps: 3000,
+          walletTotalBps: 3000,
+        },
+        {
+          blockHeight: 5678n,
+          txIndex: 1,
+          logIndex: 0,
+          wallet,
+          cluster: 1,
+          toCluster: 2,
+          kind: "redelegated",
+          weightBps: 1500,
+          walletTotalBps: 3000,
+        },
+      ],
+    });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.blockHeight).toBe("1234");
+    expect(r.data.rows[0]?.kind).toBe("delegated");
+    expect(r.data.rows[1]?.toCluster).toBe(2);
+    expect(r.data.rows[1]?.kind).toBe("redelegated");
+  });
+
+  it("paginates: passes cursor when provided", async () => {
+    let receivedParams: unknown[] | undefined;
+    mockedRpc.mockImplementation(async (_method: string, params: unknown[]) => {
+      receivedParams = params;
+      return { via: "operator-1", result: [] };
+    });
+    await readDelegationHistory(wallet, 25, "cursor-page-2");
+    expect(receivedParams).toEqual([wallet, 25, "cursor-page-2"]);
+  });
+
+  it("omits cursor on first-page calls", async () => {
+    let receivedParams: unknown[] | undefined;
+    mockedRpc.mockImplementation(async (_method: string, params: unknown[]) => {
+      receivedParams = params;
+      return { via: "operator-1", result: [] };
+    });
+    await readDelegationHistory(wallet, 10);
+    expect(receivedParams).toEqual([wallet, 10]);
+  });
+
+  it("falls back to an empty timeline when chain is offline", async () => {
+    mockedRpc.mockRejectedValue(new Error("no operator reachable"));
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toEqual([]);
+  });
+
+  it("drops malformed rows but keeps valid ones", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: [
+        { blockHeight: 1n, txIndex: 0, logIndex: 0, wallet, cluster: 1, toCluster: null, kind: "delegated", weightBps: 1000, walletTotalBps: 1000 },
+        { blockHeight: 2n, cluster: "not-a-number", kind: "delegated", weightBps: 500 }, // bad cluster
+        { blockHeight: 3n, cluster: 2, weightBps: 500 }, // missing kind
+        { blockHeight: 4n, txIndex: 1, logIndex: 0, wallet, cluster: 3, toCluster: null, kind: "undelegated", weightBps: 500, walletTotalBps: 500 },
+      ],
+    });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.cluster).toBe(1);
+    expect(r.data.rows[1]?.cluster).toBe(3);
+  });
+
+  it("rejects a non-array response", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: { not: "an array" } });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
   });
 });

@@ -35,6 +35,8 @@ import {
   type ClusterMember,
   type ClusterStatus,
   type DelegationCap,
+  type DelegationHistoryRow,
+  type DelegationHistoryView,
   type DelegationRow,
   type DelegationsView,
   type PendingRewardsRow,
@@ -328,11 +330,16 @@ export async function readDelegations(
         totalBps: typeof result.totalBps === "number" ? result.totalBps : 0,
       },
     };
-  } catch {
+  } catch (e) {
     // Empty delegations is a legitimate read for an unstaked wallet —
     // the popup renders the empty-state CTA. Sprintnet-offline gets the
     // same shape; the user sees "no active delegations" + can still
-    // drill into the cluster directory.
+    // drill into the cluster directory. Log so the SW dev-tools console
+    // distinguishes "actually empty" from "chain offline".
+    console.warn(
+      "[staking-client] readDelegations: chain offline, returning empty —",
+      (e as Error)?.message ?? e,
+    );
     return {
       ok: true,
       via: "mock",
@@ -372,15 +379,108 @@ export async function readDelegationCap(): Promise<StakingResult<DelegationCap>>
         lastChangedAtHeight: String(result.lastChangedAtHeight ?? 0),
       },
     };
-  } catch {
+  } catch (e) {
     // Pre-mainnet posture: whitepaper §23.6 Phase 12 launch cap = 50%
     // (`5000` bps). Mocking this is the cleanest way to render the
     // stake form's cap-headroom badge during cluster-offline windows;
-    // when Sprintnet returns, the chain value supersedes the mock.
+    // when Sprintnet returns, the chain value supersedes the mock. Log
+    // so the SW dev-tools console distinguishes a real chain-side cap
+    // from the §23.6 mock fallback.
+    console.warn(
+      "[staking-client] readDelegationCap: chain offline, returning §23.6 mock —",
+      (e as Error)?.message ?? e,
+    );
     return {
       ok: true,
       via: "mock",
       data: { capBps: 5000, lastChangedAtHeight: "0" },
+    };
+  }
+}
+
+// SDK contract: DelegationHistoryRecord[] (binding, not top-level exported).
+// Strict shape:
+//   { blockHeight: bigint, txIndex, logIndex, wallet, cluster,
+//     toCluster: number | null, kind, weightBps, walletTotalBps: number | null }
+// `lyth_getDelegationHistory` returns the array directly (no envelope).
+interface RawDelegationHistoryRow {
+  blockHeight?: string | number | bigint;
+  txIndex?: number;
+  logIndex?: number;
+  wallet?: string;
+  cluster?: number;
+  toCluster?: number | null;
+  kind?: string;
+  weightBps?: number;
+  walletTotalBps?: number | null;
+}
+
+function normaliseHistoryRow(
+  raw: RawDelegationHistoryRow,
+  walletFallback: string,
+): DelegationHistoryRow | null {
+  if (
+    typeof raw.cluster !== "number" ||
+    typeof raw.weightBps !== "number" ||
+    typeof raw.kind !== "string"
+  ) {
+    return null;
+  }
+  return {
+    blockHeight: String(raw.blockHeight ?? 0),
+    txIndex: typeof raw.txIndex === "number" ? raw.txIndex : 0,
+    logIndex: typeof raw.logIndex === "number" ? raw.logIndex : 0,
+    wallet: typeof raw.wallet === "string" ? raw.wallet : walletFallback,
+    cluster: raw.cluster,
+    toCluster: typeof raw.toCluster === "number" ? raw.toCluster : null,
+    kind: raw.kind,
+    weightBps: raw.weightBps,
+    walletTotalBps:
+      typeof raw.walletTotalBps === "number" ? raw.walletTotalBps : null,
+  };
+}
+
+/** Read the per-wallet delegation event timeline (§23.2 + §23.7).
+ *
+ *  Surfaces in the Delegations page as a "Recent activity" panel — a
+ *  delegation-only view distinct from the wallet-wide activity feed
+ *  (which merges transfers, swaps, and delegation events). Both
+ *  pipelines call `lyth_getDelegationHistory`, but the lean reader here
+ *  is cheaper for the Delegations page's per-mount fan-out.
+ *
+ *  Cluster-offline fallback returns an empty timeline with `via: "mock"`
+ *  so the popup branches cleanly on staleness ("history may be stale —
+ *  chain offline") without crashing the render.
+ */
+export async function readDelegationHistory(
+  wallet: string,
+  limit: number = 50,
+  cursor?: string,
+): Promise<StakingResult<DelegationHistoryView>> {
+  try {
+    const params: unknown[] =
+      cursor === undefined ? [wallet, limit] : [wallet, limit, cursor];
+    const { result, via } = await sprintnetJsonRpc<
+      ReadonlyArray<RawDelegationHistoryRow>
+    >("lyth_getDelegationHistory", params);
+    if (!Array.isArray(result)) {
+      return { ok: false, reason: "malformed lyth_getDelegationHistory response" };
+    }
+    const rows: DelegationHistoryRow[] = [];
+    for (const r of result) {
+      const row = normaliseHistoryRow(r, wallet);
+      if (row !== null) rows.push(row);
+    }
+    return { ok: true, via, data: { wallet, rows } };
+  } catch (e) {
+    console.warn(
+      "[staking-client] readDelegationHistory: chain offline, returning empty —",
+      (e as Error)?.message ?? e,
+    );
+    return {
+      ok: true,
+      via: "mock",
+      data: { wallet, rows: [] },
     };
   }
 }

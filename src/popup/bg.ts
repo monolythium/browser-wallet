@@ -887,6 +887,8 @@ export type {
   ClusterMember,
   ClusterStatus,
   DelegationCap,
+  DelegationHistoryRow,
+  DelegationHistoryView,
   DelegationRow,
   DelegationsView,
   PendingRewardsRow,
@@ -900,6 +902,7 @@ import type {
   ClusterDirectoryPage,
   ClusterStatus,
   DelegationCap,
+  DelegationHistoryView,
   DelegationRow,
   DelegationsView,
   PendingRewardsView,
@@ -954,6 +957,21 @@ export async function bgStakingRedemptionQueue(
   wallet: string,
 ): Promise<StakingResult<RedemptionQueueView>> {
   return send("staking-redemption-queue", { wallet });
+}
+
+/** Read the per-wallet delegation event timeline (delegate / undelegate /
+ *  redelegate events). Surfaces in the Delegations page's "Recent
+ *  activity" panel. Pages via opaque cursor — first call omits, follow-
+ *  ups echo the cursor from the previous reply. */
+export async function bgStakingDelegationHistory(
+  wallet: string,
+  limit = 50,
+  cursor?: string,
+): Promise<StakingResult<DelegationHistoryView>> {
+  return send(
+    "staking-delegation-history",
+    cursor === undefined ? { wallet, limit } : { wallet, limit, cursor },
+  );
 }
 
 /** Derive the per-user autovote entropy seed (§23.9). The SW derives
