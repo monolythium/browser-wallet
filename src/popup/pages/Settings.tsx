@@ -29,6 +29,14 @@ interface SettingsProps {
    *  stake breakdown, pending rewards, unstake / redelegate / claim
    *  actions per §23. */
   onOpenDelegations: () => void;
+  /** Phase 9 commit 3 — routes to the Security page (passkey policy
+   *  authoring per §28.5 Q30+Q31). Optional so legacy callers / non-
+   *  ML-DSA states render without it; when present, Settings shows
+   *  the "Passkey policy" card. */
+  onOpenSecurity?: () => void;
+  /** Phase 9 commit 5 — routes to the Features page (two-tier UX
+   *  toggles per §28.5 Q29). Optional for the same reasons. */
+  onOpenFeatures?: () => void;
   /** Phase 8 — passed only when the active vault is a multisig vault.
    *  When set, Settings renders the Multisig card with M-of-N pill +
    *  pending count + entry points to the Pending dashboard and
@@ -68,6 +76,8 @@ export function Settings({
   onOpenOperators,
   onOpenAbout,
   onOpenDelegations,
+  onOpenSecurity,
+  onOpenFeatures,
   multisig,
 }: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
@@ -278,6 +288,64 @@ export function Settings({
             <Icon name="shield" size={13} />
             Connected sites
           </button>
+
+          {onOpenSecurity && (
+            <button
+              onClick={onOpenSecurity}
+              style={{
+                width: "100%",
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.04)",
+                color: "var(--fg-100)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Icon name="passkey" size={13} />
+                Passkey policy
+              </span>
+              <Icon name="chev" size={12} />
+            </button>
+          )}
+
+          {onOpenFeatures && (
+            <button
+              onClick={onOpenFeatures}
+              style={{
+                width: "100%",
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.04)",
+                color: "var(--fg-100)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Icon name="shield" size={13} />
+                Features
+              </span>
+              <Icon name="chev" size={12} />
+            </button>
+          )}
 
           <div
             style={{
