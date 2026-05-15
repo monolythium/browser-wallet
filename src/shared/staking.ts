@@ -175,6 +175,23 @@ export interface DelegationHistoryView {
   rows: DelegationHistoryRow[];
 }
 
+/** Co-delegators for a cluster. Mirrors SDK `ClusterDelegatorsResponse`
+ *  (binding from `lyth_getClusterDelegators`). The chain returns a
+ *  capped list of delegator addresses + a `count` of the total scanned
+ *  slots; the wallet surfaces this on the cluster-detail panel so the
+ *  user can see "n wallets delegate here" without picking a delegator
+ *  from the list (the addresses themselves are unlabeled and not
+ *  individually meaningful in the wallet UI). */
+export interface ClusterDelegatorsView {
+  cluster: number;
+  /** Addresses returned by the chain in canonical scan order. The
+   *  wallet doesn't sort or dedup; the chain side already deduplicates. */
+  delegators: string[];
+  /** Number of delegator slots scanned by the node — may exceed
+   *  `delegators.length` when the chain caps the returned list. */
+  count: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rewards + redemption queue (§23.4, §23.2)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -330,7 +347,19 @@ export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
  *  and approximate the §23 model's diminishing-returns regime (clusters
  *  with more delegated stake → lower per-stake APR; community clusters
  *  marginally above Foundation clusters since the Foundation burns its
- *  rewards per §30.5). */
+ *  rewards per §30.5).
+ *
+ *  TODO: chain GAP — needs Nayiem
+ *  ────────────────────────────────
+ *  As of mono-core-sdk @0fd8a79 there is NO chain-side read for per-
+ *  cluster APR. The Phase 7.1 brief expected `lyth_clusterApr` (or a
+ *  REST equivalent at `/api/v1/staking/apr`) to land via mono-core
+ *  commit 964b0a3 "Expose advanced read API routes" — that commit
+ *  exposed certificates, registry, and DAG routes but no staking APR.
+ *  This table remains the wallet's authoritative APR source until the
+ *  chain side ships a reader; the §23.5 quadratic reward curve is
+ *  deterministic, so a future activation just swaps the table for a
+ *  per-cluster call. */
 export const MOCK_CLUSTER_APR_BPS: Readonly<Record<number, number>> = {
   1: 820, // 8.20% — Foundation, mid-saturation
   2: 805, // 8.05% — Foundation
