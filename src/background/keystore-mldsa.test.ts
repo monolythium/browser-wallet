@@ -919,3 +919,133 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
     180_000,
   );
 });
+
+describe("keystore-mldsa passkey state (Phase 9 Commit 1)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  function fakeCred(
+    i: number,
+    kind: "platform" | "cross-platform" = "platform",
+  ) {
+    return {
+      credentialId: `cred-${i}`,
+      name: `Cred ${i}`,
+      kind,
+      createdAt: 1_000_000 + i,
+    };
+  }
+
+  it(
+    "readPasskeyStateV4 returns an empty state for new vaults",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-empty-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const state = await ks.readPasskeyStateV4(list[0]!.id);
+      expect(state.credentials).toEqual([]);
+      expect(state.policy.enabled).toBe(false);
+    },
+    120_000,
+  );
+
+  it(
+    "addPasskeyCredentialV4 + readPasskeyStateV4 round-trip",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-add-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      await ks.addPasskeyCredentialV4(id, fakeCred(1));
+      await ks.addPasskeyCredentialV4(id, fakeCred(2, "cross-platform"));
+      const state = await ks.readPasskeyStateV4(id);
+      expect(state.credentials.map((c) => c.credentialId)).toEqual([
+        "cred-1",
+        "cred-2",
+      ]);
+      expect(state.credentials[1]!.kind).toBe("cross-platform");
+    },
+    120_000,
+  );
+
+  it(
+    "removePasskeyCredentialV4 disables the policy when the last cred goes",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const { defaultPasskeyPolicy } = await import("../shared/passkey.js");
+      const password = "pk-remove-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      await ks.addPasskeyCredentialV4(id, fakeCred(1));
+      await ks.setPasskeyPolicyV4(id, { ...defaultPasskeyPolicy(), enabled: true });
+      const before = await ks.readPasskeyStateV4(id);
+      expect(before.policy.enabled).toBe(true);
+
+      await ks.removePasskeyCredentialV4(id, "cred-1");
+      const after = await ks.readPasskeyStateV4(id);
+      expect(after.credentials).toEqual([]);
+      expect(after.policy.enabled).toBe(false);
+    },
+    120_000,
+  );
+
+  it(
+    "setPasskeyPolicyV4 rejects an invalid policy without persisting",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const { defaultPasskeyPolicy } = await import("../shared/passkey.js");
+      const password = "pk-bad-policy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      // limitWei=0 trips the floor check.
+      await expect(
+        ks.setPasskeyPolicyV4(id, { ...defaultPasskeyPolicy(), limitWei: 0n }),
+      ).rejects.toThrow(/invalid policy/);
+
+      const state = await ks.readPasskeyStateV4(id);
+      // Policy stays at the default (disabled) — nothing persisted.
+      expect(state.policy).toEqual(defaultPasskeyPolicy());
+    },
+    120_000,
+  );
+
+  it(
+    "passkey state survives a fresh module import",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      const password = "pk-persist-password";
+      await ks1.createVaultFromNewMnemonic(password);
+      await ks1.unlockContainerV4(password);
+      const list1 = (await ks1.listVaultsV4())!;
+      const id = list1[0]!.id;
+      await ks1.addPasskeyCredentialV4(id, fakeCred(7));
+
+      // Drop the module cache and re-import; the credential should
+      // come back unchanged from chrome.storage.local.
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const state = await ks2.readPasskeyStateV4(id);
+      expect(state.credentials.length).toBe(1);
+      expect(state.credentials[0]!.credentialId).toBe("cred-7");
+    },
+    180_000,
+  );
+});
