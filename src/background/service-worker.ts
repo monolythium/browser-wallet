@@ -84,7 +84,10 @@ import {
 import {
   DEFAULT_TX_PROPOSAL_TTL_MS,
   hashTxProposal,
+  isExecutable,
   pickFirstSelfSigner,
+  pickNextLocalVoter,
+  reconcileProposalStatus,
   type PendingProposal,
   type ProposalAction,
   type ProposalSignature,
@@ -2549,6 +2552,216 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ok: true,
           proposals: meta?.proposals ?? null,
         };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-sign":
+    case "multisig-reject": {
+      // Phase 8 Commit 4 — add this wallet's signature to a pending
+      // proposal as either approval (`multisig-sign`) or rejection
+      // (`multisig-reject`). The signer is the first local self-
+      // signer who has NOT already voted on this proposal; v1
+      // assumes a one-vote-per-self-signer model. Requires unlocked
+      // container.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
+        return { ok: false, reason: "missing vaultId or proposalId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal = meta.proposals.find((pp) => pp.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown proposal" };
+        }
+        const now = Date.now();
+        const status = reconcileProposalStatus(proposal, meta.threshold, now);
+        if (status !== "pending") {
+          return {
+            ok: false,
+            reason: `proposal is ${status}; cannot vote`,
+          };
+        }
+        const approvedIds = new Set(proposal.approvals.map((a) => a.signerId));
+        const rejectedIds = new Set(proposal.rejections.map((a) => a.signerId));
+        const voter = pickNextLocalVoter(
+          meta.signers,
+          approvedIds,
+          rejectedIds,
+        );
+        if (!voter) {
+          return {
+            ok: false,
+            reason:
+              "no local signer is eligible to vote — either every " +
+              "local signer has already voted, or this vault has no " +
+              "self-signers in the container",
+          };
+        }
+        const digest = hashTxProposal(proposal);
+        const sigBytes = await signWithVaultV4(voter.vaultId!, digest);
+        const signature: ProposalSignature = {
+          signerId: voter.id,
+          signature: "0x" + bytesToHex(sigBytes),
+          signedAt: now,
+        };
+        if (message.op === "multisig-sign") {
+          proposal.approvals.push(signature);
+        } else {
+          proposal.rejections.push(signature);
+          // Re-derive status post-rejection — may flip the proposal
+          // to "rejected" if this vote crosses the threshold.
+          proposal.status = reconcileProposalStatus(
+            proposal,
+            meta.threshold,
+            now,
+          );
+        }
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          signerId: voter.id,
+          status: proposal.status,
+          approvals: proposal.approvals.length,
+          rejections: proposal.rejections.length,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-execute": {
+      // Phase 8 Commit 4 — broadcast a proposal that has collected
+      // its threshold of approvals. The submitter is the multisig
+      // vault's own keypair (the "executor"). The proposal's
+      // approvals[] array is the off-chain audit trail; the chain
+      // only verifies the single executor signature today
+      // (chain GAP — see shared/multisig.ts).
+      //
+      // Side effect: temporarily switches the active vault to the
+      // multisig vault for the duration of the submit, then restores
+      // the previous active vault. The wallet broadcasts
+      // `accountsChanged` twice as a side effect; connected dApps
+      // observe a flip-back to the same address they had before, so
+      // the visible state is unchanged.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.proposalId !== "string") {
+        return { ok: false, reason: "missing vaultId or proposalId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal = meta.proposals.find((pp) => pp.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown proposal" };
+        }
+        const now = Date.now();
+        if (!isExecutable(proposal, meta.threshold, now)) {
+          return {
+            ok: false,
+            reason:
+              `proposal not executable: status=${proposal.status}, ` +
+              `${proposal.approvals.length}/${meta.threshold} approvals, ` +
+              `${proposal.rejections.length} rejections, ` +
+              `expires ${new Date(proposal.expiresAt).toISOString()}`,
+          };
+        }
+        // Capture the current active vault so we can restore it
+        // after broadcasting via the multisig's keypair. Skipping
+        // the restore would silently change which vault the popup
+        // is "looking at" — confusing UX.
+        const before = (await listVaultsV4()) ?? [];
+        const previouslyActive = before.find((v) => v.isActive);
+
+        // Switch to the multisig vault so submitEncryptedMlDsaTx
+        // uses the multisig's keypair as the "from" account; then
+        // restore the prior active vault on exit. accountsChanged
+        // broadcasts cover both transitions so connected dApps see
+        // the round-trip.
+        await selectActiveVaultV4(p.vaultId);
+        broadcastEvent("accountsChanged", [
+          before.find((v) => v.id === p.vaultId)?.addr ?? "",
+        ]);
+        const action = proposal.action;
+        const fromAddr = getUnlockedAddressV4();
+        if (!fromAddr) {
+          if (previouslyActive && previouslyActive.id !== p.vaultId) {
+            await selectActiveVaultV4(previouslyActive.id);
+            broadcastEvent("accountsChanged", [previouslyActive.addr]);
+          }
+          return { ok: false, reason: "multisig vault has no unlocked address" };
+        }
+        let txHash: string | null = null;
+        let broadcastError: string | null = null;
+        try {
+          const nonceRes = await sprintnetJsonRpc<string>(
+            "eth_getTransactionCount",
+            [fromAddr, "latest"],
+          );
+          const fee = await suggestFee(action.chainIdHex);
+          const gasHex =
+            action.gasLimitHex ?? fee.gasLimit ?? "0x5208";
+          const valueWeiHex =
+            action.kind === "send"
+              ? action.valueWeiHex
+              : action.valueWeiHex ?? "0x0";
+          const data = action.kind === "contract" ? action.data : action.data;
+          const r = await submitEncryptedMlDsaTx({
+            to: action.to,
+            value: valueWeiHex,
+            ...(data !== undefined ? { data } : {}),
+            gas: gasHex,
+            nonce: nonceRes.result,
+            maxFeePerGas: fee.maxFeePerGas,
+            maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+            chainIdHex: action.chainIdHex,
+          });
+          txHash = r.txHash;
+        } catch (e) {
+          broadcastError = (e as Error).message ?? "send failed";
+        } finally {
+          if (previouslyActive && previouslyActive.id !== p.vaultId) {
+            await selectActiveVaultV4(previouslyActive.id);
+            broadcastEvent("accountsChanged", [previouslyActive.addr]);
+          }
+        }
+        if (broadcastError) {
+          return { ok: false, reason: broadcastError };
+        }
+        if (txHash) {
+          // Re-read meta in case the active-vault swap raced with
+          // another mutation; defensive but cheap.
+          const freshMeta = await readMultisigMetaV4(p.vaultId);
+          if (freshMeta) {
+            const target = freshMeta.proposals.find(
+              (pp) => pp.id === p.proposalId,
+            );
+            if (target) {
+              target.status = "executed";
+              target.txHash = txHash;
+              await writeMultisigMetaV4(p.vaultId, freshMeta);
+            }
+          }
+        }
+        await resetAutoLock();
+        return { ok: true, txHash };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
