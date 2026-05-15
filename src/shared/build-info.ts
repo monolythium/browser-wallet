@@ -22,17 +22,17 @@ export const SDK_COMMIT_SHORT = "fdd3844";
  *  different hash for block 0 are marked "untrusted chain" and skipped
  *  by every RPC-dispatch path (balance, fee, send, indexer).
  *
- *  Phase 6 ships the post-2026-05-12 regenesis hash; the SDK chain
- *  registry currently snapshots an older genesis (see
- *  SDK_REGISTRY_GENESIS_HASH below) and is updated on a slower cadence
- *  than the wallet — keep this constant as the source of truth until
- *  the registry catches up. */
+ *  Mirrors the SDK chain-registry snapshot (see
+ *  SDK_REGISTRY_GENESIS_HASH below). The two are duplicated so the
+ *  About page can surface a warning if a future SDK sync drifts the
+ *  registry's value out from under the wallet — in that case the pin
+ *  takes precedence and the human reviewer decides whether to bump it. */
 export const SPRINTNET_GENESIS_HASH =
-  "0x9e5c92dc48207755617a8067e57537717bed7d43a387a539b993505cb13626c2";
+  "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from SPRINTNET_GENESIS_HASH so the
- *  reviewer notices the wallet's pin has drifted from the registry. */
+ *  reviewer notices a registry-vs-pin drift on the next sync. */
 export const SDK_REGISTRY_GENESIS_HASH: string = TESTNET_69420.genesis_hash;
 
 /** Sprintnet chain id (decimal, for display). */
