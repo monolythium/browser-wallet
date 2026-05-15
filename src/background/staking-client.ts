@@ -16,6 +16,13 @@
 //
 // The SW IPC dispatchers (service-worker.ts case "staking-*") consume
 // the envelopes verbatim.
+//
+// Phase 7.1 — wire contract anchored to SDK. The `Raw*` types below are
+// the wire form (everything optional + JSON-serialised bigints as string
+// | number); the SDK exports the strict normalised shapes referenced in
+// each block's `// SDK contract:` annotation. Aligning the cast targets
+// to SDK types means a future chain-side shape change surfaces in the
+// wallet typecheck the next time the SDK rebuilds.
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import {
@@ -36,12 +43,23 @@ import {
   type StakingResult,
 } from "../shared/staking.js";
 
+// SDK-contract anchors live in `staking-client.test.ts` as typed fixtures
+// (`const sdkShape: ClusterDirectoryPageResponse = ...`). When Nayiem
+// rotates a chain-side field name and the SDK re-exports the new shape,
+// those fixtures fail to typecheck before the wallet ships against a
+// stale contract. The `Raw*` types below are the loosened wire form
+// (optional everywhere, bigint admitted as string | number) so a
+// misbehaving operator can't crash the parser; the runtime checks
+// further down validate before normalisation.
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Cluster directory
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Wire shape from `lyth_clusters`. Mirrors SDK `ClusterDirectoryPageResponse`
- *  with everything stringified for JSON transport. */
+// SDK contract: ClusterDirectoryPageResponse + ClusterDirectoryEntryResponse.
+// The wire form below is the SDK shape with every field optional so a
+// misbehaving operator can't crash the parser; the runtime check below
+// validates `clusters` is an array before any normalisation.
 interface RawClusterDirectoryPage {
   page?: number;
   limit?: number;
@@ -58,6 +76,10 @@ interface RawClusterDirectoryEntry {
   active?: boolean;
 }
 
+// SDK contract: ClusterEntityResponse (bindings — not top-level exported).
+// Wire form keeps every field optional; the chain side's strict shape is
+// { cluster: number, entity: string, entityCode: number, block: unknown }
+// per `mono-core-sdk/packages/ts/src/bindings/ClusterEntityResponse.ts`.
 interface RawClusterEntity {
   cluster?: number;
   entity?: string;
@@ -75,8 +97,10 @@ function normaliseDirectoryEntry(
   if (typeof raw.clusterId !== "number") return null;
   return {
     clusterId: raw.clusterId,
-    // The cluster-name registry is not yet emitted by any SDK read; see
-    // staking.ts header. UI falls back to `cluster-<id>`.
+    // §22.8 namingRegistry precompile (0x1106) hasn't surfaced a reader
+    // in the SDK as of 0fd8a79. Once `lythResolveName(".cluster.mono")`
+    // (or equivalent) lands, swap this null for a per-cluster lookup
+    // batched with the entity fanout below. UI falls back to `cluster-<id>`.
     name: null,
     size: typeof raw.size === "number" ? raw.size : 0,
     threshold: typeof raw.threshold === "number" ? raw.threshold : 0,
@@ -164,6 +188,11 @@ export async function readClusterDirectory(
 // Cluster status
 // ─────────────────────────────────────────────────────────────────────────────
 
+// SDK contract: ClusterMemberResponse + ClusterStatusResponse.
+// Wire form: bigints are serialised as `string | number` over JSON-RPC;
+// the SDK normalises to `bigint`. The wallet stringifies back for IPC
+// transparency (popup never sees a bigint). Optional everywhere defends
+// against malformed operator responses.
 interface RawClusterMember {
   operatorId?: string;
   blsPubkey?: string;
@@ -179,12 +208,12 @@ interface RawClusterStatus {
   offline?: number;
   maintenance?: number;
   members?: ReadonlyArray<RawClusterMember>;
-  epoch?: string | number | null;
-  round?: string | number | null;
+  epoch?: string | number | bigint | null;
+  round?: string | number | bigint | null;
   quorum?: string;
   reputationScore?: number | null;
   livenessScore?: number | null;
-  lastUpdateHeight?: string | number;
+  lastUpdateHeight?: string | number | bigint;
 }
 
 function normaliseMember(raw: RawClusterMember): ClusterMember | null {
@@ -257,6 +286,13 @@ export async function readClusterStatus(
 // Delegations + cap
 // ─────────────────────────────────────────────────────────────────────────────
 
+// SDK contract: DelegationsResponse + DelegationRow (bindings, not top-
+// level exported). Strict chain shape:
+//   DelegationsResponse: { wallet, rows: DelegationRow[], totalBps, block }
+//   DelegationRow:       { cluster, weightBps }
+// `block` is an opaque block selector echoed by the node; the wallet
+// doesn't surface it because the popup's chain-status banner already
+// covers staleness.
 interface RawDelegationsResponse {
   wallet?: string;
   rows?: ReadonlyArray<{ cluster?: number; weightBps?: number }>;
@@ -305,9 +341,13 @@ export async function readDelegations(
   }
 }
 
+// SDK contract: DelegationCapResponse (binding, not top-level exported).
+// Strict shape: { capBps: u32, lastChangedAtHeight: bigint, blockNumber: bigint }.
+// Wire form receives bigints as `string | number` over JSON; the wallet
+// stringifies to preserve precision.
 interface RawDelegationCap {
   capBps?: number;
-  lastChangedAtHeight?: string | number;
+  lastChangedAtHeight?: string | number | bigint;
 }
 
 /** Chain encodes "cap disabled" as `u32::MAX`. The wallet normalises that

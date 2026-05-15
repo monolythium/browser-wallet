@@ -18,6 +18,10 @@
 // fixture loudly rather than silently.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  ClusterDirectoryPageResponse,
+  ClusterStatusResponse,
+} from "@monolythium/core-sdk";
 
 // Stub the tx-mldsa dispatch surface; every staking read goes through
 // this single function so one mock controls the whole suite.
@@ -153,6 +157,40 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[0]?.health).toBe("unknown");
     expect(r.data.clusters[0]?.regions).toEqual([]);
   });
+
+  // Phase 7.1 — wire-contract anchor. Constructs the exact SDK-shape
+  // `ClusterDirectoryPageResponse` (post-normalisation) and verifies the
+  // wallet's parser handles it. If Nayiem rotates a field name on the
+  // chain side and the SDK re-exports the new shape, this fixture's
+  // type annotation forces a compile error here before the wallet
+  // ships against a stale contract.
+  it("parses a strict SDK ClusterDirectoryPageResponse without rejecting fields", async () => {
+    const sdkShape: ClusterDirectoryPageResponse = {
+      page: 0,
+      limit: 25,
+      totalClusters: 1,
+      clusters: [
+        {
+          clusterId: 42,
+          size: 10,
+          threshold: 7,
+          aggregateHealth: "healthy",
+          regionDiversity: ["fsn1", "hel1"],
+          active: true,
+        },
+      ],
+    };
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusters") return { via: "operator-3", result: sdkShape };
+      return { via: "operator-3", result: { cluster: 42, entity: "independent" } };
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.totalClusters).toBe(1);
+    expect(r.data.clusters[0]?.clusterId).toBe(42);
+    expect(r.data.clusters[0]?.entity).toBe("independent");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,6 +234,40 @@ describe("readClusterStatus", () => {
     mockedRpc.mockRejectedValue(new Error("timeout"));
     const r = await readClusterStatus(1);
     expect(r.ok).toBe(false);
+  });
+
+  // Phase 7.1 — wire-contract anchor for cluster status. Same rationale
+  // as the directory anchor above: constructs the strict SDK shape with
+  // bigints for epoch / round / lastUpdateHeight and verifies the
+  // wallet's parser stringifies them faithfully for IPC.
+  it("parses a strict SDK ClusterStatusResponse and stringifies bigints", async () => {
+    const sdkShape: ClusterStatusResponse = {
+      clusterId: 5,
+      threshold: 7,
+      size: 10,
+      live: 8,
+      lagging: 1,
+      offline: 1,
+      maintenance: 0,
+      members: [
+        { operatorId: "op-a", blsPubkey: "0x" + "11".repeat(48), state: "active" },
+      ],
+      epoch: 17n,
+      round: 256n,
+      quorum: "7-of-10",
+      reputationScore: 0.88,
+      livenessScore: 0.97,
+      lastUpdateHeight: 524288n,
+    };
+    mockedRpc.mockResolvedValue({ via: "operator-2", result: sdkShape });
+    const r = await readClusterStatus(5);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.epoch).toBe("17");
+    expect(r.data.round).toBe("256");
+    expect(r.data.lastUpdateHeight).toBe("524288");
+    expect(r.data.members).toHaveLength(1);
+    expect(r.data.quorum).toBe("7-of-10");
   });
 });
 
