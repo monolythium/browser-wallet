@@ -511,3 +511,261 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
     60_000,
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 8 Commit 1 — multisig vault storage round-trip
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
+  let storage: StorageMap;
+
+  beforeEach(() => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  function fakePubkey(byte: number): string {
+    return "0x" + byte.toString(16).padStart(2, "0").repeat(1952);
+  }
+  function fakeAddress(byte: number): string {
+    return "0x" + byte.toString(16).padStart(2, "0").repeat(20);
+  }
+  function makeSigner(
+    overrides: { id: string; address: string; label?: string; pubkey?: string },
+  ) {
+    return {
+      id: overrides.id,
+      label: overrides.label ?? `Signer ${overrides.id}`,
+      address: overrides.address,
+      pubkey: overrides.pubkey ?? fakePubkey(0xab),
+      role: "external" as const,
+    };
+  }
+
+  it(
+    "addVaultMultisigV4 creates a multisig vault visible in listVaultsV4 with kind='multisig'",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "ms-create-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      const signers = [
+        makeSigner({ id: "s-a", address: fakeAddress(0x01), label: "Alice" }),
+        makeSigner({ id: "s-b", address: fakeAddress(0x02), label: "Bob" }),
+        makeSigner({ id: "s-c", address: fakeAddress(0x03), label: "Carol" }),
+      ];
+      const created = await ks.addVaultMultisigV4({
+        signers,
+        threshold: 2,
+        label: "Team treasury",
+      });
+      expect(created.vaultId).toMatch(/[0-9a-f]/);
+      expect(created.mnemonic.split(" ").length).toBe(24);
+      expect(created.address).toMatch(/^0x[0-9a-f]{40}$/);
+
+      const list = (await ks.listVaultsV4())!;
+      expect(list.length).toBe(2);
+      const ms = list.find((v) => v.id === created.vaultId)!;
+      expect(ms.kind).toBe("multisig");
+      expect(ms.label).toBe("Team treasury");
+      expect(ms.signerCount).toBe(3);
+      expect(ms.threshold).toBe(2);
+      expect(ms.pendingCount).toBe(0);
+      expect(ms.addr).toBe(created.address);
+
+      // Sibling vault (the legacy "Vault 1") stays kind='single'.
+      const single = list.find((v) => v.id !== created.vaultId)!;
+      expect(single.kind).toBe("single");
+      expect(single.signerCount).toBe(0);
+      expect(single.threshold).toBe(0);
+    },
+    120_000,
+  );
+
+  it(
+    "readMultisigMetaV4 + writeMultisigMetaV4 round-trip the meta block",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "ms-meta-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      const signers = [
+        makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+        makeSigner({ id: "s-b", address: fakeAddress(0x02) }),
+      ];
+      const { vaultId } = await ks.addVaultMultisigV4({
+        signers,
+        threshold: 2,
+      });
+
+      const initial = (await ks.readMultisigMetaV4(vaultId))!;
+      expect(initial.signers.map((s) => s.id)).toEqual(["s-a", "s-b"]);
+      expect(initial.threshold).toBe(2);
+      expect(initial.proposals).toEqual([]);
+      expect(initial.governance).toEqual([]);
+
+      // Mutate threshold to 1 + add a fake proposal, persist, reload.
+      const next = {
+        ...initial,
+        threshold: 1,
+        proposals: [
+          {
+            id: "p-1",
+            proposedBy: "s-a",
+            createdAt: 1,
+            expiresAt: 1_000_000_000_000,
+            vaultAddress: fakeAddress(0xcc),
+            action: {
+              kind: "send" as const,
+              to: fakeAddress(0xee),
+              valueWeiHex: "0x1",
+              chainIdHex: "0x10F2C",
+            },
+            approvals: [],
+            rejections: [],
+            status: "pending" as const,
+            txHash: null,
+          },
+        ],
+      };
+      await ks.writeMultisigMetaV4(vaultId, next);
+      const reloaded = (await ks.readMultisigMetaV4(vaultId))!;
+      expect(reloaded.threshold).toBe(1);
+      expect(reloaded.proposals.length).toBe(1);
+      expect(reloaded.proposals[0]!.id).toBe("p-1");
+
+      // listVaultsV4 surfaces the pending count after the mutation.
+      const ms = (await ks.listVaultsV4())!.find((v) => v.id === vaultId)!;
+      expect(ms.pendingCount).toBe(1);
+      expect(ms.threshold).toBe(1);
+    },
+    120_000,
+  );
+
+  it(
+    "readMultisigMetaV4 returns null for single vaults and unknown ids",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "ms-null-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      const list = (await ks.listVaultsV4())!;
+      const singleId = list[0]!.id;
+      expect(await ks.readMultisigMetaV4(singleId)).toBeNull();
+      expect(await ks.readMultisigMetaV4("totally-unknown")).toBeNull();
+    },
+    60_000,
+  );
+
+  it(
+    "addVaultMultisigV4 rejects validation failures (bad threshold, duplicate signer, bad pubkey)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "ms-validate-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      // threshold > N
+      await expect(
+        ks.addVaultMultisigV4({
+          signers: [
+            makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+            makeSigner({ id: "s-b", address: fakeAddress(0x02) }),
+          ],
+          threshold: 3,
+        }),
+      ).rejects.toThrow(/exceed/);
+
+      // Duplicate signer address.
+      await expect(
+        ks.addVaultMultisigV4({
+          signers: [
+            makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+            makeSigner({ id: "s-b", address: fakeAddress(0x01) }),
+          ],
+          threshold: 1,
+        }),
+      ).rejects.toThrow(/duplicate signer address/);
+
+      // Bad pubkey length.
+      await expect(
+        ks.addVaultMultisigV4({
+          signers: [
+            makeSigner({
+              id: "s-a",
+              address: fakeAddress(0x01),
+              pubkey: "0xabcd",
+            }),
+          ],
+          threshold: 1,
+        }),
+      ).rejects.toThrow(/1952 bytes/);
+    },
+    120_000,
+  );
+
+  it(
+    "addVaultMultisigV4 requires the container to be unlocked",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "ms-locked-password";
+      await ks.createVaultFromNewMnemonic(password);
+      // Do NOT unlock the container.
+
+      await expect(
+        ks.addVaultMultisigV4({
+          signers: [makeSigner({ id: "s", address: fakeAddress(0x01) })],
+          threshold: 1,
+        }),
+      ).rejects.toThrow(/locked/);
+    },
+    30_000,
+  );
+
+  it(
+    "multisig vault round-trips through chrome.storage; meta survives a fresh module import",
+    async () => {
+      // Build a multisig vault in one module session, then re-import the
+      // module from a clean cache and confirm listVaultsV4 + readMultisigMetaV4
+      // surface the same kind/signers/threshold. This pins the on-disk
+      // shape: any future schema bump that strips `kind` or `multisig`
+      // from the persisted record fails this test loudly.
+      const password = "ms-roundtrip-password";
+      const signers = [
+        makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+        makeSigner({ id: "s-b", address: fakeAddress(0x02) }),
+      ];
+
+      {
+        const ks = await import("./keystore-mldsa.js");
+        await ks.createVaultFromNewMnemonic(password);
+        await ks.unlockContainerV4(password);
+        await ks.addVaultMultisigV4({ signers, threshold: 2, label: "MS" });
+      }
+
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      // Storage still holds the container — listVaultsV4 returns it
+      // without needing unlock.
+      const list = (await ks2.listVaultsV4())!;
+      expect(list.length).toBe(2);
+      const ms = list.find((v) => v.kind === "multisig")!;
+      expect(ms.label).toBe("MS");
+      expect(ms.signerCount).toBe(2);
+      expect(ms.threshold).toBe(2);
+
+      const meta = (await ks2.readMultisigMetaV4(ms.id))!;
+      expect(meta.signers.map((s) => s.id)).toEqual(["s-a", "s-b"]);
+      expect(meta.threshold).toBe(2);
+      expect(storage["mono.vaults.v4"]).toBeDefined();
+    },
+    180_000,
+  );
+});
