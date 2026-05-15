@@ -828,6 +828,15 @@ export default function App() {
                 },
               }
             : {})}
+          {...(activeVaultSummary
+            ? {
+                phase9: {
+                  vaultId: activeVaultSummary.id,
+                  onOpenSecurity: () => setScreen("security"),
+                  onOpenFeatures: () => setScreen("features"),
+                },
+              }
+            : {})}
         />
       )}
 
