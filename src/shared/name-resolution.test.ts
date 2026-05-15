@@ -11,6 +11,8 @@ import {
   isNameEntryExpired,
   evictExpiredNames,
   mergeNameCache,
+  parseMonoName,
+  lookupNameInCache,
   type NameCache,
   type NameCacheEntry,
   type NameLabelRecord,
@@ -297,5 +299,169 @@ describe("mergeNameCache", () => {
     const r = mergeNameCache(prev, {}, now);
     expect(r).not.toBe(prev);
     expect(r).toEqual(prev);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseMonoName — §22.8 hierarchical-name parser
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("parseMonoName", () => {
+  it("parses a human name (alice.mono)", () => {
+    expect(parseMonoName("alice.mono")).toEqual({
+      tld: "human",
+      label: "alice",
+      parent: null,
+      canonical: "alice.mono",
+    });
+  });
+
+  it("parses an agent name (bob.agent.alice.mono)", () => {
+    expect(parseMonoName("bob.agent.alice.mono")).toEqual({
+      tld: "agent",
+      label: "bob",
+      parent: "alice",
+      canonical: "bob.agent.alice.mono",
+    });
+  });
+
+  it("parses a cluster name (edge-validators.cluster.mono)", () => {
+    expect(parseMonoName("edge-validators.cluster.mono")).toEqual({
+      tld: "cluster",
+      label: "edge-validators",
+      parent: null,
+      canonical: "edge-validators.cluster.mono",
+    });
+  });
+
+  it("parses a contract name (lyth-bridge.contract.mono)", () => {
+    expect(parseMonoName("lyth-bridge.contract.mono")).toEqual({
+      tld: "contract",
+      label: "lyth-bridge",
+      parent: null,
+      canonical: "lyth-bridge.contract.mono",
+    });
+  });
+
+  it("parses a system name (foundation.system.mono)", () => {
+    expect(parseMonoName("foundation.system.mono")).toEqual({
+      tld: "system",
+      label: "foundation",
+      parent: null,
+      canonical: "foundation.system.mono",
+    });
+  });
+
+  it("rejects mixed case (canonical form is lowercase per §22.7)", () => {
+    expect(parseMonoName("Alice.mono")).toBeNull();
+    expect(parseMonoName("alice.MONO")).toBeNull();
+  });
+
+  it("rejects names without a .mono suffix", () => {
+    expect(parseMonoName("alice")).toBeNull();
+    expect(parseMonoName("alice.eth")).toBeNull();
+    expect(parseMonoName("alice.mono.eth")).toBeNull();
+  });
+
+  it("rejects unknown second-position labels", () => {
+    // Only cluster / contract / system are valid 3-part TLDs.
+    expect(parseMonoName("alice.dao.mono")).toBeNull();
+    expect(parseMonoName("alice.user.mono")).toBeNull();
+  });
+
+  it("rejects 4-part names whose second position is not 'agent'", () => {
+    expect(parseMonoName("alice.sub.bob.mono")).toBeNull();
+  });
+
+  it("rejects empty labels and labels with leading/trailing hyphens", () => {
+    expect(parseMonoName(".mono")).toBeNull();
+    expect(parseMonoName("-alice.mono")).toBeNull();
+    expect(parseMonoName("alice-.mono")).toBeNull();
+  });
+
+  it("rejects labels longer than 63 chars", () => {
+    const long = "a".repeat(64);
+    expect(parseMonoName(`${long}.mono`)).toBeNull();
+  });
+
+  it("rejects names longer than 253 chars total", () => {
+    const long = "a".repeat(255);
+    expect(parseMonoName(long)).toBeNull();
+  });
+
+  it("rejects non-string / empty input", () => {
+    expect(parseMonoName("")).toBeNull();
+    // @ts-expect-error — runtime guard test
+    expect(parseMonoName(null)).toBeNull();
+    // @ts-expect-error
+    expect(parseMonoName(undefined)).toBeNull();
+  });
+
+  it("rejects 5-part forms (agent depth is hard-capped at 4 parts)", () => {
+    expect(parseMonoName("a.agent.b.agent.c.mono")).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// lookupNameInCache — reverse the cache (name → address)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("lookupNameInCache", () => {
+  const ADDR_ALICE = "0x" + "aa".repeat(20);
+  const ADDR_TREASURY = "0x" + "bb".repeat(20);
+
+  const ALICE_HUMAN: NameLabelRecord = {
+    address: ADDR_ALICE,
+    category: "foundation",
+    displayName: "alice.mono",
+    updatedAtBlock: 100,
+  };
+
+  const TREASURY: NameLabelRecord = {
+    address: ADDR_TREASURY,
+    category: "treasury",
+    displayName: "treasury.contract.mono",
+    updatedAtBlock: 110,
+  };
+
+  const cache: NameCache = {
+    [ADDR_ALICE]: { label: ALICE_HUMAN, cachedAtMs: 1 },
+    [ADDR_TREASURY]: { label: TREASURY, cachedAtMs: 1 },
+    "0xnull": { label: null, cachedAtMs: 1 },
+    "0xunparseable": {
+      label: {
+        address: "0xunparseable",
+        category: "exchange",
+        displayName: "Coinbase", // not a §22.8 form
+        updatedAtBlock: 1,
+      },
+      cachedAtMs: 1,
+    },
+  };
+
+  it("finds the address for a cached human name", () => {
+    expect(lookupNameInCache("alice.mono", cache)).toBe(ADDR_ALICE);
+  });
+
+  it("finds the address for a cached contract name", () => {
+    expect(lookupNameInCache("treasury.contract.mono", cache)).toBe(ADDR_TREASURY);
+  });
+
+  it("returns null when the name isn't in cache", () => {
+    expect(lookupNameInCache("nobody.mono", cache)).toBeNull();
+  });
+
+  it("returns null when the input doesn't parse as a §22.8 name", () => {
+    expect(lookupNameInCache("not-a-name", cache)).toBeNull();
+  });
+
+  it("ignores cache entries whose displayName isn't a §22.8 name", () => {
+    // Coinbase is in cache but its displayName isn't *.mono, so a search
+    // for "Coinbase" (a non-mono input) returns null without matching it.
+    expect(lookupNameInCache("Coinbase", cache)).toBeNull();
+  });
+
+  it("ignores null label entries", () => {
+    expect(lookupNameInCache("null.mono", cache)).toBeNull();
   });
 });

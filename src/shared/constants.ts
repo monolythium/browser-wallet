@@ -37,6 +37,7 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "wallet-chain-block-number",
   "wallet-indexer-snapshot",
   "sprintnet-operators-get",
+  "sprintnet-operators-health",
   "list-pending",
   "get-pending",
   "focus-approval",

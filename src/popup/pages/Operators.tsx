@@ -2,7 +2,7 @@
 //
 // Sprintnet is a single chain with multiple operator RPC endpoints. Power
 // users can override the published 7-operator default list with their
-// own validator URLs, or pin a single operator to bypass round-robin.
+// own operator URLs, or pin a single operator to bypass round-robin.
 //
 // Storage flow: edits are local until [Save] writes via bgOperatorsSet.
 // The SW's chrome.storage.onChanged listener invalidates the operator-
@@ -312,7 +312,7 @@ function OperatorRow({
           type="text"
           value={entry.name}
           onChange={(e) => onPatch({ name: e.target.value })}
-          placeholder="val-1"
+          placeholder="operator-1"
           spellCheck={false}
           autoComplete="off"
           style={{ ...inputStyle, flex: 1 }}
