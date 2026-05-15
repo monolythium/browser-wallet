@@ -869,3 +869,99 @@ export async function bgVaultAddImport(
     label !== undefined ? { mnemonic, label } : { mnemonic },
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 7 — staking + delegation reads (§23 whitepaper)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Every wrapper returns a `StakingResult<T>` envelope (see
+// shared/staking.ts). The `via` field on success is `"mock"` when the
+// SW falls back to in-tree fixtures (Sprintnet offline or chain GAP);
+// the popup surfaces the mock badge so the user knows the figures
+// aren't authoritative.
+
+export type {
+  ClusterDirectoryEntry,
+  ClusterDirectoryPage,
+  ClusterHealth,
+  ClusterMember,
+  ClusterStatus,
+  DelegationCap,
+  DelegationRow,
+  DelegationsView,
+  PendingRewardsRow,
+  PendingRewardsView,
+  RedemptionQueueRow,
+  RedemptionQueueView,
+  StakingResult,
+} from "../shared/staking.js";
+
+import type {
+  ClusterDirectoryPage,
+  ClusterStatus,
+  DelegationCap,
+  DelegationRow,
+  DelegationsView,
+  PendingRewardsView,
+  RedemptionQueueView,
+  StakingResult,
+} from "../shared/staking.js";
+
+/** Read the paginated cluster directory (§14 Avengers Assembly). */
+export async function bgStakingClusterDirectory(
+  page = 0,
+  limit = 25,
+): Promise<StakingResult<ClusterDirectoryPage>> {
+  return send("staking-cluster-directory", { page, limit });
+}
+
+/** Read full status for a single cluster — used by the cluster-detail
+ *  expand panel in ClusterPicker. */
+export async function bgStakingClusterStatus(
+  clusterId: number,
+): Promise<StakingResult<ClusterStatus>> {
+  return send("staking-cluster-status", { clusterId });
+}
+
+/** Read active delegations for a wallet. Empty rows is a legitimate
+ *  read for an unstaked wallet — the popup renders the empty-state CTA. */
+export async function bgStakingDelegations(
+  wallet: string,
+): Promise<StakingResult<DelegationsView>> {
+  return send("staking-delegations", { wallet });
+}
+
+/** Read the per-cluster delegation cap (§23.6 + §23.7). */
+export async function bgStakingDelegationCap(): Promise<StakingResult<DelegationCap>> {
+  return send("staking-delegation-cap");
+}
+
+/** Read pending rewards for a wallet's active delegations. The popup
+ *  passes its already-fetched delegation rows through so the SW does
+ *  not double-read. Returns mock-derived values until the chain side
+ *  surfaces a `lyth_pendingRewards` reader (chain GAP). */
+export async function bgStakingPendingRewards(
+  wallet: string,
+  delegations: ReadonlyArray<DelegationRow>,
+): Promise<StakingResult<PendingRewardsView>> {
+  return send("staking-pending-rewards", { wallet, delegations });
+}
+
+/** Read the redemption queue for a wallet. Per §23.2 ("zero unbonding
+ *  period"), this is vestigial — the wallet always renders an empty
+ *  queue today. */
+export async function bgStakingRedemptionQueue(
+  wallet: string,
+): Promise<StakingResult<RedemptionQueueView>> {
+  return send("staking-redemption-queue", { wallet });
+}
+
+/** Derive the per-user autovote entropy seed (§23.9). The SW derives
+ *  it from the unlocked ML-DSA-65 public key + a domain tag; the
+ *  popup uses the returned 32-byte hex value as the seed argument
+ *  to every pick* call in shared/autovote.ts. */
+export async function bgStakingAutovoteSeed(): Promise<
+  { ok: true; seedHex: string } | { ok: false; reason: string }
+> {
+  return send("staking-autovote-seed");
+}

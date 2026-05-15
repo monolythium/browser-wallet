@@ -64,6 +64,7 @@ import {
   wipeVaultV4,
   personalSignV4,
   signTypedDataV4FromV4,
+  getUnlockedPublicKeyV4,
   // Phase 5 multi-vault surface (Commit 2).
   hasContainerV4,
   unlockContainerV4,
@@ -74,6 +75,7 @@ import {
   addVaultImportV4,
   wipeContainerV4,
 } from "./keystore-mldsa.js";
+import { shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
   SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
@@ -119,6 +121,14 @@ import {
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
 } from "./tx-mldsa.js";
+import {
+  readClusterDirectory,
+  readClusterStatus,
+  readDelegations,
+  readDelegationCap,
+  readPendingRewards,
+  readRedemptionQueue,
+} from "./staking-client.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
@@ -2752,6 +2762,85 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
+    }
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 7 — staking + delegation reads (§23 whitepaper)
+    // ─────────────────────────────────────────────────────────────────
+    case "staking-cluster-directory": {
+      const p = message.payload as { page?: number; limit?: number } | undefined;
+      const page = typeof p?.page === "number" ? p.page : 0;
+      const limit = typeof p?.limit === "number" ? p.limit : 25;
+      return readClusterDirectory(page, limit);
+    }
+    case "staking-cluster-status": {
+      const p = message.payload as { clusterId?: number } | undefined;
+      if (typeof p?.clusterId !== "number") {
+        return { ok: false, reason: "missing clusterId" };
+      }
+      return readClusterStatus(p.clusterId);
+    }
+    case "staking-delegations": {
+      const p = message.payload as { wallet?: string } | undefined;
+      if (typeof p?.wallet !== "string") {
+        return { ok: false, reason: "missing wallet" };
+      }
+      return readDelegations(p.wallet);
+    }
+    case "staking-delegation-cap": {
+      return readDelegationCap();
+    }
+    case "staking-pending-rewards": {
+      // The wallet derives pending rewards from current delegations + the
+      // chain APR table (chain GAP — see staking-client.ts header). The
+      // popup passes its already-fetched delegation rows through so the
+      // SW doesn't double-read.
+      const p = message.payload as {
+        wallet?: string;
+        delegations?: Array<{ cluster?: number; weightBps?: number }>;
+      } | undefined;
+      if (typeof p?.wallet !== "string") {
+        return { ok: false, reason: "missing wallet" };
+      }
+      const delegations = Array.isArray(p.delegations)
+        ? p.delegations
+            .filter(
+              (d): d is { cluster: number; weightBps: number } =>
+                typeof d?.cluster === "number" && typeof d?.weightBps === "number",
+            )
+            .map((d) => ({ cluster: d.cluster, weightBps: d.weightBps }))
+        : [];
+      return readPendingRewards(p.wallet, delegations);
+    }
+    case "staking-redemption-queue": {
+      const p = message.payload as { wallet?: string } | undefined;
+      if (typeof p?.wallet !== "string") {
+        return { ok: false, reason: "missing wallet" };
+      }
+      return readRedemptionQueue(p.wallet);
+    }
+    case "staking-autovote-seed": {
+      // Per-user §23.9 entropy: derive a 32-byte seed from the unlocked
+      // ML-DSA-65 public key + a domain tag. The public key is already
+      // public state (`register-pubkey` precompile §22.4), so this leaks
+      // no secret material; the uniqueness property the whitepaper
+      // requires ("two delegators picking Max Yield don't end up at the
+      // same cluster set") rides on different users having different
+      // pubkeys. Locked wallets get a typed error and the popup falls
+      // back to a "please unlock to use autovote" branch.
+      const pubkey = getUnlockedPublicKeyV4();
+      if (pubkey === null) {
+        return { ok: false, reason: "wallet locked" };
+      }
+      const domain = new TextEncoder().encode("monolythium.autovote.v1");
+      const combined = new Uint8Array(pubkey.length + domain.length);
+      combined.set(pubkey, 0);
+      combined.set(domain, pubkey.length);
+      const seed = shake256(combined, { dkLen: 32 });
+      let hex = "0x";
+      for (let i = 0; i < seed.length; i++) {
+        hex += seed[i]!.toString(16).padStart(2, "0");
+      }
+      return { ok: true, seedHex: hex };
     }
     case "wallet-send-tx": {
       const p = message.payload as {
