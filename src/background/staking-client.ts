@@ -16,18 +16,28 @@
 //
 // The SW IPC dispatchers (service-worker.ts case "staking-*") consume
 // the envelopes verbatim.
+//
+// Phase 7.1 — wire contract anchored to SDK. The `Raw*` types below are
+// the wire form (everything optional + JSON-serialised bigints as string
+// | number); the SDK exports the strict normalised shapes referenced in
+// each block's `// SDK contract:` annotation. Aligning the cast targets
+// to SDK types means a future chain-side shape change surfaces in the
+// wallet typecheck the next time the SDK rebuilds.
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import {
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
   MOCK_CLUSTERS,
+  type ClusterDelegatorsView,
   type ClusterDirectoryEntry,
   type ClusterDirectoryPage,
   type ClusterHealth,
   type ClusterMember,
   type ClusterStatus,
   type DelegationCap,
+  type DelegationHistoryRow,
+  type DelegationHistoryView,
   type DelegationRow,
   type DelegationsView,
   type PendingRewardsRow,
@@ -36,12 +46,23 @@ import {
   type StakingResult,
 } from "../shared/staking.js";
 
+// SDK-contract anchors live in `staking-client.test.ts` as typed fixtures
+// (`const sdkShape: ClusterDirectoryPageResponse = ...`). When Nayiem
+// rotates a chain-side field name and the SDK re-exports the new shape,
+// those fixtures fail to typecheck before the wallet ships against a
+// stale contract. The `Raw*` types below are the loosened wire form
+// (optional everywhere, bigint admitted as string | number) so a
+// misbehaving operator can't crash the parser; the runtime checks
+// further down validate before normalisation.
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Cluster directory
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Wire shape from `lyth_clusters`. Mirrors SDK `ClusterDirectoryPageResponse`
- *  with everything stringified for JSON transport. */
+// SDK contract: ClusterDirectoryPageResponse + ClusterDirectoryEntryResponse.
+// The wire form below is the SDK shape with every field optional so a
+// misbehaving operator can't crash the parser; the runtime check below
+// validates `clusters` is an array before any normalisation.
 interface RawClusterDirectoryPage {
   page?: number;
   limit?: number;
@@ -58,6 +79,10 @@ interface RawClusterDirectoryEntry {
   active?: boolean;
 }
 
+// SDK contract: ClusterEntityResponse (bindings — not top-level exported).
+// Wire form keeps every field optional; the chain side's strict shape is
+// { cluster: number, entity: string, entityCode: number, block: unknown }
+// per `mono-core-sdk/packages/ts/src/bindings/ClusterEntityResponse.ts`.
 interface RawClusterEntity {
   cluster?: number;
   entity?: string;
@@ -75,8 +100,10 @@ function normaliseDirectoryEntry(
   if (typeof raw.clusterId !== "number") return null;
   return {
     clusterId: raw.clusterId,
-    // The cluster-name registry is not yet emitted by any SDK read; see
-    // staking.ts header. UI falls back to `cluster-<id>`.
+    // §22.8 namingRegistry precompile (0x1106) hasn't surfaced a reader
+    // in the SDK as of 0fd8a79. Once `lythResolveName(".cluster.mono")`
+    // (or equivalent) lands, swap this null for a per-cluster lookup
+    // batched with the entity fanout below. UI falls back to `cluster-<id>`.
     name: null,
     size: typeof raw.size === "number" ? raw.size : 0,
     threshold: typeof raw.threshold === "number" ? raw.threshold : 0,
@@ -164,6 +191,11 @@ export async function readClusterDirectory(
 // Cluster status
 // ─────────────────────────────────────────────────────────────────────────────
 
+// SDK contract: ClusterMemberResponse + ClusterStatusResponse.
+// Wire form: bigints are serialised as `string | number` over JSON-RPC;
+// the SDK normalises to `bigint`. The wallet stringifies back for IPC
+// transparency (popup never sees a bigint). Optional everywhere defends
+// against malformed operator responses.
 interface RawClusterMember {
   operatorId?: string;
   blsPubkey?: string;
@@ -179,12 +211,12 @@ interface RawClusterStatus {
   offline?: number;
   maintenance?: number;
   members?: ReadonlyArray<RawClusterMember>;
-  epoch?: string | number | null;
-  round?: string | number | null;
+  epoch?: string | number | bigint | null;
+  round?: string | number | bigint | null;
   quorum?: string;
   reputationScore?: number | null;
   livenessScore?: number | null;
-  lastUpdateHeight?: string | number;
+  lastUpdateHeight?: string | number | bigint;
 }
 
 function normaliseMember(raw: RawClusterMember): ClusterMember | null {
@@ -257,6 +289,13 @@ export async function readClusterStatus(
 // Delegations + cap
 // ─────────────────────────────────────────────────────────────────────────────
 
+// SDK contract: DelegationsResponse + DelegationRow (bindings, not top-
+// level exported). Strict chain shape:
+//   DelegationsResponse: { wallet, rows: DelegationRow[], totalBps, block }
+//   DelegationRow:       { cluster, weightBps }
+// `block` is an opaque block selector echoed by the node; the wallet
+// doesn't surface it because the popup's chain-status banner already
+// covers staleness.
 interface RawDelegationsResponse {
   wallet?: string;
   rows?: ReadonlyArray<{ cluster?: number; weightBps?: number }>;
@@ -292,11 +331,16 @@ export async function readDelegations(
         totalBps: typeof result.totalBps === "number" ? result.totalBps : 0,
       },
     };
-  } catch {
+  } catch (e) {
     // Empty delegations is a legitimate read for an unstaked wallet —
     // the popup renders the empty-state CTA. Sprintnet-offline gets the
     // same shape; the user sees "no active delegations" + can still
-    // drill into the cluster directory.
+    // drill into the cluster directory. Log so the SW dev-tools console
+    // distinguishes "actually empty" from "chain offline".
+    console.warn(
+      "[staking-client] readDelegations: chain offline, returning empty —",
+      (e as Error)?.message ?? e,
+    );
     return {
       ok: true,
       via: "mock",
@@ -305,9 +349,13 @@ export async function readDelegations(
   }
 }
 
+// SDK contract: DelegationCapResponse (binding, not top-level exported).
+// Strict shape: { capBps: u32, lastChangedAtHeight: bigint, blockNumber: bigint }.
+// Wire form receives bigints as `string | number` over JSON; the wallet
+// stringifies to preserve precision.
 interface RawDelegationCap {
   capBps?: number;
-  lastChangedAtHeight?: string | number;
+  lastChangedAtHeight?: string | number | bigint;
 }
 
 /** Chain encodes "cap disabled" as `u32::MAX`. The wallet normalises that
@@ -332,11 +380,17 @@ export async function readDelegationCap(): Promise<StakingResult<DelegationCap>>
         lastChangedAtHeight: String(result.lastChangedAtHeight ?? 0),
       },
     };
-  } catch {
+  } catch (e) {
     // Pre-mainnet posture: whitepaper §23.6 Phase 12 launch cap = 50%
     // (`5000` bps). Mocking this is the cleanest way to render the
     // stake form's cap-headroom badge during cluster-offline windows;
-    // when Sprintnet returns, the chain value supersedes the mock.
+    // when Sprintnet returns, the chain value supersedes the mock. Log
+    // so the SW dev-tools console distinguishes a real chain-side cap
+    // from the §23.6 mock fallback.
+    console.warn(
+      "[staking-client] readDelegationCap: chain offline, returning §23.6 mock —",
+      (e as Error)?.message ?? e,
+    );
     return {
       ok: true,
       via: "mock",
@@ -345,29 +399,180 @@ export async function readDelegationCap(): Promise<StakingResult<DelegationCap>>
   }
 }
 
+// SDK contract: DelegationHistoryRecord[] (binding, not top-level exported).
+// Strict shape:
+//   { blockHeight: bigint, txIndex, logIndex, wallet, cluster,
+//     toCluster: number | null, kind, weightBps, walletTotalBps: number | null }
+// `lyth_getDelegationHistory` returns the array directly (no envelope).
+interface RawDelegationHistoryRow {
+  blockHeight?: string | number | bigint;
+  txIndex?: number;
+  logIndex?: number;
+  wallet?: string;
+  cluster?: number;
+  toCluster?: number | null;
+  kind?: string;
+  weightBps?: number;
+  walletTotalBps?: number | null;
+}
+
+function normaliseHistoryRow(
+  raw: RawDelegationHistoryRow,
+  walletFallback: string,
+): DelegationHistoryRow | null {
+  if (
+    typeof raw.cluster !== "number" ||
+    typeof raw.weightBps !== "number" ||
+    typeof raw.kind !== "string"
+  ) {
+    return null;
+  }
+  return {
+    blockHeight: String(raw.blockHeight ?? 0),
+    txIndex: typeof raw.txIndex === "number" ? raw.txIndex : 0,
+    logIndex: typeof raw.logIndex === "number" ? raw.logIndex : 0,
+    wallet: typeof raw.wallet === "string" ? raw.wallet : walletFallback,
+    cluster: raw.cluster,
+    toCluster: typeof raw.toCluster === "number" ? raw.toCluster : null,
+    kind: raw.kind,
+    weightBps: raw.weightBps,
+    walletTotalBps:
+      typeof raw.walletTotalBps === "number" ? raw.walletTotalBps : null,
+  };
+}
+
+/** Read the per-wallet delegation event timeline (§23.2 + §23.7).
+ *
+ *  Surfaces in the Delegations page as a "Recent activity" panel — a
+ *  delegation-only view distinct from the wallet-wide activity feed
+ *  (which merges transfers, swaps, and delegation events). Both
+ *  pipelines call `lyth_getDelegationHistory`, but the lean reader here
+ *  is cheaper for the Delegations page's per-mount fan-out.
+ *
+ *  Cluster-offline fallback returns an empty timeline with `via: "mock"`
+ *  so the popup branches cleanly on staleness ("history may be stale —
+ *  chain offline") without crashing the render.
+ */
+export async function readDelegationHistory(
+  wallet: string,
+  limit: number = 50,
+  cursor?: string,
+): Promise<StakingResult<DelegationHistoryView>> {
+  try {
+    const params: unknown[] =
+      cursor === undefined ? [wallet, limit] : [wallet, limit, cursor];
+    const { result, via } = await sprintnetJsonRpc<
+      ReadonlyArray<RawDelegationHistoryRow>
+    >("lyth_getDelegationHistory", params);
+    if (!Array.isArray(result)) {
+      return { ok: false, reason: "malformed lyth_getDelegationHistory response" };
+    }
+    const rows: DelegationHistoryRow[] = [];
+    for (const r of result) {
+      const row = normaliseHistoryRow(r, wallet);
+      if (row !== null) rows.push(row);
+    }
+    return { ok: true, via, data: { wallet, rows } };
+  } catch (e) {
+    console.warn(
+      "[staking-client] readDelegationHistory: chain offline, returning empty —",
+      (e as Error)?.message ?? e,
+    );
+    return {
+      ok: true,
+      via: "mock",
+      data: { wallet, rows: [] },
+    };
+  }
+}
+
+// SDK contract: ClusterDelegatorsResponse (binding, not top-level exported).
+// Strict shape: { cluster: number, delegators: string[], count: number, block: unknown }.
+// Wire form drops `block` (the wallet doesn't surface it; chain-status
+// banner already covers staleness).
+interface RawClusterDelegators {
+  cluster?: number;
+  delegators?: ReadonlyArray<string>;
+  count?: number;
+}
+
+/** Read the delegator address list for a single cluster (§23.6 cap
+ *  context, §14 community-cluster surface).
+ *
+ *  Surfaces on the cluster-detail expand panel as "n wallets delegate
+ *  here" so the user can see the cluster's demand profile when picking
+ *  a target. Addresses themselves are not labeled / linkable today —
+ *  the figure is the headline value.
+ *
+ *  Cluster-offline fallback returns `{ delegators: [], count: 0 }` so
+ *  the popup renders a `—` placeholder rather than crashing. */
+export async function readClusterDelegators(
+  clusterId: number,
+): Promise<StakingResult<ClusterDelegatorsView>> {
+  try {
+    const { result, via } = await sprintnetJsonRpc<RawClusterDelegators>(
+      "lyth_getClusterDelegators",
+      [clusterId],
+    );
+    if (!result || typeof result !== "object" || typeof result.cluster !== "number") {
+      return {
+        ok: false,
+        reason: "malformed lyth_getClusterDelegators response",
+      };
+    }
+    const delegators = Array.isArray(result.delegators)
+      ? result.delegators.filter((d): d is string => typeof d === "string")
+      : [];
+    return {
+      ok: true,
+      via,
+      data: {
+        cluster: result.cluster,
+        delegators,
+        count:
+          typeof result.count === "number" ? result.count : delegators.length,
+      },
+    };
+  } catch (e) {
+    console.warn(
+      "[staking-client] readClusterDelegators: chain offline, returning empty —",
+      (e as Error)?.message ?? e,
+    );
+    return {
+      ok: true,
+      via: "mock",
+      data: { cluster: clusterId, delegators: [], count: 0 },
+    };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rewards + redemption queue (chain GAPs)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Per-account pending rewards. The SDK at fdd3844 does NOT yet expose a
- *  `lyth_pendingRewards` reader; the wallet returns a mock derived from
- *  the active delegations + MOCK_CLUSTER_APR_BPS until Nayiem surfaces
- *  the chain side.
+/** Per-account pending rewards. The SDK at 0fd8a79 (Phase 7.1 head) does
+ *  NOT yet expose a `lyth_pendingRewards` reader; the wallet returns a
+ *  mock derived from the active delegations + MOCK_CLUSTER_APR_BPS until
+ *  Nayiem surfaces the chain side.
  *
  *  Mock derivation: for each active delegation row, the wallet computes
  *  a small fake reward proportional to the weight × APR / (365 × 24 × 12)
  *  — i.e. "as if 5 minutes of accrual at the cluster's nominal APR." This
  *  is purely a render-shape hint; the UI labels the figures `MOCK` until
- *  the chain side lands. */
+ *  the chain side lands.
+ *
+ *  TODO: chain GAP — needs Nayiem
+ *  ────────────────────────────────
+ *  Phase 7.1 audit (2026-05-15): mono-core-sdk @0fd8a79 has no
+ *  `lyth_pendingRewards` and no `/api/v1/staking/rewards` REST route
+ *  either. Commit 964b0a3 "Expose advanced read API routes" exposed
+ *  certificates, registry, and DAG routes but not pending-rewards
+ *  aggregation. Once a chain reader lands, replace this body with a
+ *  direct call via `sprintnetJsonRpc` and drop the mock derivation. */
 export async function readPendingRewards(
   wallet: string,
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
-  // TODO: chain GAP — needs Nayiem
-  // ────────────────────────────────
-  // Once `lyth_pendingRewards` (or an equivalent indexer aggregate) ships
-  // in the SDK, replace this body with a direct call via
-  // `sprintnetJsonRpc` and drop the mock derivation below.
 
   let total = 0n;
   const rows: PendingRewardsRow[] = [];

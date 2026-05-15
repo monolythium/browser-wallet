@@ -13,11 +13,15 @@
 //      missing-required-fields response yields `ok: false, reason`.
 //
 // Pending-rewards + redemption-queue paths are chain-GAP mocks today
-// (the SDK at fdd3844 doesn't expose either reader); the tests pin the
+// (the SDK at 0fd8a79 doesn't expose either reader); the tests pin the
 // mock-derivation shape so a future chain-side activation breaks the
 // fixture loudly rather than silently.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  ClusterDirectoryPageResponse,
+  ClusterStatusResponse,
+} from "@monolythium/core-sdk";
 
 // Stub the tx-mldsa dispatch surface; every staking read goes through
 // this single function so one mock controls the whole suite.
@@ -27,9 +31,11 @@ vi.mock("./tx-mldsa.js", () => ({
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import {
+  readClusterDelegators,
   readClusterDirectory,
   readClusterStatus,
   readDelegationCap,
+  readDelegationHistory,
   readDelegations,
   readPendingRewards,
   readRedemptionQueue,
@@ -153,6 +159,40 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[0]?.health).toBe("unknown");
     expect(r.data.clusters[0]?.regions).toEqual([]);
   });
+
+  // Phase 7.1 — wire-contract anchor. Constructs the exact SDK-shape
+  // `ClusterDirectoryPageResponse` (post-normalisation) and verifies the
+  // wallet's parser handles it. If Nayiem rotates a field name on the
+  // chain side and the SDK re-exports the new shape, this fixture's
+  // type annotation forces a compile error here before the wallet
+  // ships against a stale contract.
+  it("parses a strict SDK ClusterDirectoryPageResponse without rejecting fields", async () => {
+    const sdkShape: ClusterDirectoryPageResponse = {
+      page: 0,
+      limit: 25,
+      totalClusters: 1,
+      clusters: [
+        {
+          clusterId: 42,
+          size: 10,
+          threshold: 7,
+          aggregateHealth: "healthy",
+          regionDiversity: ["fsn1", "hel1"],
+          active: true,
+        },
+      ],
+    };
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusters") return { via: "operator-3", result: sdkShape };
+      return { via: "operator-3", result: { cluster: 42, entity: "independent" } };
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.totalClusters).toBe(1);
+    expect(r.data.clusters[0]?.clusterId).toBe(42);
+    expect(r.data.clusters[0]?.entity).toBe("independent");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,6 +236,40 @@ describe("readClusterStatus", () => {
     mockedRpc.mockRejectedValue(new Error("timeout"));
     const r = await readClusterStatus(1);
     expect(r.ok).toBe(false);
+  });
+
+  // Phase 7.1 — wire-contract anchor for cluster status. Same rationale
+  // as the directory anchor above: constructs the strict SDK shape with
+  // bigints for epoch / round / lastUpdateHeight and verifies the
+  // wallet's parser stringifies them faithfully for IPC.
+  it("parses a strict SDK ClusterStatusResponse and stringifies bigints", async () => {
+    const sdkShape: ClusterStatusResponse = {
+      clusterId: 5,
+      threshold: 7,
+      size: 10,
+      live: 8,
+      lagging: 1,
+      offline: 1,
+      maintenance: 0,
+      members: [
+        { operatorId: "op-a", blsPubkey: "0x" + "11".repeat(48), state: "active" },
+      ],
+      epoch: 17n,
+      round: 256n,
+      quorum: "7-of-10",
+      reputationScore: 0.88,
+      livenessScore: 0.97,
+      lastUpdateHeight: 524288n,
+    };
+    mockedRpc.mockResolvedValue({ via: "operator-2", result: sdkShape });
+    const r = await readClusterStatus(5);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.epoch).toBe("17");
+    expect(r.data.round).toBe("256");
+    expect(r.data.lastUpdateHeight).toBe("524288");
+    expect(r.data.members).toHaveLength(1);
+    expect(r.data.quorum).toBe("7-of-10");
   });
 });
 
@@ -299,6 +373,86 @@ describe("readDelegationCap", () => {
     expect(r.via).toBe("mock");
     expect(r.data.capBps).toBe(5000);
   });
+
+  // Phase 7.1 — wire-contract anchor mirroring the cluster directory's
+  // typed fixture pattern. Constructs the strict SDK-shape envelope (cap
+  // + bigint heights + bigint block number) and verifies the wallet
+  // stringifies cleanly for IPC.
+  it("parses a strict SDK DelegationCapResponse shape (bigint heights stringified)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-2",
+      result: {
+        capBps: 5000,
+        lastChangedAtHeight: 100_000n,
+        blockNumber: 100_001n, // ignored by the wallet — chain-status covers it
+      },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.capBps).toBe(5000);
+    expect(r.data.lastChangedAtHeight).toBe("100000");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterDelegators (Phase 7.1 — newly activated co-delegator reader)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterDelegators", () => {
+  it("normalises a well-formed lyth_getClusterDelegators response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-3",
+      result: {
+        cluster: 7,
+        delegators: ["0x" + "aa".repeat(20), "0x" + "bb".repeat(20)],
+        count: 2,
+      },
+    });
+    const r = await readClusterDelegators(7);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.cluster).toBe(7);
+    expect(r.data.delegators).toHaveLength(2);
+    expect(r.data.count).toBe(2);
+  });
+
+  it("preserves a chain-reported count that exceeds the returned list (cap case)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        cluster: 4,
+        delegators: ["0x" + "11".repeat(20)],
+        count: 247, // chain scanned 247 slots, capped to 1 returned
+      },
+    });
+    const r = await readClusterDelegators(4);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.delegators).toHaveLength(1);
+    expect(r.data.count).toBe(247);
+  });
+
+  it("falls back to empty on chain-offline", async () => {
+    mockedRpc.mockRejectedValue(new Error("no operator"));
+    const r = await readClusterDelegators(1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.delegators).toEqual([]);
+    expect(r.data.count).toBe(0);
+  });
+
+  it("rejects a malformed response (missing cluster id)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { delegators: [], count: 0 },
+    });
+    const r = await readClusterDelegators(1);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,5 +507,106 @@ describe("readRedemptionQueue (chain GAP — §23.2 zero unbonding)", () => {
     if (!r.ok) return;
     expect(r.via).toBe("mock");
     expect(r.data.rows).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readDelegationHistory (Phase 7.1 — newly activated per-wallet timeline)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readDelegationHistory", () => {
+  const wallet = "0x" + "cc".repeat(20);
+
+  it("normalises a well-formed lyth_getDelegationHistory array (bigints stringified)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-4",
+      result: [
+        {
+          blockHeight: 1234n,
+          txIndex: 0,
+          logIndex: 2,
+          wallet,
+          cluster: 1,
+          toCluster: null,
+          kind: "delegated",
+          weightBps: 3000,
+          walletTotalBps: 3000,
+        },
+        {
+          blockHeight: 5678n,
+          txIndex: 1,
+          logIndex: 0,
+          wallet,
+          cluster: 1,
+          toCluster: 2,
+          kind: "redelegated",
+          weightBps: 1500,
+          walletTotalBps: 3000,
+        },
+      ],
+    });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.blockHeight).toBe("1234");
+    expect(r.data.rows[0]?.kind).toBe("delegated");
+    expect(r.data.rows[1]?.toCluster).toBe(2);
+    expect(r.data.rows[1]?.kind).toBe("redelegated");
+  });
+
+  it("paginates: passes cursor when provided", async () => {
+    let receivedParams: unknown[] | undefined;
+    mockedRpc.mockImplementation(async (_method: string, params: unknown[]) => {
+      receivedParams = params;
+      return { via: "operator-1", result: [] };
+    });
+    await readDelegationHistory(wallet, 25, "cursor-page-2");
+    expect(receivedParams).toEqual([wallet, 25, "cursor-page-2"]);
+  });
+
+  it("omits cursor on first-page calls", async () => {
+    let receivedParams: unknown[] | undefined;
+    mockedRpc.mockImplementation(async (_method: string, params: unknown[]) => {
+      receivedParams = params;
+      return { via: "operator-1", result: [] };
+    });
+    await readDelegationHistory(wallet, 10);
+    expect(receivedParams).toEqual([wallet, 10]);
+  });
+
+  it("falls back to an empty timeline when chain is offline", async () => {
+    mockedRpc.mockRejectedValue(new Error("no operator reachable"));
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toEqual([]);
+  });
+
+  it("drops malformed rows but keeps valid ones", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: [
+        { blockHeight: 1n, txIndex: 0, logIndex: 0, wallet, cluster: 1, toCluster: null, kind: "delegated", weightBps: 1000, walletTotalBps: 1000 },
+        { blockHeight: 2n, cluster: "not-a-number", kind: "delegated", weightBps: 500 }, // bad cluster
+        { blockHeight: 3n, cluster: 2, weightBps: 500 }, // missing kind
+        { blockHeight: 4n, txIndex: 1, logIndex: 0, wallet, cluster: 3, toCluster: null, kind: "undelegated", weightBps: 500, walletTotalBps: 500 },
+      ],
+    });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.cluster).toBe(1);
+    expect(r.data.rows[1]?.cluster).toBe(3);
+  });
+
+  it("rejects a non-array response", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: { not: "an array" } });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
   });
 });
