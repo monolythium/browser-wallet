@@ -18,7 +18,7 @@ import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Stake, Bridge,
+  Home, Accounts, Networks, Bridge,
   ReqConnect,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -27,6 +27,7 @@ import { Receive } from "./pages/Receive";
 import { Send } from "./pages/Send";
 import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
+import { Stake } from "./pages/Stake";
 import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
@@ -779,7 +780,11 @@ export default function App() {
       )}
 
       {screen === "stake" && (
-        <Stake onBack={() => setScreen("home")} />
+        <Stake
+          account={acc}
+          chainId={activeChain.chainId}
+          onBack={() => setScreen("home")}
+        />
       )}
 
       {screen === "bridge" && (
