@@ -25,6 +25,16 @@ import {
 
 interface AboutProps {
   onBack: () => void;
+  /** Phase 8 — passed when the active vault is a multisig vault.
+   *  Surfaces a §28.5-aligned card explaining the wallet's M-of-N
+   *  security model + roster summary + chain-GAP caveat. */
+  multisig?: {
+    label: string;
+    signerCount: number;
+    threshold: number;
+    pendingCount: number;
+    onOpenGovernance: () => void;
+  };
 }
 
 function readWalletVersion(): string {
@@ -35,7 +45,7 @@ function readWalletVersion(): string {
   }
 }
 
-export function About({ onBack }: AboutProps) {
+export function About({ onBack, multisig }: AboutProps) {
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [provenance, setProvenance] = useState<RuntimeProvenanceView | null>(
@@ -119,6 +129,82 @@ export function About({ onBack }: AboutProps) {
             ]}
           />
         </div>
+
+        {/* Phase 8 — Multisig vault context card. Renders only when
+            the active vault is a multisig vault. Aligns with §28.5
+            mandatory multisig surface; flags the chain-GAP off-band
+            coordination model explicitly. */}
+        {multisig && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Multisig vault</h3>
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                marginBottom: 10,
+              }}
+            >
+              Active vault &ldquo;{multisig.label}&rdquo; is an N-of-M
+              multisig per whitepaper §28.5. Every send becomes a proposal
+              that the signer committee approves before execution.
+            </div>
+            <KvList
+              rows={[
+                {
+                  k: "Threshold",
+                  v: `${multisig.threshold} of ${multisig.signerCount}`,
+                },
+                {
+                  k: "Pending",
+                  v: `${multisig.pendingCount} proposal${multisig.pendingCount === 1 ? "" : "s"}`,
+                },
+              ]}
+            />
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--fg-400)",
+                lineHeight: 1.5,
+                marginTop: 10,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "rgba(242,180,65,0.06)",
+                border: "1px solid rgba(242,180,65,0.3)",
+              }}
+            >
+              v1 multisig is off-band coordinated: the wallet enforces
+              M-of-N at the UI boundary; the chain verifies the multisig
+              vault&apos;s single executor signature only. A future
+              user-multisig precompile will close that gap.
+            </div>
+            <button
+              onClick={multisig.onOpenGovernance}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.04)",
+                color: "var(--fg-100)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <span>Signers + governance</span>
+              <Icon name="chev" size={12} />
+            </button>
+          </div>
+        )}
 
         {/* Chain card */}
         <div className="ext-card">

@@ -783,7 +783,20 @@ export default function App() {
       )}
 
       {screen === "about" && (
-        <About onBack={() => setScreen("settings")} />
+        <About
+          onBack={() => setScreen("settings")}
+          {...(activeVaultSummary?.kind === "multisig"
+            ? {
+                multisig: {
+                  label: activeVaultSummary.label,
+                  signerCount: activeVaultSummary.signerCount,
+                  threshold: activeVaultSummary.threshold,
+                  pendingCount: activeVaultSummary.pendingCount,
+                  onOpenGovernance: () => setScreen("multisig-governance"),
+                },
+              }
+            : {})}
+        />
       )}
 
       {screen === "reveal-phrase" && (
