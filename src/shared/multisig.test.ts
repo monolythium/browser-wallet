@@ -12,16 +12,22 @@ import {
   applyGovernance,
   assertSignerSetUnique,
   defaultThreshold,
+  deserializeSharedProposal,
   hashGovernanceProposal,
   hashTxProposal,
   isExecutable,
   isGovernanceExecutable,
+  mergeGovernanceSignatures,
+  mergeProposalSignatures,
   pickFirstSelfSigner,
   pickNextLocalVoter,
   reconcileGovernanceStatus,
   reconcileProposalStatus,
+  serializeProposalForShare,
   validateSignerInput,
   validateThreshold,
+  verifyGovernanceApprovals,
+  verifyProposalApprovals,
   __testing,
 } from "./multisig.js";
 
@@ -618,6 +624,193 @@ describe("pickNextLocalVoter", () => {
     const approved = new Set(["self-a", "self-b"]);
     const rejected = new Set<string>();
     expect(pickNextLocalVoter(roster, approved, rejected)).toBeUndefined();
+  });
+});
+
+describe("serializeProposalForShare + deserializeSharedProposal", () => {
+  it("round-trips a tx proposal as base64-encoded JSON", () => {
+    const p = makeProposal({ id: "p-roundtrip" });
+    const blob = serializeProposalForShare(p, "tx");
+    expect(typeof blob).toBe("string");
+    expect(blob.length).toBeGreaterThan(0);
+    const env = deserializeSharedProposal(blob);
+    expect(env.v).toBe(1);
+    expect(env.kind).toBe("tx");
+    expect(env.proposal.id).toBe(p.id);
+  });
+
+  it("round-trips a governance proposal", () => {
+    const g = makeGovProposal({
+      id: "g-roundtrip",
+      action: { kind: "change-threshold", threshold: 3 },
+    });
+    const blob = serializeProposalForShare(g, "gov");
+    const env = deserializeSharedProposal(blob);
+    expect(env.kind).toBe("gov");
+    expect(env.proposal.id).toBe(g.id);
+  });
+
+  it("rejects empty blob", () => {
+    expect(() => deserializeSharedProposal("")).toThrow(/empty/);
+    expect(() => deserializeSharedProposal("   ")).toThrow(/empty/);
+  });
+
+  it("rejects malformed base64", () => {
+    expect(() => deserializeSharedProposal("!!!not-base64!!!")).toThrow(
+      /base64/,
+    );
+  });
+
+  it("rejects unknown version", () => {
+    const badEnv = btoa(
+      JSON.stringify({ v: 99, kind: "tx", proposal: { id: "x" } }),
+    );
+    expect(() => deserializeSharedProposal(badEnv)).toThrow(/version/);
+  });
+
+  it("rejects unknown kind", () => {
+    const badEnv = btoa(
+      JSON.stringify({ v: 1, kind: "alien", proposal: { id: "x" } }),
+    );
+    expect(() => deserializeSharedProposal(badEnv)).toThrow(/kind/);
+  });
+});
+
+describe("verifyProposalApprovals + verifyGovernanceApprovals (signature filter)", () => {
+  // Without real ML-DSA-65 signing infrastructure in the test, the
+  // filter must drop signatures whose signerId doesn't match the
+  // roster (the more interesting cryptographic-soundness path is
+  // covered by the keystore integration test in
+  // background/keystore-mldsa.test.ts).
+
+  it("drops approvals referencing unknown signerIds", () => {
+    const signers = [
+      makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+    ];
+    const p = makeProposal({
+      id: "p-1",
+      approvals: [
+        { signerId: "ghost", signature: "0x" + "ab".repeat(3309), signedAt: 1 },
+      ],
+    });
+    const r = verifyProposalApprovals(p, signers);
+    expect(r.validApprovals.size).toBe(0);
+  });
+
+  it("drops governance approvals with malformed signature length", () => {
+    const signers = [
+      makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+    ];
+    const g = makeGovProposal({
+      id: "g-1",
+      action: { kind: "change-threshold", threshold: 2 },
+      approvals: [
+        { signerId: "s-a", signature: "0xabcd", signedAt: 1 },
+      ],
+    });
+    const r = verifyGovernanceApprovals(g, signers);
+    expect(r.validApprovals.size).toBe(0);
+  });
+});
+
+describe("mergeProposalSignatures", () => {
+  const signers = [makeSigner({ id: "s-a", address: fakeAddress(0x01) })];
+
+  it("returns local unchanged when local status is terminal", () => {
+    const local = makeProposal({ id: "p-1", status: "executed" });
+    const incoming = makeProposal({
+      id: "p-1",
+      approvals: [
+        { signerId: "s-a", signature: "0x" + "ab".repeat(3309), signedAt: 2 },
+      ],
+    });
+    const merged = mergeProposalSignatures(local, incoming, signers);
+    expect(merged).toBe(local);
+  });
+
+  it("throws on id mismatch", () => {
+    const local = makeProposal({ id: "p-a" });
+    const incoming = makeProposal({ id: "p-b" });
+    expect(() => mergeProposalSignatures(local, incoming, signers)).toThrow(
+      /id mismatch/,
+    );
+  });
+
+  it("throws on vaultAddress mismatch", () => {
+    const local = makeProposal({ id: "p-1", vaultAddress: fakeAddress(0x11) });
+    const incoming = makeProposal({
+      id: "p-1",
+      vaultAddress: fakeAddress(0x22),
+    });
+    expect(() => mergeProposalSignatures(local, incoming, signers)).toThrow(
+      /address mismatch/,
+    );
+  });
+
+  it("throws on action mismatch", () => {
+    const local = makeProposal({ id: "p-1" });
+    const incoming = makeProposal({
+      id: "p-1",
+      action: {
+        kind: "send",
+        to: fakeAddress(0xfe),
+        valueWeiHex: "0x99",
+        chainIdHex: "0x10F2C",
+      },
+    });
+    expect(() => mergeProposalSignatures(local, incoming, signers)).toThrow(
+      /action mismatch/,
+    );
+  });
+
+  it("skips signatures from already-voted signers (first-wins)", () => {
+    const local = makeProposal({
+      id: "p-1",
+      approvals: [
+        { signerId: "s-a", signature: "0xLOCAL", signedAt: 1 },
+      ],
+    });
+    const incoming = makeProposal({
+      id: "p-1",
+      approvals: [
+        { signerId: "s-a", signature: "0xINCOMING", signedAt: 2 },
+      ],
+    });
+    const merged = mergeProposalSignatures(local, incoming, signers);
+    expect(merged.approvals.length).toBe(1);
+    expect(merged.approvals[0]!.signature).toBe("0xLOCAL");
+  });
+});
+
+describe("mergeGovernanceSignatures", () => {
+  const signers = [makeSigner({ id: "s-a", address: fakeAddress(0x01) })];
+
+  it("throws on action mismatch", () => {
+    const local = makeGovProposal({
+      id: "g-1",
+      action: { kind: "change-threshold", threshold: 2 },
+    });
+    const incoming = makeGovProposal({
+      id: "g-1",
+      action: { kind: "change-threshold", threshold: 3 },
+    });
+    expect(() => mergeGovernanceSignatures(local, incoming, signers)).toThrow(
+      /governance action mismatch/,
+    );
+  });
+
+  it("returns local unchanged once applied", () => {
+    const local = makeGovProposal({
+      id: "g-1",
+      action: { kind: "change-threshold", threshold: 2 },
+      status: "applied",
+    });
+    const incoming = makeGovProposal({
+      id: "g-1",
+      action: { kind: "change-threshold", threshold: 2 },
+    });
+    const merged = mergeGovernanceSignatures(local, incoming, signers);
+    expect(merged).toBe(local);
   });
 });
 

@@ -19,6 +19,8 @@ import {
 } from "../../shared/multisig";
 import {
   bgMultisigExecute,
+  bgMultisigExportProposal,
+  bgMultisigImportProposal,
   bgMultisigReject,
   bgMultisigSign,
   bgVaultMultisigMeta,
@@ -38,6 +40,11 @@ export function Pending({ vaultId, onBack }: PendingProps) {
   const [now, setNow] = useState(Date.now());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportBlob, setExportBlob] = useState<{
+    id: string;
+    blob: string;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     const r = await bgVaultMultisigMeta(vaultId);
@@ -80,6 +87,41 @@ export function Pending({ vaultId, onBack }: PendingProps) {
     }
   };
 
+  const handleExport = async (proposalId: string) => {
+    setError(null);
+    try {
+      const r = await bgMultisigExportProposal({
+        vaultId,
+        proposalId,
+        kind: "tx",
+      });
+      if (r.ok) {
+        setExportBlob({ id: proposalId, blob: r.blob });
+      } else {
+        setError(r.reason ?? "export failed");
+      }
+    } catch (e) {
+      setError((e as Error).message ?? "export failed");
+    }
+  };
+
+  const handleImport = async (blob: string) => {
+    setError(null);
+    try {
+      const r = await bgMultisigImportProposal({ vaultId, blob });
+      if (!r.ok) {
+        setError(r.reason ?? "import failed");
+        return false;
+      }
+      setImportOpen(false);
+      await refresh();
+      return true;
+    } catch (e) {
+      setError((e as Error).message ?? "import failed");
+      return false;
+    }
+  };
+
   return (
     <>
       <div className="ext-top">
@@ -92,6 +134,24 @@ export function Pending({ vaultId, onBack }: PendingProps) {
         <div style={{ width: 28 }} />
       </div>
       <div className="ext-body">
+        {loaded && meta !== null && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              justifyContent: "flex-end",
+              marginBottom: 4,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              style={btnSecondary}
+            >
+              Import shared
+            </button>
+          </div>
+        )}
         {!loaded && (
           <div style={hintStyle} data-testid="pending-loading">
             Loading…
@@ -110,6 +170,20 @@ export function Pending({ vaultId, onBack }: PendingProps) {
             busyId={busyId}
             error={error}
             onAction={(id, op) => void handleAction(id, op)}
+            onExport={(id) => void handleExport(id)}
+          />
+        )}
+        {importOpen && (
+          <ImportBlobModal
+            onCancel={() => setImportOpen(false)}
+            onImport={async (blob) => handleImport(blob)}
+            error={error}
+          />
+        )}
+        {exportBlob !== null && (
+          <ExportBlobModal
+            blob={exportBlob.blob}
+            onClose={() => setExportBlob(null)}
           />
         )}
       </div>
@@ -117,15 +191,222 @@ export function Pending({ vaultId, onBack }: PendingProps) {
   );
 }
 
+interface ExportBlobModalProps {
+  blob: string;
+  onClose: () => void;
+}
+
+function ExportBlobModal({ blob, onClose }: ExportBlobModalProps) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(blob);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard may be unavailable in some embed contexts; ignore */
+    }
+  };
+  return (
+    <div style={overlayStyle} onClick={onClose}>
+      <div
+        style={modalStyle}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-400)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+          }}
+        >
+          Shared proposal blob
+        </div>
+        <div
+          style={{
+            fontSize: 11.5,
+            color: "var(--fg-300)",
+            lineHeight: 1.4,
+          }}
+        >
+          Send this to co-signers. They paste it into Import shared on
+          their wallet to add signatures.
+        </div>
+        <textarea
+          readOnly
+          value={blob}
+          rows={6}
+          style={{
+            width: "100%",
+            padding: "8px 10px",
+            borderRadius: 8,
+            background: "rgba(0,0,0,0.3)",
+            border: "1px solid var(--fg-700)",
+            color: "var(--fg-100)",
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            outline: "none",
+            resize: "vertical",
+            boxSizing: "border-box",
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" onClick={handleCopy} style={btnSecondary}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button type="button" onClick={onClose} style={btnPrimary}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface ImportBlobModalProps {
+  onCancel: () => void;
+  onImport: (blob: string) => Promise<boolean>;
+  error: string | null;
+}
+
+function ImportBlobModal({ onCancel, onImport, error }: ImportBlobModalProps) {
+  const [blob, setBlob] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const handleSubmit = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    await onImport(blob.trim());
+    setSubmitting(false);
+  };
+  return (
+    <div style={overlayStyle} onClick={onCancel}>
+      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-400)",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+          }}
+        >
+          Paste shared blob
+        </div>
+        <div
+          style={{
+            fontSize: 11.5,
+            color: "var(--fg-300)",
+            lineHeight: 1.4,
+          }}
+        >
+          Paste a proposal blob from another signer. Signatures will be
+          verified against the local signer roster before merging.
+        </div>
+        <textarea
+          value={blob}
+          onChange={(e) => setBlob(e.target.value)}
+          rows={6}
+          autoFocus
+          spellCheck={false}
+          autoCapitalize="none"
+          autoCorrect="off"
+          style={{
+            width: "100%",
+            padding: "8px 10px",
+            borderRadius: 8,
+            background: "rgba(0,0,0,0.3)",
+            border: "1px solid var(--fg-700)",
+            color: "var(--fg-100)",
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            outline: "none",
+            resize: "vertical",
+            boxSizing: "border-box",
+          }}
+        />
+        {error && (
+          <div
+            style={{
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: "rgba(255,90,95,0.08)",
+              border: "1px solid rgba(255,90,95,0.4)",
+              color: "var(--err)",
+              fontSize: 11.5,
+            }}
+          >
+            {error}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={btnSecondary}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSubmit()}
+            style={
+              submitting || blob.trim().length === 0
+                ? { ...btnPrimary, ...btnDisabled }
+                : btnPrimary
+            }
+            disabled={submitting || blob.trim().length === 0}
+          >
+            {submitting ? "Importing…" : "Import"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const overlayStyle: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  zIndex: 1000,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 12,
+};
+
+const modalStyle: CSSProperties = {
+  background: "var(--ink-100, #15161a)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 12,
+  padding: 16,
+  maxWidth: 360,
+  width: "100%",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
 interface ProposalListProps {
   meta: MultisigVaultMeta;
   now: number;
   busyId: string | null;
   error: string | null;
   onAction: (id: string, op: "sign" | "reject" | "execute") => void;
+  onExport: (id: string) => void;
 }
 
-function ProposalList({ meta, now, busyId, error, onAction }: ProposalListProps) {
+function ProposalList({
+  meta,
+  now,
+  busyId,
+  error,
+  onAction,
+  onExport,
+}: ProposalListProps) {
   const sorted = [...meta.proposals].sort((a, b) => {
     const ba = bucket(a, meta.threshold, now);
     const bb = bucket(b, meta.threshold, now);
@@ -157,6 +438,7 @@ function ProposalList({ meta, now, busyId, error, onAction }: ProposalListProps)
           now={now}
           busy={busyId === p.id}
           onAction={(op) => onAction(p.id, op)}
+          onExport={() => onExport(p.id)}
         />
       ))}
     </div>
@@ -169,6 +451,7 @@ interface ProposalCardProps {
   now: number;
   busy: boolean;
   onAction: (op: "sign" | "reject" | "execute") => void;
+  onExport: () => void;
 }
 
 function ProposalCard({
@@ -177,6 +460,7 @@ function ProposalCard({
   now,
   busy,
   onAction,
+  onExport,
 }: ProposalCardProps) {
   const approvedIds = new Set(proposal.approvals.map((a) => a.signerId));
   const rejectedIds = new Set(proposal.rejections.map((r) => r.signerId));
@@ -200,6 +484,15 @@ function ProposalCard({
           flexWrap: "wrap",
         }}
       >
+        <button
+          type="button"
+          onClick={onExport}
+          disabled={busy}
+          style={busy ? { ...btnSecondary, ...btnDisabled } : btnSecondary}
+          data-testid={`export-${proposal.id}`}
+        >
+          Export
+        </button>
         {canVote && (
           <button
             type="button"

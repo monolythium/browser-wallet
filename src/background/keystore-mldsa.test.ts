@@ -810,6 +810,76 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
   );
 
   it(
+    "real ML-DSA-65 signature verifies through verifyProposalApprovals + serialize/deserialize",
+    async () => {
+      // Cross-signer coordination depends on signature verification
+      // working against arbitrary pubkeys; this test wires the
+      // signWithVaultV4 path through hashTxProposal and round-trips
+      // the result through serialize/deserialize, then verifies the
+      // imported signature using the same logic the import IPC uses.
+      const ks = await import("./keystore-mldsa.js");
+      const {
+        hashTxProposal: hashTx,
+        serializeProposalForShare,
+        deserializeSharedProposal,
+        verifyProposalApprovals,
+      } = await import("../shared/multisig.js");
+      const password = "ms-share-password";
+      await ks.createVaultFromNewMnemonic(password);
+      const u = await ks.unlockContainerV4(password);
+      const pubkey = await ks.getVaultPubkeyV4(u.vaultId);
+
+      const proposal: import("../shared/multisig.js").PendingProposal = {
+        id: "p-share",
+        proposedBy: "s-self",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        vaultAddress: "0x" + "ab".repeat(20),
+        action: {
+          kind: "send",
+          to: "0x" + "cd".repeat(20),
+          valueWeiHex: "0x1",
+          chainIdHex: "0x10F2C",
+        },
+        approvals: [],
+        rejections: [],
+        status: "pending",
+        txHash: null,
+      };
+      const digest = hashTx(proposal);
+      const sig = await ks.signWithVaultV4(u.vaultId, digest);
+      proposal.approvals.push({
+        signerId: "s-self",
+        signature: "0x" + bytesToHexLower(sig),
+        signedAt: 0,
+      });
+
+      // Roster carries the SAME pubkey under the signerId we signed as.
+      const signers = [
+        {
+          id: "s-self",
+          label: "Self",
+          address: u.address,
+          pubkey,
+          role: "self" as const,
+          vaultId: u.vaultId,
+        },
+      ];
+
+      const blob = serializeProposalForShare(proposal, "tx");
+      const env = deserializeSharedProposal(blob);
+      expect(env.kind).toBe("tx");
+      expect(env.proposal.id).toBe(proposal.id);
+      const verified = verifyProposalApprovals(
+        env.proposal as import("../shared/multisig.js").PendingProposal,
+        signers,
+      );
+      expect(verified.validApprovals.has("s-self")).toBe(true);
+    },
+    120_000,
+  );
+
+  it(
     "multisig vault round-trips through chrome.storage; meta survives a fresh module import",
     async () => {
       // Build a multisig vault in one module session, then re-import the
