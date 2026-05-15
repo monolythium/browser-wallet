@@ -392,16 +392,49 @@ function VaultRow({ vault, onSelect, onRename }: VaultRowProps) {
       <div style={{ minWidth: 0 }}>
         <div
           style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: "var(--fg-100)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            display: "flex",
+            gap: 6,
+            alignItems: "center",
+            minWidth: 0,
           }}
           title={vault.label}
         >
-          {vault.label}
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: "var(--fg-100)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {vault.label}
+          </div>
+          {vault.kind === "multisig" && (
+            <span
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 9.5,
+                padding: "1px 5px",
+                borderRadius: 4,
+                border: "1px solid rgba(124,127,255,0.4)",
+                background: "rgba(124,127,255,0.08)",
+                color: "var(--fg-200)",
+                letterSpacing: "0.06em",
+                flexShrink: 0,
+              }}
+              title={`${vault.threshold} of ${vault.signerCount} multisig${
+                vault.pendingCount > 0
+                  ? ` · ${vault.pendingCount} pending`
+                  : ""
+              }`}
+            >
+              {vault.threshold}/{vault.signerCount}
+              {vault.pendingCount > 0 ? ` · ${vault.pendingCount}p` : ""}
+            </span>
+          )}
         </div>
         <div
           style={{
