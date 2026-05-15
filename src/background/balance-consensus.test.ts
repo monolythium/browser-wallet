@@ -18,6 +18,9 @@ const OPERATORS = [
 
 vi.mock("./networks.js", () => ({
   getActiveOperators: () => OPERATORS,
+  // GAP #11 genesis-pin: stub to always-true so this suite tests the
+  // consensus shape, not the genesis check (covered separately).
+  verifyOperatorGenesis: async () => true,
 }));
 
 import { sprintnetMaxBalanceConsensus } from "./tx-mldsa.js";

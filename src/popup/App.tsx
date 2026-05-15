@@ -31,6 +31,7 @@ import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
 import { Operators } from "./pages/Operators";
+import { About } from "./pages/About";
 import { Welcome } from "./pages/Welcome";
 import { SetPassword } from "./pages/SetPassword";
 import { ShowPhrase } from "./pages/ShowPhrase";
@@ -85,6 +86,7 @@ type Screen =
   | "network-edit"
   | "settings"
   | "operators"
+  | "about"
   | "reveal-phrase"
   | "reset-wallet"
   | "receive"
@@ -133,7 +135,7 @@ const SPRINTNET_FALLBACK: ChainEntry = {
   name: "Monolythium · Sprintnet",
   // Bootstrap-window rpc. Mirrors SPRINTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
-  // live endpoint. Updated to val-2 on 2026-05-11 regenesis (val-1's
+  // live endpoint. Updated to operator-2 on 2026-05-11 regenesis (operator-1's
   // bls.key was destroyed; see networks.ts docstring).
   rpc: "http://192.0.2.1:8545",
   builtin: true,
@@ -715,11 +717,16 @@ export default function App() {
           onShowConnectedSites={() => setScreen("connected-sites")}
           onResetWallet={() => setScreen("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
+          onOpenAbout={() => setScreen("about")}
         />
       )}
 
       {screen === "operators" && (
         <Operators onBack={() => setScreen("settings")} />
+      )}
+
+      {screen === "about" && (
+        <About onBack={() => setScreen("settings")} />
       )}
 
       {screen === "reveal-phrase" && (

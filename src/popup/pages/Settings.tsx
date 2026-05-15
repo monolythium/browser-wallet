@@ -21,6 +21,9 @@ interface SettingsProps {
   onResetWallet: () => void;
   /** Routes to the Sprintnet operators sub-page (Phase 4.3). */
   onOpenOperators: () => void;
+  /** Routes to the About page (Phase 6 commit 4) — version stack,
+   *  operator health, genesis hash, §28.5 differentiation pitch. */
+  onOpenAbout: () => void;
 }
 
 const ALGO_LABEL: Record<SignAlgo, string> = {
@@ -47,6 +50,7 @@ export function Settings({
   onShowConnectedSites,
   onResetWallet,
   onOpenOperators,
+  onOpenAbout,
 }: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
@@ -301,7 +305,7 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            Override the Sprintnet operator RPC list with your own validator
+            Override the Sprintnet operator RPC list with your own operator
             nodes. Defaults use the 7 published operators in round-robin.
           </div>
           <button
@@ -338,12 +342,34 @@ export function Settings({
               fontSize: 11,
               color: "var(--fg-300)",
               lineHeight: 1.5,
+              marginBottom: 10,
             }}
           >
-            Monolythium Wallet v{version}
-            <br />
-            Sovereign post-quantum browser wallet.
+            Monolythium Wallet v{version} · sovereign post-quantum browser
+            wallet.
           </div>
+          <button
+            onClick={onOpenAbout}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>Version, operators, links</span>
+            <Icon name="chev" size={12} />
+          </button>
         </div>
       </div>
     </>

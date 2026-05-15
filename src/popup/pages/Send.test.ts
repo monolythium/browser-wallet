@@ -123,15 +123,31 @@ describe("validateToAddress — complete mono1", () => {
 });
 
 describe("validateToAddress — unknown / garbage", () => {
-  it("non-0x non-mono1 input reports a clear error", () => {
+  it("non-0x non-mono1 non-.mono input reports a clear error", () => {
     const r = validateToAddress("hello world");
-    expect(r.error).toMatch(/0x or mono1/);
+    expect(r.error).toMatch(/0x.*mono1.*\.mono/);
     expect(r.inputForm).toBe("unknown");
   });
 
-  it("ENS-style names are rejected (no resolver yet)", () => {
+  it("malformed mono name (mixed case, no resolver yet) is reported", () => {
+    // Mixed-case is a §22.7/§22.8 canonicalization violation. The parser
+    // surfaces a specific error rather than falling through to "unknown".
+    const r = validateToAddress("Alice.mono");
+    expect(r.error).toMatch(/not a valid mono name/);
+    expect(r.inputForm).toBe("mono-name");
+  });
+
+  it("well-formed mono name is accepted (forward-resolve happens async)", () => {
+    // The synchronous parser sets inputForm to "mono-name" and surfaces
+    // the parsed canonical form; addr0x is left null because forward-
+    // resolve is async (useNameForwardResolve reads chrome.storage).
     const r = validateToAddress("alice.mono");
-    expect(r.error).toMatch(/0x or mono1/);
+    expect(r.error).toBeNull();
+    expect(r.inputForm).toBe("mono-name");
+    expect(r.addr0x).toBeNull();
+    expect(r.monoName).not.toBeNull();
+    expect(r.monoName?.tld).toBe("human");
+    expect(r.monoName?.canonical).toBe("alice.mono");
   });
 });
 
@@ -150,11 +166,11 @@ describe("formatSendError — method-aware copy", () => {
       message: "mempool: decryption failed",
       code: ADMISSION,
       method: "lyth_submitEncrypted",
-      via: "val-2",
+      via: "operator-2",
     });
     expect(s).toContain("Mempool rejected");
     expect(s).not.toContain("Chain rejected");
-    expect(s).toContain("via val-2");
+    expect(s).toContain("via operator-2");
   });
 
   it("lyth_submitEncrypted + non-admission code → 'Submission failed'", () => {
@@ -162,7 +178,7 @@ describe("formatSendError — method-aware copy", () => {
       message: "internal error",
       code: NON_ADMISSION,
       method: "lyth_submitEncrypted",
-      via: "val-3",
+      via: "operator-3",
     });
     expect(s).toContain("Submission failed");
     expect(s).not.toContain("Mempool rejected");
@@ -173,11 +189,11 @@ describe("formatSendError — method-aware copy", () => {
       message: "upstream unavailable: mempool: decryption failed",
       code: ADMISSION,
       method: "lyth_getEncryptionKey",
-      via: "val-2",
+      via: "operator-2",
     });
     expect(s).toContain("Couldn't fetch encryption key");
     expect(s).toContain("lyth_getEncryptionKey");
-    expect(s).toContain("via val-2");
+    expect(s).toContain("via operator-2");
     expect(s).not.toContain("Chain rejected");
   });
 
@@ -186,11 +202,11 @@ describe("formatSendError — method-aware copy", () => {
       message: "feeHistory unavailable",
       code: ADMISSION,
       method: "eth_feeHistory",
-      via: "val-4",
+      via: "operator-4",
     });
     expect(s).toContain("Fee history fetch failed");
     expect(s).toContain("eth_feeHistory");
-    expect(s).toContain("via val-4");
+    expect(s).toContain("via operator-4");
   });
 
   it("eth_getTransactionCount → 'Couldn't fetch account nonce'", () => {
@@ -198,11 +214,11 @@ describe("formatSendError — method-aware copy", () => {
       message: "internal",
       code: ADMISSION,
       method: "eth_getTransactionCount",
-      via: "val-5",
+      via: "operator-5",
     });
     expect(s).toContain("Couldn't fetch account nonce");
     expect(s).toContain("eth_getTransactionCount");
-    expect(s).toContain("via val-5");
+    expect(s).toContain("via operator-5");
   });
 
   it("unknown method + admission code → 'Chain rejected' fallback with method + via suffix", () => {
@@ -210,11 +226,11 @@ describe("formatSendError — method-aware copy", () => {
       message: "some chain error",
       code: ADMISSION,
       method: "lyth_estimateGas",
-      via: "val-2",
+      via: "operator-2",
     });
     expect(s).toContain("Chain rejected");
     expect(s).toContain("lyth_estimateGas");
-    expect(s).toContain("via val-2");
+    expect(s).toContain("via operator-2");
   });
 
   it("method missing + admission code → legacy verbatim 'Chain rejected: ${message}'", () => {

@@ -11,7 +11,7 @@ import {
   type NativeEvmTxFields,
 } from "@monolythium/core-sdk/crypto";
 import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
-import { getActiveOperators } from "./networks.js";
+import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -65,6 +65,14 @@ export async function sprintnetJsonRpc<T>(
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
   for (const v of getActiveOperators()) {
+    // GAP #11: genesis-hash pin. Operators whose block 0 doesn't match
+    // SPRINTNET_GENESIS_HASH are skipped — they're either on a fork or
+    // a different chain entirely, and routing any request to them
+    // leaks reads / writes onto an untrusted ledger.
+    if (!(await verifyOperatorGenesis(v.rpc))) {
+      lastTransportErr = new Error(`${v.name}: untrusted genesis`);
+      continue;
+    }
     let res: Response;
     try {
       res = await fetch(v.rpc, {
@@ -166,6 +174,13 @@ export async function sprintnetMaxBalanceConsensus(
   }
 
   const probes = operators.map(async (op) => {
+    // GAP #11: skip operators whose block 0 doesn't match our pin.
+    // Treated as a "failing" entry so the consensus result still
+    // reports the skipped operator's name and reason — distinct from
+    // a network error, and visible in the SW console balance log.
+    if (!(await verifyOperatorGenesis(op.rpc))) {
+      return { name: op.name, balanceHex: null, reason: "untrusted genesis" };
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), BALANCE_CONSENSUS_TIMEOUT_MS);
     try {

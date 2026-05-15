@@ -13,7 +13,7 @@
 import type { ReactNode } from "react";
 import { CategoryBadge } from "./CategoryBadge.js";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity.js";
-import type { NameLabel } from "../../shared/name-resolution.js";
+import { parseMonoName, type NameLabel } from "../../shared/name-resolution.js";
 import { shortBech32m } from "../../shared/bech32m.js";
 import { PendingTxRowBody } from "./ActivityRow/PendingTxRowBody.js";
 import { TxSendRowBody } from "./ActivityRow/TxSendRowBody.js";
@@ -61,6 +61,12 @@ export function ActivityRow({ row, counterpartyLabel }: ActivityRowProps) {
 // a counterparty with optional CategoryBadge. The fallback is bech32m
 // (truncated to 6 body chars) via shared/bech32m.ts:shortBech32m.
 //
+// Badge category resolution prefers §22.8 TLD when the displayName
+// parses as a `.mono` hierarchical name (e.g. "treasury.contract.mono"
+// renders with the TLD palette and "contract" badge); otherwise falls
+// back to the indexer's pragmatic category (`label.category`). The two
+// share "contract" so the visual is identical when both agree.
+//
 // Exported so the row body components can compose it; not part of the
 // public hook surface.
 export function renderCounterparty(
@@ -69,10 +75,12 @@ export function renderCounterparty(
 ): ReactNode {
   if (!addr) return "unknown";
   if (label && label.displayName) {
+    const monoParse = parseMonoName(label.displayName);
+    const badgeCategory = monoParse !== null ? monoParse.tld : label.category;
     return (
       <>
         {label.displayName}
-        <CategoryBadge category={label.category} />
+        <CategoryBadge category={badgeCategory} />
       </>
     );
   }

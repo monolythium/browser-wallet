@@ -172,6 +172,13 @@ vi.mock("@monolythium/core-sdk", () => ({
   getRpcEndpoints: () => [
     { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
   ],
+  // GAP #11: shared/build-info.ts reads TESTNET_69420.genesis_hash at
+  // module init; stub just the fields the wallet actually reads.
+  TESTNET_69420: {
+    chain_id: 69420,
+    genesis_hash:
+      "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
+  },
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────

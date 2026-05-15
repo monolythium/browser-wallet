@@ -84,6 +84,9 @@ import {
   readOperatorOverride,
   getDefaultOperators,
   getActiveOperators,
+  verifyOperatorGenesis,
+  snapshotGenesisCache,
+  clearGenesisCache,
 } from "./networks.js";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
@@ -322,6 +325,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
   void loadOperatorOverride();
   cachedOperator = null;
+  // GAP #11: a fresh override list may add an operator that was never
+  // probed for genesis; drop the cache so the next dispatch re-probes
+  // and the About-page health view reflects fresh trust state.
+  clearGenesisCache();
 });
 
 // ---- Auto-lock ----
@@ -1786,6 +1793,92 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         effective: getActiveOperators().map((d) => ({ ...d })),
       };
     }
+    case "sprintnet-operators-health": {
+      // About-page operator-table source. Probes every active operator
+      // in parallel (net_version + eth_blockNumber) and surfaces the
+      // genesis-hash verification result (GAP #11). The inner
+      // verifyOperatorGenesis call uses its own forever-cache, so
+      // repeated About-page opens don't re-probe block 0; this
+      // handler itself isn't cached because the latency / block-tip
+      // numbers should be fresh on every screen open.
+      const ops = getActiveOperators();
+      const PROBE_BUDGET_MS = 1_500;
+      const results = await Promise.all(
+        ops.map(async (op) => {
+          // Force the genesis check into the cache and snapshot the
+          // observed value so the row can render both ok + observed.
+          await verifyOperatorGenesis(op.rpc, PROBE_BUDGET_MS);
+          const genesisEntry = snapshotGenesisCache().get(op.rpc);
+          const trustedGenesis = genesisEntry?.ok ?? false;
+          const observedGenesis = genesisEntry?.observed ?? null;
+
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), PROBE_BUDGET_MS);
+          try {
+            const startedAt = Date.now();
+            const body = JSON.stringify([
+              { jsonrpc: "2.0", id: 1, method: "net_version", params: [] },
+              { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
+            ]);
+            const res = await fetch(op.rpc, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body,
+              signal: ctrl.signal,
+            });
+            clearTimeout(timer);
+            if (!res.ok) {
+              return {
+                name: op.name,
+                region: op.region,
+                rpc: op.rpc,
+                ok: false as const,
+                reason: `HTTP ${res.status}`,
+                trustedGenesis,
+                observedGenesis,
+              };
+            }
+            const parsed = (await res.json()) as unknown;
+            const arr = Array.isArray(parsed) ? parsed : [parsed];
+            const netRow = arr.find(
+              (r): r is { id: number; result?: string } =>
+                typeof r === "object" && r !== null && (r as { id?: unknown }).id === 1,
+            );
+            const blockRow = arr.find(
+              (r): r is { id: number; result?: string } =>
+                typeof r === "object" && r !== null && (r as { id?: unknown }).id === 2,
+            );
+            const chainIdDec =
+              typeof netRow?.result === "string" ? Number(netRow.result) : null;
+            const blockHex =
+              typeof blockRow?.result === "string" ? blockRow.result : null;
+            return {
+              name: op.name,
+              region: op.region,
+              rpc: op.rpc,
+              ok: true as const,
+              chainIdDec,
+              blockHex,
+              latencyMs: Date.now() - startedAt,
+              trustedGenesis,
+              observedGenesis,
+            };
+          } catch (e) {
+            clearTimeout(timer);
+            return {
+              name: op.name,
+              region: op.region,
+              rpc: op.rpc,
+              ok: false as const,
+              reason: (e as Error)?.name === "AbortError" ? "timeout" : "unreachable",
+              trustedGenesis,
+              observedGenesis,
+            };
+          }
+        }),
+      );
+      return { ok: true, operators: results };
+    }
     case "sprintnet-operators-set": {
       // Payload: { operators: OperatorEntry[] | null }. Null clears the
       // override and reverts to defaults; non-null persists the override.
@@ -1799,6 +1892,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (raw === null) {
         await setOperatorOverride(null);
         cachedOperator = null;
+        clearGenesisCache();
         return { ok: true };
       }
       const validated = validateOperatorList(raw);
@@ -1807,6 +1901,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       await setOperatorOverride(validated);
       cachedOperator = null;
+      clearGenesisCache();
       return { ok: true };
     }
     case "keystore-unlock": {

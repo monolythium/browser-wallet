@@ -15,10 +15,10 @@ import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import {
-  ACCOUNTS, DAPPS, PENDING, NODE,
+  ACCOUNTS, DAPPS, NODE,
 } from "./demo-data";
 import type {
-  Account, Custody, Algo, PendingSign,
+  Account, Custody,
 } from "./demo-data";
 import type {
   ConnectRequest,
@@ -36,15 +36,13 @@ import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
 import { NftTab } from "./components/NftTab";
 import type { SendNftTarget } from "./pages/SendNft";
+import {
+  detectOriginWarnings,
+  detectMessageWarnings,
+  type OriginWarning,
+  type MessageWarning,
+} from "../shared/phishing";
 
-/** @deprecated kept for legacy imports; use ChainStatusBanner. */
-export function DemoBanner() {
-  return (
-    <div className="ext-demo-banner">
-      <Icon name="warn" size={10} /> Mock · no real value · design-only
-    </div>
-  );
-}
 
 // ---- Chain status banner (replaces DemoBanner) ----
 //
@@ -139,7 +137,7 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
   }, []);
 
   // Operator-name poll, separate from chain-health. The operator label is
-  // a pure side-info readout (which Sprintnet validator answered our
+  // a pure side-info readout (which Sprintnet operator answered our
   // probe) and stays decoupled from the LIVE/STALLED/OFFLINE state — a
   // chain can be live with an unknown operator, or stalled while the
   // operator is still reachable.
@@ -409,6 +407,130 @@ interface ApprovalDisplay {
 
 function hostnameOf(origin: string): string {
   try { return new URL(origin).hostname; } catch { return origin; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phishing-warning panels — rendered above the body of approval screens.
+// Pure presentation; the heuristic logic lives in src/shared/phishing.ts.
+// Two distinct components so call sites can place them in different slots
+// (typed_sign places origin warnings after req-head; ReqConnect places both
+// after req-head; ReqPersonalSignReal stacks both in order).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function OriginWarningPanel({ warnings }: { warnings: OriginWarning[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="req-section">
+      {warnings.map((w) => (
+        <WarningRow
+          key={w.code}
+          level={w.level}
+          title={titleForOriginCode(w.code)}
+          text={w.text}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MessageWarningPanel({ warnings }: { warnings: MessageWarning[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="req-section">
+      {warnings.map((w) => (
+        <WarningRow
+          key={w.code}
+          level={w.level}
+          title={titleForMessageCode(w.code)}
+          text={w.text}
+        />
+      ))}
+    </div>
+  );
+}
+
+function WarningRow({
+  level,
+  title,
+  text,
+}: {
+  level: "warning" | "danger";
+  title: string;
+  text: string;
+}) {
+  const isDanger = level === "danger";
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 10,
+        padding: "10px 12px",
+        marginBottom: 6,
+        borderRadius: 10,
+        background: isDanger
+          ? "rgba(220,80,80,0.10)"
+          : "rgba(244,201,122,0.08)",
+        border: isDanger
+          ? "1px solid rgba(220,80,80,0.4)"
+          : "1px solid rgba(244,201,122,0.4)",
+      }}
+    >
+      <Icon name="warn" size={14} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 11.5,
+            fontWeight: 600,
+            color: isDanger ? "var(--err)" : "var(--warn)",
+            marginBottom: 2,
+            letterSpacing: "0.02em",
+            textTransform: "uppercase",
+            fontFamily: "var(--f-mono)",
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--fg-100)", lineHeight: 1.5 }}>
+          {text}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function titleForOriginCode(code: string): string {
+  switch (code) {
+    case "missing-origin":
+    case "malformed-origin":
+      return "Invalid origin";
+    case "non-https":
+      return "Insecure transport";
+    case "punycode":
+      return "Punycode hostname";
+    case "homograph":
+      return "Lookalike characters";
+    case "brand-lookalike":
+      return "Brand impersonation risk";
+    case "risky-tld":
+      return "Risky TLD";
+    default:
+      return "Origin warning";
+  }
+}
+
+function titleForMessageCode(code: string): string {
+  switch (code) {
+    case "abi-shaped-hex":
+      return "Looks like contract calldata";
+    case "binary-hex":
+      return "Non-printable payload";
+    case "permit-keyword":
+      return "Permit / approval clause";
+    case "oversized-payload":
+      return "Unusually large payload";
+    default:
+      return "Payload warning";
+  }
 }
 
 function previewMessage(message: string): string {
@@ -1303,18 +1425,13 @@ function NetworksSection({ title, chains, currentChainId, onOpenDetail, emptyHin
   );
 }
 
-// ---- Settings ----
 // ---- Sheet wrapper for request dialogs ----
 interface ReqSheetProps {
   onBack: () => void;
   children: ReactNode;
-  type?: PendingSign["type"];
-  showTypeTabs?: boolean;
-  onChangeSignType?: (t: PendingSign["type"]) => void;
 }
 
-function ReqSheet({ onBack, children, type, showTypeTabs, onChangeSignType }: ReqSheetProps) {
-  const types: PendingSign["type"][] = ["swap", "stake", "bridge", "contract"];
+function ReqSheet({ onBack, children }: ReqSheetProps) {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px 0" }}>
@@ -1325,30 +1442,6 @@ function ReqSheet({ onBack, children, type, showTypeTabs, onChangeSignType }: Re
           Incoming request
         </div>
       </div>
-      {showTypeTabs && onChangeSignType && (
-        <div style={{ display: "flex", gap: 4, padding: "6px 14px 0", flexWrap: "wrap" }}>
-          {types.map((t) => (
-            <button
-              key={t}
-              onClick={() => onChangeSignType(t)}
-              style={{
-                padding: "4px 10px",
-                borderRadius: 999,
-                fontSize: 10,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                fontFamily: "var(--f-mono)",
-                background: t === type ? "var(--gold-bg)" : "transparent",
-                color: t === type ? "var(--gold)" : "var(--fg-400)",
-                border: t === type ? "1px solid rgba(124,127,255,0.4)" : "1px solid var(--fg-700)",
-                cursor: "pointer",
-              }}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      )}
       <div style={{ flex: 1, overflowY: "auto" }}>{children}</div>
     </>
   );
@@ -1367,22 +1460,6 @@ function CustodyBadge({ mode }: { mode: Custody }) {
     <div className="req-custody">
       <span className={`glyph ${m.cls}`}><Icon name={m.ico} size={12} /></span>
       <span>Signing with</span><b>{m.lbl}</b>
-    </div>
-  );
-}
-
-// ---- Algo picker ----
-function AlgoPicker({ value, onChange }: { value: Algo; onChange: (a: Algo) => void }) {
-  return (
-    <div className="req-algo">
-      <button className={value === "slhdsa" ? "on" : ""} onClick={() => onChange("slhdsa")}>
-        <div className="n">SLH-DSA-128s</div>
-        <div className="d">Hash-based · stateless · no assumptions</div>
-      </button>
-      <button className={value === "mldsa" ? "on" : ""} onClick={() => onChange("mldsa")}>
-        <div className="n">ML-DSA-65</div>
-        <div className="d">Lattice · faster · smaller</div>
-      </button>
     </div>
   );
 }
@@ -1423,6 +1500,9 @@ export function ReqConnect({
   }
   const initial = (hostname[0] ?? "?").toUpperCase();
 
+  const originWarnings = detectOriginWarnings(origin);
+  const hasDanger = originWarnings.some((w) => w.level === "danger");
+
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -1439,6 +1519,28 @@ export function ReqConnect({
         </div>
         <h2>Connect this site?</h2>
         <div className="sub">grants read access to your address — no signing</div>
+      </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
+
+      <div className="req-section">
+        <div className="req-section__h">Origin</div>
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(0,0,0,0.3)",
+            border: hasDanger
+              ? "1px solid rgba(220,80,80,0.4)"
+              : "1px solid rgba(255,255,255,0.05)",
+            fontFamily: "var(--f-mono)",
+            fontSize: 11.5,
+            color: "var(--fg-100)",
+            wordBreak: "break-all",
+          }}
+        >
+          {origin}
+        </div>
       </div>
 
       <div className="req-section">
@@ -1464,289 +1566,9 @@ export function ReqConnect({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove}>Connect</button>
-      </div>
-    </>
-  );
-}
-
-// ---- Sign request ----
-interface ReqSignProps {
-  type: PendingSign["type"];
-  custody: Custody;
-  algo: Algo;
-  onApprove: () => void;
-  onReject: () => void;
-}
-
-interface SwapSummary { pay: { amount: number; sym: string }; receive: { amount: number; sym: string }; rate: string; slippage: string; route: string }
-interface StakeSummary { action: string; amount: { amount: number; sym: string }; target: string; apr: string; autoCompound: boolean; unlockEst: string }
-interface BridgeSummary { action: string; amount: { amount: number; sym: string }; from: string; to: string; receive: { amount: number; sym: string }; rate: string; relays: string; etaMin: number }
-interface ContractSummary { action: string; token: string; spender: string; risk: string }
-
-export function ReqSign({ type, custody, algo: initAlgo, onApprove, onReject }: ReqSignProps) {
-  const key = type === "swap" ? "signSwap"
-    : type === "stake" ? "signStake"
-    : type === "bridge" ? "signBridge"
-    : "signContract";
-  const r = PENDING[key as "signSwap" | "signStake" | "signBridge" | "signContract"];
-  const [algo, setAlgo] = useState<Algo>(initAlgo || r.algo);
-  const [showDecoded, setShowDecoded] = useState(false);
-  const [showRaw, setShowRaw] = useState(false);
-  const dapp = DAPPS.find((d) => d.id === r.dappId)!;
-
-  return (
-    <>
-      <div className="req-head">
-        <div className="origin">
-          <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
-          <div className="info">
-            <div className="n">{dapp.name}</div>
-            <div className="u">{r.origin}</div>
-          </div>
-          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--gold)", padding: "3px 7px", border: "1px solid rgba(124,127,255,0.4)", borderRadius: 4 }}>{r.type}</div>
-        </div>
-      </div>
-
-      {/* Per-type summary */}
-      {type === "swap" && (() => {
-        const s = r.summary as unknown as SwapSummary;
-        return (
-          <div className="req-sum">
-            <div className="req-sum__action">Swap</div>
-            <div className="req-sum__amt">{fmt(s.pay.amount, 0)}<span className="sym">{s.pay.sym}</span></div>
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 14, color: "var(--fg-400)", margin: "4px 0 2px" }}>→</div>
-            <div className="req-sum__amt" style={{ fontSize: 26 }}>{fmt(s.receive.amount)}<span className="sym" style={{ color: "var(--ok)" }}>{s.receive.sym}</span></div>
-            <div className="req-sum__meta">rate {s.rate} · slippage {s.slippage} · via {s.route}</div>
-          </div>
-        );
-      })()}
-      {type === "stake" && (() => {
-        const s = r.summary as unknown as StakeSummary;
-        return (
-          <div className="req-sum">
-            <div className="req-sum__action">Delegate</div>
-            <div className="req-sum__amt">{fmt(s.amount.amount, 0)}<span className="sym">{s.amount.sym}</span></div>
-            <div className="req-sum__meta">→ {s.target} · APR {s.apr}{s.autoCompound ? " · auto" : ""}</div>
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-500)", marginTop: 4 }}>unlock est · {s.unlockEst}</div>
-          </div>
-        );
-      })()}
-      {type === "bridge" && (() => {
-        const s = r.summary as unknown as BridgeSummary;
-        return (
-          <div className="req-sum">
-            <div className="req-sum__action">Bridge out · {s.from} → {s.to}</div>
-            <div className="req-sum__amt">{fmt(s.amount.amount, 0)}<span className="sym">{s.amount.sym}</span></div>
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 14, color: "var(--fg-400)", margin: "4px 0 2px" }}>→</div>
-            <div className="req-sum__amt" style={{ fontSize: 26 }}>{fmt(s.receive.amount, 0)}<span className="sym" style={{ color: "#c08ad6" }}>{s.receive.sym}</span></div>
-            <div className="req-sum__meta">rate {s.rate} · {s.relays} · ETA ~{s.etaMin}m</div>
-          </div>
-        );
-      })()}
-      {type === "contract" && (() => {
-        const s = r.summary as unknown as ContractSummary;
-        return (
-          <div className="req-sum">
-            <div className="req-sum__action" style={{ color: "var(--warn)" }}>⚠ Contract approval</div>
-            <div style={{ fontSize: 14, fontWeight: 500, padding: "8px 14px", lineHeight: 1.4, marginTop: 4 }}>{s.action}</div>
-            <div className="req-sum__meta">token · {s.token} · spender {s.spender}</div>
-          </div>
-        );
-      })()}
-
-      {r.sim && r.sim.warnings && r.sim.warnings.length > 0 && r.sim.warnings.map((w, i) => (
-        <div className="req-warn warn" key={i}><Icon name="warn" size={14} /><div>{w}</div></div>
-      ))}
-
-      {r.sim && (
-        <div className="req-section">
-          <div className="req-sim">
-            <div className="req-sim__h"><Icon name="check" size={10} /> Simulation</div>
-            {r.sim.willReceive && <div className="req-sim__row"><span className="k">You receive</span><span className="v in">+{fmt(r.sim.willReceive.amount)} {r.sim.willReceive.sym}</span></div>}
-            {r.sim.willPay && <div className="req-sim__row"><span className="k">You pay</span><span className="v out">−{fmt(r.sim.willPay.amount)} {r.sim.willPay.sym}</span></div>}
-            {r.sim.net && <div className="req-sim__row"><span className="k">Net</span><span className="v">{r.sim.net}</span></div>}
-          </div>
-        </div>
-      )}
-
-      <div className="req-section">
-        <div className="req-section__h">
-          Fee
-          <span style={{ color: "var(--fg-200)", fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.04em", textTransform: "none" }}>
-            {fmt(r.fee.amount, 4)} {r.fee.sym} · public gas
-          </span>
-        </div>
-      </div>
-
-      <div className="req-section">
-        <div className="req-section__h">Signing algorithm</div>
-        <AlgoPicker value={algo} onChange={setAlgo} />
-      </div>
-
-      <div className="req-section">
-        <div className="req-section__h">
-          <span>Structured decode</span>
-          <button onClick={() => setShowDecoded((v) => !v)}>{showDecoded ? "hide" : "show"} ↓</button>
-        </div>
-        {showDecoded && (
-          <div>
-            {r.decoded.map((d, i) => (
-              <div className="req-kv" key={i}>
-                <span className="k">{d.k}</span>
-                <span className="v">{d.v}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="req-section" style={{ paddingBottom: 16 }}>
-        <div className="req-section__h">
-          <span>Raw payload</span>
-          <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
-        </div>
-        {showRaw && <div className="req-raw">{r.raw}</div>}
-      </div>
-
-      <CustodyBadge mode={custody} />
-      <div className="req-foot">
-        <button onClick={onReject}>Reject</button>
-        <button className={type === "contract" ? "danger" : "prim"} onClick={onApprove}>
-          {type === "contract" ? "Approve spend" : custody === "hw" ? "Confirm on device" : custody === "passkey" ? "Sign with passkey" : "Sign"}
+        <button className={hasDanger ? "danger" : "prim"} onClick={onApprove}>
+          {hasDanger ? "Connect anyway" : "Connect"}
         </button>
-      </div>
-    </>
-  );
-}
-
-// ---- Message sign ----
-export function ReqMessage({ custody, onApprove, onReject }: { custody: Custody; onApprove: () => void; onReject: () => void }) {
-  const r = PENDING.signMessage;
-  const [showRaw, setShowRaw] = useState(false);
-  const dapp = DAPPS.find((d) => d.id === r.dappId)!;
-  return (
-    <>
-      <div className="req-head">
-        <div className="origin">
-          <div className={`fav ${dapp.icon}`}>{dapp.icon}</div>
-          <div className="info">
-            <div className="n">{dapp.name}</div>
-            <div className="u">{r.origin}</div>
-          </div>
-          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--fg-200)", padding: "3px 7px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4 }}>message</div>
-        </div>
-        <h2>{r.summary.purpose}</h2>
-        <div className="sub">no value transferred · expires in {r.summary.expires}</div>
-      </div>
-
-      <div className="req-section">
-        <div className="req-section__h">Payload (human-readable)</div>
-        <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.05)" }}>
-          <div className="req-kv"><span className="k">Domain</span><span className="v">{r.humanPayload.domain}</span></div>
-          <div className="req-kv"><span className="k">Nonce</span><span className="v">{r.humanPayload.nonce}</span></div>
-          <div className="req-kv"><span className="k">Issued at</span><span className="v">{r.humanPayload.issuedAt}</span></div>
-          <div className="req-kv"><span className="k">Expires</span><span className="v">{r.humanPayload.expiresAt}</span></div>
-          <div className="req-kv" style={{ gridTemplateColumns: "1fr" }}>
-            <span className="v" style={{ marginTop: 6, fontStyle: "italic", color: "var(--fg-300)", lineHeight: 1.5 }}>"{r.humanPayload.statement}"</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="req-section" style={{ paddingBottom: 16 }}>
-        <div className="req-section__h">
-          <span>Raw message</span>
-          <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
-        </div>
-        {showRaw && <div className="req-raw">{r.raw}</div>}
-      </div>
-
-      <CustodyBadge mode={custody} />
-      <div className="req-foot">
-        <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove}>Sign message</button>
-      </div>
-    </>
-  );
-}
-
-// ---- Onboarding ----
-export function ReqOnboard() {
-  const onboardCardStyle: CSSProperties = {
-    padding: "12px 14px",
-    borderRadius: 12,
-    background: "rgba(124,127,255,0.06)",
-    border: "1px solid rgba(124,127,255,0.3)",
-    marginBottom: 8,
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    cursor: "pointer",
-  };
-  return (
-    <>
-      <div style={{ padding: "40px 24px 20px", textAlign: "center" }}>
-        <div
-          style={{
-            width: 56,
-            height: 56,
-            borderRadius: 16,
-            margin: "0 auto 14px",
-            background: "linear-gradient(135deg, #1a1c30, #06070f)",
-            border: "1px solid rgba(124,127,255,0.4)",
-            display: "grid",
-            placeItems: "center",
-            color: "var(--gold)",
-            fontFamily: "var(--f-mono)",
-            fontSize: 24,
-            fontWeight: 700,
-            boxShadow: "inset 0 1px 0 rgba(124,127,255,0.3), 0 0 24px rgba(124,127,255,0.18)",
-          }}
-        >
-          M
-        </div>
-        <h1 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em" }}>Monolythium Wallet</h1>
-        <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--gold)", letterSpacing: "0.2em", textTransform: "uppercase" }}>Post-quantum wallet</div>
-        <p style={{ margin: "18px 16px 0", color: "var(--fg-300)", fontSize: 13, lineHeight: 1.55 }}>
-          Your keys are sealed by your machine's TPM or platform passkey.
-          Never leave the device. Never seen by Monolythium.
-        </p>
-      </div>
-      <div style={{ padding: "10px 14px" }}>
-        <div style={onboardCardStyle}>
-          <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(124,127,255,0.18)", color: "var(--gold)", display: "grid", placeItems: "center" }}>
-            <Icon name="plus" size={16} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Create new wallet</div>
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 2 }}>TPM-sealed by default · recoverable via Shamir</div>
-          </div>
-          <Icon name="chev" size={14} />
-        </div>
-        <div
-          style={{
-            padding: "12px 14px",
-            borderRadius: 12,
-            background: "rgba(255,255,255,0.03)",
-            border: "1px solid rgba(255,255,255,0.06)",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            cursor: "pointer",
-          }}
-        >
-          <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(255,255,255,0.06)", color: "var(--fg-200)", display: "grid", placeItems: "center" }}>
-            <Icon name="hw" size={16} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Import existing</div>
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-400)", marginTop: 2 }}>Mnemonic · SSS shares · hardware</div>
-          </div>
-          <Icon name="chev" size={14} />
-        </div>
-      </div>
-      <div style={{ padding: "20px 24px", fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--fg-500)", letterSpacing: "0.08em", lineHeight: 1.6, textTransform: "uppercase" }}>
-        ⟟ SLH-DSA-128s (hash-based) · ML-DSA-65 (lattice) · dual-sig ready
       </div>
     </>
   );
@@ -1962,6 +1784,9 @@ export function ReqSendTx({
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
 
+  const originWarnings = detectOriginWarnings(origin);
+  const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
+
   const baseGasPrice = parseHexQuantity(view.gasPrice);
   const tieredGasPrice =
     baseGasPrice == null
@@ -2003,6 +1828,8 @@ export function ReqSendTx({
           on {view.chainLabel} ({view.chainId})
         </div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
 
       <div className="req-section">
         <div className="req-section__h">From</div>
@@ -2167,8 +1994,15 @@ export function ReqSendTx({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove}>
-          {custody === "hw" ? "Confirm on device" : "Sign & send"}
+        <button
+          className={hasOriginDanger ? "danger" : "prim"}
+          onClick={onApprove}
+        >
+          {custody === "hw"
+            ? "Confirm on device"
+            : hasOriginDanger
+              ? "Sign & send anyway"
+              : "Sign & send"}
         </button>
       </div>
     </>
@@ -2197,6 +2031,12 @@ export function ReqPersonalSignReal({
   const utf8 = isHex ? bytesToUtf8IfPrintable(bytes) : message;
   const [showRaw, setShowRaw] = useState(false);
 
+  const originWarnings = detectOriginWarnings(origin);
+  const messageWarnings = detectMessageWarnings(message);
+  const hasDanger =
+    originWarnings.some((w) => w.level === "danger") ||
+    messageWarnings.some((w) => w.level === "danger");
+
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -2214,6 +2054,9 @@ export function ReqPersonalSignReal({
         <h2>Confirm message signature</h2>
         <div className="sub">no value transferred · EIP-191 prefix applied before sign</div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
+      <MessageWarningPanel warnings={messageWarnings} />
 
       <div className="req-section">
         <div className="req-section__h">Signing as</div>
@@ -2269,8 +2112,15 @@ export function ReqPersonalSignReal({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove}>
-          {custody === "hw" ? "Confirm on device" : "Sign message"}
+        <button
+          className={hasDanger ? "danger" : "prim"}
+          onClick={onApprove}
+        >
+          {custody === "hw"
+            ? "Confirm on device"
+            : hasDanger
+              ? "Sign anyway"
+              : "Sign message"}
         </button>
       </div>
     </>
@@ -2296,6 +2146,9 @@ export function ReqTypedSign({
   const { parsed, digest, address, origin, rawTypedData } = request;
   const [showRaw, setShowRaw] = useState(false);
 
+  const originWarnings = detectOriginWarnings(origin);
+  const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
+
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -2317,6 +2170,8 @@ export function ReqTypedSign({
             : "could not parse — review raw payload below"}
         </div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
 
       <div className="req-section">
         <div className="req-section__h">Signing as</div>
@@ -2384,8 +2239,16 @@ export function ReqTypedSign({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove} disabled={!parsed}>
-          {custody === "hw" ? "Confirm on device" : "Sign typed data"}
+        <button
+          className={hasOriginDanger ? "danger" : "prim"}
+          onClick={onApprove}
+          disabled={!parsed}
+        >
+          {custody === "hw"
+            ? "Confirm on device"
+            : hasOriginDanger
+              ? "Sign anyway"
+              : "Sign typed data"}
         </button>
       </div>
     </>
@@ -2470,6 +2333,7 @@ export function ReqAddChain({ request, onApprove, onReject, chain }: ReqAddChain
   // `proposed` is the chain the dApp wants to add; `chain` (prop) is the
   // wallet's currently active chain shown in the status banner.
   const { chain: proposed, origin } = request;
+  const originWarnings = detectOriginWarnings(origin);
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -2487,6 +2351,8 @@ export function ReqAddChain({ request, onApprove, onReject, chain }: ReqAddChain
         <h2>{proposed.chainName}</h2>
         <div className="sub">requesting · adds chain to wallet network list</div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
 
       <div className="req-warn warn">
         <Icon name="warn" size={14} />

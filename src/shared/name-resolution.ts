@@ -175,3 +175,150 @@ export function mergeNameCache(
   }
   return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §22.8 hierarchical naming — TLD parser + reverse lookup
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Whitepaper §22.8 defines five TLDs on the naming-registry precompile
+// (0x1106):
+//
+//   <label>.mono                    — human (primary)
+//   <label>.agent.<human>.mono      — agent (sub-account under a human parent)
+//   <label>.cluster.mono            — cluster (validator-bond bundle)
+//   <label>.contract.mono           — contract (deployed code label)
+//   <label>.system.mono             — system / foundation (reserved TLD)
+//
+// The chain's `lyth_getAddressLabel` currently emits the pragmatic indexer
+// taxonomy (foundation/exchange/bridge/treasury/contract/operator) in
+// `displayName`. When §22.8 ships on chain, the same `displayName` field
+// will carry the hierarchical form (e.g. "treasury.contract.mono"); the
+// parser here lets the UI surface a TLD-aware badge without an indexer
+// change.
+
+/** Five TLD categories from §22.8. */
+export type MonoTld = "human" | "agent" | "cluster" | "contract" | "system";
+
+export interface MonoNameParse {
+  /** TLD category. */
+  tld: MonoTld;
+  /** Leftmost label (`alice` in `alice.agent.bob.mono`). */
+  label: string;
+  /** For agent names: the human parent label (`bob` in the example above);
+   *  null for the four non-agent TLDs. */
+  parent: string | null;
+  /** Reconstructed canonical form, lowercased. */
+  canonical: string;
+}
+
+/** Maximum total length of a hierarchical name. Generous floor; the
+ *  naming-registry precompile enforces a tighter cap on chain. */
+const MONO_NAME_MAX_LEN = 253;
+
+/** Label charset: `[a-z0-9-]`, no leading/trailing hyphen, length 1-63. */
+const LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function isValidLabel(s: string): boolean {
+  return s.length > 0 && s.length <= 63 && LABEL_RE.test(s);
+}
+
+/**
+ * Parse a §22.8 hierarchical name into its TLD category, leftmost label,
+ * and (for agent names) human parent. Returns null on any structural
+ * failure — mixed case is rejected (§22.7 canonicalization rule applies).
+ *
+ * Accepted forms:
+ *   "alice.mono"                      → { tld: "human",    label: "alice",  parent: null }
+ *   "bob.agent.alice.mono"            → { tld: "agent",    label: "bob",    parent: "alice" }
+ *   "edge-validators.cluster.mono"    → { tld: "cluster",  label: "edge-validators" }
+ *   "lyth-bridge.contract.mono"       → { tld: "contract", label: "lyth-bridge" }
+ *   "foundation.system.mono"          → { tld: "system",   label: "foundation" }
+ *
+ * Rejected:
+ *   - Mixed case ("Alice.mono")
+ *   - Names without `.mono` suffix
+ *   - Empty labels or labels >63 chars
+ *   - Labels with leading/trailing hyphen
+ *   - Reserved labels in second position other than the four sub-TLDs
+ */
+export function parseMonoName(input: string): MonoNameParse | null {
+  if (typeof input !== "string") return null;
+  if (input.length === 0 || input.length > MONO_NAME_MAX_LEN) return null;
+  if (input !== input.toLowerCase()) return null;
+  if (!input.endsWith(".mono")) return null;
+  const parts = input.split(".");
+  // Every form ends with ".mono", so the rightmost part is "mono".
+  // Forms by part count:
+  //   2  →  [label, "mono"]            human
+  //   3  →  [label, <tld>, "mono"]     cluster/contract/system
+  //   4  →  [label, "agent", parent, "mono"] agent
+  if (parts.length < 2 || parts.length > 4) return null;
+  if (parts[parts.length - 1] !== "mono") return null;
+  for (const p of parts) {
+    if (!isValidLabel(p)) return null;
+  }
+  if (parts.length === 2) {
+    const [label] = parts as [string, string];
+    return {
+      tld: "human",
+      label,
+      parent: null,
+      canonical: `${label}.mono`,
+    };
+  }
+  if (parts.length === 3) {
+    const [label, sub] = parts as [string, string, string];
+    if (sub === "cluster" || sub === "contract" || sub === "system") {
+      return {
+        tld: sub,
+        label,
+        parent: null,
+        canonical: `${label}.${sub}.mono`,
+      };
+    }
+    return null; // unknown second-position label
+  }
+  // parts.length === 4 — only `agent` is valid here.
+  const [label, sub, parent] = parts as [string, string, string, string];
+  if (sub !== "agent") return null;
+  return {
+    tld: "agent",
+    label,
+    parent,
+    canonical: `${label}.agent.${parent}.mono`,
+  };
+}
+
+/**
+ * Reverse name → address using only the local name cache. The wallet
+ * does not have a `lyth_resolveName` RPC yet (§22.8 registry is forward-
+ * looking), so this only finds matches the user has already encountered
+ * via reverse-resolve (address → label).
+ *
+ * Returns the lowercased 0x address on a hit, or null when the name
+ * isn't in cache (UI should surface "name not in cache — paste address
+ * directly" copy).
+ *
+ * Comparison is on the canonical lowercased form via `parseMonoName`;
+ * label entries whose `displayName` doesn't parse as a §22.8 name are
+ * skipped. The first matching entry wins (cache is small; iteration is
+ * O(n) which is fine for popup-side lookup).
+ */
+export function lookupNameInCache(
+  name: string,
+  cache: NameCache,
+): string | null {
+  const parsed = parseMonoName(name);
+  if (parsed === null) return null;
+  for (const [addr, entry] of Object.entries(cache)) {
+    const label = entry.label;
+    if (label === null) continue;
+    if (typeof label.displayName !== "string") continue;
+    const candidate = parseMonoName(label.displayName);
+    if (candidate === null) continue;
+    if (candidate.canonical === parsed.canonical) {
+      return addr.toLowerCase();
+    }
+  }
+  return null;
+}
