@@ -19,7 +19,9 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
+import { RedelegateForm } from "../components/RedelegateForm";
 import { StakeForm } from "../components/StakeForm";
+import { UnstakeForm } from "../components/UnstakeForm";
 import {
   bgStakingAutovoteSeed,
   bgStakingClusterDirectory,
@@ -34,6 +36,8 @@ import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
   encodeDelegate,
+  encodeRedelegate,
+  encodeUndelegate,
   lythAmountToBps,
 } from "../../shared/staking-tx";
 import { MOCK_CLUSTER_APR_BPS } from "../../shared/staking";
@@ -46,7 +50,20 @@ import {
   type AutovoteResult,
 } from "../../shared/autovote";
 
-type Step = "pick" | "form" | "preview" | "submitting" | "success" | "error";
+type Step =
+  | "pick"
+  | "form"
+  | "unstake-form"
+  | "redelegate-form"
+  | "redelegate-dst-pick"
+  | "preview"
+  | "submitting"
+  | "success"
+  | "error";
+
+/** Action the user is preparing. Drives the preview/submit calldata
+ *  encoding + the success copy. */
+type Action = "delegate" | "undelegate" | "redelegate";
 
 /** Top-level interaction mode. `"manual"` = single-cluster pick →
  *  stake form path (commit 2). The four autovote modes route through
@@ -92,7 +109,9 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
   // Selection + form state.
   const [entryMode, setEntryMode] = useState<EntryMode>("manual");
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
+  const [redelegateDstClusterId, setRedelegateDstClusterId] = useState<number | null>(null);
   const [amountStr, setAmountStr] = useState("");
+  const [action, setAction] = useState<Action>("delegate");
   const [autovoteTargetBps, setAutovoteTargetBps] = useState<number>(5000);
   const [autovoteSeed, setAutovoteSeed] = useState<Uint8Array | null>(null);
   const [autovotePlan, setAutovotePlan] = useState<AutovoteResult | null>(null);
@@ -207,16 +226,16 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
     [selectedClusterId, clusters],
   );
 
-  // Submission. Encodes `delegate(uint256,uint256)` calldata and routes
-  // through bgWalletSendTx; the SW wraps it into the ML-DSA-65 envelope
-  // path for Sprintnet.
+  // Submission. Encodes delegate / undelegate / redelegate calldata
+  // based on the current `action` and routes through bgWalletSendTx;
+  // the SW wraps it into the ML-DSA-65 envelope path for Sprintnet.
   const handleConfirm = async () => {
     if (selectedCluster === null || balanceWei === null) return;
+    if (action === "redelegate" && redelegateDstClusterId === null) return;
     setStep("submitting");
     setSubmitError(null);
     setTxHash(null);
     try {
-      // Parse the amount once.
       const amountWei = parseLythAmount(amountStr);
       if (amountWei === null) {
         setSubmitError({
@@ -228,8 +247,17 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
         setStep("error");
         return;
       }
-      const addBps = lythAmountToBps(amountWei, balanceWei);
-      const data = encodeDelegate(selectedCluster.clusterId, addBps);
+      const bps = lythAmountToBps(amountWei, balanceWei);
+      const data =
+        action === "delegate"
+          ? encodeDelegate(selectedCluster.clusterId, bps)
+          : action === "undelegate"
+            ? encodeUndelegate(selectedCluster.clusterId, bps)
+            : encodeRedelegate(
+                selectedCluster.clusterId,
+                redelegateDstClusterId!,
+                bps,
+              );
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -237,16 +265,16 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
         data,
         // The delegation precompile's gas budget isn't measured yet
         // (chain GAP — needs Nayiem). Use a generous overhead-aware
-        // estimate; once the chain side activates, the SW's
-        // `wallet-fee-suggestion` covers the per-method limit.
-        gasLimitHex: "0x186A0", // 100000
+        // estimate; redelegate carries one extra uint256 arg so we
+        // bump the budget slightly for that path.
+        gasLimitHex: action === "redelegate" ? "0x1D4C0" : "0x186A0",
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
         setStep("success");
       } else {
         setSubmitError({
-          message: r.reason ?? "delegation rejected",
+          message: r.reason ?? `${action} rejected`,
           code: typeof r.code === "number" ? r.code : null,
           method: typeof r.method === "string" ? r.method : null,
           via: typeof r.via === "string" ? r.via : null,
@@ -255,7 +283,7 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
       }
     } catch (e) {
       setSubmitError({
-        message: (e as Error).message ?? "delegation failed",
+        message: (e as Error).message ?? `${action} failed`,
         code: null,
         method: null,
         via: null,
@@ -308,12 +336,36 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
           <>
             <SummaryBanner delegations={delegations} balanceWei={balanceWei} />
 
+            {/* Existing delegations — manage Unstake / Redelegate per row */}
+            {delegations !== null && delegations.rows.length > 0 && (
+              <ExistingDelegations
+                delegations={delegations}
+                clusters={clusters}
+                balanceWei={balanceWei}
+                onUnstake={(clusterId) => {
+                  setAction("undelegate");
+                  setSelectedClusterId(clusterId);
+                  setRedelegateDstClusterId(null);
+                  setAmountStr("");
+                  setStep("unstake-form");
+                }}
+                onRedelegate={(clusterId) => {
+                  setAction("redelegate");
+                  setSelectedClusterId(clusterId);
+                  setRedelegateDstClusterId(null);
+                  setAmountStr("");
+                  setStep("redelegate-form");
+                }}
+              />
+            )}
+
             {/* §23.9 four-button autovote + manual entry */}
             <div className="ext-card" style={{ padding: 12 }}>
               <EntryModeToggle
                 entryMode={entryMode}
                 onChange={(mode) => {
                   setEntryMode(mode);
+                  setAction("delegate");
                   setSelectedClusterId(null);
                 }}
               />
@@ -365,6 +417,7 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
                     selectedClusterId={selectedClusterId}
                     isMock={clustersMock}
                     onSelect={(id) => {
+                      setAction("delegate");
                       setSelectedClusterId(id);
                       setStep("form");
                     }}
@@ -372,6 +425,69 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
                 )}
               </>
             )}
+          </>
+        )}
+
+        {step === "unstake-form" && selectedCluster !== null && (
+          <UnstakeForm
+            cluster={selectedCluster}
+            currentWeightBps={existingWeightBps}
+            amountStr={amountStr}
+            onAmountChange={setAmountStr}
+            balanceWei={balanceWei}
+            onContinue={() => setStep("preview")}
+            onBack={() => setStep("pick")}
+          />
+        )}
+
+        {step === "redelegate-form" && selectedCluster !== null && (
+          <RedelegateForm
+            srcCluster={selectedCluster}
+            srcWeightBps={existingWeightBps}
+            dstCluster={
+              redelegateDstClusterId === null
+                ? null
+                : (clusters.find((c) => c.clusterId === redelegateDstClusterId) ?? null)
+            }
+            dstExistingWeightBps={
+              delegations?.rows.find((r) => r.cluster === redelegateDstClusterId)
+                ?.weightBps ?? 0
+            }
+            capBps={capBps}
+            amountStr={amountStr}
+            onAmountChange={setAmountStr}
+            onPickDestination={() => setStep("redelegate-dst-pick")}
+            balanceWei={balanceWei}
+            onContinue={() => setStep("preview")}
+            onBack={() => setStep("pick")}
+          />
+        )}
+
+        {step === "redelegate-dst-pick" && (
+          <>
+            <div
+              style={{
+                marginBottom: 8,
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-400)",
+                lineHeight: 1.5,
+              }}
+            >
+              Pick the destination cluster. Source and destination must
+              differ.
+            </div>
+            <ClusterPicker
+              clusters={clusters.filter(
+                (c) => c.clusterId !== selectedClusterId,
+              )}
+              selectedClusterId={redelegateDstClusterId}
+              isMock={clustersMock}
+              onSelect={(id) => {
+                setRedelegateDstClusterId(id);
+                setStep("redelegate-form");
+              }}
+            />
           </>
         )}
 
@@ -391,11 +507,25 @@ export function Stake({ account, chainId, onBack }: StakeProps) {
         {step === "preview" && selectedCluster !== null && (
           <PreviewView
             cluster={selectedCluster}
+            action={action}
+            destCluster={
+              action === "redelegate" && redelegateDstClusterId !== null
+                ? (clusters.find((c) => c.clusterId === redelegateDstClusterId) ?? null)
+                : null
+            }
             amountStr={amountStr}
             balanceWei={balanceWei}
             existingWeightBps={existingWeightBps}
             onConfirm={() => void handleConfirm()}
-            onBack={() => setStep("form")}
+            onBack={() =>
+              setStep(
+                action === "delegate"
+                  ? "form"
+                  : action === "undelegate"
+                    ? "unstake-form"
+                    : "redelegate-form",
+              )
+            }
           />
         )}
 
@@ -515,6 +645,8 @@ function KvStack({
 
 interface PreviewViewProps {
   cluster: ClusterDirectoryEntry;
+  action: Action;
+  destCluster: ClusterDirectoryEntry | null;
   amountStr: string;
   balanceWei: bigint | null;
   existingWeightBps: number;
@@ -524,6 +656,8 @@ interface PreviewViewProps {
 
 function PreviewView({
   cluster,
+  action,
+  destCluster,
   amountStr,
   balanceWei,
   existingWeightBps,
@@ -532,32 +666,62 @@ function PreviewView({
 }: PreviewViewProps) {
   const amountWei = parseLythAmount(amountStr);
   const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
-  const addBps =
+  const moveBps =
     amountWei !== null && balanceWei !== null && balanceWei > 0n
       ? lythAmountToBps(amountWei, balanceWei)
       : 0;
+  const totalAfterBps =
+    action === "delegate"
+      ? existingWeightBps + moveBps
+      : action === "undelegate"
+        ? Math.max(0, existingWeightBps - moveBps)
+        : Math.max(0, existingWeightBps - moveBps); // source after redelegate
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div className="ext-card" style={{ padding: 14 }}>
-        <Row k="Cluster" v={cluster.name ?? `cluster-${cluster.clusterId}`} />
-        <Row k="Cluster id" v={`#${cluster.clusterId}`} />
         <Row
-          k="Amount"
-          v={`${amountStr} LYTH`}
-          tone="var(--gold)"
+          k={action === "redelegate" ? "Source cluster" : "Cluster"}
+          v={cluster.name ?? `cluster-${cluster.clusterId}`}
         />
-        <Row k="Added weight" v={`${(addBps / 100).toFixed(2)}%`} />
+        {action === "redelegate" && destCluster !== null && (
+          <Row
+            k="Destination"
+            v={destCluster.name ?? `cluster-${destCluster.clusterId}`}
+            tone="var(--gold)"
+          />
+        )}
+        <Row k="Amount" v={`${amountStr} LYTH`} tone="var(--gold)" />
         <Row
-          k="Total weight after"
-          v={`${((existingWeightBps + addBps) / 100).toFixed(2)}%`}
+          k={
+            action === "delegate"
+              ? "Added weight"
+              : action === "undelegate"
+                ? "Removed weight"
+                : "Moved weight"
+          }
+          v={`${(moveBps / 100).toFixed(2)}%`}
+        />
+        <Row
+          k={
+            action === "delegate"
+              ? "Total weight after"
+              : action === "undelegate"
+                ? "Remaining at cluster"
+                : "Remaining at source"
+          }
+          v={`${(totalAfterBps / 100).toFixed(2)}%`}
         />
         <Row
           k="APR"
           v={aprBps === null ? "—" : `${(aprBps / 100).toFixed(2)}%`}
         />
         <Row
-          k="Unbonding"
-          v="Instant (§23.2 zero-unbond)"
+          k={action === "redelegate" ? "Cluster swap" : "Unbonding"}
+          v={
+            action === "redelegate"
+              ? "Instant (§23.2)"
+              : "Instant (§23.2 zero-unbond)"
+          }
           tone="var(--ok)"
         />
       </div>
@@ -583,9 +747,13 @@ function PreviewView({
             lineHeight: 1.6,
           }}
         >
-          Submits as a `delegate(clusterId, weightBps)` call to the
-          delegation precompile via the encrypted-mempool path. Sprintnet
-          may reject the call until the gate is activated.
+          {action === "delegate" &&
+            "Submits `delegate(clusterId, weightBps)` to the delegation precompile via the encrypted-mempool path."}
+          {action === "undelegate" &&
+            "Submits `undelegate(clusterId, weightBps)` — instant release (§23.2 zero-unbond)."}
+          {action === "redelegate" &&
+            "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
+          Sprintnet may reject the call until the gate is activated.
         </div>
       </div>
 
@@ -810,6 +978,170 @@ function allocationToLythAmountStr(
   const trimmed = remStr.replace(/0+$/, "");
   return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ExistingDelegations — per-cluster active stake with Unstake / Redelegate
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ExistingDelegationsProps {
+  delegations: DelegationsView;
+  clusters: ReadonlyArray<ClusterDirectoryEntry>;
+  balanceWei: bigint | null;
+  onUnstake: (clusterId: number) => void;
+  onRedelegate: (clusterId: number) => void;
+}
+
+function ExistingDelegations({
+  delegations,
+  clusters,
+  balanceWei,
+  onUnstake,
+  onRedelegate,
+}: ExistingDelegationsProps) {
+  const clusterById = useMemo(() => {
+    const m = new Map<number, ClusterDirectoryEntry>();
+    for (const c of clusters) m.set(c.clusterId, c);
+    return m;
+  }, [clusters]);
+
+  return (
+    <div className="ext-card" style={{ padding: 12 }}>
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-400)",
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+          marginBottom: 8,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <span>Active delegations · §23</span>
+        <span
+          style={{
+            fontSize: 9,
+            color: "var(--fg-500)",
+            letterSpacing: "0.06em",
+            textTransform: "none",
+          }}
+        >
+          {delegations.rows.length} cluster
+          {delegations.rows.length === 1 ? "" : "s"} ·{" "}
+          {(delegations.totalBps / 100).toFixed(2)}% total
+        </span>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        {delegations.rows.map((row) => {
+          const c = clusterById.get(row.cluster);
+          const amountWei =
+            balanceWei !== null
+              ? (balanceWei * BigInt(row.weightBps)) / 10_000n
+              : null;
+          return (
+            <div
+              key={row.cluster}
+              style={{
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.02)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  marginBottom: 6,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "var(--fg-100)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {c?.name ?? `cluster-${row.cluster}`}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 9.5,
+                      color: "var(--fg-400)",
+                      marginTop: 2,
+                    }}
+                  >
+                    {(row.weightBps / 100).toFixed(2)}%
+                    {amountWei !== null && (
+                      <> · {weiToLythCompact(amountWei)} LYTH</>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 6,
+                }}
+              >
+                <button
+                  onClick={() => onUnstake(row.cluster)}
+                  style={delegationActionBtnStyle}
+                >
+                  Unstake
+                </button>
+                <button
+                  onClick={() => onRedelegate(row.cluster)}
+                  style={delegationActionBtnStyle}
+                >
+                  Redelegate
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function weiToLythCompact(wei: bigint): string {
+  const whole = wei / 10n ** 18n;
+  const rem = wei % 10n ** 18n;
+  if (rem === 0n) return whole.toString();
+  const remStr = rem.toString().padStart(18, "0").slice(0, 4);
+  const trimmed = remStr.replace(/0+$/, "");
+  return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
+}
+
+const delegationActionBtnStyle: CSSProperties = {
+  padding: "6px 8px",
+  borderRadius: 6,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.04)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-mono)",
+  fontSize: 10,
+  cursor: "pointer",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EntryModeToggle — switches between manual + four autovote modes
