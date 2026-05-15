@@ -1,6 +1,6 @@
 // Phase 7 — staking data types shared between the SW staking-client and the
 // popup-side bg wrappers + UI. These mirror the SDK bindings emitted by
-// mono-core-sdk @fdd3844 but live here in the wallet so:
+// mono-core-sdk @0fd8a79 (Phase 7.1 uplift) but live here in the wallet so:
 //
 //   1. The IPC boundary doesn't need to import the SDK at the popup edge
 //      (the SDK pulls in a large dependency surface; the popup just wants
@@ -170,7 +170,7 @@ export interface DelegationHistoryRow {
 //
 // TODO: chain GAP — needs Nayiem
 // ────────────────────────────────
-// The SDK at fdd3844 does not yet expose:
+// The SDK at 0fd8a79 (Phase 7.1 head) does not yet expose:
 //   - per-account pending-rewards aggregation
 //   - redemption-queue rows for in-flight unstake events
 //

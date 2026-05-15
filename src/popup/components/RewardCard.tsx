@@ -3,7 +3,7 @@
 //
 // Data source: bgStakingPendingRewards returns a mock-derived view
 // today (chain GAP — no `lyth_pendingRewards` reader yet in the SDK
-// at fdd3844). The card surfaces `via: "mock"` with an explicit
+// at 0fd8a79). The card surfaces `via: "mock"` with an explicit
 // "illustrative — chain side pending" banner so the figures don't
 // mislead.
 //

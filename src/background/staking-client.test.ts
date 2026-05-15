@@ -13,7 +13,7 @@
 //      missing-required-fields response yields `ok: false, reason`.
 //
 // Pending-rewards + redemption-queue paths are chain-GAP mocks today
-// (the SDK at fdd3844 doesn't expose either reader); the tests pin the
+// (the SDK at 0fd8a79 doesn't expose either reader); the tests pin the
 // mock-derivation shape so a future chain-side activation breaks the
 // fixture loudly rather than silently.
 
