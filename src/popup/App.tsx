@@ -133,7 +133,7 @@ const SPRINTNET_FALLBACK: ChainEntry = {
   name: "Monolythium · Sprintnet",
   // Bootstrap-window rpc. Mirrors SPRINTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
-  // live endpoint. Updated to val-2 on 2026-05-11 regenesis (val-1's
+  // live endpoint. Updated to operator-2 on 2026-05-11 regenesis (operator-1's
   // bls.key was destroyed; see networks.ts docstring).
   rpc: "http://192.0.2.1:8545",
   builtin: true,

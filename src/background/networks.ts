@@ -47,11 +47,10 @@ export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
  * these defaults at lookup time.
  *
  * Naming: the registry-sourced endpoints are labelled `operator-N` (1-
- * indexed, matching the SDK snapshot's ordering). Prior to the 2026-05-14
- * sync the wallet shipped `val-N` labels with val-1 explicitly dropped
- * (regenesis 2026-05-11, val-1's bls.key destroyed during a debugging
- * triple-wipe → cluster dropped to 6/7, BFT floor 5/7). The SDK registry
- * already excludes that endpoint, so the wallet inherits the drop
+ * indexed, matching the SDK snapshot's ordering). The 2026-05-11 regenesis
+ * dropped the original operator-1 (its bls.key was destroyed during a
+ * debugging triple-wipe → cluster dropped to 6/7, BFT floor 5/7). The SDK
+ * registry already excludes that endpoint, so the wallet inherits the drop
  * automatically and no longer hardcodes the exclusion.
  */
 export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =

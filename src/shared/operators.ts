@@ -3,11 +3,11 @@
 // and the popup (which renders the override-management UI).
 //
 // Sprintnet has 6 hardcoded default operator RPCs (see networks.ts:
-// SPRINTNET_OPERATOR_RPCS_DEFAULTS; val-1 dropped per 2026-05-11
-// regenesis, see that file's docstring). Power users can override that list with
-// their own validator nodes; the override is persisted to chrome.storage.local
-// and merged at lookup time. Absence of the key (or null value) means
-// "use the defaults".
+// SPRINTNET_OPERATOR_RPCS_DEFAULTS; the original operator-1 was dropped
+// per the 2026-05-11 regenesis, see that file's docstring). Power users
+// can override that list with their own operator nodes; the override is
+// persisted to chrome.storage.local and merged at lookup time. Absence
+// of the key (or null value) means "use the defaults".
 
 /**
  * Storage key for the user-configured operator override. Lives in

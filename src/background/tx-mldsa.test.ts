@@ -10,13 +10,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Stub getActiveOperators to a single deterministic entry. With a
-// real list the post-regenesis defaults (val-2 through val-7) would
-// drive which operator name lands in err.via; mocking lets the
+// real list the post-regenesis defaults (operator-1 through operator-6)
+// would drive which operator name lands in err.via; mocking lets the
 // assertion be exact regardless of future default-list edits.
 // vi.mock is hoisted above the static import below.
 vi.mock("./networks.js", () => ({
   getActiveOperators: () => [
-    { name: "val-test", region: "x", rpc: "http://test.example" },
+    { name: "operator-test", region: "x", rpc: "http://test.example" },
   ],
 }));
 
@@ -55,7 +55,7 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
       method?: string;
     };
     expect(err.code).toBe(-32049);
-    expect(err.via).toBe("val-test");
+    expect(err.via).toBe("operator-test");
     expect(err.method).toBe("lyth_getEncryptionKey");
     expect(err.message).toBe("mempool: decryption failed");
   });
