@@ -715,6 +715,37 @@ export async function bgOperatorsSet(
   return send("sprintnet-operators-set", { operators });
 }
 
+/** Per-operator health row surfaced by `sprintnet-operators-health`. `ok`
+ *  is true when the operator responded with both a `net_version` and a
+ *  `eth_blockNumber` within the probe budget. */
+export type OperatorHealthRow =
+  | {
+      name: string;
+      region: string;
+      rpc: string;
+      ok: true;
+      chainIdDec: number | null;
+      blockHex: string | null;
+      latencyMs: number;
+    }
+  | {
+      name: string;
+      region: string;
+      rpc: string;
+      ok: false;
+      reason: string;
+    };
+
+/** Probe every active operator in parallel and return per-row status.
+ *  Used by the About page; not cached because we want fresh numbers on
+ *  the user opening the screen. */
+export async function bgOperatorsHealth(): Promise<{
+  ok: true;
+  operators: OperatorHealthRow[];
+}> {
+  return send("sprintnet-operators-health");
+}
+
 export async function bgGetAutoLockMinutes(): Promise<{
   autoLockMinutes: number;
   options: readonly number[];
