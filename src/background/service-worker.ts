@@ -1786,6 +1786,77 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         effective: getActiveOperators().map((d) => ({ ...d })),
       };
     }
+    case "sprintnet-operators-health": {
+      // About-page operator-table source. Probes every active operator
+      // in parallel (eth_blockNumber + net_version) and returns per-
+      // operator status. Not cached — this handler only fires on
+      // About-page open, and a stale health view is worse than a
+      // 1.5s probe wait.
+      const ops = getActiveOperators();
+      const PROBE_BUDGET_MS = 1_500;
+      const results = await Promise.all(
+        ops.map(async (op) => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), PROBE_BUDGET_MS);
+          try {
+            const startedAt = Date.now();
+            const body = JSON.stringify([
+              { jsonrpc: "2.0", id: 1, method: "net_version", params: [] },
+              { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
+            ]);
+            const res = await fetch(op.rpc, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body,
+              signal: ctrl.signal,
+            });
+            clearTimeout(timer);
+            if (!res.ok) {
+              return {
+                name: op.name,
+                region: op.region,
+                rpc: op.rpc,
+                ok: false as const,
+                reason: `HTTP ${res.status}`,
+              };
+            }
+            const parsed = (await res.json()) as unknown;
+            const arr = Array.isArray(parsed) ? parsed : [parsed];
+            const netRow = arr.find(
+              (r): r is { id: number; result?: string } =>
+                typeof r === "object" && r !== null && (r as { id?: unknown }).id === 1,
+            );
+            const blockRow = arr.find(
+              (r): r is { id: number; result?: string } =>
+                typeof r === "object" && r !== null && (r as { id?: unknown }).id === 2,
+            );
+            const chainIdDec =
+              typeof netRow?.result === "string" ? Number(netRow.result) : null;
+            const blockHex =
+              typeof blockRow?.result === "string" ? blockRow.result : null;
+            return {
+              name: op.name,
+              region: op.region,
+              rpc: op.rpc,
+              ok: true as const,
+              chainIdDec,
+              blockHex,
+              latencyMs: Date.now() - startedAt,
+            };
+          } catch (e) {
+            clearTimeout(timer);
+            return {
+              name: op.name,
+              region: op.region,
+              rpc: op.rpc,
+              ok: false as const,
+              reason: (e as Error)?.name === "AbortError" ? "timeout" : "unreachable",
+            };
+          }
+        }),
+      );
+      return { ok: true, operators: results };
+    }
     case "sprintnet-operators-set": {
       // Payload: { operators: OperatorEntry[] | null }. Null clears the
       // override and reverts to defaults; non-null persists the override.
