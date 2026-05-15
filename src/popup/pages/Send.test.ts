@@ -123,15 +123,31 @@ describe("validateToAddress — complete mono1", () => {
 });
 
 describe("validateToAddress — unknown / garbage", () => {
-  it("non-0x non-mono1 input reports a clear error", () => {
+  it("non-0x non-mono1 non-.mono input reports a clear error", () => {
     const r = validateToAddress("hello world");
-    expect(r.error).toMatch(/0x or mono1/);
+    expect(r.error).toMatch(/0x.*mono1.*\.mono/);
     expect(r.inputForm).toBe("unknown");
   });
 
-  it("ENS-style names are rejected (no resolver yet)", () => {
+  it("malformed mono name (mixed case, no resolver yet) is reported", () => {
+    // Mixed-case is a §22.7/§22.8 canonicalization violation. The parser
+    // surfaces a specific error rather than falling through to "unknown".
+    const r = validateToAddress("Alice.mono");
+    expect(r.error).toMatch(/not a valid mono name/);
+    expect(r.inputForm).toBe("mono-name");
+  });
+
+  it("well-formed mono name is accepted (forward-resolve happens async)", () => {
+    // The synchronous parser sets inputForm to "mono-name" and surfaces
+    // the parsed canonical form; addr0x is left null because forward-
+    // resolve is async (useNameForwardResolve reads chrome.storage).
     const r = validateToAddress("alice.mono");
-    expect(r.error).toMatch(/0x or mono1/);
+    expect(r.error).toBeNull();
+    expect(r.inputForm).toBe("mono-name");
+    expect(r.addr0x).toBeNull();
+    expect(r.monoName).not.toBeNull();
+    expect(r.monoName?.tld).toBe("human");
+    expect(r.monoName?.canonical).toBe("alice.mono");
   });
 });
 
