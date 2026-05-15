@@ -17,6 +17,7 @@ import {
   isExecutable,
   isGovernanceExecutable,
   pickFirstSelfSigner,
+  pickNextLocalVoter,
   reconcileGovernanceStatus,
   reconcileProposalStatus,
   validateSignerInput,
@@ -569,6 +570,54 @@ describe("pickFirstSelfSigner", () => {
 
   it("returns undefined for an empty roster", () => {
     expect(pickFirstSelfSigner([])).toBeUndefined();
+  });
+});
+
+describe("pickNextLocalVoter", () => {
+  function buildRoster(): MultisigSigner[] {
+    return [
+      makeSigner({
+        id: "self-a",
+        address: fakeAddress(0x01),
+        role: "self",
+        vaultId: "v-a",
+      } as Partial<MultisigSigner> & { id: string; address: string }),
+      makeSigner({
+        id: "self-b",
+        address: fakeAddress(0x02),
+        role: "self",
+        vaultId: "v-b",
+      } as Partial<MultisigSigner> & { id: string; address: string }),
+      makeSigner({ id: "ext-c", address: fakeAddress(0x03) }),
+    ];
+  }
+
+  it("skips already-approved self signers and returns the next eligible", () => {
+    const roster = buildRoster();
+    const approved = new Set(["self-a"]);
+    const rejected = new Set<string>();
+    expect(pickNextLocalVoter(roster, approved, rejected)?.id).toBe("self-b");
+  });
+
+  it("skips already-rejected self signers", () => {
+    const roster = buildRoster();
+    const approved = new Set<string>();
+    const rejected = new Set(["self-a"]);
+    expect(pickNextLocalVoter(roster, approved, rejected)?.id).toBe("self-b");
+  });
+
+  it("returns undefined when all self signers have voted", () => {
+    const roster = buildRoster();
+    const approved = new Set(["self-a"]);
+    const rejected = new Set(["self-b"]);
+    expect(pickNextLocalVoter(roster, approved, rejected)).toBeUndefined();
+  });
+
+  it("never returns external signers even when they haven't voted", () => {
+    const roster = buildRoster();
+    const approved = new Set(["self-a", "self-b"]);
+    const rejected = new Set<string>();
+    expect(pickNextLocalVoter(roster, approved, rejected)).toBeUndefined();
   });
 });
 

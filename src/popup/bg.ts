@@ -1012,6 +1012,58 @@ export async function bgMultisigListProposals(
   return send("multisig-list-proposals", { vaultId });
 }
 
+/** Add an approval signature to a pending proposal. Returns the new
+ *  approval/rejection counts so the popup can reconcile the UI
+ *  without a refetch. Requires unlocked container. */
+export async function bgMultisigSign(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").ProposalStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-sign", args);
+}
+
+/** Add a rejection signature. Mirrors bgMultisigSign but lands in
+ *  the proposal's rejections[] array. */
+export async function bgMultisigReject(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | {
+      ok: true;
+      signerId: string;
+      status: import("../shared/multisig.js").ProposalStatus;
+      approvals: number;
+      rejections: number;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-reject", args);
+}
+
+/** Execute a proposal whose approvals have reached threshold. Pulls
+ *  the action out of the proposal record + broadcasts via the
+ *  encrypted-envelope path using the multisig vault's own keypair.
+ *  Returns the tx hash on success; updates the proposal record's
+ *  status + txHash atomically. */
+export async function bgMultisigExecute(args: {
+  vaultId: string;
+  proposalId: string;
+}): Promise<
+  | { ok: true; txHash: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-execute", args);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Phase 7 — staking + delegation reads (§23 whitepaper)
 // ─────────────────────────────────────────────────────────────────────

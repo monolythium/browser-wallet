@@ -248,6 +248,25 @@ export function pickFirstSelfSigner(
   return signers.find((s) => s.role === "self" && s.vaultId !== undefined);
 }
 
+/** Find the first self-signer who has NOT already voted on the
+ *  proposal (neither approved nor rejected). Used by the sign/reject
+ *  IPC handlers to pick the next local signer that can still vote;
+ *  returns undefined when every local signer has already voted or
+ *  when there are no self-signers at all. */
+export function pickNextLocalVoter(
+  signers: readonly MultisigSigner[],
+  approvedIds: ReadonlySet<string>,
+  rejectedIds: ReadonlySet<string>,
+): MultisigSigner | undefined {
+  return signers.find(
+    (s) =>
+      s.role === "self" &&
+      s.vaultId !== undefined &&
+      !approvedIds.has(s.id) &&
+      !rejectedIds.has(s.id),
+  );
+}
+
 /** Default threshold for an N-signer multisig — simple majority
  *  (floor(N/2) + 1). The spec calls this out as the default; users
  *  can override at creation time. Concrete values:
