@@ -349,10 +349,10 @@ export async function readDelegationCap(): Promise<StakingResult<DelegationCap>>
 // Rewards + redemption queue (chain GAPs)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Per-account pending rewards. The SDK at fdd3844 does NOT yet expose a
- *  `lyth_pendingRewards` reader; the wallet returns a mock derived from
- *  the active delegations + MOCK_CLUSTER_APR_BPS until Nayiem surfaces
- *  the chain side.
+/** Per-account pending rewards. The SDK at 0fd8a79 (Phase 7.1 head) does
+ *  NOT yet expose a `lyth_pendingRewards` reader; the wallet returns a
+ *  mock derived from the active delegations + MOCK_CLUSTER_APR_BPS until
+ *  Nayiem surfaces the chain side.
  *
  *  Mock derivation: for each active delegation row, the wallet computes
  *  a small fake reward proportional to the weight × APR / (365 × 24 × 12)

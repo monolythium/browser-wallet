@@ -15,7 +15,7 @@ export const SDK_PACKAGE_VERSION = "0.1.0";
  *  HEAD` at the time of the last upstream sync. The wallet's
  *  pnpm-lock.yaml resolves the SDK from the workspace path, so this
  *  constant exists purely for the About-page version readout. */
-export const SDK_COMMIT_SHORT = "fdd3844";
+export const SDK_COMMIT_SHORT = "0fd8a79";
 
 /** Expected Sprintnet genesis hash — the wallet's authoritative pin for
  *  GAP #11 (orphan-fork defense). Operator probes that return a
