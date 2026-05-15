@@ -40,9 +40,22 @@ interface NftDetailProps {
   /** Optional unpin handler — when provided, surfaces a secondary
    *  "Remove" button alongside Send. */
   onRemove?: () => void;
+  /** Phase 9 — when `false`, hide the rich-metadata pieces
+   *  (description blurb + attributes grid). Header, image,
+   *  collection / contract / standard card, and Send/Remove CTAs
+   *  stay visible. Default `true` so callers that haven't been
+   *  retrofitted with the §28.5 Q29 MARKETPLACE flag still render
+   *  the existing UI. */
+  showRichMetadata?: boolean;
 }
 
-export function NftDetail({ nft, onBack, onSend, onRemove }: NftDetailProps) {
+export function NftDetail({
+  nft,
+  onBack,
+  onSend,
+  onRemove,
+  showRichMetadata = true,
+}: NftDetailProps) {
   const [imgError, setImgError] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -146,7 +159,7 @@ export function NftDetail({ nft, onBack, onSend, onRemove }: NftDetailProps) {
           </div>
         </div>
 
-        {nft.metadata?.description && (
+        {showRichMetadata && nft.metadata?.description && (
           <div
             style={{
               fontSize: 12,
@@ -219,7 +232,7 @@ export function NftDetail({ nft, onBack, onSend, onRemove }: NftDetailProps) {
           />
         </div>
 
-        {nft.metadata?.attributes && nft.metadata.attributes.length > 0 && (
+        {showRichMetadata && nft.metadata?.attributes && nft.metadata.attributes.length > 0 && (
           <div>
             <div
               style={{

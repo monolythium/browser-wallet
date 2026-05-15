@@ -32,6 +32,7 @@ import { Icon } from "../Icon";
 import { NftCard, type NftCardEntry } from "./NftCard";
 import { NftDetail, type NftDetailEntry, type NftStandard } from "./NftDetail";
 import { NftAddModal } from "./NftAddModal";
+import { useFeature } from "../hooks/useFeature";
 import type { SendNftTarget } from "../pages/SendNft";
 import {
   fetchOrCacheNftMetadata,
@@ -74,6 +75,10 @@ const SPRINTNET_FOOTNOTE =
   "NFT discovery uses on-chain event indexing, which is currently disabled on Sprintnet. You can still pin any NFT you own by contract address — sending and receiving work normally.";
 
 export function NftTab({ ownerAddress, chainId, chainIdHex, onOpenSendNft }: NftTabProps) {
+  // Phase 9 — §28.5 Q29 MARKETPLACE flag drives the rich-metadata
+  // surfaces in the detail view (description + attributes grid).
+  // Default OFF → minimal detail view.
+  const marketplaceOn = useFeature("MARKETPLACE");
   const caller: EthCaller = useMemo(
     () => ({
       ethCall: async (req) => {
@@ -213,6 +218,7 @@ export function NftTab({ ownerAddress, chainId, chainIdHex, onOpenSendNft }: Nft
     return (
       <NftDetail
         nft={detail}
+        showRichMetadata={marketplaceOn}
         onBack={() => setSelected(null)}
         onSend={() => {
           // Phase 5 Commit 7 — bubble to App.tsx, which stashes the
