@@ -28,6 +28,7 @@ import { Send } from "./pages/Send";
 import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
+import { Features } from "./pages/Features";
 import { Stake } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -106,7 +107,8 @@ type Screen =
   | "connected-sites"
   | "multisig-pending"
   | "multisig-governance"
-  | "security";
+  | "security"
+  | "features";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -767,7 +769,10 @@ export default function App() {
           onOpenAbout={() => setScreen("about")}
           onOpenDelegations={() => setScreen("delegations")}
           {...(activeVaultSummary
-            ? { onOpenSecurity: () => setScreen("security") }
+            ? {
+                onOpenSecurity: () => setScreen("security"),
+                onOpenFeatures: () => setScreen("features"),
+              }
             : {})}
           {...(activeVaultSummary?.kind === "multisig"
             ? {
@@ -789,6 +794,10 @@ export default function App() {
           vaultId={activeVaultSummary.id}
           vaultAddress={activeVaultSummary.addr}
         />
+      )}
+
+      {screen === "features" && (
+        <Features onBack={() => setScreen("settings")} />
       )}
 
       {screen === "operators" && (
