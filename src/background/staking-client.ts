@@ -29,6 +29,7 @@ import {
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
   MOCK_CLUSTERS,
+  type ClusterDelegatorsView,
   type ClusterDirectoryEntry,
   type ClusterDirectoryPage,
   type ClusterHealth,
@@ -485,6 +486,66 @@ export async function readDelegationHistory(
   }
 }
 
+// SDK contract: ClusterDelegatorsResponse (binding, not top-level exported).
+// Strict shape: { cluster: number, delegators: string[], count: number, block: unknown }.
+// Wire form drops `block` (the wallet doesn't surface it; chain-status
+// banner already covers staleness).
+interface RawClusterDelegators {
+  cluster?: number;
+  delegators?: ReadonlyArray<string>;
+  count?: number;
+}
+
+/** Read the delegator address list for a single cluster (§23.6 cap
+ *  context, §14 community-cluster surface).
+ *
+ *  Surfaces on the cluster-detail expand panel as "n wallets delegate
+ *  here" so the user can see the cluster's demand profile when picking
+ *  a target. Addresses themselves are not labeled / linkable today —
+ *  the figure is the headline value.
+ *
+ *  Cluster-offline fallback returns `{ delegators: [], count: 0 }` so
+ *  the popup renders a `—` placeholder rather than crashing. */
+export async function readClusterDelegators(
+  clusterId: number,
+): Promise<StakingResult<ClusterDelegatorsView>> {
+  try {
+    const { result, via } = await sprintnetJsonRpc<RawClusterDelegators>(
+      "lyth_getClusterDelegators",
+      [clusterId],
+    );
+    if (!result || typeof result !== "object" || typeof result.cluster !== "number") {
+      return {
+        ok: false,
+        reason: "malformed lyth_getClusterDelegators response",
+      };
+    }
+    const delegators = Array.isArray(result.delegators)
+      ? result.delegators.filter((d): d is string => typeof d === "string")
+      : [];
+    return {
+      ok: true,
+      via,
+      data: {
+        cluster: result.cluster,
+        delegators,
+        count:
+          typeof result.count === "number" ? result.count : delegators.length,
+      },
+    };
+  } catch (e) {
+    console.warn(
+      "[staking-client] readClusterDelegators: chain offline, returning empty —",
+      (e as Error)?.message ?? e,
+    );
+    return {
+      ok: true,
+      via: "mock",
+      data: { cluster: clusterId, delegators: [], count: 0 },
+    };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rewards + redemption queue (chain GAPs)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -498,16 +559,20 @@ export async function readDelegationHistory(
  *  a small fake reward proportional to the weight × APR / (365 × 24 × 12)
  *  — i.e. "as if 5 minutes of accrual at the cluster's nominal APR." This
  *  is purely a render-shape hint; the UI labels the figures `MOCK` until
- *  the chain side lands. */
+ *  the chain side lands.
+ *
+ *  TODO: chain GAP — needs Nayiem
+ *  ────────────────────────────────
+ *  Phase 7.1 audit (2026-05-15): mono-core-sdk @0fd8a79 has no
+ *  `lyth_pendingRewards` and no `/api/v1/staking/rewards` REST route
+ *  either. Commit 964b0a3 "Expose advanced read API routes" exposed
+ *  certificates, registry, and DAG routes but not pending-rewards
+ *  aggregation. Once a chain reader lands, replace this body with a
+ *  direct call via `sprintnetJsonRpc` and drop the mock derivation. */
 export async function readPendingRewards(
   wallet: string,
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
-  // TODO: chain GAP — needs Nayiem
-  // ────────────────────────────────
-  // Once `lyth_pendingRewards` (or an equivalent indexer aggregate) ships
-  // in the SDK, replace this body with a direct call via
-  // `sprintnetJsonRpc` and drop the mock derivation below.
 
   let total = 0n;
   const rows: PendingRewardsRow[] = [];

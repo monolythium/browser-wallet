@@ -31,6 +31,7 @@ vi.mock("./tx-mldsa.js", () => ({
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import {
+  readClusterDelegators,
   readClusterDirectory,
   readClusterStatus,
   readDelegationCap,
@@ -371,6 +372,86 @@ describe("readDelegationCap", () => {
     if (!r.ok) return;
     expect(r.via).toBe("mock");
     expect(r.data.capBps).toBe(5000);
+  });
+
+  // Phase 7.1 — wire-contract anchor mirroring the cluster directory's
+  // typed fixture pattern. Constructs the strict SDK-shape envelope (cap
+  // + bigint heights + bigint block number) and verifies the wallet
+  // stringifies cleanly for IPC.
+  it("parses a strict SDK DelegationCapResponse shape (bigint heights stringified)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-2",
+      result: {
+        capBps: 5000,
+        lastChangedAtHeight: 100_000n,
+        blockNumber: 100_001n, // ignored by the wallet — chain-status covers it
+      },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.capBps).toBe(5000);
+    expect(r.data.lastChangedAtHeight).toBe("100000");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterDelegators (Phase 7.1 — newly activated co-delegator reader)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterDelegators", () => {
+  it("normalises a well-formed lyth_getClusterDelegators response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-3",
+      result: {
+        cluster: 7,
+        delegators: ["0x" + "aa".repeat(20), "0x" + "bb".repeat(20)],
+        count: 2,
+      },
+    });
+    const r = await readClusterDelegators(7);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.cluster).toBe(7);
+    expect(r.data.delegators).toHaveLength(2);
+    expect(r.data.count).toBe(2);
+  });
+
+  it("preserves a chain-reported count that exceeds the returned list (cap case)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        cluster: 4,
+        delegators: ["0x" + "11".repeat(20)],
+        count: 247, // chain scanned 247 slots, capped to 1 returned
+      },
+    });
+    const r = await readClusterDelegators(4);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.delegators).toHaveLength(1);
+    expect(r.data.count).toBe(247);
+  });
+
+  it("falls back to empty on chain-offline", async () => {
+    mockedRpc.mockRejectedValue(new Error("no operator"));
+    const r = await readClusterDelegators(1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.delegators).toEqual([]);
+    expect(r.data.count).toBe(0);
+  });
+
+  it("rejects a malformed response (missing cluster id)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { delegators: [], count: 0 },
+    });
+    const r = await readClusterDelegators(1);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
   });
 });
 

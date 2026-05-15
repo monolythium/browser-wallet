@@ -122,6 +122,7 @@ import {
   sprintnetMaxBalanceConsensus,
 } from "./tx-mldsa.js";
 import {
+  readClusterDelegators,
   readClusterDirectory,
   readClusterStatus,
   readDelegationHistory,
@@ -2834,6 +2835,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const limit = typeof p.limit === "number" ? p.limit : 50;
       return readDelegationHistory(p.wallet, limit, p.cursor);
+    }
+    case "staking-cluster-delegators": {
+      // Phase 7.1 — co-delegator surface for a single cluster. Used by
+      // the cluster-detail expand panel to render "n wallets delegate
+      // here" without inferring from indirect signals.
+      const p = message.payload as { clusterId?: number } | undefined;
+      if (typeof p?.clusterId !== "number") {
+        return { ok: false, reason: "missing clusterId" };
+      }
+      return readClusterDelegators(p.clusterId);
     }
     case "staking-autovote-seed": {
       // Per-user §23.9 entropy: derive a 32-byte seed from the unlocked

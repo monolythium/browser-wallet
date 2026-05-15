@@ -881,6 +881,7 @@ export async function bgVaultAddImport(
 // aren't authoritative.
 
 export type {
+  ClusterDelegatorsView,
   ClusterDirectoryEntry,
   ClusterDirectoryPage,
   ClusterHealth,
@@ -899,6 +900,7 @@ export type {
 } from "../shared/staking.js";
 
 import type {
+  ClusterDelegatorsView,
   ClusterDirectoryPage,
   ClusterStatus,
   DelegationCap,
@@ -972,6 +974,16 @@ export async function bgStakingDelegationHistory(
     "staking-delegation-history",
     cursor === undefined ? { wallet, limit } : { wallet, limit, cursor },
   );
+}
+
+/** Read the co-delegator list for a single cluster — used by the
+ *  cluster-detail expand panel to surface demand-profile context
+ *  ("47 wallets delegate here"). Returns `{ delegators: [], count: 0 }`
+ *  with `via: "mock"` when the chain is offline. */
+export async function bgStakingClusterDelegators(
+  clusterId: number,
+): Promise<StakingResult<ClusterDelegatorsView>> {
+  return send("staking-cluster-delegators", { clusterId });
 }
 
 /** Derive the per-user autovote entropy seed (§23.9). The SW derives
