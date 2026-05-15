@@ -16,6 +16,7 @@ import {
   hashTxProposal,
   isExecutable,
   isGovernanceExecutable,
+  pickFirstSelfSigner,
   reconcileGovernanceStatus,
   reconcileProposalStatus,
   validateSignerInput,
@@ -535,6 +536,39 @@ describe("applyGovernance", () => {
     expect(() =>
       applyGovernance(baseSigners(), 2, { kind: "change-threshold", threshold: 0 }, newId),
     ).toThrow(/>= 1/);
+  });
+});
+
+describe("pickFirstSelfSigner", () => {
+  it("returns the first self signer with a vaultId", () => {
+    const signers: MultisigSigner[] = [
+      makeSigner({ id: "ext-1", address: fakeAddress(0x01) }),
+      makeSigner({
+        id: "self-1",
+        address: fakeAddress(0x02),
+        role: "self",
+        vaultId: "v-1",
+      } as Partial<MultisigSigner> & { id: string; address: string }),
+      makeSigner({
+        id: "self-2",
+        address: fakeAddress(0x03),
+        role: "self",
+        vaultId: "v-2",
+      } as Partial<MultisigSigner> & { id: string; address: string }),
+    ];
+    expect(pickFirstSelfSigner(signers)?.id).toBe("self-1");
+  });
+
+  it("returns undefined when no self signer exists", () => {
+    const signers: MultisigSigner[] = [
+      makeSigner({ id: "ext-1", address: fakeAddress(0x01) }),
+      makeSigner({ id: "ext-2", address: fakeAddress(0x02) }),
+    ];
+    expect(pickFirstSelfSigner(signers)).toBeUndefined();
+  });
+
+  it("returns undefined for an empty roster", () => {
+    expect(pickFirstSelfSigner([])).toBeUndefined();
   });
 });
 

@@ -969,6 +969,50 @@ export async function bgVaultPubkey(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Phase 8 Commit 3 — proposal creation surface
+// ─────────────────────────────────────────────────────────────────────
+//
+// `bgMultisigPropose` creates a new transaction proposal inside a
+// multisig vault's meta. The first self-signer in the roster acts as
+// proposer; their vault key signs the canonical proposal hash and
+// the signature lands in approvals[0]. Container must be unlocked.
+//
+// `bgMultisigListProposals` is a thin convenience wrapper around the
+// proposals array — saves callers from pulling the full meta when
+// they only need the proposal list.
+
+import type {
+  PendingProposal,
+  ProposalAction,
+} from "../shared/multisig.js";
+
+export type {
+  PendingProposal,
+  ProposalAction,
+  ProposalSignature,
+  ProposalStatus,
+} from "../shared/multisig.js";
+
+export async function bgMultisigPropose(args: {
+  vaultId: string;
+  action: ProposalAction;
+}): Promise<
+  | { ok: true; proposalId: string; proposerId: string }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-propose", args);
+}
+
+export async function bgMultisigListProposals(
+  vaultId: string,
+): Promise<
+  | { ok: true; proposals: PendingProposal[] | null }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-list-proposals", { vaultId });
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Phase 7 — staking + delegation reads (§23 whitepaper)
 // ─────────────────────────────────────────────────────────────────────
 //
