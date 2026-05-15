@@ -51,6 +51,7 @@
 //             the shared-proposal import path.
 
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tunables
@@ -502,8 +503,267 @@ export function applyGovernance(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Cross-signer coordination (Commit 7)
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Schema-bound envelope wrapping a serialized proposal blob. The
+ *  `kind` discriminator is what the importer keys on to route into
+ *  the tx or governance queue. The `v` field is a future-proofing
+ *  tag — bump it (and rotate the proposal hash domain in parallel)
+ *  to invalidate stale exports cleanly. */
+export interface SharedProposalEnvelope {
+  v: 1;
+  kind: "tx" | "gov";
+  proposal: PendingProposal | GovernanceProposal;
+}
+
+/** Encode a proposal as a base64-encoded JSON envelope suitable for
+ *  pasting into a chat / email / QR code. The output is wire-stable:
+ *  re-encoding the same proposal yields the same bytes. Pure. */
+export function serializeProposalForShare(
+  proposal: PendingProposal | GovernanceProposal,
+  kind: "tx" | "gov",
+): string {
+  const envelope: SharedProposalEnvelope = { v: 1, kind, proposal };
+  const json = JSON.stringify(envelope);
+  return bytesToBase64(new TextEncoder().encode(json));
+}
+
+/** Decode a shared-proposal blob back to an envelope. Throws on
+ *  malformed base64, malformed JSON, missing version tag, or
+ *  structural mismatch with the kind discriminator. Does NOT verify
+ *  signatures — caller must run {@link verifyProposalApprovals} or
+ *  the governance equivalent before trusting the contents. */
+export function deserializeSharedProposal(
+  blob: string,
+): SharedProposalEnvelope {
+  const trimmed = blob.trim();
+  if (trimmed.length === 0) {
+    throw new Error("empty shared-proposal blob");
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = base64ToBytes(trimmed);
+  } catch {
+    throw new Error("shared-proposal blob is not valid base64");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("shared-proposal blob is not valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("shared-proposal envelope is not an object");
+  }
+  const env = parsed as Record<string, unknown>;
+  if (env["v"] !== 1) {
+    throw new Error(`unsupported shared-proposal version: ${env["v"]}`);
+  }
+  if (env["kind"] !== "tx" && env["kind"] !== "gov") {
+    throw new Error(`unknown shared-proposal kind: ${env["kind"]}`);
+  }
+  if (!env["proposal"] || typeof env["proposal"] !== "object") {
+    throw new Error("shared-proposal envelope missing proposal payload");
+  }
+  return env as unknown as SharedProposalEnvelope;
+}
+
+/** Verify every signature in a tx proposal's approvals + rejections
+ *  against the corresponding signer's pubkey from the local roster.
+ *  Returns the set of signerIds whose signatures verified. Throws
+ *  if any signature is malformed or references an unknown signer
+ *  (these are integrity errors the importer must surface, not
+ *  silently drop). Signatures that fail verification are simply
+ *  excluded from the returned set — the caller can compare to the
+ *  raw approvals[] to detect tampering. */
+export function verifyProposalApprovals(
+  proposal: PendingProposal,
+  signers: readonly MultisigSigner[],
+): { validApprovals: Set<string>; validRejections: Set<string> } {
+  const digest = hashTxProposal(proposal);
+  const validApprovals = new Set<string>();
+  const validRejections = new Set<string>();
+  for (const a of proposal.approvals) {
+    if (verifySignatureFor(a, signers, digest)) validApprovals.add(a.signerId);
+  }
+  for (const r of proposal.rejections) {
+    if (verifySignatureFor(r, signers, digest)) validRejections.add(r.signerId);
+  }
+  return { validApprovals, validRejections };
+}
+
+/** Mirror of {@link verifyProposalApprovals} for governance proposals. */
+export function verifyGovernanceApprovals(
+  proposal: GovernanceProposal,
+  signers: readonly MultisigSigner[],
+): { validApprovals: Set<string>; validRejections: Set<string> } {
+  const digest = hashGovernanceProposal(proposal);
+  const validApprovals = new Set<string>();
+  const validRejections = new Set<string>();
+  for (const a of proposal.approvals) {
+    if (verifySignatureFor(a, signers, digest)) validApprovals.add(a.signerId);
+  }
+  for (const r of proposal.rejections) {
+    if (verifySignatureFor(r, signers, digest)) validRejections.add(r.signerId);
+  }
+  return { validApprovals, validRejections };
+}
+
+/** Merge incoming approvals + rejections into a local tx proposal.
+ *  Dedupes by signerId (later signatures from the same signer are
+ *  ignored — first-wins). Signatures that fail verification against
+ *  the local roster are skipped. The returned proposal has the
+ *  union of valid signatures.
+ *
+ *  Pre-conditions enforced:
+ *    - local + incoming must share the same id + vaultAddress + action
+ *    - if either is in a terminal status, the result is the local
+ *      proposal unchanged (the off-band sender's view is stale).
+ */
+export function mergeProposalSignatures(
+  local: PendingProposal,
+  incoming: PendingProposal,
+  signers: readonly MultisigSigner[],
+): PendingProposal {
+  if (local.id !== incoming.id) {
+    throw new Error("merge: proposal id mismatch");
+  }
+  if (local.vaultAddress.toLowerCase() !== incoming.vaultAddress.toLowerCase()) {
+    throw new Error("merge: vault address mismatch");
+  }
+  if (
+    canonicalActionFingerprint(local.action) !==
+    canonicalActionFingerprint(incoming.action)
+  ) {
+    throw new Error("merge: action mismatch");
+  }
+  if (local.status !== "pending") return local;
+  const digest = hashTxProposal(local);
+  const seenApprovals = new Set(local.approvals.map((a) => a.signerId));
+  const seenRejections = new Set(local.rejections.map((r) => r.signerId));
+  const out: PendingProposal = {
+    ...local,
+    approvals: [...local.approvals],
+    rejections: [...local.rejections],
+  };
+  for (const a of incoming.approvals) {
+    if (seenApprovals.has(a.signerId) || seenRejections.has(a.signerId)) continue;
+    if (!verifySignatureFor(a, signers, digest)) continue;
+    out.approvals.push(a);
+    seenApprovals.add(a.signerId);
+  }
+  for (const r of incoming.rejections) {
+    if (seenApprovals.has(r.signerId) || seenRejections.has(r.signerId)) continue;
+    if (!verifySignatureFor(r, signers, digest)) continue;
+    out.rejections.push(r);
+    seenRejections.add(r.signerId);
+  }
+  return out;
+}
+
+/** Mirror of {@link mergeProposalSignatures} for governance proposals. */
+export function mergeGovernanceSignatures(
+  local: GovernanceProposal,
+  incoming: GovernanceProposal,
+  signers: readonly MultisigSigner[],
+): GovernanceProposal {
+  if (local.id !== incoming.id) {
+    throw new Error("merge: proposal id mismatch");
+  }
+  if (local.vaultAddress.toLowerCase() !== incoming.vaultAddress.toLowerCase()) {
+    throw new Error("merge: vault address mismatch");
+  }
+  if (
+    canonicalGovActionFingerprint(local.action) !==
+    canonicalGovActionFingerprint(incoming.action)
+  ) {
+    throw new Error("merge: governance action mismatch");
+  }
+  if (local.status !== "pending") return local;
+  const digest = hashGovernanceProposal(local);
+  const seenApprovals = new Set(local.approvals.map((a) => a.signerId));
+  const seenRejections = new Set(local.rejections.map((r) => r.signerId));
+  const out: GovernanceProposal = {
+    ...local,
+    approvals: [...local.approvals],
+    rejections: [...local.rejections],
+  };
+  for (const a of incoming.approvals) {
+    if (seenApprovals.has(a.signerId) || seenRejections.has(a.signerId)) continue;
+    if (!verifySignatureFor(a, signers, digest)) continue;
+    out.approvals.push(a);
+    seenApprovals.add(a.signerId);
+  }
+  for (const r of incoming.rejections) {
+    if (seenApprovals.has(r.signerId) || seenRejections.has(r.signerId)) continue;
+    if (!verifySignatureFor(r, signers, digest)) continue;
+    out.rejections.push(r);
+    seenRejections.add(r.signerId);
+  }
+  return out;
+}
+
+function verifySignatureFor(
+  sig: ProposalSignature,
+  signers: readonly MultisigSigner[],
+  digest: Uint8Array,
+): boolean {
+  const signer = signers.find((s) => s.id === sig.signerId);
+  if (!signer) return false;
+  let pubBytes: Uint8Array;
+  let sigBytes: Uint8Array;
+  try {
+    pubBytes = hexToBytes(signer.pubkey, 1952);
+    sigBytes = hexToBytes(sig.signature, 3309);
+  } catch {
+    return false;
+  }
+  try {
+    return ml_dsa65.verify(sigBytes, digest, pubBytes);
+  } catch {
+    return false;
+  }
+}
+
+function canonicalActionFingerprint(action: ProposalAction): string {
+  return canonicalStringify(normalizeAction(action));
+}
+
+function canonicalGovActionFingerprint(action: GovernanceAction): string {
+  return canonicalStringify(normalizeGovernanceAction(action));
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Internals
 // ────────────────────────────────────────────────────────────────────────────
+
+function bytesToBase64(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
+  return btoa(s);
+}
+
+function base64ToBytes(s: string): Uint8Array {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function hexToBytes(hex: string, expectedLen: number): Uint8Array {
+  if (!/^0x[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error("hex string must be 0x + hex chars");
+  }
+  if (hex.length - 2 !== expectedLen * 2) {
+    throw new Error(`hex string must encode ${expectedLen} bytes`);
+  }
+  const out = new Uint8Array(expectedLen);
+  for (let i = 0; i < expectedLen; i++) {
+    out[i] = parseInt(hex.slice(2 + i * 2, 4 + i * 2), 16);
+  }
+  return out;
+}
 
 function canonicalStringify(value: unknown): string {
   if (value === null) return "null";

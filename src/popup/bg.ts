@@ -1137,6 +1137,50 @@ export async function bgMultisigExecuteGovernance(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Phase 8 Commit 7 — cross-signer coordination
+// ─────────────────────────────────────────────────────────────────────
+//
+// Multisig signers commonly live on different machines (one per
+// hardware key, one per officer, etc.). The wallet's pending queue
+// is local-only, so a co-signer who created a proposal needs to
+// share it with the rest of the committee out-of-band. The
+// export/import IPC pair serializes a proposal record (base64 JSON)
+// for pasting into chat/email/QR code; the recipient's wallet
+// verifies every signature against the local roster's pubkeys
+// before merging.
+//
+// Chain-side coordination would supersede this when a user-multisig
+// precompile lands (see shared/multisig.ts module doc for the GAP).
+
+/** Serialize a proposal (tx or governance) as a base64 JSON blob
+ *  for out-of-band sharing. The blob carries the full proposal
+ *  record including current signatures so recipients can merge
+ *  without losing approvals already collected. */
+export async function bgMultisigExportProposal(args: {
+  vaultId: string;
+  proposalId: string;
+  kind: "tx" | "gov";
+}): Promise<
+  { ok: true; blob: string } | { ok: false; reason?: string }
+> {
+  return send("multisig-export-proposal", args);
+}
+
+/** Import a shared proposal blob from another signer. Verifies
+ *  every signature against the local roster's pubkeys; on a known
+ *  proposal id, merges approvals/rejections (dedupe by signerId);
+ *  on a new id, appends the (sanitized) proposal. */
+export async function bgMultisigImportProposal(args: {
+  vaultId: string;
+  blob: string;
+}): Promise<
+  | { ok: true; kind: "tx" | "gov"; proposalId: string }
+  | { ok: false; reason?: string }
+> {
+  return send("multisig-import-proposal", args);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Phase 7 — staking + delegation reads (§23 whitepaper)
 // ─────────────────────────────────────────────────────────────────────
 //

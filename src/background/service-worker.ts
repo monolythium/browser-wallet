@@ -85,14 +85,20 @@ import {
   DEFAULT_GOV_PROPOSAL_TTL_MS,
   DEFAULT_TX_PROPOSAL_TTL_MS,
   applyGovernance,
+  deserializeSharedProposal,
   hashGovernanceProposal,
   hashTxProposal,
   isExecutable,
   isGovernanceExecutable,
+  mergeGovernanceSignatures,
+  mergeProposalSignatures,
   pickFirstSelfSigner,
   pickNextLocalVoter,
   reconcileGovernanceStatus,
   reconcileProposalStatus,
+  serializeProposalForShare,
+  verifyGovernanceApprovals,
+  verifyProposalApprovals,
   type GovernanceAction,
   type GovernanceProposal,
   type PendingProposal,
@@ -2932,6 +2938,172 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           status: proposal.status,
           approvals: proposal.approvals.length,
           rejections: proposal.rejections.length,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-export-proposal": {
+      // Phase 8 Commit 7 — serialize a proposal (tx or governance)
+      // into a base64-encoded JSON blob suitable for out-of-band
+      // sharing (paste into chat / email / QR code). The blob carries
+      // the full proposal record including current approvals/
+      // rejections so the recipient can merge without losing
+      // signatures already collected.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        proposalId?: string;
+        kind?: "tx" | "gov";
+      };
+      if (
+        typeof p.vaultId !== "string" ||
+        typeof p.proposalId !== "string" ||
+        (p.kind !== "tx" && p.kind !== "gov")
+      ) {
+        return {
+          ok: false,
+          reason: "missing vaultId / proposalId / kind",
+        };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const proposal =
+          p.kind === "tx"
+            ? meta.proposals.find((pp) => pp.id === p.proposalId)
+            : meta.governance.find((g) => g.id === p.proposalId);
+        if (!proposal) {
+          return { ok: false, reason: "unknown proposal" };
+        }
+        const blob = serializeProposalForShare(proposal, p.kind);
+        return { ok: true, blob };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "multisig-import-proposal": {
+      // Phase 8 Commit 7 — accept a base64 blob from another signer's
+      // wallet. Verifies every signature in the incoming proposal
+      // against the local signer roster (pubkeys + hashTxProposal /
+      // hashGovernanceProposal). If the proposal id already exists
+      // locally, merge approvals/rejections (dedupe by signerId,
+      // first-wins). If new, append after running the same signature
+      // verification + structural check.
+      //
+      // Returns the merged proposal id + status; the popup refreshes
+      // its meta-read and the UI updates uniformly.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        blob?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.blob !== "string") {
+        return { ok: false, reason: "missing vaultId or blob" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        if (!meta) {
+          return {
+            ok: false,
+            reason: "target vault is not a multisig vault",
+          };
+        }
+        const envelope = deserializeSharedProposal(p.blob);
+
+        if (envelope.kind === "tx") {
+          const incoming = envelope.proposal as PendingProposal;
+          // Vault binding: the incoming proposal must reference this
+          // multisig vault. Otherwise an attacker could craft a
+          // proposal for a different vault that this signer hasn't
+          // opted into.
+          if (
+            incoming.vaultAddress.toLowerCase() !==
+            (await listVaultsV4())
+              ?.find((v) => v.id === p.vaultId)
+              ?.addr.toLowerCase()
+          ) {
+            return {
+              ok: false,
+              reason: "imported proposal targets a different vault address",
+            };
+          }
+          const existing = meta.proposals.find((pp) => pp.id === incoming.id);
+          if (existing) {
+            const merged = mergeProposalSignatures(
+              existing,
+              incoming,
+              meta.signers,
+            );
+            meta.proposals = meta.proposals.map((pp) =>
+              pp.id === merged.id ? merged : pp,
+            );
+          } else {
+            // Brand-new proposal — drop any signatures whose pubkeys
+            // don't match the local roster (defense-in-depth; the
+            // merge path applies the same filter).
+            const verified = verifyProposalApprovals(incoming, meta.signers);
+            const sanitized: PendingProposal = {
+              ...incoming,
+              approvals: incoming.approvals.filter((a) =>
+                verified.validApprovals.has(a.signerId),
+              ),
+              rejections: incoming.rejections.filter((r) =>
+                verified.validRejections.has(r.signerId),
+              ),
+            };
+            meta.proposals = [sanitized, ...meta.proposals];
+          }
+        } else {
+          const incoming = envelope.proposal as GovernanceProposal;
+          if (
+            incoming.vaultAddress.toLowerCase() !==
+            (await listVaultsV4())
+              ?.find((v) => v.id === p.vaultId)
+              ?.addr.toLowerCase()
+          ) {
+            return {
+              ok: false,
+              reason: "imported proposal targets a different vault address",
+            };
+          }
+          const existing = meta.governance.find((g) => g.id === incoming.id);
+          if (existing) {
+            const merged = mergeGovernanceSignatures(
+              existing,
+              incoming,
+              meta.signers,
+            );
+            meta.governance = meta.governance.map((g) =>
+              g.id === merged.id ? merged : g,
+            );
+          } else {
+            const verified = verifyGovernanceApprovals(
+              incoming,
+              meta.signers,
+            );
+            const sanitized: GovernanceProposal = {
+              ...incoming,
+              approvals: incoming.approvals.filter((a) =>
+                verified.validApprovals.has(a.signerId),
+              ),
+              rejections: incoming.rejections.filter((r) =>
+                verified.validRejections.has(r.signerId),
+              ),
+            };
+            meta.governance = [sanitized, ...meta.governance];
+          }
+        }
+
+        await writeMultisigMetaV4(p.vaultId, meta);
+        await resetAutoLock();
+        return {
+          ok: true,
+          kind: envelope.kind,
+          proposalId: envelope.proposal.id,
         };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
