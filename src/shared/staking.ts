@@ -164,6 +164,17 @@ export interface DelegationHistoryRow {
   walletTotalBps: number | null;
 }
 
+/** Paginated per-wallet delegation event timeline. Mirrors the
+ *  `lyth_getDelegationHistory` reader, which returns a plain
+ *  `DelegationHistoryRecord[]` on the wire — the wallet wraps the array
+ *  in this envelope so the popup's render path can branch on `via:
+ *  "mock"` and surface a "chain offline — history may be stale" hint
+ *  when the cluster is offline. */
+export interface DelegationHistoryView {
+  wallet: string;
+  rows: DelegationHistoryRow[];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rewards + redemption queue (§23.4, §23.2)
 // ─────────────────────────────────────────────────────────────────────────────

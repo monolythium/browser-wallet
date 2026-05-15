@@ -124,6 +124,7 @@ import {
 import {
   readClusterDirectory,
   readClusterStatus,
+  readDelegationHistory,
   readDelegations,
   readDelegationCap,
   readPendingRewards,
@@ -2817,6 +2818,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing wallet" };
       }
       return readRedemptionQueue(p.wallet);
+    }
+    case "staking-delegation-history": {
+      // Phase 7.1 — per-wallet delegation event timeline. Distinct from
+      // the wallet-wide activity feed: the activity feed merges every
+      // event kind for the user's address; this reader is delegation-
+      // only for the Delegations page's "Recent activity" surface.
+      const p = message.payload as {
+        wallet?: string;
+        limit?: number;
+        cursor?: string;
+      } | undefined;
+      if (typeof p?.wallet !== "string") {
+        return { ok: false, reason: "missing wallet" };
+      }
+      const limit = typeof p.limit === "number" ? p.limit : 50;
+      return readDelegationHistory(p.wallet, limit, p.cursor);
     }
     case "staking-autovote-seed": {
       // Per-user §23.9 entropy: derive a 32-byte seed from the unlocked
