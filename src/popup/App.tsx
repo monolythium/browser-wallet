@@ -29,6 +29,7 @@ import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
+import { OnboardingHintBar } from "./components/OnboardingHintBar";
 import { Stake } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -679,6 +680,15 @@ export default function App() {
             setScreen("send-nft");
           }}
           onOpenOnboard={() => setScreen("welcome")}
+          topSlot={
+            activeVaultSummary ? (
+              <OnboardingHintBar
+                vaultId={activeVaultSummary.id}
+                onOpenSecurity={() => setScreen("security")}
+                onOpenFeatures={() => setScreen("features")}
+              />
+            ) : undefined
+          }
         />
       )}
 
