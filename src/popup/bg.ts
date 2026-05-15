@@ -955,3 +955,13 @@ export async function bgStakingRedemptionQueue(
 ): Promise<StakingResult<RedemptionQueueView>> {
   return send("staking-redemption-queue", { wallet });
 }
+
+/** Derive the per-user autovote entropy seed (§23.9). The SW derives
+ *  it from the unlocked ML-DSA-65 public key + a domain tag; the
+ *  popup uses the returned 32-byte hex value as the seed argument
+ *  to every pick* call in shared/autovote.ts. */
+export async function bgStakingAutovoteSeed(): Promise<
+  { ok: true; seedHex: string } | { ok: false; reason: string }
+> {
+  return send("staking-autovote-seed");
+}
