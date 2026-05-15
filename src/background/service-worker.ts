@@ -119,6 +119,14 @@ import {
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
 } from "./tx-mldsa.js";
+import {
+  readClusterDirectory,
+  readClusterStatus,
+  readDelegations,
+  readDelegationCap,
+  readPendingRewards,
+  readRedemptionQueue,
+} from "./staking-client.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
@@ -2752,6 +2760,61 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
+    }
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 7 — staking + delegation reads (§23 whitepaper)
+    // ─────────────────────────────────────────────────────────────────
+    case "staking-cluster-directory": {
+      const p = message.payload as { page?: number; limit?: number } | undefined;
+      const page = typeof p?.page === "number" ? p.page : 0;
+      const limit = typeof p?.limit === "number" ? p.limit : 25;
+      return readClusterDirectory(page, limit);
+    }
+    case "staking-cluster-status": {
+      const p = message.payload as { clusterId?: number } | undefined;
+      if (typeof p?.clusterId !== "number") {
+        return { ok: false, reason: "missing clusterId" };
+      }
+      return readClusterStatus(p.clusterId);
+    }
+    case "staking-delegations": {
+      const p = message.payload as { wallet?: string } | undefined;
+      if (typeof p?.wallet !== "string") {
+        return { ok: false, reason: "missing wallet" };
+      }
+      return readDelegations(p.wallet);
+    }
+    case "staking-delegation-cap": {
+      return readDelegationCap();
+    }
+    case "staking-pending-rewards": {
+      // The wallet derives pending rewards from current delegations + the
+      // chain APR table (chain GAP — see staking-client.ts header). The
+      // popup passes its already-fetched delegation rows through so the
+      // SW doesn't double-read.
+      const p = message.payload as {
+        wallet?: string;
+        delegations?: Array<{ cluster?: number; weightBps?: number }>;
+      } | undefined;
+      if (typeof p?.wallet !== "string") {
+        return { ok: false, reason: "missing wallet" };
+      }
+      const delegations = Array.isArray(p.delegations)
+        ? p.delegations
+            .filter(
+              (d): d is { cluster: number; weightBps: number } =>
+                typeof d?.cluster === "number" && typeof d?.weightBps === "number",
+            )
+            .map((d) => ({ cluster: d.cluster, weightBps: d.weightBps }))
+        : [];
+      return readPendingRewards(p.wallet, delegations);
+    }
+    case "staking-redemption-queue": {
+      const p = message.payload as { wallet?: string } | undefined;
+      if (typeof p?.wallet !== "string") {
+        return { ok: false, reason: "missing wallet" };
+      }
+      return readRedemptionQueue(p.wallet);
     }
     case "wallet-send-tx": {
       const p = message.payload as {
