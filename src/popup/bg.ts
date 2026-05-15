@@ -717,24 +717,34 @@ export async function bgOperatorsSet(
 
 /** Per-operator health row surfaced by `sprintnet-operators-health`. `ok`
  *  is true when the operator responded with both a `net_version` and a
- *  `eth_blockNumber` within the probe budget. */
+ *  `eth_blockNumber` within the probe budget; `trustedGenesis` is true
+ *  when the operator's block 0 hash matches the wallet's pinned
+ *  SPRINTNET_GENESIS_HASH (Phase 6 GAP #11 — orphan-fork defense). The
+ *  two are orthogonal: an operator can be live but on a forked chain
+ *  (ok=true, trustedGenesis=false) — RPC dispatch still excludes it,
+ *  and the row is rendered with a distinct badge. */
+export interface OperatorHealthRowCommon {
+  name: string;
+  region: string;
+  rpc: string;
+  /** True iff block-0 hash matches the wallet's pinned genesis. */
+  trustedGenesis: boolean;
+  /** Block-0 hash returned by `eth_getBlockByNumber("0x0", false)`;
+   *  null when the probe failed or the response was malformed. */
+  observedGenesis: string | null;
+}
+
 export type OperatorHealthRow =
-  | {
-      name: string;
-      region: string;
-      rpc: string;
+  | (OperatorHealthRowCommon & {
       ok: true;
       chainIdDec: number | null;
       blockHex: string | null;
       latencyMs: number;
-    }
-  | {
-      name: string;
-      region: string;
-      rpc: string;
+    })
+  | (OperatorHealthRowCommon & {
       ok: false;
       reason: string;
-    };
+    });
 
 /** Probe every active operator in parallel and return per-row status.
  *  Used by the About page; not cached because we want fresh numbers on

@@ -12,6 +12,7 @@ import {
   EXTERNAL_LINKS,
   SDK_COMMIT_SHORT,
   SDK_PACKAGE_VERSION,
+  SDK_REGISTRY_GENESIS_HASH,
   SPRINTNET_CHAIN_ID_DEC,
   SPRINTNET_GENESIS_HASH,
   WALLET_PITCH,
@@ -53,7 +54,11 @@ export function About({ onBack }: AboutProps) {
   }, []);
 
   const healthyCount = operators?.filter((o) => o.ok).length ?? 0;
+  const trustedCount = operators?.filter((o) => o.trustedGenesis).length ?? 0;
   const totalCount = operators?.length ?? 0;
+  const sdkRegistryMismatch =
+    SDK_REGISTRY_GENESIS_HASH.toLowerCase() !==
+    SPRINTNET_GENESIS_HASH.toLowerCase();
 
   return (
     <>
@@ -125,6 +130,29 @@ export function About({ onBack }: AboutProps) {
           >
             {SPRINTNET_GENESIS_HASH}
           </div>
+          {sdkRegistryMismatch && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "8px 10px",
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--warn)",
+                lineHeight: 1.5,
+                background: "rgba(244,201,122,0.08)",
+                borderRadius: 8,
+                border: "1px solid rgba(244,201,122,0.4)",
+              }}
+              title={SDK_REGISTRY_GENESIS_HASH}
+            >
+              SDK registry snapshot reports{" "}
+              <span style={{ color: "var(--fg-200)" }}>
+                {shortHex(SDK_REGISTRY_GENESIS_HASH, 10, 8)}
+              </span>{" "}
+              — wallet's pinned genesis takes precedence until the registry
+              resyncs.
+            </div>
+          )}
         </div>
 
         {/* Operator table */}
@@ -143,7 +171,7 @@ export function About({ onBack }: AboutProps) {
             >
               {operators === null
                 ? "probing…"
-                : `${healthyCount}/${totalCount} live`}
+                : `${trustedCount}/${totalCount} trusted · ${healthyCount} live`}
             </span>
           </div>
           {probeError !== null && (
@@ -334,7 +362,10 @@ function Mono({ children }: { children: ReactNode }) {
 
 function OperatorRow({ row }: { row: OperatorHealthRow }) {
   const ok = row.ok;
-  const reason = ok ? null : row.reason;
+  const trusted = row.trustedGenesis;
+  // Untrusted (forked) operators are RPC-skipped regardless of liveness,
+  // so they get the danger border even when the probe succeeded.
+  const dangerBorder = !trusted || !ok;
   return (
     <div
       style={{
@@ -345,7 +376,9 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
         padding: "8px 10px",
         borderRadius: 8,
         background: "rgba(255,255,255,0.03)",
-        border: ok ? "1px solid var(--fg-700)" : "1px solid rgba(220,80,80,0.3)",
+        border: dangerBorder
+          ? "1px solid rgba(220,80,80,0.3)"
+          : "1px solid var(--fg-700)",
       }}
     >
       <span
@@ -353,7 +386,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           width: 8,
           height: 8,
           borderRadius: "50%",
-          background: ok ? "var(--ok)" : "var(--err)",
+          background: dangerBorder ? "var(--err)" : "var(--ok)",
           flexShrink: 0,
         }}
       />
@@ -363,20 +396,45 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
             fontSize: 12,
             fontWeight: 500,
             color: "var(--fg-100)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
           }}
         >
-          {row.name}
+          <span>{row.name}</span>
           <span
             style={{
               fontFamily: "var(--f-mono)",
               fontSize: 10,
               color: "var(--fg-500)",
-              marginLeft: 6,
               letterSpacing: "0.04em",
             }}
           >
             {row.region}
           </span>
+          {!trusted && (
+            <span
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 9,
+                fontWeight: 600,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "var(--err)",
+                background: "rgba(220,80,80,0.12)",
+                padding: "1px 5px",
+                borderRadius: 3,
+                border: "1px solid rgba(220,80,80,0.4)",
+              }}
+              title={
+                row.observedGenesis !== null
+                  ? `observed genesis: ${row.observedGenesis}`
+                  : "operator did not return a genesis block"
+              }
+            >
+              untrusted chain
+            </span>
+          )}
         </div>
         <div
           style={{
@@ -398,7 +456,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           fontFamily: "var(--f-mono)",
           fontSize: 10,
           textAlign: "right",
-          color: ok ? "var(--ok)" : "var(--err)",
+          color: dangerBorder ? "var(--err)" : "var(--ok)",
           minWidth: 56,
         }}
       >
@@ -412,7 +470,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
             )}
           </>
         ) : (
-          <div>{reason}</div>
+          <div>{row.reason}</div>
         )}
       </div>
     </div>

@@ -84,6 +84,9 @@ import {
   readOperatorOverride,
   getDefaultOperators,
   getActiveOperators,
+  verifyOperatorGenesis,
+  snapshotGenesisCache,
+  clearGenesisCache,
 } from "./networks.js";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
@@ -322,6 +325,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
   void loadOperatorOverride();
   cachedOperator = null;
+  // GAP #11: a fresh override list may add an operator that was never
+  // probed for genesis; drop the cache so the next dispatch re-probes
+  // and the About-page health view reflects fresh trust state.
+  clearGenesisCache();
 });
 
 // ---- Auto-lock ----
@@ -1788,14 +1795,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "sprintnet-operators-health": {
       // About-page operator-table source. Probes every active operator
-      // in parallel (eth_blockNumber + net_version) and returns per-
-      // operator status. Not cached — this handler only fires on
-      // About-page open, and a stale health view is worse than a
-      // 1.5s probe wait.
+      // in parallel (net_version + eth_blockNumber) and surfaces the
+      // genesis-hash verification result (GAP #11). The inner
+      // verifyOperatorGenesis call uses its own forever-cache, so
+      // repeated About-page opens don't re-probe block 0; this
+      // handler itself isn't cached because the latency / block-tip
+      // numbers should be fresh on every screen open.
       const ops = getActiveOperators();
       const PROBE_BUDGET_MS = 1_500;
       const results = await Promise.all(
         ops.map(async (op) => {
+          // Force the genesis check into the cache and snapshot the
+          // observed value so the row can render both ok + observed.
+          await verifyOperatorGenesis(op.rpc, PROBE_BUDGET_MS);
+          const genesisEntry = snapshotGenesisCache().get(op.rpc);
+          const trustedGenesis = genesisEntry?.ok ?? false;
+          const observedGenesis = genesisEntry?.observed ?? null;
+
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), PROBE_BUDGET_MS);
           try {
@@ -1818,6 +1834,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 rpc: op.rpc,
                 ok: false as const,
                 reason: `HTTP ${res.status}`,
+                trustedGenesis,
+                observedGenesis,
               };
             }
             const parsed = (await res.json()) as unknown;
@@ -1842,6 +1860,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               chainIdDec,
               blockHex,
               latencyMs: Date.now() - startedAt,
+              trustedGenesis,
+              observedGenesis,
             };
           } catch (e) {
             clearTimeout(timer);
@@ -1851,6 +1871,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               rpc: op.rpc,
               ok: false as const,
               reason: (e as Error)?.name === "AbortError" ? "timeout" : "unreachable",
+              trustedGenesis,
+              observedGenesis,
             };
           }
         }),
@@ -1870,6 +1892,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (raw === null) {
         await setOperatorOverride(null);
         cachedOperator = null;
+        clearGenesisCache();
         return { ok: true };
       }
       const validated = validateOperatorList(raw);
@@ -1878,6 +1901,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       await setOperatorOverride(validated);
       cachedOperator = null;
+      clearGenesisCache();
       return { ok: true };
     }
     case "keystore-unlock": {
