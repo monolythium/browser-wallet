@@ -87,7 +87,11 @@ import {
   setPasskeyPolicyV4,
 } from "./keystore-mldsa.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
-import { validateCredentialName, validatePasskeyPolicy } from "../shared/passkey.js";
+import {
+  evaluatePolicy as evaluatePasskeyPolicy,
+  validateCredentialName,
+  validatePasskeyPolicy,
+} from "../shared/passkey.js";
 import {
   loadTwoTierState,
   setTwoTierFeature,
@@ -1089,6 +1093,18 @@ let cachedOperator: {
   rpc: string | null;
   checkedAt: number;
 } | null = null;
+
+// ---- Phase 9 — in-memory passkey usage ledger ----
+//
+// Per-vault list of `{ at, valueWei }` entries for txs signed under
+// the passkey-unlock path. Used to enforce the daily-cap mode of
+// `PasskeyPolicy`. Lives in memory only — SW hibernation drops it,
+// which is fine: the daily cap is purely a wallet-side spam guard,
+// not a security invariant, and a fresh SW boot starts the window at
+// zero (so a user who reboots their browser and immediately makes a
+// large passkey-unlocked tx is the worst-case "the cap doesn't bind"
+// scenario — still within the per-tx limit, which is the real ceiling).
+const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
 
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
@@ -3313,6 +3329,92 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
+    }
+    case "passkey-evaluate": {
+      // Send-flow consults this before showing the preview screen.
+      // Returns a decision the popup uses to pick the unlock-mode
+      // badge + whether to run a passkey ceremony before submit.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        valueWeiHex?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
+        return { ok: false, reason: "missing vaultId or valueWeiHex" };
+      }
+      let valueWei: bigint;
+      try {
+        valueWei = BigInt(p.valueWeiHex);
+      } catch {
+        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
+      }
+      try {
+        const state = await readPasskeyStateV4(p.vaultId);
+        const usage = passkeyUsage.get(p.vaultId) ?? [];
+        const decision = evaluatePasskeyPolicy({
+          state,
+          valueWei,
+          recentUsage: usage,
+          now: Date.now(),
+        });
+        // Encode the decision for the wire — `bigint` doesn't survive
+        // structured-clone serialisation across the runtime.sendMessage
+        // boundary in some browser builds.
+        if (decision.kind === "over-limit") {
+          return {
+            ok: true,
+            decision: {
+              kind: "over-limit" as const,
+              mode: decision.mode,
+              thresholdWeiHex: "0x" + decision.threshold.toString(16),
+              attemptedWeiHex: "0x" + decision.attempted.toString(16),
+            },
+          };
+        }
+        if (decision.kind === "passkey-ok") {
+          // Surface the active credentials so the popup can build the
+          // `allowCredentials[]` list for `navigator.credentials.get()`
+          // without a second round-trip.
+          return {
+            ok: true,
+            decision: {
+              kind: "passkey-ok" as const,
+              credentials: state.credentials.map((c) => ({ ...c })),
+            },
+          };
+        }
+        return {
+          ok: true,
+          decision: {
+            kind: "password-required" as const,
+            reason: decision.reason,
+          },
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-record-usage": {
+      // Append a `{at, valueWei}` entry to the in-memory daily-cap
+      // ledger. Popup calls this after a successful passkey-unlocked
+      // tx submit. Prune-on-read keeps the list bounded — no explicit
+      // GC required.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        valueWeiHex?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
+        return { ok: false, reason: "missing vaultId or valueWeiHex" };
+      }
+      let valueWei: bigint;
+      try {
+        valueWei = BigInt(p.valueWeiHex);
+      } catch {
+        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
+      }
+      const entries = passkeyUsage.get(p.vaultId) ?? [];
+      entries.push({ at: Date.now(), valueWei });
+      passkeyUsage.set(p.vaultId, entries);
+      return { ok: true };
     }
     case "passkey-set-policy": {
       // Replace the policy atomically. The wallet enforces the

@@ -848,6 +848,8 @@ export default function App() {
           onBack={() => setScreen("home")}
           {...(activeVaultSummary?.kind === "multisig"
             ? { multisigVaultId: activeVaultSummary.id }
+            : activeVaultSummary !== null
+            ? { singleVaultId: activeVaultSummary.id }
             : {})}
         />
       )}
