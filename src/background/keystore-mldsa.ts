@@ -876,6 +876,33 @@ export async function addVaultMultisigV4(args: {
   }
 }
 
+/** Read a target vault's 1952-byte ML-DSA-65 pubkey as a 0x-prefixed
+ *  hex string. Requires the container to be unlocked (cached MEK).
+ *  Used by the MultisigCreateModal to populate self-signer pubkey
+ *  fields without forcing the user to switch active vaults. Does NOT
+ *  swap the active vault — caller's `unlocked` state is unchanged. */
+export async function getVaultPubkeyV4(vaultId: string): Promise<string> {
+  if (!mekCache) throw new Error("container is locked");
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  let seed: Uint8Array;
+  try {
+    const opened = openVaultEnvelopeV4(vek, v.envelope);
+    seed = opened.seed;
+  } finally {
+    vek.fill(0);
+  }
+  try {
+    const backend = MlDsa65Backend.fromSeed(seed);
+    return "0x" + bytesToHex(backend.publicKey());
+  } finally {
+    seed.fill(0);
+  }
+}
+
 /** Read a vault's multisig meta. Returns null for single vaults or
  *  unknown ids. No unlock required — the meta is plaintext alongside
  *  the encrypted envelope (signer pubkeys + proposal payloads are

@@ -47,6 +47,7 @@ import { bech32mDisplay } from "../../shared/bech32m";
 import { Modal } from "./Modal";
 import { RevealableAddressBlock } from "./RevealableAddressBlock";
 import { VaultAddModal, type VaultAddMode } from "./VaultAddModal";
+import { MultisigCreateModal } from "./MultisigCreateModal";
 import {
   bgVaultsList,
   bgVaultSelect,
@@ -74,6 +75,7 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
   const [open, setOpen] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [addMode, setAddMode] = useState<VaultAddMode | null>(null);
+  const [multisigOpen, setMultisigOpen] = useState(false);
   // wrapRef wraps the chip + portal mount point and backs the
   // click-outside check on the chip side. portalRef is attached to
   // the portal'd dropdown panel so the same listener can also tell
@@ -205,9 +207,18 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
     setOpen(false);
     setAddMode("import");
   };
+  const handleAddMultisig = () => {
+    setOpen(false);
+    setMultisigOpen(true);
+  };
   const handleAddCancel = () => setAddMode(null);
   const handleAddComplete = async () => {
     setAddMode(null);
+    await refresh();
+  };
+  const handleMultisigCancel = () => setMultisigOpen(false);
+  const handleMultisigComplete = async () => {
+    setMultisigOpen(false);
     await refresh();
   };
 
@@ -310,6 +321,10 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
             />
             <FooterButton onClick={handleAddFresh} label="New vault" />
             <FooterButton onClick={handleAddImport} label="Import existing" />
+            <FooterButton
+              onClick={handleAddMultisig}
+              label="New multisig vault"
+            />
           </div>,
           document.body,
         )}
@@ -335,6 +350,15 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
           vaultsCount={vaults?.length ?? 0}
           onClose={handleAddCancel}
           onComplete={() => void handleAddComplete()}
+        />
+      )}
+
+      {multisigOpen && (
+        <MultisigCreateModal
+          open={true}
+          vaultsCount={vaults?.length ?? 0}
+          onClose={handleMultisigCancel}
+          onComplete={() => void handleMultisigComplete()}
         />
       )}
     </div>

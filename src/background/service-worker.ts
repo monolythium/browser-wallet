@@ -74,6 +74,10 @@ import {
   addVaultFreshV4,
   addVaultImportV4,
   wipeContainerV4,
+  // Phase 8 multisig surface (Commit 1).
+  addVaultMultisigV4,
+  readMultisigMetaV4,
+  getVaultPubkeyV4,
 } from "./keystore-mldsa.js";
 import { shake256 } from "@noble/hashes/sha3.js";
 import {
@@ -2359,6 +2363,83 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const r = await addVaultImportV4(p.mnemonic, label);
         await resetAutoLock();
         return { ok: true, vaultId: r.vaultId, address: r.address };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-add-multisig": {
+      // Phase 8 Commit 2 — create a multisig vault inside the
+      // container. Requires an unlocked container (MEK cached). The
+      // caller passes the N signer pubkeys + threshold + optional
+      // label; the keystore helper validates the roster + threshold,
+      // generates the multisig vault's own ML-DSA-65 keypair, and
+      // returns the new vault id + executor mnemonic + address.
+      //
+      // The mnemonic returned is the recovery secret for the
+      // *multisig vault itself* (the keypair that submits executed
+      // proposals on-chain) — NOT for any of the signers. Treat it
+      // like a single-vault mnemonic; the popup surfaces it in the
+      // same backup-checkbox reveal step.
+      const p = (message.payload ?? {}) as {
+        signers?: unknown;
+        threshold?: unknown;
+        label?: unknown;
+      };
+      if (!Array.isArray(p.signers)) {
+        return { ok: false, reason: "missing signers array" };
+      }
+      if (typeof p.threshold !== "number") {
+        return { ok: false, reason: "missing threshold" };
+      }
+      const label = typeof p.label === "string" ? p.label : undefined;
+      try {
+        const r = await addVaultMultisigV4({
+          signers: p.signers as Parameters<typeof addVaultMultisigV4>[0]["signers"],
+          threshold: p.threshold,
+          ...(label !== undefined ? { label } : {}),
+        });
+        await resetAutoLock();
+        return {
+          ok: true,
+          vaultId: r.vaultId,
+          mnemonic: r.mnemonic,
+          address: r.address,
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-pubkey": {
+      // Phase 8 Commit 2 — read a vault's 1952-byte ML-DSA-65 pubkey
+      // as 0x-prefixed hex. Requires unlocked container; used by the
+      // MultisigCreateModal to populate self-signer entries without
+      // forcing the user to switch the active vault.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const pubkey = await getVaultPubkeyV4(p.vaultId);
+        return { ok: true, pubkey };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-multisig-meta": {
+      // Read the multisig meta (signer roster + threshold + queues)
+      // for a specific vault. Returns `meta: null` when the target is
+      // a single-key vault or unknown — the popup branches on that
+      // signal rather than treating absence as an error. No unlock
+      // required: signer pubkeys + proposal payloads are intentionally
+      // non-secret (only the multisig vault's seed lives in the
+      // encrypted envelope).
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const meta = await readMultisigMetaV4(p.vaultId);
+        return { ok: true, meta };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
