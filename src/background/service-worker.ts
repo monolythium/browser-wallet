@@ -1254,6 +1254,58 @@ function validateRawDelegationList(input: unknown[]): RawDelegationHistory[] {
   return out;
 }
 
+// Phase 7.1 — helpers for the operators-health enrichment. The batched
+// probe receives lyth_operatorCapabilities + lyth_indexerStatus alongside
+// the existing net_version + eth_blockNumber pair; these helpers parse
+// each subresult defensively so a single bad operator surface doesn't
+// fail the whole row.
+
+/** Extract the surfaces map from a `lyth_operatorCapabilities` response.
+ *  SDK shape: `{ schemaVersion, surfaces: Record<string, { status, tracking? }> }`.
+ *  Returns `null` when the response is missing or malformed — operators
+ *  on pre-uplift binaries return `error` here, which is a perfectly
+ *  legitimate "no capability info" signal. */
+function parseOperatorCapabilities(value: unknown): Record<string, string> | null {
+  if (value === null || typeof value !== "object") return null;
+  const r = value as Record<string, unknown>;
+  const surfaces = r["surfaces"];
+  if (surfaces === null || typeof surfaces !== "object") return null;
+  const out: Record<string, string> = {};
+  for (const [k, raw] of Object.entries(surfaces as Record<string, unknown>)) {
+    if (typeof raw === "object" && raw !== null) {
+      const s = (raw as Record<string, unknown>)["status"];
+      if (typeof s === "string") out[k] = s;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Extract { height, latest } from a `lyth_indexerStatus` response, with
+ *  `null` for both when the indexer is disabled or the response is
+ *  malformed. Bigints arrive as `string | number` on the wire; the
+ *  wallet downcasts to `number` for display (block heights fit comfortably). */
+function parseIndexerStatus(value: unknown): {
+  height: number | null;
+  latest: number | null;
+} {
+  if (value === null || value === undefined || typeof value !== "object") {
+    return { height: null, latest: null };
+  }
+  const r = value as Record<string, unknown>;
+  const toNum = (v: unknown): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  };
+  return {
+    height: toNum(r["currentHeight"]),
+    latest: toNum(r["latestHeight"]),
+  };
+}
+
 /** Read both per-(addr, chain) cache keys in one chrome.storage.local
  *  round-trip. Returns null/empty for missing or malformed entries; the
  *  caller treats null as "no cache yet". */
@@ -1828,9 +1880,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           const timer = setTimeout(() => ctrl.abort(), PROBE_BUDGET_MS);
           try {
             const startedAt = Date.now();
+            // Phase 7.1 — batched probe extended with capability + indexer
+            // surfaces (SDK commits 0f483b8 + service-probe helpers). The
+            // capability/indexer responses may be missing on operators
+            // running pre-uplift binaries; the parse below treats their
+            // absence as "no capability info" rather than failing the row.
             const body = JSON.stringify([
               { jsonrpc: "2.0", id: 1, method: "net_version", params: [] },
               { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
+              { jsonrpc: "2.0", id: 3, method: "lyth_operatorCapabilities", params: [] },
+              { jsonrpc: "2.0", id: 4, method: "lyth_indexerStatus", params: [] },
             ]);
             const res = await fetch(op.rpc, {
               method: "POST",
@@ -1848,22 +1907,37 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 reason: `HTTP ${res.status}`,
                 trustedGenesis,
                 observedGenesis,
+                capabilities: null,
+                indexerHeight: null,
+                indexerLatest: null,
               };
             }
             const parsed = (await res.json()) as unknown;
             const arr = Array.isArray(parsed) ? parsed : [parsed];
-            const netRow = arr.find(
-              (r): r is { id: number; result?: string } =>
-                typeof r === "object" && r !== null && (r as { id?: unknown }).id === 1,
-            );
-            const blockRow = arr.find(
-              (r): r is { id: number; result?: string } =>
-                typeof r === "object" && r !== null && (r as { id?: unknown }).id === 2,
-            );
+            const findRow = (id: number) =>
+              arr.find(
+                (r): r is { id: number; result?: unknown } =>
+                  typeof r === "object" &&
+                  r !== null &&
+                  (r as { id?: unknown }).id === id,
+              );
+            const netRow = findRow(1) as
+              | { id: number; result?: string }
+              | undefined;
+            const blockRow = findRow(2) as
+              | { id: number; result?: string }
+              | undefined;
+            const capsRow = findRow(3);
+            const indexerRow = findRow(4);
             const chainIdDec =
               typeof netRow?.result === "string" ? Number(netRow.result) : null;
             const blockHex =
               typeof blockRow?.result === "string" ? blockRow.result : null;
+            // Parse capabilities defensively — operator may not support
+            // the method (pre-uplift binary), in which case capsRow has
+            // `error` instead of `result`.
+            const capabilities = parseOperatorCapabilities(capsRow?.result);
+            const indexerSnapshot = parseIndexerStatus(indexerRow?.result);
             return {
               name: op.name,
               region: op.region,
@@ -1874,6 +1948,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               latencyMs: Date.now() - startedAt,
               trustedGenesis,
               observedGenesis,
+              capabilities,
+              indexerHeight: indexerSnapshot.height,
+              indexerLatest: indexerSnapshot.latest,
             };
           } catch (e) {
             clearTimeout(timer);
@@ -1885,6 +1962,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               reason: (e as Error)?.name === "AbortError" ? "timeout" : "unreachable",
               trustedGenesis,
               observedGenesis,
+              capabilities: null,
+              indexerHeight: null,
+              indexerLatest: null,
             };
           }
         }),
