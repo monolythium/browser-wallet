@@ -9,7 +9,7 @@
 // just shaping that call.
 
 import type { ReactNode, CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon, shortAddr } from "../Icon";
 import {
   bgWalletBalance,
@@ -19,6 +19,14 @@ import {
 } from "../bg";
 import type { Account } from "../demo-data";
 import { addressToBech32m, bech32mToAddress } from "../../shared/bech32m";
+import {
+  STORAGE_KEY_NAME_CACHE,
+  lookupNameInCache,
+  parseMonoName,
+  validateNameCache,
+  type MonoNameParse,
+  type NameCache,
+} from "../../shared/name-resolution";
 
 interface SendProps {
   account: Account;
@@ -116,7 +124,11 @@ export function Send({ account, chainId, onBack }: SendProps) {
   const tierMultiplier = TIER_MULTIPLIERS[tier];
   const estimatedFeeWei = computeEstimatedFeeWei(feeSuggestion, tierMultiplier);
 
-  const parsedRecipient = validateToAddress(to);
+  const parsedRecipient = useMemo(() => validateToAddress(to), [to]);
+  const nameResolution = useNameForwardResolve(parsedRecipient.monoName);
+  const effectiveAddr0x =
+    parsedRecipient.addr0x ?? nameResolution.addr0x ?? null;
+
   const amountError = validateAmount(amountStr);
   const amountWei = amountError === null && amountStr.length > 0
     ? safeLythToWeiBigInt(amountStr)
@@ -133,7 +145,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
     amountWei + estimatedFeeWei > balanceWei;
 
   const canContinue =
-    parsedRecipient.addr0x !== null &&
+    effectiveAddr0x !== null &&
     amountError === null &&
     amountStr.length > 0 &&
     parseFloat(amountStr) > 0 &&
@@ -166,14 +178,14 @@ export function Send({ account, chainId, onBack }: SendProps) {
 
   const handleConfirm = async () => {
     if (amountWei === null) return;
-    if (parsedRecipient.addr0x === null) return; // form button is gated; defensive
+    if (effectiveAddr0x === null) return; // form button is gated; defensive
     setStep("sending");
     setSubmitError(null);
     setTxHash(null);
     try {
       const valueWeiHex = "0x" + amountWei.toString(16);
       const r = await bgWalletSendTx({
-        to: parsedRecipient.addr0x,
+        to: effectiveAddr0x,
         valueWeiHex,
         chainIdHex: chainId,
       });
@@ -216,7 +228,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
   if (step === "preview") {
     return (
       <PreviewView
-        to={parsedRecipient.addr0x ?? to}
+        to={effectiveAddr0x ?? to}
         amountWei={amountWei}
         estimatedFeeWei={estimatedFeeWei}
         tier={tier}
@@ -279,7 +291,7 @@ export function Send({ account, chainId, onBack }: SendProps) {
               type="text"
               value={to}
               onChange={(e) => setTo(e.target.value.trim())}
-              placeholder="0x… or mono1…"
+              placeholder="0x…, mono1…, or alice.mono"
               spellCheck={false}
               autoComplete="off"
               style={{ ...addressInputStyle, flex: 1 }}
@@ -305,6 +317,13 @@ export function Send({ account, chainId, onBack }: SendProps) {
               Will send to: {middleTruncate(parsedRecipient.addr0x, 10, 8)}
             </div>
           )}
+          {parsedRecipient.inputForm === "mono-name" &&
+            parsedRecipient.monoName !== null && (
+              <MonoNameResolveHint
+                parsed={parsedRecipient.monoName}
+                resolution={nameResolution}
+              />
+            )}
         </FormCard>
 
         <FormCard label="Amount">
@@ -538,43 +557,68 @@ const fromHint: CSSProperties = {
 // ---- validation ----
 
 /**
- * Recipient input parser. Accepts both 0x hex and bech32m (mono1…) per
- * whitepaper §22.7. The IPC contract stays 0x-only; the popup is the
- * codec boundary. Empty / partial input returns no error so the form
- * stays quiet while the user is still typing.
+ * Recipient input parser. Accepts:
+ *   - 0x hex (whitepaper §22.7 wire form)
+ *   - bech32m (mono1…, §22.7 display form)
+ *   - §22.8 hierarchical names ending in `.mono` (forward-resolved
+ *     against the local name cache; no `lyth_resolveName` RPC yet)
+ *
+ * The IPC contract stays 0x-only; the popup is the codec + name-
+ * resolution boundary. Empty / partial input returns no error so the
+ * form stays quiet while the user is still typing.
  */
 export interface RecipientParse {
   /** Human-readable error to surface under the input. null = no error. */
   error: string | null;
   /** Canonical 0x lowercase form, used for IPC. null when input is invalid
-   *  or incomplete. */
+   *  or incomplete. For mono-name input this is filled by the async
+   *  cache lookup, not the synchronous parser. */
   addr0x: string | null;
   /** Canonical bech32m form, used for the dual-format hint. null when
    *  input is invalid or incomplete. */
   bech: string | null;
+  /** Parsed §22.8 name when inputForm === "mono-name", null otherwise.
+   *  The cache lookup is layered above the parser so the form can show
+   *  TLD-aware feedback ("Looks like a human name — looking up…") while
+   *  the resolve is in flight. */
+  monoName: MonoNameParse | null;
   /** Which input shape the user is in:
    *   - "empty": input is empty
    *   - "partial": prefix matches but length is short of canonical (still typing)
    *   - "0x": complete 0x form (valid or invalid)
    *   - "mono1": complete bech32m form (valid or invalid)
+   *   - "mono-name": complete §22.8 hierarchical name (e.g. alice.mono)
    *   - "unknown": prefix doesn't match either shape */
-  inputForm: "empty" | "partial" | "0x" | "mono1" | "unknown";
+  inputForm: "empty" | "partial" | "0x" | "mono1" | "mono-name" | "unknown";
 }
 
 export function validateToAddress(s: string): RecipientParse {
   if (s.length === 0) {
-    return { error: null, addr0x: null, bech: null, inputForm: "empty" };
+    return {
+      error: null,
+      addr0x: null,
+      bech: null,
+      monoName: null,
+      inputForm: "empty",
+    };
   }
   // 0x branch
   if (s.startsWith("0x") || s.startsWith("0X")) {
     if (s.length < 42) {
-      return { error: null, addr0x: null, bech: null, inputForm: "partial" };
+      return {
+        error: null,
+        addr0x: null,
+        bech: null,
+        monoName: null,
+        inputForm: "partial",
+      };
     }
     if (s.length !== 42) {
       return {
         error: `address must be 42 chars (got ${s.length})`,
         addr0x: null,
         bech: null,
+        monoName: null,
         inputForm: "0x",
       };
     }
@@ -583,6 +627,7 @@ export function validateToAddress(s: string): RecipientParse {
         error: "address must be 0x + 40 hex chars",
         addr0x: null,
         bech: null,
+        monoName: null,
         inputForm: "0x",
       };
     }
@@ -593,7 +638,13 @@ export function validateToAddress(s: string): RecipientParse {
     } catch {
       bech = null;
     }
-    return { error: null, addr0x, bech, inputForm: "0x" };
+    return {
+      error: null,
+      addr0x,
+      bech,
+      monoName: null,
+      inputForm: "0x",
+    };
   }
   // mono1 branch — accept both lowercase and all-uppercase per BIP-350.
   // The codec rejects mixed-case; we let it surface that as the error.
@@ -601,7 +652,13 @@ export function validateToAddress(s: string): RecipientParse {
   // 32 data + 6 checksum. Anything shorter is "still typing" (no error).
   if (s.startsWith("mono1") || s.startsWith("MONO1")) {
     if (s.length < 43) {
-      return { error: null, addr0x: null, bech: null, inputForm: "partial" };
+      return {
+        error: null,
+        addr0x: null,
+        bech: null,
+        monoName: null,
+        inputForm: "partial",
+      };
     }
     try {
       const addr0x = bech32mToAddress(s);
@@ -609,6 +666,7 @@ export function validateToAddress(s: string): RecipientParse {
         error: null,
         addr0x: addr0x.toLowerCase(),
         bech: s.toLowerCase(),
+        monoName: null,
         inputForm: "mono1",
       };
     } catch (e) {
@@ -616,17 +674,182 @@ export function validateToAddress(s: string): RecipientParse {
         error: (e as Error).message ?? "invalid mono1 address",
         addr0x: null,
         bech: null,
+        monoName: null,
         inputForm: "mono1",
       };
     }
   }
+  // §22.8 hierarchical name branch. The parser is strict (lowercase,
+  // canonical TLDs only); when it succeeds, the form switches to
+  // "mono-name" and the async cache lookup populates addr0x. Partial
+  // input (e.g. "alice" or "alice.") is treated as still-typing.
+  if (s.endsWith(".mono")) {
+    const parsed = parseMonoName(s);
+    if (parsed !== null) {
+      return {
+        error: null,
+        addr0x: null,
+        bech: null,
+        monoName: parsed,
+        inputForm: "mono-name",
+      };
+    }
+    return {
+      error: "not a valid mono name (e.g. alice.mono, treasury.contract.mono)",
+      addr0x: null,
+      bech: null,
+      monoName: null,
+      inputForm: "mono-name",
+    };
+  }
+  if (looksLikePartialMonoName(s)) {
+    return {
+      error: null,
+      addr0x: null,
+      bech: null,
+      monoName: null,
+      inputForm: "partial",
+    };
+  }
   return {
-    error: "address must start with 0x or mono1",
+    error: "address must start with 0x, mono1, or end in .mono",
     addr0x: null,
     bech: null,
+    monoName: null,
     inputForm: "unknown",
   };
 }
+
+/** Quiet-mode heuristic for the recipient field: if the input is plausibly
+ *  a §22.8 name being typed (lowercase, label-friendly chars, short
+ *  enough that ".mono" could still be appended), treat it as still-
+ *  typing rather than surfacing the "doesn't start with 0x/mono1/.mono"
+ *  error. The length cap keeps wrong-HRP bech32m strings (which are 43+
+ *  chars without a dot) from being mis-classified as partial names. */
+const PARTIAL_NAME_MAX_LEN = 40;
+function looksLikePartialMonoName(s: string): boolean {
+  if (s.length === 0 || s.length > PARTIAL_NAME_MAX_LEN) return false;
+  if (s !== s.toLowerCase()) return false;
+  return /^[a-z0-9][a-z0-9.-]*$/.test(s);
+}
+
+// ---- §22.8 forward-resolve (name → address) via local name cache ----
+
+interface NameResolutionState {
+  status: "idle" | "loading" | "hit" | "miss";
+  addr0x: string | null;
+}
+
+const IDLE_RESOLUTION: NameResolutionState = { status: "idle", addr0x: null };
+
+/**
+ * Reverse-scans the local name cache to find an address whose stored
+ * displayName matches the requested §22.8 name. Returns idle when there
+ * is no name to resolve, loading while the storage read is in flight,
+ * hit when the cache had a match, miss when it didn't.
+ *
+ * The cache is the only forward-resolve source today — the SDK doesn't
+ * expose `lyth_resolveName` yet (§22.8 registry is forward-looking). When
+ * the SDK ships the RPC, this hook becomes the place to add the network
+ * fallback; the surface (idle / loading / hit / miss + addr0x) stays
+ * stable so callers don't change.
+ *
+ * Subscribes to chrome.storage.onChanged so a fresh reverse-resolve
+ * elsewhere in the popup (e.g. activity feed pulling a new label) makes
+ * the Send form light up without a re-type.
+ */
+function useNameForwardResolve(
+  parsed: MonoNameParse | null,
+): NameResolutionState {
+  const [state, setState] = useState<NameResolutionState>(IDLE_RESOLUTION);
+  const canonical = parsed?.canonical ?? null;
+
+  useEffect(() => {
+    if (canonical === null) {
+      setState(IDLE_RESOLUTION);
+      return;
+    }
+    let cancelled = false;
+    setState({ status: "loading", addr0x: null });
+
+    const resolve = (cache: NameCache) => {
+      const addr = lookupNameInCache(canonical, cache);
+      if (cancelled) return;
+      setState(
+        addr !== null
+          ? { status: "hit", addr0x: addr }
+          : { status: "miss", addr0x: null },
+      );
+    };
+
+    chrome.storage.local.get([STORAGE_KEY_NAME_CACHE], (res) => {
+      if (cancelled) return;
+      const validated = validateNameCache(res?.[STORAGE_KEY_NAME_CACHE]);
+      resolve(validated ?? {});
+    });
+
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      const change = changes[STORAGE_KEY_NAME_CACHE];
+      if (!change) return;
+      const validated = validateNameCache(change.newValue);
+      if (validated === null) return;
+      resolve(validated);
+    };
+    chrome.storage.onChanged.addListener(listener);
+
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [canonical]);
+
+  return state;
+}
+
+interface MonoNameResolveHintProps {
+  parsed: MonoNameParse;
+  resolution: NameResolutionState;
+}
+
+function MonoNameResolveHint({ parsed, resolution }: MonoNameResolveHintProps) {
+  const tldLabel = TLD_HINT[parsed.tld];
+  if (resolution.status === "loading") {
+    return (
+      <div style={dualFormatHint}>
+        Looks like a {tldLabel} name — checking your address book…
+      </div>
+    );
+  }
+  if (resolution.status === "hit" && resolution.addr0x !== null) {
+    return (
+      <div style={dualFormatHint}>
+        Resolved {tldLabel} name → {middleTruncate(resolution.addr0x, 10, 8)}
+      </div>
+    );
+  }
+  if (resolution.status === "miss") {
+    return (
+      <div style={inlineError}>
+        Name not in your address book yet. On-chain name lookup ships with the
+        §22.8 registry — paste the 0x or mono1 address for now.
+      </div>
+    );
+  }
+  // idle — shouldn't render because the parent gates on monoName !== null.
+  return null;
+}
+
+const TLD_HINT: Record<MonoNameParse["tld"], string> = {
+  human: "human",
+  agent: "agent",
+  cluster: "cluster",
+  contract: "contract",
+  system: "system",
+};
 
 /** Middle-truncate a string keeping `head` leading chars and `tail` trailing
  *  chars with an ellipsis in between. Used by the dual-format hint to fit

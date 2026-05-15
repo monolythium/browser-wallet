@@ -1,21 +1,32 @@
-// Compact pill for AddressLabelRecord.category. Mounted inline next to
-// displayName in TxSend/Receive/TokenTransfer row bodies. NOT used in
-// delegation bodies — cluster.mono is already an implicit category;
-// a redundant badge would be visual noise.
+// Compact pill rendered next to a counterparty's displayName in
+// TxSend/Receive/TokenTransfer row bodies, and next to recipient
+// previews in Send. NOT used in delegation bodies — cluster.mono is
+// already an implicit category; a redundant badge would be visual
+// noise.
 //
 // Color tokens live in tokens.css under --cat-*. The component reads
-// them via var() so future theme variants (and the §22.8 hierarchical-
-// name palette expansion) don't require editing this component.
+// them via var() so future theme variants and §22.8 TLD palette overrides
+// don't require editing this component.
+//
+// Two taxonomies coexist:
+//   - Indexer pragmatic taxonomy (foundation/exchange/bridge/treasury
+//     /contract/operator). Surfaced today by `lyth_getAddressLabel`.
+//   - §22.8 TLD categories (human/agent/cluster/contract/system).
+//     Surfaced when the indexer emits `.mono` hierarchical names in
+//     `displayName`. The popup parses these via parseMonoName and passes
+//     the TLD as `category`; this component renders both flavors
+//     uniformly. "contract" is shared between both taxonomies and uses
+//     a single token — semantically the same concept either way.
+
+import type { MonoTld } from "../../shared/name-resolution.js";
 
 export interface CategoryBadgeProps {
+  /** Either an indexer pragmatic category or a §22.8 TLD label. */
   category: string;
 }
 
-// Six known categories from the indexer's pragmatic taxonomy. The lookup
-// table is intentionally `Record<string, ...>` so unknown categories
-// (e.g. when the chain ships §22.8 names) fall through to `null` and
-// render nothing rather than a default-styled badge.
-const KNOWN_CATEGORIES = new Set([
+/** Indexer pragmatic taxonomy (today's lyth_getAddressLabel emit). */
+const PRAGMATIC_CATEGORIES = new Set([
   "foundation",
   "exchange",
   "bridge",
@@ -24,8 +35,21 @@ const KNOWN_CATEGORIES = new Set([
   "operator",
 ]);
 
+/** §22.8 TLD categories (parseMonoName output). */
+const TLD_CATEGORIES = new Set<MonoTld>([
+  "human",
+  "agent",
+  "cluster",
+  "contract",
+  "system",
+]);
+
+function isRenderableCategory(c: string): boolean {
+  return PRAGMATIC_CATEGORIES.has(c) || TLD_CATEGORIES.has(c as MonoTld);
+}
+
 export function CategoryBadge({ category }: CategoryBadgeProps) {
-  if (!KNOWN_CATEGORIES.has(category)) return null;
+  if (!isRenderableCategory(category)) return null;
   return (
     <span
       style={{
