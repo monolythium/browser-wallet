@@ -36,6 +36,12 @@ import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
 import { NftTab } from "./components/NftTab";
 import type { SendNftTarget } from "./pages/SendNft";
+import {
+  detectOriginWarnings,
+  detectMessageWarnings,
+  type OriginWarning,
+  type MessageWarning,
+} from "../shared/phishing";
 
 /** @deprecated kept for legacy imports; use ChainStatusBanner. */
 export function DemoBanner() {
@@ -409,6 +415,130 @@ interface ApprovalDisplay {
 
 function hostnameOf(origin: string): string {
   try { return new URL(origin).hostname; } catch { return origin; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phishing-warning panels — rendered above the body of approval screens.
+// Pure presentation; the heuristic logic lives in src/shared/phishing.ts.
+// Two distinct components so call sites can place them in different slots
+// (typed_sign places origin warnings after req-head; ReqConnect places both
+// after req-head; ReqPersonalSignReal stacks both in order).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function OriginWarningPanel({ warnings }: { warnings: OriginWarning[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="req-section">
+      {warnings.map((w) => (
+        <WarningRow
+          key={w.code}
+          level={w.level}
+          title={titleForOriginCode(w.code)}
+          text={w.text}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MessageWarningPanel({ warnings }: { warnings: MessageWarning[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="req-section">
+      {warnings.map((w) => (
+        <WarningRow
+          key={w.code}
+          level={w.level}
+          title={titleForMessageCode(w.code)}
+          text={w.text}
+        />
+      ))}
+    </div>
+  );
+}
+
+function WarningRow({
+  level,
+  title,
+  text,
+}: {
+  level: "warning" | "danger";
+  title: string;
+  text: string;
+}) {
+  const isDanger = level === "danger";
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 10,
+        padding: "10px 12px",
+        marginBottom: 6,
+        borderRadius: 10,
+        background: isDanger
+          ? "rgba(220,80,80,0.10)"
+          : "rgba(244,201,122,0.08)",
+        border: isDanger
+          ? "1px solid rgba(220,80,80,0.4)"
+          : "1px solid rgba(244,201,122,0.4)",
+      }}
+    >
+      <Icon name="warn" size={14} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 11.5,
+            fontWeight: 600,
+            color: isDanger ? "var(--err)" : "var(--warn)",
+            marginBottom: 2,
+            letterSpacing: "0.02em",
+            textTransform: "uppercase",
+            fontFamily: "var(--f-mono)",
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--fg-100)", lineHeight: 1.5 }}>
+          {text}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function titleForOriginCode(code: string): string {
+  switch (code) {
+    case "missing-origin":
+    case "malformed-origin":
+      return "Invalid origin";
+    case "non-https":
+      return "Insecure transport";
+    case "punycode":
+      return "Punycode hostname";
+    case "homograph":
+      return "Lookalike characters";
+    case "brand-lookalike":
+      return "Brand impersonation risk";
+    case "risky-tld":
+      return "Risky TLD";
+    default:
+      return "Origin warning";
+  }
+}
+
+function titleForMessageCode(code: string): string {
+  switch (code) {
+    case "abi-shaped-hex":
+      return "Looks like contract calldata";
+    case "binary-hex":
+      return "Non-printable payload";
+    case "permit-keyword":
+      return "Permit / approval clause";
+    case "oversized-payload":
+      return "Unusually large payload";
+    default:
+      return "Payload warning";
+  }
 }
 
 function previewMessage(message: string): string {
@@ -1423,6 +1553,9 @@ export function ReqConnect({
   }
   const initial = (hostname[0] ?? "?").toUpperCase();
 
+  const originWarnings = detectOriginWarnings(origin);
+  const hasDanger = originWarnings.some((w) => w.level === "danger");
+
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -1439,6 +1572,28 @@ export function ReqConnect({
         </div>
         <h2>Connect this site?</h2>
         <div className="sub">grants read access to your address — no signing</div>
+      </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
+
+      <div className="req-section">
+        <div className="req-section__h">Origin</div>
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(0,0,0,0.3)",
+            border: hasDanger
+              ? "1px solid rgba(220,80,80,0.4)"
+              : "1px solid rgba(255,255,255,0.05)",
+            fontFamily: "var(--f-mono)",
+            fontSize: 11.5,
+            color: "var(--fg-100)",
+            wordBreak: "break-all",
+          }}
+        >
+          {origin}
+        </div>
       </div>
 
       <div className="req-section">
@@ -1464,7 +1619,9 @@ export function ReqConnect({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove}>Connect</button>
+        <button className={hasDanger ? "danger" : "prim"} onClick={onApprove}>
+          {hasDanger ? "Connect anyway" : "Connect"}
+        </button>
       </div>
     </>
   );
@@ -1962,6 +2119,9 @@ export function ReqSendTx({
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
 
+  const originWarnings = detectOriginWarnings(origin);
+  const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
+
   const baseGasPrice = parseHexQuantity(view.gasPrice);
   const tieredGasPrice =
     baseGasPrice == null
@@ -2003,6 +2163,8 @@ export function ReqSendTx({
           on {view.chainLabel} ({view.chainId})
         </div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
 
       <div className="req-section">
         <div className="req-section__h">From</div>
@@ -2167,8 +2329,15 @@ export function ReqSendTx({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove}>
-          {custody === "hw" ? "Confirm on device" : "Sign & send"}
+        <button
+          className={hasOriginDanger ? "danger" : "prim"}
+          onClick={onApprove}
+        >
+          {custody === "hw"
+            ? "Confirm on device"
+            : hasOriginDanger
+              ? "Sign & send anyway"
+              : "Sign & send"}
         </button>
       </div>
     </>
@@ -2197,6 +2366,12 @@ export function ReqPersonalSignReal({
   const utf8 = isHex ? bytesToUtf8IfPrintable(bytes) : message;
   const [showRaw, setShowRaw] = useState(false);
 
+  const originWarnings = detectOriginWarnings(origin);
+  const messageWarnings = detectMessageWarnings(message);
+  const hasDanger =
+    originWarnings.some((w) => w.level === "danger") ||
+    messageWarnings.some((w) => w.level === "danger");
+
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -2214,6 +2389,9 @@ export function ReqPersonalSignReal({
         <h2>Confirm message signature</h2>
         <div className="sub">no value transferred · EIP-191 prefix applied before sign</div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
+      <MessageWarningPanel warnings={messageWarnings} />
 
       <div className="req-section">
         <div className="req-section__h">Signing as</div>
@@ -2269,8 +2447,15 @@ export function ReqPersonalSignReal({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove}>
-          {custody === "hw" ? "Confirm on device" : "Sign message"}
+        <button
+          className={hasDanger ? "danger" : "prim"}
+          onClick={onApprove}
+        >
+          {custody === "hw"
+            ? "Confirm on device"
+            : hasDanger
+              ? "Sign anyway"
+              : "Sign message"}
         </button>
       </div>
     </>
@@ -2296,6 +2481,9 @@ export function ReqTypedSign({
   const { parsed, digest, address, origin, rawTypedData } = request;
   const [showRaw, setShowRaw] = useState(false);
 
+  const originWarnings = detectOriginWarnings(origin);
+  const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
+
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -2317,6 +2505,8 @@ export function ReqTypedSign({
             : "could not parse — review raw payload below"}
         </div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
 
       <div className="req-section">
         <div className="req-section__h">Signing as</div>
@@ -2384,8 +2574,16 @@ export function ReqTypedSign({
       <CustodyBadge mode={custody} />
       <div className="req-foot">
         <button onClick={onReject}>Reject</button>
-        <button className="prim" onClick={onApprove} disabled={!parsed}>
-          {custody === "hw" ? "Confirm on device" : "Sign typed data"}
+        <button
+          className={hasOriginDanger ? "danger" : "prim"}
+          onClick={onApprove}
+          disabled={!parsed}
+        >
+          {custody === "hw"
+            ? "Confirm on device"
+            : hasOriginDanger
+              ? "Sign anyway"
+              : "Sign typed data"}
         </button>
       </div>
     </>
@@ -2470,6 +2668,7 @@ export function ReqAddChain({ request, onApprove, onReject, chain }: ReqAddChain
   // `proposed` is the chain the dApp wants to add; `chain` (prop) is the
   // wallet's currently active chain shown in the status banner.
   const { chain: proposed, origin } = request;
+  const originWarnings = detectOriginWarnings(origin);
   return (
     <>
       <ChainStatusBanner network={chain} />
@@ -2487,6 +2686,8 @@ export function ReqAddChain({ request, onApprove, onReject, chain }: ReqAddChain
         <h2>{proposed.chainName}</h2>
         <div className="sub">requesting · adds chain to wallet network list</div>
       </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
 
       <div className="req-warn warn">
         <Icon name="warn" size={14} />

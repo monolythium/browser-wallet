@@ -27,6 +27,12 @@ import {
   type MonoNameParse,
   type NameCache,
 } from "../../shared/name-resolution";
+import {
+  activityCacheKey,
+  activityPendingKey,
+  type ActivityCache,
+  type PendingActivityCache,
+} from "../../shared/activity";
 
 interface SendProps {
   account: Account;
@@ -128,6 +134,12 @@ export function Send({ account, chainId, onBack }: SendProps) {
   const nameResolution = useNameForwardResolve(parsedRecipient.monoName);
   const effectiveAddr0x =
     parsedRecipient.addr0x ?? nameResolution.addr0x ?? null;
+
+  const recipientFamiliarity = useRecipientFamiliarity(
+    effectiveAddr0x,
+    account.addr,
+    chainId,
+  );
 
   const amountError = validateAmount(amountStr);
   const amountWei = amountError === null && amountStr.length > 0
@@ -324,6 +336,29 @@ export function Send({ account, chainId, onBack }: SendProps) {
                 resolution={nameResolution}
               />
             )}
+          {recipientFamiliarity === "new" && (
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                marginTop: 8,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "rgba(244,201,122,0.08)",
+                border: "1px solid rgba(244,201,122,0.4)",
+                fontSize: 11,
+                color: "var(--fg-100)",
+                lineHeight: 1.5,
+              }}
+            >
+              <Icon name="warn" size={12} />
+              <span>
+                <b>First-time recipient.</b> You haven't sent to this address
+                from this account before — double-check the destination is
+                what you intended.
+              </span>
+            </div>
+          )}
         </FormCard>
 
         <FormCard label="Amount">
@@ -850,6 +885,66 @@ const TLD_HINT: Record<MonoNameParse["tld"], string> = {
   contract: "contract",
   system: "system",
 };
+
+// ---- Recipient familiarity (phase 6 phishing protection) ----
+
+type Familiarity = "unknown" | "new" | "seen";
+
+/**
+ * Returns "seen" when the recipient has appeared as the counterparty of a
+ * prior outgoing tx_send (or out-direction token_transfer / pending_tx)
+ * from the active account on this chain. "new" when the recipient is
+ * resolved but absent from the activity cache. "unknown" while the
+ * recipient is not yet typed-in / not yet resolved, or before the cache
+ * read completes — the UI suppresses the warning in this state to avoid
+ * a flash-of-new-recipient on first render.
+ *
+ * The check is local-only (reads chrome.storage); no IPC. Activity-cache
+ * eviction caps the lookback at the rolling window the SW maintains.
+ */
+function useRecipientFamiliarity(
+  recipientAddr0x: string | null,
+  accountAddr: string,
+  chainIdHex: string,
+): Familiarity {
+  const [state, setState] = useState<Familiarity>("unknown");
+
+  useEffect(() => {
+    if (!recipientAddr0x || !accountAddr.startsWith("0x")) {
+      setState("unknown");
+      return;
+    }
+    const target = recipientAddr0x.toLowerCase();
+    const accLower = accountAddr.toLowerCase();
+    const confirmedKey = activityCacheKey(accLower, chainIdHex);
+    const pendingKey = activityPendingKey(accLower, chainIdHex);
+    let cancelled = false;
+    setState("unknown");
+
+    chrome.storage.local.get([confirmedKey, pendingKey], (res) => {
+      if (cancelled) return;
+      const confirmed = res?.[confirmedKey] as ActivityCache | undefined;
+      const pending = res?.[pendingKey] as PendingActivityCache | undefined;
+
+      const inConfirmed = (confirmed?.confirmed ?? []).some((r) => {
+        if (r.kind === "tx_send") return r.counterparty === target;
+        if (r.kind === "token_transfer")
+          return r.direction === "out" && r.counterparty === target;
+        return false;
+      });
+      const inPending = (pending?.pending ?? []).some(
+        (r) => r.to.toLowerCase() === target,
+      );
+      setState(inConfirmed || inPending ? "seen" : "new");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recipientAddr0x, accountAddr, chainIdHex]);
+
+  return state;
+}
 
 /** Middle-truncate a string keeping `head` leading chars and `tail` trailing
  *  chars with an ellipsis in between. Used by the dual-format hint to fit
