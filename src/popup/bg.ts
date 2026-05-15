@@ -732,6 +732,19 @@ export interface OperatorHealthRowCommon {
   /** Block-0 hash returned by `eth_getBlockByNumber("0x0", false)`;
    *  null when the probe failed or the response was malformed. */
   observedGenesis: string | null;
+  /** Phase 7.1 — operator-surface availability from
+   *  `lyth_operatorCapabilities` (SDK commit 0f483b8). Keys are surface
+   *  names ("ferveo", "streams", "indexer", "prover", "websocket", etc.);
+   *  values are the chain-reported status string. `null` when the
+   *  capability probe failed or the operator doesn't expose the method
+   *  — RPC dispatch is not gated on this; it's a display-only hint. */
+  capabilities: Record<string, string> | null;
+  /** Phase 7.1 — indexer height summary from `lyth_indexerStatus`. `null`
+   *  when the operator's indexer is disabled or the probe failed.
+   *  Surfaces as a "indexer #N (lag N)" line under the row. */
+  indexerHeight: number | null;
+  /** Highest block the indexer observed, for the lag computation. */
+  indexerLatest: number | null;
 }
 
 export type OperatorHealthRow =
