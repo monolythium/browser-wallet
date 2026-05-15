@@ -58,8 +58,8 @@ vi.mock("@monolythium/core-sdk", () => {
     MonolythiumProvider: FakeMonolythiumProvider,
     MONOLYTHIUM_TESTNET_CHAIN_ID: TESTNET_CHAIN_ID_BIGINT,
     // 6 endpoints — matches SDK chain-registry snapshot post-regenesis
-    // 2026-05-11 (val-1 dropped). Tests pin defaults.length === 6 so the
-    // mock must mirror the registry cardinality, not stub a single entry.
+    // 2026-05-11 (original operator dropped). Tests pin defaults.length === 6
+    // so the mock must mirror the registry cardinality, not stub a single entry.
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "fsn1", tier: "official" },
       { url: "http://test.invalid:8546", provider: "test", region: "nbg1", tier: "official" },
@@ -694,7 +694,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       }>("sprintnet-operators-get");
       expect(r.ok).toBe(true);
       expect(r.override).toBeNull();
-      expect(r.defaults.length).toBe(6); // val-2 through val-7, val-1 dropped per regenesis 2026-05-11
+      expect(r.defaults.length).toBe(6); // 6 active operators; original operator-1 dropped per regenesis 2026-05-11
       expect(r.effective).toEqual(r.defaults);
     });
 

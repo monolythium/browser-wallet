@@ -139,7 +139,7 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
   }, []);
 
   // Operator-name poll, separate from chain-health. The operator label is
-  // a pure side-info readout (which Sprintnet validator answered our
+  // a pure side-info readout (which Sprintnet operator answered our
   // probe) and stays decoupled from the LIVE/STALLED/OFFLINE state — a
   // chain can be live with an unknown operator, or stalled while the
   // operator is still reachable.
