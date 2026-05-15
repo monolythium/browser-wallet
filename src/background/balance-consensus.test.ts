@@ -175,4 +175,52 @@ describe("sprintnetMaxBalanceConsensus", () => {
     const r = await sprintnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x5");
   });
+
+  // Phase 7.1 commit 7 — SDK contract anchor. The strict
+  // AccountProofResponse binding (mono-core-sdk @0fd8a79) annotates
+  // `state_root`/`block_number` in snake_case, but the chain serializer
+  // emits camelCase on the wire (`stateRoot`, `blockNumber`). The
+  // wallet only reads `.value`, so the case mismatch is a no-op for
+  // balance reads — but pin a fixture in both shapes to catch any
+  // future serializer rotation early.
+  it("parses both wire-case forms of the AccountProofResponse envelope", async () => {
+    // camelCase wire form (what the chain currently emits)
+    const camelCase = {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          value: "0x7",
+          stateRoot: "0x" + "11".repeat(32),
+          blockNumber: "0x100",
+          proof: null,
+        },
+      }),
+    };
+    // snake_case wire form (what the ts-rs binding annotates)
+    const snakeCase = {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          value: "0x9",
+          state_root: "0x" + "22".repeat(32),
+          block_number: "0x100",
+          proof: null,
+        },
+      }),
+    };
+    installFetchPerUrl({
+      "http://op-a.test": async () => camelCase,
+      "http://op-b.test": async () => snakeCase,
+      "http://op-c.test": async () => envelopeResponse("0x3"),
+    });
+    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    expect(r.balanceHex).toBe("0x9");
+    expect(r.contributing).toHaveLength(3);
+  });
 });

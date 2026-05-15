@@ -130,7 +130,24 @@ export interface BalanceConsensusResult {
 const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
 
 /** Accept both the proof-envelope shape `{ value, blockNumber, proof,
- *  stateRoot }` and the plain hex-string shape; reject everything else. */
+ *  stateRoot }` and the plain hex-string shape; reject everything else.
+ *
+ *  SDK contract: AccountProofResponse (binding, not top-level exported)
+ *    @ mono-core-sdk 0fd8a79.
+ *  Strict shape: `{ value, state_root, block_number, proof? }`.
+ *
+ *  Wire-vs-binding case mismatch (intentional, observed Phase 7.1): the
+ *  chain serializer emits camelCase (`stateRoot`, `blockNumber`) even
+ *  though the ts-rs binding annotates snake_case. The wallet's parser
+ *  only reads `.value`, so the case mismatch doesn't affect balance
+ *  reads — but downstream callers that need the proof envelope's other
+ *  fields should consult the live wire form, not the binding annotations.
+ *
+ *  Resilience posture (Phase 7.1 commit 7): keep the dual-shape accept —
+ *  rejecting only when neither `value: 0x…` nor plain `0x…` is present.
+ *  Operators on a future binary that drops the envelope wrapper in
+ *  favour of bare hex (or vice versa) keep working without a wallet
+ *  bump. */
 function parseBalanceFromRpcResult(result: unknown): string | null {
   if (typeof result === "string" && result.startsWith("0x")) {
     return result;
