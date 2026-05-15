@@ -824,6 +824,16 @@ export interface VaultSummary {
   addr: string;
   createdAt: number;
   isActive: boolean;
+  /** Phase 8 — "single" for legacy single-key vaults, "multisig" for
+   *  vaults created via {@link bgVaultAddMultisig}. */
+  kind: "single" | "multisig";
+  /** Phase 8 — N in M-of-N (0 for single vaults). */
+  signerCount: number;
+  /** Phase 8 — M in M-of-N (0 for single vaults). */
+  threshold: number;
+  /** Phase 8 — count of pending tx + governance proposals (0 for
+   *  single vaults). The picker surfaces "M-of-N · K pending" pill. */
+  pendingCount: number;
 }
 
 /**
@@ -904,6 +914,58 @@ export async function bgVaultAddImport(
     "vault-add-import",
     label !== undefined ? { mnemonic, label } : { mnemonic },
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 8 — multisig vault surface (§28.5 Q70+Q75)
+// ─────────────────────────────────────────────────────────────────────
+//
+// `bgVaultAddMultisig` creates a new multisig vault inside the
+// container. The caller supplies the N signer roster (each entry
+// must carry a label + 0x-address + 0x-pubkey + role) and the
+// threshold M. The keystore validates + generates a fresh keypair
+// for the multisig vault itself (the "executor" keypair) and
+// returns its mnemonic + address — treat the mnemonic like a
+// single-vault recovery phrase.
+//
+// `bgVaultMultisigMeta` reads the per-vault meta (signers, threshold,
+// pending proposals, governance). `meta: null` means the target is a
+// single-key vault or the id is unknown — both are non-errors.
+
+import type {
+  MultisigSigner,
+  MultisigVaultMeta,
+} from "../shared/multisig.js";
+
+export type { MultisigSigner, MultisigVaultMeta } from "../shared/multisig.js";
+
+export async function bgVaultAddMultisig(args: {
+  signers: MultisigSigner[];
+  threshold: number;
+  label?: string;
+}): Promise<
+  | { ok: true; vaultId: string; mnemonic: string; address: string }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-add-multisig", args);
+}
+
+export async function bgVaultMultisigMeta(
+  vaultId: string,
+): Promise<
+  | { ok: true; meta: MultisigVaultMeta | null }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-multisig-meta", { vaultId });
+}
+
+/** Read a vault's ML-DSA-65 pubkey (0x + 3904 hex chars). Requires
+ *  an unlocked container. Used by the MultisigCreateModal to fill
+ *  self-signer entries from existing vaults. */
+export async function bgVaultPubkey(
+  vaultId: string,
+): Promise<{ ok: true; pubkey: string } | { ok: false; reason?: string }> {
+  return send("vault-pubkey", { vaultId });
 }
 
 // ─────────────────────────────────────────────────────────────────────
