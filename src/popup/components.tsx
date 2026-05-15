@@ -697,9 +697,14 @@ interface HomeProps {
    *  stashes the target NFT and routes to the SendNft screen. */
   onOpenSendNft?: (target: SendNftTarget) => void;
   onOpenOnboard: () => void;
+  /** Phase 9 Commit 7 — slot rendered at the top of the Home body
+   *  for the post-onboarding hint bar (OnboardingHintBar). Optional
+   *  so test harnesses + callers without the route wired still
+   *  render. */
+  topSlot?: ReactNode;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, onOpenOnboard }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, onOpenOnboard, topSlot }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -727,6 +732,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         onSettings={onSettings}
       />
       <div className="ext-body">
+        {topSlot}
         {/* Hero */}
         <div className="ext-card ext-hero">
           <div className="lbl">{isPriv ? "Private balance · LYTH-p" : liveLabel?.displayName ?? "Available · LYTH"}</div>
