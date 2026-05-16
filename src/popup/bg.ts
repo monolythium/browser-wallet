@@ -1305,3 +1305,114 @@ export async function bgStakingAutovoteSeed(): Promise<
 > {
   return send("staking-autovote-seed");
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 9 — passkey + two-tier IPC helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Wire-format passkey policy. `bigint` does not survive
+ *  `chrome.runtime.sendMessage`, so we ship decimal strings on the
+ *  wire and the popup helpers convert at the boundary. */
+export interface BgPasskeyPolicy {
+  enabled: boolean;
+  mode: BgPolicyMode;
+  /** Decimal-string wei. */
+  limitWei: string;
+  /** Decimal-string wei. */
+  dailyCapWei: string;
+}
+
+export interface BgPasskeyState {
+  credentials: BgPasskeyCredential[];
+  policy: BgPasskeyPolicy;
+}
+
+export type BgAuthenticatorKind = "platform" | "cross-platform";
+export type BgPolicyMode = "per-tx" | "daily";
+
+export interface BgPasskeyCredential {
+  credentialId: string;
+  name: string;
+  kind: BgAuthenticatorKind;
+  createdAt: number;
+}
+
+export async function bgPasskeyGetState(
+  vaultId: string,
+): Promise<{ ok: true; state: BgPasskeyState } | { ok: false; reason: string }> {
+  return send("passkey-get-state", { vaultId });
+}
+
+export async function bgPasskeyAddCredential(args: {
+  vaultId: string;
+  credential: BgPasskeyCredential;
+}): Promise<{ ok: true; state: BgPasskeyState } | { ok: false; reason: string }> {
+  return send("passkey-add-credential", args);
+}
+
+export async function bgPasskeyRemoveCredential(args: {
+  vaultId: string;
+  credentialId: string;
+}): Promise<{ ok: true; state: BgPasskeyState } | { ok: false; reason: string }> {
+  return send("passkey-remove-credential", args);
+}
+
+export async function bgPasskeySetPolicy(args: {
+  vaultId: string;
+  policy: BgPasskeyPolicy;
+}): Promise<{ ok: true; state: BgPasskeyState } | { ok: false; reason: string }> {
+  return send("passkey-set-policy", args);
+}
+
+/** Wire-format passkey decision — mirrors `PolicyDecision` in
+ *  `shared/passkey.ts` with bigint values encoded as hex strings. */
+export type BgPasskeyDecision =
+  | { kind: "passkey-ok"; credentials: BgPasskeyCredential[] }
+  | { kind: "password-required"; reason: "disabled" | "no-credential" }
+  | {
+      kind: "over-limit";
+      mode: BgPolicyMode;
+      thresholdWeiHex: string;
+      attemptedWeiHex: string;
+    };
+
+/** Consult the policy for a tx value. The wallet UI runs this before
+ *  the preview screen so the user sees which unlock path applies. */
+export async function bgPasskeyEvaluate(args: {
+  vaultId: string;
+  valueWeiHex: string;
+}): Promise<
+  | { ok: true; decision: BgPasskeyDecision }
+  | { ok: false; reason: string }
+> {
+  return send("passkey-evaluate", args);
+}
+
+/** Append to the in-memory daily-cap ledger after a successful
+ *  passkey-unlocked tx submit. Caller is the popup Send flow on the
+ *  Confirm → submit → success transition. */
+export async function bgPasskeyRecordUsage(args: {
+  vaultId: string;
+  valueWeiHex: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return send("passkey-record-usage", args);
+}
+
+// Two-tier UX feature toggles
+import type {
+  FeatureFlag as TwoTierFlag,
+  TwoTierState,
+} from "../shared/two-tier-features.js";
+
+export async function bgTwoTierGetState(): Promise<
+  { ok: true; state: TwoTierState } | { ok: false; reason: string }
+> {
+  return send("two-tier-get-state");
+}
+
+export async function bgTwoTierSetFeature(
+  flag: TwoTierFlag,
+  enabled: boolean,
+): Promise<{ ok: true; state: TwoTierState } | { ok: false; reason: string }> {
+  return send("two-tier-set-feature", { flag, enabled });
+}

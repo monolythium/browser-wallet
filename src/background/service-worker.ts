@@ -80,7 +80,26 @@ import {
   writeMultisigMetaV4,
   getVaultPubkeyV4,
   signWithVaultV4,
+  // Phase 9 passkey surface (Commit 1).
+  readPasskeyStateV4,
+  addPasskeyCredentialV4,
+  removePasskeyCredentialV4,
+  setPasskeyPolicyV4,
 } from "./keystore-mldsa.js";
+import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
+import {
+  evaluatePolicy as evaluatePasskeyPolicy,
+  validateCredentialName,
+  validatePasskeyPolicy,
+} from "../shared/passkey.js";
+import {
+  loadTwoTierState,
+  setTwoTierFeature,
+} from "./two-tier-features-store.js";
+import {
+  FEATURE_FLAGS,
+  type FeatureFlag,
+} from "../shared/two-tier-features.js";
 import {
   DEFAULT_GOV_PROPOSAL_TTL_MS,
   DEFAULT_TX_PROPOSAL_TTL_MS,
@@ -1075,6 +1094,18 @@ let cachedOperator: {
   checkedAt: number;
 } | null = null;
 
+// ---- Phase 9 — in-memory passkey usage ledger ----
+//
+// Per-vault list of `{ at, valueWei }` entries for txs signed under
+// the passkey-unlock path. Used to enforce the daily-cap mode of
+// `PasskeyPolicy`. Lives in memory only — SW hibernation drops it,
+// which is fine: the daily cap is purely a wallet-side spam guard,
+// not a security invariant, and a fresh SW boot starts the window at
+// zero (so a user who reboots their browser and immediately makes a
+// large passkey-unlocked tx is the worst-case "the cap doesn't bind"
+// scenario — still within the per-tx limit, which is the real ceiling).
+const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
+
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
  * given chain. On Sprintnet we ignore `eth_gasPrice` (returns `0x0`)
@@ -1128,6 +1159,121 @@ async function suggestFee(chainIdHex: string): Promise<{
     maxFeePerGas: gasPriceHex,
     gasLimit: null,
   };
+}
+
+// ---- Phase 9 passkey IPC marshalling ----
+//
+// `bigint` does not survive `chrome.runtime.sendMessage` — the
+// structured-clone algorithm preserves it in DOM contexts but the
+// extension messaging layer JSON-serialises payloads. Encode every
+// wei value as a decimal string on the wire; parse back on receive.
+
+interface SerializedPasskeyPolicy {
+  enabled: boolean;
+  mode: "per-tx" | "daily";
+  limitWei: string;
+  dailyCapWei: string;
+}
+
+interface SerializedPasskeyState {
+  credentials: PasskeyCredential[];
+  policy: SerializedPasskeyPolicy;
+}
+
+function serializePasskeyState(s: {
+  credentials: PasskeyCredential[];
+  policy: PasskeyPolicy;
+}): SerializedPasskeyState {
+  // Phase 9 hotfix: defensive against a degraded in-memory shape.
+  // BigInt fields can be `undefined` if the policy was loaded from
+  // chrome.storage on a Chrome version that didn't preserve bigints
+  // (the durable fix lives in keystore-mldsa.ts; this is a belt-and-
+  // braces second line of defence so a bad value never crashes the
+  // IPC response with "Cannot read properties of undefined (reading
+  // 'toString')"). Falls back to the default policy limits when a
+  // field can't be coerced.
+  const policy = s?.policy ?? {};
+  const safeLimit = bigintFieldToString(
+    (policy as PasskeyPolicy).limitWei,
+    "100000000000000000000",
+  );
+  const safeDaily = bigintFieldToString(
+    (policy as PasskeyPolicy).dailyCapWei,
+    "500000000000000000000",
+  );
+  return {
+    credentials: Array.isArray(s?.credentials)
+      ? s.credentials.map((c) => ({ ...c }))
+      : [],
+    policy: {
+      enabled:
+        typeof (policy as PasskeyPolicy).enabled === "boolean"
+          ? (policy as PasskeyPolicy).enabled
+          : false,
+      mode:
+        (policy as PasskeyPolicy).mode === "daily" ? "daily" : "per-tx",
+      limitWei: safeLimit,
+      dailyCapWei: safeDaily,
+    },
+  };
+}
+
+/** Coerce a possibly-undefined / possibly-non-bigint policy field
+ *  into the decimal-string wire format. Tolerates bigint (the in-
+ *  memory case), string (the on-disk case after the hotfix), and
+ *  number (defensive). Falls back to the supplied decimal string
+ *  on anything else. */
+function bigintFieldToString(v: unknown, fallback: string): string {
+  if (typeof v === "bigint") return v.toString();
+  if (typeof v === "string" && v.length > 0) {
+    try {
+      // round-trip through BigInt to make sure the wire value parses
+      // cleanly on the popup side.
+      return BigInt(v).toString();
+    } catch {
+      return fallback;
+    }
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    try {
+      return BigInt(Math.floor(v)).toString();
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function parsePasskeyCredential(raw: unknown): PasskeyCredential | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.credentialId !== "string" || r.credentialId.length === 0) return null;
+  if (typeof r.name !== "string") return null;
+  if (r.kind !== "platform" && r.kind !== "cross-platform") return null;
+  if (typeof r.createdAt !== "number") return null;
+  return {
+    credentialId: r.credentialId,
+    name: r.name,
+    kind: r.kind,
+    createdAt: r.createdAt,
+  };
+}
+
+function parsePasskeyPolicy(raw: unknown): PasskeyPolicy | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.enabled !== "boolean") return null;
+  if (r.mode !== "per-tx" && r.mode !== "daily") return null;
+  if (typeof r.limitWei !== "string" || typeof r.dailyCapWei !== "string") return null;
+  let limitWei: bigint;
+  let dailyCapWei: bigint;
+  try {
+    limitWei = BigInt(r.limitWei);
+    dailyCapWei = BigInt(r.dailyCapWei);
+  } catch {
+    return null;
+  }
+  return { enabled: r.enabled, mode: r.mode, limitWei, dailyCapWei };
 }
 
 // ---- internal popup messages ----
@@ -3159,6 +3305,222 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           signers: meta.signers.length,
           threshold: meta.threshold,
         };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
+    // Phase 9 — passkey IPCs (§28.5 Q30 + Q31)
+    // ────────────────────────────────────────────────────────────────
+    case "passkey-get-state": {
+      // Read the per-vault passkey state — credentials + policy.
+      // No unlock required: the popup uses this to render Settings →
+      // Security and the Send-flow signing-mode badge whether or not
+      // the user is currently unlocked. The credential IDs are public
+      // (the actual secret lives in the browser's authenticator), and
+      // the policy thresholds aren't sensitive.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const state = await readPasskeyStateV4(p.vaultId);
+        return {
+          ok: true,
+          state: serializePasskeyState(state),
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-add-credential": {
+      // Persist a freshly-registered credential. The popup ran the
+      // WebAuthn `.create()` call (only possible in the popup window
+      // context per MV3 rules) and forwards the resulting credentialId
+      // + user-edited name + authenticator kind here. The wallet never
+      // sees the private key material — that lives inside the
+      // browser's authenticator.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        credential?: unknown;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      const cred = parsePasskeyCredential(p.credential);
+      if (!cred) {
+        return { ok: false, reason: "invalid credential shape" };
+      }
+      if (!validateCredentialName(cred.name)) {
+        return { ok: false, reason: "invalid credential name" };
+      }
+      try {
+        const state = await addPasskeyCredentialV4(p.vaultId, cred);
+        return { ok: true, state: serializePasskeyState(state) };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-remove-credential": {
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        credentialId?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.credentialId !== "string") {
+        return { ok: false, reason: "missing vaultId or credentialId" };
+      }
+      try {
+        const state = await removePasskeyCredentialV4(
+          p.vaultId,
+          p.credentialId,
+        );
+        return { ok: true, state: serializePasskeyState(state) };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-evaluate": {
+      // Send-flow consults this before showing the preview screen.
+      // Returns a decision the popup uses to pick the unlock-mode
+      // badge + whether to run a passkey ceremony before submit.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        valueWeiHex?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
+        return { ok: false, reason: "missing vaultId or valueWeiHex" };
+      }
+      let valueWei: bigint;
+      try {
+        valueWei = BigInt(p.valueWeiHex);
+      } catch {
+        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
+      }
+      try {
+        const state = await readPasskeyStateV4(p.vaultId);
+        const usage = passkeyUsage.get(p.vaultId) ?? [];
+        const decision = evaluatePasskeyPolicy({
+          state,
+          valueWei,
+          recentUsage: usage,
+          now: Date.now(),
+        });
+        // Encode the decision for the wire — `bigint` doesn't survive
+        // structured-clone serialisation across the runtime.sendMessage
+        // boundary in some browser builds.
+        if (decision.kind === "over-limit") {
+          return {
+            ok: true,
+            decision: {
+              kind: "over-limit" as const,
+              mode: decision.mode,
+              thresholdWeiHex: "0x" + decision.threshold.toString(16),
+              attemptedWeiHex: "0x" + decision.attempted.toString(16),
+            },
+          };
+        }
+        if (decision.kind === "passkey-ok") {
+          // Surface the active credentials so the popup can build the
+          // `allowCredentials[]` list for `navigator.credentials.get()`
+          // without a second round-trip.
+          return {
+            ok: true,
+            decision: {
+              kind: "passkey-ok" as const,
+              credentials: state.credentials.map((c) => ({ ...c })),
+            },
+          };
+        }
+        return {
+          ok: true,
+          decision: {
+            kind: "password-required" as const,
+            reason: decision.reason,
+          },
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "passkey-record-usage": {
+      // Append a `{at, valueWei}` entry to the in-memory daily-cap
+      // ledger. Popup calls this after a successful passkey-unlocked
+      // tx submit. Prune-on-read keeps the list bounded — no explicit
+      // GC required.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        valueWeiHex?: string;
+      };
+      if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
+        return { ok: false, reason: "missing vaultId or valueWeiHex" };
+      }
+      let valueWei: bigint;
+      try {
+        valueWei = BigInt(p.valueWeiHex);
+      } catch {
+        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
+      }
+      const entries = passkeyUsage.get(p.vaultId) ?? [];
+      entries.push({ at: Date.now(), valueWei });
+      passkeyUsage.set(p.vaultId, entries);
+      return { ok: true };
+    }
+    case "passkey-set-policy": {
+      // Replace the policy atomically. The wallet enforces the
+      // resulting threshold at signing time (Commit 4). There is NO
+      // chain-side enforcement today — see the chain-GAP note in
+      // shared/passkey.ts. The validator inside the shared module
+      // rejects bogus inputs; bad payloads round-trip a typed reason.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        policy?: unknown;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      const policy = parsePasskeyPolicy(p.policy);
+      if (!policy) {
+        return { ok: false, reason: "invalid policy shape" };
+      }
+      const validationError = validatePasskeyPolicy(policy);
+      if (validationError) {
+        return { ok: false, reason: `invalid policy: ${validationError}` };
+      }
+      try {
+        const state = await setPasskeyPolicyV4(p.vaultId, policy);
+        return { ok: true, state: serializePasskeyState(state) };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
+    // Phase 9 — two-tier UX feature toggle IPCs (§28.5 Q29)
+    // ────────────────────────────────────────────────────────────────
+    case "two-tier-get-state": {
+      try {
+        const state = await loadTwoTierState();
+        return { ok: true, state };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "two-tier-set-feature": {
+      const p = (message.payload ?? {}) as {
+        flag?: string;
+        enabled?: unknown;
+      };
+      if (typeof p.flag !== "string" || typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "missing flag or enabled bool" };
+      }
+      if (!(FEATURE_FLAGS as readonly string[]).includes(p.flag)) {
+        return { ok: false, reason: "unknown feature flag" };
+      }
+      try {
+        const state = await setTwoTierFeature(
+          p.flag as FeatureFlag,
+          p.enabled,
+        );
+        return { ok: true, state };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
