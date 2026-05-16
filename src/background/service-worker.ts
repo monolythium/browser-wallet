@@ -200,6 +200,7 @@ import {
   readPendingRewards,
   readRedemptionQueue,
 } from "./staking-client.js";
+import { previewTransactionHooks } from "./preview-hooks-client.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
@@ -4318,6 +4319,33 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
+    }
+    case "wallet-preview-transaction-hooks": {
+      // Phase 11.5 Commit 2 — call lyth_previewTransactionHooks
+      // (MS-CORE-0009) so the Send preview can show "Hooks that
+      // will run" before the user signs. Falls back to mock-not-
+      // deployed on -32601, in which case the popup hides the
+      // section entirely (no UI regression on older operators).
+      const p = message.payload as {
+        from?: string;
+        to?: string;
+        valueWeiHex?: string;
+        data?: string;
+      } | undefined;
+      if (typeof p?.to !== "string") {
+        return { ok: false, reason: "missing to" };
+      }
+      const input: {
+        from?: string;
+        to: string;
+        valueWeiHex?: string;
+        data?: string;
+      } = { to: p.to };
+      if (typeof p.from === "string") input.from = p.from;
+      if (typeof p.valueWeiHex === "string") input.valueWeiHex = p.valueWeiHex;
+      if (typeof p.data === "string") input.data = p.data;
+      const outcome = await previewTransactionHooks(input);
+      return { ok: true, outcome };
     }
     // ─────────────────────────────────────────────────────────────────
     // Phase 7 — staking + delegation reads (§23 whitepaper)

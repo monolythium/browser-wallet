@@ -554,6 +554,36 @@ export async function bgWalletFeeSuggestion(
   };
 }
 
+/** Phase 11.5 Commit 2 — pre-tx hook preview. Calls
+ *  `lyth_previewTransactionHooks` (mono-core @dd05511 / MS-CORE-0009).
+ *  Returns a typed `ChainOutcome<TransactionHookPreview>` whose `kind`
+ *  the Send preview branches on:
+ *    - "live" → render the "Hooks that will run" section with real data
+ *    - "mock-not-deployed" / "mock-offline" / "mock-error" → hide the
+ *      section so older operators (pre-dd05511) don't degrade the UX
+ *
+ *  The IPC handler in service-worker.ts wraps the raw RPC in
+ *  `withChainFallback` so this helper never throws on RPC errors;
+ *  it only returns `{ ok: false }` for IPC-level validation failures
+ *  (e.g. missing `to` address). */
+export async function bgPreviewTransactionHooks(args: {
+  from?: string;
+  to: string;
+  valueWeiHex?: string;
+  data?: string;
+}): Promise<
+  | { ok: true; outcome: PreviewTransactionHooksOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-preview-transaction-hooks", args);
+}
+
+/** Convenience re-export of the typed outcome the SW returns. */
+export type PreviewTransactionHooksOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").TransactionHookPreview
+  >;
+
 /**
  * Read the active chain id from chrome.storage. Returns the Sprintnet
  * default (`0x10F2C`) when nothing is stored yet (first launch) or when
