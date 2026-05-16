@@ -31,6 +31,7 @@ import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Stake } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { ClusterDetail } from "./pages/ClusterDetail";
@@ -584,6 +585,7 @@ export default function App() {
     screen === "reset-wallet";
 
   return (
+    <ErrorBoundary>
     <div className="ext" data-denom={acc.denom}>
       {showBannerStrip && (
         <ChainStatusBanner
@@ -1004,6 +1006,7 @@ export default function App() {
         />
       )}
     </div>
+    </ErrorBoundary>
   );
 }
 
