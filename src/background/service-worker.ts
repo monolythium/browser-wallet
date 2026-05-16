@@ -202,6 +202,7 @@ import {
 } from "./staking-client.js";
 import { previewTransactionHooks } from "./preview-hooks-client.js";
 import { readSigningActivity } from "./signing-activity-client.js";
+import { readOperatorRisk } from "./operator-risk-client.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
@@ -4360,6 +4361,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
       if (typeof p?.limit === "number") args.limit = p.limit;
       const outcome = await readSigningActivity(args);
+      return { ok: true, outcome };
+    }
+    case "chain-operator-risk": {
+      // Phase 11.5 Commit 5 — call lyth_operatorRisk (MD-CORE-0006)
+      // for a sampled authority. Returns ChainOutcome<OperatorRiskWire>
+      // with miss-rate / headroom / jail status. Defaults:
+      // authorityIndex 0, windowRounds 200 (chain clamps at 1000).
+      // Mock-not-deployed on -32601 so the popup hides the card.
+      const p = message.payload as
+        | { authorityIndex?: number; windowRounds?: number }
+        | undefined;
+      const args: { authorityIndex?: number; windowRounds?: number } = {};
+      if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
+      if (typeof p?.windowRounds === "number") args.windowRounds = p.windowRounds;
+      const outcome = await readOperatorRisk(args);
       return { ok: true, outcome };
     }
     // ─────────────────────────────────────────────────────────────────

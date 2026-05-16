@@ -223,6 +223,108 @@ export function summarizeSigningActivity(
 }
 
 // ---------------------------------------------------------------
+// 2b) lyth_operatorRisk   (MD-CORE-0006 / 017cab9)
+//     Handler: ChainProvider::operator_risk → returns OperatorRisk
+//     Params:  [authorityIndex: u16, windowRounds: u32]
+//              (windowRounds clamped at MAX_OPERATOR_RISK_WINDOW = 1000)
+//
+// Wired in Commit 5 INSTEAD OF lyth_getServiceProbe (the original
+// task spec). Rationale documented in the audit follow-up commit
+// message: the wallet's Operators page surfaces RPC URLs, not the
+// 32-byte node-registry peerIds that lyth_getServiceProbe requires.
+// lyth_operatorRisk is the sibling MD-CORE-0006 surface that delivers
+// the same "real chain-side operator health" intent without needing
+// a separate peerId-resolution chain. It also slots into the existing
+// `pendingChange` placeholder on operator-risk.ts:59-66.
+// ---------------------------------------------------------------
+
+export type JailStatusWindow =
+  | {
+      jailed: boolean;
+      tombstoned: boolean;
+      jailedUntilHeight: number;
+      unjailCount: number;
+    }
+  | { reason: string };
+
+export interface OperatorRiskWire {
+  schemaVersion: number;
+  authorityIndex: number;
+  dataHeight: number;
+  windowRounds: number;
+  missedRounds: number;
+  observedRounds: number;
+  missRateBps: number;
+  thresholdBps: number;
+  remainingHeadroomBps: number;
+  jailStatus: JailStatusWindow;
+  reasons: string[];
+}
+
+export function isOperatorRiskWire(raw: unknown): raw is OperatorRiskWire {
+  if (!raw || typeof raw !== "object") return false;
+  const o = raw as Record<string, unknown>;
+  for (const k of [
+    "schemaVersion",
+    "authorityIndex",
+    "dataHeight",
+    "windowRounds",
+    "missedRounds",
+    "observedRounds",
+    "missRateBps",
+    "thresholdBps",
+    "remainingHeadroomBps",
+  ] as const) {
+    if (typeof o[k] !== "number") return false;
+  }
+  if (!Array.isArray(o.reasons)) return false;
+  for (const r of o.reasons) if (typeof r !== "string") return false;
+  const js = o.jailStatus;
+  if (!js || typeof js !== "object") return false;
+  const jso = js as Record<string, unknown>;
+  const isAvailable =
+    typeof jso.jailed === "boolean" &&
+    typeof jso.tombstoned === "boolean" &&
+    typeof jso.jailedUntilHeight === "number" &&
+    typeof jso.unjailCount === "number";
+  const isAbsent = typeof jso.reason === "string";
+  if (!isAvailable && !isAbsent) return false;
+  return true;
+}
+
+export function isJailStatusAvailable(
+  js: JailStatusWindow,
+): js is {
+  jailed: boolean;
+  tombstoned: boolean;
+  jailedUntilHeight: number;
+  unjailCount: number;
+} {
+  return "jailed" in js;
+}
+
+/** Risk tier derived from the chain's miss-rate vs threshold. Drives
+ *  the AuthorityRiskCard badge color in the popup. */
+export type OperatorRiskTier = "ok" | "warn" | "err";
+
+/** Map a chain-side OperatorRiskWire payload onto a coarse 3-tier
+ *  badge class. Pure derivation — kept in the shared module so the
+ *  popup can use it without importing the SW-side RPC client. */
+export function deriveOperatorRiskTier(risk: OperatorRiskWire): OperatorRiskTier {
+  if (
+    "jailed" in risk.jailStatus &&
+    (risk.jailStatus.jailed || risk.jailStatus.tombstoned)
+  ) {
+    return "err";
+  }
+  if (risk.thresholdBps === 0) return "ok";
+  if (risk.missRateBps >= risk.thresholdBps) return "err";
+  if (risk.remainingHeadroomBps < risk.thresholdBps / 4) return "warn";
+  if (risk.reasons.length > 0) return "warn";
+  return "ok";
+}
+
+// ---------------------------------------------------------------
 // 3) lyth_getServiceProbe   (AUD-0088 / 2a06c291)
 //    Handler: protocore.rs:403
 //    Params:  [peerId: [u8; 32], serviceMask: u32]
