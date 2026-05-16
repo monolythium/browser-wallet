@@ -92,6 +92,11 @@ import {
   removeCredential as removePasskeyCredential,
   setPolicy as setPasskeyPolicy,
 } from "../shared/passkey.js";
+import type { SlhDsaBackup } from "../shared/slh-dsa-backup.js";
+import {
+  cloneBackupForRead,
+  cloneBackupForWrite,
+} from "../shared/slh-dsa-backup.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -230,6 +235,18 @@ interface VaultRecordV4 {
    *  user-edited names + policy thresholds. See `shared/passkey.ts`
    *  for the rationale and the on-chain GAP analysis. */
   passkey?: VaultPasskeyState;
+  /** Phase 10 — optional per-vault SLH-DSA emergency backup record.
+   *  Absent on every vault until the user opts into the §30.1 flow.
+   *  Read paths treat absence as "not set up". When present, the
+   *  encrypted secret-key material is XChaCha20-Poly1305-sealed under
+   *  the SAME VEK that protects the primary ML-DSA-65 envelope — the
+   *  cold-storage backup the user wrote down is what they recover
+   *  from in a G3 emergency, NOT this on-disk copy. See
+   *  `shared/slh-dsa-backup.ts` for the rationale + chain-GAP
+   *  analysis + parameter-set choice (`slh_dsa_sha2_128s` algo id
+   *  `1101`, the only currently-chain-eligible backup variant per
+   *  Law §2.9). */
+  slhDsaBackup?: SlhDsaBackup;
 }
 
 /** Multi-vault container. Stored under
@@ -489,9 +506,31 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
   // as `undefined`.
   return {
     ...raw,
-    vaults: raw.vaults.map((v) =>
-      v.passkey ? { ...v, passkey: clonePasskeyState(v.passkey) } : v,
-    ),
+    vaults: raw.vaults.map((v) => {
+      // Phase 9 hotfix — passkey BigInt normalisation
+      let out = v.passkey
+        ? { ...v, passkey: clonePasskeyState(v.passkey) }
+        : v;
+      // Phase 10 — SLH-DSA backup defensive read. The on-disk shape
+      // is already plain JSON (no BigInts to recover), but pushing
+      // every read through `cloneBackupForRead` strips unknown fields
+      // + fails closed on a corrupt record (returns `null`, which
+      // the read paths treat as "no backup configured"). The same
+      // defence-in-depth posture as the Phase 9 passkey path.
+      if (out.slhDsaBackup) {
+        const restored = cloneBackupForRead(out.slhDsaBackup);
+        if (restored !== null) {
+          out = { ...out, slhDsaBackup: restored };
+        } else {
+          // Corrupt record — drop the field rather than carry a
+          // broken shape forward. The next write rehydrates a
+          // clean record.
+          const { slhDsaBackup: _drop, ...withoutBackup } = out;
+          out = withoutBackup;
+        }
+      }
+      return out;
+    }),
   };
 }
 
@@ -1125,6 +1164,73 @@ export async function setPasskeyPolicyV4(
   v.passkey = clonePasskeyState(next);
   await saveVaultsContainerV4(container);
   return clonePasskeyState(next);
+}
+
+// ---- Phase 10 SLH-DSA backup CRUD ----
+//
+// The keygen + secret-key encryption lives in
+// `src/background/slh-dsa-keygen.ts` (Phase 10 Commit 2). These
+// helpers are the storage seam — they accept an already-prepared
+// `SlhDsaBackup` record and persist / read it through the same
+// container the rest of the vault state lives in. Read paths return
+// `null` (not a placeholder) for vaults that have not opted into
+// the backup flow.
+
+/** Read the SLH-DSA backup record for the target vault. Returns
+ *  `null` for unknown vault ids and for vaults that have never
+ *  generated a backup. Tolerates the round-trip through
+ *  chrome.storage via `cloneBackupForRead` — a corrupt on-disk
+ *  shape returns `null` rather than crashing the caller. */
+export async function readSlhDsaBackupV4(
+  vaultId: string,
+): Promise<SlhDsaBackup | null> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return null;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.slhDsaBackup) return null;
+  return cloneBackupForRead(v.slhDsaBackup);
+}
+
+/** Replace the SLH-DSA backup record atomically. Caller is the
+ *  keygen path (Commit 2) — by the time we get here the secret key
+ *  has already been VEK-wrapped + the user has gone through the
+ *  reveal-modal flow. Throws on unknown vault id; the caller never
+ *  catches it because the only call site is the SW IPC handler
+ *  which surfaces the throw as a typed error. */
+export async function writeSlhDsaBackupV4(
+  vaultId: string,
+  backup: SlhDsaBackup,
+): Promise<SlhDsaBackup> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  v.slhDsaBackup = cloneBackupForWrite(backup);
+  await saveVaultsContainerV4(container);
+  // Return through the read clone so the caller always gets a
+  // fresh object (defensive against future mutation by callers
+  // that capture the reference).
+  return cloneBackupForRead(v.slhDsaBackup) ?? backup;
+}
+
+/** Drop the SLH-DSA backup record entirely. Used by the Settings →
+ *  Security re-export flow when the user explicitly chooses
+ *  "Generate a new backup key" (which means abandoning the prior
+ *  one — chain registration is one-time, so the new key cannot be
+ *  registered on the same vault address; this is an escape hatch
+ *  for users who lost their cold-storage copy and accept that the
+ *  on-chain registration is now irrecoverable for this vault).
+ *  Returns `true` if a record existed and was removed. */
+export async function clearSlhDsaBackupV4(
+  vaultId: string,
+): Promise<boolean> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return false;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.slhDsaBackup) return false;
+  delete v.slhDsaBackup;
+  await saveVaultsContainerV4(container);
+  return true;
 }
 
 /** Defensive copy so callers can't mutate stored state by holding a
