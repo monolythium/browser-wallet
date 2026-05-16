@@ -1184,15 +1184,64 @@ function serializePasskeyState(s: {
   credentials: PasskeyCredential[];
   policy: PasskeyPolicy;
 }): SerializedPasskeyState {
+  // Phase 9 hotfix: defensive against a degraded in-memory shape.
+  // BigInt fields can be `undefined` if the policy was loaded from
+  // chrome.storage on a Chrome version that didn't preserve bigints
+  // (the durable fix lives in keystore-mldsa.ts; this is a belt-and-
+  // braces second line of defence so a bad value never crashes the
+  // IPC response with "Cannot read properties of undefined (reading
+  // 'toString')"). Falls back to the default policy limits when a
+  // field can't be coerced.
+  const policy = s?.policy ?? {};
+  const safeLimit = bigintFieldToString(
+    (policy as PasskeyPolicy).limitWei,
+    "100000000000000000000",
+  );
+  const safeDaily = bigintFieldToString(
+    (policy as PasskeyPolicy).dailyCapWei,
+    "500000000000000000000",
+  );
   return {
-    credentials: s.credentials.map((c) => ({ ...c })),
+    credentials: Array.isArray(s?.credentials)
+      ? s.credentials.map((c) => ({ ...c }))
+      : [],
     policy: {
-      enabled: s.policy.enabled,
-      mode: s.policy.mode,
-      limitWei: s.policy.limitWei.toString(),
-      dailyCapWei: s.policy.dailyCapWei.toString(),
+      enabled:
+        typeof (policy as PasskeyPolicy).enabled === "boolean"
+          ? (policy as PasskeyPolicy).enabled
+          : false,
+      mode:
+        (policy as PasskeyPolicy).mode === "daily" ? "daily" : "per-tx",
+      limitWei: safeLimit,
+      dailyCapWei: safeDaily,
     },
   };
+}
+
+/** Coerce a possibly-undefined / possibly-non-bigint policy field
+ *  into the decimal-string wire format. Tolerates bigint (the in-
+ *  memory case), string (the on-disk case after the hotfix), and
+ *  number (defensive). Falls back to the supplied decimal string
+ *  on anything else. */
+function bigintFieldToString(v: unknown, fallback: string): string {
+  if (typeof v === "bigint") return v.toString();
+  if (typeof v === "string" && v.length > 0) {
+    try {
+      // round-trip through BigInt to make sure the wire value parses
+      // cleanly on the popup side.
+      return BigInt(v).toString();
+    } catch {
+      return fallback;
+    }
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    try {
+      return BigInt(Math.floor(v)).toString();
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
 }
 
 function parsePasskeyCredential(raw: unknown): PasskeyCredential | null {
