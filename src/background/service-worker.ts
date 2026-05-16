@@ -85,15 +85,17 @@ import {
   addPasskeyCredentialV4,
   removePasskeyCredentialV4,
   setPasskeyPolicyV4,
-  // Phase 10 SLH-DSA emergency-backup surface (Commit 1+2).
+  // Phase 10 SLH-DSA emergency-backup surface (Commit 1+2+4).
   // `writeSlhDsaBackupV4` is not used directly by any IPC — the
   // SW writes through the higher-level helpers (`generateSlhDsaBackupV4`,
-  // `confirmSlhDsaColdStorageV4`) instead. Test seam only.
+  // `confirmSlhDsaColdStorageV4`, `setSlhDsaRegistrationStatusV4`)
+  // instead. Test seam only.
   readSlhDsaBackupV4,
   clearSlhDsaBackupV4,
   generateSlhDsaBackupV4,
   recoverSlhDsaMnemonicV4,
   confirmSlhDsaColdStorageV4,
+  setSlhDsaRegistrationStatusV4,
 } from "./keystore-mldsa.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
@@ -3601,6 +3603,48 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const backup = await confirmSlhDsaColdStorageV4(p.vaultId);
+        return { ok: true, backup };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "slh-dsa-backup-set-registration-status": {
+      // Update a backup record's chain-registration lifecycle
+      // atomically. The popup orchestrates the actual tx
+      // submission via the existing `wallet-send-tx` IPC + this
+      // status update IPC, so the SW doesn't need to know about
+      // the calldata-building seam.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        status?: string;
+        txHash?: string | null;
+        block?: number | null;
+        error?: string | null;
+      };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      const validStatuses = new Set([
+        "not-registered",
+        "pending",
+        "registered",
+        "registration-failed",
+      ]);
+      if (typeof p.status !== "string" || !validStatuses.has(p.status)) {
+        return { ok: false, reason: "invalid status" };
+      }
+      try {
+        const backup = await setSlhDsaRegistrationStatusV4(p.vaultId, {
+          status: p.status as
+            | "not-registered"
+            | "pending"
+            | "registered"
+            | "registration-failed",
+          ...(p.txHash !== undefined ? { txHash: p.txHash } : {}),
+          ...(p.block !== undefined ? { block: p.block } : {}),
+          ...(p.error !== undefined ? { error: p.error } : {}),
+        });
+        await resetAutoLock();
         return { ok: true, backup };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };

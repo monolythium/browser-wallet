@@ -1339,6 +1339,89 @@ export async function confirmSlhDsaColdStorageV4(
   return cloneBackupForRead(v.slhDsaBackup);
 }
 
+/** Update a backup record's chain-registration status atomically.
+ *  The popup orchestrates the flow:
+ *
+ *    1. read backup → decode pubkey → buildTx → bgWalletSendTx
+ *    2. on tx-submitted reply, call this with status="pending"
+ *       + the returned tx hash
+ *    3. on a later receipt poll (or a manual user "check status"),
+ *       call this again with "registered" + the inclusion block,
+ *       or "registration-failed" + the revert reason
+ *    4. clear back to "not-registered" only if the caller decides
+ *       to abandon a stuck `pending` and retry (rare)
+ *
+ *  Throws on unknown vault id / no backup record (call
+ *  `generateSlhDsaBackupV4` first). */
+export async function setSlhDsaRegistrationStatusV4(
+  vaultId: string,
+  args: {
+    status: "not-registered" | "pending" | "registered" | "registration-failed";
+    /** Tx hash — required when transitioning to `pending` or
+     *  `registered`; cleared when transitioning to
+     *  `not-registered`. Optional otherwise. */
+    txHash?: string | null;
+    /** Inclusion block — populated when transitioning to
+     *  `registered`. */
+    block?: number | null;
+    /** Chain revert reason — populated when transitioning to
+     *  `registration-failed`. */
+    error?: string | null;
+  },
+): Promise<SlhDsaBackup> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  if (!v.slhDsaBackup) {
+    throw new Error("no backup record for this vault");
+  }
+
+  // Build the next record from the existing one + the patch. Use
+  // conditional spreads for the optional fields so we can both
+  // SET and CLEAR them through this single API (`undefined` →
+  // omit from record, `null` → also omit, a string → set, etc.).
+  const next: SlhDsaBackup = {
+    ...v.slhDsaBackup,
+    chainRegistrationStatus: args.status,
+    ...(typeof args.txHash === "string"
+      ? { chainRegistrationTxHash: args.txHash }
+      : {}),
+    ...(typeof args.block === "number"
+      ? { chainRegistrationBlock: args.block }
+      : {}),
+    ...(typeof args.error === "string"
+      ? { chainRegistrationError: args.error }
+      : {}),
+  };
+
+  // For terminal states, clear stale fields explicitly so a UI
+  // that reads the record sees a clean shape rather than a mix of
+  // old + new metadata. Use delete to make the field absent (which
+  // honours `exactOptionalPropertyTypes`).
+  if (args.status === "not-registered") {
+    delete next.chainRegistrationTxHash;
+    delete next.chainRegistrationBlock;
+    delete next.chainRegistrationError;
+  }
+  if (args.status === "registered") {
+    delete next.chainRegistrationError;
+  }
+  if (args.status === "registration-failed") {
+    // Keep the txHash if we have one (the failure may have a tx
+    // we want the user to be able to investigate) but drop the
+    // success-block field.
+    delete next.chainRegistrationBlock;
+  }
+  if (args.txHash === null) {
+    delete next.chainRegistrationTxHash;
+  }
+
+  v.slhDsaBackup = cloneBackupForWrite(next);
+  await saveVaultsContainerV4(container);
+  return cloneBackupForRead(v.slhDsaBackup) ?? next;
+}
+
 /** Defensive copy so callers can't mutate stored state by holding a
  *  reference to the returned record.
  *

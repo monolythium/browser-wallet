@@ -403,3 +403,32 @@ export function hasBackupStarted(
 ): boolean {
   return b !== null && b !== undefined && b.createdAt > 0;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Hex helpers — also useful in the popup tx-building path
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Decode a stored hex pubkey back to raw 32 bytes. Used by the
+ *  popup-side `bgSlhDsaBackupSubmitRegistration` orchestrator to
+ *  feed the precompile's `bytes` argument. Validates length so a
+ *  corrupt record can't slip past. Lives in this shared module
+ *  (rather than the SW-side keygen module) so the popup can import
+ *  it without pulling the heavy SW crypto graph. */
+export function decodeBackupPublicKeyHex(hexPubkey: string): Uint8Array {
+  if (typeof hexPubkey !== "string") {
+    throw new Error("decodeBackupPublicKeyHex: input must be a string");
+  }
+  if (!/^[0-9a-f]*$/.test(hexPubkey)) {
+    throw new Error("decodeBackupPublicKeyHex: non-hex characters");
+  }
+  if (hexPubkey.length !== SLH_DSA_SHA2_128S_LENGTHS.publicKey * 2) {
+    throw new Error(
+      `decodeBackupPublicKeyHex: ${hexPubkey.length / 2} bytes, want ${SLH_DSA_SHA2_128S_LENGTHS.publicKey}`,
+    );
+  }
+  const out = new Uint8Array(SLH_DSA_SHA2_128S_LENGTHS.publicKey);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hexPubkey.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}

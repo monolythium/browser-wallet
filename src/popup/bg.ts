@@ -1482,3 +1482,91 @@ export async function bgSlhDsaBackupClear(
 > {
   return send("slh-dsa-backup-clear", { vaultId });
 }
+
+/** Update a backup's chain-registration lifecycle status. Used by
+ *  the popup-side orchestrator (`bgSlhDsaBackupSubmitRegistration`)
+ *  on each tx-submit / receipt-poll. */
+export async function bgSlhDsaBackupSetRegistrationStatus(args: {
+  vaultId: string;
+  status: "not-registered" | "pending" | "registered" | "registration-failed";
+  txHash?: string | null;
+  block?: number | null;
+  error?: string | null;
+}): Promise<
+  | { ok: true; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-set-registration-status", args);
+}
+
+import {
+  buildEmergencyKeyRegisterTx,
+} from "../shared/slh-dsa-chain-tx.js";
+import { decodeBackupPublicKeyHex } from "../shared/slh-dsa-backup.js";
+
+/** High-level orchestrator that submits the on-chain registration
+ *  for the active vault's emergency-backup key.
+ *
+ *  Flow:
+ *   1. Look up the persisted backup record (caller already showed
+ *      the user a "Register on-chain" CTA — they have one). Decode
+ *      the 32-byte pubkey from its hex storage shape.
+ *   2. Build the `register(uint16,bytes)` calldata for the
+ *      precompile at 0x1100.
+ *   3. Submit via `bgWalletSendTx` (the same path every other
+ *      contract-call tx takes).
+ *   4. On submit success, flip `chainRegistrationStatus` to
+ *      `"pending"` with the tx hash so the UI can render a "tx
+ *      submitted, waiting for inclusion" badge + Monoscan link.
+ *   5. On submit failure, flip to `"registration-failed"` with the
+ *      chain reason verbatim. The user can retry from Settings.
+ *
+ *  Receipt polling (pending → registered | registration-failed) is
+ *  the Settings page's responsibility (Commit 6 wires it). */
+export async function bgSlhDsaBackupSubmitRegistration(args: {
+  vaultId: string;
+  publicKeyHex: string;
+  chainIdHex: string;
+}): Promise<
+  | { ok: true; txHash: string; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  let pubkeyBytes: Uint8Array;
+  try {
+    pubkeyBytes = decodeBackupPublicKeyHex(args.publicKeyHex);
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message };
+  }
+
+  const tx = buildEmergencyKeyRegisterTx(pubkeyBytes);
+  const submit = await bgWalletSendTx({
+    to: tx.to,
+    valueWeiHex: tx.valueWeiHex,
+    data: tx.data,
+    chainIdHex: args.chainIdHex,
+  });
+
+  if (!submit.ok) {
+    const reason =
+      typeof submit.reason === "string" ? submit.reason : "tx submit failed";
+    // Persist the failure so the Settings page can show a clear
+    // "registration failed, retry?" state even after popup close.
+    await bgSlhDsaBackupSetRegistrationStatus({
+      vaultId: args.vaultId,
+      status: "registration-failed",
+      error: reason,
+    });
+    return { ok: false, reason };
+  }
+
+  const txHash = submit.result.txHash;
+  const setRes = await bgSlhDsaBackupSetRegistrationStatus({
+    vaultId: args.vaultId,
+    status: "pending",
+    txHash,
+  });
+  if (!setRes.ok) {
+    return { ok: false, reason: setRes.reason };
+  }
+  return { ok: true, txHash, backup: setRes.backup };
+}
