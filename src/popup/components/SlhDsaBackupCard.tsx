@@ -26,6 +26,7 @@ import {
   bgSlhDsaBackupSubmitRegistration,
 } from "../bg";
 import { SlhDsaBackupRevealModal } from "./SlhDsaBackupRevealModal";
+import { SlhDsaRotationRehearsal } from "./SlhDsaRotationRehearsal";
 import {
   type SlhDsaBackup,
   backupStatusLabel,
@@ -348,6 +349,11 @@ export function SlhDsaBackupCard({
               {submitErr && (
                 <div style={{ ...errBox, marginTop: 8 }}>{submitErr}</div>
               )}
+
+              {/* G3 rotation rehearsal — read-only explainer. Only
+                  surfaces when the vault actually has a backup
+                  (otherwise the explainer is premature). */}
+              <SlhDsaRotationRehearsal />
 
               {/* Destructive — abandon + regenerate. */}
               <div
