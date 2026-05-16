@@ -15,12 +15,15 @@ import {
   bgMultisigPropose,
   bgPasskeyEvaluate,
   bgPasskeyRecordUsage,
+  bgPreviewTransactionHooks,
   bgWalletBalance,
   bgWalletFeeSuggestion,
   bgWalletSendTx,
   type BgPasskeyDecision,
   type FeeSuggestion,
+  type PreviewTransactionHooksOutcome,
 } from "../bg";
+import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
@@ -1324,6 +1327,241 @@ function PasskeyDecisionBadge({
   );
 }
 
+/** Phase 11.5 Commit 2 — "Hooks that will run" section on the Send
+ *  preview screen. Lazy-fetches the chain's pre-tx hook preview
+ *  (`lyth_previewTransactionHooks`, mono-core @dd05511) when the
+ *  preview mounts.
+ *
+ *  Visibility:
+ *    - while loading        → thin skeleton (no width-shift)
+ *    - chain returned live  → render hook list + spending-policy row
+ *    - any mock-* outcome   → render nothing (graceful no-op on
+ *                             operators that haven't deployed yet)
+ *
+ *  We hide the section on every mock outcome rather than rendering a
+ *  "data missing" hint because the preview screen already feels busy
+ *  with the summary + warning cards. The dev-tools `via` string still
+ *  records what happened for diagnostics. */
+function PreviewHooksSection({
+  fromAddr,
+  to,
+  amountWei,
+}: {
+  fromAddr: string;
+  to: string;
+  amountWei: bigint | null;
+}) {
+  const [outcome, setOutcome] = useState<PreviewTransactionHooksOutcome | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setOutcome(null);
+    void (async () => {
+      const args: { from?: string; to: string; valueWeiHex?: string } = {
+        from: fromAddr,
+        to,
+      };
+      if (amountWei !== null) args.valueWeiHex = "0x" + amountWei.toString(16);
+      const r = await bgPreviewTransactionHooks(args);
+      if (cancelled) return;
+      setLoading(false);
+      if (r.ok) {
+        setOutcome(r.outcome);
+      } else {
+        setOutcome(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fromAddr, to, amountWei]);
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          height: 28,
+          borderRadius: 8,
+          background: "rgba(124,127,255,0.04)",
+          border: "1px dashed rgba(124,127,255,0.2)",
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (!outcome || outcome.kind !== "live") {
+    // mock-not-deployed / mock-offline / mock-error → hide entirely.
+    return null;
+  }
+  return <HookPreviewCard preview={outcome.data} />;
+}
+
+function HookPreviewCard({ preview }: { preview: TransactionHookPreview }) {
+  const policy = preview.spendingPolicy;
+  const policyOk = policy.status === "ok";
+  return (
+    <div
+      className="ext-card"
+      style={{
+        padding: "10px 12px",
+        background: preview.wouldReject
+          ? "rgba(244,99,99,0.06)"
+          : "rgba(124,127,255,0.05)",
+        border: preview.wouldReject
+          ? "1px solid rgba(244,99,99,0.4)"
+          : "1px solid rgba(124,127,255,0.25)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 6,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            color: "var(--fg-400)",
+          }}
+        >
+          Hooks that will run · §15
+        </div>
+        {preview.wouldReject && (
+          <span
+            style={{
+              fontSize: 9.5,
+              padding: "2px 6px",
+              borderRadius: 999,
+              background: "rgba(244,99,99,0.18)",
+              color: "var(--fg-100)",
+              fontWeight: 600,
+            }}
+          >
+            WOULD REJECT
+          </span>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        <HookRow
+          name="Spending policy"
+          status={policy.status}
+          tone={policyOk ? "ok" : "warn"}
+          message={policy.message ?? policy.reason ?? null}
+          details={policy.details}
+        />
+        {preview.warnings.map((w, i) => (
+          <HookRow
+            key={`${w.code}-${i}`}
+            name={w.code}
+            status={w.severity}
+            tone={w.severity === "error" ? "warn" : "info"}
+            message={w.message}
+            details={null}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HookRow({
+  name,
+  status,
+  tone,
+  message,
+  details,
+}: {
+  name: string;
+  status: string;
+  tone: "ok" | "warn" | "info";
+  message: string | null;
+  details: Record<string, string> | null;
+}) {
+  const dotColor =
+    tone === "ok" ? "var(--ok)" : tone === "warn" ? "var(--warn, #f2b441)" : "var(--fg-400)";
+  const detailEntries = details ? Object.entries(details) : [];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          color: "var(--fg-100)",
+        }}
+      >
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: dotColor,
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontWeight: 600 }}>{name}</span>
+        <span
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-400)",
+          }}
+        >
+          {status}
+        </span>
+      </div>
+      {message && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--fg-300)",
+            paddingLeft: 12,
+            lineHeight: 1.4,
+          }}
+        >
+          {message}
+        </div>
+      )}
+      {detailEntries.length > 0 && (
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-400)",
+            paddingLeft: 12,
+            display: "flex",
+            flexDirection: "column",
+            gap: 1,
+          }}
+        >
+          {detailEntries.map(([k, v]) => (
+            <div key={k}>
+              {k}: {v}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PreviewView({
   to,
   amountWei,
@@ -1385,6 +1623,12 @@ function PreviewView({
             />
           </div>
         </div>
+
+        <PreviewHooksSection
+          fromAddr={fromAddr}
+          to={to}
+          amountWei={amountWei}
+        />
 
         {passkeyDecision && !isMultisig && (
           <PasskeyDecisionBadge decision={passkeyDecision} />
