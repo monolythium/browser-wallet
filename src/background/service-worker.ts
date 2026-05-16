@@ -200,6 +200,10 @@ import {
   readPendingRewards,
   readRedemptionQueue,
 } from "./staking-client.js";
+import { previewTransactionHooks } from "./preview-hooks-client.js";
+import { readSigningActivity } from "./signing-activity-client.js";
+import { readOperatorRisk } from "./operator-risk-client.js";
+import { readUpcomingDuties } from "./upcoming-duties-client.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
@@ -4318,6 +4322,78 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
+    }
+    case "wallet-preview-transaction-hooks": {
+      // Phase 11.5 Commit 2 — call lyth_previewTransactionHooks
+      // (MS-CORE-0009) so the Send preview can show "Hooks that
+      // will run" before the user signs. Falls back to mock-not-
+      // deployed on -32601, in which case the popup hides the
+      // section entirely (no UI regression on older operators).
+      const p = message.payload as {
+        from?: string;
+        to?: string;
+        valueWeiHex?: string;
+        data?: string;
+      } | undefined;
+      if (typeof p?.to !== "string") {
+        return { ok: false, reason: "missing to" };
+      }
+      const input: {
+        from?: string;
+        to: string;
+        valueWeiHex?: string;
+        data?: string;
+      } = { to: p.to };
+      if (typeof p.from === "string") input.from = p.from;
+      if (typeof p.valueWeiHex === "string") input.valueWeiHex = p.valueWeiHex;
+      if (typeof p.data === "string") input.data = p.data;
+      const outcome = await previewTransactionHooks(input);
+      return { ok: true, outcome };
+    }
+    case "chain-signing-activity": {
+      // Phase 11.5 Commit 3 — call lyth_signingActivity (MD-CORE-0004)
+      // for a sampled authority. Returns ChainOutcome<OperatorSigningActivity>.
+      // Defaults: authorityIndex 0, limit 20. Falls back to mock-not-deployed
+      // on -32601 so older operators don't break the Operators page.
+      const p = message.payload as
+        | { authorityIndex?: number; limit?: number }
+        | undefined;
+      const args: { authorityIndex?: number; limit?: number } = {};
+      if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
+      if (typeof p?.limit === "number") args.limit = p.limit;
+      const outcome = await readSigningActivity(args);
+      return { ok: true, outcome };
+    }
+    case "chain-operator-risk": {
+      // Phase 11.5 Commit 5 — call lyth_operatorRisk (MD-CORE-0006)
+      // for a sampled authority. Returns ChainOutcome<OperatorRiskWire>
+      // with miss-rate / headroom / jail status. Defaults:
+      // authorityIndex 0, windowRounds 200 (chain clamps at 1000).
+      // Mock-not-deployed on -32601 so the popup hides the card.
+      const p = message.payload as
+        | { authorityIndex?: number; windowRounds?: number }
+        | undefined;
+      const args: { authorityIndex?: number; windowRounds?: number } = {};
+      if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
+      if (typeof p?.windowRounds === "number") args.windowRounds = p.windowRounds;
+      const outcome = await readOperatorRisk(args);
+      return { ok: true, outcome };
+    }
+    case "chain-upcoming-duties": {
+      // Phase 11.5 Commit 7 — call lyth_upcomingDuties (MD-CORE-0005)
+      // for a sampled authority. Returns ChainOutcome<UpcomingDuties>
+      // with attestation window + committee context + keyRotation
+      // boundary. Block-production + sync surfaces are typed-null on
+      // Starfish-C (leader election unpredictable). Defaults:
+      // authorityIndex 0, horizonRounds 1000 (chain max).
+      const p = message.payload as
+        | { authorityIndex?: number; horizonRounds?: number }
+        | undefined;
+      const args: { authorityIndex?: number; horizonRounds?: number } = {};
+      if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
+      if (typeof p?.horizonRounds === "number") args.horizonRounds = p.horizonRounds;
+      const outcome = await readUpcomingDuties(args);
+      return { ok: true, outcome };
     }
     // ─────────────────────────────────────────────────────────────────
     // Phase 7 — staking + delegation reads (§23 whitepaper)
