@@ -14,20 +14,24 @@ import { Icon } from "../Icon";
 import {
   bgChainOperatorRisk,
   bgChainSigningActivity,
+  bgChainUpcomingDuties,
   bgOperatorsGet,
   bgOperatorsSet,
   type ChainOperatorRiskOutcome,
   type ChainSigningActivityOutcome,
+  type ChainUpcomingDutiesOutcome,
   type OperatorEntryWire,
 } from "../bg";
 import {
   deriveOperatorRiskTier,
   isJailStatusAvailable,
+  isKeyRotationAvailable,
   summarizeSigningActivity,
   type OperatorRiskTier,
   type OperatorRiskWire,
   type OperatorSigningActivity,
   type SigningEntryStatus,
+  type UpcomingDuties,
 } from "../../shared/audit-followup-types";
 
 interface OperatorsProps {
@@ -184,6 +188,8 @@ export function Operators({ onBack }: OperatorsProps) {
             <ChainSigningHealthCard />
 
             <AuthorityRiskCard />
+
+            <UpcomingDutiesCard />
 
             <div className="ext-card" style={{ padding: "8px 10px" }}>
               {draft.length === 0 ? (
@@ -750,6 +756,186 @@ function AuthorityRiskLive({ risk }: { risk: OperatorRiskWire }) {
         Sampled over {risk.windowRounds} rounds · {risk.observedRounds}{" "}
         observed
       </div>
+    </div>
+  );
+}
+
+/** Phase 11.5 Commit 7 — chain-wide upcoming-duties snapshot. Calls
+ *  `lyth_upcomingDuties` (MD-CORE-0005) for the canonical first
+ *  authority slot, renders a compact card showing attestation
+ *  window + key-rotation epoch boundary + committee context. Hidden
+ *  on any mock-* outcome so older operators don't see a broken
+ *  card.
+ *
+ *  Block production + sync duties are typed-null with reasons on
+ *  Starfish-C (leader election unpredictable), per the chain doc
+ *  at protocore.rs:354-358. The card shows them as one-liner
+ *  reason rows rather than scheduling targets. */
+function UpcomingDutiesCard() {
+  const [outcome, setOutcome] = useState<ChainUpcomingDutiesOutcome | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgChainUpcomingDuties();
+      if (cancelled) return;
+      setLoading(false);
+      if (r.ok) setOutcome(r.outcome);
+      else setOutcome(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        className="ext-card"
+        style={{
+          padding: "10px 12px",
+          background: "rgba(124,127,255,0.04)",
+          border: "1px dashed rgba(124,127,255,0.2)",
+          height: 28,
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (!outcome || outcome.kind !== "live") return null;
+  return <UpcomingDutiesLive duties={outcome.data} />;
+}
+
+function UpcomingDutiesLive({ duties }: { duties: UpcomingDuties }) {
+  const { attestation, blockProduction, sync, keyRotation } = duties.duties;
+  const attestationOpen =
+    attestation.endRound >= duties.currentRound &&
+    attestation.startRound <= duties.currentRound + duties.horizonRounds;
+  const keyRotation_ = keyRotation;
+  return (
+    <div
+      className="ext-card"
+      style={{
+        padding: "10px 12px",
+        background: "rgba(124,127,255,0.05)",
+        border: "1px solid rgba(124,127,255,0.25)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        Upcoming duties — authority {duties.authorityIndex} · round{" "}
+        {duties.currentRound}
+      </div>
+      <DutyRow
+        label="Attestation"
+        value={
+          attestationOpen
+            ? `rounds ${attestation.startRound}–${attestation.endRound} · ${attestation.kind}`
+            : `next window: rounds ${attestation.startRound}–${attestation.endRound}`
+        }
+        tone="ok"
+      />
+      <DutyRow
+        label="Key rotation"
+        value={
+          isKeyRotationAvailable(keyRotation_)
+            ? `next round ${keyRotation_.nextRound} · epoch ${keyRotation_.epochLengthRounds} rounds`
+            : `not scheduled: ${keyRotation_.reason}`
+        }
+        tone={isKeyRotationAvailable(keyRotation_) ? "ok" : "info"}
+      />
+      <DutyRow
+        label="Block production"
+        value={blockProduction.reason}
+        tone="info"
+      />
+      <DutyRow label="Sync" value={sync.reason} tone="info" />
+      {duties.committee && (
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            paddingTop: 4,
+            borderTop: "1px solid rgba(255,255,255,0.05)",
+          }}
+        >
+          Committee: {duties.committee.authoritySetSize} authorities · quorum{" "}
+          {duties.committee.quorumThreshold} · recovery{" "}
+          {duties.committee.recoveryFloor}
+          {duties.committee.authorityInCurrentSet
+            ? " · in current set"
+            : " · NOT in current set"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DutyRow({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "info";
+}) {
+  const dot = tone === "ok" ? "var(--ok)" : "var(--fg-500)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
+        fontSize: 11.5,
+        color: "var(--fg-100)",
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: dot,
+          flexShrink: 0,
+          alignSelf: "center",
+        }}
+      />
+      <span
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+          width: 78,
+          flexShrink: 0,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          flex: 1,
+          fontFamily: "var(--f-mono)",
+          color: "var(--fg-300)",
+          wordBreak: "break-word",
+        }}
+      >
+        {value}
+      </span>
     </div>
   );
 }

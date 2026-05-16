@@ -203,6 +203,7 @@ import {
 import { previewTransactionHooks } from "./preview-hooks-client.js";
 import { readSigningActivity } from "./signing-activity-client.js";
 import { readOperatorRisk } from "./operator-risk-client.js";
+import { readUpcomingDuties } from "./upcoming-duties-client.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
@@ -4376,6 +4377,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
       if (typeof p?.windowRounds === "number") args.windowRounds = p.windowRounds;
       const outcome = await readOperatorRisk(args);
+      return { ok: true, outcome };
+    }
+    case "chain-upcoming-duties": {
+      // Phase 11.5 Commit 7 — call lyth_upcomingDuties (MD-CORE-0005)
+      // for a sampled authority. Returns ChainOutcome<UpcomingDuties>
+      // with attestation window + committee context + keyRotation
+      // boundary. Block-production + sync surfaces are typed-null on
+      // Starfish-C (leader election unpredictable). Defaults:
+      // authorityIndex 0, horizonRounds 1000 (chain max).
+      const p = message.payload as
+        | { authorityIndex?: number; horizonRounds?: number }
+        | undefined;
+      const args: { authorityIndex?: number; horizonRounds?: number } = {};
+      if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
+      if (typeof p?.horizonRounds === "number") args.horizonRounds = p.horizonRounds;
+      const outcome = await readUpcomingDuties(args);
       return { ok: true, outcome };
     }
     // ─────────────────────────────────────────────────────────────────
