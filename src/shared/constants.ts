@@ -42,6 +42,9 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   // fire-and-forget subscribe don't represent user activity.
   "ws-status",
   "ws-subscribe-new-heads",
+  // Phase 11 Commit 3 — AddressActivityKind probe is passive metadata
+  // (used by the activity feed to render empty-state context).
+  "wallet-activity-kind",
   "list-pending",
   "get-pending",
   "focus-approval",

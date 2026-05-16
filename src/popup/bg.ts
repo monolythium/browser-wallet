@@ -428,6 +428,21 @@ export async function bgWalletActivityGet(
 // need to reach into shared/.
 export type { NameLabel, NameLabelRecord } from "../shared/name-resolution.js";
 
+/** Phase 11 Commit 3 — typed AddressActivityKind probe (GAP #17 closes).
+ *  Returns one of {found, not_found, indexer_disabled, pruned, private,
+ *  unknown} so the activity feed can pick the right empty-state UX.
+ *  Never errors at this layer — the SW collapses transport failures
+ *  into the safe defensive default ("not_found"). */
+export type { WalletActivityKindEnvelope } from "../shared/activity-kind.js";
+export async function bgWalletActivityKind(
+  address: string,
+): Promise<{
+  ok: true;
+  envelope: import("../shared/activity-kind.js").WalletActivityKindEnvelope;
+}> {
+  return send("wallet-activity-kind", { address });
+}
+
 export async function bgWalletResolveNames(
   addresses: string[],
   chainIdHex: string,

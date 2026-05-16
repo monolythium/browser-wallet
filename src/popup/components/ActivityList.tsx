@@ -11,11 +11,13 @@
 
 import { useMemo } from "react";
 import { useActivity } from "../hooks/useActivity.js";
+import { useActivityKind } from "../hooks/useActivityKind.js";
 import { useNameResolution } from "../hooks/useNameResolution.js";
 import { useIndexerStatus } from "../hooks/useIndexerStatus.js";
 import { ActivityRow } from "./ActivityRow.js";
 import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity.js";
+import type { WalletActivityKindEnvelope } from "../../shared/activity-kind.js";
 
 export interface ActivityListProps {
   /** Unlocked account address (0x form). Null while the wallet boots
@@ -92,18 +94,83 @@ function loadingSkeleton() {
   );
 }
 
-function emptyState() {
+/** Phase 11 Commit 3 — kind-aware empty state. The chain emits a typed
+ *  `lyth_addressActivityKind` (chain commit d77e4fc) discriminating
+ *  not_found / indexer_disabled / pruned / private / unknown. Each gets
+ *  its own copy so the user understands what's actually going on
+ *  rather than seeing the generic "no transactions yet" for every
+ *  reason history is unavailable. Closes GAP #17.
+ *
+ *  When `envelope` is null (probe in flight / chain unreachable), falls
+ *  back to the historical generic empty state copy. */
+function emptyState(envelope: WalletActivityKindEnvelope | null) {
+  const base = {
+    padding: "28px 18px",
+    textAlign: "center" as const,
+    fontSize: 12,
+    color: "var(--fg-500)",
+    lineHeight: 1.5,
+  };
+  if (envelope === null || envelope.kind === "not_found") {
+    return (
+      <div style={base}>
+        No transactions yet. Send or receive LYTH to see history here.
+      </div>
+    );
+  }
+  if (envelope.kind === "indexer_disabled") {
+    return (
+      <div style={base}>
+        <div style={{ marginBottom: 8 }}>
+          Activity history unavailable on this network.
+        </div>
+        <div style={{ fontSize: 11, color: "var(--fg-600)" }}>
+          This operator does not serve the indexer endpoint. Try a different
+          operator in Settings → Network.
+        </div>
+      </div>
+    );
+  }
+  if (envelope.kind === "pruned") {
+    const earliest = envelope.retention?.earliestRetained;
+    const archive = envelope.retention?.archiveRedirect?.hint;
+    return (
+      <div style={base}>
+        <div style={{ marginBottom: 8 }}>
+          Older activity has been pruned by the indexer.
+        </div>
+        {earliest !== undefined && (
+          <div style={{ fontSize: 11, color: "var(--fg-600)" }}>
+            Showing activity from block {earliest} onward.
+          </div>
+        )}
+        {archive && (
+          <div style={{ fontSize: 11, color: "var(--fg-600)", marginTop: 6 }}>
+            {archive}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (envelope.kind === "private") {
+    return (
+      <div style={base}>
+        <div style={{ marginBottom: 8 }}>Private activity placeholder.</div>
+        <div style={{ fontSize: 11, color: "var(--fg-600)" }}>
+          Viewing your private transfers requires the meta-address surface
+          shipping in Phase 12 (§13 / §25).
+        </div>
+      </div>
+    );
+  }
+  // "unknown" — chain emitted a forward-compatible kind the wallet
+  // doesn't recognise yet. Render the safe generic copy + a hint.
   return (
-    <div
-      style={{
-        padding: "28px 18px",
-        textAlign: "center",
-        fontSize: 12,
-        color: "var(--fg-500)",
-        lineHeight: 1.5,
-      }}
-    >
-      No transactions yet. Send or receive LYTH to see history here.
+    <div style={base}>
+      <div style={{ marginBottom: 8 }}>History temporarily unavailable.</div>
+      <div style={{ fontSize: 11, color: "var(--fg-600)" }}>
+        Your wallet may need an update to display this kind of activity.
+      </div>
     </div>
   );
 }
@@ -137,6 +204,10 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
     chainIdHex,
   );
   const indexerStatus = useIndexerStatus(chainIdHex);
+  // Phase 11 Commit 3 — kind probe runs in parallel with the activity
+  // fetch. Used only by the empty-state branch — when rows arrive,
+  // the envelope is irrelevant.
+  const activityKind = useActivityKind(addr, chainIdHex);
 
   // Derive counterparty addresses for name resolution. Pulls from both
   // confirmed rows and pending rows so a Pending row's recipient also
@@ -182,8 +253,11 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
         if (hasIndexerError && rows.length === 0) {
           return errorState(() => void refresh());
         }
-        // Empty state.
-        if (rows.length === 0) return emptyState();
+        // Empty state. The kind probe (useActivityKind) discriminates
+        // not_found / indexer_disabled / pruned / private / unknown
+        // so the user sees context-aware copy rather than the historical
+        // generic "no transactions yet" for every absence reason.
+        if (rows.length === 0) return emptyState(activityKind.envelope);
         // Live rows.
         return (
           <div>

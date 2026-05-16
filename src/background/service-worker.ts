@@ -183,6 +183,10 @@ import {
 } from "./tx-mldsa.js";
 import { getWsClient, type WsStatus } from "./ws-client.js";
 import {
+  DEFAULT_ACTIVITY_KIND_ENVELOPE,
+  normaliseActivityKind,
+} from "../shared/activity-kind.js";
+import {
   readClusterDelegators,
   readClusterDirectory,
   readClusterStatus,
@@ -4031,6 +4035,65 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const nextPending = evictExpiredPending(reconciled, now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
       return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
+    }
+    case "wallet-activity-kind": {
+      // Phase 11 Commit 3 — typed AddressActivityKind probe (chain
+      // commit d77e4fc, GAP #17 closes here).
+      //
+      // The popup uses this to pick the right empty-state UX:
+      // not_found vs indexer_disabled vs pruned vs private all have
+      // distinct copy and CTAs. Previously P4.4 used a heuristic
+      // ("no rows → 'no activity yet'") which conflated all four into
+      // the same message.
+      //
+      // Graceful fallback: on transport error or chain-side method-
+      // not-found, returns DEFAULT_ACTIVITY_KIND_ENVELOPE (kind:
+      // not_found) so the popup degrades to the historical UX. The
+      // popup never sees an error from this IPC.
+      const p = message.payload as { address?: string };
+      if (typeof p?.address !== "string") {
+        return {
+          ok: true,
+          envelope: DEFAULT_ACTIVITY_KIND_ENVELOPE,
+        };
+      }
+      try {
+        const { result } = await sprintnetJsonRpc<unknown>(
+          "lyth_addressActivityKind",
+          [p.address],
+        );
+        const envelope = normaliseActivityKind(p.address, result);
+        return {
+          ok: true,
+          envelope: envelope ?? {
+            ...DEFAULT_ACTIVITY_KIND_ENVELOPE,
+            address: p.address.toLowerCase(),
+          },
+        };
+      } catch (e) {
+        const err = e as Error & { code?: number };
+        // method-not-found (-32601) → emit "indexer_disabled" rather
+        // than "not_found" so the user sees the right copy. Other
+        // transport errors get the not_found defensive default.
+        if (err.code === -32601) {
+          return {
+            ok: true,
+            envelope: {
+              schemaVersion: 0,
+              address: p.address.toLowerCase(),
+              kind: "indexer_disabled" as const,
+              retention: null,
+            },
+          };
+        }
+        return {
+          ok: true,
+          envelope: {
+            ...DEFAULT_ACTIVITY_KIND_ENVELOPE,
+            address: p.address.toLowerCase(),
+          },
+        };
+      }
     }
     case "wallet-resolve-names": {
       // Phase 4.4 batched name resolution. The de facto naming source on
