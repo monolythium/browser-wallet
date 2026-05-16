@@ -561,6 +561,41 @@ export async function bgWalletChainBlockNumber(): Promise<
   return send("wallet-chain-block-number");
 }
 
+/** Phase 11 Commit 2 — WS-client status probe. Returns the SW-singleton
+ *  WsClient's current connection state so the popup can prefer event-
+ *  driven updates over polling when WS is connected. Status values:
+ *    - "disconnected" — no live socket (boot state or transient drop)
+ *    - "connecting"   — socket opening; not yet usable
+ *    - "connected"    — socket open, subscriptions active
+ *    - "unavailable"  — WS endpoint unreachable after retries; polling
+ *                       fallback advised. */
+export type BgWsStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "unavailable";
+
+export async function bgWsStatus(): Promise<
+  { ok: true; status: BgWsStatus } | { ok: false; reason?: string }
+> {
+  return send("ws-status");
+}
+
+/** Phase 11 Commit 2 — fire-and-forget subscribe to chain `newHeads`.
+ *  After the first call, the SW writes the latest block hex to
+ *  chrome.storage.session under `mono.ws.lastBlockHex` every time a
+ *  head arrives. ChainStatusBanner watches that key for live updates
+ *  without its 8 s polling fallback firing as often.
+ *
+ *  Returns the WS-client status at the time of the call. The popup can
+ *  use this as a hint whether to expect live updates or to keep its
+ *  polling loop running at full cadence. */
+export async function bgWsSubscribeNewHeads(): Promise<
+  { ok: true; status: BgWsStatus } | { ok: false; reason?: string }
+> {
+  return send("ws-subscribe-new-heads");
+}
+
 export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
