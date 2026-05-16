@@ -554,6 +554,122 @@ export async function bgWalletFeeSuggestion(
   };
 }
 
+/** Phase 11.5 Commit 2 — pre-tx hook preview. Calls
+ *  `lyth_previewTransactionHooks` (mono-core @dd05511 / MS-CORE-0009).
+ *  Returns a typed `ChainOutcome<TransactionHookPreview>` whose `kind`
+ *  the Send preview branches on:
+ *    - "live" → render the "Hooks that will run" section with real data
+ *    - "mock-not-deployed" / "mock-offline" / "mock-error" → hide the
+ *      section so older operators (pre-dd05511) don't degrade the UX
+ *
+ *  The IPC handler in service-worker.ts wraps the raw RPC in
+ *  `withChainFallback` so this helper never throws on RPC errors;
+ *  it only returns `{ ok: false }` for IPC-level validation failures
+ *  (e.g. missing `to` address). */
+export async function bgPreviewTransactionHooks(args: {
+  from?: string;
+  to: string;
+  valueWeiHex?: string;
+  data?: string;
+}): Promise<
+  | { ok: true; outcome: PreviewTransactionHooksOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-preview-transaction-hooks", args);
+}
+
+/** Convenience re-export of the typed outcome the SW returns. */
+export type PreviewTransactionHooksOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").TransactionHookPreview
+  >;
+
+/** Phase 11.5 Commit 3 — chain-wide signing-activity sample. Calls
+ *  `lyth_signingActivity` (mono-core @dd05511 / MD-CORE-0004) for a
+ *  single authority slot (default 0) over a small window (default 20
+ *  entries). Returns a `ChainOutcome<OperatorSigningActivity>` whose
+ *  `kind` the Operators page branches on:
+ *    - "live" → render the signing-health card with real data
+ *    - any mock-* outcome → hide the card (no UI regression on older
+ *      operators)
+ *
+ *  This is intentionally NOT per-RPC-endpoint attribution. The chain
+ *  method is keyed on consensus authority index; mapping the wallet's
+ *  RPC operators back to BLS validator slots would require chaining
+ *  `lyth_resolveOperatorAuthority` + `lyth_clusterStatus.members[]`
+ *  per row, which is deferred to a future commit. */
+export async function bgChainSigningActivity(args?: {
+  authorityIndex?: number;
+  limit?: number;
+}): Promise<
+  | { ok: true; outcome: ChainSigningActivityOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("chain-signing-activity", args ?? {});
+}
+
+export type ChainSigningActivityOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").OperatorSigningActivity
+  >;
+
+/** Phase 11.5 Commit 5 — chain-wide operator-risk snapshot. Calls
+ *  `lyth_operatorRisk` (mono-core @dd05511 / MD-CORE-0006, paired
+ *  with 017cab9 operator pending-change risk previews) for a single
+ *  authority slot (default 0) over a 200-round window (default).
+ *  Returns a `ChainOutcome<OperatorRiskWire>` whose `kind` the
+ *  Operators page branches on:
+ *    - "live"  → render the AuthorityRiskCard with real chain data
+ *    - mock-*  → hide the card (no regression on older operators)
+ *
+ *  Scope swap from the original "lyth_getServiceProbe" target: the
+ *  wallet's Operators page tracks RPC URLs, not 32-byte peerIds, so
+ *  getServiceProbe per row isn't structurally possible without a
+ *  separate peerId-resolution chain. lyth_operatorRisk is the
+ *  sibling MD-CORE-0006 surface that delivers the same intent
+ *  (real chain-side operator health) keyed on authority index. */
+export async function bgChainOperatorRisk(args?: {
+  authorityIndex?: number;
+  windowRounds?: number;
+}): Promise<
+  | { ok: true; outcome: ChainOperatorRiskOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("chain-operator-risk", args ?? {});
+}
+
+export type ChainOperatorRiskOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").OperatorRiskWire
+  >;
+
+/** Phase 11.5 Commit 7 — chain-wide upcoming-duties snapshot. Calls
+ *  `lyth_upcomingDuties` (mono-core @dd05511 / MD-CORE-0005) for a
+ *  single authority slot (default 0) over a 1000-round horizon
+ *  (chain max). Returns a `ChainOutcome<UpcomingDuties>` whose
+ *  `kind` the Operators page branches on:
+ *    - "live"  → render UpcomingDutiesCard with the attestation
+ *                window + key-rotation epoch boundary
+ *    - mock-*  → hide the card (no regression on older operators)
+ *
+ *  Block production and sync duties are typed-null with reasons on
+ *  Starfish-C (leader election is not predictable); the card shows
+ *  them as informational rows rather than scheduled tasks. */
+export async function bgChainUpcomingDuties(args?: {
+  authorityIndex?: number;
+  horizonRounds?: number;
+}): Promise<
+  | { ok: true; outcome: ChainUpcomingDutiesOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("chain-upcoming-duties", args ?? {});
+}
+
+export type ChainUpcomingDutiesOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").UpcomingDuties
+  >;
+
 /**
  * Read the active chain id from chrome.storage. Returns the Sprintnet
  * default (`0x10F2C`) when nothing is stored yet (first launch) or when

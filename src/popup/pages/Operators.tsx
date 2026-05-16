@@ -12,10 +12,27 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import {
+  bgChainOperatorRisk,
+  bgChainSigningActivity,
+  bgChainUpcomingDuties,
   bgOperatorsGet,
   bgOperatorsSet,
+  type ChainOperatorRiskOutcome,
+  type ChainSigningActivityOutcome,
+  type ChainUpcomingDutiesOutcome,
   type OperatorEntryWire,
 } from "../bg";
+import {
+  deriveOperatorRiskTier,
+  isJailStatusAvailable,
+  isKeyRotationAvailable,
+  summarizeSigningActivity,
+  type OperatorRiskTier,
+  type OperatorRiskWire,
+  type OperatorSigningActivity,
+  type SigningEntryStatus,
+  type UpcomingDuties,
+} from "../../shared/audit-followup-types";
 
 interface OperatorsProps {
   onBack: () => void;
@@ -167,6 +184,12 @@ export function Operators({ onBack }: OperatorsProps) {
                   : "Using default operators"}
               </div>
             </div>
+
+            <ChainSigningHealthCard />
+
+            <AuthorityRiskCard />
+
+            <UpcomingDutiesCard />
 
             <div className="ext-card" style={{ padding: "8px 10px" }}>
               {draft.length === 0 ? (
@@ -467,4 +490,510 @@ function sameOperators(
     if (a[i]!.rpc !== b[i]!.rpc) return false;
   }
   return true;
+}
+
+/** Phase 11.5 Commit 3 — chain-wide signing-health sample. Calls
+ *  `lyth_signingActivity` (MD-CORE-0004) for the canonical first
+ *  authority slot, renders a single-line status pill + signer count
+ *  + a reservedStatuses footnote when the chain reports subsystems
+ *  with partial wiring. Hidden entirely on any mock-* outcome so
+ *  older operators (pre-mono-core @dd05511) don't see a broken card.
+ *
+ *  Per-RPC-endpoint attribution is intentionally out of scope: the
+ *  wallet's Operators page manages transport-layer RPC URLs, while
+ *  `lyth_signingActivity` is keyed on the consensus BLS authority
+ *  slot. Mapping the two would require chaining
+ *  `lyth_resolveOperatorAuthority` over `lyth_clusterStatus.members`
+ *  per row, which is deferred. The card title is explicit about that
+ *  scope so users don't misread it as per-RPC health. */
+function ChainSigningHealthCard() {
+  const [outcome, setOutcome] = useState<ChainSigningActivityOutcome | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgChainSigningActivity();
+      if (cancelled) return;
+      setLoading(false);
+      if (r.ok) setOutcome(r.outcome);
+      else setOutcome(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        className="ext-card"
+        style={{
+          padding: "10px 12px",
+          background: "rgba(124,127,255,0.04)",
+          border: "1px dashed rgba(124,127,255,0.2)",
+          height: 28,
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (!outcome || outcome.kind !== "live") return null;
+  return <SigningHealthLive activity={outcome.data} />;
+}
+
+function SigningHealthLive({ activity }: { activity: OperatorSigningActivity }) {
+  const summary = summarizeSigningActivity(activity);
+  const { dotColor, label } = statusPillStyle(summary.latestStatus);
+  return (
+    <div
+      className="ext-card"
+      style={{
+        padding: "10px 12px",
+        background: "rgba(124,127,255,0.05)",
+        border: "1px solid rgba(124,127,255,0.25)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        Chain signing — authority {activity.authorityIndex} · round{" "}
+        {activity.currentRound}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: 12,
+          color: "var(--fg-100)",
+        }}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: dotColor,
+            flexShrink: 0,
+          }}
+          title={`Latest signing status: ${summary.latestStatus}`}
+        />
+        <span style={{ fontWeight: 600 }}>{label}</span>
+        {summary.latestSignersCount !== null && (
+          <span style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }}>
+            · {summary.latestSignersCount} signers
+          </span>
+        )}
+        <span
+          style={{
+            marginLeft: "auto",
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+          }}
+        >
+          {activity.entries.length} / {activity.limit}
+        </span>
+      </div>
+      {activity.reservedStatuses.length > 0 && (
+        <div
+          style={{
+            fontSize: 10.5,
+            color: "var(--fg-400)",
+            lineHeight: 1.4,
+            paddingTop: 4,
+            borderTop: "1px solid rgba(255,255,255,0.05)",
+          }}
+        >
+          <span style={{ color: "var(--warn, #f2b441)" }}>
+            {activity.reservedStatuses.length} reserved status
+            {activity.reservedStatuses.length === 1 ? "" : "es"}
+          </span>{" "}
+          — primitives partially wired (
+          {activity.reservedStatuses
+            .slice(0, 3)
+            .map((r) => r.code)
+            .join(", ")}
+          {activity.reservedStatuses.length > 3 ? ", …" : ""}
+          ).
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Phase 11.5 Commit 5 — chain-wide authority-risk snapshot. Calls
+ *  `lyth_operatorRisk` (MD-CORE-0006 / 017cab9) for the canonical
+ *  first authority slot, renders a single-row "miss rate × headroom
+ *  × jail" tier card. Hidden on any mock-* outcome so older
+ *  operators (pre-mono-core @dd05511) don't see a broken card.
+ *
+ *  Swap rationale (see operator-risk-client.ts module header):
+ *  lyth_getServiceProbe requires a peerId per row the wallet
+ *  doesn't track; lyth_operatorRisk is the sibling surface that
+ *  delivers the same "real chain-side health" intent without that
+ *  extra resolution step. */
+function AuthorityRiskCard() {
+  const [outcome, setOutcome] = useState<ChainOperatorRiskOutcome | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgChainOperatorRisk();
+      if (cancelled) return;
+      setLoading(false);
+      if (r.ok) setOutcome(r.outcome);
+      else setOutcome(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        className="ext-card"
+        style={{
+          padding: "10px 12px",
+          background: "rgba(124,127,255,0.04)",
+          border: "1px dashed rgba(124,127,255,0.2)",
+          height: 28,
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (!outcome || outcome.kind !== "live") return null;
+  return <AuthorityRiskLive risk={outcome.data} />;
+}
+
+function AuthorityRiskLive({ risk }: { risk: OperatorRiskWire }) {
+  const tier = deriveOperatorRiskTier(risk);
+  const tierStyle = tierBadgeStyle(tier);
+  const missPct = (risk.missRateBps / 100).toFixed(2);
+  const headroomPct = (risk.remainingHeadroomBps / 100).toFixed(2);
+  const thresholdPct = (risk.thresholdBps / 100).toFixed(0);
+  const jail = risk.jailStatus;
+  return (
+    <div
+      className="ext-card"
+      style={{
+        padding: "10px 12px",
+        background: tierStyle.bg,
+        border: `1px solid ${tierStyle.border}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        Authority risk — authority {risk.authorityIndex} · height{" "}
+        {risk.dataHeight}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+          fontSize: 12,
+          color: "var(--fg-100)",
+        }}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: tierStyle.dot,
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontWeight: 600 }}>{tierStyle.label}</span>
+        <span style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }}>
+          miss {missPct}% / headroom {headroomPct}% (slash {thresholdPct}%)
+        </span>
+      </div>
+      {isJailStatusAvailable(jail) && (jail.jailed || jail.tombstoned) && (
+        <div style={{ fontSize: 11, color: "var(--err)" }}>
+          {jail.tombstoned
+            ? "Tombstoned — equivocation slash, permanently barred."
+            : `Jailed until height ${jail.jailedUntilHeight} (${jail.unjailCount} prior unjails).`}
+        </div>
+      )}
+      {risk.reasons.length > 0 && (
+        <div style={{ fontSize: 11, color: "var(--fg-300)" }}>
+          Reasons: {risk.reasons.join(", ")}
+        </div>
+      )}
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-500)",
+        }}
+      >
+        Sampled over {risk.windowRounds} rounds · {risk.observedRounds}{" "}
+        observed
+      </div>
+    </div>
+  );
+}
+
+/** Phase 11.5 Commit 7 — chain-wide upcoming-duties snapshot. Calls
+ *  `lyth_upcomingDuties` (MD-CORE-0005) for the canonical first
+ *  authority slot, renders a compact card showing attestation
+ *  window + key-rotation epoch boundary + committee context. Hidden
+ *  on any mock-* outcome so older operators don't see a broken
+ *  card.
+ *
+ *  Block production + sync duties are typed-null with reasons on
+ *  Starfish-C (leader election unpredictable), per the chain doc
+ *  at protocore.rs:354-358. The card shows them as one-liner
+ *  reason rows rather than scheduling targets. */
+function UpcomingDutiesCard() {
+  const [outcome, setOutcome] = useState<ChainUpcomingDutiesOutcome | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgChainUpcomingDuties();
+      if (cancelled) return;
+      setLoading(false);
+      if (r.ok) setOutcome(r.outcome);
+      else setOutcome(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        className="ext-card"
+        style={{
+          padding: "10px 12px",
+          background: "rgba(124,127,255,0.04)",
+          border: "1px dashed rgba(124,127,255,0.2)",
+          height: 28,
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (!outcome || outcome.kind !== "live") return null;
+  return <UpcomingDutiesLive duties={outcome.data} />;
+}
+
+function UpcomingDutiesLive({ duties }: { duties: UpcomingDuties }) {
+  const { attestation, blockProduction, sync, keyRotation } = duties.duties;
+  const attestationOpen =
+    attestation.endRound >= duties.currentRound &&
+    attestation.startRound <= duties.currentRound + duties.horizonRounds;
+  const keyRotation_ = keyRotation;
+  return (
+    <div
+      className="ext-card"
+      style={{
+        padding: "10px 12px",
+        background: "rgba(124,127,255,0.05)",
+        border: "1px solid rgba(124,127,255,0.25)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        Upcoming duties — authority {duties.authorityIndex} · round{" "}
+        {duties.currentRound}
+      </div>
+      <DutyRow
+        label="Attestation"
+        value={
+          attestationOpen
+            ? `rounds ${attestation.startRound}–${attestation.endRound} · ${attestation.kind}`
+            : `next window: rounds ${attestation.startRound}–${attestation.endRound}`
+        }
+        tone="ok"
+      />
+      <DutyRow
+        label="Key rotation"
+        value={
+          isKeyRotationAvailable(keyRotation_)
+            ? `next round ${keyRotation_.nextRound} · epoch ${keyRotation_.epochLengthRounds} rounds`
+            : `not scheduled: ${keyRotation_.reason}`
+        }
+        tone={isKeyRotationAvailable(keyRotation_) ? "ok" : "info"}
+      />
+      <DutyRow
+        label="Block production"
+        value={blockProduction.reason}
+        tone="info"
+      />
+      <DutyRow label="Sync" value={sync.reason} tone="info" />
+      {duties.committee && (
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            paddingTop: 4,
+            borderTop: "1px solid rgba(255,255,255,0.05)",
+          }}
+        >
+          Committee: {duties.committee.authoritySetSize} authorities · quorum{" "}
+          {duties.committee.quorumThreshold} · recovery{" "}
+          {duties.committee.recoveryFloor}
+          {duties.committee.authorityInCurrentSet
+            ? " · in current set"
+            : " · NOT in current set"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DutyRow({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "info";
+}) {
+  const dot = tone === "ok" ? "var(--ok)" : "var(--fg-500)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
+        fontSize: 11.5,
+        color: "var(--fg-100)",
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: dot,
+          flexShrink: 0,
+          alignSelf: "center",
+        }}
+      />
+      <span
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+          width: 78,
+          flexShrink: 0,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          flex: 1,
+          fontFamily: "var(--f-mono)",
+          color: "var(--fg-300)",
+          wordBreak: "break-word",
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function tierBadgeStyle(tier: OperatorRiskTier): {
+  dot: string;
+  label: string;
+  bg: string;
+  border: string;
+} {
+  switch (tier) {
+    case "ok":
+      return {
+        dot: "var(--ok)",
+        label: "Healthy",
+        bg: "rgba(80,200,120,0.06)",
+        border: "rgba(80,200,120,0.3)",
+      };
+    case "warn":
+      return {
+        dot: "var(--warn, #f2b441)",
+        label: "Near threshold",
+        bg: "rgba(242,180,65,0.06)",
+        border: "rgba(242,180,65,0.3)",
+      };
+    case "err":
+      return {
+        dot: "var(--err)",
+        label: "At risk",
+        bg: "rgba(244,99,99,0.06)",
+        border: "rgba(244,99,99,0.3)",
+      };
+  }
+}
+
+function statusPillStyle(status: SigningEntryStatus): {
+  dotColor: string;
+  label: string;
+} {
+  switch (status) {
+    case "signed":
+      return { dotColor: "var(--ok)", label: "Signing (latest cert healthy)" };
+    case "maintenance":
+      return { dotColor: "var(--info, #7c7fff)", label: "Maintenance window" };
+    case "delayed":
+      return { dotColor: "var(--warn, #f2b441)", label: "Delayed — round behind" };
+    case "missed":
+      return { dotColor: "var(--warn, #f2b441)", label: "Missed round" };
+    case "offline":
+      return { dotColor: "var(--err)", label: "Offline" };
+    case "no_cert":
+      return { dotColor: "var(--fg-500)", label: "No cert this round" };
+    case "unavailable_history":
+      return { dotColor: "var(--fg-500)", label: "History unavailable" };
+    default:
+      return {
+        dotColor: "var(--fg-500)",
+        label: `Status: ${status}`,
+      };
+  }
 }
