@@ -12,14 +12,20 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import {
+  bgChainOperatorRisk,
   bgChainSigningActivity,
   bgOperatorsGet,
   bgOperatorsSet,
+  type ChainOperatorRiskOutcome,
   type ChainSigningActivityOutcome,
   type OperatorEntryWire,
 } from "../bg";
 import {
+  deriveOperatorRiskTier,
+  isJailStatusAvailable,
   summarizeSigningActivity,
+  type OperatorRiskTier,
+  type OperatorRiskWire,
   type OperatorSigningActivity,
   type SigningEntryStatus,
 } from "../../shared/audit-followup-types";
@@ -176,6 +182,8 @@ export function Operators({ onBack }: OperatorsProps) {
             </div>
 
             <ChainSigningHealthCard />
+
+            <AuthorityRiskCard />
 
             <div className="ext-card" style={{ padding: "8px 10px" }}>
               {draft.length === 0 ? (
@@ -616,6 +624,165 @@ function SigningHealthLive({ activity }: { activity: OperatorSigningActivity }) 
       )}
     </div>
   );
+}
+
+/** Phase 11.5 Commit 5 — chain-wide authority-risk snapshot. Calls
+ *  `lyth_operatorRisk` (MD-CORE-0006 / 017cab9) for the canonical
+ *  first authority slot, renders a single-row "miss rate × headroom
+ *  × jail" tier card. Hidden on any mock-* outcome so older
+ *  operators (pre-mono-core @dd05511) don't see a broken card.
+ *
+ *  Swap rationale (see operator-risk-client.ts module header):
+ *  lyth_getServiceProbe requires a peerId per row the wallet
+ *  doesn't track; lyth_operatorRisk is the sibling surface that
+ *  delivers the same "real chain-side health" intent without that
+ *  extra resolution step. */
+function AuthorityRiskCard() {
+  const [outcome, setOutcome] = useState<ChainOperatorRiskOutcome | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgChainOperatorRisk();
+      if (cancelled) return;
+      setLoading(false);
+      if (r.ok) setOutcome(r.outcome);
+      else setOutcome(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        className="ext-card"
+        style={{
+          padding: "10px 12px",
+          background: "rgba(124,127,255,0.04)",
+          border: "1px dashed rgba(124,127,255,0.2)",
+          height: 28,
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (!outcome || outcome.kind !== "live") return null;
+  return <AuthorityRiskLive risk={outcome.data} />;
+}
+
+function AuthorityRiskLive({ risk }: { risk: OperatorRiskWire }) {
+  const tier = deriveOperatorRiskTier(risk);
+  const tierStyle = tierBadgeStyle(tier);
+  const missPct = (risk.missRateBps / 100).toFixed(2);
+  const headroomPct = (risk.remainingHeadroomBps / 100).toFixed(2);
+  const thresholdPct = (risk.thresholdBps / 100).toFixed(0);
+  const jail = risk.jailStatus;
+  return (
+    <div
+      className="ext-card"
+      style={{
+        padding: "10px 12px",
+        background: tierStyle.bg,
+        border: `1px solid ${tierStyle.border}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        Authority risk — authority {risk.authorityIndex} · height{" "}
+        {risk.dataHeight}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+          fontSize: 12,
+          color: "var(--fg-100)",
+        }}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: tierStyle.dot,
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontWeight: 600 }}>{tierStyle.label}</span>
+        <span style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }}>
+          miss {missPct}% / headroom {headroomPct}% (slash {thresholdPct}%)
+        </span>
+      </div>
+      {isJailStatusAvailable(jail) && (jail.jailed || jail.tombstoned) && (
+        <div style={{ fontSize: 11, color: "var(--err)" }}>
+          {jail.tombstoned
+            ? "Tombstoned — equivocation slash, permanently barred."
+            : `Jailed until height ${jail.jailedUntilHeight} (${jail.unjailCount} prior unjails).`}
+        </div>
+      )}
+      {risk.reasons.length > 0 && (
+        <div style={{ fontSize: 11, color: "var(--fg-300)" }}>
+          Reasons: {risk.reasons.join(", ")}
+        </div>
+      )}
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-500)",
+        }}
+      >
+        Sampled over {risk.windowRounds} rounds · {risk.observedRounds}{" "}
+        observed
+      </div>
+    </div>
+  );
+}
+
+function tierBadgeStyle(tier: OperatorRiskTier): {
+  dot: string;
+  label: string;
+  bg: string;
+  border: string;
+} {
+  switch (tier) {
+    case "ok":
+      return {
+        dot: "var(--ok)",
+        label: "Healthy",
+        bg: "rgba(80,200,120,0.06)",
+        border: "rgba(80,200,120,0.3)",
+      };
+    case "warn":
+      return {
+        dot: "var(--warn, #f2b441)",
+        label: "Near threshold",
+        bg: "rgba(242,180,65,0.06)",
+        border: "rgba(242,180,65,0.3)",
+      };
+    case "err":
+      return {
+        dot: "var(--err)",
+        label: "At risk",
+        bg: "rgba(244,99,99,0.06)",
+        border: "rgba(244,99,99,0.3)",
+      };
+  }
 }
 
 function statusPillStyle(status: SigningEntryStatus): {

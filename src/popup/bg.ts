@@ -613,6 +613,36 @@ export type ChainSigningActivityOutcome =
     import("../shared/audit-followup-types.js").OperatorSigningActivity
   >;
 
+/** Phase 11.5 Commit 5 — chain-wide operator-risk snapshot. Calls
+ *  `lyth_operatorRisk` (mono-core @dd05511 / MD-CORE-0006, paired
+ *  with 017cab9 operator pending-change risk previews) for a single
+ *  authority slot (default 0) over a 200-round window (default).
+ *  Returns a `ChainOutcome<OperatorRiskWire>` whose `kind` the
+ *  Operators page branches on:
+ *    - "live"  → render the AuthorityRiskCard with real chain data
+ *    - mock-*  → hide the card (no regression on older operators)
+ *
+ *  Scope swap from the original "lyth_getServiceProbe" target: the
+ *  wallet's Operators page tracks RPC URLs, not 32-byte peerIds, so
+ *  getServiceProbe per row isn't structurally possible without a
+ *  separate peerId-resolution chain. lyth_operatorRisk is the
+ *  sibling MD-CORE-0006 surface that delivers the same intent
+ *  (real chain-side operator health) keyed on authority index. */
+export async function bgChainOperatorRisk(args?: {
+  authorityIndex?: number;
+  windowRounds?: number;
+}): Promise<
+  | { ok: true; outcome: ChainOperatorRiskOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("chain-operator-risk", args ?? {});
+}
+
+export type ChainOperatorRiskOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").OperatorRiskWire
+  >;
+
 /**
  * Read the active chain id from chrome.storage. Returns the Sprintnet
  * default (`0x10F2C`) when nothing is stored yet (first launch) or when

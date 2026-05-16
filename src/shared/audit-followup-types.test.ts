@@ -2,13 +2,16 @@ import { describe, it, expect } from "vitest";
 import {
   isTransactionHookPreview,
   isOperatorSigningActivity,
+  isOperatorRiskWire,
   isPublicServiceProbe,
   isUpcomingDuties,
+  isJailStatusAvailable,
   isKeyRotationAvailable,
   summarizeSigningActivity,
   KNOWN_SIGNING_ENTRY_STATUSES,
   type TransactionHookPreview,
   type OperatorSigningActivity,
+  type OperatorRiskWire,
   type PublicServiceProbe,
   type UpcomingDuties,
 } from "./audit-followup-types.js";
@@ -166,6 +169,66 @@ describe("audit-followup-types — OperatorSigningActivity shape", () => {
     expect(out.latestStatus).toBe("unavailable_history");
     expect(out.latestSignersCount).toBeNull();
     expect(out.isHealthy).toBe(false);
+  });
+});
+
+describe("audit-followup-types — OperatorRiskWire shape", () => {
+  const valid: OperatorRiskWire = {
+    schemaVersion: 1,
+    authorityIndex: 0,
+    dataHeight: 9_999,
+    windowRounds: 200,
+    missedRounds: 6,
+    observedRounds: 200,
+    missRateBps: 300,
+    thresholdBps: 5_000,
+    remainingHeadroomBps: 4_700,
+    jailStatus: {
+      jailed: false,
+      tombstoned: false,
+      jailedUntilHeight: 0,
+      unjailCount: 0,
+    },
+    reasons: [],
+  };
+
+  it("accepts a healthy operator-risk payload", () => {
+    expect(isOperatorRiskWire(valid)).toBe(true);
+  });
+
+  it("accepts the absent jail-status branch", () => {
+    const absent: OperatorRiskWire = {
+      ...valid,
+      jailStatus: { reason: "no jail registry wired" },
+    };
+    expect(isOperatorRiskWire(absent)).toBe(true);
+  });
+
+  it("accepts a non-empty reasons[] array", () => {
+    expect(
+      isOperatorRiskWire({ ...valid, reasons: ["near_threshold"] }),
+    ).toBe(true);
+  });
+
+  it("rejects when jailStatus has neither shape", () => {
+    expect(isOperatorRiskWire({ ...valid, jailStatus: {} })).toBe(false);
+  });
+
+  it("rejects when a numeric field is a string", () => {
+    expect(
+      isOperatorRiskWire({ ...valid, missRateBps: "300" }),
+    ).toBe(false);
+  });
+
+  it("rejects when reasons contains a non-string", () => {
+    expect(
+      isOperatorRiskWire({ ...valid, reasons: ["ok", 42] as unknown as string[] }),
+    ).toBe(false);
+  });
+
+  it("isJailStatusAvailable narrows correctly", () => {
+    expect(isJailStatusAvailable(valid.jailStatus)).toBe(true);
+    expect(isJailStatusAvailable({ reason: "absent" })).toBe(false);
   });
 });
 
