@@ -181,6 +181,7 @@ import {
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
 } from "./tx-mldsa.js";
+import { getWsClient, type WsStatus } from "./ws-client.js";
 import {
   readClusterDelegators,
   readClusterDirectory,
@@ -445,6 +446,19 @@ async function pauseAutoLock(): Promise<void> {
 }
 
 let openApprovalCount = 0;
+
+// Phase 11 Commit 2 — WS infrastructure module state.
+//
+// `wsNewHeadsListenerInstalled` is set on first `ws-subscribe-new-heads`
+// IPC so subsequent calls don't install a second listener (which would
+// double-write to chrome.storage). The flag resets on SW restart, which
+// is correct: the WsClient singleton also resets, so the listener
+// re-installs on the next subscribe call.
+let wsNewHeadsListenerInstalled = false;
+/** Session-storage key the SW writes when a `newHeads` event lands.
+ *  ChainStatusBanner subscribes to this key via chrome.storage.onChanged
+ *  for live-block updates without polling. */
+const STORAGE_KEY_WS_LAST_BLOCK_HEX = "mono.ws.lastBlockHex";
 
 async function approvalOpened(): Promise<void> {
   openApprovalCount++;
@@ -4336,6 +4350,55 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         hex += seed[i]!.toString(16).padStart(2, "0");
       }
       return { ok: true, seedHex: hex };
+    }
+    case "ws-status": {
+      // Phase 11 Commit 2 — WS-client status probe. The popup uses this
+      // to decide whether to keep its existing polling cadence (default)
+      // or drop to event-driven updates (when WS reports "connected").
+      // No side effects: doesn't subscribe, doesn't open a connection.
+      // Just reports what the SW-singleton currently sees.
+      const client = getWsClient();
+      const status: WsStatus = client.status;
+      return { ok: true, status };
+    }
+    case "ws-subscribe-new-heads": {
+      // Phase 11 Commit 2 — fire-and-forget subscribe to the chain's
+      // `newHeads` channel. The SW-singleton WsClient manages one
+      // connection per SW lifetime; subsequent calls share it.
+      //
+      // Side effect: when a new head arrives, the SW writes the latest
+      // blockHex to `chrome.storage.session` under `mono.ws.lastBlockHex`.
+      // The popup's ChainStatusBanner subscribes to that key via
+      // chrome.storage.onChanged for live updates without polling.
+      //
+      // Graceful degradation: if WS unavailable, the IPC returns
+      // `{ ok: true, status: "unavailable" }` and the popup keeps its
+      // existing 8 s blockNumber poll active.
+      const client = getWsClient();
+      // First call: install the storage-write listener exactly once
+      // per SW boot via the `wsNewHeadsListenerInstalled` flag.
+      if (!wsNewHeadsListenerInstalled) {
+        wsNewHeadsListenerInstalled = true;
+        client.subscribe("newHeads", (params) => {
+          // Chain emits `{ number: "0x...", hash, parent, ... }`. The
+          // wallet only cares about the height for the live banner.
+          if (
+            typeof params === "object" &&
+            params !== null &&
+            "number" in (params as Record<string, unknown>)
+          ) {
+            const number = (params as { number?: unknown }).number;
+            if (typeof number === "string") {
+              chrome.storage.session
+                .set({ [STORAGE_KEY_WS_LAST_BLOCK_HEX]: number })
+                .catch(() => {
+                  // session write failure is non-load-bearing
+                });
+            }
+          }
+        });
+      }
+      return { ok: true, status: client.status };
     }
     case "wallet-send-tx": {
       const p = message.payload as {
