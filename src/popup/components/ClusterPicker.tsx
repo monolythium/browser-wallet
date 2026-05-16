@@ -38,6 +38,11 @@ interface ClusterPickerProps {
   /** Called when a row is tapped — the parent advances to the stake-
    *  form step or, in autovote mode (Commit 3), records the toggle. */
   onSelect: (clusterId: number) => void;
+  /** Phase 11 Commit 6 — when supplied, the expanded row gets a
+   *  "View details" link that navigates to the dedicated cluster-detail
+   *  page. Optional so consumers that don't have a navigation surface
+   *  (e.g. autovote picker, multisig flows) opt out cleanly. */
+  onShowDetails?: (cluster: ClusterDirectoryEntry) => void;
   /** Optional indicator: rendered when the list is sourced from the
    *  Sprintnet-offline fallback fixtures (`via: "mock"` from the SW).
    *  The component shows a banner so the user knows the figures are
@@ -63,6 +68,7 @@ export function ClusterPicker({
   clusters,
   selectedClusterId,
   onSelect,
+  onShowDetails,
   isMock,
 }: ClusterPickerProps) {
   const [search, setSearch] = useState("");
@@ -170,6 +176,9 @@ export function ClusterPicker({
             onToggleExpand={() =>
               setExpandedId((prev) => (prev === c.clusterId ? null : c.clusterId))
             }
+            {...(onShowDetails
+              ? { onShowDetails: () => onShowDetails(c) }
+              : {})}
           />
         ))
       )}
@@ -187,6 +196,10 @@ interface ClusterRowProps {
   expanded: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
+  /** Phase 11 Commit 6 — optional "View details →" link. When provided,
+   *  the expanded row footer renders a button that calls this with the
+   *  cluster row, surfacing the dedicated cluster-detail page. */
+  onShowDetails?: () => void;
 }
 
 function ClusterRow({
@@ -195,6 +208,7 @@ function ClusterRow({
   expanded,
   onSelect,
   onToggleExpand,
+  onShowDetails,
 }: ClusterRowProps) {
   const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
   const reputation = MOCK_CLUSTER_REPUTATION[cluster.clusterId] ?? null;
@@ -355,6 +369,33 @@ function ClusterRow({
             archive) are surfaced from `lyth_operatorInfo` and not yet
             aggregated per cluster. Surfacing here in a future commit.
           </div>
+          {/* Phase 11 Commit 6 — link to dedicated cluster-detail page
+              for the full operator slate, delegator demand, and your
+              history with this cluster. */}
+          {onShowDetails && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowDetails();
+              }}
+              style={{
+                marginTop: 8,
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                letterSpacing: "0.04em",
+                color: "var(--fg-200)",
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid var(--fg-700)",
+                padding: "4px 10px",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+              aria-label={`View details for ${cluster.name ?? `cluster-${cluster.clusterId}`}`}
+            >
+              View details →
+            </button>
+          )}
         </div>
       )}
     </div>
