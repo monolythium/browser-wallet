@@ -461,11 +461,35 @@ export async function bgWalletResolveNames(
 // the response is malformed, the handler returns the defensive
 // { stale: false, lagBlocks: null, currentHeight: null, latestHeight: null }
 // rather than surfacing a false-positive stale flag to the user.
+//
+// Phase 11 Commit 4 — extended with schemaVersion + schemaDrift +
+// retention envelope (chain commits 9d59c3f + 94cf845). Closes GAP #18.
+export interface IndexerRetentionView {
+  /** True when the indexer also serves a deep archive. */
+  archive: boolean;
+  /** Rolling window size in blocks (null when the chain doesn't surface). */
+  retentionBlocks: number | null;
+  /** Free-form redirect hint when the indexer is rolling and an archive
+   *  is available somewhere else. Chain-supplied string; the wallet
+   *  renders verbatim. */
+  archiveRedirect: string | null;
+}
+
 export interface IndexerStatusView {
   stale: boolean;
   lagBlocks: number | null;
   currentHeight: number | null;
   latestHeight: number | null;
+  /** Chain-emitted schema version (null when chain doesn't include it).
+   *  Used by the popup to detect drift against the wallet's known schema. */
+  schemaVersion: number | null;
+  /** True when chain's schemaVersion > the build's known version. The
+   *  popup surfaces a non-blocking "wallet needs update" hint when set;
+   *  parsing continues with the existing additive validators. */
+  schemaDrift: boolean;
+  /** Retention envelope when chain serves it. Null when chain or
+   *  operator omits the field. */
+  retention: IndexerRetentionView | null;
 }
 
 export async function bgWalletIndexerStatus(
@@ -483,6 +507,9 @@ export async function bgWalletIndexerStatus(
       lagBlocks: r.lagBlocks,
       currentHeight: r.currentHeight,
       latestHeight: r.latestHeight,
+      schemaVersion: r.schemaVersion,
+      schemaDrift: r.schemaDrift,
+      retention: r.retention,
     },
   };
 }

@@ -241,9 +241,18 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
 
   return (
     <>
-      {indexerStatus.status?.stale && (
-        <IndexerStaleBanner stale={indexerStatus.status.stale} />
-      )}
+      {indexerStatus.status &&
+        (indexerStatus.status.stale ||
+          indexerStatus.status.schemaDrift ||
+          indexerStatus.status.retention?.archiveRedirect) && (
+          <IndexerStaleBanner
+            stale={indexerStatus.status.stale}
+            schemaDrift={indexerStatus.status.schemaDrift}
+            archiveRedirect={
+              indexerStatus.status.retention?.archiveRedirect ?? null
+            }
+          />
+        )}
       {(() => {
         // Loading: first fetch hasn't returned AND cache is null.
         if (loading && cache === null && pending.length === 0) {

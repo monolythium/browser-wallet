@@ -187,6 +187,10 @@ import {
   normaliseActivityKind,
 } from "../shared/activity-kind.js";
 import {
+  WALLET_KNOWN_INDEXER_SCHEMA_VERSION,
+  validateIndexerStatusWire,
+} from "../shared/indexer-status.js";
+import {
   readClusterDelegators,
   readClusterDirectory,
   readClusterStatus,
@@ -1638,31 +1642,12 @@ function validateRawNameLabel(input: unknown): NameLabelRecord | null {
 // narrow enough to flag a real backlog before it becomes user-visible.
 const INDEXER_LAG_STALE_THRESHOLD = 10;
 
-interface IndexerStatusValidated {
-  currentHeight: number;
-  latestHeight: number | null;
-}
-
-/** Validate the wire shape of `lyth_indexerStatus`. The chain may
- *  serialize heights as JSON numbers (the wire reality) even though
- *  the SDK's ts-rs binding labels them bigint — see activity.ts for
- *  the same rationale. `latestHeight` is optional in the binding;
- *  null when not yet observed. */
-function validateIndexerStatus(input: unknown): IndexerStatusValidated | null {
-  if (input === null || typeof input !== "object") return null;
-  const r = input as Record<string, unknown>;
-  if (typeof r.currentHeight !== "number" || !Number.isFinite(r.currentHeight)) {
-    return null;
-  }
-  let latestHeight: number | null = null;
-  if (r.latestHeight !== undefined && r.latestHeight !== null) {
-    if (typeof r.latestHeight !== "number" || !Number.isFinite(r.latestHeight)) {
-      return null;
-    }
-    latestHeight = r.latestHeight;
-  }
-  return { currentHeight: r.currentHeight, latestHeight };
-}
+// Phase 11 Commit 4 — IndexerStatus validator + WALLET_KNOWN_INDEXER_SCHEMA_VERSION
+// moved to shared/indexer-status.ts so both the SW (this file) and any
+// future popup-side direct consumer share one wire-shape contract.
+// `validateIndexerStatus` is now a re-export alias for backward
+// compatibility with the existing call site below.
+const validateIndexerStatus = validateIndexerStatusWire;
 
 /** Per-address fetch. Returns the resolved label (null = chain has no
  *  entry for this address) or a methodNotFound flag when the operator
@@ -4243,7 +4228,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const now = Date.now();
       const gate = await readMethodGate(STORAGE_KEY_INDEXER_STATUS_METHOD_GATE);
       if (methodGateTripped(gate, p.chainIdHex, now)) {
-        return { ok: true, stale: false, lagBlocks: null, currentHeight: null, latestHeight: null };
+        return {
+          ok: true,
+          stale: false,
+          lagBlocks: null,
+          currentHeight: null,
+          latestHeight: null,
+          schemaVersion: null,
+          schemaDrift: false,
+          retention: null,
+        };
       }
       try {
         const { result } = await sprintnetJsonRpc<unknown>("lyth_indexerStatus", []);
@@ -4257,6 +4251,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             lagBlocks: null,
             currentHeight: null,
             latestHeight: null,
+            schemaVersion: null,
+            schemaDrift: false,
+            retention: null,
           };
         }
         // Recovery: clear the gate if it was previously tripped.
@@ -4272,12 +4269,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             ? 0
             : Math.max(0, validated.latestHeight - validated.currentHeight);
         const stale = lagBlocks > INDEXER_LAG_STALE_THRESHOLD;
+        // Phase 11 Commit 4 — schema drift detection. Chain reports a
+        // higher schemaVersion than the wallet build was tested against;
+        // surface a hint so users know their parsers may miss new fields.
+        // Doesn't break anything — strict additive parsers (which the
+        // wallet uses) silently drop unknown fields.
+        const schemaDrift =
+          validated.schemaVersion > WALLET_KNOWN_INDEXER_SCHEMA_VERSION;
         return {
           ok: true,
           stale,
           lagBlocks,
           currentHeight: validated.currentHeight,
           latestHeight: validated.latestHeight,
+          schemaVersion: validated.schemaVersion,
+          schemaDrift,
+          retention: validated.retention,
         };
       } catch (e) {
         const err = e as Error & { code?: number };
@@ -4294,6 +4301,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           lagBlocks: null,
           currentHeight: null,
           latestHeight: null,
+          schemaVersion: null,
+          schemaDrift: false,
+          retention: null,
         };
       }
     }
