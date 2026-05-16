@@ -37,6 +37,7 @@
 // head every 3 s is the upper bound on signal velocity.
 
 import { getActiveOperators } from "./networks.js";
+import type { OperatorEntry } from "../shared/operators.js";
 
 /** Public connection status surfaced to callers. */
 export type WsStatus =
@@ -61,7 +62,10 @@ interface PendingSubscription {
   rpcId: number;
 }
 
-/** Convert an HTTP/HTTPS operator RPC URL into a wss:// URL. */
+/** Convert an HTTP/HTTPS operator RPC URL into a wss:// URL. Naive
+ *  same-port conversion. Kept for callers that just want the protocol
+ *  swap without operator-aware logic; new code should prefer
+ *  `deriveWsUrl(operator)` which knows about :8546 + the wsRpc override. */
 export function httpUrlToWss(url: string): string {
   if (url.startsWith("https://")) return "wss://" + url.slice("https://".length);
   if (url.startsWith("http://")) return "ws://" + url.slice("http://".length);
@@ -69,9 +73,94 @@ export function httpUrlToWss(url: string): string {
   return url;
 }
 
+/** Phase 11 Commit 12 — operator-aware WS URL derivation.
+ *
+ *  Precedence:
+ *    1. `operator.wsRpc` explicit override (set by SDK registry or
+ *       user-supplied override list)
+ *    2. Geth/Erigon convention: if HTTP is on port 8545, WS is on 8546
+ *    3. Fall back to same-port http→ws conversion (legacy behaviour)
+ *
+ *  The :8546 default fixes the HTTP 303 handshake-failure spam reported
+ *  by user against Sprintnet op-1 (8545 returns redirect for upgrade).
+ */
+export function deriveWsUrl(operator: OperatorEntry): string {
+  if (operator.wsRpc !== undefined && operator.wsRpc.length > 0) {
+    return operator.wsRpc;
+  }
+  let url: URL;
+  try {
+    url = new URL(operator.rpc);
+  } catch {
+    // Malformed rpc — fall back to naive conversion (preserves prior
+    // behaviour rather than throwing).
+    return httpUrlToWss(operator.rpc);
+  }
+  const isHttps = url.protocol === "https:";
+  const wsProtocol = isHttps ? "wss:" : "ws:";
+  // Standard Ethereum RPC: HTTP on 8545, WS on 8546. Apply the bump
+  // whether port is the literal "8545" or empty + default scheme port.
+  if (url.port === "8545") {
+    const pathSuffix = url.pathname === "/" ? "" : url.pathname;
+    return `${wsProtocol}//${url.hostname}:8546${pathSuffix}${url.search}`;
+  }
+  // Non-standard port — preserve the legacy same-port conversion.
+  return httpUrlToWss(operator.rpc);
+}
+
 /** Backoff schedule for reconnect. Doubles up to 60 s ceiling. */
 function backoffMs(attempt: number): number {
   return Math.min(60_000, 1000 * Math.pow(2, attempt));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11 Commit 12 — per-URL failure cache.
+//
+// When a WS handshake fails (303, 404, network refusal, etc.) before
+// the connection ever opens, we mark the URL as known-down for TTL
+// minutes. Subsequent ensureConnection() short-circuits to
+// `unavailable` status without trying again. Prevents the ~5 min of
+// console retry spam reported by user against Sprintnet :8545 (which
+// returns HTTP 303 redirect on upgrade attempts).
+//
+// The cache is module-scoped so it survives WsClient singleton resets
+// within a SW lifetime, but resets across SW restarts (chrome may
+// terminate the SW after ~30 s idle). That's correct behaviour: a SW
+// restart implies enough time has passed that the operator may have
+// changed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** TTL for per-URL handshake-failure cache entries. */
+export const WS_FAILURE_TTL_MS = 10 * 60 * 1000;
+/** Max retry attempts when WS has never successfully opened. Differs
+ *  from the post-open reconnect budget (6 attempts via scheduleReconnect)
+ *  — a handshake that never works is a config issue, not a transient
+ *  network blip. */
+export const MAX_HANDSHAKE_ATTEMPTS = 2;
+
+const wsFailureCache = new Map<string, number>();
+
+/** Test seam — clear the module-scoped failure cache between cases. */
+export function __resetWsFailureCache(): void {
+  wsFailureCache.clear();
+}
+
+/** Returns true when `wsUrl` is in the failure cache within TTL.
+ *  Mutates the cache (evicts expired entries on read) so callers don't
+ *  have to. */
+export function isWsKnownDown(wsUrl: string): boolean {
+  const expiresAt = wsFailureCache.get(wsUrl);
+  if (expiresAt === undefined) return false;
+  if (Date.now() > expiresAt) {
+    wsFailureCache.delete(wsUrl);
+    return false;
+  }
+  return true;
+}
+
+/** Mark a WS URL as known-down. Sticky for `WS_FAILURE_TTL_MS`. */
+export function markWsDown(wsUrl: string): void {
+  wsFailureCache.set(wsUrl, Date.now() + WS_FAILURE_TTL_MS);
 }
 
 /** WS connection manager. Singleton — `getWsClient()` is the only entry
@@ -90,6 +179,18 @@ export class WsClient {
   private subscriptionIdToChannel = new Map<string, string>();
   /** Status-change listeners. */
   private statusListeners = new Set<(s: WsStatus) => void>();
+  /** Phase 11 Commit 12 — tracks whether the current WS connection EVER
+   *  fired `onopen`. A close without a preceding open means the handshake
+   *  failed (303 redirect, 404, etc.) — we apply MAX_HANDSHAKE_ATTEMPTS
+   *  before marking the URL down + falling to polling. After a successful
+   *  open we use the more permissive reconnect budget. */
+  private openedOnce = false;
+  /** The URL the current WS connection is using. Cached so onClose can
+   *  mark the right URL down when a handshake fails. */
+  private currentWsUrl: string | null = null;
+  /** First-occurrence guard for the console.warn on factory-throw, so
+   *  repeated subscribe calls into a broken environment don't spam. */
+  private factoryWarnedOnce = false;
 
   /** Override the factory in tests. Production uses the global
    *  `WebSocket` constructor. */
@@ -166,6 +267,8 @@ export class WsClient {
     }
     this.subscriptions.clear();
     this.subscriptionIdToChannel.clear();
+    this.openedOnce = false;
+    this.currentWsUrl = null;
     this.setStatus("disconnected");
   }
 
@@ -192,17 +295,35 @@ export class WsClient {
     // complex than HTTP (a WS session is stateful — failover means
     // re-subscribing every channel). v1 picks the first operator and
     // reconnects on drop; multi-operator WS failover is post-mainnet.
-    const wsUrl = httpUrlToWss(ops[0]!.rpc);
+    //
+    // Phase 11 Commit 12 — `deriveWsUrl` knows about the `wsRpc`
+    // override + the :8546 Geth convention. Previously we used the
+    // naive `httpUrlToWss` which kept the HTTP port, causing 303
+    // handshake-failure spam against Sprintnet operators.
+    const wsUrl = deriveWsUrl(ops[0]!);
+    // Failure-cache short-circuit. If the URL is in the failure cache
+    // within TTL, skip the connection attempt entirely + go straight
+    // to "unavailable" so callers fall back to polling without spam.
+    if (isWsKnownDown(wsUrl)) {
+      this.setStatus("unavailable");
+      return;
+    }
+    this.currentWsUrl = wsUrl;
+    this.openedOnce = false;
     this.setStatus("connecting");
     let ws: WebSocket;
     try {
       ws = WsClient.factory(wsUrl);
     } catch (e) {
-      console.warn("[ws-client] factory threw:", (e as Error).message);
       // Factory failure (no WebSocket in environment) is permanent
       // until the environment changes. Don't schedule a reconnect — the
       // next subscribe call from a caller will re-trigger ensureConnection
       // if conditions changed. setStatus("unavailable") is sticky.
+      // First-occurrence guard so repeated subscribe calls don't spam.
+      if (!this.factoryWarnedOnce) {
+        console.warn("[ws-client] factory threw:", (e as Error).message);
+        this.factoryWarnedOnce = true;
+      }
       this.setStatus("unavailable");
       return;
     }
@@ -215,6 +336,7 @@ export class WsClient {
 
   private onOpen(): void {
     this.reconnectAttempts = 0;
+    this.openedOnce = true;
     this.setStatus("connected");
     // Re-send every pending subscription so reconnect doesn't lose
     // listeners. The server doesn't remember the subscriptions from
@@ -274,6 +396,13 @@ export class WsClient {
 
   private onClose(): void {
     this.ws = null;
+    // Phase 11 Commit 12 — a close without a preceding open is a
+    // handshake failure (the most common cause is HTTP 303 redirect or
+    // 404 against a port that doesn't serve WS — e.g. Geth on :8545
+    // refusing upgrades). Tighter retry budget + URL-cache poisoning so
+    // we don't keep hammering an endpoint that will never work.
+    const handshakeFailed = !this.openedOnce;
+    const wsUrlAtFailure = this.currentWsUrl;
     // Clear server-assigned ids; the next reconnect will reissue
     // subscribe requests.
     for (const entry of this.subscriptions.values()) {
@@ -282,11 +411,24 @@ export class WsClient {
         entry.subscriptionId = null;
       }
     }
-    if (this.subscriptions.size > 0) {
-      this.scheduleReconnect();
-    } else {
+    if (this.subscriptions.size === 0) {
       this.setStatus("disconnected");
+      return;
     }
+    if (handshakeFailed) {
+      // Use the tighter MAX_HANDSHAKE_ATTEMPTS budget. After it's
+      // exhausted, mark the URL down so future ensureConnection short-
+      // circuits to "unavailable" for WS_FAILURE_TTL_MS.
+      if (this.reconnectAttempts + 1 >= MAX_HANDSHAKE_ATTEMPTS) {
+        if (wsUrlAtFailure !== null) markWsDown(wsUrlAtFailure);
+        this.setStatus("unavailable");
+        // Don't schedule another reconnect — caller falls back to polling.
+        return;
+      }
+      // Allow ONE retry before giving up — covers the case where the
+      // first connection raced a SW resurrection.
+    }
+    this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
@@ -295,7 +437,8 @@ export class WsClient {
     this.reconnectAttempts++;
     // After 6 consecutive failures (~63 s of accumulated delay) surface
     // "unavailable" so callers can drop to polling without waiting for
-    // a recovery that may never come.
+    // a recovery that may never come. The handshake-failure path takes
+    // the tighter MAX_HANDSHAKE_ATTEMPTS budget in onClose() instead.
     if (this.reconnectAttempts >= 6) {
       this.setStatus("unavailable");
     } else {

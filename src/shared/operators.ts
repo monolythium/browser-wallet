@@ -20,11 +20,22 @@ export const STORAGE_KEY_OPERATOR_OVERRIDE = "mono.operators.override";
  * Single operator entry. Mirrors the shape of SPRINTNET_OPERATOR_RPCS_DEFAULTS
  * in networks.ts so the merge function can flip between defaults and override
  * without per-call shape adapters.
+ *
+ * Phase 11 Commit 12 — optional `wsRpc` field. When present, the WS client
+ * uses it verbatim. When absent, the client derives a wss:// URL from `rpc`
+ * (Geth/Erigon convention is HTTP on :8545, WS on :8546). The override is
+ * additive — existing operator records without the field continue to work
+ * via auto-derivation.
  */
 export interface OperatorEntry {
   name: string;
   region: string;
   rpc: string;
+  /** Optional explicit WebSocket endpoint. When omitted, the WS client
+   *  derives one from `rpc` per Geth/Erigon convention (`:8545` → `:8546`).
+   *  Power users override via chrome.storage.local; the SDK registry can
+   *  also supply this via `RpcEndpoint.ws_url`. */
+  wsRpc?: string;
 }
 
 /**
@@ -44,7 +55,12 @@ export function validateOperatorList(input: unknown): OperatorEntry[] | null {
   const out: OperatorEntry[] = [];
   for (const entry of input) {
     if (entry === null || typeof entry !== "object") return null;
-    const e = entry as { name?: unknown; region?: unknown; rpc?: unknown };
+    const e = entry as {
+      name?: unknown;
+      region?: unknown;
+      rpc?: unknown;
+      wsRpc?: unknown;
+    };
     if (typeof e.name !== "string" || e.name.length === 0 || e.name.length > 64) {
       return null;
     }
@@ -58,7 +74,26 @@ export function validateOperatorList(input: unknown): OperatorEntry[] | null {
     } catch {
       return null;
     }
-    out.push({ name: e.name, region: e.region, rpc: e.rpc });
+    // Phase 11 Commit 12 — wsRpc is optional. When present it must parse
+    // as a URL and use the ws:// / wss:// scheme; malformed values
+    // invalidate the whole entry (caller falls back to defaults).
+    let wsRpc: string | undefined;
+    if (e.wsRpc !== undefined) {
+      if (typeof e.wsRpc !== "string") return null;
+      try {
+        const u = new URL(e.wsRpc);
+        if (u.protocol !== "ws:" && u.protocol !== "wss:") return null;
+      } catch {
+        return null;
+      }
+      wsRpc = e.wsRpc;
+    }
+    out.push({
+      name: e.name,
+      region: e.region,
+      rpc: e.rpc,
+      ...(wsRpc !== undefined ? { wsRpc } : {}),
+    });
   }
   return out;
 }

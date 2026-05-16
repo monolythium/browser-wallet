@@ -59,6 +59,11 @@ export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
     name: `operator-${i + 1}`,
     region: endpoint.region ?? "unknown",
     rpc: endpoint.url,
+    // Phase 11 Commit 12 — pull SDK's ws_url through when present so the
+    // WS client can subscribe without per-operator auto-discovery. When
+    // absent, deriveWsUrl in ws-client.ts falls back to the :8546 Geth
+    // convention.
+    ...(endpoint.ws_url !== undefined ? { wsRpc: endpoint.ws_url } : {}),
   }));
 
 /** In-memory active operator list. Hydrated from storage at SW boot via
