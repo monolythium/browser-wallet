@@ -101,6 +101,12 @@ interface StakeProps {
    *  Resets to manual delegate on mount when omitted. */
   initialAction?: "delegate" | "undelegate" | "redelegate";
   initialClusterId?: number;
+  /** Phase 11 Commit 6 — when supplied, the ClusterPicker rows expose
+   *  a "View details →" affordance that calls this with the directory
+   *  entry. App navigates to the dedicated cluster-detail screen. */
+  onShowClusterDetail?: (
+    cluster: import("../../shared/staking").ClusterDirectoryEntry,
+  ) => void;
   onBack: () => void;
 }
 
@@ -109,6 +115,7 @@ export function Stake({
   chainId,
   initialAction,
   initialClusterId,
+  onShowClusterDetail,
   onBack,
 }: StakeProps) {
   // Initial step depends on whether the parent has deep-linked us into
@@ -545,6 +552,9 @@ export function Stake({
                     clusters={clusters}
                     selectedClusterId={selectedClusterId}
                     isMock={clustersMock}
+                    {...(onShowClusterDetail
+                      ? { onShowDetails: onShowClusterDetail }
+                      : {})}
                     onSelect={(id) => {
                       setAction("delegate");
                       setSelectedClusterId(id);
@@ -612,6 +622,9 @@ export function Stake({
               )}
               selectedClusterId={redelegateDstClusterId}
               isMock={clustersMock}
+              {...(onShowClusterDetail
+                ? { onShowDetails: onShowClusterDetail }
+                : {})}
               onSelect={(id) => {
                 setRedelegateDstClusterId(id);
                 setStep("redelegate-form");

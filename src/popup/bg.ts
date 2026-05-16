@@ -428,6 +428,21 @@ export async function bgWalletActivityGet(
 // need to reach into shared/.
 export type { NameLabel, NameLabelRecord } from "../shared/name-resolution.js";
 
+/** Phase 11 Commit 3 — typed AddressActivityKind probe (GAP #17 closes).
+ *  Returns one of {found, not_found, indexer_disabled, pruned, private,
+ *  unknown} so the activity feed can pick the right empty-state UX.
+ *  Never errors at this layer — the SW collapses transport failures
+ *  into the safe defensive default ("not_found"). */
+export type { WalletActivityKindEnvelope } from "../shared/activity-kind.js";
+export async function bgWalletActivityKind(
+  address: string,
+): Promise<{
+  ok: true;
+  envelope: import("../shared/activity-kind.js").WalletActivityKindEnvelope;
+}> {
+  return send("wallet-activity-kind", { address });
+}
+
 export async function bgWalletResolveNames(
   addresses: string[],
   chainIdHex: string,
@@ -446,11 +461,35 @@ export async function bgWalletResolveNames(
 // the response is malformed, the handler returns the defensive
 // { stale: false, lagBlocks: null, currentHeight: null, latestHeight: null }
 // rather than surfacing a false-positive stale flag to the user.
+//
+// Phase 11 Commit 4 — extended with schemaVersion + schemaDrift +
+// retention envelope (chain commits 9d59c3f + 94cf845). Closes GAP #18.
+export interface IndexerRetentionView {
+  /** True when the indexer also serves a deep archive. */
+  archive: boolean;
+  /** Rolling window size in blocks (null when the chain doesn't surface). */
+  retentionBlocks: number | null;
+  /** Free-form redirect hint when the indexer is rolling and an archive
+   *  is available somewhere else. Chain-supplied string; the wallet
+   *  renders verbatim. */
+  archiveRedirect: string | null;
+}
+
 export interface IndexerStatusView {
   stale: boolean;
   lagBlocks: number | null;
   currentHeight: number | null;
   latestHeight: number | null;
+  /** Chain-emitted schema version (null when chain doesn't include it).
+   *  Used by the popup to detect drift against the wallet's known schema. */
+  schemaVersion: number | null;
+  /** True when chain's schemaVersion > the build's known version. The
+   *  popup surfaces a non-blocking "wallet needs update" hint when set;
+   *  parsing continues with the existing additive validators. */
+  schemaDrift: boolean;
+  /** Retention envelope when chain serves it. Null when chain or
+   *  operator omits the field. */
+  retention: IndexerRetentionView | null;
 }
 
 export async function bgWalletIndexerStatus(
@@ -468,6 +507,9 @@ export async function bgWalletIndexerStatus(
       lagBlocks: r.lagBlocks,
       currentHeight: r.currentHeight,
       latestHeight: r.latestHeight,
+      schemaVersion: r.schemaVersion,
+      schemaDrift: r.schemaDrift,
+      retention: r.retention,
     },
   };
 }
@@ -559,6 +601,41 @@ export async function bgWalletChainBlockNumber(): Promise<
   | { ok: false; reason?: string }
 > {
   return send("wallet-chain-block-number");
+}
+
+/** Phase 11 Commit 2 — WS-client status probe. Returns the SW-singleton
+ *  WsClient's current connection state so the popup can prefer event-
+ *  driven updates over polling when WS is connected. Status values:
+ *    - "disconnected" — no live socket (boot state or transient drop)
+ *    - "connecting"   — socket opening; not yet usable
+ *    - "connected"    — socket open, subscriptions active
+ *    - "unavailable"  — WS endpoint unreachable after retries; polling
+ *                       fallback advised. */
+export type BgWsStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "unavailable";
+
+export async function bgWsStatus(): Promise<
+  { ok: true; status: BgWsStatus } | { ok: false; reason?: string }
+> {
+  return send("ws-status");
+}
+
+/** Phase 11 Commit 2 — fire-and-forget subscribe to chain `newHeads`.
+ *  After the first call, the SW writes the latest block hex to
+ *  chrome.storage.session under `mono.ws.lastBlockHex` every time a
+ *  head arrives. ChainStatusBanner watches that key for live updates
+ *  without its 8 s polling fallback firing as often.
+ *
+ *  Returns the WS-client status at the time of the call. The popup can
+ *  use this as a hint whether to expect live updates or to keep its
+ *  polling loop running at full cadence. */
+export async function bgWsSubscribeNewHeads(): Promise<
+  { ok: true; status: BgWsStatus } | { ok: false; reason?: string }
+> {
+  return send("ws-subscribe-new-heads");
 }
 
 export async function bgWalletSendTx(args: {

@@ -183,20 +183,29 @@ export function SlhDsaBackupCard({
 
       {loadErr && <div style={errBox}>Could not load: {loadErr}</div>}
 
+      {/* Phase 11 Commit 11 — `BackupStateRow` always renders so the user
+          sees the current state pill even for a fresh vault (label =
+          "Not set up"). Previously the entire action area was wrapped
+          in `{backup && ...}`, which hid the primary CTA when backup
+          was null — fresh vaults saw only the card header + description
+          text and reported "appears as placeholder text only". */}
+      <BackupStateRow backup={backup} />
+
+      {/* Action area — drives off the current state. The "Set up" CTA
+          fires when backup is null OR backup.createdAt is 0 (vault
+          opted in but generation didn't complete). All other action
+          surfaces live below, gated on `backup.createdAt > 0`. */}
+      {(!backup || backup.createdAt === 0) && (
+        <button
+          onClick={() => setRevealOpen("generate")}
+          style={btnPrimaryFull}
+        >
+          <Icon name="shield" size={12} /> Set up emergency recovery key
+        </button>
+      )}
+
       {backup && (
         <>
-          <BackupStateRow backup={backup} />
-
-          {/* Action area — drives off the current state */}
-          {(!backup || backup.createdAt === 0) && (
-            <button
-              onClick={() => setRevealOpen("generate")}
-              style={btnPrimaryFull}
-            >
-              <Icon name="shield" size={12} /> Set up emergency recovery key
-            </button>
-          )}
-
           {backup.createdAt > 0 && (
             <>
               {/* "Locally generated" state */}
@@ -350,11 +359,6 @@ export function SlhDsaBackupCard({
                 <div style={{ ...errBox, marginTop: 8 }}>{submitErr}</div>
               )}
 
-              {/* G3 rotation rehearsal — read-only explainer. Only
-                  surfaces when the vault actually has a backup
-                  (otherwise the explainer is premature). */}
-              <SlhDsaRotationRehearsal />
-
               {/* Destructive — abandon + regenerate. */}
               <div
                 style={{
@@ -414,6 +418,15 @@ export function SlhDsaBackupCard({
         </>
       )}
 
+      {/* Phase 11 Commit 11 — G3 rotation rehearsal (§30.2) demoted to
+          a collapsed-by-default reference block that surfaces for ALL
+          states, including fresh vaults. The user wanted to read about
+          the emergency-rotation flow BEFORE committing to setup, which
+          the previous "only show after backup exists" placement
+          prevented. The block is visually muted vs the primary card
+          chrome via SlhDsaRotationRehearsal's own styling. */}
+      <SlhDsaRotationRehearsal />
+
       {revealOpen !== null && (
         <SlhDsaBackupRevealModal
           open={revealOpen !== null}
@@ -431,12 +444,16 @@ export function SlhDsaBackupCard({
   );
 }
 
-function BackupStateRow({ backup }: { backup: SlhDsaBackup }) {
+function BackupStateRow({ backup }: { backup: SlhDsaBackup | null }) {
+  // Phase 11 Commit 11 — null-safe state row. backupStatusLabel already
+  // returns "Not set up" for null/undefined; this row renders the same
+  // pill shape so the layout doesn't shift between "not set up" and
+  // "locally generated" states.
   const label = backupStatusLabel(backup);
-  const complete = isBackupComplete(backup);
+  const complete = backup !== null && isBackupComplete(backup);
   const tone = complete
     ? { color: "var(--ok, #7ee3c1)", border: "rgba(126,227,193,0.4)" }
-    : backup.chainRegistrationStatus === "registration-failed"
+    : backup !== null && backup.chainRegistrationStatus === "registration-failed"
       ? { color: "var(--err)", border: "rgba(220,80,80,0.4)" }
       : { color: "var(--fg-100)", border: "var(--fg-700)" };
   return (
@@ -456,7 +473,7 @@ function BackupStateRow({ backup }: { backup: SlhDsaBackup }) {
         <div style={{ fontSize: 12, fontWeight: 500, color: tone.color }}>
           {label}
         </div>
-        {backup.createdAt > 0 && (
+        {backup && backup.createdAt > 0 && (
           <div
             style={{
               fontSize: 10.5,
@@ -467,6 +484,18 @@ function BackupStateRow({ backup }: { backup: SlhDsaBackup }) {
           >
             Algo: SLH-DSA-SHA2-128s · created{" "}
             {new Date(backup.createdAt).toLocaleDateString()}
+          </div>
+        )}
+        {backup === null && (
+          <div
+            style={{
+              fontSize: 10.5,
+              color: "var(--fg-400)",
+              marginTop: 2,
+              fontFamily: "var(--f-mono)",
+            }}
+          >
+            Algo: SLH-DSA-SHA2-128s · {`NIST FIPS 205 (hash-based)`}
           </div>
         )}
       </div>

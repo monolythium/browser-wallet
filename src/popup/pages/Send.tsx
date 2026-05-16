@@ -25,6 +25,8 @@ import { PasskeySignModal } from "../components/PasskeySignModal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
 import { addressToBech32m, bech32mToAddress } from "../../shared/bech32m";
+import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
+import { classifySendError } from "../../shared/send-error";
 import {
   STORAGE_KEY_NAME_CACHE,
   lookupNameInCache,
@@ -470,6 +472,18 @@ export function Send({
           {parsedRecipient.error && (
             <div style={inlineError}>{parsedRecipient.error}</div>
           )}
+          {/* Phase 11 Commit 7 — bech32m typo suggestion. When the user
+              types a mono1... address that fails checksum but a single-
+              character substitution produces a valid one, surface the
+              candidate as a clickable hint. Click sets it as the new
+              recipient input. Conservative: only renders when the
+              parser already reported an error AND the typo-detect found
+              a clean 1-edit fix. */}
+          <BechTypoHint
+            to={to}
+            hasParseError={!!parsedRecipient.error}
+            onApply={(addr) => setTo(addr)}
+          />
           {parsedRecipient.inputForm === "0x" && parsedRecipient.bech && (
             <div style={dualFormatHint}>
               Mono form: {parsedRecipient.bech}
@@ -1685,8 +1699,49 @@ interface ErrorViewProps {
   onCancel: () => void;
 }
 
+/** Phase 11 Commit 7 — colour palette per severity. Severity comes from
+ *  classifySendError; "info" (user cancelled) gets a blue treatment so
+ *  the error screen doesn't shout at the user about a cancel they
+ *  intentionally chose. */
+function severityColours(severity: "err" | "warn" | "info"): {
+  fg: string;
+  iconBg: string;
+  cardBg: string;
+  borderRgba: string;
+} {
+  switch (severity) {
+    case "err":
+      return {
+        fg: "var(--err)",
+        iconBg: "rgba(220,80,80,0.12)",
+        cardBg: "rgba(220,80,80,0.08)",
+        borderRgba: "rgba(220,80,80,0.4)",
+      };
+    case "warn":
+      return {
+        fg: "var(--warn)",
+        iconBg: "rgba(220,180,80,0.12)",
+        cardBg: "rgba(220,180,80,0.08)",
+        borderRgba: "rgba(220,180,80,0.4)",
+      };
+    case "info":
+      return {
+        fg: "var(--fg-200)",
+        iconBg: "rgba(120,160,220,0.10)",
+        cardBg: "rgba(120,160,220,0.06)",
+        borderRgba: "rgba(120,160,220,0.3)",
+      };
+  }
+}
+
 function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewProps) {
   const display = formatSendError({ message, code, method, via });
+  // Phase 11 Commit 7 — typed classification on top of the formatted
+  // message. headline + body replace the previous single-line render
+  // for kinds the classifier recognises; unknown kinds preserve the
+  // verbatim `display` string in the body.
+  const classified = classifySendError(display);
+  const colours = severityColours(classified.severity);
   return (
     <>
       <div className="ext-top">
@@ -1696,7 +1751,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewP
         <div
           style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
         >
-          Transaction failed
+          {classified.headline}
         </div>
         <div style={{ width: 28 }} />
       </div>
@@ -1711,14 +1766,14 @@ function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewP
               display: "grid",
               placeItems: "center",
               borderRadius: "50%",
-              background: "rgba(220,80,80,0.12)",
-              border: "1px solid rgba(220,80,80,0.4)",
-              color: "var(--err)",
+              background: colours.iconBg,
+              border: `1px solid ${colours.borderRgba}`,
+              color: colours.fg,
               fontSize: 28,
             }}
             aria-hidden="true"
           >
-            ✕
+            {classified.severity === "info" ? "ⓘ" : "✕"}
           </div>
         </div>
 
@@ -1726,13 +1781,40 @@ function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewP
           className="ext-card"
           style={{
             padding: "12px 14px",
-            background: "rgba(220,80,80,0.08)",
-            border: "1px solid rgba(220,80,80,0.4)",
+            background: colours.cardBg,
+            border: `1px solid ${colours.borderRgba}`,
           }}
         >
           <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--fg-100)" }}>
-            {display}
+            {classified.body}
           </div>
+          {classified.kind !== "unknown" && (
+            <details style={{ marginTop: 8 }}>
+              <summary
+                style={{
+                  fontSize: 10,
+                  color: "var(--fg-500)",
+                  cursor: "pointer",
+                  fontFamily: "var(--f-mono)",
+                  letterSpacing: "0.04em",
+                }}
+              >
+                Technical details
+              </summary>
+              <div
+                style={{
+                  fontSize: 10.5,
+                  color: "var(--fg-400)",
+                  lineHeight: 1.5,
+                  marginTop: 6,
+                  fontFamily: "var(--f-mono)",
+                  wordBreak: "break-word",
+                }}
+              >
+                {display}
+              </div>
+            </details>
+          )}
         </div>
 
         <div
@@ -1767,6 +1849,82 @@ function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewP
         </div>
       </div>
     </>
+  );
+}
+
+/** Phase 11 Commit 7 — bech32m typo suggestion hint.
+ *
+ *  When the user typed something that fails parsing AND the typo
+ *  classifier finds a 1-edit fix, render an inline "Did you mean
+ *  mono1abc..." chip. Click applies the suggestion as the new recipient.
+ *
+ *  Conservative defaults:
+ *    - Only renders when the parent's parse already errored (so we
+ *      don't second-guess valid recipients).
+ *    - Only renders for `bech32m-typo` classification (not for hex,
+ *      not for unknown garbage).
+ *    - Truncates the suggestion for display, but applies the full
+ *      address on click.
+ */
+function BechTypoHint({
+  to,
+  hasParseError,
+  onApply,
+}: {
+  to: string;
+  hasParseError: boolean;
+  onApply: (addr: string) => void;
+}) {
+  if (!hasParseError) return null;
+  const classified = classifyAddressInput(to);
+  if (classified.kind !== "bech32m-typo") return null;
+  const trunc = middleTruncate(classified.suggestion, 14, 8);
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        padding: "8px 10px",
+        borderRadius: 8,
+        background: "rgba(120,160,220,0.06)",
+        border: "1px solid rgba(120,160,220,0.3)",
+        fontSize: 11,
+        color: "var(--fg-100)",
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap",
+      }}
+    >
+      <span>
+        Did you mean{" "}
+        <code
+          style={{
+            fontFamily: "var(--f-mono)",
+            color: "var(--fg-100)",
+          }}
+        >
+          {trunc}
+        </code>
+        ?
+      </span>
+      <button
+        type="button"
+        onClick={() => onApply(classified.suggestion)}
+        style={{
+          fontSize: 10,
+          fontFamily: "var(--f-mono)",
+          letterSpacing: "0.04em",
+          color: "var(--fg-100)",
+          background: "rgba(255,255,255,0.06)",
+          border: "1px solid var(--fg-700)",
+          padding: "3px 8px",
+          borderRadius: 4,
+          cursor: "pointer",
+        }}
+      >
+        Use suggested
+      </button>
+    </div>
   );
 }
 

@@ -30,7 +30,12 @@ import type {
   PendingApproval,
   WalletIndexerSnapshot,
 } from "./bg";
-import { bgWalletOperatorStatus, bgWalletChainBlockNumber, bgFocusApproval } from "./bg";
+import {
+  bgWalletOperatorStatus,
+  bgWalletChainBlockNumber,
+  bgFocusApproval,
+  bgWsSubscribeNewHeads,
+} from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
@@ -129,10 +134,43 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
     void tick();
     const intervalId = setInterval(tick, HEALTH_TICK_MS);
     document.addEventListener("visibilitychange", visHandler);
+
+    // Phase 11 Commit 2 — opportunistic WS upgrade. Ask the SW to
+    // subscribe to `newHeads`; when chain pushes a new head, the SW
+    // writes the block hex to chrome.storage.session under the key
+    // below. We watch that key here and update the banner without
+    // waiting for the next 8 s poll. The 8 s poll stays running as
+    // a safety net so a WS drop doesn't strand the user on stale
+    // data — if WS is healthy, the poll's tick just reaffirms what
+    // the WS already wrote.
+    void bgWsSubscribeNewHeads().catch(() => {
+      // ws-subscribe-new-heads is best-effort; failure means the
+      // 8 s poll covers us alone (the existing behaviour).
+    });
+    const wsKey = "mono.ws.lastBlockHex";
+    const wsListener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "session") return;
+      if (cancelled) return;
+      const change = changes[wsKey];
+      if (!change || typeof change.newValue !== "string") return;
+      const blockHex = change.newValue;
+      const now = Date.now();
+      if (lastBlockHex === null || blockHex !== lastBlockHex) {
+        lastBlockHex = blockHex;
+        lastBlockObservedAt = now;
+        setHealth({ kind: "live", blockHex });
+      }
+    };
+    chrome.storage.onChanged.addListener(wsListener);
+
     return () => {
       cancelled = true;
       clearInterval(intervalId);
       document.removeEventListener("visibilitychange", visHandler);
+      chrome.storage.onChanged.removeListener(wsListener);
     };
   }, []);
 
@@ -871,28 +909,77 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         </div>
 
         {/* Tabs */}
+        {/* Phase 11 Commit 10 — ARIA tablist + tab + tabpanel pattern.
+            Screen readers announce "Tab Assets, 1 of 3, selected" when
+            focused; keyboard arrow navigation between tabs comes for
+            free from native browser button behaviour + the role hint. */}
         <div className="ext-card">
-          <div className="ext-tabs">
-            <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
-            <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
-            <button className={tab === "nfts" ? "on" : ""} onClick={() => setTab("nfts")}>NFTs</button>
+          <div className="ext-tabs" role="tablist" aria-label="Home content">
+            <button
+              role="tab"
+              aria-selected={tab === "assets"}
+              aria-controls="ext-tabpanel-assets"
+              id="ext-tab-assets"
+              className={tab === "assets" ? "on" : ""}
+              onClick={() => setTab("assets")}
+            >
+              Assets
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === "activity"}
+              aria-controls="ext-tabpanel-activity"
+              id="ext-tab-activity"
+              className={tab === "activity" ? "on" : ""}
+              onClick={() => setTab("activity")}
+            >
+              Activity
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === "nfts"}
+              aria-controls="ext-tabpanel-nfts"
+              id="ext-tab-nfts"
+              className={tab === "nfts" ? "on" : ""}
+              onClick={() => setTab("nfts")}
+            >
+              NFTs
+            </button>
           </div>
           {tab === "assets" && (
-            <AssetList account={account} network={network} indexer={indexer} />
+            <div
+              role="tabpanel"
+              id="ext-tabpanel-assets"
+              aria-labelledby="ext-tab-assets"
+            >
+              <AssetList account={account} network={network} indexer={indexer} />
+            </div>
           )}
           {tab === "activity" && (
-            <ActivityList
-              addr={account.addr.startsWith("0x") ? account.addr : null}
-              chainIdHex={network.chainId}
-            />
+            <div
+              role="tabpanel"
+              id="ext-tabpanel-activity"
+              aria-labelledby="ext-tab-activity"
+            >
+              <ActivityList
+                addr={account.addr.startsWith("0x") ? account.addr : null}
+                chainIdHex={network.chainId}
+              />
+            </div>
           )}
           {tab === "nfts" && (
-            <NftTab
-              ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
-              chainId={network.chainIdNum}
-              chainIdHex={network.chainId}
-              {...(onOpenSendNft ? { onOpenSendNft } : {})}
-            />
+            <div
+              role="tabpanel"
+              id="ext-tabpanel-nfts"
+              aria-labelledby="ext-tab-nfts"
+            >
+              <NftTab
+                ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
+                chainId={network.chainIdNum}
+                chainIdHex={network.chainId}
+                {...(onOpenSendNft ? { onOpenSendNft } : {})}
+              />
+            </div>
           )}
         </div>
 
