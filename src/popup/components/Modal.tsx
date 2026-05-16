@@ -28,6 +28,11 @@ export interface ModalProps {
   children: ReactNode;
 }
 
+// Phase 11 Commit 10 — stable id for the modal title so the dialog
+// element can reference it via aria-labelledby. Counter increments
+// per Modal instance to keep ids unique across multiple open modals.
+let modalIdCounter = 0;
+
 export function Modal({ open, onClose, title, titleAccent, children }: ModalProps) {
   useEffect(() => {
     if (!open) return;
@@ -41,6 +46,11 @@ export function Modal({ open, onClose, title, titleAccent, children }: ModalProp
   if (!open) return null;
 
   const stopPropagation = (e: MouseEvent) => e.stopPropagation();
+
+  // Phase 11 Commit 10 — aria-labelledby points at the title so screen
+  // readers announce the modal heading on focus. Each instance gets a
+  // unique id to support multiple simultaneous modals (rare but legal).
+  const titleId = `ext-modal-title-${++modalIdCounter}`;
 
   return createPortal(
     <div
@@ -62,6 +72,7 @@ export function Modal({ open, onClose, title, titleAccent, children }: ModalProp
         onClick={stopPropagation}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={title != null ? titleId : undefined}
         style={{
           width: "100%",
           maxWidth: 340,
@@ -78,6 +89,7 @@ export function Modal({ open, onClose, title, titleAccent, children }: ModalProp
       >
         {title != null && (
           <div
+            id={titleId}
             style={{
               fontWeight: 600,
               fontSize: 12,
