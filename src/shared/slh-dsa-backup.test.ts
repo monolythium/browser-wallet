@@ -11,6 +11,7 @@ import {
   backupStatusLabel,
   cloneBackupForRead,
   cloneBackupForWrite,
+  decodeBackupPublicKeyHex,
   emptySlhDsaBackup,
   hasBackupStarted,
   isBackupComplete,
@@ -334,5 +335,40 @@ describe("hasBackupStarted + isBackupComplete", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("decodeBackupPublicKeyHex", () => {
+  it("round-trips a 32-byte all-0xab pubkey", () => {
+    const bytes = decodeBackupPublicKeyHex("ab".repeat(32));
+    expect(bytes.length).toBe(32);
+    expect(Array.from(bytes).every((b) => b === 0xab)).toBe(true);
+  });
+
+  it("round-trips an indexed-byte fixture", () => {
+    let hex = "";
+    for (let i = 0; i < 32; i++) hex += i.toString(16).padStart(2, "0");
+    const bytes = decodeBackupPublicKeyHex(hex);
+    for (let i = 0; i < 32; i++) {
+      expect(bytes[i]).toBe(i);
+    }
+  });
+
+  it("rejects wrong-length hex", () => {
+    expect(() => decodeBackupPublicKeyHex("ab".repeat(16))).toThrow(
+      /16 bytes, want 32/,
+    );
+    expect(() => decodeBackupPublicKeyHex("ab".repeat(33))).toThrow();
+  });
+
+  it("rejects non-hex characters", () => {
+    expect(() => decodeBackupPublicKeyHex("z".repeat(64))).toThrow(
+      /non-hex characters/,
+    );
+  });
+
+  it("rejects non-string input", () => {
+    // @ts-expect-error — testing the runtime guard
+    expect(() => decodeBackupPublicKeyHex(null)).toThrow(/must be a string/);
   });
 });
