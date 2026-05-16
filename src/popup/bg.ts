@@ -1416,3 +1416,69 @@ export async function bgTwoTierSetFeature(
 ): Promise<{ ok: true; state: TwoTierState } | { ok: false; reason: string }> {
   return send("two-tier-set-feature", { flag, enabled });
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 10 — SLH-DSA emergency-backup IPC helpers (§30.1)
+// ────────────────────────────────────────────────────────────────────────────
+
+import type { SlhDsaBackup } from "../shared/slh-dsa-backup.js";
+
+/** Read the persisted backup record for the target vault. Returns
+ *  `null` when the vault has not opted into the §30.1 flow. */
+export async function bgSlhDsaBackupGet(
+  vaultId: string,
+): Promise<
+  | { ok: true; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-get", { vaultId });
+}
+
+/** Generate a fresh SLH-DSA backup keypair, persist the encrypted
+ *  secret + entropy, and return the 24-word mnemonic for the reveal
+ *  modal. The mnemonic MUST NOT be persisted by the popup — the
+ *  user's cold-storage copy is the cryptographic backup. */
+export async function bgSlhDsaBackupGenerate(
+  vaultId: string,
+): Promise<
+  | { ok: true; mnemonic: string; backup: SlhDsaBackup }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-generate", { vaultId });
+}
+
+/** Re-derive the 24-word mnemonic from a stored backup record.
+ *  Used by the Settings → Security "Re-export" flow. Requires the
+ *  container to be unlocked. */
+export async function bgSlhDsaBackupRecoverMnemonic(
+  vaultId: string,
+): Promise<
+  | { ok: true; mnemonic: string }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-recover-mnemonic", { vaultId });
+}
+
+/** Flip `coldStorageConfirmed` to true after the user attests via
+ *  the reveal modal's checkbox. Idempotent. */
+export async function bgSlhDsaBackupConfirmColdStorage(
+  vaultId: string,
+): Promise<
+  | { ok: true; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-confirm-cold-storage", { vaultId });
+}
+
+/** Drop the backup record. Settings → Security exposes this as an
+ *  explicit "Generate new key" action — chain registration becomes
+ *  irrecoverable for the vault address after a clear+regenerate
+ *  cycle. */
+export async function bgSlhDsaBackupClear(
+  vaultId: string,
+): Promise<
+  | { ok: true; cleared: boolean }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-clear", { vaultId });
+}

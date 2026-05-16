@@ -85,6 +85,15 @@ import {
   addPasskeyCredentialV4,
   removePasskeyCredentialV4,
   setPasskeyPolicyV4,
+  // Phase 10 SLH-DSA emergency-backup surface (Commit 1+2).
+  // `writeSlhDsaBackupV4` is not used directly by any IPC — the
+  // SW writes through the higher-level helpers (`generateSlhDsaBackupV4`,
+  // `confirmSlhDsaColdStorageV4`) instead. Test seam only.
+  readSlhDsaBackupV4,
+  clearSlhDsaBackupV4,
+  generateSlhDsaBackupV4,
+  recoverSlhDsaMnemonicV4,
+  confirmSlhDsaColdStorageV4,
 } from "./keystore-mldsa.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
@@ -3521,6 +3530,95 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           p.enabled,
         );
         return { ok: true, state };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
+    // Phase 10 — SLH-DSA emergency-backup IPCs (§30.1)
+    // ────────────────────────────────────────────────────────────────
+    case "slh-dsa-backup-get": {
+      // Returns the persisted backup record for the target vault, or
+      // `null` if no backup is configured. The record is plain JSON
+      // (no BigInt, no Uint8Array), so it round-trips through
+      // chrome.runtime.sendMessage natively.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const backup = await readSlhDsaBackupV4(p.vaultId);
+        return { ok: true, backup };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "slh-dsa-backup-generate": {
+      // Generates a fresh SLH-DSA backup keypair, persists the
+      // record (with `coldStorageConfirmed: false`), and returns
+      // the 24-word mnemonic for the popup's reveal modal. The
+      // mnemonic is the ONLY field the popup needs that isn't
+      // recoverable from chrome.storage — it surfaces once for
+      // the user to write down, and the popup holds it in memory
+      // only for the duration of the reveal flow.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const { mnemonic, backup } = await generateSlhDsaBackupV4(p.vaultId);
+        await resetAutoLock();
+        return { ok: true, mnemonic, backup };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "slh-dsa-backup-recover-mnemonic": {
+      // Re-export flow (Commit 6 wiring). Requires the container to
+      // be unlocked. Decrypts the stored entropy slot + re-derives
+      // the 24-word mnemonic. The wallet does not regenerate the
+      // keypair — the same pubkey + secret + chain-registration
+      // status are preserved.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const mnemonic = await recoverSlhDsaMnemonicV4(p.vaultId);
+        await resetAutoLock();
+        return { ok: true, mnemonic };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "slh-dsa-backup-confirm-cold-storage": {
+      // Flips `coldStorageConfirmed` to `true` after the user
+      // attests via the reveal modal's checkbox. Idempotent —
+      // calling on an already-confirmed record is a no-op.
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const backup = await confirmSlhDsaColdStorageV4(p.vaultId);
+        return { ok: true, backup };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "slh-dsa-backup-clear": {
+      // Escape hatch for users who want to abandon the local
+      // record and regenerate. Surfaces an explicit warning UX in
+      // Commit 6 because a prior on-chain registration becomes
+      // irrecoverable for this vault address (the precompile is
+      // one-time-per-address).
+      const p = (message.payload ?? {}) as { vaultId?: string };
+      if (typeof p.vaultId !== "string") {
+        return { ok: false, reason: "missing vaultId" };
+      }
+      try {
+        const cleared = await clearSlhDsaBackupV4(p.vaultId);
+        return { ok: true, cleared };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
