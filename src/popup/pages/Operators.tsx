@@ -12,10 +12,17 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import {
+  bgChainSigningActivity,
   bgOperatorsGet,
   bgOperatorsSet,
+  type ChainSigningActivityOutcome,
   type OperatorEntryWire,
 } from "../bg";
+import {
+  summarizeSigningActivity,
+  type OperatorSigningActivity,
+  type SigningEntryStatus,
+} from "../../shared/audit-followup-types";
 
 interface OperatorsProps {
   onBack: () => void;
@@ -167,6 +174,8 @@ export function Operators({ onBack }: OperatorsProps) {
                   : "Using default operators"}
               </div>
             </div>
+
+            <ChainSigningHealthCard />
 
             <div className="ext-card" style={{ padding: "8px 10px" }}>
               {draft.length === 0 ? (
@@ -467,4 +476,171 @@ function sameOperators(
     if (a[i]!.rpc !== b[i]!.rpc) return false;
   }
   return true;
+}
+
+/** Phase 11.5 Commit 3 — chain-wide signing-health sample. Calls
+ *  `lyth_signingActivity` (MD-CORE-0004) for the canonical first
+ *  authority slot, renders a single-line status pill + signer count
+ *  + a reservedStatuses footnote when the chain reports subsystems
+ *  with partial wiring. Hidden entirely on any mock-* outcome so
+ *  older operators (pre-mono-core @dd05511) don't see a broken card.
+ *
+ *  Per-RPC-endpoint attribution is intentionally out of scope: the
+ *  wallet's Operators page manages transport-layer RPC URLs, while
+ *  `lyth_signingActivity` is keyed on the consensus BLS authority
+ *  slot. Mapping the two would require chaining
+ *  `lyth_resolveOperatorAuthority` over `lyth_clusterStatus.members`
+ *  per row, which is deferred. The card title is explicit about that
+ *  scope so users don't misread it as per-RPC health. */
+function ChainSigningHealthCard() {
+  const [outcome, setOutcome] = useState<ChainSigningActivityOutcome | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await bgChainSigningActivity();
+      if (cancelled) return;
+      setLoading(false);
+      if (r.ok) setOutcome(r.outcome);
+      else setOutcome(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        className="ext-card"
+        style={{
+          padding: "10px 12px",
+          background: "rgba(124,127,255,0.04)",
+          border: "1px dashed rgba(124,127,255,0.2)",
+          height: 28,
+        }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (!outcome || outcome.kind !== "live") return null;
+  return <SigningHealthLive activity={outcome.data} />;
+}
+
+function SigningHealthLive({ activity }: { activity: OperatorSigningActivity }) {
+  const summary = summarizeSigningActivity(activity);
+  const { dotColor, label } = statusPillStyle(summary.latestStatus);
+  return (
+    <div
+      className="ext-card"
+      style={{
+        padding: "10px 12px",
+        background: "rgba(124,127,255,0.05)",
+        border: "1px solid rgba(124,127,255,0.25)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+        }}
+      >
+        Chain signing — authority {activity.authorityIndex} · round{" "}
+        {activity.currentRound}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: 12,
+          color: "var(--fg-100)",
+        }}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: dotColor,
+            flexShrink: 0,
+          }}
+          title={`Latest signing status: ${summary.latestStatus}`}
+        />
+        <span style={{ fontWeight: 600 }}>{label}</span>
+        {summary.latestSignersCount !== null && (
+          <span style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }}>
+            · {summary.latestSignersCount} signers
+          </span>
+        )}
+        <span
+          style={{
+            marginLeft: "auto",
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+          }}
+        >
+          {activity.entries.length} / {activity.limit}
+        </span>
+      </div>
+      {activity.reservedStatuses.length > 0 && (
+        <div
+          style={{
+            fontSize: 10.5,
+            color: "var(--fg-400)",
+            lineHeight: 1.4,
+            paddingTop: 4,
+            borderTop: "1px solid rgba(255,255,255,0.05)",
+          }}
+        >
+          <span style={{ color: "var(--warn, #f2b441)" }}>
+            {activity.reservedStatuses.length} reserved status
+            {activity.reservedStatuses.length === 1 ? "" : "es"}
+          </span>{" "}
+          — primitives partially wired (
+          {activity.reservedStatuses
+            .slice(0, 3)
+            .map((r) => r.code)
+            .join(", ")}
+          {activity.reservedStatuses.length > 3 ? ", …" : ""}
+          ).
+        </div>
+      )}
+    </div>
+  );
+}
+
+function statusPillStyle(status: SigningEntryStatus): {
+  dotColor: string;
+  label: string;
+} {
+  switch (status) {
+    case "signed":
+      return { dotColor: "var(--ok)", label: "Signing (latest cert healthy)" };
+    case "maintenance":
+      return { dotColor: "var(--info, #7c7fff)", label: "Maintenance window" };
+    case "delayed":
+      return { dotColor: "var(--warn, #f2b441)", label: "Delayed — round behind" };
+    case "missed":
+      return { dotColor: "var(--warn, #f2b441)", label: "Missed round" };
+    case "offline":
+      return { dotColor: "var(--err)", label: "Offline" };
+    case "no_cert":
+      return { dotColor: "var(--fg-500)", label: "No cert this round" };
+    case "unavailable_history":
+      return { dotColor: "var(--fg-500)", label: "History unavailable" };
+    default:
+      return {
+        dotColor: "var(--fg-500)",
+        label: `Status: ${status}`,
+      };
+  }
 }
