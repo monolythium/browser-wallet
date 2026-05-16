@@ -1266,3 +1266,184 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
     180_000,
   );
 });
+
+describe("keystore-mldsa SLH-DSA backup CRUD (Phase 10 Commit 1)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  function fakeBackup(
+    overrides: Partial<{
+      publicKey: string;
+      chainRegistrationStatus:
+        | "not-registered"
+        | "pending"
+        | "registered"
+        | "registration-failed";
+      coldStorageConfirmed: boolean;
+      createdAt: number;
+    }> = {},
+  ) {
+    return {
+      encryptedPrivateKey: "ZmFrZS1lbmNyeXB0ZWQ=",
+      encryptedPrivateKeyNonce:
+        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+      publicKey: overrides.publicKey ?? "ab".repeat(32),
+      parameterSet: "slh_dsa_sha2_128s" as const,
+      chainRegistrationStatus:
+        overrides.chainRegistrationStatus ?? ("not-registered" as const),
+      coldStorageConfirmed: overrides.coldStorageConfirmed ?? false,
+      createdAt: overrides.createdAt ?? 1_700_000_000_000,
+    };
+  }
+
+  it(
+    "readSlhDsaBackupV4 returns null for vaults without a backup",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "slh-empty-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const result = await ks.readSlhDsaBackupV4(list[0]!.id);
+      expect(result).toBeNull();
+    },
+    120_000,
+  );
+
+  it(
+    "writeSlhDsaBackupV4 + readSlhDsaBackupV4 round-trip cleanly",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "slh-rw-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+      const persisted = await ks.writeSlhDsaBackupV4(id, fakeBackup());
+      expect(persisted.publicKey).toBe("ab".repeat(32));
+      const reread = await ks.readSlhDsaBackupV4(id);
+      expect(reread).not.toBeNull();
+      expect(reread!.publicKey).toBe("ab".repeat(32));
+      expect(reread!.parameterSet).toBe("slh_dsa_sha2_128s");
+      expect(reread!.chainRegistrationStatus).toBe("not-registered");
+    },
+    120_000,
+  );
+
+  it(
+    "writeSlhDsaBackupV4 overwrites previous record atomically (status transitions)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "slh-overwrite-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+      await ks.writeSlhDsaBackupV4(id, fakeBackup());
+      await ks.writeSlhDsaBackupV4(
+        id,
+        fakeBackup({
+          chainRegistrationStatus: "pending",
+          coldStorageConfirmed: true,
+        }),
+      );
+      const after = await ks.readSlhDsaBackupV4(id);
+      expect(after?.chainRegistrationStatus).toBe("pending");
+      expect(after?.coldStorageConfirmed).toBe(true);
+    },
+    120_000,
+  );
+
+  it(
+    "clearSlhDsaBackupV4 drops the record (re-export escape hatch)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "slh-clear-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+      await ks.writeSlhDsaBackupV4(id, fakeBackup());
+      const dropped = await ks.clearSlhDsaBackupV4(id);
+      expect(dropped).toBe(true);
+      const after = await ks.readSlhDsaBackupV4(id);
+      expect(after).toBeNull();
+      // Second clear is a no-op (returns false, doesn't throw).
+      const dropped2 = await ks.clearSlhDsaBackupV4(id);
+      expect(dropped2).toBe(false);
+    },
+    120_000,
+  );
+
+  it(
+    "backup record survives a fresh module import (chrome.storage round-trip)",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      const password = "slh-persist-password";
+      await ks1.createVaultFromNewMnemonic(password);
+      await ks1.unlockContainerV4(password);
+      const list1 = (await ks1.listVaultsV4())!;
+      const id = list1[0]!.id;
+      await ks1.writeSlhDsaBackupV4(
+        id,
+        fakeBackup({
+          chainRegistrationStatus: "registered",
+          coldStorageConfirmed: true,
+        }),
+      );
+
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const reread = await ks2.readSlhDsaBackupV4(id);
+      expect(reread).not.toBeNull();
+      expect(reread!.publicKey).toBe("ab".repeat(32));
+      expect(reread!.chainRegistrationStatus).toBe("registered");
+      expect(reread!.coldStorageConfirmed).toBe(true);
+    },
+    180_000,
+  );
+
+  it(
+    "corrupt on-disk backup record self-heals (read returns null, no crash)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "slh-corrupt-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+      await ks.writeSlhDsaBackupV4(id, fakeBackup());
+
+      // Corrupt the on-disk shape directly — non-hex pubkey
+      // characters. The next read should silently drop the field
+      // rather than wedge the IPC.
+      const got = await new Promise<Record<string, unknown>>((resolve) => {
+        chrome.storage.local.get(["mono.vaults.v4"], (g) => resolve(g));
+      });
+      const container = got["mono.vaults.v4"] as {
+        vaults: { passkey?: unknown; slhDsaBackup?: { publicKey?: string } }[];
+      };
+      container.vaults[0]!.slhDsaBackup!.publicKey = "z".repeat(64);
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { "mono.vaults.v4": container },
+          () => resolve(),
+        );
+      });
+
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const reread = await ks2.readSlhDsaBackupV4(id);
+      expect(reread).toBeNull();
+    },
+    180_000,
+  );
+});
