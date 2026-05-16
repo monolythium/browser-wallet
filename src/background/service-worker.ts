@@ -3650,6 +3650,39 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
+    case "slh-dsa-backup-poll-receipt": {
+      // Light wrapper around `eth_getTransactionReceipt` used by the
+      // Settings → Security page (Commit 6) to flip a `pending`
+      // backup to `registered` (status=0x1) or `registration-failed`
+      // (status=0x0) once a registration tx lands. Returns the
+      // receipt's `status` + `blockNumber` if available, or `null`
+      // if the tx is still pending. The caller flips the backup
+      // record itself via `slh-dsa-backup-set-registration-status`
+      // — this IPC is read-only.
+      const p = (message.payload ?? {}) as { txHash?: string };
+      if (typeof p.txHash !== "string" || !p.txHash.startsWith("0x")) {
+        return { ok: false, reason: "missing/invalid txHash" };
+      }
+      try {
+        const { result } = await sprintnetJsonRpc<{
+          status?: string;
+          blockNumber?: string;
+        } | null>("eth_getTransactionReceipt", [p.txHash]);
+        if (!result) {
+          return { ok: true, receipt: null };
+        }
+        return {
+          ok: true,
+          receipt: {
+            status: typeof result.status === "string" ? result.status : null,
+            blockNumber:
+              typeof result.blockNumber === "string" ? result.blockNumber : null,
+          },
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
     case "slh-dsa-backup-clear": {
       // Escape hatch for users who want to abandon the local
       // record and regenerate. Surfaces an explicit warning UX in
