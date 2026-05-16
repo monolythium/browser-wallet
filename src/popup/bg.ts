@@ -1483,6 +1483,22 @@ export async function bgSlhDsaBackupClear(
   return send("slh-dsa-backup-clear", { vaultId });
 }
 
+/** Light wrapper around `eth_getTransactionReceipt` used to poll a
+ *  pending registration. Returns `receipt: null` while the tx is
+ *  still pending; on inclusion returns the `status` (`"0x1"` =
+ *  success, `"0x0"` = revert) + `blockNumber`. */
+export async function bgSlhDsaBackupPollReceipt(
+  txHash: string,
+): Promise<
+  | {
+      ok: true;
+      receipt: { status: string | null; blockNumber: string | null } | null;
+    }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-poll-receipt", { txHash });
+}
+
 /** Update a backup's chain-registration lifecycle status. Used by
  *  the popup-side orchestrator (`bgSlhDsaBackupSubmitRegistration`)
  *  on each tx-submit / receipt-poll. */

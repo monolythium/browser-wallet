@@ -30,6 +30,7 @@ import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { OnboardingHintBar } from "./components/OnboardingHintBar";
+import { SlhDsaBackupHintBar } from "./components/SlhDsaBackupHintBar";
 import { Stake } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -682,11 +683,17 @@ export default function App() {
           onOpenOnboard={() => setScreen("welcome")}
           topSlot={
             activeVaultSummary ? (
-              <OnboardingHintBar
-                vaultId={activeVaultSummary.id}
-                onOpenSecurity={() => setScreen("security")}
-                onOpenFeatures={() => setScreen("features")}
-              />
+              <>
+                <OnboardingHintBar
+                  vaultId={activeVaultSummary.id}
+                  onOpenSecurity={() => setScreen("security")}
+                  onOpenFeatures={() => setScreen("features")}
+                />
+                <SlhDsaBackupHintBar
+                  vaultId={activeVaultSummary.id}
+                  onOpenSecurity={() => setScreen("security")}
+                />
+              </>
             ) : undefined
           }
         />
@@ -803,6 +810,7 @@ export default function App() {
           onBack={() => setScreen("settings")}
           vaultId={activeVaultSummary.id}
           vaultAddress={activeVaultSummary.addr}
+          chainIdHex={activeChain.chainId}
         />
       )}
 
