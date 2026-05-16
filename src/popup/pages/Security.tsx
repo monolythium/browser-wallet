@@ -22,6 +22,7 @@ import {
   type BgPolicyMode,
 } from "../bg";
 import { PasskeyRegisterModal } from "../components/PasskeyRegisterModal";
+import { SlhDsaBackupCard } from "../components/SlhDsaBackupCard";
 import {
   DEFAULT_PASSKEY_DAILY_CAP_WEI,
   DEFAULT_PASSKEY_LIMIT_WEI,
@@ -36,6 +37,10 @@ export interface SecurityProps {
   /** Vault address — surfaced inside the WebAuthn user block during
    *  registration. */
   vaultAddress: string;
+  /** Active chain id (hex). Threaded through to the Phase 10 backup
+   *  card so its on-chain registration submit knows which chain to
+   *  target. */
+  chainIdHex: string;
 }
 
 /** Convert wei (decimal string) → LYTH (decimal string with ≤ 4 dp).
@@ -93,7 +98,12 @@ export function closestStopIndex(weiStr: string): number {
   }
 }
 
-export function Security({ onBack, vaultId, vaultAddress }: SecurityProps) {
+export function Security({
+  onBack,
+  vaultId,
+  vaultAddress,
+  chainIdHex,
+}: SecurityProps) {
   const [state, setState] = useState<BgPasskeyState | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
@@ -392,6 +402,13 @@ export function Security({ onBack, vaultId, vaultAddress }: SecurityProps) {
             Register new passkey
           </button>
         </div>
+
+        {/* Phase 10 — SLH-DSA emergency backup card */}
+        <SlhDsaBackupCard
+          vaultId={vaultId}
+          vaultAddressLabel={vaultAddress}
+          chainIdHex={chainIdHex}
+        />
       </div>
 
       <PasskeyRegisterModal
