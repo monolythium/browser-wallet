@@ -92,6 +92,15 @@ import {
   removeCredential as removePasskeyCredential,
   setPolicy as setPasskeyPolicy,
 } from "../shared/passkey.js";
+import type { SlhDsaBackup } from "../shared/slh-dsa-backup.js";
+import {
+  cloneBackupForRead,
+  cloneBackupForWrite,
+} from "../shared/slh-dsa-backup.js";
+import {
+  prepareSlhDsaBackup,
+  recoverBackupMnemonic,
+} from "./slh-dsa-keygen.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -230,6 +239,18 @@ interface VaultRecordV4 {
    *  user-edited names + policy thresholds. See `shared/passkey.ts`
    *  for the rationale and the on-chain GAP analysis. */
   passkey?: VaultPasskeyState;
+  /** Phase 10 — optional per-vault SLH-DSA emergency backup record.
+   *  Absent on every vault until the user opts into the §30.1 flow.
+   *  Read paths treat absence as "not set up". When present, the
+   *  encrypted secret-key material is XChaCha20-Poly1305-sealed under
+   *  the SAME VEK that protects the primary ML-DSA-65 envelope — the
+   *  cold-storage backup the user wrote down is what they recover
+   *  from in a G3 emergency, NOT this on-disk copy. See
+   *  `shared/slh-dsa-backup.ts` for the rationale + chain-GAP
+   *  analysis + parameter-set choice (`slh_dsa_sha2_128s` algo id
+   *  `1101`, the only currently-chain-eligible backup variant per
+   *  Law §2.9). */
+  slhDsaBackup?: SlhDsaBackup;
 }
 
 /** Multi-vault container. Stored under
@@ -489,9 +510,31 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
   // as `undefined`.
   return {
     ...raw,
-    vaults: raw.vaults.map((v) =>
-      v.passkey ? { ...v, passkey: clonePasskeyState(v.passkey) } : v,
-    ),
+    vaults: raw.vaults.map((v) => {
+      // Phase 9 hotfix — passkey BigInt normalisation
+      let out = v.passkey
+        ? { ...v, passkey: clonePasskeyState(v.passkey) }
+        : v;
+      // Phase 10 — SLH-DSA backup defensive read. The on-disk shape
+      // is already plain JSON (no BigInts to recover), but pushing
+      // every read through `cloneBackupForRead` strips unknown fields
+      // + fails closed on a corrupt record (returns `null`, which
+      // the read paths treat as "no backup configured"). The same
+      // defence-in-depth posture as the Phase 9 passkey path.
+      if (out.slhDsaBackup) {
+        const restored = cloneBackupForRead(out.slhDsaBackup);
+        if (restored !== null) {
+          out = { ...out, slhDsaBackup: restored };
+        } else {
+          // Corrupt record — drop the field rather than carry a
+          // broken shape forward. The next write rehydrates a
+          // clean record.
+          const { slhDsaBackup: _drop, ...withoutBackup } = out;
+          out = withoutBackup;
+        }
+      }
+      return out;
+    }),
   };
 }
 
@@ -1125,6 +1168,258 @@ export async function setPasskeyPolicyV4(
   v.passkey = clonePasskeyState(next);
   await saveVaultsContainerV4(container);
   return clonePasskeyState(next);
+}
+
+// ---- Phase 10 SLH-DSA backup CRUD ----
+//
+// The keygen + secret-key encryption lives in
+// `src/background/slh-dsa-keygen.ts` (Phase 10 Commit 2). These
+// helpers are the storage seam — they accept an already-prepared
+// `SlhDsaBackup` record and persist / read it through the same
+// container the rest of the vault state lives in. Read paths return
+// `null` (not a placeholder) for vaults that have not opted into
+// the backup flow.
+
+/** Read the SLH-DSA backup record for the target vault. Returns
+ *  `null` for unknown vault ids and for vaults that have never
+ *  generated a backup. Tolerates the round-trip through
+ *  chrome.storage via `cloneBackupForRead` — a corrupt on-disk
+ *  shape returns `null` rather than crashing the caller. */
+export async function readSlhDsaBackupV4(
+  vaultId: string,
+): Promise<SlhDsaBackup | null> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return null;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.slhDsaBackup) return null;
+  return cloneBackupForRead(v.slhDsaBackup);
+}
+
+/** Replace the SLH-DSA backup record atomically. Caller is the
+ *  keygen path (Commit 2) — by the time we get here the secret key
+ *  has already been VEK-wrapped + the user has gone through the
+ *  reveal-modal flow. Throws on unknown vault id; the caller never
+ *  catches it because the only call site is the SW IPC handler
+ *  which surfaces the throw as a typed error. */
+export async function writeSlhDsaBackupV4(
+  vaultId: string,
+  backup: SlhDsaBackup,
+): Promise<SlhDsaBackup> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  v.slhDsaBackup = cloneBackupForWrite(backup);
+  await saveVaultsContainerV4(container);
+  // Return through the read clone so the caller always gets a
+  // fresh object (defensive against future mutation by callers
+  // that capture the reference).
+  return cloneBackupForRead(v.slhDsaBackup) ?? backup;
+}
+
+/** Drop the SLH-DSA backup record entirely. Used by the Settings →
+ *  Security re-export flow when the user explicitly chooses
+ *  "Generate a new backup key" (which means abandoning the prior
+ *  one — chain registration is one-time, so the new key cannot be
+ *  registered on the same vault address; this is an escape hatch
+ *  for users who lost their cold-storage copy and accept that the
+ *  on-chain registration is now irrecoverable for this vault).
+ *  Returns `true` if a record existed and was removed. */
+export async function clearSlhDsaBackupV4(
+  vaultId: string,
+): Promise<boolean> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return false;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.slhDsaBackup) return false;
+  delete v.slhDsaBackup;
+  await saveVaultsContainerV4(container);
+  return true;
+}
+
+/** Generate a fresh SLH-DSA backup keypair for the target vault,
+ *  encrypt the secret + entropy under the vault's VEK, persist the
+ *  record into the container, and return the human-readable
+ *  24-word BIP-39 mnemonic for the popup's reveal flow.
+ *
+ *  Requires the container to be unlocked (MEK cached). The caller
+ *  (SW IPC handler) checks `isUnlockedV4()` before invoking; we
+ *  throw a typed `"keystore locked"` if the cache is empty so a
+ *  race between auto-lock + user action surfaces cleanly.
+ *
+ *  Refuses to overwrite an existing record — Re-export uses
+ *  {@link recoverSlhDsaMnemonicV4} instead. Callers that want to
+ *  abandon and regenerate must call {@link clearSlhDsaBackupV4}
+ *  first (Settings → Security exposes this as an explicit
+ *  "Generate new key" action that warns about losing any prior
+ *  on-chain registration).
+ *
+ *  Returns `{ mnemonic, backup }` — the mnemonic is for the
+ *  popup ONLY and is never persisted; the backup record is what
+ *  callers can read back via {@link readSlhDsaBackupV4}. */
+export async function generateSlhDsaBackupV4(
+  vaultId: string,
+): Promise<{ mnemonic: string; backup: SlhDsaBackup }> {
+  if (mekCache === null) {
+    throw new Error("keystore locked");
+  }
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  if (v.slhDsaBackup && v.slhDsaBackup.publicKey.length > 0) {
+    throw new Error(
+      "backup already exists — clear it first or use the re-export flow",
+    );
+  }
+
+  // Unwrap the VEK locally, run keygen, zero the VEK before return.
+  // The VEK never escapes this function's stack — the keygen module
+  // gets it by-reference and zeroes its working secret too.
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  let prepared: { mnemonic: string; backup: SlhDsaBackup };
+  try {
+    prepared = prepareSlhDsaBackup({ vek });
+  } finally {
+    vek.fill(0);
+  }
+
+  v.slhDsaBackup = cloneBackupForWrite(prepared.backup);
+  await saveVaultsContainerV4(container);
+  // Return the in-memory record (with mnemonic) — the caller
+  // forwards mnemonic to the popup and lets it fall out of scope.
+  return prepared;
+}
+
+/** Re-derive the 24-word mnemonic from a previously-generated
+ *  backup record. Used by the Settings → Security "Re-export"
+ *  flow. Requires the container to be unlocked. Throws if the
+ *  vault has no backup, or if the AEAD decrypt fails (wrong VEK,
+ *  tampered ciphertext). */
+export async function recoverSlhDsaMnemonicV4(
+  vaultId: string,
+): Promise<string> {
+  if (mekCache === null) {
+    throw new Error("keystore locked");
+  }
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  if (!v.slhDsaBackup || v.slhDsaBackup.publicKey.length === 0) {
+    throw new Error("no backup configured for this vault");
+  }
+
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  try {
+    return recoverBackupMnemonic(vek, v.slhDsaBackup);
+  } finally {
+    vek.fill(0);
+  }
+}
+
+/** Flip `coldStorageConfirmed` to `true` after the user attests
+ *  via the reveal modal's "I have written this down" checkbox.
+ *  Idempotent — calling on an already-confirmed record is a no-op.
+ *  Returns the updated record (or null if the vault has no backup). */
+export async function confirmSlhDsaColdStorageV4(
+  vaultId: string,
+): Promise<SlhDsaBackup | null> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return null;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.slhDsaBackup) return null;
+  if (!v.slhDsaBackup.coldStorageConfirmed) {
+    v.slhDsaBackup = cloneBackupForWrite({
+      ...v.slhDsaBackup,
+      coldStorageConfirmed: true,
+    });
+    await saveVaultsContainerV4(container);
+  }
+  return cloneBackupForRead(v.slhDsaBackup);
+}
+
+/** Update a backup record's chain-registration status atomically.
+ *  The popup orchestrates the flow:
+ *
+ *    1. read backup → decode pubkey → buildTx → bgWalletSendTx
+ *    2. on tx-submitted reply, call this with status="pending"
+ *       + the returned tx hash
+ *    3. on a later receipt poll (or a manual user "check status"),
+ *       call this again with "registered" + the inclusion block,
+ *       or "registration-failed" + the revert reason
+ *    4. clear back to "not-registered" only if the caller decides
+ *       to abandon a stuck `pending` and retry (rare)
+ *
+ *  Throws on unknown vault id / no backup record (call
+ *  `generateSlhDsaBackupV4` first). */
+export async function setSlhDsaRegistrationStatusV4(
+  vaultId: string,
+  args: {
+    status: "not-registered" | "pending" | "registered" | "registration-failed";
+    /** Tx hash — required when transitioning to `pending` or
+     *  `registered`; cleared when transitioning to
+     *  `not-registered`. Optional otherwise. */
+    txHash?: string | null;
+    /** Inclusion block — populated when transitioning to
+     *  `registered`. */
+    block?: number | null;
+    /** Chain revert reason — populated when transitioning to
+     *  `registration-failed`. */
+    error?: string | null;
+  },
+): Promise<SlhDsaBackup> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  if (!v.slhDsaBackup) {
+    throw new Error("no backup record for this vault");
+  }
+
+  // Build the next record from the existing one + the patch. Use
+  // conditional spreads for the optional fields so we can both
+  // SET and CLEAR them through this single API (`undefined` →
+  // omit from record, `null` → also omit, a string → set, etc.).
+  const next: SlhDsaBackup = {
+    ...v.slhDsaBackup,
+    chainRegistrationStatus: args.status,
+    ...(typeof args.txHash === "string"
+      ? { chainRegistrationTxHash: args.txHash }
+      : {}),
+    ...(typeof args.block === "number"
+      ? { chainRegistrationBlock: args.block }
+      : {}),
+    ...(typeof args.error === "string"
+      ? { chainRegistrationError: args.error }
+      : {}),
+  };
+
+  // For terminal states, clear stale fields explicitly so a UI
+  // that reads the record sees a clean shape rather than a mix of
+  // old + new metadata. Use delete to make the field absent (which
+  // honours `exactOptionalPropertyTypes`).
+  if (args.status === "not-registered") {
+    delete next.chainRegistrationTxHash;
+    delete next.chainRegistrationBlock;
+    delete next.chainRegistrationError;
+  }
+  if (args.status === "registered") {
+    delete next.chainRegistrationError;
+  }
+  if (args.status === "registration-failed") {
+    // Keep the txHash if we have one (the failure may have a tx
+    // we want the user to be able to investigate) but drop the
+    // success-block field.
+    delete next.chainRegistrationBlock;
+  }
+  if (args.txHash === null) {
+    delete next.chainRegistrationTxHash;
+  }
+
+  v.slhDsaBackup = cloneBackupForWrite(next);
+  await saveVaultsContainerV4(container);
+  return cloneBackupForRead(v.slhDsaBackup) ?? next;
 }
 
 /** Defensive copy so callers can't mutate stored state by holding a

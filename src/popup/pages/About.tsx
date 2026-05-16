@@ -11,7 +11,9 @@ import {
   bgOperatorsHealth,
   bgPasskeyGetState,
   bgRuntimeProvenance,
+  bgSlhDsaBackupGet,
   bgTwoTierGetState,
+  bgVaultsList,
   type BgPasskeyState,
   type OperatorHealthRow,
   type RuntimeProvenanceView,
@@ -21,6 +23,11 @@ import {
   FEATURE_META,
   type TwoTierState,
 } from "../../shared/two-tier-features";
+import {
+  type SlhDsaBackup,
+  backupStatusLabel,
+  isBackupComplete,
+} from "../../shared/slh-dsa-backup";
 import {
   EXTERNAL_LINKS,
   SDK_COMMIT_SHORT,
@@ -51,6 +58,14 @@ interface AboutProps {
     onOpenSecurity: () => void;
     onOpenFeatures: () => void;
   };
+  /** Phase 10 — when set, surfaces a §30.1 backup status card with
+   *  the active vault's backup state + a cross-vault "N of M"
+   *  aggregate so the user can see at a glance how many of their
+   *  vaults have a registered emergency-recovery key. */
+  phase10?: {
+    activeVaultId: string;
+    onOpenSecurity: () => void;
+  };
 }
 
 function readWalletVersion(): string {
@@ -61,7 +76,7 @@ function readWalletVersion(): string {
   }
 }
 
-export function About({ onBack, multisig, phase9 }: AboutProps) {
+export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [provenance, setProvenance] = useState<RuntimeProvenanceView | null>(
@@ -69,6 +84,15 @@ export function About({ onBack, multisig, phase9 }: AboutProps) {
   );
   const [passkeyState, setPasskeyState] = useState<BgPasskeyState | null>(null);
   const [twoTierState, setTwoTierState] = useState<TwoTierState | null>(null);
+  /** Active vault's backup state. */
+  const [activeBackup, setActiveBackup] = useState<SlhDsaBackup | null>(null);
+  /** Cross-vault aggregate — sums `isBackupComplete` across every
+   *  vault in the container. Loaded once on mount. */
+  const [aggregate, setAggregate] = useState<{
+    total: number;
+    complete: number;
+    missing: { id: string; label: string }[];
+  } | null>(null);
   const walletVersion = readWalletVersion();
 
   useEffect(() => {
@@ -100,10 +124,44 @@ export function About({ onBack, multisig, phase9 }: AboutProps) {
         if (tt.ok) setTwoTierState(tt.state);
       })();
     }
+    if (phase10 !== undefined) {
+      void (async () => {
+        // Active vault's backup state + cross-vault aggregate run
+        // in parallel — separate IPCs, no inter-dependency. The
+        // aggregate makes one `bgVaultsList` call + one
+        // `bgSlhDsaBackupGet` per vault. Cheap; the list rarely
+        // exceeds a handful of vaults.
+        const [activeRes, vaultsRes] = await Promise.all([
+          bgSlhDsaBackupGet(phase10.activeVaultId),
+          bgVaultsList(),
+        ]);
+        if (cancelled) return;
+        if (activeRes.ok) setActiveBackup(activeRes.backup);
+        if (vaultsRes.ok && vaultsRes.vaults !== null) {
+          const vaults = vaultsRes.vaults;
+          const perVault = await Promise.all(
+            vaults.map(async (v) => ({
+              id: v.id,
+              label: v.label,
+              res: await bgSlhDsaBackupGet(v.id),
+            })),
+          );
+          if (cancelled) return;
+          let complete = 0;
+          const missing: { id: string; label: string }[] = [];
+          for (const row of perVault) {
+            const backup = row.res.ok ? row.res.backup : null;
+            if (isBackupComplete(backup)) complete++;
+            else missing.push({ id: row.id, label: row.label });
+          }
+          setAggregate({ total: vaults.length, complete, missing });
+        }
+      })();
+    }
     return () => {
       cancelled = true;
     };
-  }, [phase9]);
+  }, [phase9, phase10]);
 
   const healthyCount = operators?.filter((o) => o.ok).length ?? 0;
   const trustedCount = operators?.filter((o) => o.trustedGenesis).length ?? 0;
@@ -371,6 +429,138 @@ export function About({ onBack, multisig, phase9 }: AboutProps) {
               }}
             >
               <span>Open Features</span>
+              <Icon name="chev" size={12} />
+            </button>
+          </div>
+        )}
+
+        {phase10 && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Emergency recovery (§30.1)</h3>
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                marginBottom: 10,
+              }}
+            >
+              SLH-DSA-SHA2-128s backup keypair, one per vault.
+              Hash-based — cross-family hedge against a future
+              ML-DSA / lattice break. Wallet-only generation + chain-
+              registered public half via the `0x1100` emergency-key
+              registry (one-time per address).
+            </div>
+
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-400)",
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                marginBottom: 6,
+              }}
+            >
+              This vault
+            </div>
+            <KvList
+              rows={[
+                {
+                  k: "Status",
+                  v: activeBackup === null
+                    ? "—"
+                    : backupStatusLabel(activeBackup),
+                },
+                ...(activeBackup &&
+                activeBackup.chainRegistrationTxHash !== undefined
+                  ? [
+                      {
+                        k: "Tx",
+                        v: `${activeBackup.chainRegistrationTxHash.slice(0, 10)}…${activeBackup.chainRegistrationTxHash.slice(-8)}`,
+                      },
+                    ]
+                  : []),
+                ...(activeBackup &&
+                activeBackup.chainRegistrationBlock !== undefined
+                  ? [
+                      {
+                        k: "Block",
+                        v: activeBackup.chainRegistrationBlock.toString(),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+
+            {aggregate !== null && aggregate.total > 1 && (
+              <>
+                <div
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 10,
+                    color: "var(--fg-400)",
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
+                    marginBottom: 6,
+                    marginTop: 14,
+                  }}
+                >
+                  All vaults
+                </div>
+                <div
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    background: "rgba(124,127,255,0.06)",
+                    border: "1px solid rgba(124,127,255,0.4)",
+                    fontSize: 11.5,
+                    color: "var(--fg-100)",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong>{aggregate.complete}</strong> of{" "}
+                  <strong>{aggregate.total}</strong> vaults have a
+                  registered emergency-recovery key.
+                  {aggregate.missing.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 10.5,
+                        color: "var(--fg-300)",
+                      }}
+                    >
+                      Missing:{" "}
+                      {aggregate.missing.map((m) => m.label).join(", ")}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            <button
+              onClick={phase10.onOpenSecurity}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.04)",
+                color: "var(--fg-100)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <span>Open Security</span>
               <Icon name="chev" size={12} />
             </button>
           </div>

@@ -1416,3 +1416,173 @@ export async function bgTwoTierSetFeature(
 ): Promise<{ ok: true; state: TwoTierState } | { ok: false; reason: string }> {
   return send("two-tier-set-feature", { flag, enabled });
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 10 — SLH-DSA emergency-backup IPC helpers (§30.1)
+// ────────────────────────────────────────────────────────────────────────────
+
+import type { SlhDsaBackup } from "../shared/slh-dsa-backup.js";
+
+/** Read the persisted backup record for the target vault. Returns
+ *  `null` when the vault has not opted into the §30.1 flow. */
+export async function bgSlhDsaBackupGet(
+  vaultId: string,
+): Promise<
+  | { ok: true; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-get", { vaultId });
+}
+
+/** Generate a fresh SLH-DSA backup keypair, persist the encrypted
+ *  secret + entropy, and return the 24-word mnemonic for the reveal
+ *  modal. The mnemonic MUST NOT be persisted by the popup — the
+ *  user's cold-storage copy is the cryptographic backup. */
+export async function bgSlhDsaBackupGenerate(
+  vaultId: string,
+): Promise<
+  | { ok: true; mnemonic: string; backup: SlhDsaBackup }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-generate", { vaultId });
+}
+
+/** Re-derive the 24-word mnemonic from a stored backup record.
+ *  Used by the Settings → Security "Re-export" flow. Requires the
+ *  container to be unlocked. */
+export async function bgSlhDsaBackupRecoverMnemonic(
+  vaultId: string,
+): Promise<
+  | { ok: true; mnemonic: string }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-recover-mnemonic", { vaultId });
+}
+
+/** Flip `coldStorageConfirmed` to true after the user attests via
+ *  the reveal modal's checkbox. Idempotent. */
+export async function bgSlhDsaBackupConfirmColdStorage(
+  vaultId: string,
+): Promise<
+  | { ok: true; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-confirm-cold-storage", { vaultId });
+}
+
+/** Drop the backup record. Settings → Security exposes this as an
+ *  explicit "Generate new key" action — chain registration becomes
+ *  irrecoverable for the vault address after a clear+regenerate
+ *  cycle. */
+export async function bgSlhDsaBackupClear(
+  vaultId: string,
+): Promise<
+  | { ok: true; cleared: boolean }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-clear", { vaultId });
+}
+
+/** Light wrapper around `eth_getTransactionReceipt` used to poll a
+ *  pending registration. Returns `receipt: null` while the tx is
+ *  still pending; on inclusion returns the `status` (`"0x1"` =
+ *  success, `"0x0"` = revert) + `blockNumber`. */
+export async function bgSlhDsaBackupPollReceipt(
+  txHash: string,
+): Promise<
+  | {
+      ok: true;
+      receipt: { status: string | null; blockNumber: string | null } | null;
+    }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-poll-receipt", { txHash });
+}
+
+/** Update a backup's chain-registration lifecycle status. Used by
+ *  the popup-side orchestrator (`bgSlhDsaBackupSubmitRegistration`)
+ *  on each tx-submit / receipt-poll. */
+export async function bgSlhDsaBackupSetRegistrationStatus(args: {
+  vaultId: string;
+  status: "not-registered" | "pending" | "registered" | "registration-failed";
+  txHash?: string | null;
+  block?: number | null;
+  error?: string | null;
+}): Promise<
+  | { ok: true; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  return send("slh-dsa-backup-set-registration-status", args);
+}
+
+import {
+  buildEmergencyKeyRegisterTx,
+} from "../shared/slh-dsa-chain-tx.js";
+import { decodeBackupPublicKeyHex } from "../shared/slh-dsa-backup.js";
+
+/** High-level orchestrator that submits the on-chain registration
+ *  for the active vault's emergency-backup key.
+ *
+ *  Flow:
+ *   1. Look up the persisted backup record (caller already showed
+ *      the user a "Register on-chain" CTA — they have one). Decode
+ *      the 32-byte pubkey from its hex storage shape.
+ *   2. Build the `register(uint16,bytes)` calldata for the
+ *      precompile at 0x1100.
+ *   3. Submit via `bgWalletSendTx` (the same path every other
+ *      contract-call tx takes).
+ *   4. On submit success, flip `chainRegistrationStatus` to
+ *      `"pending"` with the tx hash so the UI can render a "tx
+ *      submitted, waiting for inclusion" badge + Monoscan link.
+ *   5. On submit failure, flip to `"registration-failed"` with the
+ *      chain reason verbatim. The user can retry from Settings.
+ *
+ *  Receipt polling (pending → registered | registration-failed) is
+ *  the Settings page's responsibility (Commit 6 wires it). */
+export async function bgSlhDsaBackupSubmitRegistration(args: {
+  vaultId: string;
+  publicKeyHex: string;
+  chainIdHex: string;
+}): Promise<
+  | { ok: true; txHash: string; backup: SlhDsaBackup | null }
+  | { ok: false; reason: string }
+> {
+  let pubkeyBytes: Uint8Array;
+  try {
+    pubkeyBytes = decodeBackupPublicKeyHex(args.publicKeyHex);
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message };
+  }
+
+  const tx = buildEmergencyKeyRegisterTx(pubkeyBytes);
+  const submit = await bgWalletSendTx({
+    to: tx.to,
+    valueWeiHex: tx.valueWeiHex,
+    data: tx.data,
+    chainIdHex: args.chainIdHex,
+  });
+
+  if (!submit.ok) {
+    const reason =
+      typeof submit.reason === "string" ? submit.reason : "tx submit failed";
+    // Persist the failure so the Settings page can show a clear
+    // "registration failed, retry?" state even after popup close.
+    await bgSlhDsaBackupSetRegistrationStatus({
+      vaultId: args.vaultId,
+      status: "registration-failed",
+      error: reason,
+    });
+    return { ok: false, reason };
+  }
+
+  const txHash = submit.result.txHash;
+  const setRes = await bgSlhDsaBackupSetRegistrationStatus({
+    vaultId: args.vaultId,
+    status: "pending",
+    txHash,
+  });
+  if (!setRes.ok) {
+    return { ok: false, reason: setRes.reason };
+  }
+  return { ok: true, txHash, backup: setRes.backup };
+}
