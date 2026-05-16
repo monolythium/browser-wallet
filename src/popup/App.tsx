@@ -29,8 +29,8 @@ import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
-import { OnboardingHintBar } from "./components/OnboardingHintBar";
-import { SlhDsaBackupHintBar } from "./components/SlhDsaBackupHintBar";
+import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
+import { SetupHealthChip } from "./components/SetupHealthChip";
 import { Stake } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { ClusterDetail } from "./pages/ClusterDetail";
@@ -694,14 +694,14 @@ export default function App() {
           topSlot={
             activeVaultSummary ? (
               <>
-                <OnboardingHintBar
+                <SetupHealthChip
+                  vaultId={activeVaultSummary.id}
+                  onOpenSecurity={() => setScreen("security")}
+                />
+                <UnifiedOnboardingHintBar
                   vaultId={activeVaultSummary.id}
                   onOpenSecurity={() => setScreen("security")}
                   onOpenFeatures={() => setScreen("features")}
-                />
-                <SlhDsaBackupHintBar
-                  vaultId={activeVaultSummary.id}
-                  onOpenSecurity={() => setScreen("security")}
                 />
               </>
             ) : undefined
