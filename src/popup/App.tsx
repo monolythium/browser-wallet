@@ -843,6 +843,10 @@ export default function App() {
                   onOpenSecurity: () => setScreen("security"),
                   onOpenFeatures: () => setScreen("features"),
                 },
+                phase10: {
+                  activeVaultId: activeVaultSummary.id,
+                  onOpenSecurity: () => setScreen("security"),
+                },
               }
             : {})}
         />
