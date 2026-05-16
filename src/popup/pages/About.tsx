@@ -37,6 +37,11 @@ import {
   SPRINTNET_GENESIS_HASH,
   WALLET_PITCH,
 } from "../../shared/build-info";
+import {
+  OPERATOR_RISK_LEGEND,
+  classifyOperatorRisk,
+  type OperatorRiskBadge,
+} from "../../shared/operator-risk";
 
 interface AboutProps {
   onBack: () => void;
@@ -797,6 +802,10 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           </div>
         </div>
 
+        {/* Phase 11 Commit 5 — Operator risk legend. Decodes the chips
+            rendered on operator rows above. */}
+        <OperatorRiskLegendCard />
+
         {/* Pitch / differentiation */}
         <div className="ext-card">
           <div className="ext-card__head">
@@ -954,6 +963,21 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
   // Untrusted (forked) operators are RPC-skipped regardless of liveness,
   // so they get the danger border even when the probe succeeded.
   const dangerBorder = !trusted || !ok;
+  // Phase 11 Commit 5 — derive risk badges from probe data.
+  const riskBadges = classifyOperatorRisk({
+    ok: row.ok,
+    trustedGenesis: row.trustedGenesis,
+    capabilities: row.capabilities,
+    indexerHeight: row.indexerHeight,
+    indexerLatest: row.indexerLatest,
+    latencyMs: row.ok ? row.latencyMs : null,
+    // Phase 11 chain GAP — `lyth_pendingOperatorChanges` (or whatever
+    // chain commit 017cab9 ends up calling it) is not in the SDK at
+    // @0fd8a79. Once a reader lands, surface `pendingChange` here.
+    // The classifier already supports the field; surfaces a "pending"
+    // badge with chain-supplied severity when present.
+    pendingChange: null,
+  });
   return (
     <div
       style={{
@@ -1079,6 +1103,26 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           <div>{row.reason}</div>
         )}
       </div>
+      {/* Phase 11 Commit 5 — operator risk badges (derived from probe
+          data via classifyOperatorRisk). Spans the full row when any
+          risk badge applies; absent for healthy operators. */}
+      {riskBadges.length > 0 && (
+        <div
+          style={{
+            gridColumn: "1 / -1",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 4,
+            marginTop: 4,
+            paddingTop: 6,
+            borderTop: "1px solid rgba(255,255,255,0.05)",
+          }}
+        >
+          {riskBadges.map((b) => (
+            <RiskBadgeChip key={b.kind} badge={b} />
+          ))}
+        </div>
+      )}
       {/* Phase 7.1 — per-operator capability badge strip. Spans all 3
           columns when present; absent when the operator's response had
           no capabilities or returned an error for `lyth_operatorCapabilities`. */}
@@ -1120,6 +1164,106 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
             ))}
           </div>
         )}
+    </div>
+  );
+}
+
+/** Phase 11 Commit 5 — render a single risk badge as a coloured chip
+ *  with a hover tooltip explaining what tripped it. Severity drives
+ *  the colour (info = blue, warn = amber, err = red). */
+function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
+  const colour =
+    badge.severity === "err"
+      ? "var(--err)"
+      : badge.severity === "warn"
+        ? "var(--warn)"
+        : "var(--fg-300)";
+  const bg =
+    badge.severity === "err"
+      ? "rgba(220,80,80,0.12)"
+      : badge.severity === "warn"
+        ? "rgba(220,180,80,0.12)"
+        : "rgba(120,160,220,0.08)";
+  const borderColour =
+    badge.severity === "err"
+      ? "rgba(220,80,80,0.4)"
+      : badge.severity === "warn"
+        ? "rgba(220,180,80,0.4)"
+        : "rgba(120,160,220,0.3)";
+  return (
+    <span
+      style={{
+        fontFamily: "var(--f-mono)",
+        fontSize: 9,
+        fontWeight: 600,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: colour,
+        background: bg,
+        border: `1px solid ${borderColour}`,
+        padding: "1px 5px",
+        borderRadius: 3,
+      }}
+      title={badge.tooltip}
+    >
+      {badge.label}
+    </span>
+  );
+}
+
+/** Phase 11 Commit 5 — Operator-risk legend card rendered on the About
+ *  page below the operator probe list. One-line explanation per risk
+ *  kind so the user can decode the badges from the probe rows above.
+ *  Static (no chain reads); content tracks OPERATOR_RISK_LEGEND. */
+function OperatorRiskLegendCard() {
+  return (
+    <div className="ext-card">
+      <div className="ext-card__head">
+        <h3>Operator risk legend</h3>
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--fg-400)",
+          lineHeight: 1.5,
+          marginBottom: 8,
+        }}
+      >
+        Each chip on an operator row decodes a signal the wallet collected
+        from its probe round-trip. Most are advisory — the wallet's RPC
+        dispatcher already routes around offline / untrusted operators.
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {OPERATOR_RISK_LEGEND.map((entry) => (
+          <div key={entry.kind}>
+            <div
+              style={{
+                fontSize: 11.5,
+                fontWeight: 600,
+                color: "var(--fg-100)",
+                marginBottom: 2,
+              }}
+            >
+              {entry.label}
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+              }}
+            >
+              {entry.body}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
