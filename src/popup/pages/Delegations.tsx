@@ -42,6 +42,9 @@ interface DelegationsProps {
   onRedelegate: (clusterId: number) => void;
   /** Route to the Stake page in stake-more mode. */
   onStakeMore: () => void;
+  /** Phase 11 Commit 6 — route to the cluster-detail panel for a
+   *  specific cluster. */
+  onShowClusterDetail?: (cluster: ClusterDirectoryEntry) => void;
 }
 
 export function Delegations({
@@ -51,6 +54,7 @@ export function Delegations({
   onUnstake,
   onRedelegate,
   onStakeMore,
+  onShowClusterDetail,
 }: DelegationsProps) {
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
@@ -337,7 +341,9 @@ export function Delegations({
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "1fr 1fr",
+                          gridTemplateColumns: onShowClusterDetail
+                            ? "1fr 1fr 1fr"
+                            : "1fr 1fr",
                           gap: 6,
                           marginTop: 8,
                         }}
@@ -354,6 +360,20 @@ export function Delegations({
                         >
                           Redelegate
                         </button>
+                        {onShowClusterDetail && (
+                          <button
+                            onClick={() => {
+                              const c = clusters.find(
+                                (cc) => cc.clusterId === row.cluster,
+                              );
+                              if (c) onShowClusterDetail(c);
+                            }}
+                            style={rowActionBtnStyle}
+                            aria-label={`View details for cluster ${row.cluster}`}
+                          >
+                            Details
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

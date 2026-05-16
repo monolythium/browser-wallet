@@ -33,6 +33,7 @@ import { OnboardingHintBar } from "./components/OnboardingHintBar";
 import { SlhDsaBackupHintBar } from "./components/SlhDsaBackupHintBar";
 import { Stake } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
+import { ClusterDetail } from "./pages/ClusterDetail";
 import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
@@ -104,6 +105,7 @@ type Screen =
   | "send-nft"
   | "stake"
   | "delegations"
+  | "cluster-detail"
   | "bridge"
   | "approval"
   | "connected-sites"
@@ -199,6 +201,14 @@ export default function App() {
     action: "undelegate" | "redelegate";
     clusterId: number;
   } | null>(null);
+  // Phase 11 Commit 6 — selected cluster for the cluster-detail panel.
+  // Set when the user navigates from ClusterPicker or Delegations row
+  // → cluster detail. The cluster directory row is held inline rather
+  // than re-fetched: it's already in the parent's state from the
+  // staking-cluster-directory call that populated the picker.
+  const [selectedCluster, setSelectedCluster] = useState<
+    import("../shared/staking").ClusterDirectoryEntry | null
+  >(null);
   const selectedChain: ChainEntry | null =
     selectedChainId !== null
       ? (chainList.find((c) => c.chainId === selectedChainId) ?? null)
@@ -930,6 +940,10 @@ export default function App() {
                 initialClusterId: stakeDeepLink.clusterId,
               }
             : {})}
+          onShowClusterDetail={(cluster) => {
+            setSelectedCluster(cluster);
+            setScreen("cluster-detail");
+          }}
           onBack={() => {
             const wasDeepLinked = stakeDeepLink !== null;
             setStakeDeepLink(null);
@@ -954,6 +968,23 @@ export default function App() {
           onStakeMore={() => {
             setStakeDeepLink(null);
             setScreen("stake");
+          }}
+          onShowClusterDetail={(cluster) => {
+            setSelectedCluster(cluster);
+            setScreen("cluster-detail");
+          }}
+        />
+      )}
+
+      {screen === "cluster-detail" && selectedCluster !== null && (
+        <ClusterDetail
+          cluster={selectedCluster}
+          walletAddress={acc.addr.startsWith("0x") ? acc.addr : null}
+          onBack={() => {
+            setSelectedCluster(null);
+            // Most cluster-detail entry points come from Stake or
+            // Delegations; default back-target is delegations.
+            setScreen("delegations");
           }}
         />
       )}
