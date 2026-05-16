@@ -38,6 +38,13 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "wallet-indexer-snapshot",
   "sprintnet-operators-get",
   "sprintnet-operators-health",
+  // Phase 11 Commit 2 — WS infra polls are passive: status reads and
+  // fire-and-forget subscribe don't represent user activity.
+  "ws-status",
+  "ws-subscribe-new-heads",
+  // Phase 11 Commit 3 — AddressActivityKind probe is passive metadata
+  // (used by the activity feed to render empty-state context).
+  "wallet-activity-kind",
   "list-pending",
   "get-pending",
   "focus-approval",

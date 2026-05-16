@@ -91,3 +91,69 @@ describe("mergeOperatorOverride", () => {
     expect(r).not.toBe(override);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11 Commit 12 — optional wsRpc field
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("validateOperatorList — wsRpc field (Phase 11 Commit 12)", () => {
+  it("accepts entries with valid ws:// wsRpc", () => {
+    const r = validateOperatorList([
+      {
+        name: "op-1",
+        region: "lon",
+        rpc: "http://host:8545",
+        wsRpc: "ws://host:8546",
+      },
+    ]);
+    expect(r).not.toBeNull();
+    expect(r![0]!.wsRpc).toBe("ws://host:8546");
+  });
+
+  it("accepts entries with valid wss:// wsRpc", () => {
+    const r = validateOperatorList([
+      {
+        name: "op",
+        region: "r",
+        rpc: "https://host:8545",
+        wsRpc: "wss://host:8546",
+      },
+    ]);
+    expect(r).not.toBeNull();
+    expect(r![0]!.wsRpc).toBe("wss://host:8546");
+  });
+
+  it("accepts entries WITHOUT wsRpc (backward compat)", () => {
+    const r = validateOperatorList([
+      { name: "op", region: "r", rpc: "http://host:8545" },
+    ]);
+    expect(r).not.toBeNull();
+    expect(r![0]!.wsRpc).toBeUndefined();
+  });
+
+  it("rejects entries with non-string wsRpc", () => {
+    const r = validateOperatorList([
+      { name: "op", region: "r", rpc: "http://host", wsRpc: 42 },
+    ]);
+    expect(r).toBeNull();
+  });
+
+  it("rejects entries with malformed wsRpc URL", () => {
+    const r = validateOperatorList([
+      { name: "op", region: "r", rpc: "http://host", wsRpc: "not-a-url" },
+    ]);
+    expect(r).toBeNull();
+  });
+
+  it("rejects entries with HTTP protocol in wsRpc (must be ws:// or wss://)", () => {
+    const r = validateOperatorList([
+      {
+        name: "op",
+        region: "r",
+        rpc: "http://host",
+        wsRpc: "http://host:8546",
+      },
+    ]);
+    expect(r).toBeNull();
+  });
+});

@@ -280,6 +280,12 @@ body { margin:0; background:#0a0815; color:#fff; font-family: var(--f-sans); ove
 @keyframes ext-pending-spin {
   to { transform: rotate(360deg); }
 }
+/* Phase 11 Commit 9 — InlineSpinner pulse for the LoadingState primitive.
+   Three dots fading in/out at staggered phases. */
+@keyframes ext-spinner-pulse {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
 .ext-pending-dot {
   position: absolute;
   top: -2px;

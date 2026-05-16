@@ -181,6 +181,15 @@ import {
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
 } from "./tx-mldsa.js";
+import { getWsClient, type WsStatus } from "./ws-client.js";
+import {
+  DEFAULT_ACTIVITY_KIND_ENVELOPE,
+  normaliseActivityKind,
+} from "../shared/activity-kind.js";
+import {
+  WALLET_KNOWN_INDEXER_SCHEMA_VERSION,
+  validateIndexerStatusWire,
+} from "../shared/indexer-status.js";
 import {
   readClusterDelegators,
   readClusterDirectory,
@@ -445,6 +454,19 @@ async function pauseAutoLock(): Promise<void> {
 }
 
 let openApprovalCount = 0;
+
+// Phase 11 Commit 2 — WS infrastructure module state.
+//
+// `wsNewHeadsListenerInstalled` is set on first `ws-subscribe-new-heads`
+// IPC so subsequent calls don't install a second listener (which would
+// double-write to chrome.storage). The flag resets on SW restart, which
+// is correct: the WsClient singleton also resets, so the listener
+// re-installs on the next subscribe call.
+let wsNewHeadsListenerInstalled = false;
+/** Session-storage key the SW writes when a `newHeads` event lands.
+ *  ChainStatusBanner subscribes to this key via chrome.storage.onChanged
+ *  for live-block updates without polling. */
+const STORAGE_KEY_WS_LAST_BLOCK_HEX = "mono.ws.lastBlockHex";
 
 async function approvalOpened(): Promise<void> {
   openApprovalCount++;
@@ -1620,31 +1642,12 @@ function validateRawNameLabel(input: unknown): NameLabelRecord | null {
 // narrow enough to flag a real backlog before it becomes user-visible.
 const INDEXER_LAG_STALE_THRESHOLD = 10;
 
-interface IndexerStatusValidated {
-  currentHeight: number;
-  latestHeight: number | null;
-}
-
-/** Validate the wire shape of `lyth_indexerStatus`. The chain may
- *  serialize heights as JSON numbers (the wire reality) even though
- *  the SDK's ts-rs binding labels them bigint — see activity.ts for
- *  the same rationale. `latestHeight` is optional in the binding;
- *  null when not yet observed. */
-function validateIndexerStatus(input: unknown): IndexerStatusValidated | null {
-  if (input === null || typeof input !== "object") return null;
-  const r = input as Record<string, unknown>;
-  if (typeof r.currentHeight !== "number" || !Number.isFinite(r.currentHeight)) {
-    return null;
-  }
-  let latestHeight: number | null = null;
-  if (r.latestHeight !== undefined && r.latestHeight !== null) {
-    if (typeof r.latestHeight !== "number" || !Number.isFinite(r.latestHeight)) {
-      return null;
-    }
-    latestHeight = r.latestHeight;
-  }
-  return { currentHeight: r.currentHeight, latestHeight };
-}
+// Phase 11 Commit 4 — IndexerStatus validator + WALLET_KNOWN_INDEXER_SCHEMA_VERSION
+// moved to shared/indexer-status.ts so both the SW (this file) and any
+// future popup-side direct consumer share one wire-shape contract.
+// `validateIndexerStatus` is now a re-export alias for backward
+// compatibility with the existing call site below.
+const validateIndexerStatus = validateIndexerStatusWire;
 
 /** Per-address fetch. Returns the resolved label (null = chain has no
  *  entry for this address) or a methodNotFound flag when the operator
@@ -4018,6 +4021,65 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
       return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
     }
+    case "wallet-activity-kind": {
+      // Phase 11 Commit 3 — typed AddressActivityKind probe (chain
+      // commit d77e4fc, GAP #17 closes here).
+      //
+      // The popup uses this to pick the right empty-state UX:
+      // not_found vs indexer_disabled vs pruned vs private all have
+      // distinct copy and CTAs. Previously P4.4 used a heuristic
+      // ("no rows → 'no activity yet'") which conflated all four into
+      // the same message.
+      //
+      // Graceful fallback: on transport error or chain-side method-
+      // not-found, returns DEFAULT_ACTIVITY_KIND_ENVELOPE (kind:
+      // not_found) so the popup degrades to the historical UX. The
+      // popup never sees an error from this IPC.
+      const p = message.payload as { address?: string };
+      if (typeof p?.address !== "string") {
+        return {
+          ok: true,
+          envelope: DEFAULT_ACTIVITY_KIND_ENVELOPE,
+        };
+      }
+      try {
+        const { result } = await sprintnetJsonRpc<unknown>(
+          "lyth_addressActivityKind",
+          [p.address],
+        );
+        const envelope = normaliseActivityKind(p.address, result);
+        return {
+          ok: true,
+          envelope: envelope ?? {
+            ...DEFAULT_ACTIVITY_KIND_ENVELOPE,
+            address: p.address.toLowerCase(),
+          },
+        };
+      } catch (e) {
+        const err = e as Error & { code?: number };
+        // method-not-found (-32601) → emit "indexer_disabled" rather
+        // than "not_found" so the user sees the right copy. Other
+        // transport errors get the not_found defensive default.
+        if (err.code === -32601) {
+          return {
+            ok: true,
+            envelope: {
+              schemaVersion: 0,
+              address: p.address.toLowerCase(),
+              kind: "indexer_disabled" as const,
+              retention: null,
+            },
+          };
+        }
+        return {
+          ok: true,
+          envelope: {
+            ...DEFAULT_ACTIVITY_KIND_ENVELOPE,
+            address: p.address.toLowerCase(),
+          },
+        };
+      }
+    }
     case "wallet-resolve-names": {
       // Phase 4.4 batched name resolution. The de facto naming source on
       // Sprintnet is `lyth_getAddressLabel` (per the §22.8 GAP-OPEN
@@ -4166,7 +4228,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const now = Date.now();
       const gate = await readMethodGate(STORAGE_KEY_INDEXER_STATUS_METHOD_GATE);
       if (methodGateTripped(gate, p.chainIdHex, now)) {
-        return { ok: true, stale: false, lagBlocks: null, currentHeight: null, latestHeight: null };
+        return {
+          ok: true,
+          stale: false,
+          lagBlocks: null,
+          currentHeight: null,
+          latestHeight: null,
+          schemaVersion: null,
+          schemaDrift: false,
+          retention: null,
+        };
       }
       try {
         const { result } = await sprintnetJsonRpc<unknown>("lyth_indexerStatus", []);
@@ -4180,6 +4251,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             lagBlocks: null,
             currentHeight: null,
             latestHeight: null,
+            schemaVersion: null,
+            schemaDrift: false,
+            retention: null,
           };
         }
         // Recovery: clear the gate if it was previously tripped.
@@ -4195,12 +4269,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             ? 0
             : Math.max(0, validated.latestHeight - validated.currentHeight);
         const stale = lagBlocks > INDEXER_LAG_STALE_THRESHOLD;
+        // Phase 11 Commit 4 — schema drift detection. Chain reports a
+        // higher schemaVersion than the wallet build was tested against;
+        // surface a hint so users know their parsers may miss new fields.
+        // Doesn't break anything — strict additive parsers (which the
+        // wallet uses) silently drop unknown fields.
+        const schemaDrift =
+          validated.schemaVersion > WALLET_KNOWN_INDEXER_SCHEMA_VERSION;
         return {
           ok: true,
           stale,
           lagBlocks,
           currentHeight: validated.currentHeight,
           latestHeight: validated.latestHeight,
+          schemaVersion: validated.schemaVersion,
+          schemaDrift,
+          retention: validated.retention,
         };
       } catch (e) {
         const err = e as Error & { code?: number };
@@ -4217,6 +4301,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           lagBlocks: null,
           currentHeight: null,
           latestHeight: null,
+          schemaVersion: null,
+          schemaDrift: false,
+          retention: null,
         };
       }
     }
@@ -4336,6 +4423,55 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         hex += seed[i]!.toString(16).padStart(2, "0");
       }
       return { ok: true, seedHex: hex };
+    }
+    case "ws-status": {
+      // Phase 11 Commit 2 — WS-client status probe. The popup uses this
+      // to decide whether to keep its existing polling cadence (default)
+      // or drop to event-driven updates (when WS reports "connected").
+      // No side effects: doesn't subscribe, doesn't open a connection.
+      // Just reports what the SW-singleton currently sees.
+      const client = getWsClient();
+      const status: WsStatus = client.status;
+      return { ok: true, status };
+    }
+    case "ws-subscribe-new-heads": {
+      // Phase 11 Commit 2 — fire-and-forget subscribe to the chain's
+      // `newHeads` channel. The SW-singleton WsClient manages one
+      // connection per SW lifetime; subsequent calls share it.
+      //
+      // Side effect: when a new head arrives, the SW writes the latest
+      // blockHex to `chrome.storage.session` under `mono.ws.lastBlockHex`.
+      // The popup's ChainStatusBanner subscribes to that key via
+      // chrome.storage.onChanged for live updates without polling.
+      //
+      // Graceful degradation: if WS unavailable, the IPC returns
+      // `{ ok: true, status: "unavailable" }` and the popup keeps its
+      // existing 8 s blockNumber poll active.
+      const client = getWsClient();
+      // First call: install the storage-write listener exactly once
+      // per SW boot via the `wsNewHeadsListenerInstalled` flag.
+      if (!wsNewHeadsListenerInstalled) {
+        wsNewHeadsListenerInstalled = true;
+        client.subscribe("newHeads", (params) => {
+          // Chain emits `{ number: "0x...", hash, parent, ... }`. The
+          // wallet only cares about the height for the live banner.
+          if (
+            typeof params === "object" &&
+            params !== null &&
+            "number" in (params as Record<string, unknown>)
+          ) {
+            const number = (params as { number?: unknown }).number;
+            if (typeof number === "string") {
+              chrome.storage.session
+                .set({ [STORAGE_KEY_WS_LAST_BLOCK_HEX]: number })
+                .catch(() => {
+                  // session write failure is non-load-bearing
+                });
+            }
+          }
+        });
+      }
+      return { ok: true, status: client.status };
     }
     case "wallet-send-tx": {
       const p = message.payload as {
