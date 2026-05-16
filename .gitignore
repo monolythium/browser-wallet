@@ -81,3 +81,6 @@ amo-credentials.json
  
 # Local pnpm build approval (per-machine, not source-controlled) 
 pnpm-workspace.yaml 
+
+# Claude Code IDE session artifacts
+.claude/
