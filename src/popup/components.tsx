@@ -909,28 +909,77 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         </div>
 
         {/* Tabs */}
+        {/* Phase 11 Commit 10 — ARIA tablist + tab + tabpanel pattern.
+            Screen readers announce "Tab Assets, 1 of 3, selected" when
+            focused; keyboard arrow navigation between tabs comes for
+            free from native browser button behaviour + the role hint. */}
         <div className="ext-card">
-          <div className="ext-tabs">
-            <button className={tab === "assets" ? "on" : ""} onClick={() => setTab("assets")}>Assets</button>
-            <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
-            <button className={tab === "nfts" ? "on" : ""} onClick={() => setTab("nfts")}>NFTs</button>
+          <div className="ext-tabs" role="tablist" aria-label="Home content">
+            <button
+              role="tab"
+              aria-selected={tab === "assets"}
+              aria-controls="ext-tabpanel-assets"
+              id="ext-tab-assets"
+              className={tab === "assets" ? "on" : ""}
+              onClick={() => setTab("assets")}
+            >
+              Assets
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === "activity"}
+              aria-controls="ext-tabpanel-activity"
+              id="ext-tab-activity"
+              className={tab === "activity" ? "on" : ""}
+              onClick={() => setTab("activity")}
+            >
+              Activity
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === "nfts"}
+              aria-controls="ext-tabpanel-nfts"
+              id="ext-tab-nfts"
+              className={tab === "nfts" ? "on" : ""}
+              onClick={() => setTab("nfts")}
+            >
+              NFTs
+            </button>
           </div>
           {tab === "assets" && (
-            <AssetList account={account} network={network} indexer={indexer} />
+            <div
+              role="tabpanel"
+              id="ext-tabpanel-assets"
+              aria-labelledby="ext-tab-assets"
+            >
+              <AssetList account={account} network={network} indexer={indexer} />
+            </div>
           )}
           {tab === "activity" && (
-            <ActivityList
-              addr={account.addr.startsWith("0x") ? account.addr : null}
-              chainIdHex={network.chainId}
-            />
+            <div
+              role="tabpanel"
+              id="ext-tabpanel-activity"
+              aria-labelledby="ext-tab-activity"
+            >
+              <ActivityList
+                addr={account.addr.startsWith("0x") ? account.addr : null}
+                chainIdHex={network.chainId}
+              />
+            </div>
           )}
           {tab === "nfts" && (
-            <NftTab
-              ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
-              chainId={network.chainIdNum}
-              chainIdHex={network.chainId}
-              {...(onOpenSendNft ? { onOpenSendNft } : {})}
-            />
+            <div
+              role="tabpanel"
+              id="ext-tabpanel-nfts"
+              aria-labelledby="ext-tab-nfts"
+            >
+              <NftTab
+                ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
+                chainId={network.chainIdNum}
+                chainIdHex={network.chainId}
+                {...(onOpenSendNft ? { onOpenSendNft } : {})}
+              />
+            </div>
           )}
         </div>
 
