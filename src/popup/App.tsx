@@ -27,6 +27,9 @@ import { Receive } from "./pages/Receive";
 import { Send } from "./pages/Send";
 import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
+import { Security } from "./pages/Security";
+import { Features } from "./pages/Features";
+import { OnboardingHintBar } from "./components/OnboardingHintBar";
 import { Stake } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -104,7 +107,9 @@ type Screen =
   | "approval"
   | "connected-sites"
   | "multisig-pending"
-  | "multisig-governance";
+  | "multisig-governance"
+  | "security"
+  | "features";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -675,6 +680,15 @@ export default function App() {
             setScreen("send-nft");
           }}
           onOpenOnboard={() => setScreen("welcome")}
+          topSlot={
+            activeVaultSummary ? (
+              <OnboardingHintBar
+                vaultId={activeVaultSummary.id}
+                onOpenSecurity={() => setScreen("security")}
+                onOpenFeatures={() => setScreen("features")}
+              />
+            ) : undefined
+          }
         />
       )}
 
@@ -764,6 +778,12 @@ export default function App() {
           onOpenOperators={() => setScreen("operators")}
           onOpenAbout={() => setScreen("about")}
           onOpenDelegations={() => setScreen("delegations")}
+          {...(activeVaultSummary
+            ? {
+                onOpenSecurity: () => setScreen("security"),
+                onOpenFeatures: () => setScreen("features"),
+              }
+            : {})}
           {...(activeVaultSummary?.kind === "multisig"
             ? {
                 multisig: {
@@ -776,6 +796,18 @@ export default function App() {
               }
             : {})}
         />
+      )}
+
+      {screen === "security" && activeVaultSummary && (
+        <Security
+          onBack={() => setScreen("settings")}
+          vaultId={activeVaultSummary.id}
+          vaultAddress={activeVaultSummary.addr}
+        />
+      )}
+
+      {screen === "features" && (
+        <Features onBack={() => setScreen("settings")} />
       )}
 
       {screen === "operators" && (
@@ -793,6 +825,15 @@ export default function App() {
                   threshold: activeVaultSummary.threshold,
                   pendingCount: activeVaultSummary.pendingCount,
                   onOpenGovernance: () => setScreen("multisig-governance"),
+                },
+              }
+            : {})}
+          {...(activeVaultSummary
+            ? {
+                phase9: {
+                  vaultId: activeVaultSummary.id,
+                  onOpenSecurity: () => setScreen("security"),
+                  onOpenFeatures: () => setScreen("features"),
                 },
               }
             : {})}
@@ -835,6 +876,8 @@ export default function App() {
           onBack={() => setScreen("home")}
           {...(activeVaultSummary?.kind === "multisig"
             ? { multisigVaultId: activeVaultSummary.id }
+            : activeVaultSummary !== null
+            ? { singleVaultId: activeVaultSummary.id }
             : {})}
         />
       )}

@@ -32,6 +32,13 @@ interface RewardCardProps {
   /** Disable the claim button while a previous claim is in flight or
    *  the wallet has zero accrued rewards. */
   claimDisabled: boolean;
+  /** Phase 9 — when `false`, hide the per-cluster breakdown +
+   *  effective-APR annotations ("advanced reward analytics" per
+   *  §28.5 Q29's TRADING_INTERFACE flag). The total reward + claim
+   *  button stay visible. Default `true` so existing call sites
+   *  that haven't been retrofitted with the feature flag render as
+   *  before. */
+  showAdvancedAnalytics?: boolean;
 }
 
 export function RewardCard({
@@ -40,6 +47,7 @@ export function RewardCard({
   clusters,
   onClaim,
   claimDisabled,
+  showAdvancedAnalytics = true,
 }: RewardCardProps) {
   const clusterById = useMemo(() => {
     const m = new Map<number, ClusterDirectoryEntry>();
@@ -123,8 +131,10 @@ export function RewardCard({
         </span>
       </div>
 
-      {/* Per-cluster breakdown */}
-      {rewards.rows.length > 0 && (
+      {/* Per-cluster breakdown — gated behind TRADING_INTERFACE
+          (§28.5 Q29). When the flag is off, only the total + claim
+          button stay visible. */}
+      {showAdvancedAnalytics && rewards.rows.length > 0 && (
         <div
           style={{
             marginTop: 10,

@@ -9,10 +9,18 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import {
   bgOperatorsHealth,
+  bgPasskeyGetState,
   bgRuntimeProvenance,
+  bgTwoTierGetState,
+  type BgPasskeyState,
   type OperatorHealthRow,
   type RuntimeProvenanceView,
 } from "../bg";
+import {
+  FEATURE_FLAGS,
+  FEATURE_META,
+  type TwoTierState,
+} from "../../shared/two-tier-features";
 import {
   EXTERNAL_LINKS,
   SDK_COMMIT_SHORT,
@@ -35,6 +43,14 @@ interface AboutProps {
     pendingCount: number;
     onOpenGovernance: () => void;
   };
+  /** Phase 9 — when set, surfaces a §28.5 Q29+Q30+Q31 status card
+   *  showing how many passkeys are registered, the policy state, and
+   *  which two-tier features are active. */
+  phase9?: {
+    vaultId: string;
+    onOpenSecurity: () => void;
+    onOpenFeatures: () => void;
+  };
 }
 
 function readWalletVersion(): string {
@@ -45,12 +61,14 @@ function readWalletVersion(): string {
   }
 }
 
-export function About({ onBack, multisig }: AboutProps) {
+export function About({ onBack, multisig, phase9 }: AboutProps) {
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [provenance, setProvenance] = useState<RuntimeProvenanceView | null>(
     null,
   );
+  const [passkeyState, setPasskeyState] = useState<BgPasskeyState | null>(null);
+  const [twoTierState, setTwoTierState] = useState<TwoTierState | null>(null);
   const walletVersion = readWalletVersion();
 
   useEffect(() => {
@@ -71,10 +89,21 @@ export function About({ onBack, multisig }: AboutProps) {
       if (cancelled) return;
       if (r.ok) setProvenance(r.provenance);
     })();
+    if (phase9 !== undefined) {
+      void (async () => {
+        const [pk, tt] = await Promise.all([
+          bgPasskeyGetState(phase9.vaultId),
+          bgTwoTierGetState(),
+        ]);
+        if (cancelled) return;
+        if (pk.ok) setPasskeyState(pk.state);
+        if (tt.ok) setTwoTierState(tt.state);
+      })();
+    }
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [phase9]);
 
   const healthyCount = operators?.filter((o) => o.ok).length ?? 0;
   const trustedCount = operators?.filter((o) => o.trustedGenesis).length ?? 0;
@@ -201,6 +230,147 @@ export function About({ onBack, multisig }: AboutProps) {
               }}
             >
               <span>Signers + governance</span>
+              <Icon name="chev" size={12} />
+            </button>
+          </div>
+        )}
+
+        {phase9 && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Passkey + features</h3>
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                marginBottom: 10,
+              }}
+            >
+              §28.5 Q29+Q30+Q31 — wallet-side passkey policy + two-tier
+              UX. Passkey enforcement is wallet-only today; chain
+              precompile is a future phase.
+            </div>
+
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-400)",
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                marginBottom: 6,
+              }}
+            >
+              Security
+            </div>
+            <KvList
+              rows={[
+                {
+                  k: "Passkeys",
+                  v: passkeyState
+                    ? `${passkeyState.credentials.length} registered`
+                    : "—",
+                },
+                {
+                  k: "Policy",
+                  v: passkeyState
+                    ? passkeyState.policy.enabled
+                      ? `${passkeyState.policy.mode} · enabled`
+                      : "disabled"
+                    : "—",
+                },
+              ]}
+            />
+            <button
+              onClick={phase9.onOpenSecurity}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.04)",
+                color: "var(--fg-100)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <span>Open Security</span>
+              <Icon name="chev" size={12} />
+            </button>
+
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-400)",
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                marginBottom: 6,
+                marginTop: 14,
+              }}
+            >
+              Active features
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {twoTierState ? (
+                FEATURE_FLAGS.filter((f) => twoTierState[f].enabled).length === 0 ? (
+                  <span style={{ fontSize: 11, color: "var(--fg-400)" }}>
+                    None enabled — wallet shows the minimal surface.
+                  </span>
+                ) : (
+                  FEATURE_FLAGS.filter((f) => twoTierState[f].enabled).map(
+                    (f) => (
+                      <span
+                        key={f}
+                        style={{
+                          padding: "3px 8px",
+                          borderRadius: 6,
+                          background: "rgba(244,201,122,0.08)",
+                          border: "1px solid rgba(244,201,122,0.4)",
+                          color: "var(--gold)",
+                          fontFamily: "var(--f-mono)",
+                          fontSize: 10.5,
+                        }}
+                      >
+                        {FEATURE_META[f].label}
+                      </span>
+                    ),
+                  )
+                )
+              ) : (
+                <span style={{ fontSize: 11, color: "var(--fg-400)" }}>—</span>
+              )}
+            </div>
+            <button
+              onClick={phase9.onOpenFeatures}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.04)",
+                color: "var(--fg-100)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <span>Open Features</span>
               <Icon name="chev" size={12} />
             </button>
           </div>

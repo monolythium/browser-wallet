@@ -78,6 +78,20 @@ import {
   validateSignerInput,
   validateThreshold,
 } from "../shared/multisig.js";
+import type {
+  PasskeyCredential,
+  PasskeyPolicy,
+  VaultPasskeyState,
+} from "../shared/passkey.js";
+import {
+  DEFAULT_PASSKEY_DAILY_CAP_WEI,
+  DEFAULT_PASSKEY_LIMIT_WEI,
+  appendCredential,
+  defaultPasskeyPolicy,
+  emptyVaultPasskeyState,
+  removeCredential as removePasskeyCredential,
+  setPolicy as setPasskeyPolicy,
+} from "../shared/passkey.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -208,6 +222,14 @@ interface VaultRecordV4 {
   /** M-of-N committee + proposal queues for `kind === "multisig"`.
    *  Must be present on multisig records, absent on single records. */
   multisig?: MultisigVaultMeta;
+  /** Phase 9 — optional per-vault passkey state. Absent on legacy
+   *  vaults and on vaults that haven't run passkey registration; read
+   *  paths treat absence as "no passkey configured" (policy disabled,
+   *  no credentials). The actual WebAuthn key material lives in the
+   *  browser's authenticator; the wallet only stores credential IDs +
+   *  user-edited names + policy thresholds. See `shared/passkey.ts`
+   *  for the rationale and the on-chain GAP analysis. */
+  passkey?: VaultPasskeyState;
 }
 
 /** Multi-vault container. Stored under
@@ -454,16 +476,47 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
     });
   });
   if (raw === null) return null;
-  if (isVaultsContainerV4(raw)) return raw;
-  throw new Error("v4 vaults container is unrecognised — refusing to read");
+  if (!isVaultsContainerV4(raw)) {
+    throw new Error("v4 vaults container is unrecognised — refusing to read");
+  }
+  // Phase 9 hotfix: normalise the per-vault passkey state back to the
+  // in-memory (bigint-typed) shape. On disk the passkey policy is
+  // stored as decimal strings (see `passkeyStateForStorage`); rest of
+  // the code expects bigints. `clonePasskeyState` tolerates either
+  // shape and fills in defaults when fields are missing entirely,
+  // which also covers the (real-Chrome-observed) case where bigints
+  // round-tripped through `chrome.storage.local.set` and came back
+  // as `undefined`.
+  return {
+    ...raw,
+    vaults: raw.vaults.map((v) =>
+      v.passkey ? { ...v, passkey: clonePasskeyState(v.passkey) } : v,
+    ),
+  };
 }
 
 async function saveVaultsContainerV4(
   container: VaultsContainerV4,
 ): Promise<void> {
+  // Phase 9 hotfix: chrome.storage.local doesn't reliably preserve
+  // BigInt values across the persistence boundary — on some Chrome
+  // versions the bigint fields get stripped silently, leaving e.g.
+  // `policy.limitWei: undefined` on the next read, which then crashes
+  // any downstream `.toString()` call. Project the per-vault passkey
+  // state down to a JSON-safe shape (bigints → decimal strings) just
+  // before the actual `set`. The in-memory `container` is unchanged
+  // so callers that hold a reference still see the rich shape.
+  const persistable = {
+    ...container,
+    vaults: container.vaults.map((v) =>
+      v.passkey
+        ? { ...v, passkey: passkeyStateForStorage(v.passkey) }
+        : v,
+    ),
+  };
   return new Promise((resolve) => {
     chrome.storage.local.set(
-      { [VAULTS_CONTAINER_KEY_V4]: container },
+      { [VAULTS_CONTAINER_KEY_V4]: persistable },
       () => resolve(),
     );
   });
@@ -1005,6 +1058,167 @@ function cloneGovernanceAction(
     };
   }
   return { ...a };
+}
+
+// ---- Passkey per-vault state (Phase 9) ----
+
+/** Read a vault's passkey state. Returns an empty (disabled, no
+ *  credentials) state when the vault is unknown or has never
+ *  configured passkeys — caller never needs a presence check. */
+export async function readPasskeyStateV4(
+  vaultId: string,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return emptyVaultPasskeyState();
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.passkey) return emptyVaultPasskeyState();
+  return clonePasskeyState(v.passkey);
+}
+
+/** Append a fresh credential to the targeted vault. Throws on
+ *  unknown id, on cap-reached, or on duplicate credentialId. */
+export async function addPasskeyCredentialV4(
+  vaultId: string,
+  cred: PasskeyCredential,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const current = v.passkey ?? emptyVaultPasskeyState();
+  const next = appendCredential(current, cred);
+  v.passkey = clonePasskeyState(next);
+  await saveVaultsContainerV4(container);
+  return clonePasskeyState(next);
+}
+
+/** Remove a credential by id. No-op if absent. Auto-disables the
+ *  policy when the last credential is removed (shared helper handles
+ *  that). */
+export async function removePasskeyCredentialV4(
+  vaultId: string,
+  credentialId: string,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const current = v.passkey ?? emptyVaultPasskeyState();
+  const next = removePasskeyCredential(current, credentialId);
+  v.passkey = clonePasskeyState(next);
+  await saveVaultsContainerV4(container);
+  return clonePasskeyState(next);
+}
+
+/** Replace the policy. Validation runs inside `setPolicy` — bad input
+ *  throws without persisting. */
+export async function setPasskeyPolicyV4(
+  vaultId: string,
+  policy: PasskeyPolicy,
+): Promise<VaultPasskeyState> {
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  const current = v.passkey ?? emptyVaultPasskeyState();
+  const next = setPasskeyPolicy(current, policy);
+  v.passkey = clonePasskeyState(next);
+  await saveVaultsContainerV4(container);
+  return clonePasskeyState(next);
+}
+
+/** Defensive copy so callers can't mutate stored state by holding a
+ *  reference to the returned record.
+ *
+ *  Phase 9 hotfix: also tolerates the JSON-safe form policy may be in
+ *  after a chrome.storage round-trip. `BigInt` values do not survive
+ *  the chrome.storage persistence boundary reliably across all Chrome
+ *  versions — some strip the field silently, leaving `policy.limitWei`
+ *  / `policy.dailyCapWei` as `undefined`. This clone normalises both
+ *  the in-memory (bigint-typed) and on-disk (string- or missing-typed)
+ *  shapes back into a well-formed in-memory record, falling back to
+ *  the defaults from `defaultPasskeyPolicy()` whenever a field can't
+ *  be coerced. */
+function clonePasskeyState(s: VaultPasskeyState | StoredPasskeyState | unknown): VaultPasskeyState {
+  const safe = (s ?? emptyVaultPasskeyState()) as Partial<VaultPasskeyState> &
+    Partial<StoredPasskeyState>;
+  const credentials = Array.isArray(safe.credentials)
+    ? safe.credentials.map((c) => ({ ...c }))
+    : [];
+  return {
+    credentials,
+    policy: clonePasskeyPolicy(safe.policy),
+  };
+}
+
+/** JSON-safe shape that's actually written to chrome.storage. BigInt
+ *  fields collapse to decimal strings; the rest of the policy is
+ *  plain JSON. Used only at the persistence boundary inside
+ *  `saveVaultsContainerV4` + on load. */
+interface StoredPasskeyPolicy {
+  enabled: boolean;
+  mode: "per-tx" | "daily";
+  limitWei: string;
+  dailyCapWei: string;
+}
+
+interface StoredPasskeyState {
+  credentials: PasskeyCredential[];
+  policy: StoredPasskeyPolicy;
+}
+
+/** Normalise an arbitrary `policy` blob back into a `PasskeyPolicy`.
+ *  Accepts either the in-memory (bigint-typed) or the on-disk
+ *  (string- or missing-typed) shape; coerces by way of
+ *  `toBigIntOrDefault`. */
+function clonePasskeyPolicy(raw: unknown): PasskeyPolicy {
+  const def = defaultPasskeyPolicy();
+  if (!raw || typeof raw !== "object") return def;
+  const r = raw as Record<string, unknown>;
+  return {
+    enabled: typeof r.enabled === "boolean" ? r.enabled : def.enabled,
+    mode: r.mode === "daily" ? "daily" : "per-tx",
+    limitWei: toBigIntOrDefault(r.limitWei, DEFAULT_PASSKEY_LIMIT_WEI),
+    dailyCapWei: toBigIntOrDefault(r.dailyCapWei, DEFAULT_PASSKEY_DAILY_CAP_WEI),
+  };
+}
+
+/** Coerce a value into a `bigint`, falling back to `fallback` when
+ *  the input is missing or unparseable. Accepts: bigint (passthrough),
+ *  string (decimal or hex), number (truncated via `BigInt(Math.floor(...))`).
+ *  Returns the fallback on everything else. */
+function toBigIntOrDefault(v: unknown, fallback: bigint): bigint {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "string" && v.length > 0) {
+    try {
+      return BigInt(v);
+    } catch {
+      return fallback;
+    }
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    try {
+      return BigInt(Math.floor(v));
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+/** Project a `VaultPasskeyState` down to the JSON-safe shape that's
+ *  written to chrome.storage. BigInt → decimal string; everything
+ *  else is preserved. */
+function passkeyStateForStorage(s: VaultPasskeyState): StoredPasskeyState {
+  return {
+    credentials: s.credentials.map((c) => ({ ...c })),
+    policy: {
+      enabled: s.policy.enabled,
+      mode: s.policy.mode,
+      limitWei: s.policy.limitWei.toString(),
+      dailyCapWei: s.policy.dailyCapWei.toString(),
+    },
+  };
 }
 
 /** Shared body for {@link addVaultFreshV4} + {@link addVaultImportV4} +

@@ -919,3 +919,350 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
     180_000,
   );
 });
+
+describe("keystore-mldsa passkey state (Phase 9 Commit 1)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  function fakeCred(
+    i: number,
+    kind: "platform" | "cross-platform" = "platform",
+  ) {
+    return {
+      credentialId: `cred-${i}`,
+      name: `Cred ${i}`,
+      kind,
+      createdAt: 1_000_000 + i,
+    };
+  }
+
+  it(
+    "readPasskeyStateV4 returns an empty state for new vaults",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-empty-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const state = await ks.readPasskeyStateV4(list[0]!.id);
+      expect(state.credentials).toEqual([]);
+      expect(state.policy.enabled).toBe(false);
+    },
+    120_000,
+  );
+
+  it(
+    "addPasskeyCredentialV4 + readPasskeyStateV4 round-trip",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-add-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      await ks.addPasskeyCredentialV4(id, fakeCred(1));
+      await ks.addPasskeyCredentialV4(id, fakeCred(2, "cross-platform"));
+      const state = await ks.readPasskeyStateV4(id);
+      expect(state.credentials.map((c) => c.credentialId)).toEqual([
+        "cred-1",
+        "cred-2",
+      ]);
+      expect(state.credentials[1]!.kind).toBe("cross-platform");
+    },
+    120_000,
+  );
+
+  it(
+    "removePasskeyCredentialV4 disables the policy when the last cred goes",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const { defaultPasskeyPolicy } = await import("../shared/passkey.js");
+      const password = "pk-remove-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      await ks.addPasskeyCredentialV4(id, fakeCred(1));
+      await ks.setPasskeyPolicyV4(id, { ...defaultPasskeyPolicy(), enabled: true });
+      const before = await ks.readPasskeyStateV4(id);
+      expect(before.policy.enabled).toBe(true);
+
+      await ks.removePasskeyCredentialV4(id, "cred-1");
+      const after = await ks.readPasskeyStateV4(id);
+      expect(after.credentials).toEqual([]);
+      expect(after.policy.enabled).toBe(false);
+    },
+    120_000,
+  );
+
+  it(
+    "setPasskeyPolicyV4 rejects an invalid policy without persisting",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const { defaultPasskeyPolicy } = await import("../shared/passkey.js");
+      const password = "pk-bad-policy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      // limitWei=0 trips the floor check.
+      await expect(
+        ks.setPasskeyPolicyV4(id, { ...defaultPasskeyPolicy(), limitWei: 0n }),
+      ).rejects.toThrow(/invalid policy/);
+
+      const state = await ks.readPasskeyStateV4(id);
+      // Policy stays at the default (disabled) — nothing persisted.
+      expect(state.policy).toEqual(defaultPasskeyPolicy());
+    },
+    120_000,
+  );
+
+  it(
+    "passkey state survives a fresh module import",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      const password = "pk-persist-password";
+      await ks1.createVaultFromNewMnemonic(password);
+      await ks1.unlockContainerV4(password);
+      const list1 = (await ks1.listVaultsV4())!;
+      const id = list1[0]!.id;
+      await ks1.addPasskeyCredentialV4(id, fakeCred(7));
+
+      // Drop the module cache and re-import; the credential should
+      // come back unchanged from chrome.storage.local.
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const state = await ks2.readPasskeyStateV4(id);
+      expect(state.credentials.length).toBe(1);
+      expect(state.credentials[0]!.credentialId).toBe("cred-7");
+    },
+    180_000,
+  );
+});
+
+describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
+  // The base `installChromeStub` keeps stored objects as live JS
+  // references, so BigInt values survive a set / get round-trip in
+  // the test environment but DO NOT in real Chrome (some Chrome
+  // versions strip BigInt fields silently from chrome.storage.local).
+  // These tests pin the hotfix that converts BigInt → decimal-string
+  // on write and parses back on read so the bug is captured in CI.
+
+  /** Storage stub that JSON-serialises every value on `set` and
+   *  parses on `get` — closest in-process approximation of the real
+   *  chrome.storage failure mode we hit on Windows Hello. */
+  function installJsonStorageStub(): { storage: StorageMap } {
+    const storage: StorageMap = {};
+    (globalThis as { chrome?: unknown }).chrome = {
+      storage: {
+        local: {
+          get: (
+            keys: string[],
+            cb: (res: Record<string, unknown>) => void,
+          ) => {
+            const out: Record<string, unknown> = {};
+            for (const k of keys) {
+              if (k in storage) {
+                const raw = storage[k];
+                if (typeof raw === "string") {
+                  try {
+                    out[k] = JSON.parse(raw);
+                  } catch {
+                    out[k] = raw;
+                  }
+                } else {
+                  out[k] = raw;
+                }
+              }
+            }
+            queueMicrotask(() => cb(out));
+          },
+          set: (entries: Record<string, unknown>, cb: () => void) => {
+            for (const [k, v] of Object.entries(entries)) {
+              // Mimic the real chrome.storage write path. If `v`
+              // contains BigInt values that aren't serialised first,
+              // this would throw — which is exactly the bug we are
+              // pinning against. The hotfix converts to strings BEFORE
+              // calling set, so this branch never sees a BigInt.
+              storage[k] = JSON.stringify(v);
+            }
+            queueMicrotask(() => cb());
+          },
+          remove: (keys: string[] | string, cb?: () => void) => {
+            const arr = Array.isArray(keys) ? keys : [keys];
+            for (const k of arr) delete storage[k];
+            if (cb) queueMicrotask(() => cb());
+          },
+        },
+      },
+    };
+    return { storage };
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  function fakeCred(i: number) {
+    return {
+      credentialId: `cred-${i}`,
+      name: `Cred ${i}`,
+      kind: "platform" as const,
+      createdAt: 1_000_000 + i,
+    };
+  }
+
+  it(
+    "BigInt policy survives a JSON-serialising storage round-trip (real Chrome)",
+    async () => {
+      installJsonStorageStub();
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-bigint-roundtrip-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      // This is the operation that crashed on Windows Hello before
+      // the hotfix — the policy contains BigInt fields by default,
+      // and the storage stub here serialises them through JSON
+      // (which would historically have thrown / stripped the field).
+      const after = await ks.addPasskeyCredentialV4(id, fakeCred(1));
+      expect(after.credentials.length).toBe(1);
+      // The policy bigints came back through the round-trip intact.
+      expect(typeof after.policy.limitWei).toBe("bigint");
+      expect(typeof after.policy.dailyCapWei).toBe("bigint");
+      expect(after.policy.limitWei).toBe(100_000_000_000_000_000_000n);
+
+      // Drop the module + re-import; the SAME bigint values come
+      // back after a fresh load from the JSON-stringified storage.
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const reread = await ks2.readPasskeyStateV4(id);
+      expect(reread.credentials[0]!.credentialId).toBe("cred-1");
+      expect(typeof reread.policy.limitWei).toBe("bigint");
+      expect(reread.policy.limitWei).toBe(100_000_000_000_000_000_000n);
+    },
+    180_000,
+  );
+
+  it(
+    "stored policy with missing BigInt fields falls back to defaults",
+    async () => {
+      installJsonStorageStub();
+      const ks = await import("./keystore-mldsa.js");
+      const { DEFAULT_PASSKEY_LIMIT_WEI, DEFAULT_PASSKEY_DAILY_CAP_WEI } =
+        await import("../shared/passkey.js");
+      const password = "pk-corrupt-policy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      // Register a credential normally so the vault has a passkey
+      // record on disk.
+      await ks.addPasskeyCredentialV4(id, fakeCred(1));
+
+      // Simulate the real-Chrome corruption: corrupt the stored
+      // container so policy.limitWei / dailyCapWei are missing
+      // entirely (some Chrome versions silently strip BigInt fields
+      // on set). Hand-edit the JSON-serialised storage directly.
+      // Array-form key — the stub iterates `keys` with `for-of` and
+      // would walk a bare string character-by-character.
+      const got = await new Promise<Record<string, unknown>>((resolve) => {
+        chrome.storage.local.get(["mono.vaults.v4"], (g) => resolve(g));
+      });
+      const parsed = got["mono.vaults.v4"] as {
+        vaults: { passkey?: { policy: Record<string, unknown> } }[];
+      };
+      // Strip the bigint fields from the persisted policy to mimic
+      // the production failure mode.
+      delete parsed.vaults[0]!.passkey!.policy.limitWei;
+      delete parsed.vaults[0]!.passkey!.policy.dailyCapWei;
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { "mono.vaults.v4": parsed },
+          () => resolve(),
+        );
+      });
+
+      // Fresh import — the load path normalises through
+      // clonePasskeyState, filling in defaults for missing fields.
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const state = await ks2.readPasskeyStateV4(id);
+      // Credential survives.
+      expect(state.credentials.length).toBe(1);
+      // Missing policy fields healed to defaults — and crucially
+      // they are bigints, so any downstream `.toString()` works.
+      expect(state.policy.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_WEI);
+      expect(state.policy.dailyCapWei).toBe(DEFAULT_PASSKEY_DAILY_CAP_WEI);
+    },
+    180_000,
+  );
+
+  it(
+    "registration with a fully-missing on-disk passkey policy still succeeds",
+    async () => {
+      installJsonStorageStub();
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-no-policy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      // Hand-write a vault record with `passkey: { credentials: [...], policy: {} }`
+      // — i.e. policy object exists but every field has been
+      // stripped. This is the worst-case shape we'd see after a
+      // production BigInt-strip incident. Array-form key per the
+      // stub contract.
+      const got = await new Promise<Record<string, unknown>>((resolve) => {
+        chrome.storage.local.get(["mono.vaults.v4"], (g) => resolve(g));
+      });
+      const container = got["mono.vaults.v4"] as {
+        vaults: { id: string; passkey?: unknown }[];
+      };
+      container.vaults[0]!.passkey = {
+        credentials: [],
+        policy: {},
+      };
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { "mono.vaults.v4": container },
+          () => resolve(),
+        );
+      });
+
+      // Now attempt a registration — this is the actual
+      // Windows-Hello-on-fresh-Phase-9-install failure scenario.
+      // Before the hotfix this returned the dreaded
+      // "Cannot read properties of undefined (reading 'toString')"
+      // because the in-memory policy retained the `{}` shape with
+      // no bigint fields.
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const after = await ks2.addPasskeyCredentialV4(id, fakeCred(7));
+      expect(after.credentials[0]!.credentialId).toBe("cred-7");
+      expect(typeof after.policy.limitWei).toBe("bigint");
+    },
+    180_000,
+  );
+});

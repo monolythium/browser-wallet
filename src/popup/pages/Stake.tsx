@@ -23,6 +23,7 @@ import { RedelegateForm } from "../components/RedelegateForm";
 import { RewardCard } from "../components/RewardCard";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgStakingAutovoteSeed,
   bgStakingClusterDirectory,
@@ -132,6 +133,11 @@ export function Stake({
   const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
+
+  // Phase 9 — §28.5 Q29 TRADING_INTERFACE flag gates the advanced
+  // reward analytics surface (per-cluster breakdown inside RewardCard).
+  // Default OFF → users see only the total + claim button.
+  const tradingInterfaceOn = useFeature("TRADING_INTERFACE");
 
   // Selection + form state.
   const [entryMode, setEntryMode] = useState<EntryMode>("manual");
@@ -455,6 +461,7 @@ export function Stake({
                 clusters={clusters}
                 onClaim={() => void handleClaim()}
                 claimDisabled={false}
+                showAdvancedAnalytics={tradingInterfaceOn}
               />
             )}
 
