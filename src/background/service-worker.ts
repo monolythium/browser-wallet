@@ -201,6 +201,7 @@ import {
   readRedemptionQueue,
 } from "./staking-client.js";
 import { previewTransactionHooks } from "./preview-hooks-client.js";
+import { readSigningActivity } from "./signing-activity-client.js";
 import { weiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
@@ -4345,6 +4346,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (typeof p.valueWeiHex === "string") input.valueWeiHex = p.valueWeiHex;
       if (typeof p.data === "string") input.data = p.data;
       const outcome = await previewTransactionHooks(input);
+      return { ok: true, outcome };
+    }
+    case "chain-signing-activity": {
+      // Phase 11.5 Commit 3 — call lyth_signingActivity (MD-CORE-0004)
+      // for a sampled authority. Returns ChainOutcome<OperatorSigningActivity>.
+      // Defaults: authorityIndex 0, limit 20. Falls back to mock-not-deployed
+      // on -32601 so older operators don't break the Operators page.
+      const p = message.payload as
+        | { authorityIndex?: number; limit?: number }
+        | undefined;
+      const args: { authorityIndex?: number; limit?: number } = {};
+      if (typeof p?.authorityIndex === "number") args.authorityIndex = p.authorityIndex;
+      if (typeof p?.limit === "number") args.limit = p.limit;
+      const outcome = await readSigningActivity(args);
       return { ok: true, outcome };
     }
     // ─────────────────────────────────────────────────────────────────

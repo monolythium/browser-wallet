@@ -584,6 +584,35 @@ export type PreviewTransactionHooksOutcome =
     import("../shared/audit-followup-types.js").TransactionHookPreview
   >;
 
+/** Phase 11.5 Commit 3 — chain-wide signing-activity sample. Calls
+ *  `lyth_signingActivity` (mono-core @dd05511 / MD-CORE-0004) for a
+ *  single authority slot (default 0) over a small window (default 20
+ *  entries). Returns a `ChainOutcome<OperatorSigningActivity>` whose
+ *  `kind` the Operators page branches on:
+ *    - "live" → render the signing-health card with real data
+ *    - any mock-* outcome → hide the card (no UI regression on older
+ *      operators)
+ *
+ *  This is intentionally NOT per-RPC-endpoint attribution. The chain
+ *  method is keyed on consensus authority index; mapping the wallet's
+ *  RPC operators back to BLS validator slots would require chaining
+ *  `lyth_resolveOperatorAuthority` + `lyth_clusterStatus.members[]`
+ *  per row, which is deferred to a future commit. */
+export async function bgChainSigningActivity(args?: {
+  authorityIndex?: number;
+  limit?: number;
+}): Promise<
+  | { ok: true; outcome: ChainSigningActivityOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("chain-signing-activity", args ?? {});
+}
+
+export type ChainSigningActivityOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").OperatorSigningActivity
+  >;
+
 /**
  * Read the active chain id from chrome.storage. Returns the Sprintnet
  * default (`0x10F2C`) when nothing is stored yet (first launch) or when
