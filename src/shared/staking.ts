@@ -379,3 +379,48 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
   5: 0.82,
   6: 0.5,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11 chain investigation — 2026-05-16
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Re-audit of mono-core HEAD `ce93d83` + mono-core-sdk @0fd8a79 status:
+//
+//   ✅ `lyth_addressActivityKind` (chain d77e4fc / SDK exposes
+//      `RpcClient.lythAddressActivityKind`) — REPLACES the P4.4
+//      heuristic empty-state. GAP #17 closes in Phase 11 Commit 3.
+//
+//   ✅ `lyth_indexerStatus` returning `IndexerStatus | null` (chain
+//      94cf845 / SDK `RpcClient.lythIndexerStatus`) — supports
+//      activity-feed pagination + archive-redirect. GAP #18 closes
+//      in Phase 11 Commit 4.
+//
+//   ✅ `lyth_subscribe` / `lyth_unsubscribe` (chain 0aaa5fc / SDK
+//      `RpcClient.lythSubscribe`/`lythUnsubscribe`) — note: these
+//      are WebSocket-only on the chain side. The Phase 11 Commit 2
+//      WS-client wires them with graceful HTTP-fallback.
+//
+//   ⚠️ `lyth_operatorCapabilities` (chain 017cab9 / SDK
+//      `RpcClient.lythOperatorCapabilities`) — risk-preview field
+//      shape evolving; the Phase 11 Commit 5 wire-up renders the
+//      stable subset (latency / version / uptime) and uses
+//      `withChainFallback` to keep the operators page rendering when
+//      the chain method 404s.
+//
+//   ⚠️ `7160636` registry public service probe runner — chain ships
+//      it, but the SDK at 0fd8a79 doesn't yet have a typed helper.
+//      Phase 11 Commit 5 calls via `lyth_publicServiceProbe` direct
+//      RPC behind `withChainFallback`.
+//
+//   ❌ `lyth_pendingRewards` — STILL no chain reader. Mock derivation
+//      stays in `staking-client.readPendingRewards`.
+//
+//   ❌ `lyth_clusterApr` — STILL no chain reader. MOCK_CLUSTER_APR_BPS
+//      stays the wallet's authoritative APR source.
+//
+//   ❌ `lyth_namingRegistry` (§22.8) — STILL no chain reader. Cluster
+//      names display `cluster-<id>` until Nayiem wires the resolver.
+//
+// The above is the binding wallet-side view; Sprintnet deploy status
+// of each method is checked at runtime via `withChainFallback` rather
+// than baked into the build.
