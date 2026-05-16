@@ -97,6 +97,10 @@ import {
   cloneBackupForRead,
   cloneBackupForWrite,
 } from "../shared/slh-dsa-backup.js";
+import {
+  prepareSlhDsaBackup,
+  recoverBackupMnemonic,
+} from "./slh-dsa-keygen.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -1231,6 +1235,108 @@ export async function clearSlhDsaBackupV4(
   delete v.slhDsaBackup;
   await saveVaultsContainerV4(container);
   return true;
+}
+
+/** Generate a fresh SLH-DSA backup keypair for the target vault,
+ *  encrypt the secret + entropy under the vault's VEK, persist the
+ *  record into the container, and return the human-readable
+ *  24-word BIP-39 mnemonic for the popup's reveal flow.
+ *
+ *  Requires the container to be unlocked (MEK cached). The caller
+ *  (SW IPC handler) checks `isUnlockedV4()` before invoking; we
+ *  throw a typed `"keystore locked"` if the cache is empty so a
+ *  race between auto-lock + user action surfaces cleanly.
+ *
+ *  Refuses to overwrite an existing record — Re-export uses
+ *  {@link recoverSlhDsaMnemonicV4} instead. Callers that want to
+ *  abandon and regenerate must call {@link clearSlhDsaBackupV4}
+ *  first (Settings → Security exposes this as an explicit
+ *  "Generate new key" action that warns about losing any prior
+ *  on-chain registration).
+ *
+ *  Returns `{ mnemonic, backup }` — the mnemonic is for the
+ *  popup ONLY and is never persisted; the backup record is what
+ *  callers can read back via {@link readSlhDsaBackupV4}. */
+export async function generateSlhDsaBackupV4(
+  vaultId: string,
+): Promise<{ mnemonic: string; backup: SlhDsaBackup }> {
+  if (mekCache === null) {
+    throw new Error("keystore locked");
+  }
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  if (v.slhDsaBackup && v.slhDsaBackup.publicKey.length > 0) {
+    throw new Error(
+      "backup already exists — clear it first or use the re-export flow",
+    );
+  }
+
+  // Unwrap the VEK locally, run keygen, zero the VEK before return.
+  // The VEK never escapes this function's stack — the keygen module
+  // gets it by-reference and zeroes its working secret too.
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  let prepared: { mnemonic: string; backup: SlhDsaBackup };
+  try {
+    prepared = prepareSlhDsaBackup({ vek });
+  } finally {
+    vek.fill(0);
+  }
+
+  v.slhDsaBackup = cloneBackupForWrite(prepared.backup);
+  await saveVaultsContainerV4(container);
+  // Return the in-memory record (with mnemonic) — the caller
+  // forwards mnemonic to the popup and lets it fall out of scope.
+  return prepared;
+}
+
+/** Re-derive the 24-word mnemonic from a previously-generated
+ *  backup record. Used by the Settings → Security "Re-export"
+ *  flow. Requires the container to be unlocked. Throws if the
+ *  vault has no backup, or if the AEAD decrypt fails (wrong VEK,
+ *  tampered ciphertext). */
+export async function recoverSlhDsaMnemonicV4(
+  vaultId: string,
+): Promise<string> {
+  if (mekCache === null) {
+    throw new Error("keystore locked");
+  }
+  const container = await loadVaultsContainerV4();
+  if (!container) throw new Error("no v4 vaults container");
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v) throw new Error("unknown vault id");
+  if (!v.slhDsaBackup || v.slhDsaBackup.publicKey.length === 0) {
+    throw new Error("no backup configured for this vault");
+  }
+
+  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  try {
+    return recoverBackupMnemonic(vek, v.slhDsaBackup);
+  } finally {
+    vek.fill(0);
+  }
+}
+
+/** Flip `coldStorageConfirmed` to `true` after the user attests
+ *  via the reveal modal's "I have written this down" checkbox.
+ *  Idempotent — calling on an already-confirmed record is a no-op.
+ *  Returns the updated record (or null if the vault has no backup). */
+export async function confirmSlhDsaColdStorageV4(
+  vaultId: string,
+): Promise<SlhDsaBackup | null> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return null;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.slhDsaBackup) return null;
+  if (!v.slhDsaBackup.coldStorageConfirmed) {
+    v.slhDsaBackup = cloneBackupForWrite({
+      ...v.slhDsaBackup,
+      coldStorageConfirmed: true,
+    });
+    await saveVaultsContainerV4(container);
+  }
+  return cloneBackupForRead(v.slhDsaBackup);
 }
 
 /** Defensive copy so callers can't mutate stored state by holding a

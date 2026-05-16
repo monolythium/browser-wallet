@@ -1293,6 +1293,9 @@ describe("keystore-mldsa SLH-DSA backup CRUD (Phase 10 Commit 1)", () => {
       encryptedPrivateKey: "ZmFrZS1lbmNyeXB0ZWQ=",
       encryptedPrivateKeyNonce:
         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+      encryptedEntropy: "ZW50cm9weS1lbmNyeXB0ZWQ=",
+      encryptedEntropyNonce:
+        "GBkaGxwdHh8gISIjJCUmJygpKisscy0u",
       publicKey: overrides.publicKey ?? "ab".repeat(32),
       parameterSet: "slh_dsa_sha2_128s" as const,
       chainRegistrationStatus:

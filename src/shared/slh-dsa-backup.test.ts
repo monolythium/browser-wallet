@@ -26,6 +26,8 @@ function fakeBackup(overrides: Partial<SlhDsaBackup> = {}): SlhDsaBackup {
   return {
     encryptedPrivateKey: "dGVzdC1lbmNyeXB0ZWQ=",
     encryptedPrivateKeyNonce: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+    encryptedEntropy: "ZW50cm9weS1lbmNyeXB0ZWQ=",
+    encryptedEntropyNonce: "GBkaGxwdHh8gISIjJCUmJygpKisscy0u",
     // 32 bytes (64 hex chars) of fake pubkey material.
     publicKey: "ab".repeat(32),
     parameterSet: "slh_dsa_sha2_128s",

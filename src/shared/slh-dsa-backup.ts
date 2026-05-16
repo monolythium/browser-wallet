@@ -164,6 +164,19 @@ export interface SlhDsaBackup {
   /** Per-record XChaCha20 nonce (24 bytes), base64. Distinct from
    *  the primary envelope's nonce — each AEAD slot owns its own. */
   encryptedPrivateKeyNonce: string;
+  /** XChaCha20-Poly1305 ciphertext of the 32-byte BIP-39 entropy
+   *  the user backed up as a 24-word mnemonic. Sealed under the
+   *  same VEK + a fresh nonce. Lets the Settings → Security
+   *  "Re-export backup" flow re-derive the mnemonic on demand
+   *  (password unlock → VEK → decrypt → SHAKE256-expand →
+   *  entropyToMnemonic). Without this field, re-export would have
+   *  to generate a fresh keypair (which would invalidate any
+   *  prior on-chain registration since the precompile is one-time
+   *  per address). base64. */
+  encryptedEntropy: string;
+  /** Per-record XChaCha20 nonce (24 bytes) for the entropy slot,
+   *  base64. */
+  encryptedEntropyNonce: string;
   /** SLH-DSA-SHA2-128s public key. Hex, lowercase, no `0x` prefix.
    *  32 bytes. Public — does not require a vault unlock to read. */
   publicKey: string;
@@ -199,6 +212,8 @@ export function emptySlhDsaBackup(): SlhDsaBackup {
   return {
     encryptedPrivateKey: "",
     encryptedPrivateKeyNonce: "",
+    encryptedEntropy: "",
+    encryptedEntropyNonce: "",
     publicKey: "",
     parameterSet: "slh_dsa_sha2_128s",
     chainRegistrationStatus: "not-registered",
@@ -230,6 +245,8 @@ export function validateBackupShape(b: unknown): BackupValidationError | null {
   if (typeof r.publicKey !== "string") return "missing-fields";
   if (typeof r.encryptedPrivateKey !== "string") return "missing-fields";
   if (typeof r.encryptedPrivateKeyNonce !== "string") return "missing-fields";
+  if (typeof r.encryptedEntropy !== "string") return "missing-fields";
+  if (typeof r.encryptedEntropyNonce !== "string") return "missing-fields";
   if (typeof r.parameterSet !== "string") return "missing-fields";
   if (typeof r.chainRegistrationStatus !== "string") return "missing-fields";
   if (typeof r.coldStorageConfirmed !== "boolean") return "missing-fields";
@@ -287,6 +304,8 @@ export function cloneBackupForRead(raw: unknown): SlhDsaBackup | null {
   return {
     encryptedPrivateKey: r.encryptedPrivateKey as string,
     encryptedPrivateKeyNonce: r.encryptedPrivateKeyNonce as string,
+    encryptedEntropy: r.encryptedEntropy as string,
+    encryptedEntropyNonce: r.encryptedEntropyNonce as string,
     publicKey: r.publicKey as string,
     parameterSet: "slh_dsa_sha2_128s",
     chainRegistrationStatus:
@@ -318,6 +337,8 @@ export function cloneBackupForWrite(b: SlhDsaBackup): SlhDsaBackup {
   return {
     encryptedPrivateKey: b.encryptedPrivateKey,
     encryptedPrivateKeyNonce: b.encryptedPrivateKeyNonce,
+    encryptedEntropy: b.encryptedEntropy,
+    encryptedEntropyNonce: b.encryptedEntropyNonce,
     publicKey: b.publicKey,
     parameterSet: b.parameterSet,
     chainRegistrationStatus: b.chainRegistrationStatus,
