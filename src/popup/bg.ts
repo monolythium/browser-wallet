@@ -643,6 +643,33 @@ export type ChainOperatorRiskOutcome =
     import("../shared/audit-followup-types.js").OperatorRiskWire
   >;
 
+/** Phase 11.5 Commit 7 — chain-wide upcoming-duties snapshot. Calls
+ *  `lyth_upcomingDuties` (mono-core @dd05511 / MD-CORE-0005) for a
+ *  single authority slot (default 0) over a 1000-round horizon
+ *  (chain max). Returns a `ChainOutcome<UpcomingDuties>` whose
+ *  `kind` the Operators page branches on:
+ *    - "live"  → render UpcomingDutiesCard with the attestation
+ *                window + key-rotation epoch boundary
+ *    - mock-*  → hide the card (no regression on older operators)
+ *
+ *  Block production and sync duties are typed-null with reasons on
+ *  Starfish-C (leader election is not predictable); the card shows
+ *  them as informational rows rather than scheduled tasks. */
+export async function bgChainUpcomingDuties(args?: {
+  authorityIndex?: number;
+  horizonRounds?: number;
+}): Promise<
+  | { ok: true; outcome: ChainUpcomingDutiesOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("chain-upcoming-duties", args ?? {});
+}
+
+export type ChainUpcomingDutiesOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/audit-followup-types.js").UpcomingDuties
+  >;
+
 /**
  * Read the active chain id from chrome.storage. Returns the Sprintnet
  * default (`0x10F2C`) when nothing is stored yet (first launch) or when
