@@ -50,6 +50,27 @@ export const PENDING_TTL_MS = 5 * 60 * 1000;
  *  interval. */
 export const PENDING_MATCH_BLOCK_WINDOW = 10;
 
+/** Sentinel `tokenId` the chain's indexer emits for native-LYTH transfer
+ *  rows after mono-core 3537b135 ("Index native transfers in address
+ *  activity"). The on-chain constant is `Hash::ZERO` (32 bytes of zero);
+ *  on the JSON-RPC wire it serializes as `"0x" + 64*"0"`. Before that
+ *  commit, native transfers arrived with `tokenId: null`. */
+export const NATIVE_LYTH_TOKEN_ID = "0x" + "0".repeat(64);
+
+/** Predicate recognizing every shape a native-LYTH transfer row can carry
+ *  in the `tokenId` field, across the pre-3537b135 wire form (null /
+ *  undefined / "" / "0x") and the post-3537b135 zero-hash sentinel
+ *  (case-insensitive). Defensive forward-compat so the activity mapper
+ *  routes native transfers to `tx_send` / `tx_receive` instead of a
+ *  phantom `token_transfer` row once Sprintnet operators upgrade. */
+export function isNativeLythTokenId(
+  tokenId: string | null | undefined,
+): boolean {
+  if (tokenId === null || tokenId === undefined) return true;
+  if (tokenId === "" || tokenId === "0x") return true;
+  return tokenId.toLowerCase() === NATIVE_LYTH_TOKEN_ID;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage keys
 // ─────────────────────────────────────────────────────────────────────────────
@@ -464,7 +485,11 @@ export function mapAddressActivityToRows(
     const anchorKey = `${e.blockHeight}.${e.txIndex}.${e.logIndex}`;
 
     if (e.kind === "transfer") {
-      if (e.tokenId !== null && e.tokenId.length > 0) {
+      // Phase 11.6 — route the chain-3537b135 zero-hash sentinel (and
+      // every legacy null / empty / "0x" shape) to the native-LYTH
+      // branch. A non-empty, non-sentinel tokenId is a real factory
+      // token id (32-byte hash) and stays as `token_transfer`.
+      if (!isNativeLythTokenId(e.tokenId)) {
         out.push({
           kind: "token_transfer",
           blockHeight: e.blockHeight,
@@ -472,7 +497,7 @@ export function mapAddressActivityToRows(
           logIndex: e.logIndex,
           direction: e.direction,
           counterparty: e.counterparty,
-          tokenId: e.tokenId,
+          tokenId: e.tokenId as string,
           amountDecimal: e.amount,
         });
       } else if (e.direction === "out") {

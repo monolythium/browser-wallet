@@ -13,15 +13,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // real list the post-regenesis defaults (operator-1 through operator-6)
 // would drive which operator name lands in err.via; mocking lets the
 // assertion be exact regardless of future default-list edits.
-// verifyOperatorGenesis is stubbed to always-true: this suite tests
-// the RPC dispatch error-stamping, not the GAP #11 genesis-pin path
-// (covered separately via verifyOperatorGenesis unit tests).
-// vi.mock is hoisted above the static import below.
+//
+// verifyOperatorGenesis stub: Phase 11.6 disabled the genesis-hash
+// enforcement, so tx-mldsa.ts no longer imports this helper. The stub
+// is kept in the mock factory for symmetry with the networks.js module
+// surface, returning `false` so a regression test can assert the
+// dispatcher still reaches the operator — proves the guards are
+// fully removed (a leftover guard would short-circuit on `false`).
+// vi.mock is hoisted above the static imports below.
+const { verifyOperatorGenesisSpy } = vi.hoisted(() => ({
+  verifyOperatorGenesisSpy: vi.fn(async () => false),
+}));
 vi.mock("./networks.js", () => ({
   getActiveOperators: () => [
     { name: "operator-test", region: "x", rpc: "http://test.example" },
   ],
-  verifyOperatorGenesis: async () => true,
+  verifyOperatorGenesis: verifyOperatorGenesisSpy,
 }));
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
@@ -89,5 +96,37 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
     expect(err.code).toBeUndefined();
     expect(err.via).toBeUndefined();
     expect(err.method).toBeUndefined();
+  });
+});
+
+// Phase 11.6 regression pin — the genesis-hash enforcement has been
+// disabled. With the stub `verifyOperatorGenesis` returning `false`,
+// the dispatcher must still route to the operator (a leftover guard
+// would short-circuit and throw "untrusted genesis" instead of letting
+// the body.error propagate). This test exists to catch a future
+// re-introduction of the genesis guard.
+describe("sprintnetJsonRpc — Phase 11.6 genesis-disable regression", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    verifyOperatorGenesisSpy.mockClear();
+  });
+
+  it("dispatches to the operator even when verifyOperatorGenesis would return false", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ jsonrpc: "2.0", id: 1, result: "0x42" }),
+    })) as unknown as typeof fetch;
+
+    const { result, via } = await sprintnetJsonRpc<string>(
+      "eth_blockNumber",
+      [],
+    );
+    expect(result).toBe("0x42");
+    expect(via).toBe("operator-test");
+    // The dispatcher must NOT have called the genesis verifier; if a
+    // future commit reinstates the guard, this assertion catches it.
+    expect(verifyOperatorGenesisSpy).not.toHaveBeenCalled();
   });
 });

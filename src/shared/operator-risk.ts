@@ -100,16 +100,22 @@ export function classifyOperatorRisk(
     return out;
   }
 
-  if (!input.trustedGenesis) {
-    out.push({
-      kind: "untrusted-genesis",
-      label: "untrusted",
-      tooltip:
-        "Operator's block-0 hash doesn't match the wallet's pinned genesis. " +
-        "RPC dispatch excludes this operator.",
-      severity: "err",
-    });
-  }
+  // Phase 11.6 — untrusted-genesis badge disabled for Beta. The wallet's
+  // dispatcher accepts mismatched-genesis operators now, so this badge
+  // would lie about what RPC dispatch actually does. The classifier
+  // still accepts `trustedGenesis` on its input (chain-side data is
+  // collected unchanged) — only the badge emission is short-circuited.
+  // Re-enable for mainnet by restoring:
+  // if (!input.trustedGenesis) {
+  //   out.push({
+  //     kind: "untrusted-genesis",
+  //     label: "untrusted",
+  //     tooltip:
+  //       "Operator's block-0 hash doesn't match the wallet's pinned genesis. " +
+  //       "RPC dispatch excludes this operator.",
+  //     severity: "err",
+  //   });
+  // }
 
   if (input.capabilities === null) {
     out.push({
