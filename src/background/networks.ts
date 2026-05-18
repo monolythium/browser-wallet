@@ -225,10 +225,11 @@ export async function probeFirstAliveOperator(
       const body = (await res.json()) as { result?: string };
       const reportedChainId = Number(body?.result ?? 0);
       if (reportedChainId !== expectedChainIdDec) continue;
-      // Genesis check (GAP #11). On mismatch the operator is excluded
-      // from RPC dispatch for the rest of the SW lifetime.
-      const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
-      if (!genesisOk) continue;
+      // Phase 11.6 — GAP #11 genesis-hash filter disabled for Beta. Probe
+      // returns the first operator on the expected chain id without any
+      // block-0 hash check. Re-enable for mainnet by restoring:
+      //   const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
+      //   if (!genesisOk) continue;
       return { name: v.name, rpc: v.rpc };
     } catch {
       // unreachable / timeout — try next

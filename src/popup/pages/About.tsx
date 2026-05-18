@@ -169,7 +169,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
   }, [phase9, phase10]);
 
   const healthyCount = operators?.filter((o) => o.ok).length ?? 0;
-  const trustedCount = operators?.filter((o) => o.trustedGenesis).length ?? 0;
+  // Phase 11.6 — `trustedCount` removed from the summary; enforcement is
+  // disabled, so reporting "N trusted" would mislead the user.
   const totalCount = operators?.length ?? 0;
   // Phase 7.1 — capability aggregate. Counts operators reporting each
   // surface as "available". Surfaces the "n/m support X" header summary
@@ -730,7 +731,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
             >
               {operators === null
                 ? "probing…"
-                : `${trustedCount}/${totalCount} trusted · ${healthyCount} live`}
+                : `${healthyCount}/${totalCount} live`}
             </span>
           </div>
           {probeError !== null && (
@@ -959,10 +960,12 @@ function Mono({ children }: { children: ReactNode }) {
 
 function OperatorRow({ row }: { row: OperatorHealthRow }) {
   const ok = row.ok;
-  const trusted = row.trustedGenesis;
-  // Untrusted (forked) operators are RPC-skipped regardless of liveness,
-  // so they get the danger border even when the probe succeeded.
-  const dangerBorder = !trusted || !ok;
+  // Phase 11.6 — genesis-hash enforcement disabled for Beta. Operator
+  // rows no longer go red on genesis mismatch; only transport failure
+  // drives the danger border. `row.trustedGenesis` is still populated
+  // by the SW probe (the data is collected for re-enable + the
+  // observed-genesis tooltip), but the UI doesn't act on it.
+  const dangerBorder = !ok;
   // Phase 11 Commit 5 — derive risk badges from probe data.
   const riskBadges = classifyOperatorRisk({
     ok: row.ok,
@@ -1024,29 +1027,11 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           >
             {row.region}
           </span>
-          {!trusted && (
-            <span
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 9,
-                fontWeight: 600,
-                letterSpacing: "0.1em",
-                textTransform: "uppercase",
-                color: "var(--err)",
-                background: "rgba(220,80,80,0.12)",
-                padding: "1px 5px",
-                borderRadius: 3,
-                border: "1px solid rgba(220,80,80,0.4)",
-              }}
-              title={
-                row.observedGenesis !== null
-                  ? `observed genesis: ${row.observedGenesis}`
-                  : "operator did not return a genesis block"
-              }
-            >
-              untrusted chain
-            </span>
-          )}
+          {/* Phase 11.6 — "untrusted chain" badge suppressed. The
+              dispatcher accepts mismatched-genesis operators for Beta,
+              so flagging them in the UI would mislead the user. The
+              probe still collects `trustedGenesis` + `observedGenesis`;
+              restore this badge when re-enabling enforcement. */}
         </div>
         <div
           style={{

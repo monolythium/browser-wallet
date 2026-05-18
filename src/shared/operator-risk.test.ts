@@ -45,11 +45,14 @@ describe("classifyOperatorRisk — transport-error short-circuit", () => {
 });
 
 describe("classifyOperatorRisk — untrusted genesis", () => {
-  it("flags untrusted-genesis (severity: err)", () => {
+  // Inverted in Phase 11.6 — genesis-hash enforcement disabled for Beta,
+  // so the classifier no longer emits an untrusted-genesis badge on
+  // mismatch. The dispatcher accepts the operator regardless, and a
+  // badge would lie about what RPC dispatch actually does.
+  it("does NOT flag untrusted-genesis while enforcement is disabled", () => {
     const r = classifyOperatorRisk({ ...HEALTHY, trustedGenesis: false });
     const flag = r.find((b) => b.kind === "untrusted-genesis");
-    expect(flag).toBeDefined();
-    expect(flag!.severity).toBe("err");
+    expect(flag).toBeUndefined();
   });
 });
 
@@ -166,7 +169,10 @@ describe("classifyOperatorRisk — composite cases", () => {
       latencyMs: HIGH_LATENCY_MS,
     });
     const kinds = r.map((b) => b.kind).sort();
-    expect(kinds).toContain("untrusted-genesis");
+    // Phase 11.6 — `untrusted-genesis` removed from this assertion;
+    // enforcement is disabled, so the classifier no longer emits it
+    // even with trustedGenesis=false (verified separately above).
+    expect(kinds).not.toContain("untrusted-genesis");
     expect(kinds).toContain("missing-capabilities");
     expect(kinds).toContain("indexer-disabled");
     expect(kinds).toContain("high-latency");

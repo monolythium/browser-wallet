@@ -11,7 +11,10 @@ import {
   type NativeEvmTxFields,
 } from "@monolythium/core-sdk/crypto";
 import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
-import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
+import { getActiveOperators } from "./networks.js";
+// Phase 11.6 — `verifyOperatorGenesis` import dropped from this module
+// because no call site invokes it (enforcement disabled). Re-add it to
+// the import line above when restoring the GAP #11 guards below.
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -65,14 +68,15 @@ export async function sprintnetJsonRpc<T>(
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
   for (const v of getActiveOperators()) {
-    // GAP #11: genesis-hash pin. Operators whose block 0 doesn't match
-    // SPRINTNET_GENESIS_HASH are skipped — they're either on a fork or
-    // a different chain entirely, and routing any request to them
-    // leaks reads / writes onto an untrusted ledger.
-    if (!(await verifyOperatorGenesis(v.rpc))) {
-      lastTransportErr = new Error(`${v.name}: untrusted genesis`);
-      continue;
-    }
+    // Phase 11.6 — genesis-hash enforcement disabled for Beta. The wallet
+    // accepts any operator regardless of block-0 hash, enabling val-1
+    // (192.0.2.7) pre-regenesis orphan and other non-canonical
+    // operators while Sprintnet ferveo rollout is in flight. Re-enable
+    // for mainnet by restoring the throw below:
+    // if (!(await verifyOperatorGenesis(v.rpc))) {
+    //   lastTransportErr = new Error(`${v.name}: untrusted genesis`);
+    //   continue;
+    // }
     let res: Response;
     try {
       res = await fetch(v.rpc, {
@@ -191,13 +195,12 @@ export async function sprintnetMaxBalanceConsensus(
   }
 
   const probes = operators.map(async (op) => {
-    // GAP #11: skip operators whose block 0 doesn't match our pin.
-    // Treated as a "failing" entry so the consensus result still
-    // reports the skipped operator's name and reason — distinct from
-    // a network error, and visible in the SW console balance log.
-    if (!(await verifyOperatorGenesis(op.rpc))) {
-      return { name: op.name, balanceHex: null, reason: "untrusted genesis" };
-    }
+    // Phase 11.6 — genesis-hash filter disabled (see sprintnetJsonRpc).
+    // All operators are probed regardless of block-0 hash. Re-enable for
+    // mainnet by restoring the early-return below:
+    // if (!(await verifyOperatorGenesis(op.rpc))) {
+    //   return { name: op.name, balanceHex: null, reason: "untrusted genesis" };
+    // }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), BALANCE_CONSENSUS_TIMEOUT_MS);
     try {
