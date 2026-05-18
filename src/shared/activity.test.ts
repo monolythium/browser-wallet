@@ -7,10 +7,12 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTIVITY_ROLLING_WINDOW,
+  NATIVE_LYTH_TOKEN_ID,
   PENDING_TTL_MS,
   PENDING_MATCH_BLOCK_WINDOW,
   activityCacheKey,
   activityPendingKey,
+  isNativeLythTokenId,
   validateActivityRow,
   validateActivityCache,
   validatePendingActivityCache,
@@ -908,5 +910,97 @@ describe("mergeIndexerSnapshot", () => {
       "2", // (100, 0, 5)
       "3", // (100, 0, 3)
     ]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 11.6 — native-LYTH zero-hash sentinel (mono-core 3537b135)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("isNativeLythTokenId", () => {
+  it("treats null as native", () => {
+    expect(isNativeLythTokenId(null)).toBe(true);
+  });
+
+  it("treats undefined as native", () => {
+    expect(isNativeLythTokenId(undefined)).toBe(true);
+  });
+
+  it("treats empty string as native", () => {
+    expect(isNativeLythTokenId("")).toBe(true);
+  });
+
+  it("treats bare '0x' as native", () => {
+    expect(isNativeLythTokenId("0x")).toBe(true);
+  });
+
+  it("treats 32-byte zero-hash as native (chain 3537b135 sentinel)", () => {
+    expect(isNativeLythTokenId(NATIVE_LYTH_TOKEN_ID)).toBe(true);
+  });
+
+  it("treats mixed-case zero-hash as native (case-insensitive)", () => {
+    expect(isNativeLythTokenId("0X" + "0".repeat(64))).toBe(true);
+  });
+
+  it("treats a real 32-byte token id as non-native", () => {
+    expect(isNativeLythTokenId("0x" + "ab".repeat(32))).toBe(false);
+  });
+
+  it("treats a short non-zero id as non-native", () => {
+    expect(isNativeLythTokenId("0xdeadbeef")).toBe(false);
+  });
+});
+
+describe("mapAddressActivityToRows — native-LYTH zero-hash sentinel routing", () => {
+  const makeTransfer = (
+    overrides: Partial<RawAddressActivity> = {},
+  ): RawAddressActivity => ({
+    blockHeight: 200,
+    txIndex: 0,
+    logIndex: 0,
+    kind: "transfer",
+    direction: "out",
+    counterparty: "0xabc",
+    tokenId: null,
+    amount: "2.5",
+    cluster: null,
+    weightBps: null,
+    subKind: null,
+    ...overrides,
+  });
+
+  it("routes zero-hash tokenId + direction:out to tx_send (not token_transfer)", () => {
+    const rows = mapAddressActivityToRows(
+      [makeTransfer({ tokenId: NATIVE_LYTH_TOKEN_ID })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("tx_send");
+    expect((rows[0] as TxSendRow).amountDecimal).toBe("2.5");
+  });
+
+  it("routes zero-hash tokenId + direction:in to tx_receive (not token_transfer)", () => {
+    const rows = mapAddressActivityToRows(
+      [makeTransfer({ tokenId: NATIVE_LYTH_TOKEN_ID, direction: "in" })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("tx_receive");
+  });
+
+  it("preserves legacy null tokenId routing (pre-3537b135 operator)", () => {
+    const rows = mapAddressActivityToRows(
+      [makeTransfer({ tokenId: null })],
+      new Set(),
+    );
+    expect(rows[0]?.kind).toBe("tx_send");
+  });
+
+  it("preserves real factory-token routing for non-sentinel tokenId", () => {
+    const rows = mapAddressActivityToRows(
+      [makeTransfer({ tokenId: "0x" + "ab".repeat(32) })],
+      new Set(),
+    );
+    expect(rows[0]?.kind).toBe("token_transfer");
   });
 });
