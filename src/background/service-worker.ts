@@ -4509,6 +4509,75 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
     }
+    case "wallet-mrv-receipt-status": {
+      const p = message.payload as {
+        txHash?: string;
+        chainIdHex?: string;
+      };
+      if (
+        typeof p?.txHash !== "string" ||
+        !/^0x[0-9a-fA-F]{64}$/.test(p.txHash)
+      ) {
+        return { ok: false, reason: "missing/invalid txHash" };
+      }
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return {
+          ok: false,
+          reason: "MRV receipt polling is only wired for Sprintnet today",
+        };
+      }
+      try {
+        const { result, via } = await sprintnetJsonRpc<{
+          transactionHash?: string;
+          status?: string;
+          blockNumber?: string;
+          contractAddress?: string | null;
+        } | null>("eth_getTransactionReceipt", [p.txHash]);
+        if (!result) {
+          return { ok: true, receipt: null, via };
+        }
+        return {
+          ok: true,
+          receipt: {
+            txHash:
+              typeof result.transactionHash === "string"
+                ? result.transactionHash
+                : p.txHash,
+            status: typeof result.status === "string" ? result.status : null,
+            blockNumber:
+              typeof result.blockNumber === "string" ? result.blockNumber : null,
+            contractAddress:
+              typeof result.contractAddress === "string"
+                ? result.contractAddress
+                : null,
+          },
+          via,
+        };
+      } catch (e) {
+        const err = e as Error & {
+          code?: number;
+          via?: string;
+          method?: string;
+        };
+        const code = typeof err.code === "number" ? err.code : undefined;
+        const method =
+          typeof err.method === "string"
+            ? err.method
+            : "eth_getTransactionReceipt";
+        const via = typeof err.via === "string" ? err.via : undefined;
+        const reason = err.message ?? "MRV native receipt polling failed";
+        return {
+          ok: false,
+          reason,
+          method,
+          ...(code !== undefined && { code }),
+          ...(via !== undefined && { via }),
+        };
+      }
+    }
     case "wallet-preview-transaction-hooks": {
       // Phase 11.5 Commit 2 — call lyth_previewTransactionHooks
       // (MS-CORE-0009) so the Send preview can show "Hooks that
