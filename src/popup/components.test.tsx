@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyFeeTier,
   computeNativeFeeLythoshi,
+  formatIndexedTokenBalanceRow,
   formatExecutionUnits,
   formatLythoshiAmountHex,
   formatLythoshiPerExecutionUnit,
@@ -40,5 +41,58 @@ describe("ReqSendTx native fee helpers", () => {
     expect(computeNativeFeeLythoshi(null, "0x64", "medium")).toBeNull();
     expect(computeNativeFeeLythoshi("0x5208", "not-hex", "medium")).toBeNull();
     expect(formatLythoshiAmountHex("not-hex")).toBe("—");
+  });
+});
+
+describe("indexed token balance display", () => {
+  it("keeps legacy indexer rows on the historical token-id label", () => {
+    expect(
+      formatIndexedTokenBalanceRow({
+        tokenId: "0x" + "a".repeat(64),
+        balance: "9",
+        updatedAtBlock: 1234,
+      }),
+    ).toEqual({
+      title: "0xaaaaaaaaaaaa…aaaaaaaa",
+      subtitle: "updated at block 1,234",
+      unitsLabel: "raw units",
+    });
+  });
+
+  it("uses MRC collection and real token ids for NFT-style rows", () => {
+    const display = formatIndexedTokenBalanceRow({
+      tokenId: "0x" + "f".repeat(64),
+      balance: "4",
+      updatedAtBlock: 77,
+      mrc: {
+        standard: "mrc1155",
+        assetId: "0x" + "c".repeat(64),
+        tokenId: "0x" + "d".repeat(64),
+      },
+    });
+
+    expect(display.title).toBe("MRC-1155 0xdddddddddddd…dddddddd");
+    expect(display.subtitle).toBe(
+      "collection 0xcccccccccccc…cccccccc · token 0xdddddddddddd…dddddddd · updated at block 77",
+    );
+    expect(display.subtitle).not.toContain("0xffffffffffff");
+  });
+
+  it("labels MRC-20 rows by asset id", () => {
+    expect(
+      formatIndexedTokenBalanceRow({
+        tokenId: "0x" + "b".repeat(64),
+        balance: "100",
+        updatedAtBlock: 88,
+        mrc: {
+          standard: "mrc20",
+          assetId: "0x" + "a".repeat(64),
+        },
+      }),
+    ).toEqual({
+      title: "MRC-20 0xaaaaaaaaaaaa…aaaaaaaa",
+      subtitle: "asset 0xaaaaaaaaaaaa…aaaaaaaa · updated at block 88",
+      unitsLabel: "raw units",
+    });
   });
 });

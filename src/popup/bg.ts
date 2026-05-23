@@ -1,6 +1,12 @@
 // Popup-side helpers for talking to the background service worker.
 // All calls go through chrome.runtime.sendMessage with `{ kind: "popup", ... }`.
 
+import type { WalletTokenBalance } from "../shared/token-balances.js";
+export type {
+  WalletTokenBalance,
+  WalletTokenBalanceMrcIdentity,
+} from "../shared/token-balances.js";
+
 export type Custody = "tpm" | "passkey" | "hw" | "sw";
 export type SignAlgo = "secp256k1" | "slhdsa" | "mldsa";
 
@@ -347,12 +353,6 @@ export async function bgEthCall(
   chainIdHex: string,
 ): Promise<{ ok: true; result: string } | { ok: false; reason?: string }> {
   return send("wallet-eth-call", { to, data, chainIdHex });
-}
-
-export interface WalletTokenBalance {
-  tokenId: string;
-  balance: string;
-  updatedAtBlock: number;
 }
 
 export interface WalletAddressLabel {

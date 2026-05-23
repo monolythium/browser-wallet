@@ -324,6 +324,69 @@ afterEach(() => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// wallet-indexer-snapshot
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-indexer-snapshot", () => {
+  it("validates token balances while preserving optional MRC identity", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [
+      {
+        tokenId: "0xopaque",
+        balance: "7",
+        updatedAtBlock: 123,
+        mrc: {
+          standard: "mrc721",
+          assetId: "0xcollection",
+          tokenId: "0xreal",
+        },
+      },
+      {
+        tokenId: "0xlegacy",
+        balance: "2",
+        updatedAtBlock: 124,
+        mrc: null,
+      },
+    ];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        tokenBalances: Array<{
+          tokenId: string;
+          balance: string;
+          updatedAtBlock: number;
+          mrc?: { standard: string; assetId: string; tokenId?: string };
+        }>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.tokenBalances[0]).toEqual({
+      tokenId: "0xopaque",
+      balance: "7",
+      updatedAtBlock: 123,
+      mrc: {
+        standard: "mrc721",
+        assetId: "0xcollection",
+        tokenId: "0xreal",
+      },
+    });
+    expect(r.snapshot.tokenBalances[1]).toEqual({
+      tokenId: "0xlegacy",
+      balance: "2",
+      updatedAtBlock: 124,
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // wallet-activity-get
 // ─────────────────────────────────────────────────────────────────────────────
 

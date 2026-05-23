@@ -29,6 +29,7 @@ import type {
   ChainEntry,
   PendingApproval,
   WalletIndexerSnapshot,
+  WalletTokenBalance,
 } from "./bg";
 import {
   bgWalletOperatorStatus,
@@ -363,22 +364,25 @@ function AssetList({ account, network, indexer }: AssetListProps) {
   const liveRows = indexer?.tokenBalances ?? [];
   return (
     <div>
-      {liveRows.length > 0 && liveRows.map((row) => (
-        <div className="ext-asset" key={row.tokenId}>
-          <div className="ext-asset__ico native">IDX</div>
-          <div className="ext-asset__main">
-            <div className="sym">
-              {shortHex(row.tokenId)} <span className="ext-badge-att">Indexed</span>
+      {liveRows.length > 0 && liveRows.map((row) => {
+        const display = formatIndexedTokenBalanceRow(row);
+        return (
+          <div className="ext-asset" key={row.tokenId}>
+            <div className="ext-asset__ico native">IDX</div>
+            <div className="ext-asset__main">
+              <div className="sym">
+                {display.title} <span className="ext-badge-att">Indexed</span>
+              </div>
+              <div className="chain">{display.subtitle}</div>
             </div>
-            <div className="chain">updated at block {row.updatedAtBlock.toLocaleString()}</div>
+            <div className="ext-asset__spark" />
+            <div className="ext-asset__right">
+              <div className="amt">{row.balance}</div>
+              <div className="chg">{display.unitsLabel}</div>
+            </div>
           </div>
-          <div className="ext-asset__spark" />
-          <div className="ext-asset__right">
-            <div className="amt">{row.balance}</div>
-            <div className="chg">raw units</div>
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       {/* LYTH — live row */}
       <div className="ext-asset">
@@ -427,6 +431,63 @@ function AssetList({ account, network, indexer }: AssetListProps) {
 
 function shortHex(value: string): string {
   return value.length > 26 ? `${value.slice(0, 14)}…${value.slice(-8)}` : value;
+}
+
+interface IndexedTokenBalanceDisplay {
+  title: string;
+  subtitle: string;
+  unitsLabel: string;
+}
+
+function normaliseMrcStandard(standard: string): string {
+  return standard.toLowerCase().replace(/[-_]/g, "");
+}
+
+function formatMrcStandardLabel(standard: string): string {
+  switch (normaliseMrcStandard(standard)) {
+    case "mrc20":
+      return "MRC-20";
+    case "mrc721":
+      return "MRC-721";
+    case "mrc1155":
+      return "MRC-1155";
+    default:
+      return standard.toUpperCase();
+  }
+}
+
+export function formatIndexedTokenBalanceRow(
+  row: WalletTokenBalance,
+): IndexedTokenBalanceDisplay {
+  const updated = `updated at block ${row.updatedAtBlock.toLocaleString()}`;
+  if (!row.mrc) {
+    return {
+      title: shortHex(row.tokenId),
+      subtitle: updated,
+      unitsLabel: "raw units",
+    };
+  }
+
+  const standard = normaliseMrcStandard(row.mrc.standard);
+  const label = formatMrcStandardLabel(row.mrc.standard);
+  const isCollectionToken = standard === "mrc721" || standard === "mrc1155";
+  const assetKind = isCollectionToken ? "collection" : "asset";
+  const assetId = shortHex(row.mrc.assetId);
+
+  if (isCollectionToken && row.mrc.tokenId) {
+    const tokenId = shortHex(row.mrc.tokenId);
+    return {
+      title: `${label} ${tokenId}`,
+      subtitle: `${assetKind} ${assetId} · token ${tokenId} · ${updated}`,
+      unitsLabel: "raw units",
+    };
+  }
+
+  return {
+    title: `${label} ${assetId}`,
+    subtitle: `${assetKind} ${assetId} · ${updated}`,
+    unitsLabel: "raw units",
+  };
 }
 
 // ---- Pending requests shelf ----
