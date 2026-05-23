@@ -42,7 +42,8 @@ interface CapturedRpcCall {
 const rpcCalls: CapturedRpcCall[] = [];
 let rpcResponses: Record<string, unknown> = {};
 
-vi.mock("@monolythium/core-sdk", () => {
+vi.mock("@monolythium/core-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
   class FakeMonolythiumProvider {
     constructor(public rpc: string, public opts?: unknown) {}
     async _send(payload: { id: number; jsonrpc: string; method: string; params: unknown[] }) {
@@ -55,6 +56,7 @@ vi.mock("@monolythium/core-sdk", () => {
     }
   }
   return {
+    ...actual,
     MonolythiumProvider: FakeMonolythiumProvider,
     MONOLYTHIUM_TESTNET_CHAIN_ID: TESTNET_CHAIN_ID_BIGINT,
     // 6 endpoints — matches SDK chain-registry snapshot post-regenesis

@@ -162,24 +162,31 @@ vi.mock("./connected-sites.js", () => ({
   clearAllConnectedSites: vi.fn(async () => undefined),
 }));
 
-vi.mock("@monolythium/core-sdk", () => ({
-  MonolythiumProvider: class {
-    async _send() {
-      return [];
-    }
-  },
-  MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
-  getRpcEndpoints: () => [
-    { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
-  ],
-  // GAP #11: shared/build-info.ts reads TESTNET_69420.genesis_hash at
-  // module init; stub just the fields the wallet actually reads.
-  TESTNET_69420: {
-    chain_id: 69420,
-    genesis_hash:
-      "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
-  },
-}));
+vi.mock("@monolythium/core-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
+  return {
+    ...actual,
+    MonolythiumProvider: class {
+      async _send() {
+        return [];
+      }
+    },
+    MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
+    getRpcEndpoints: () => [
+      { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
+    ],
+    // GAP #11: shared/build-info.ts reads TESTNET_69420.genesis_hash at
+    // module init; stub just the fields the wallet actually reads.
+    TESTNET_69420: {
+      chain_id: 69420,
+      genesis_hash:
+        "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
+    },
+  };
+});
+
+import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
+import { submitEncryptedMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -838,5 +845,81 @@ describe("wallet-send-tx pending-row prepend", () => {
     };
     expect(persisted).toBeDefined();
     expect(persisted.pending[0]?.broadcastBlockHeight).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-mrv-submit-plan
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-mrv-submit-plan", () => {
+  const CONTRACT = "0x2222222222222222222222222222222222222222";
+
+  function buildSubmitPlan() {
+    return buildWalletMrvCallNativePlan({
+      fromAddress: DETERMINISTIC_ADDRESS,
+      contractAddress: CONTRACT,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      nonceHex: "0x8",
+      executionUnitLimitHex: "0x200000",
+      maxExecutionFeeLythoshiHex: "0x989680",
+      priorityTipLythoshiHex: "0x5",
+      input: "0xaabbccdd",
+      valueWeiHex: "0x2a",
+    });
+  }
+
+  it("submits a previewed MRV plan with its native transaction extension", async () => {
+    const plan = buildSubmitPlan();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-submit-plan",
+      payload: { plan, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; txHash: string; via: string };
+
+    expect(r).toEqual({
+      ok: true,
+      txHash: SUBMITTED_TX_HASH,
+      via: "mock-operator",
+    });
+    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+      to: CONTRACT,
+      value: "0x2a",
+      data: "0xaabbccdd",
+      gas: "0x200000",
+      nonce: "0x8",
+      maxFeePerGas: "0x989680",
+      maxPriorityFeePerGas: "0x5",
+      chainIdHex: "0x10f2c",
+      extensions: [{ kind: 48, bodyHex: "0x01" }],
+    });
+  });
+
+  it("returns the locked-wallet error before signing", async () => {
+    unlocked = false;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-submit-plan",
+      payload: { plan: buildSubmitPlan(), chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: false; reason?: string };
+
+    expect(r).toEqual({ ok: false, reason: "wallet locked" });
+    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("blocks tampered preview plans before encrypted submission", async () => {
+    const plan = buildSubmitPlan();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-submit-plan",
+      payload: {
+        plan: { ...plan, tx: { ...plan.tx, extensions: [] } },
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: false; reason?: string };
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/exactly one transaction extension/);
+    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
   });
 });

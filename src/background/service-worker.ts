@@ -29,6 +29,8 @@ import {
 import {
   buildWalletMrvCallNativePlan,
   buildWalletMrvDeployNativePlan,
+  walletMrvNativePlanToSubmitTx,
+  type WalletMrvNativeSubmissionPlan,
   type WalletMrvCallNativePlanInput,
   type WalletMrvDeployNativePlanInput,
 } from "../shared/mrv-native-plan.js";
@@ -4458,6 +4460,53 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: true, plan: buildWalletMrvCallNativePlan(input) };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-mrv-submit-plan": {
+      const p = message.payload as {
+        plan?: WalletMrvNativeSubmissionPlan;
+        chainIdHex?: string;
+      };
+      if (p?.plan === null || typeof p?.plan !== "object") {
+        return { ok: false, reason: "missing MRV native submission plan" };
+      }
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "MRV submission is only wired for Sprintnet today" };
+      }
+      if (!isUnlockedV4()) {
+        return { ok: false, reason: "wallet locked" };
+      }
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) {
+        return { ok: false, reason: "wallet has no unlocked address" };
+      }
+      try {
+        const txReq = walletMrvNativePlanToSubmitTx(p.plan, {
+          chainIdHex: p.chainIdHex,
+          fromAddress: fromAddr,
+        });
+        const { txHash, via } = await submitEncryptedMlDsaTx(txReq);
+        return { ok: true, txHash, via };
+      } catch (e) {
+        const err = e as Error & {
+          code?: number;
+          via?: string;
+          method?: string;
+        };
+        const code = typeof err.code === "number" ? err.code : undefined;
+        const method = typeof err.method === "string" ? err.method : undefined;
+        const via = typeof err.via === "string" ? err.via : undefined;
+        const reason = err.message ?? "MRV native submission failed";
+        return {
+          ok: false,
+          reason,
+          ...(code !== undefined && { code }),
+          ...(method !== undefined && { method }),
+          ...(via !== undefined && { via }),
+        };
       }
     }
     case "wallet-preview-transaction-hooks": {
