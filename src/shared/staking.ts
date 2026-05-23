@@ -196,21 +196,19 @@ export interface ClusterDelegatorsView {
 // Rewards + redemption queue (§23.4, §23.2)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// TODO: chain GAP — needs Nayiem
-// ────────────────────────────────
-// The SDK at 0fd8a79 (Phase 7.1 head) does not yet expose:
-//   - per-account pending-rewards aggregation
-//   - redemption-queue rows for in-flight unstake events
-//
-// Both shapes are typed here against the whitepaper §23 economic model
-// so the popup can render the cards once the chain side lands; the SW
-// staking-client returns `{ ok: false, reason: "chain GAP" }` until the
-// SDK surfaces a `lyth_pendingRewards` / `lyth_redemptionQueue` reader.
+// The chain now exposes `lyth_pendingRewards(wallet)` for the rewards
+// snapshot. Redemption queues remain vestigial on the delegator side:
+// per §23.2 direct unstake has zero unbonding, so the wallet keeps the
+// queue shape as an empty/mock compatibility envelope.
 
 /** Aggregated pending rewards across every active delegation. */
 export interface PendingRewardsRow {
   /** Cluster id the rewards accrued from. */
   cluster: number;
+  /** Delegated weight at observation time, in basis points. */
+  weightBps: number;
+  /** Unsettled rewards from this cluster, as a decimal lythoshi string. */
+  unsettledAmountLythoshi: string;
   /** Accrued rewards as a hex lythoshi quantity (8-decimal native LYTH).
    *  The `amountWei` key is a legacy upstream/API compatibility name only. */
   amountWei: string;
@@ -224,13 +222,22 @@ export interface PendingRewardsRow {
 /** Pending-rewards envelope keyed by wallet. */
 export interface PendingRewardsView {
   wallet: string;
+  /** Total pending rewards, as a decimal lythoshi string. */
+  totalAmountLythoshi: string;
+  /** Settled-but-unclaimed rewards, as a decimal lythoshi string. */
+  settledPendingLythoshi: string;
+  /** Unsettled accrual still attributed to delegation rows, as decimal
+   *  lythoshi. */
+  unsettledAmountLythoshi: string;
+  /** Whether the wallet has chain-side auto-compounding enabled. */
+  autoCompound: boolean;
   /** Total accrued rewards as hex lythoshi. `totalAmountWei` is retained
    *  as a compatibility boundary name until the upstream staking API shape
    *  is renamed. */
   totalAmountWei: string;
   rows: PendingRewardsRow[];
   /** Block height the snapshot was taken at; absent when the data is
-   *  mocked (chain GAP). */
+   *  mocked because `lyth_pendingRewards` is unavailable/offline. */
   blockHeight: string | null;
 }
 
@@ -418,8 +425,9 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //      Phase 11 Commit 5 calls via `lyth_publicServiceProbe` direct
 //      RPC behind `withChainFallback`.
 //
-//   ❌ `lyth_pendingRewards` — STILL no chain reader. Mock derivation
-//      stays in `staking-client.readPendingRewards`.
+//   ✅ `lyth_pendingRewards` — wallet calls the direct RPC first and
+//      uses the old mock derivation only when the method is unavailable
+//      or Sprintnet is offline.
 //
 //   ❌ `lyth_clusterApr` — STILL no chain reader. MOCK_CLUSTER_APR_BPS
 //      stays the wallet's authoritative APR source.
