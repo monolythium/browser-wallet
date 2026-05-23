@@ -6,8 +6,16 @@ export interface MrcAccountRecord {
   controller: string;
   recovery: string | null;
   policyHash: string | null;
+  policy: MrcPolicyRecord | null;
   nonce: string | null;
   updatedAtBlock: number;
+}
+
+export interface MrcPolicyRecord {
+  enabled: boolean;
+  perActionLimit: string;
+  windowLimit: string;
+  allowedAssets: string[];
 }
 
 export interface MrcPolicySpendRecord {
@@ -76,6 +84,28 @@ function validateBlockHeight(input: unknown): number | null {
   return null;
 }
 
+function validateMrcPolicyRecord(input: unknown): MrcPolicyRecord | null {
+  if (!isPlainRecord(input)) return null;
+  const r = input as Record<string, unknown>;
+  if (typeof r.enabled !== "boolean") return null;
+  if (!isNonEmptyString(r.perActionLimit)) return null;
+  if (!isNonEmptyString(r.windowLimit)) return null;
+  if (!Array.isArray(r.allowedAssets)) return null;
+
+  const allowedAssets: string[] = [];
+  for (const raw of r.allowedAssets) {
+    if (!isNonEmptyString(raw)) return null;
+    allowedAssets.push(raw);
+  }
+
+  return {
+    enabled: r.enabled,
+    perActionLimit: r.perActionLimit,
+    windowLimit: r.windowLimit,
+    allowedAssets,
+  };
+}
+
 function validateMrcAccountRecord(
   input: unknown,
   expectedKind: MrcAccountRecord["kind"],
@@ -90,19 +120,27 @@ function validateMrcAccountRecord(
   if (controller === null) return null;
   let recovery: string | null;
   let policyHash: string | null;
+  let policy: MrcPolicyRecord | null;
+  const rawPolicy = r.policy ?? null;
   if (expectedKind === "smart_account") {
     const recoveryInput =
       r.recovery === null ? null : normalizeUserAddress(r.recovery);
     if (r.recovery !== null && recoveryInput === null) return null;
     if (r.policyHash !== null) return null;
+    if (rawPolicy !== null) return null;
     recovery = recoveryInput;
     policyHash = null;
+    policy = null;
   } else {
     const policyHashInput = r.policyHash;
     if (r.recovery !== null) return null;
     if (policyHashInput !== null && !isNonEmptyString(policyHashInput)) return null;
+    const policyInput =
+      rawPolicy === null ? null : validateMrcPolicyRecord(rawPolicy);
+    if (rawPolicy !== null && policyInput === null) return null;
     recovery = null;
     policyHash = policyHashInput;
+    policy = policyInput;
   }
   const nonce = r.nonce;
   if (nonce !== null && !isNonEmptyString(nonce)) return null;
@@ -114,6 +152,7 @@ function validateMrcAccountRecord(
     controller,
     recovery,
     policyHash,
+    policy,
     nonce,
     updatedAtBlock,
   };

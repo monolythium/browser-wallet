@@ -642,6 +642,7 @@ describe("wallet-indexer-snapshot", () => {
         controller,
         recovery,
         policyHash: null,
+        policy: null,
         nonce: "7",
         updatedAtBlock: 140,
       },
@@ -651,6 +652,12 @@ describe("wallet-indexer-snapshot", () => {
         controller,
         recovery: null,
         policyHash: "0x" + "55".repeat(32),
+        policy: {
+          enabled: true,
+          perActionLimit: "20",
+          windowLimit: "100",
+          allowedAssets: ["0x" + "44".repeat(32)],
+        },
         nonce: null,
         updatedAtBlock: 141,
       },
@@ -676,7 +683,10 @@ describe("wallet-indexer-snapshot", () => {
         mrcAccount: {
           account: string;
           smartAccount: { nonce: string | null } | null;
-          policyAccount: { policyHash: string | null } | null;
+          policyAccount: {
+            policyHash: string | null;
+            policy: { enabled: boolean; perActionLimit: string } | null;
+          } | null;
           policySpends: Array<{ window: string; spent: string }>;
         } | null;
         errors: Record<string, string>;
@@ -687,7 +697,10 @@ describe("wallet-indexer-snapshot", () => {
     expect(r.snapshot.mrcAccount).toMatchObject({
       account: DETERMINISTIC_SMART_ACCOUNT,
       smartAccount: { nonce: "7" },
-      policyAccount: { policyHash: "0x" + "55".repeat(32) },
+      policyAccount: {
+        policyHash: "0x" + "55".repeat(32),
+        policy: { enabled: true, perActionLimit: "20" },
+      },
       policySpends: [{ window: "9", spent: "45" }],
     });
     expect(r.snapshot.errors.mrcAccount).toBeUndefined();

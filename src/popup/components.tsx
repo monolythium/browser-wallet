@@ -39,6 +39,7 @@ import type {
   WalletBridgeRouteReadiness,
   MrcAccountLookupResponse,
   MrcAccountRecord,
+  MrcPolicyRecord,
   MrcPolicySpendRecord,
   WalletMrcHolder,
   WalletMrcHoldersResponse,
@@ -453,6 +454,7 @@ export function MrcAccountSummary({
     mrcAccount.policyAccount,
   ].filter((record): record is MrcAccountRecord => record !== null);
   const spendRows = mrcAccount.policySpends.slice(0, 2);
+  const policy = mrcAccount.policyAccount?.policy ?? null;
   const roleLabel =
     records.length > 0
       ? records.map((record) => mrcAccountKindLabel(record.kind)).join(" + ")
@@ -487,6 +489,9 @@ export function MrcAccountSummary({
               {formatMrcAccountRecordLine(record)}
             </div>
           ))}
+          {policy && (
+            <div>{formatMrcPolicyLine(policy)}</div>
+          )}
           {spendRows.map((spend) => (
             <div key={`${spend.assetId}:${spend.window}`}>
               {formatMrcPolicySpendLine(spend)}
@@ -533,6 +538,17 @@ export function formatMrcAccountRecordLine(record: MrcAccountRecord): string {
   if (record.nonce) bits.push(`nonce ${record.nonce}`);
   bits.push(`block ${record.updatedAtBlock.toLocaleString()}`);
   return bits.join(" · ");
+}
+
+export function formatMrcPolicyLine(policy: MrcPolicyRecord): string {
+  const previewAssets = policy.allowedAssets.slice(0, 2).map(shortHex);
+  const assetSummary =
+    policy.allowedAssets.length === 0
+      ? "no assets"
+      : policy.allowedAssets.length > previewAssets.length
+        ? `${previewAssets.join(", ")} + ${policy.allowedAssets.length - previewAssets.length} more`
+        : previewAssets.join(", ");
+  return `Policy body ${policy.enabled ? "enabled" : "disabled"} · per action ${policy.perActionLimit} · window ${policy.windowLimit} · assets ${assetSummary}`;
 }
 
 export function formatMrcPolicySpendLine(spend: MrcPolicySpendRecord): string {
