@@ -32,8 +32,9 @@ export interface StakeFormProps {
    *  state transitions back to the picker. */
   amountStr: string;
   onAmountChange: (next: string) => void;
-  /** Wallet's available balance in wei. `null` while the SW
-   *  `wallet-balance` fetch is in flight. */
+  /** Compatibility prop name retained for existing callers. Value is
+   *  v4.1 native lythoshi, not 18-decimal EVM wei. `null` while the
+   *  SW `wallet-balance` fetch is in flight. */
   balanceWei: bigint | null;
   /** Already-delegated weight to THIS cluster (bps). Used for the
    *  cap-headroom check — additions stack on top of existing weight. */
@@ -48,30 +49,39 @@ export interface StakeFormProps {
   onBack: () => void;
 }
 
-/** Decimal-LYTH-amount string → wei bigint. Mirrors Send.tsx's
- *  `safeLythToWeiBigInt`; kept inline so StakeForm stays self-
- *  contained. */
-function lythToWei(amountStr: string): bigint | null {
+const NATIVE_LYTH_DECIMALS = 8;
+const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+
+/** Decimal-LYTH-amount string → lythoshi bigint. Kept inline so
+ *  StakeForm stays self-contained at the compatibility boundary. */
+export function lythToLythoshi(amountStr: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(amountStr)) return null;
   const dot = amountStr.indexOf(".");
   const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
   const fracPart = dot < 0 ? "" : amountStr.slice(dot + 1);
-  if (fracPart.length > 18) return null;
-  const padded = fracPart + "0".repeat(18 - fracPart.length);
+  if (fracPart.length > NATIVE_LYTH_DECIMALS) return null;
+  const padded =
+    fracPart + "0".repeat(NATIVE_LYTH_DECIMALS - fracPart.length);
   try {
-    return BigInt(intPart) * 10n ** 18n + (padded.length > 0 ? BigInt(padded) : 0n);
+    return (
+      BigInt(intPart) * LYTHOSHI_PER_LYTH +
+      (padded.length > 0 ? BigInt(padded) : 0n)
+    );
   } catch {
     return null;
   }
 }
 
-/** Wei → LYTH display string, 4 decimal places. Used for the
+/** Lythoshi → LYTH display string. Used for the
  *  balance + cap-headroom hint strings. */
-function weiToLyth(wei: bigint, decimals = 4): string {
-  const whole = wei / 10n ** 18n;
-  const remainder = wei % 10n ** 18n;
+export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  const remainder = lythoshi % LYTHOSHI_PER_LYTH;
   if (decimals === 0 || remainder === 0n) return whole.toString();
-  const remStr = remainder.toString().padStart(18, "0").slice(0, decimals);
+  const remStr = remainder
+    .toString()
+    .padStart(NATIVE_LYTH_DECIMALS, "0")
+    .slice(0, decimals);
   // Trim trailing zeros for compact display.
   const trimmed = remStr.replace(/0+$/, "");
   return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
@@ -87,23 +97,25 @@ export function StakeForm({
   onContinue,
   onBack,
 }: StakeFormProps) {
-  const amountWei = useMemo(() => lythToWei(amountStr), [amountStr]);
+  const amountLythoshi = useMemo(() => lythToLythoshi(amountStr), [amountStr]);
 
   // Compute the would-be total delegated weight after this stake.
   const additionalBps =
-    amountWei !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountWei, balanceWei)
+    amountLythoshi !== null && balanceWei !== null && balanceWei > 0n
+      ? lythAmountToBps(amountLythoshi, balanceWei)
       : 0;
   const totalAfterBps = existingWeightBps + additionalBps;
 
   const overCap = capBps !== null && totalAfterBps > capBps;
   const insufficientFunds =
-    amountWei !== null && balanceWei !== null && amountWei > balanceWei;
-  const amountIsZero = amountWei === null || amountWei === 0n;
+    amountLythoshi !== null &&
+    balanceWei !== null &&
+    amountLythoshi > balanceWei;
+  const amountIsZero = amountLythoshi === null || amountLythoshi === 0n;
 
   const canContinue =
-    amountWei !== null &&
-    amountWei > 0n &&
+    amountLythoshi !== null &&
+    amountLythoshi > 0n &&
     !overCap &&
     !insufficientFunds &&
     balanceWei !== null;
@@ -114,7 +126,7 @@ export function StakeForm({
     // to the headroom, not to 100% of balance. If cap is disabled
     // (`capBps === null`), the max is the full balance.
     if (capBps === null) {
-      onAmountChange(weiToLyth(balanceWei, 6));
+      onAmountChange(lythoshiToLyth(balanceWei, NATIVE_LYTH_DECIMALS));
       return;
     }
     const headroomBps = Math.max(0, capBps - existingWeightBps);
@@ -123,8 +135,10 @@ export function StakeForm({
       return;
     }
     // amount = balance * headroomBps / 10000
-    const headroomWei = (balanceWei * BigInt(headroomBps)) / 10_000n;
-    onAmountChange(weiToLyth(headroomWei, 6));
+    const headroomLythoshi = (balanceWei * BigInt(headroomBps)) / 10_000n;
+    onAmountChange(
+      lythoshiToLyth(headroomLythoshi, NATIVE_LYTH_DECIMALS),
+    );
   };
 
   const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
@@ -238,7 +252,7 @@ export function StakeForm({
             "Balance loading…"
           ) : (
             <>
-              available {weiToLyth(balanceWei)} LYTH · existing{" "}
+              available {lythoshiToLyth(balanceWei)} LYTH · existing{" "}
               {(existingWeightBps / 100).toFixed(2)}% in this cluster
               {capBps !== null && (
                 <>

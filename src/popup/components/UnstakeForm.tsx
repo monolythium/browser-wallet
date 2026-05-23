@@ -29,32 +29,43 @@ export interface UnstakeFormProps {
    *  delegation list and back doesn't lose typing. */
   amountStr: string;
   onAmountChange: (next: string) => void;
-  /** Wallet's full balance in wei — used to display the LYTH amount
-   *  the bps weight represents. */
+  /** Compatibility prop name retained for existing callers. Value is
+   *  v4.1 native lythoshi, not 18-decimal EVM wei. Used to display
+   *  the LYTH amount the bps weight represents. */
   balanceWei: bigint | null;
   onContinue: () => void;
   onBack: () => void;
 }
 
-function lythToWei(amountStr: string): bigint | null {
+const NATIVE_LYTH_DECIMALS = 8;
+const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+
+export function lythToLythoshi(amountStr: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(amountStr)) return null;
   const dot = amountStr.indexOf(".");
   const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
   const fracPart = dot < 0 ? "" : amountStr.slice(dot + 1);
-  if (fracPart.length > 18) return null;
-  const padded = fracPart + "0".repeat(18 - fracPart.length);
+  if (fracPart.length > NATIVE_LYTH_DECIMALS) return null;
+  const padded =
+    fracPart + "0".repeat(NATIVE_LYTH_DECIMALS - fracPart.length);
   try {
-    return BigInt(intPart) * 10n ** 18n + (padded.length > 0 ? BigInt(padded) : 0n);
+    return (
+      BigInt(intPart) * LYTHOSHI_PER_LYTH +
+      (padded.length > 0 ? BigInt(padded) : 0n)
+    );
   } catch {
     return null;
   }
 }
 
-function weiToLyth(wei: bigint, decimals = 4): string {
-  const whole = wei / 10n ** 18n;
-  const rem = wei % 10n ** 18n;
+export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  const rem = lythoshi % LYTHOSHI_PER_LYTH;
   if (rem === 0n || decimals === 0) return whole.toString();
-  const remStr = rem.toString().padStart(18, "0").slice(0, decimals);
+  const remStr = rem
+    .toString()
+    .padStart(NATIVE_LYTH_DECIMALS, "0")
+    .slice(0, decimals);
   const trimmed = remStr.replace(/0+$/, "");
   return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
 }
@@ -68,24 +79,26 @@ export function UnstakeForm({
   onContinue,
   onBack,
 }: UnstakeFormProps) {
-  const amountWei = useMemo(() => lythToWei(amountStr), [amountStr]);
-  const currentDelegationWei =
+  const amountLythoshi = useMemo(() => lythToLythoshi(amountStr), [amountStr]);
+  const currentDelegationLythoshi =
     balanceWei !== null && currentWeightBps > 0
       ? (balanceWei * BigInt(currentWeightBps)) / 10_000n
       : 0n;
   const removeBps =
-    amountWei !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountWei, balanceWei)
+    amountLythoshi !== null && balanceWei !== null && balanceWei > 0n
+      ? lythAmountToBps(amountLythoshi, balanceWei)
       : 0;
 
   const exceedsDelegation = removeBps > currentWeightBps;
-  const amountIsZero = amountWei === null || amountWei === 0n;
+  const amountIsZero = amountLythoshi === null || amountLythoshi === 0n;
   const canContinue = !amountIsZero && !exceedsDelegation && balanceWei !== null;
 
   const handleMax = () => {
     if (balanceWei === null || currentWeightBps <= 0) return;
     // Max = full current delegation amount in this cluster.
-    onAmountChange(weiToLyth(currentDelegationWei, 6));
+    onAmountChange(
+      lythoshiToLyth(currentDelegationLythoshi, NATIVE_LYTH_DECIMALS),
+    );
   };
 
   const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
@@ -138,7 +151,7 @@ export function UnstakeForm({
             lineHeight: 1.6,
           }}
         >
-          Currently delegating {weiToLyth(currentDelegationWei)} LYTH (
+          Currently delegating {lythoshiToLyth(currentDelegationLythoshi)} LYTH (
           {(currentWeightBps / 100).toFixed(2)}%) · APR{" "}
           {aprBps === null ? "—" : `${(aprBps / 100).toFixed(2)}%`}
         </div>
@@ -187,13 +200,13 @@ export function UnstakeForm({
         {exceedsDelegation && (
           <div style={inlineErr}>
             Amount exceeds your current delegation in this cluster (
-            {weiToLyth(currentDelegationWei)} LYTH).
+            {lythoshiToLyth(currentDelegationLythoshi)} LYTH).
           </div>
         )}
         <div style={fromHint}>
           Available immediately — §23.2 zero-unbond for delegators.
-          {amountWei !== null &&
-            amountWei > 0n &&
+          {amountLythoshi !== null &&
+            amountLythoshi > 0n &&
             !exceedsDelegation && (
               <>
                 {" "}
