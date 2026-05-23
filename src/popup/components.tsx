@@ -32,6 +32,7 @@ import type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
   WalletBridgeRouteReadiness,
+  WalletMrcHolder,
   WalletTokenBalance,
 } from "./bg";
 import {
@@ -384,6 +385,7 @@ function AssetList({ account, network, indexer }: AssetListProps) {
                 )}
               </div>
               <div className="chain">{display.subtitle}</div>
+              <MrcHolderSummary holders={row.mrcHolders?.holders ?? []} />
             </div>
             <div className="ext-asset__spark" />
             <div className="ext-asset__right">
@@ -425,6 +427,30 @@ function AssetList({ account, network, indexer }: AssetListProps) {
           <div className="amt">—</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MrcHolderSummary({ holders }: { holders: WalletMrcHolder[] }) {
+  if (holders.length === 0) return null;
+  return (
+    <div
+      style={{
+        marginTop: 6,
+        fontFamily: "var(--f-mono)",
+        fontSize: 9.5,
+        lineHeight: 1.45,
+        color: "var(--fg-400)",
+      }}
+    >
+      <div style={{ color: "var(--fg-300)", textTransform: "uppercase" }}>
+        Native holders
+      </div>
+      {holders.map((holder) => (
+        <div key={`${holder.rank}:${holder.address}`}>
+          {formatMrcHolderDisplayLine(holder)}
+        </div>
+      ))}
     </div>
   );
 }
@@ -498,6 +524,10 @@ export function formatIndexedTokenBalanceRow(
     subtitle: `${assetKind} ${assetId} · ${updated}`,
     unitsLabel: "raw units",
   };
+}
+
+export function formatMrcHolderDisplayLine(holder: WalletMrcHolder): string {
+  return `#${holder.rank} ${shortAddr(holder.address, 10)} · ${holder.balance} · block ${holder.updatedAtBlock.toLocaleString()}`;
 }
 
 export interface BridgeDisclosureRowDisplay {

@@ -412,6 +412,85 @@ describe("wallet-indexer-snapshot", () => {
     });
   });
 
+  it("enriches native MRC NFT token balances with bounded holder rows", async () => {
+    const assetId = `0x${"bb".repeat(32)}`;
+    const tokenId = `0x${"cc".repeat(32)}`;
+    const holderAddress = "0x1111111111111111111111111111111111111111";
+    rpcResponses["lyth_getTokenBalances"] = [
+      {
+        tokenId: "balance-key",
+        balance: "1",
+        updatedAtBlock: 123,
+        mrc: {
+          standard: "mrc721",
+          assetId,
+          tokenId,
+        },
+      },
+      {
+        tokenId: "mrc20-key",
+        balance: "10",
+        updatedAtBlock: 124,
+        mrc: {
+          standard: "mrc20",
+          assetId: `0x${"dd".repeat(32)}`,
+        },
+      },
+    ];
+    rpcResponses["lyth_mrcHolders"] = {
+      schemaVersion: 1,
+      standard: "mrc721",
+      assetId,
+      tokenId,
+      limit: 3,
+      holders: [
+        {
+          rank: 1,
+          address: holderAddress,
+          balance: "1",
+          updatedAtBlock: 125,
+        },
+      ],
+    };
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        tokenBalances: Array<{
+          tokenId: string;
+          mrcHolders?: {
+            standard: string;
+            assetId: string;
+            tokenId: string;
+            limit: number;
+            holders: Array<{ address: string; balance: string }>;
+          };
+        }>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.tokenBalances[0]?.mrcHolders).toMatchObject({
+      standard: "mrc721",
+      assetId,
+      tokenId,
+      limit: 3,
+      holders: [{ address: holderAddress, balance: "1" }],
+    });
+    expect(r.snapshot.tokenBalances[1]?.mrcHolders).toBeUndefined();
+    expect(rpcCalls).toContainEqual({
+      method: "lyth_mrcHolders",
+      params: ["mrc721", assetId, tokenId, 3],
+    });
+  });
+
   it("passes through bridge route disclosures from token-balance envelopes", async () => {
     rpcResponses["lyth_getTokenBalances"] = {
       tokenBalances: [

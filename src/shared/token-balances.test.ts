@@ -3,6 +3,7 @@ import {
   collectWalletBridgeRouteDisclosures,
   validateWalletBridgeRouteDisclosureList,
   validateWalletBridgeRouteReadiness,
+  validateWalletMrcHoldersResponse,
   validateWalletTokenBalanceList,
 } from "./token-balances.js";
 
@@ -274,6 +275,120 @@ describe("wallet token-balance validators", () => {
         ],
       },
     ]);
+  });
+
+  it("preserves bounded MRC holder rows on native NFT balances", () => {
+    expect(
+      validateWalletTokenBalanceList([
+        {
+          tokenId: "balance-key",
+          balance: "1",
+          updatedAtBlock: 99,
+          mrc: {
+            standard: "mrc721",
+            assetId: "0xcollection",
+            tokenId: "0xtoken",
+          },
+          mrcHolders: {
+            schemaVersion: 1,
+            standard: "mrc721",
+            assetId: "0xcollection",
+            tokenId: "0xtoken",
+            limit: 2,
+            holders: [
+              {
+                rank: 1,
+                address: "0x1111111111111111111111111111111111111111",
+                balance: "1",
+                updatedAtBlock: "123",
+              },
+              {
+                rank: 2,
+                address: "0x2222222222222222222222222222222222222222",
+                balance: "1",
+                updatedAtBlock: 124n,
+              },
+              {
+                rank: 3,
+                address: "0x3333333333333333333333333333333333333333",
+                balance: "1",
+                updatedAtBlock: 125,
+              },
+            ],
+          },
+        },
+      ]),
+    ).toEqual([
+      {
+        tokenId: "balance-key",
+        balance: "1",
+        updatedAtBlock: 99,
+        mrc: {
+          standard: "mrc721",
+          assetId: "0xcollection",
+          tokenId: "0xtoken",
+        },
+        mrcHolders: {
+          schemaVersion: 1,
+          standard: "mrc721",
+          assetId: "0xcollection",
+          tokenId: "0xtoken",
+          limit: 2,
+          holders: [
+            {
+              rank: 1,
+              address: "0x1111111111111111111111111111111111111111",
+              balance: "1",
+              updatedAtBlock: 123,
+            },
+            {
+              rank: 2,
+              address: "0x2222222222222222222222222222222222222222",
+              balance: "1",
+              updatedAtBlock: 124,
+            },
+          ],
+        },
+      },
+    ]);
+  });
+});
+
+describe("MRC holder validators", () => {
+  it("rejects unsupported standards and malformed holder rows", () => {
+    expect(
+      validateWalletMrcHoldersResponse({
+        schemaVersion: 1,
+        standard: "mrc20",
+        assetId: "0xasset",
+        tokenId: "0xtoken",
+        limit: 2,
+        holders: [],
+      }),
+    ).toBeNull();
+
+    expect(
+      validateWalletMrcHoldersResponse({
+        schemaVersion: 1,
+        standard: "mrc1155",
+        assetId: "0xasset",
+        tokenId: "0xtoken",
+        limit: 2,
+        holders: [
+          { rank: 0, address: "0x1", balance: "1", updatedAtBlock: 1 },
+          { rank: 1, address: "0x2", balance: "2", updatedAtBlock: 2 },
+        ],
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      standard: "mrc1155",
+      assetId: "0xasset",
+      tokenId: "0xtoken",
+      limit: 2,
+      holders: [
+        { rank: 1, address: "0x2", balance: "2", updatedAtBlock: 2 },
+      ],
+    });
   });
 });
 
