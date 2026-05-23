@@ -228,7 +228,23 @@ interface WalletMrvNativeReceiptEvidence {
   artifactHash: string | null;
   receiptCommitment: string | null;
   eventCount: number | null;
+  noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
   noEvmProofStatus: "missing" | "present-unverified";
+}
+
+interface WalletMrvNoEvmReceiptProofTranscript {
+  schema: "mono.no_evm_receipt_proof.v1";
+  proofType: "canonicalReceiptsTranscript";
+  rootAlgorithm: string;
+  receiptCodec: string;
+  blockHash: string;
+  txHash: string;
+  receiptsRoot: string;
+  targetReceiptHash: string;
+  blockHeight: number;
+  txIndex: number;
+  receiptCount: number;
+  receiptTranscript: string[];
 }
 
 interface WalletMrvNativeReceiptEvidenceError {
@@ -1359,22 +1375,117 @@ function parseMrvNativeReceiptEvidence(
 ): WalletMrvNativeReceiptEvidence | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
+  const noEvmProofRaw = r.noEvmProof;
+  const noEvmProof =
+    noEvmProofRaw === null || noEvmProofRaw === undefined
+      ? null
+      : parseMrvNoEvmReceiptProofTranscript(noEvmProofRaw);
+  if (
+    noEvmProofRaw !== null &&
+    noEvmProofRaw !== undefined &&
+    noEvmProof === null
+  ) {
+    return null;
+  }
   return {
     schema: typeof r.schema === "string" ? r.schema : null,
     txType: typeof r.txType === "number" ? r.txType : null,
     artifactHash: typeof r.artifactHash === "string" ? r.artifactHash : null,
     receiptCommitment: parseMrvReceiptCommitment(r.receiptCommitment),
     eventCount: typeof r.eventCount === "number" ? r.eventCount : null,
-    noEvmProofStatus:
-      r.noEvmProof === null || r.noEvmProof === undefined
-        ? "missing"
-        : "present-unverified",
+    noEvmProof,
+    noEvmProofStatus: noEvmProof === null ? "missing" : "present-unverified",
   };
 }
 
 function parseMrvReceiptCommitment(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   return /^0x[0-9a-fA-F]{64}$/.test(raw) ? raw : null;
+}
+
+function parseMrvNoEvmReceiptProofTranscript(
+  raw: unknown,
+): WalletMrvNoEvmReceiptProofTranscript | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.schema !== "mono.no_evm_receipt_proof.v1") return null;
+  if (r.proofType !== "canonicalReceiptsTranscript") return null;
+
+  const rootAlgorithm = parseNonEmptyString(r.rootAlgorithm);
+  const receiptCodec = parseNonEmptyString(r.receiptCodec);
+  const blockHash = parseMrvReceiptHash(r.blockHash);
+  const txHash = parseMrvReceiptHash(r.txHash);
+  const receiptsRoot = parseMrvReceiptHash(r.receiptsRoot);
+  const targetReceiptHash = parseMrvReceiptHash(r.targetReceiptHash);
+  const blockHeight = parseNonNegativeSafeInteger(r.blockHeight);
+  const txIndex = parseNonNegativeSafeInteger(r.txIndex);
+  const receiptCount = parsePositiveSafeInteger(r.receiptCount);
+  const receiptTranscript = parseMrvReceiptTranscript(r.receiptTranscript);
+
+  if (
+    rootAlgorithm === null ||
+    receiptCodec === null ||
+    blockHash === null ||
+    txHash === null ||
+    receiptsRoot === null ||
+    targetReceiptHash === null ||
+    blockHeight === null ||
+    txIndex === null ||
+    receiptCount === null ||
+    receiptTranscript === null ||
+    txIndex >= receiptCount ||
+    receiptTranscript.length !== receiptCount
+  ) {
+    return null;
+  }
+
+  return {
+    schema: "mono.no_evm_receipt_proof.v1",
+    proofType: "canonicalReceiptsTranscript",
+    rootAlgorithm,
+    receiptCodec,
+    blockHash,
+    txHash,
+    receiptsRoot,
+    targetReceiptHash,
+    blockHeight,
+    txIndex,
+    receiptCount,
+    receiptTranscript,
+  };
+}
+
+function parseNonEmptyString(raw: unknown): string | null {
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+function parseNonNegativeSafeInteger(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0
+    ? raw
+    : null;
+}
+
+function parsePositiveSafeInteger(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0
+    ? raw
+    : null;
+}
+
+function parseMrvReceiptHash(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  return /^0x[0-9a-fA-F]{64}$/.test(raw) ? raw : null;
+}
+
+function parseMrvReceiptTranscript(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const transcript: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(entry)) {
+      return null;
+    }
+    transcript.push(entry);
+  }
+  return transcript;
 }
 
 // ---- internal popup messages ----
