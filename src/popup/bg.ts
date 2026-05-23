@@ -882,7 +882,23 @@ export interface WalletMrvNativeReceiptEvidence {
   artifactHash: string | null;
   receiptCommitment: string | null;
   eventCount: number | null;
+  noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
   noEvmProofStatus: "missing" | "present-unverified";
+}
+
+export interface WalletMrvNoEvmReceiptProofTranscript {
+  schema: "mono.no_evm_receipt_proof.v1";
+  proofType: "canonicalReceiptsTranscript";
+  rootAlgorithm: string;
+  receiptCodec: string;
+  blockHash: string;
+  txHash: string;
+  receiptsRoot: string;
+  targetReceiptHash: string;
+  blockHeight: number;
+  txIndex: number;
+  receiptCount: number;
+  receiptTranscript: string[];
 }
 
 export interface WalletMrvNativeReceiptEvidenceError {
