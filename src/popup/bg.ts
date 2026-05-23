@@ -1490,9 +1490,9 @@ export async function bgStakingPendingRewards(
   return send("staking-pending-rewards", { wallet, delegations });
 }
 
-/** Read the redemption queue for a wallet. Per §23.2 ("zero unbonding
- *  period"), this is vestigial — the wallet always renders an empty
- *  queue today. */
+/** Read the redemption queue for a wallet. The SW prefers live
+ *  `lyth_redemptionQueue(wallet)` and only returns the empty mock shape
+ *  when the method is absent or Sprintnet is unreachable. */
 export async function bgStakingRedemptionQueue(
   wallet: string,
 ): Promise<StakingResult<RedemptionQueueView>> {
