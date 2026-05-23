@@ -11,6 +11,8 @@
 import type { ReactNode, CSSProperties } from "react";
 import { useState, useEffect } from "react";
 import {
+  NATIVE_AGENT_MODULE_ADDRESS,
+  NATIVE_AGENT_MODULE_ADDRESS_BYTES,
   PRECOMPILE_ADDRESSES,
   addressToTypedBech32,
   type AddressKind,
@@ -2578,7 +2580,7 @@ interface DecodedCall {
   /** Selector hex, e.g. `0xa9059cbb`, or native payload encoding marker. */
   selector: string;
   /** Optional protocol surface for first-party native precompile actions. */
-  surface?: "native-market";
+  surface?: "native-market" | "native-agent";
   /** Decoded args in display order. */
   args: Array<{ name: string; type: string; value: string }>;
 }
@@ -2597,6 +2599,10 @@ export function decodeCalldata(data: string, to?: string): DecodedCall | null {
   if (!data || !data.startsWith("0x")) return null;
   if (isNativeMarketModuleTarget(to)) {
     const nativePayload = decodeNativeMarketBincodePayload(data);
+    if (nativePayload) return nativePayload;
+  }
+  if (isNativeAgentModuleTarget(to)) {
+    const nativePayload = decodeNativeAgentBincodePayload(data);
     if (nativePayload) return nativePayload;
   }
   if (data.length < 10) return null;
@@ -2779,6 +2785,15 @@ function isNativeMarketModuleTarget(to: string | undefined): boolean {
   );
 }
 
+function isNativeAgentModuleTarget(to: string | undefined): boolean {
+  if (typeof to !== "string") return false;
+  const normalized = to.toLowerCase();
+  return (
+    normalized === NATIVE_AGENT_MODULE_ADDRESS_BYTES ||
+    normalized === NATIVE_AGENT_MODULE_ADDRESS
+  );
+}
+
 const NATIVE_MARKET_KIND_LABELS: Record<number, AddressKind> = {
   0: "user",
   1: "smartAccount",
@@ -2813,6 +2828,404 @@ function decodeNativeMarketBincodePayload(data: string): DecodedCall | null {
   }
 
   return null;
+}
+
+function decodeNativeAgentBincodePayload(data: string): DecodedCall | null {
+  const r = NativeMarketPayloadReader.fromHex(data);
+  if (!r) return null;
+  const nativeCall = r.u32();
+  if (nativeCall == null) return null;
+
+  const agentCall = r.u32();
+  if (agentCall == null) return null;
+
+  if (nativeCall === 0) return decodeNativeAgentIssuerPayload(r, agentCall);
+  if (nativeCall === 1) return decodeNativeAgentAttestationPayload(r, agentCall);
+  if (nativeCall === 2) return decodeNativeAgentConsentPayload(r, agentCall);
+  if (nativeCall === 3) return decodeNativeAgentDiscoveryPayload(r, agentCall);
+  if (nativeCall === 4) return decodeNativeAgentAvailabilityPayload(r, agentCall);
+  if (nativeCall === 5) return decodeNativeAgentArbiterPayload(r, agentCall);
+  if (nativeCall === 6) return decodeNativeAgentSpendingPolicyPayload(r, agentCall);
+  if (nativeCall === 7) return decodeNativeAgentEscrowPayload(r, agentCall);
+  if (nativeCall === 8) return decodeNativeAgentReputationPayload(r, agentCall);
+  return null;
+}
+
+function decodeNativeAgentIssuerPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const issuer = r.monoAddress();
+    const nonce = r.u64();
+    const metadataHash = r.bytesHex(32);
+    if (!issuer || nonce == null || !metadataHash || !r.done()) return null;
+    return nativeAgentCall("nativeAgentRegisterIssuer", [
+      monoArg("issuer", issuer),
+      uintArg("nonce", "uint64", nonce),
+      bytesArg("metadata hash", metadataHash),
+    ]);
+  }
+  if (call === 1) {
+    const issuerId = r.bytesHex(32);
+    if (!issuerId || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetIssuer", [bytesArg("issuer id", issuerId)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentAttestationPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const issuerId = r.bytesHex(32);
+    const issuer = r.monoAddress();
+    const subject = r.monoAddress();
+    const nonce = r.u64();
+    const schemaHash = r.bytesHex(32);
+    const payloadHash = r.bytesHex(32);
+    if (!issuerId || !issuer || !subject || nonce == null || !schemaHash || !payloadHash || !r.done()) return null;
+    return nativeAgentCall("nativeAgentIssueAttestation", [
+      bytesArg("issuer id", issuerId),
+      monoArg("issuer", issuer),
+      monoArg("subject", subject),
+      uintArg("nonce", "uint64", nonce),
+      bytesArg("schema hash", schemaHash),
+      bytesArg("payload hash", payloadHash),
+    ]);
+  }
+  if (call === 1) {
+    const attestationId = r.bytesHex(32);
+    const issuer = r.monoAddress();
+    if (!attestationId || !issuer || !r.done()) return null;
+    return nativeAgentCall("nativeAgentRevokeAttestation", [
+      bytesArg("attestation id", attestationId),
+      monoArg("issuer", issuer),
+    ]);
+  }
+  if (call === 2) {
+    const attestationId = r.bytesHex(32);
+    if (!attestationId || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetAttestation", [bytesArg("attestation id", attestationId)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentConsentPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const subject = r.monoAddress();
+    const grantee = r.monoAddress();
+    const nonce = r.u64();
+    const scopeHash = r.bytesHex(32);
+    const expiresAt = r.u64();
+    if (!subject || !grantee || nonce == null || !scopeHash || expiresAt == null || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGrantConsent", [
+      monoArg("subject", subject),
+      monoArg("grantee", grantee),
+      uintArg("nonce", "uint64", nonce),
+      bytesArg("scope hash", scopeHash),
+      uintArg("expires at", "uint64", expiresAt),
+    ]);
+  }
+  if (call === 1) {
+    const consentId = r.bytesHex(32);
+    const subject = r.monoAddress();
+    if (!consentId || !subject || !r.done()) return null;
+    return nativeAgentCall("nativeAgentRevokeConsent", [
+      bytesArg("consent id", consentId),
+      monoArg("subject", subject),
+    ]);
+  }
+  if (call === 2) {
+    const consentId = r.bytesHex(32);
+    if (!consentId || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetConsent", [bytesArg("consent id", consentId)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentDiscoveryPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const provider = r.monoAddress();
+    const nonce = r.u64();
+    const categoryHash = r.bytesHex(32);
+    const metadataHash = r.bytesHex(32);
+    if (!provider || nonce == null || !categoryHash || !metadataHash || !r.done()) return null;
+    return nativeAgentCall("nativeAgentListService", [
+      monoArg("provider", provider),
+      uintArg("nonce", "uint64", nonce),
+      bytesArg("category hash", categoryHash),
+      bytesArg("metadata hash", metadataHash),
+    ]);
+  }
+  if (call === 1) {
+    const serviceId = r.bytesHex(32);
+    const provider = r.monoAddress();
+    if (!serviceId || !provider || !r.done()) return null;
+    return nativeAgentCall("nativeAgentDeactivateService", [
+      bytesArg("service id", serviceId),
+      monoArg("provider", provider),
+    ]);
+  }
+  if (call === 2) {
+    const serviceId = r.bytesHex(32);
+    if (!serviceId || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetService", [bytesArg("service id", serviceId)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentAvailabilityPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const provider = r.monoAddress();
+    const maxConcurrent = r.u32();
+    const paused = r.u8();
+    if (!provider || maxConcurrent == null || paused == null || !r.done()) return null;
+    return nativeAgentCall("nativeAgentSetAvailability", [
+      monoArg("provider", provider),
+      numberArg("max concurrent", "uint32", maxConcurrent),
+      numberArg("paused", "bool", paused === 0 ? "false" : paused === 1 ? "true" : `unknown (${paused})`),
+    ]);
+  }
+  if (call === 1 || call === 2) {
+    const provider = r.monoAddress();
+    const consumer = r.monoAddress();
+    if (!provider || !consumer || !r.done()) return null;
+    return nativeAgentCall(call === 1 ? "nativeAgentOpenAvailability" : "nativeAgentCloseAvailability", [
+      monoArg("provider", provider),
+      monoArg("consumer", consumer),
+    ]);
+  }
+  if (call === 3) {
+    const provider = r.monoAddress();
+    if (!provider || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetAvailability", [monoArg("provider", provider)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentArbiterPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const arbiter = r.monoAddress();
+    const nonce = r.u64();
+    const tier = r.u16();
+    const metadataHash = r.bytesHex(32);
+    if (!arbiter || nonce == null || tier == null || !metadataHash || !r.done()) return null;
+    return nativeAgentCall("nativeAgentRegisterArbiter", [
+      monoArg("arbiter", arbiter),
+      uintArg("nonce", "uint64", nonce),
+      numberArg("tier", "uint16", tier),
+      bytesArg("metadata hash", metadataHash),
+    ]);
+  }
+  if (call === 1) {
+    const arbiterId = r.bytesHex(32);
+    if (!arbiterId || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetArbiter", [bytesArg("arbiter id", arbiterId)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentSpendingPolicyPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const owner = r.monoAddress();
+    const controller = r.monoAddress();
+    const nonce = r.u64();
+    const assetId = r.bytesHex(32);
+    const perActionLimit = r.u128();
+    const windowLimit = r.u128();
+    const windowSecs = r.u64();
+    if (
+      !owner ||
+      !controller ||
+      nonce == null ||
+      !assetId ||
+      perActionLimit == null ||
+      windowLimit == null ||
+      windowSecs == null ||
+      !r.done()
+    ) {
+      return null;
+    }
+    return nativeAgentCall("nativeAgentSetSpendingPolicy", [
+      monoArg("owner", owner),
+      monoArg("controller", controller),
+      uintArg("nonce", "uint64", nonce),
+      bytesArg("asset id", assetId),
+      uintArg("per-action limit", "uint128", perActionLimit),
+      uintArg("window limit", "uint128", windowLimit),
+      uintArg("window seconds", "uint64", windowSecs),
+    ]);
+  }
+  if (call === 1) {
+    const policyId = r.bytesHex(32);
+    const controller = r.monoAddress();
+    const window = r.u64();
+    const amount = r.u128();
+    if (!policyId || !controller || window == null || amount == null || !r.done()) return null;
+    return nativeAgentCall("nativeAgentRecordPolicySpend", [
+      bytesArg("policy id", policyId),
+      monoArg("controller", controller),
+      uintArg("window", "uint64", window),
+      uintArg("amount", "uint128", amount),
+    ]);
+  }
+  if (call === 2) {
+    const policyId = r.bytesHex(32);
+    if (!policyId || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetSpendingPolicy", [bytesArg("policy id", policyId)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentEscrowPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const buyer = r.monoAddress();
+    const provider = r.monoAddress();
+    const arbiter = r.monoAddress();
+    const nonce = r.u64();
+    const assetId = r.bytesHex(32);
+    const amount = r.u128();
+    const termsHash = r.bytesHex(32);
+    if (!buyer || !provider || !arbiter || nonce == null || !assetId || amount == null || !termsHash || !r.done()) {
+      return null;
+    }
+    return nativeAgentCall("nativeAgentCreateEscrow", [
+      monoArg("buyer", buyer),
+      monoArg("provider", provider),
+      monoArg("arbiter", arbiter),
+      uintArg("nonce", "uint64", nonce),
+      bytesArg("asset id", assetId),
+      uintArg("amount", "uint128", amount),
+      bytesArg("terms hash", termsHash),
+    ]);
+  }
+  if (call === 1) {
+    const escrowId = r.bytesHex(32);
+    const actor = r.monoAddress();
+    const termsHash = r.bytesHex(32);
+    if (!escrowId || !actor || !termsHash || !r.done()) return null;
+    return nativeAgentCall("nativeAgentCounterEscrow", [
+      bytesArg("escrow id", escrowId),
+      monoArg("actor", actor),
+      bytesArg("terms hash", termsHash),
+    ]);
+  }
+  if (call === 2 || call === 3 || (call >= 5 && call <= 7)) {
+    const escrowId = r.bytesHex(32);
+    const actor = r.monoAddress();
+    if (!escrowId || !actor || !r.done()) return null;
+    const names = [
+      "nativeAgentAcceptEscrow",
+      "nativeAgentStartEscrow",
+      "nativeAgentSubmitEscrow",
+      "nativeAgentApproveEscrow",
+      "nativeAgentDisputeEscrow",
+      "nativeAgentCancelEscrow",
+    ];
+    const name = names[call - 2];
+    if (!name) return null;
+    const actorName = call === 3 || call === 4 ? "provider" : "actor";
+    return nativeAgentCall(name, [bytesArg("escrow id", escrowId), monoArg(actorName, actor)]);
+  }
+  if (call === 4) {
+    const escrowId = r.bytesHex(32);
+    const provider = r.monoAddress();
+    const payloadHash = r.bytesHex(32);
+    if (!escrowId || !provider || !payloadHash || !r.done()) return null;
+    return nativeAgentCall("nativeAgentSubmitEscrow", [
+      bytesArg("escrow id", escrowId),
+      monoArg("provider", provider),
+      bytesArg("payload hash", payloadHash),
+    ]);
+  }
+  if (call === 8) {
+    const escrowId = r.bytesHex(32);
+    const actor = r.monoAddress();
+    const resolution = r.u32();
+    if (!escrowId || !actor || resolution == null || !r.done()) return null;
+    return nativeAgentCall("nativeAgentResolveEscrow", [
+      bytesArg("escrow id", escrowId),
+      monoArg("actor", actor),
+      numberArg(
+        "resolution",
+        "enum",
+        resolution === 0 ? "release-provider" : resolution === 1 ? "refund-buyer" : `unknown (${resolution})`,
+      ),
+    ]);
+  }
+  if (call === 9) {
+    const escrowId = r.bytesHex(32);
+    if (!escrowId || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetEscrow", [bytesArg("escrow id", escrowId)]);
+  }
+  return null;
+}
+
+function decodeNativeAgentReputationPayload(r: NativeMarketPayloadReader, call: number): DecodedCall | null {
+  if (call === 0) {
+    const reviewer = r.monoAddress();
+    const subject = r.monoAddress();
+    const categoryId = r.u32();
+    const speed = r.u8();
+    const quality = r.u8();
+    const communication = r.u8();
+    const accuracy = r.u8();
+    const payloadHash = r.bytesHex(32);
+    if (
+      !reviewer ||
+      !subject ||
+      categoryId == null ||
+      speed == null ||
+      quality == null ||
+      communication == null ||
+      accuracy == null ||
+      !payloadHash ||
+      !r.done()
+    ) {
+      return null;
+    }
+    return nativeAgentCall("nativeAgentRecordReputation", [
+      monoArg("reviewer", reviewer),
+      monoArg("subject", subject),
+      numberArg("category id", "uint32", categoryId),
+      numberArg("speed", "uint8", speed),
+      numberArg("quality", "uint8", quality),
+      numberArg("communication", "uint8", communication),
+      numberArg("accuracy", "uint8", accuracy),
+      bytesArg("payload hash", payloadHash),
+    ]);
+  }
+  if (call === 1) {
+    const subject = r.monoAddress();
+    const categoryId = r.u32();
+    if (!subject || categoryId == null || !r.done()) return null;
+    return nativeAgentCall("nativeAgentGetReputation", [
+      monoArg("subject", subject),
+      numberArg("category id", "uint32", categoryId),
+    ]);
+  }
+  return null;
+}
+
+function nativeAgentCall(name: string, args: DecodedCall["args"]): DecodedCall {
+  return {
+    name,
+    selector: "native-bincode",
+    surface: "native-agent",
+    args,
+  };
+}
+
+function monoArg(name: string, value: { kind: AddressKind; display: string }): DecodedCall["args"][number] {
+  return { name, type: value.kind, value: value.display };
+}
+
+function bytesArg(name: string, value: string): DecodedCall["args"][number] {
+  return { name, type: "bytes32", value };
+}
+
+function uintArg(name: string, type: string, value: bigint): DecodedCall["args"][number] {
+  return { name, type, value: value.toString(10) };
+}
+
+function numberArg(name: string, type: string, value: number | string): DecodedCall["args"][number] {
+  return { name, type, value: typeof value === "number" ? value.toString(10) : value };
 }
 
 function decodeNativeSpotLimitOrderPayload(r: NativeMarketPayloadReader): DecodedCall | null {
@@ -3072,6 +3485,13 @@ class NativeMarketPayloadReader {
     return value;
   }
 
+  u8(): number | null {
+    if (this.offset + 1 > this.bytes.length) return null;
+    const value = this.bytes[this.offset]!;
+    this.offset += 1;
+    return value;
+  }
+
   u128(): bigint | null {
     return this.uintLe(16);
   }
@@ -3294,7 +3714,7 @@ export function ReqSendTx({
       {decoded && (
         <div className="req-section">
           <div className="req-section__h">
-            <span>{decoded.surface === "native-market" ? "Native market action" : "Decoded call"}</span>
+            <span>{decodedSurfaceTitle(decoded)}</span>
             <button onClick={() => setShowDecoded((v) => !v)}>
               {showDecoded ? "hide" : "show"} ↓
             </button>
@@ -3364,6 +3784,12 @@ export function ReqSendTx({
       </div>
     </>
   );
+}
+
+function decodedSurfaceTitle(decoded: DecodedCall): string {
+  if (decoded.surface === "native-market") return "Native market action";
+  if (decoded.surface === "native-agent") return "Native agent action";
+  return "Decoded call";
 }
 
 // ---- personal_sign approval ----
