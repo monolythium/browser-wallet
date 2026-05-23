@@ -9,6 +9,15 @@ import {
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
 
 const EMPTY_BRIDGE_ROUTES: WalletBridgeRouteDisclosure[] = [];
+const BRIDGE_ROUTE_RESPONSE_FIELDS = [
+  "routes",
+  "bridgeRouteDisclosures",
+  "bridgeRoutes",
+  "routeDisclosures",
+  "bridge_route_disclosures",
+  "bridge_routes",
+  "route_disclosures",
+] as const;
 
 export function normaliseBridgeRoutesResponse(
   input: unknown,
@@ -26,14 +35,12 @@ export function normaliseBridgeRoutesResponse(
     return single.length > 0 ? single : null;
   }
 
-  const fromRoutes = validateWalletBridgeRouteDisclosureList(r.routes);
-  if (fromRoutes.length > 0 || Array.isArray(r.routes)) return fromRoutes;
-
-  const fromDisclosures = validateWalletBridgeRouteDisclosureList(
-    r.bridgeRouteDisclosures,
-  );
-  if (fromDisclosures.length > 0 || Array.isArray(r.bridgeRouteDisclosures)) {
-    return fromDisclosures;
+  for (const field of BRIDGE_ROUTE_RESPONSE_FIELDS) {
+    const value = r[field];
+    const routes = validateWalletBridgeRouteDisclosureList(value);
+    if (routes.length > 0 || Array.isArray(value)) {
+      return routes;
+    }
   }
 
   return null;
