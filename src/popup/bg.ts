@@ -860,6 +860,23 @@ export interface WalletMrvNativeReceipt {
   status: string | null;
   blockNumber: string | null;
   contractAddress: string | null;
+  nativeReceipt: WalletMrvNativeReceiptEvidence | null;
+  nativeReceiptError?: WalletMrvNativeReceiptEvidenceError;
+}
+
+export interface WalletMrvNativeReceiptEvidence {
+  schema: string | null;
+  txType: number | null;
+  artifactHash: string | null;
+  eventCount: number | null;
+  noEvmProofStatus: "missing" | "present-unverified";
+}
+
+export interface WalletMrvNativeReceiptEvidenceError {
+  reason: string;
+  code?: number;
+  method?: string;
+  via?: string;
 }
 
 export async function bgWalletMrvNativeReceiptStatus(args: {

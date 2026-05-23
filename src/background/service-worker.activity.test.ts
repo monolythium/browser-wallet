@@ -953,6 +953,14 @@ describe("wallet-mrv-receipt-status", () => {
       contractAddress: "0x2222222222222222222222222222222222222222",
       logs: [{ fabricatedProof: true }],
     };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      eventCount: 1,
+      noEvmProof: null,
+      proofLikeField: { ignored: true },
+    };
 
     const r = (await dispatchPopup({
       kind: "popup",
@@ -965,6 +973,14 @@ describe("wallet-mrv-receipt-status", () => {
         status: string | null;
         blockNumber: string | null;
         contractAddress: string | null;
+        nativeReceipt: {
+          schema: string | null;
+          txType: number | null;
+          artifactHash: string | null;
+          eventCount: number | null;
+          noEvmProofStatus: string;
+          proofLikeField?: unknown;
+        } | null;
         logs?: unknown[];
       };
       via?: string;
@@ -977,10 +993,54 @@ describe("wallet-mrv-receipt-status", () => {
         status: "0x1",
         blockNumber: "0x64",
         contractAddress: "0x2222222222222222222222222222222222222222",
+        nativeReceipt: {
+          schema: "riscv.receipt.v1",
+          txType: 0x41,
+          artifactHash: "0x" + "b".repeat(64),
+          eventCount: 1,
+          noEvmProofStatus: "missing",
+        },
       },
       via: "mock-operator",
     });
     expect(r.receipt.logs).toBeUndefined();
+    expect(r.receipt.nativeReceipt?.proofLikeField).toBeUndefined();
+    expect(rpcCalls).toContainEqual({
+      method: "lyth_nativeReceipt",
+      params: [SUBMITTED_TX_HASH],
+    });
+  });
+
+  it("keeps inclusion visible when native receipt evidence is unavailable", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x64",
+      contractAddress: null,
+    };
+    rpcErrors["lyth_nativeReceipt"] = {
+      code: -32090,
+      message: "transaction native receipt missing",
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: null;
+        nativeReceiptError?: { reason: string; code?: number; method?: string };
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toBeNull();
+    expect(r.receipt.nativeReceiptError).toEqual({
+      reason: "transaction native receipt missing",
+      method: "lyth_nativeReceipt",
+      code: -32090,
+    });
   });
 
   it("surfaces exact receipt RPC blockers instead of fabricating status", async () => {
