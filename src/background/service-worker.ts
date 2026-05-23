@@ -214,6 +214,21 @@ import {
   readPendingRewards,
   readRedemptionQueue,
 } from "./staking-client.js";
+
+interface WalletMrvNativeReceiptEvidence {
+  schema: string | null;
+  txType: number | null;
+  artifactHash: string | null;
+  eventCount: number | null;
+  noEvmProofStatus: "missing" | "present-unverified";
+}
+
+interface WalletMrvNativeReceiptEvidenceError {
+  reason: string;
+  code?: number;
+  method?: string;
+  via?: string;
+}
 import { previewTransactionHooks } from "./preview-hooks-client.js";
 import { readSigningActivity } from "./signing-activity-client.js";
 import { readOperatorRisk } from "./operator-risk-client.js";
@@ -1329,6 +1344,23 @@ function parsePasskeyPolicy(raw: unknown): PasskeyPolicy | null {
     return null;
   }
   return { enabled: r.enabled, mode: r.mode, limitWei, dailyCapWei };
+}
+
+function parseMrvNativeReceiptEvidence(
+  raw: unknown,
+): WalletMrvNativeReceiptEvidence | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  return {
+    schema: typeof r.schema === "string" ? r.schema : null,
+    txType: typeof r.txType === "number" ? r.txType : null,
+    artifactHash: typeof r.artifactHash === "string" ? r.artifactHash : null,
+    eventCount: typeof r.eventCount === "number" ? r.eventCount : null,
+    noEvmProofStatus:
+      r.noEvmProof === null || r.noEvmProof === undefined
+        ? "missing"
+        : "present-unverified",
+  };
 }
 
 // ---- internal popup messages ----
@@ -4539,6 +4571,34 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         if (!result) {
           return { ok: true, receipt: null, via };
         }
+        let nativeReceipt: WalletMrvNativeReceiptEvidence | null = null;
+        let nativeReceiptError: WalletMrvNativeReceiptEvidenceError | undefined;
+        try {
+          const native = await sprintnetJsonRpc<unknown>("lyth_nativeReceipt", [
+            p.txHash,
+          ]);
+          nativeReceipt = parseMrvNativeReceiptEvidence(native.result);
+          if (nativeReceipt === null) {
+            nativeReceiptError = {
+              reason: "lyth_nativeReceipt returned malformed native receipt",
+              method: "lyth_nativeReceipt",
+              ...(typeof native.via === "string" ? { via: native.via } : {}),
+            };
+          }
+        } catch (e) {
+          const err = e as Error & {
+            code?: number;
+            via?: string;
+            method?: string;
+          };
+          nativeReceiptError = {
+            reason: err.message ?? "MRV native receipt unavailable",
+            method:
+              typeof err.method === "string" ? err.method : "lyth_nativeReceipt",
+            ...(typeof err.code === "number" ? { code: err.code } : {}),
+            ...(typeof err.via === "string" ? { via: err.via } : {}),
+          };
+        }
         return {
           ok: true,
           receipt: {
@@ -4553,6 +4613,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               typeof result.contractAddress === "string"
                 ? result.contractAddress
                 : null,
+            nativeReceipt,
+            ...(nativeReceiptError !== undefined ? { nativeReceiptError } : {}),
           },
           via,
         };
