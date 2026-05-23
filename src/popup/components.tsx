@@ -31,6 +31,7 @@ import type {
   WalletIndexerSnapshot,
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
+  WalletBridgeRouteReadiness,
   WalletTokenBalance,
 } from "./bg";
 import {
@@ -1283,7 +1284,10 @@ interface BridgeProps {
 
 export function Bridge({ onBack, indexer }: BridgeProps) {
   const disclosures = collectBridgeRouteDisclosuresFromIndexer(indexer);
-  const routeChoice = useBridgeRouteSelection(disclosures);
+  const routeChoice = useBridgeRouteSelection(
+    disclosures,
+    indexer?.bridgeRouteReadiness ?? null,
+  );
   const transferPreview = routeChoice.transferPreview;
 
   return (
@@ -1361,6 +1365,12 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
             <BridgeRouteMetric label="SDK routes" value={String(routeChoice.sdkRouteCount)} />
             <BridgeRouteMetric label="Display only" value={String(routeChoice.displayOnlyCount)} />
           </div>
+          {routeChoice.catalogueReadiness && (
+            <BridgeRouteReadinessPanel
+              title="Catalogue readiness"
+              readiness={routeChoice.catalogueReadiness}
+            />
+          )}
           {routeChoice.blockedReasons.length > 0 && (
             <BridgeRouteReasonList
               title="Selection closed"
@@ -1453,6 +1463,12 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
               <BridgeRouteMetric label="Recipient" value="required" />
             </div>
           )}
+          {transferPreview.readiness && (
+            <BridgeRouteReadinessPanel
+              title="Route readiness"
+              readiness={transferPreview.readiness}
+            />
+          )}
           {transferPreview.blockedReasons.length > 0 && (
             <BridgeRouteReasonList
               title="Intent guard"
@@ -1477,6 +1493,13 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
               style={{ cursor: "not-allowed", opacity: 0.55 }}
             >
               Request quote
+            </button>
+            <button
+              className="ghost"
+              disabled
+              style={{ cursor: "not-allowed", opacity: 0.55 }}
+            >
+              Submit bridge
             </button>
           </div>
         </div>
@@ -1555,6 +1578,15 @@ function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) 
           <BridgeRouteMetric label="Risk" value={assessment.riskTier} />
           <BridgeRouteMetric label="Cooldown" value={`${route.cooldownSeconds}s`} />
           <BridgeRouteMetric label="Finality" value={`${route.finalityBlocks} blocks`} />
+          {candidate.bridgeId && (
+            <BridgeRouteMetric label="Bridge ID" value={candidate.bridgeId} />
+          )}
+          {candidate.wrappedAsset && (
+            <BridgeRouteMetric
+              label="Wrapped asset"
+              value={candidate.wrappedAsset}
+            />
+          )}
         </div>
       ) : (
         <BridgeRouteReasonList
@@ -1576,6 +1608,12 @@ function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) 
           title="Warnings"
           reasons={assessment.warnings}
           tone="warning"
+        />
+      )}
+      {candidate.readiness && (
+        <BridgeRouteReadinessPanel
+          title="Catalogue readiness"
+          readiness={candidate.readiness}
         />
       )}
 
@@ -1603,6 +1641,65 @@ function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) 
 interface BridgeRouteMetricProps {
   label: string;
   value: string;
+}
+
+interface BridgeRouteReadinessPanelProps {
+  title: string;
+  readiness: WalletBridgeRouteReadiness;
+}
+
+function BridgeRouteReadinessPanel({
+  title,
+  readiness,
+}: BridgeRouteReadinessPanelProps) {
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: "var(--fg-200)",
+          marginBottom: 6,
+        }}
+      >
+        {title}
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: 8,
+        }}
+      >
+        <BridgeRouteMetric
+          label="Selection"
+          value={readiness.routeSelectionReady ? "ready" : "blocked"}
+        />
+        <BridgeRouteMetric
+          label="Quote"
+          value={readiness.quoteReady ? "ready" : "disabled"}
+        />
+        <BridgeRouteMetric
+          label="Submit"
+          value={readiness.submitReady ? "ready" : "disabled"}
+        />
+      </div>
+      {readiness.blockedReasons.length > 0 && (
+        <BridgeRouteReasonList
+          title="Readiness guard"
+          reasons={readiness.blockedReasons}
+          tone="blocked"
+        />
+      )}
+      {readiness.warnings.length > 0 && (
+        <BridgeRouteReasonList
+          title="Readiness warnings"
+          reasons={readiness.warnings}
+          tone="warning"
+        />
+      )}
+    </div>
+  );
 }
 
 function BridgeRouteMetric({ label, value }: BridgeRouteMetricProps) {

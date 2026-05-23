@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectWalletBridgeRouteDisclosures,
   validateWalletBridgeRouteDisclosureList,
+  validateWalletBridgeRouteReadiness,
   validateWalletTokenBalanceList,
 } from "./token-balances.js";
 
@@ -277,6 +278,24 @@ describe("wallet token-balance validators", () => {
 });
 
 describe("bridge route disclosure validators", () => {
+  it("normalizes catalogue readiness flags and bounded reason lists", () => {
+    expect(
+      validateWalletBridgeRouteReadiness({
+        routeSelectionReady: false,
+        quote_ready: false,
+        submitReady: false,
+        blocked_reasons: ["bridge route selection requires transfer intent"],
+        warnings: ["catalogue discovery only"],
+      }),
+    ).toEqual({
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: ["bridge route selection requires transfer intent"],
+      warnings: ["catalogue discovery only"],
+    });
+  });
+
   it("accepts singular and plural API fields from an enclosing response", () => {
     expect(
       collectWalletBridgeRouteDisclosures({

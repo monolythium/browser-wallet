@@ -497,12 +497,26 @@ describe("wallet-indexer-snapshot", () => {
       ok: true;
       snapshot: {
         bridgeRouteDisclosures: Array<Record<string, unknown>>;
+        bridgeRouteReadiness: {
+          routeSelectionReady: boolean;
+          quoteReady: boolean;
+          submitReady: boolean;
+          blockedReasons: string[];
+          warnings: string[];
+        } | null;
         errors: Record<string, string>;
       };
     };
 
     expect(r.ok).toBe(true);
     expect(r.snapshot.bridgeRouteDisclosures).toEqual([DISCOVERY_ROUTE]);
+    expect(r.snapshot.bridgeRouteReadiness).toEqual({
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: ["bridge route selection requires transfer intent"],
+      warnings: [],
+    });
     expect(r.snapshot.errors.bridgeRoutes).toBeUndefined();
     expect(rpcCalls).toContainEqual({
       method: "lyth_bridgeRoutes",

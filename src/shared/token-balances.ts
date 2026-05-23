@@ -17,6 +17,19 @@ export type WalletBridgeRouteDisclosure = Record<
   WalletBridgeDisclosureValue
 >;
 
+export interface WalletBridgeRouteReadiness {
+  routeSelectionReady: boolean;
+  quoteReady: boolean;
+  submitReady: boolean;
+  blockedReasons: string[];
+  warnings: string[];
+}
+
+export interface WalletBridgeRoutesCatalogue {
+  bridgeRouteDisclosures: WalletBridgeRouteDisclosure[];
+  readiness: WalletBridgeRouteReadiness | null;
+}
+
 export interface WalletTokenBalance {
   tokenId: string;
   balance: string;
@@ -42,6 +55,35 @@ function isPlainRecord(input: unknown): input is Record<string, unknown> {
   }
   const proto = Object.getPrototypeOf(input);
   return proto === Object.prototype || proto === null;
+}
+
+function readBooleanAlias(
+  input: Record<string, unknown>,
+  aliases: readonly string[],
+): boolean | null {
+  for (const alias of aliases) {
+    const value = input[alias];
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
+function readStringListAlias(
+  input: Record<string, unknown>,
+  aliases: readonly string[],
+): string[] {
+  for (const alias of aliases) {
+    const value = input[alias];
+    if (!Array.isArray(value)) continue;
+    const out: string[] = [];
+    for (const item of value.slice(0, MAX_DISCLOSURE_ARRAY_ITEMS)) {
+      if (typeof item !== "string") return [];
+      if (item.length > MAX_DISCLOSURE_STRING_LENGTH) return [];
+      out.push(item);
+    }
+    return out;
+  }
+  return [];
 }
 
 function validateWalletBridgeDisclosureValue(
@@ -96,6 +138,45 @@ export function validateWalletBridgeRouteDisclosure(
     return null;
   }
   return Object.keys(value).length > 0 ? value : null;
+}
+
+export function validateWalletBridgeRouteReadiness(
+  input: unknown,
+): WalletBridgeRouteReadiness | null {
+  if (!isPlainRecord(input)) return null;
+  const routeSelectionReady = readBooleanAlias(input, [
+    "routeSelectionReady",
+    "route_selection_ready",
+  ]);
+  const quoteReady = readBooleanAlias(input, ["quoteReady", "quote_ready"]);
+  const submitReady = readBooleanAlias(input, ["submitReady", "submit_ready"]);
+  const blockedReasons = readStringListAlias(input, [
+    "blockedReasons",
+    "blocked_reasons",
+    "readinessBlockedReasons",
+  ]);
+  const warnings = readStringListAlias(input, [
+    "warnings",
+    "readinessWarnings",
+  ]);
+
+  if (
+    routeSelectionReady === null &&
+    quoteReady === null &&
+    submitReady === null &&
+    blockedReasons.length === 0 &&
+    warnings.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    routeSelectionReady: routeSelectionReady ?? false,
+    quoteReady: quoteReady ?? false,
+    submitReady: submitReady ?? false,
+    blockedReasons,
+    warnings,
+  };
 }
 
 export function validateWalletBridgeRouteDisclosureList(
