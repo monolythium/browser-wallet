@@ -23,8 +23,10 @@
 // wallet automatically.
 
 import {
+  addressToTypedBech32,
   MonolythiumProvider,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
+  typedBech32ToAddress,
 } from "@monolythium/core-sdk";
 import {
   buildWalletMrvCallNativePlan,
@@ -200,6 +202,10 @@ import {
   WALLET_KNOWN_INDEXER_SCHEMA_VERSION,
   validateIndexerStatusWire,
 } from "../shared/indexer-status.js";
+import {
+  validateMrcAccountLookupResponse,
+  type MrcAccountLookupResponse,
+} from "../shared/mrc-account.js";
 import {
   collectWalletBridgeRouteDisclosures,
   validateWalletMrcHoldersResponse,
@@ -1645,6 +1651,7 @@ interface IndexerSnapshotRaw {
   tokenBalances: WalletTokenBalance[];
   bridgeRouteDisclosures: WalletBridgeRouteDisclosure[];
   bridgeRouteReadiness: WalletBridgeRouteReadiness | null;
+  mrcAccount: MrcAccountLookupResponse | null;
   addressLabel: unknown | null;
   delegationHistory: unknown[];
   addressActivity: unknown[];
@@ -1653,6 +1660,11 @@ interface IndexerSnapshotRaw {
 
 const MRC_HOLDER_LOOKUP_ROW_LIMIT = 4;
 const MRC_HOLDER_LOOKUP_LIMIT = 3;
+const MRC_ACCOUNT_SPEND_LOOKUP_LIMIT = 4;
+
+interface FetchIndexerSnapshotOptions {
+  includeMrcAccount: boolean;
+}
 
 function readTokenBalanceRows(input: unknown): unknown[] {
   if (Array.isArray(input)) return input;
@@ -1765,23 +1777,65 @@ async function enrichMrcHolderRows(
   };
 }
 
-/** Parallel-fetch the four indexer streams used by both popup-facing
+function smartAccountLookupAddress(address: string): string | null {
+  try {
+    if (address.startsWith("0x") || address.startsWith("0X")) {
+      return addressToTypedBech32("smartAccount", address);
+    }
+    return typedBech32ToAddress(address, "smartAccount").address;
+  } catch {
+    return null;
+  }
+}
+
+async function readMrcAccountLookup(
+  address: string,
+): Promise<{ value: MrcAccountLookupResponse | null; error?: string }> {
+  const lookupAccount = smartAccountLookupAddress(address);
+  if (lookupAccount === null) {
+    return { value: null, error: "invalid MRC account lookup address" };
+  }
+  const response = await settleSprintnetRpc<unknown>("lyth_mrcAccount", [
+    lookupAccount,
+    MRC_ACCOUNT_SPEND_LOOKUP_LIMIT,
+  ]);
+  if (response.error) {
+    return { value: null, error: response.error };
+  }
+  const mrcAccount = validateMrcAccountLookupResponse(response.value);
+  if (
+    mrcAccount === null ||
+    mrcAccount.account.toLowerCase() !== lookupAccount.toLowerCase()
+  ) {
+    return { value: null, error: "malformed lyth_mrcAccount response" };
+  }
+  return { value: mrcAccount };
+}
+
+/** Parallel-fetch the indexer streams used by popup-facing
  *  snapshots. Token balances are validated at the SW boundary because the
  *  popup renders them directly; other streams keep their existing raw shapes
  *  and are validated by the consumers that need typed rows. */
 async function fetchIndexerSnapshot(
   address: string,
   _chainIdHex: string,
+  options: FetchIndexerSnapshotOptions,
 ): Promise<IndexerSnapshotRaw> {
   const [
     tokenBalances,
     bridgeRoutes,
+    mrcAccount,
     addressLabel,
     delegationHistory,
     addressActivity,
   ] = await Promise.all([
     settleSprintnetRpc<unknown>("lyth_getTokenBalances", [address]),
     readBridgeRoutes(),
+    options.includeMrcAccount
+      ? readMrcAccountLookup(address)
+      : Promise.resolve<{ value: MrcAccountLookupResponse | null; error?: string }>({
+          value: null,
+        }),
     settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
     settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
     settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
@@ -1791,6 +1845,7 @@ async function fetchIndexerSnapshot(
   if (bridgeRoutes.kind !== "live" && "reason" in bridgeRoutes) {
     errors.bridgeRoutes = bridgeRoutes.reason;
   }
+  if (mrcAccount.error) errors.mrcAccount = mrcAccount.error;
   if (addressLabel.error) errors.addressLabel = addressLabel.error;
   if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
   if (addressActivity.error) errors.addressActivity = addressActivity.error;
@@ -1806,6 +1861,7 @@ async function fetchIndexerSnapshot(
       ...collectWalletBridgeRouteDisclosures(tokenBalances.value),
     ]),
     bridgeRouteReadiness: bridgeRoutes.data.readiness,
+    mrcAccount: mrcAccount.value,
     addressLabel: addressLabel.value ?? null,
     delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
     addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
@@ -4414,13 +4470,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "indexer snapshot is only wired for Sprintnet today" };
       }
-      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex);
+      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex, {
+        includeMrcAccount: true,
+      });
       return {
         ok: true,
         snapshot: {
           tokenBalances: fresh.tokenBalances,
           bridgeRouteDisclosures: fresh.bridgeRouteDisclosures,
           bridgeRouteReadiness: fresh.bridgeRouteReadiness,
+          mrcAccount: fresh.mrcAccount,
           addressLabel: fresh.addressLabel,
           delegationHistory: fresh.delegationHistory,
           addressActivity: fresh.addressActivity,
@@ -4474,7 +4533,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
         return { ok: true, cache: prevCache, pending, errors: {} };
       }
-      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex);
+      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex, {
+        includeMrcAccount: false,
+      });
       const activityOk = fresh.errors.addressActivity === undefined;
       const delegationOk = fresh.errors.delegationHistory === undefined;
       if (!activityOk && !delegationOk && prevCache !== null) {

@@ -29,8 +29,13 @@ import {
   it,
   vi,
 } from "vitest";
+import { addressToTypedBech32 } from "@monolythium/core-sdk";
 
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
+const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
+  "smartAccount",
+  DETERMINISTIC_ADDRESS,
+);
 const TESTNET_CHAIN_ID_HEX = "0x10F2C";
 const DISCOVERY_ROUTE = {
   routeId: "ccip-usdc-eth-mono",
@@ -574,6 +579,108 @@ describe("wallet-indexer-snapshot", () => {
     });
   });
 
+  it("includes best-effort MRC account lookup in popup snapshots", async () => {
+    const controller = addressToTypedBech32(
+      "user",
+      "0x2222222222222222222222222222222222222222",
+    );
+    const recovery = addressToTypedBech32(
+      "user",
+      "0x3333333333333333333333333333333333333333",
+    );
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+    rpcResponses["lyth_mrcAccount"] = {
+      schemaVersion: 1,
+      account: DETERMINISTIC_SMART_ACCOUNT,
+      spendLimit: 4,
+      smartAccount: {
+        kind: "smart_account",
+        account: DETERMINISTIC_SMART_ACCOUNT,
+        controller,
+        recovery,
+        policyHash: null,
+        nonce: "7",
+        updatedAtBlock: 140,
+      },
+      policyAccount: {
+        kind: "policy_account",
+        account: DETERMINISTIC_SMART_ACCOUNT,
+        controller,
+        recovery: null,
+        policyHash: "0x" + "55".repeat(32),
+        nonce: null,
+        updatedAtBlock: 141,
+      },
+      policySpends: [
+        {
+          account: DETERMINISTIC_SMART_ACCOUNT,
+          assetId: "0x" + "44".repeat(32),
+          window: "9",
+          amount: "20",
+          spent: "45",
+          updatedAtBlock: 142,
+        },
+      ],
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        mrcAccount: {
+          account: string;
+          smartAccount: { nonce: string | null } | null;
+          policyAccount: { policyHash: string | null } | null;
+          policySpends: Array<{ window: string; spent: string }>;
+        } | null;
+        errors: Record<string, string>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.mrcAccount).toMatchObject({
+      account: DETERMINISTIC_SMART_ACCOUNT,
+      smartAccount: { nonce: "7" },
+      policyAccount: { policyHash: "0x" + "55".repeat(32) },
+      policySpends: [{ window: "9", spent: "45" }],
+    });
+    expect(r.snapshot.errors.mrcAccount).toBeUndefined();
+    expect(rpcCalls).toContainEqual({
+      method: "lyth_mrcAccount",
+      params: [DETERMINISTIC_SMART_ACCOUNT, 4],
+    });
+  });
+
+  it("returns a null MRC account summary when lookup is unavailable", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+    rpcErrors["lyth_mrcAccount"] = { code: -32601, message: "Method not found" };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        mrcAccount: null;
+        errors: Record<string, string>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.mrcAccount).toBeNull();
+    expect(r.snapshot.errors.mrcAccount).toBe("Method not found");
+  });
+
   it("passes through bridge route disclosures from token-balance envelopes", async () => {
     rpcResponses["lyth_getTokenBalances"] = {
       tokenBalances: [
@@ -749,6 +856,7 @@ describe("wallet-activity-get", () => {
     });
     const firstFetchCount = rpcCalls.length;
     expect(firstFetchCount).toBe(5); // tokenBalances + bridgeRoutes + addressLabel + delegationHistory + addressActivity
+    expect(rpcCalls.some((c) => c.method === "lyth_mrcAccount")).toBe(false);
     // Second call immediately after — cache is fresh, should NOT hit RPC.
     await dispatchPopup({
       kind: "popup",
