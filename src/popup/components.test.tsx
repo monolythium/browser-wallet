@@ -137,6 +137,44 @@ describe("ReqSendTx native market calldata decode", () => {
     expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
   });
 
+  it("decodes native bincode NFT create listing approvals only for the market system module", () => {
+    const seller = "11".repeat(20);
+    const collectionId = "22".repeat(32);
+    const tokenId = "33".repeat(32);
+    const paymentAsset = "44".repeat(32);
+    const payload =
+      "0x010000000000000000000000" +
+      seller +
+      "0700000000000000" +
+      "00000000" +
+      collectionId +
+      tokenId +
+      "01000000000000000000000000000000" +
+      paymentAsset +
+      "7b000000000000000000000000000000" +
+      "00000000" +
+      "e703000000000000";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeNftCreateListing");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["seller", addressToTypedBech32("user", `0x${seller}`)],
+      ["nonce", "7"],
+      ["standard", "mrc721"],
+      ["collection id", `0x${collectionId}`],
+      ["token id", `0x${tokenId}`],
+      ["quantity", "1"],
+      ["payment asset", `0x${paymentAsset}`],
+      ["price", "123"],
+      ["listing kind", "fixed-price"],
+      ["expires at block", "999"],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
   it("decodes native bincode NFT buy listing approvals only for the market system module", () => {
     const listingId = "55".repeat(32);
     const buyer = "66".repeat(20);
@@ -152,6 +190,24 @@ describe("ReqSendTx native market calldata decode", () => {
       ["listing id", `0x${listingId}`],
       ["buyer", addressToTypedBech32("user", `0x${buyer}`)],
       ["current block", "777"],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
+  it("decodes native bincode NFT cancel listing approvals only for the market system module", () => {
+    const listingId = "55".repeat(32);
+    const caller = "66".repeat(20);
+    const payload =
+      "0x01000000020000005555555555555555555555555555555555555555555555555555555555555555000000006666666666666666666666666666666666666666";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeNftCancelListing");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["listing id", `0x${listingId}`],
+      ["caller", addressToTypedBech32("user", `0x${caller}`)],
     ]);
     expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
   });
