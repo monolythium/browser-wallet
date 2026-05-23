@@ -1,11 +1,10 @@
 // Phase 7 — RewardCard. Pending-rewards summary + per-cluster breakdown
 // + "Claim all" button.
 //
-// Data source: bgStakingPendingRewards returns a mock-derived view
-// today (chain GAP — no `lyth_pendingRewards` reader yet in the SDK
-// at 0fd8a79). The card surfaces `via: "mock"` with an explicit
-// "illustrative — chain side pending" banner so the figures don't
-// mislead.
+// Data source: bgStakingPendingRewards reads `lyth_pendingRewards`
+// first. When an older/offline operator cannot serve that method, the
+// card surfaces `via: "mock"` with an explicit illustrative banner so
+// fallback figures don't look like live reward state.
 //
 // Claim path: `claimRewards()` is a selector-only precompile call
 // (no args). Encoded via shared/staking-tx.ts:encodeClaimRewards()
@@ -24,7 +23,7 @@ interface RewardCardProps {
   /** Compatibility reward fields are still named `*Wei` in
    *  PendingRewardsView; values rendered here are v4.1 lythoshi. */
   rewards: PendingRewardsView | null;
-  /** `true` when the SW returned mock data (chain side not yet live). */
+  /** `true` when the SW returned fallback mock data. */
   isMock: boolean;
   clusters: ReadonlyArray<ClusterDirectoryEntry>;
   /** Called when the user taps "Claim all". The parent owns the SW
@@ -96,7 +95,7 @@ export function RewardCard({
       >
         <div style={cardLabel}>Pending rewards · §23.4</div>
         {isMock && (
-          <span style={mockBadgeStyle} title="Chain side has not yet surfaced a pending-rewards reader; figures derived locally from active delegations × cluster APR.">
+          <span style={mockBadgeStyle} title="Live pending-rewards read is unavailable from this operator; figures are derived locally from active delegations × cluster APR.">
             illustrative
           </span>
         )}
@@ -241,9 +240,9 @@ export function RewardCard({
             lineHeight: 1.5,
           }}
         >
-          Chain side has not yet exposed a pending-rewards reader; the
-          claim tx still routes to the delegation precompile and accrues
-          on-chain rewards correctly once the gate activates.
+          Live pending-rewards read is unavailable from this operator;
+          the claim tx still routes to the delegation precompile and
+          settles on-chain rewards.
         </div>
       )}
     </div>

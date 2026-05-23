@@ -8,9 +8,9 @@
 //     `ok: true, data, via: "mock"` so the popup renders the realistic
 //     architecture shape while Sprintnet is offline (Phase 7 phase-
 //     start posture);
-//   - on chain GAP (RPC doesn't exist in SDK yet), returns a typed
-//     mock with `via: "mock"` and a clear `// TODO: chain GAP` comment
-//     at the call site;
+//   - on the few remaining chain GAPs, returns a typed mock with
+//     `via: "mock"` and a clear `// TODO: chain GAP` comment at the
+//     call site;
 //   - on protocol-shape mismatch (the chain returned something we
 //     don't recognise), returns `ok: false, reason`.
 //

@@ -18,17 +18,12 @@
 // CHAIN GAP TRACKER
 // =================
 //
-// Two RPCs investigated for Phase 11.5 are NOT YET exposed on
-// mono-core @dd05511 and so have no types or validators in this
-// module — wallet adoption deferred to a future sync:
+// Follow-up RPCs investigated for Phase 11.5:
 //
-// 1. **Delegation reward claim ledger** — `48c4ba65 MS-CORE-0009
-//    add delegation reward claim ledger` lands the storage layer
-//    in `crates/precompiles/system/delegation/src/storage.rs` but
-//    does NOT expose an RPC method. Wallet's `lyth_pendingRewards`
-//    mock GAP (Phase 7.1, derived via MOCK_APR / (365×288))
-//    cannot be closed until the read surface ships. Tracked also
-//    by `c90e9372 MS-CORE-0009 pin claim reward ledger blocker`.
+// 1. **Delegation reward claim ledger** — the wallet now calls
+//    `lyth_pendingRewards` directly in `staking-client.ts`. Typed SDK
+//    helpers may replace that direct call once the wallet consumes a
+//    package release carrying the new reader.
 //
 // 2. **`lyth_setAddressLabel`** — the `lyth_getAddressLabel`
 //    handler (`protocore.rs:3660`) comments that the indexer
@@ -36,7 +31,7 @@
 //    but the write path is not wired. Wallet's address-book write
 //    flow (Phase 11.5 Commit 6 originally proposed) is deferred.
 //
-// Both will be re-evaluated at the next chain sync.
+// Remaining deferred items will be re-evaluated at the next chain sync.
 //
 // Whitepaper alignment:
 //  - lyth_previewTransactionHooks → §15 (spending policy hook gate)
