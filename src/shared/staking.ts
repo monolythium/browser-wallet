@@ -211,7 +211,8 @@ export interface ClusterDelegatorsView {
 export interface PendingRewardsRow {
   /** Cluster id the rewards accrued from. */
   cluster: number;
-  /** Accrued rewards in wei-LYTH (smallest unit). */
+  /** Accrued rewards as a hex lythoshi quantity (8-decimal native LYTH).
+   *  The `amountWei` key is a legacy upstream/API compatibility name only. */
   amountWei: string;
   /** Cluster's effective APR at observation time, in basis points. `null`
    *  when the chain hasn't surfaced an APR for this cluster (per §23.5
@@ -223,6 +224,9 @@ export interface PendingRewardsRow {
 /** Pending-rewards envelope keyed by wallet. */
 export interface PendingRewardsView {
   wallet: string;
+  /** Total accrued rewards as hex lythoshi. `totalAmountWei` is retained
+   *  as a compatibility boundary name until the upstream staking API shape
+   *  is renamed. */
   totalAmountWei: string;
   rows: PendingRewardsRow[];
   /** Block height the snapshot was taken at; absent when the data is
@@ -239,6 +243,8 @@ export interface PendingRewardsView {
  *  always empty. */
 export interface RedemptionQueueRow {
   cluster: number;
+  /** Redemption amount as hex lythoshi. The `amountWei` key remains only
+   *  for staking API compatibility. */
   amountWei: string;
   /** Unix timestamp the redemption clears at. `null` when the chain
    *  reports an instant exit (the §23.2 baseline). */
