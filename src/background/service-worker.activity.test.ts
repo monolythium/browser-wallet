@@ -735,6 +735,12 @@ describe("wallet-indexer-snapshot", () => {
   });
 
   it("preserves native agent state rows in popup snapshots", async () => {
+    const issuerId = `0x${"11".repeat(32)}`;
+    const attestationId = `0x${"12".repeat(32)}`;
+    const consentId = `0x${"13".repeat(32)}`;
+    const serviceId = `0x${"14".repeat(32)}`;
+    const arbiterId = `0x${"15".repeat(32)}`;
+    const reviewId = `0x${"16".repeat(32)}`;
     const policyId = `0x${"aa".repeat(32)}`;
     const escrowId = `0x${"bb".repeat(32)}`;
     rpcResponses["lyth_getTokenBalances"] = [];
@@ -749,6 +755,65 @@ describe("wallet-indexer-snapshot", () => {
         account: DETERMINISTIC_ADDRESS,
         includePolicySpends: true,
       },
+      issuers: [
+        {
+          issuerId,
+          issuer: DETERMINISTIC_ADDRESS,
+          metadataHash: `0x${"1b".repeat(32)}`,
+          updatedAtBlock: 45,
+        },
+      ],
+      attestations: [
+        {
+          attestationId,
+          issuerId,
+          issuer: DETERMINISTIC_ADDRESS,
+          subject: "mono1agentcontroller",
+          schemaHash: `0x${"17".repeat(32)}`,
+          payloadHash: `0x${"ee".repeat(32)}`,
+          active: false,
+          updatedAtBlock: 46,
+        },
+      ],
+      consents: [
+        {
+          consentId,
+          subject: DETERMINISTIC_ADDRESS,
+          grantee: "mono1agentarbiter",
+          scopeHash: `0x${"19".repeat(32)}`,
+          expiresAt: 10_000,
+          active: true,
+          updatedAtBlock: 47,
+        },
+      ],
+      services: [
+        {
+          serviceId,
+          provider: "mono1agentprovider",
+          categoryHash: `0x${"1a".repeat(32)}`,
+          metadataHash: `0x${"1b".repeat(32)}`,
+          active: true,
+          updatedAtBlock: 48,
+        },
+      ],
+      availability: [
+        {
+          provider: "mono1agentprovider",
+          maxConcurrent: 8,
+          openRequests: 2,
+          paused: false,
+          updatedAtBlock: 49,
+        },
+      ],
+      arbiters: [
+        {
+          arbiterId,
+          arbiter: "mono1agentarbiter",
+          tier: 2,
+          metadataHash: `0x${"1b".repeat(32)}`,
+          updatedAtBlock: 50,
+        },
+      ],
       spendingPolicies: [
         {
           policyId,
@@ -783,6 +848,20 @@ describe("wallet-indexer-snapshot", () => {
           updatedAtBlock: 44,
         },
       ],
+      reputationReviews: [
+        {
+          reviewId,
+          reviewer: DETERMINISTIC_ADDRESS,
+          subject: "mono1agentprovider",
+          categoryId: 7,
+          speedScore: 9,
+          qualityScore: 8,
+          communicationScore: 10,
+          accuracyScore: 9,
+          payloadHash: `0x${"ee".repeat(32)}`,
+          updatedAtBlock: 51,
+        },
+      ],
       source: {
         indexerProvider: "native_agent_state",
         projection: "native_agent_state",
@@ -797,18 +876,54 @@ describe("wallet-indexer-snapshot", () => {
       ok: true;
       snapshot: {
         nativeAgentState: {
+          issuers: Array<{ issuerId: string; issuer: string }>;
+          attestations: Array<{ attestationId: string; active: boolean }>;
+          consents: Array<{ consentId: string; active: boolean }>;
+          services: Array<{ serviceId: string; provider: string }>;
+          availability: Array<{ provider: string; maxConcurrent: number; openRequests: number }>;
+          arbiters: Array<{ arbiterId: string; tier: number }>;
           spendingPolicies: Array<{ policyId: string }>;
           escrows: Array<{ escrowId: string; status: string }>;
+          reputationReviews: Array<{ reviewId: string; qualityScore: number }>;
         } | null;
         errors: Record<string, string>;
       };
     };
 
     expect(r.ok).toBe(true);
+    expect(r.snapshot.nativeAgentState?.issuers[0]).toMatchObject({
+      issuerId,
+      issuer: DETERMINISTIC_ADDRESS,
+    });
+    expect(r.snapshot.nativeAgentState?.attestations[0]).toMatchObject({
+      attestationId,
+      active: false,
+    });
+    expect(r.snapshot.nativeAgentState?.consents[0]).toMatchObject({
+      consentId,
+      active: true,
+    });
+    expect(r.snapshot.nativeAgentState?.services[0]).toMatchObject({
+      serviceId,
+      provider: "mono1agentprovider",
+    });
+    expect(r.snapshot.nativeAgentState?.availability[0]).toMatchObject({
+      provider: "mono1agentprovider",
+      maxConcurrent: 8,
+      openRequests: 2,
+    });
+    expect(r.snapshot.nativeAgentState?.arbiters[0]).toMatchObject({
+      arbiterId,
+      tier: 2,
+    });
     expect(r.snapshot.nativeAgentState?.spendingPolicies[0]?.policyId).toBe(policyId);
     expect(r.snapshot.nativeAgentState?.escrows[0]).toMatchObject({
       escrowId,
       status: "accepted",
+    });
+    expect(r.snapshot.nativeAgentState?.reputationReviews[0]).toMatchObject({
+      reviewId,
+      qualityScore: 8,
     });
     expect(r.snapshot.errors.nativeAgentState).toBeUndefined();
     expect(rpcCalls).toContainEqual({

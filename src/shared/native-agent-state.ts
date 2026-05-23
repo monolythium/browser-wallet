@@ -20,6 +20,13 @@ export interface NativeAgentStateResponse {
   schemaVersion: number;
   limit: number;
   filters: NativeAgentStateRow;
+  issuers: NativeAgentStateRow[];
+  attestations: NativeAgentStateRow[];
+  consents: NativeAgentStateRow[];
+  services: NativeAgentStateRow[];
+  availability: NativeAgentStateRow[];
+  arbiters: NativeAgentStateRow[];
+  reputationReviews: NativeAgentStateRow[];
   spendingPolicies: NativeAgentStateRow[];
   policySpends: NativeAgentStateRow[];
   escrows: NativeAgentStateRow[];
@@ -101,7 +108,21 @@ function readRows(
   camelKey: string,
   snakeKey: string,
 ): NativeAgentStateRow[] | null {
-  const raw = record[camelKey] ?? record[snakeKey];
+  const raw = Object.prototype.hasOwnProperty.call(record, camelKey)
+    ? record[camelKey]
+    : record[snakeKey];
+  return validateNativeAgentStateRows(raw);
+}
+
+function readOptionalRows(
+  record: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): NativeAgentStateRow[] | null {
+  const hasCamel = Object.prototype.hasOwnProperty.call(record, camelKey);
+  const hasSnake = Object.prototype.hasOwnProperty.call(record, snakeKey);
+  if (!hasCamel && !hasSnake) return [];
+  const raw = hasCamel ? record[camelKey] : record[snakeKey];
   return validateNativeAgentStateRows(raw);
 }
 
@@ -130,6 +151,17 @@ export function validateNativeAgentStateResponse(
     r.source === undefined || r.source === null
       ? null
       : validateNativeAgentStateRow(r.source);
+  const issuers = readOptionalRows(r, "issuers", "issuers");
+  const attestations = readOptionalRows(r, "attestations", "attestations");
+  const consents = readOptionalRows(r, "consents", "consents");
+  const services = readOptionalRows(r, "services", "services");
+  const availability = readOptionalRows(r, "availability", "availability");
+  const arbiters = readOptionalRows(r, "arbiters", "arbiters");
+  const reputationReviews = readOptionalRows(
+    r,
+    "reputationReviews",
+    "reputation_reviews",
+  );
   const spendingPolicies = readRows(r, "spendingPolicies", "spending_policies");
   const policySpends = readRows(r, "policySpends", "policy_spends");
   const escrows = readRows(r, "escrows", "escrows");
@@ -137,6 +169,13 @@ export function validateNativeAgentStateResponse(
   if (
     filters === null ||
     source === null && r.source !== undefined && r.source !== null ||
+    issuers === null ||
+    attestations === null ||
+    consents === null ||
+    services === null ||
+    availability === null ||
+    arbiters === null ||
+    reputationReviews === null ||
     spendingPolicies === null ||
     policySpends === null ||
     escrows === null
@@ -148,6 +187,13 @@ export function validateNativeAgentStateResponse(
     schemaVersion: r.schemaVersion,
     limit: r.limit,
     filters,
+    issuers,
+    attestations,
+    consents,
+    services,
+    availability,
+    arbiters,
+    reputationReviews,
     spendingPolicies,
     policySpends,
     escrows,
