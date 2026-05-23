@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { addressToTypedBech32 } from "@monolythium/core-sdk";
 import {
   applyFeeTier,
+  AssetList,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
@@ -20,7 +21,12 @@ import {
   lythoshiToLythString,
   MrcAccountSummary,
 } from "./components.js";
-import type { WalletBridgeRouteDisclosure } from "./bg.js";
+import type {
+  ChainEntry,
+  WalletBridgeRouteDisclosure,
+  WalletIndexerSnapshot,
+} from "./bg.js";
+import type { Account } from "./demo-data.js";
 
 function sdkBridgeRoute(
   routeId: string,
@@ -150,8 +156,56 @@ describe("indexed token balance display", () => {
     ).toEqual({
       title: "MRC-4626 shares 0x444444444444…44444444",
       subtitle: "vault 0x444444444444…44444444 · updated at block 4,626",
-      unitsLabel: "shares",
+      unitsLabel: "vault shares",
     });
+  });
+
+  it("renders MRC-4626 vault share balances in the asset list", () => {
+    const vaultId = "0x" + "4".repeat(64);
+    const account = {
+      id: "vault",
+      label: "vault",
+      denom: "public",
+      addr: "0x1111111111111111111111111111111111111111",
+      algo: "slhdsa",
+      balance: 12,
+      custody: "sw",
+    } satisfies Account;
+    const network = {
+      chainId: "0x1",
+      name: "Sprintnet",
+      rpc: "http://localhost:8545",
+      chainIdNum: 1,
+      builtin: true,
+      active: true,
+    } satisfies ChainEntry;
+    const indexer = {
+      tokenBalances: [
+        {
+          tokenId: vaultId,
+          balance: "321",
+          updatedAtBlock: 4626,
+          mrc: {
+            standard: "mrc4626",
+            assetId: vaultId,
+          },
+        },
+      ],
+      mrcAccount: null,
+      addressLabel: null,
+      delegationHistory: [],
+      addressActivity: [],
+      errors: {},
+    } satisfies WalletIndexerSnapshot;
+
+    const html = renderToStaticMarkup(
+      <AssetList account={account} network={network} indexer={indexer} />,
+    );
+
+    expect(html).toContain("MRC-4626 shares 0x444444444444…44444444");
+    expect(html).toContain("vault 0x444444444444…44444444");
+    expect(html).toContain("321");
+    expect(html).toContain("vault shares");
   });
 
   it("formats native MRC holder summary rows without inventing totals", () => {

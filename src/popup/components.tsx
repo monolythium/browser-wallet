@@ -371,7 +371,7 @@ interface AssetListProps {
   indexer: WalletIndexerSnapshot | null;
 }
 
-function AssetList({ account, network, indexer }: AssetListProps) {
+export function AssetList({ account, network, indexer }: AssetListProps) {
   const lythAmount = account.balance;
   const liveRows = indexer?.tokenBalances ?? [];
   return (
@@ -631,7 +631,7 @@ export function formatIndexedTokenBalanceRow(
     return {
       title: `${label} shares ${assetId}`,
       subtitle: `vault ${assetId} · ${updated}`,
-      unitsLabel: "shares",
+      unitsLabel: "vault shares",
     };
   }
 

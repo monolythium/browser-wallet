@@ -124,6 +124,34 @@ describe("wallet token-balance validators", () => {
     ]);
   });
 
+  it("preserves bare MRC-4626 vault share balance identities", () => {
+    const vaultId = `0x${"62".repeat(32)}`;
+    expect(
+      validateWalletTokenBalanceList([
+        {
+          tokenId: "indexer-balance-key",
+          balance: "99",
+          updatedAtBlock: 200,
+          mrc: {
+            standard: "mrc4626",
+            assetId: vaultId,
+            tokenId: null,
+          },
+        },
+      ]),
+    ).toEqual([
+      {
+        tokenId: "indexer-balance-key",
+        balance: "99",
+        updatedAtBlock: 200,
+        mrc: {
+          standard: "mrc4626",
+          assetId: vaultId,
+        },
+      },
+    ]);
+  });
+
   it("drops malformed rows instead of leaking partial MRC identity", () => {
     expect(
       validateWalletTokenBalanceList([
