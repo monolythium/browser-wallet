@@ -29,6 +29,10 @@ import {
   DELEGATION_PRECOMPILE,
   encodeClaimRewards,
 } from "../../shared/staking-tx";
+import {
+  lythoshiToLythDecimal,
+  parseHexQuantity,
+} from "../../shared/native-amount";
 
 interface DelegationsProps {
   account: Account;
@@ -58,7 +62,7 @@ export function Delegations({
 }: DelegationsProps) {
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
-  const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
+  const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
   const [claimSubmitting, setClaimSubmitting] = useState(false);
@@ -85,11 +89,8 @@ export function Delegations({
       if (dirR.ok) setClusters(dirR.data.clusters.slice());
       if (delR.ok) setDelegations(delR.data);
       if (balR.ok) {
-        try {
-          setBalanceWei(BigInt(balR.balanceHex));
-        } catch {
-          // malformed hex — render with null
-        }
+        const parsedBalance = parseHexQuantity(balR.balanceHex);
+        if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
       }
       if (delR.ok) {
         const rewR = await bgStakingPendingRewards(account.addr, delR.data.rows);
@@ -110,10 +111,10 @@ export function Delegations({
     return m;
   }, [clusters]);
 
-  const totalDelegatedWei = useMemo(() => {
-    if (delegations === null || balanceWei === null) return null;
-    return (balanceWei * BigInt(delegations.totalBps)) / 10_000n;
-  }, [delegations, balanceWei]);
+  const totalDelegatedLythoshi = useMemo(() => {
+    if (delegations === null || balanceLythoshi === null) return null;
+    return (balanceLythoshi * BigInt(delegations.totalBps)) / 10_000n;
+  }, [delegations, balanceLythoshi]);
 
   // Claim handler — same encoded selector + tx envelope as Stake.tsx
   // but inlined here so the Delegations page doesn't depend on the
@@ -127,7 +128,7 @@ export function Delegations({
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data: encodeClaimRewards(),
-        gasLimitHex: "0x14820",
+        gasLimitHex: "0x14820", // 84000 — selector-only allowance
       });
       if (r.ok) setClaimResult({ ok: true, txHash: r.result.txHash });
       else setClaimResult({ ok: false, reason: r.reason ?? "claim rejected" });
@@ -176,9 +177,9 @@ export function Delegations({
             <KvStack
               label="Staked"
               value={
-                totalDelegatedWei === null
+                totalDelegatedLythoshi === null
                   ? "—"
-                  : `${formatWei(totalDelegatedWei)} LYTH (${((delegations?.totalBps ?? 0) / 100).toFixed(2)}%)`
+                  : `${formatLythoshi(totalDelegatedLythoshi)} LYTH (${((delegations?.totalBps ?? 0) / 100).toFixed(2)}%)`
               }
               tone="var(--gold)"
             />
@@ -288,9 +289,9 @@ export function Delegations({
               >
                 {delegations.rows.map((row) => {
                   const c = clusterById.get(row.cluster);
-                  const amountWei =
-                    balanceWei !== null
-                      ? (balanceWei * BigInt(row.weightBps)) / 10_000n
+                  const amountLythoshi =
+                    balanceLythoshi !== null
+                      ? (balanceLythoshi * BigInt(row.weightBps)) / 10_000n
                       : null;
                   return (
                     <div
@@ -332,8 +333,8 @@ export function Delegations({
                             }}
                           >
                             {(row.weightBps / 100).toFixed(2)}%
-                            {amountWei !== null && (
-                              <> · {formatWei(amountWei)} LYTH</>
+                            {amountLythoshi !== null && (
+                              <> · {formatLythoshi(amountLythoshi)} LYTH</>
                             )}
                           </div>
                         </div>
@@ -442,14 +443,8 @@ function KvStack({
   );
 }
 
-function formatWei(wei: bigint, decimals = 4): string {
-  if (wei <= 0n) return "0";
-  const whole = wei / 10n ** 18n;
-  const rem = wei % 10n ** 18n;
-  if (rem === 0n || decimals === 0) return whole.toString();
-  const remStr = rem.toString().padStart(18, "0").slice(0, decimals);
-  const trimmed = remStr.replace(/0+$/, "");
-  return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
+export function formatLythoshi(lythoshi: bigint, decimals = 4): string {
+  return lythoshiToLythDecimal(lythoshi, decimals);
 }
 
 const cardLabelStyle: CSSProperties = {

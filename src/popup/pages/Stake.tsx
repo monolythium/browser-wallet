@@ -45,6 +45,11 @@ import {
   encodeUndelegate,
   lythAmountToBps,
 } from "../../shared/staking-tx";
+import {
+  LYTHOSHI_PER_LYTH,
+  lythoshiToLythDecimal,
+  parseHexQuantity,
+} from "../../shared/native-amount";
 import { MOCK_CLUSTER_APR_BPS } from "../../shared/staking";
 import {
   pickMaxDecentralization,
@@ -137,7 +142,7 @@ export function Stake({
   // Delegation context state.
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
   const [capBps, setCapBps] = useState<number | null>(null);
-  const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
+  const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
 
@@ -207,11 +212,8 @@ export function Stake({
       if (delR.ok) setDelegations(delR.data);
       if (capR.ok) setCapBps(capR.data.capBps);
       if (balR.ok) {
-        try {
-          setBalanceWei(BigInt(balR.balanceHex));
-        } catch {
-          // malformed hex — render with null
-        }
+        const parsedBalance = parseHexQuantity(balR.balanceHex);
+        if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
       }
       if (seedR.ok) {
         const seedBytes = hexToBytes(seedR.seedHex);
@@ -284,7 +286,7 @@ export function Stake({
   // for Sprintnet.
   const handleConfirm = async () => {
     if (action !== "claim") {
-      if (selectedCluster === null || balanceWei === null) return;
+      if (selectedCluster === null || balanceLythoshi === null) return;
       if (action === "redelegate" && redelegateDstClusterId === null) return;
     }
     setStep("submitting");
@@ -292,13 +294,13 @@ export function Stake({
     setTxHash(null);
     try {
       let data: string;
-      let gasLimitHex: string;
+      let executionUnitLimitHex: string;
       if (action === "claim") {
         data = encodeClaimRewards();
-        gasLimitHex = "0x14820"; // 84000 — selector-only, modest overhead
+        executionUnitLimitHex = "0x14820"; // 84000 — selector-only allowance
       } else {
-        const amountWei = parseLythAmount(amountStr);
-        if (amountWei === null || balanceWei === null) {
+        const amountLythoshi = parseLythAmountToLythoshi(amountStr);
+        if (amountLythoshi === null || balanceLythoshi === null) {
           setSubmitError({
             message: "invalid amount",
             code: null,
@@ -308,7 +310,7 @@ export function Stake({
           setStep("error");
           return;
         }
-        const bps = lythAmountToBps(amountWei, balanceWei);
+        const bps = lythAmountToBps(amountLythoshi, balanceLythoshi);
         data =
           action === "delegate"
             ? encodeDelegate(selectedCluster!.clusterId, bps)
@@ -319,18 +321,18 @@ export function Stake({
                   redelegateDstClusterId!,
                   bps,
                 );
-        // The delegation precompile's gas budget isn't measured yet
+        // The delegation precompile's execution-unit budget isn't measured yet
         // (chain GAP — needs Nayiem). Use a generous overhead-aware
         // estimate; redelegate carries one extra uint256 arg so we
         // bump the budget slightly for that path.
-        gasLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
+        executionUnitLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
       }
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data,
-        gasLimitHex,
+        gasLimitHex: executionUnitLimitHex,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -372,7 +374,7 @@ export function Stake({
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data: encodeClaimRewards(),
-        gasLimitHex: "0x14820", // 84000 — selector-only
+        gasLimitHex: "0x14820", // 84000 — selector-only allowance
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -457,7 +459,10 @@ export function Stake({
       <div className="ext-body">
         {step === "pick" && (
           <>
-            <SummaryBanner delegations={delegations} balanceWei={balanceWei} />
+            <SummaryBanner
+              delegations={delegations}
+              balanceLythoshi={balanceLythoshi}
+            />
 
             {/* Pending rewards — surfaces only when there's something
                 to claim or an active delegation that could accrue. */}
@@ -477,7 +482,7 @@ export function Stake({
               <ExistingDelegations
                 delegations={delegations}
                 clusters={clusters}
-                balanceWei={balanceWei}
+                balanceLythoshi={balanceLythoshi}
                 onUnstake={(clusterId) => {
                   setAction("undelegate");
                   setSelectedClusterId(clusterId);
@@ -525,7 +530,9 @@ export function Stake({
                   // path keeps the audit shape simple for Phase 7.
                   const first = autovotePlan.allocations[0]!;
                   setSelectedClusterId(first.cluster);
-                  setAmountStr(allocationToLythAmountStr(first, balanceWei));
+                  setAmountStr(
+                    allocationToLythAmountStr(first, balanceLythoshi),
+                  );
                   setStep("preview");
                 }}
               />
@@ -573,7 +580,7 @@ export function Stake({
             currentWeightBps={existingWeightBps}
             amountStr={amountStr}
             onAmountChange={setAmountStr}
-            balanceWei={balanceWei}
+            balanceWei={balanceLythoshi}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -596,7 +603,7 @@ export function Stake({
             amountStr={amountStr}
             onAmountChange={setAmountStr}
             onPickDestination={() => setStep("redelegate-dst-pick")}
-            balanceWei={balanceWei}
+            balanceWei={balanceLythoshi}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -638,7 +645,7 @@ export function Stake({
             cluster={selectedCluster}
             amountStr={amountStr}
             onAmountChange={setAmountStr}
-            balanceWei={balanceWei}
+            balanceWei={balanceLythoshi}
             existingWeightBps={existingWeightBps}
             capBps={capBps}
             onContinue={() => setStep("preview")}
@@ -656,7 +663,7 @@ export function Stake({
                 : null
             }
             amountStr={amountStr}
-            balanceWei={balanceWei}
+            balanceLythoshi={balanceLythoshi}
             existingWeightBps={existingWeightBps}
             onConfirm={() => void handleConfirm()}
             onBack={() =>
@@ -704,16 +711,17 @@ export function Stake({
 
 interface SummaryBannerProps {
   delegations: DelegationsView | null;
-  balanceWei: bigint | null;
+  balanceLythoshi: bigint | null;
 }
 
-function SummaryBanner({ delegations, balanceWei }: SummaryBannerProps) {
+function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
   const stakedBps = delegations?.totalBps ?? 0;
-  const stakedWei =
-    balanceWei !== null && stakedBps > 0
-      ? (balanceWei * BigInt(stakedBps)) / 10_000n
+  const stakedLythoshi =
+    balanceLythoshi !== null && stakedBps > 0
+      ? (balanceLythoshi * BigInt(stakedBps)) / 10_000n
       : 0n;
-  const liquidWei = balanceWei !== null ? balanceWei - stakedWei : null;
+  const liquidLythoshi =
+    balanceLythoshi !== null ? balanceLythoshi - stakedLythoshi : null;
   return (
     <div className="ext-card" style={{ padding: 12, marginBottom: 4 }}>
       <div
@@ -726,17 +734,21 @@ function SummaryBanner({ delegations, balanceWei }: SummaryBannerProps) {
       >
         <KvStack
           label="Liquid"
-          value={liquidWei === null ? "—" : `${formatWei(liquidWei)} LYTH`}
+          value={
+            liquidLythoshi === null
+              ? "—"
+              : `${formatLythoshi(liquidLythoshi)} LYTH`
+          }
           tone="var(--fg-100)"
         />
         <KvStack
           label="Staked"
           value={
-            stakedWei === 0n && balanceWei !== null
+            stakedLythoshi === 0n && balanceLythoshi !== null
               ? "0 LYTH"
-              : balanceWei === null
+              : balanceLythoshi === null
                 ? "—"
-                : `${formatWei(stakedWei)} LYTH (${(stakedBps / 100).toFixed(2)}%)`
+                : `${formatLythoshi(stakedLythoshi)} LYTH (${(stakedBps / 100).toFixed(2)}%)`
           }
           tone="var(--gold)"
         />
@@ -791,7 +803,7 @@ interface PreviewViewProps {
   action: Action;
   destCluster: ClusterDirectoryEntry | null;
   amountStr: string;
-  balanceWei: bigint | null;
+  balanceLythoshi: bigint | null;
   existingWeightBps: number;
   onConfirm: () => void;
   onBack: () => void;
@@ -802,16 +814,16 @@ function PreviewView({
   action,
   destCluster,
   amountStr,
-  balanceWei,
+  balanceLythoshi,
   existingWeightBps,
   onConfirm,
   onBack,
 }: PreviewViewProps) {
-  const amountWei = parseLythAmount(amountStr);
+  const amountLythoshi = parseLythAmountToLythoshi(amountStr);
   const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
   const moveBps =
-    amountWei !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountWei, balanceWei)
+    amountLythoshi !== null && balanceLythoshi !== null && balanceLythoshi > 0n
+      ? lythAmountToBps(amountLythoshi, balanceLythoshi)
       : 0;
   const totalAfterBps =
     action === "delegate"
@@ -1099,16 +1111,21 @@ function ErrorView({ error, onRetry, onCancel }: ErrorViewProps) {
 // Helpers + styles
 // ─────────────────────────────────────────────────────────────────────────────
 
-function parseLythAmount(s: string): bigint | null {
+const NATIVE_LYTH_DECIMALS = 8;
+
+export function parseLythAmountToLythoshi(s: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(s)) return null;
-  if (parseFloat(s) <= 0) return null;
   const dot = s.indexOf(".");
   const intPart = dot < 0 ? s : s.slice(0, dot);
   const fracPart = dot < 0 ? "" : s.slice(dot + 1);
-  if (fracPart.length > 18) return null;
-  const padded = fracPart + "0".repeat(18 - fracPart.length);
+  if (fracPart.length > NATIVE_LYTH_DECIMALS) return null;
+  const padded =
+    fracPart + "0".repeat(NATIVE_LYTH_DECIMALS - fracPart.length);
   try {
-    return BigInt(intPart) * 10n ** 18n + (padded.length > 0 ? BigInt(padded) : 0n);
+    const lythoshi =
+      BigInt(intPart) * LYTHOSHI_PER_LYTH +
+      (padded.length > 0 ? BigInt(padded) : 0n);
+    return lythoshi > 0n ? lythoshi : null;
   } catch {
     return null;
   }
@@ -1117,18 +1134,20 @@ function parseLythAmount(s: string): bigint | null {
 /** Convert an autovote allocation row + the wallet balance into the
  *  LYTH-amount string the StakeForm + preview expect. Floors to 6
  *  decimal places for display continuity with the manual flow. */
-function allocationToLythAmountStr(
+export function allocationToLythAmountStr(
   alloc: AutovoteAllocation,
-  balanceWei: bigint | null,
+  balanceLythoshi: bigint | null,
 ): string {
-  if (balanceWei === null || balanceWei === 0n || alloc.weightBps <= 0) return "0";
-  const wei = (balanceWei * BigInt(alloc.weightBps)) / 10_000n;
-  const whole = wei / 10n ** 18n;
-  const rem = wei % 10n ** 18n;
-  if (rem === 0n) return whole.toString();
-  const remStr = rem.toString().padStart(18, "0").slice(0, 6);
-  const trimmed = remStr.replace(/0+$/, "");
-  return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
+  if (
+    balanceLythoshi === null ||
+    balanceLythoshi === 0n ||
+    alloc.weightBps <= 0
+  ) {
+    return "0";
+  }
+  const allocationLythoshi =
+    (balanceLythoshi * BigInt(alloc.weightBps)) / 10_000n;
+  return lythoshiToLythDecimal(allocationLythoshi, 6);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1138,7 +1157,7 @@ function allocationToLythAmountStr(
 interface ExistingDelegationsProps {
   delegations: DelegationsView;
   clusters: ReadonlyArray<ClusterDirectoryEntry>;
-  balanceWei: bigint | null;
+  balanceLythoshi: bigint | null;
   onUnstake: (clusterId: number) => void;
   onRedelegate: (clusterId: number) => void;
 }
@@ -1146,7 +1165,7 @@ interface ExistingDelegationsProps {
 function ExistingDelegations({
   delegations,
   clusters,
-  balanceWei,
+  balanceLythoshi,
   onUnstake,
   onRedelegate,
 }: ExistingDelegationsProps) {
@@ -1194,9 +1213,9 @@ function ExistingDelegations({
       >
         {delegations.rows.map((row) => {
           const c = clusterById.get(row.cluster);
-          const amountWei =
-            balanceWei !== null
-              ? (balanceWei * BigInt(row.weightBps)) / 10_000n
+          const amountLythoshi =
+            balanceLythoshi !== null
+              ? (balanceLythoshi * BigInt(row.weightBps)) / 10_000n
               : null;
           return (
             <div
@@ -1239,8 +1258,8 @@ function ExistingDelegations({
                     }}
                   >
                     {(row.weightBps / 100).toFixed(2)}%
-                    {amountWei !== null && (
-                      <> · {weiToLythCompact(amountWei)} LYTH</>
+                    {amountLythoshi !== null && (
+                      <> · {formatLythoshi(amountLythoshi)} LYTH</>
                     )}
                   </div>
                 </div>
@@ -1271,15 +1290,6 @@ function ExistingDelegations({
       </div>
     </div>
   );
-}
-
-function weiToLythCompact(wei: bigint): string {
-  const whole = wei / 10n ** 18n;
-  const rem = wei % 10n ** 18n;
-  if (rem === 0n) return whole.toString();
-  const remStr = rem.toString().padStart(18, "0").slice(0, 4);
-  const trimmed = remStr.replace(/0+$/, "");
-  return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
 }
 
 const delegationActionBtnStyle: CSSProperties = {
@@ -1640,13 +1650,8 @@ function AutovotePlanCard({
   );
 }
 
-function formatWei(wei: bigint, decimals = 4): string {
-  const whole = wei / 10n ** 18n;
-  const rem = wei % 10n ** 18n;
-  if (rem === 0n || decimals === 0) return whole.toString();
-  const remStr = rem.toString().padStart(18, "0").slice(0, decimals);
-  const trimmed = remStr.replace(/0+$/, "");
-  return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
+export function formatLythoshi(lythoshi: bigint, decimals = 4): string {
+  return lythoshiToLythDecimal(lythoshi, decimals);
 }
 
 function Row({
