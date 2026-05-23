@@ -780,12 +780,14 @@ describe("native agent state summary", () => {
             {
               issuer_id: "0x" + "11".repeat(32),
               issuer: "mono1agentowner",
+              nonce: 1,
               updated_at_block: 45,
             },
           ],
           attestations: [
             {
               attestationId: "0x" + "12".repeat(32),
+              nonce: "2",
               subject: "mono1agentcontroller",
               active: false,
               updatedAtBlock: 46,
@@ -795,6 +797,7 @@ describe("native agent state summary", () => {
             {
               consent_id: "0x" + "13".repeat(32),
               grantee: "mono1agentarbiter",
+              nonce: 3,
               active: true,
               updated_at_block: 47,
             },
@@ -803,6 +806,7 @@ describe("native agent state summary", () => {
             {
               serviceId: "0x" + "14".repeat(32),
               provider: "mono1agentprovider",
+              nonce: "0x4",
               active: true,
               updatedAtBlock: 48,
             },
@@ -820,6 +824,7 @@ describe("native agent state summary", () => {
             {
               arbiter_id: "0x" + "15".repeat(32),
               arbiter: "mono1agentarbiter",
+              nonce: 5,
               tier: 2,
               updated_at_block: 50,
             },
@@ -830,6 +835,7 @@ describe("native agent state summary", () => {
               owner: "mono1agentowner",
               controller: "mono1agentcontroller",
               assetId: "0x" + "cc".repeat(32),
+              nonce: "6",
               enabled: true,
               perActionLimit: "100",
               windowLimit: "500",
@@ -855,6 +861,7 @@ describe("native agent state summary", () => {
               provider: "mono1agentprovider",
               arbiter: "mono1agentarbiter",
               assetId: "0x" + "cc".repeat(32),
+              nonce: 7,
               amount: "1000",
               termsHash: "0x" + "dd".repeat(32),
               round: 2,
@@ -898,6 +905,13 @@ describe("native agent state summary", () => {
     expect(html).toContain("review");
     expect(html).toContain("quality 8");
     expect(html).toContain("spend 125 / 25");
+    expect(html).toContain("nonce 1");
+    expect(html).toContain("nonce 2");
+    expect(html).toContain("nonce 3");
+    expect(html).toContain("nonce 0x4");
+    expect(html).toContain("nonce 5");
+    expect(html).toContain("nonce 6");
+    expect(html).toContain("nonce 7");
   });
 });
 

@@ -512,6 +512,13 @@ function nativeAgentFlagLabel(
   return null;
 }
 
+function nativeAgentNoncePart(row: NativeAgentStateRow): string | null {
+  const value = row.nonce;
+  if (typeof value === "number" && Number.isFinite(value)) return `nonce ${value}`;
+  if (typeof value === "string" && value.trim().length > 0) return `nonce ${value}`;
+  return null;
+}
+
 function nativeAgentParts(parts: Array<string | null | undefined>): string {
   return parts.filter((part): part is string => typeof part === "string" && part.length > 0).join(" · ");
 }
@@ -537,6 +544,7 @@ function nativeAgentSummaryFamilies(
       render: (row) =>
         nativeAgentParts([
           `issuer ${nativeAgentShortRowValue(row, ["issuerId", "issuer_id"])}`,
+          nativeAgentNoncePart(row),
           nativeAgentShortRowValue(row, ["issuer"]),
         ]),
     },
@@ -548,6 +556,7 @@ function nativeAgentSummaryFamilies(
       render: (row) =>
         nativeAgentParts([
           `attestation ${nativeAgentShortRowValue(row, ["attestationId", "attestation_id"])}`,
+          nativeAgentNoncePart(row),
           nativeAgentFlagLabel(row, ["active"], "active", "inactive"),
           `subject ${nativeAgentShortRowValue(row, ["subject"])}`,
         ]),
@@ -560,6 +569,7 @@ function nativeAgentSummaryFamilies(
       render: (row) =>
         nativeAgentParts([
           `consent ${nativeAgentShortRowValue(row, ["consentId", "consent_id"])}`,
+          nativeAgentNoncePart(row),
           nativeAgentFlagLabel(row, ["active"], "active", "inactive"),
           `grantee ${nativeAgentShortRowValue(row, ["grantee"])}`,
         ]),
@@ -572,6 +582,7 @@ function nativeAgentSummaryFamilies(
       render: (row) =>
         nativeAgentParts([
           `service ${nativeAgentShortRowValue(row, ["serviceId", "service_id"])}`,
+          nativeAgentNoncePart(row),
           nativeAgentFlagLabel(row, ["active"], "active", "inactive"),
           nativeAgentShortRowValue(row, ["provider"]),
         ]),
@@ -600,6 +611,7 @@ function nativeAgentSummaryFamilies(
       render: (row) =>
         nativeAgentParts([
           `arbiter ${nativeAgentShortRowValue(row, ["arbiterId", "arbiter_id"])}`,
+          nativeAgentNoncePart(row),
           `tier ${nativeAgentRowString(row, ["tier"]) ?? "—"}`,
         ]),
     },
@@ -612,6 +624,7 @@ function nativeAgentSummaryFamilies(
       render: (row) =>
         nativeAgentParts([
           `policy ${nativeAgentShortRowValue(row, ["policyId", "policy_id"])}`,
+          nativeAgentNoncePart(row),
           `limit ${nativeAgentRowString(row, ["windowLimit", "window_limit"]) ?? "—"}`,
         ]),
     },
@@ -634,6 +647,7 @@ function nativeAgentSummaryFamilies(
       render: (row) =>
         nativeAgentParts([
           `escrow ${nativeAgentShortRowValue(row, ["escrowId", "escrow_id"])}`,
+          nativeAgentNoncePart(row),
           nativeAgentRowString(row, ["status"]) ?? "unknown",
         ]),
     },

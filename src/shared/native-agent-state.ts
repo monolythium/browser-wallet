@@ -7,6 +7,10 @@ export type NativeAgentStateJsonValue =
   | { [key: string]: NativeAgentStateJsonValue };
 
 export type NativeAgentStateRow = Record<string, NativeAgentStateJsonValue>;
+export type NativeAgentStateNonce = string | number | null;
+export type NativeAgentStateNonceRow = NativeAgentStateRow & {
+  nonce?: NativeAgentStateNonce;
+};
 
 export interface NativeAgentStateFilter {
   policyId?: string;
@@ -20,16 +24,16 @@ export interface NativeAgentStateResponse {
   schemaVersion: number;
   limit: number;
   filters: NativeAgentStateRow;
-  issuers: NativeAgentStateRow[];
-  attestations: NativeAgentStateRow[];
-  consents: NativeAgentStateRow[];
-  services: NativeAgentStateRow[];
+  issuers: NativeAgentStateNonceRow[];
+  attestations: NativeAgentStateNonceRow[];
+  consents: NativeAgentStateNonceRow[];
+  services: NativeAgentStateNonceRow[];
   availability: NativeAgentStateRow[];
-  arbiters: NativeAgentStateRow[];
+  arbiters: NativeAgentStateNonceRow[];
   reputationReviews: NativeAgentStateRow[];
-  spendingPolicies: NativeAgentStateRow[];
+  spendingPolicies: NativeAgentStateNonceRow[];
   policySpends: NativeAgentStateRow[];
-  escrows: NativeAgentStateRow[];
+  escrows: NativeAgentStateNonceRow[];
   source: NativeAgentStateRow | null;
 }
 
@@ -38,6 +42,9 @@ const MAX_JSON_KEYS = 96;
 const MAX_JSON_KEY_LENGTH = 96;
 const MAX_JSON_STRING_LENGTH = 2048;
 const MAX_JSON_ARRAY_ITEMS = 250;
+const MAX_U64 = (1n << 64n) - 1n;
+const DECIMAL_QUANTITY_RE = /^\d+$/;
+const HEX_QUANTITY_RE = /^0x[0-9a-fA-F]+$/;
 
 function isPlainRecord(input: unknown): input is Record<string, unknown> {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -103,6 +110,28 @@ function validateNativeAgentStateRows(input: unknown): NativeAgentStateRow[] | n
   return out;
 }
 
+function isValidNativeAgentStateNonce(input: NativeAgentStateJsonValue | undefined): boolean {
+  if (input === undefined || input === null) return true;
+  if (typeof input === "number") return Number.isSafeInteger(input) && input >= 0;
+  if (typeof input !== "string") return false;
+  if (input.length === 0) return false;
+  if (!DECIMAL_QUANTITY_RE.test(input) && !HEX_QUANTITY_RE.test(input)) return false;
+  try {
+    return BigInt(input) <= MAX_U64;
+  } catch {
+    return false;
+  }
+}
+
+function validateNativeAgentStateNonceRows(input: unknown): NativeAgentStateNonceRow[] | null {
+  const rows = validateNativeAgentStateRows(input);
+  if (rows === null) return null;
+  for (const row of rows) {
+    if (!isValidNativeAgentStateNonce(row.nonce)) return null;
+  }
+  return rows as NativeAgentStateNonceRow[];
+}
+
 function readRows(
   record: Record<string, unknown>,
   camelKey: string,
@@ -112,6 +141,17 @@ function readRows(
     ? record[camelKey]
     : record[snakeKey];
   return validateNativeAgentStateRows(raw);
+}
+
+function readNonceRows(
+  record: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): NativeAgentStateNonceRow[] | null {
+  const raw = Object.prototype.hasOwnProperty.call(record, camelKey)
+    ? record[camelKey]
+    : record[snakeKey];
+  return validateNativeAgentStateNonceRows(raw);
 }
 
 function readOptionalRows(
@@ -124,6 +164,18 @@ function readOptionalRows(
   if (!hasCamel && !hasSnake) return [];
   const raw = hasCamel ? record[camelKey] : record[snakeKey];
   return validateNativeAgentStateRows(raw);
+}
+
+function readOptionalNonceRows(
+  record: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): NativeAgentStateNonceRow[] | null {
+  const hasCamel = Object.prototype.hasOwnProperty.call(record, camelKey);
+  const hasSnake = Object.prototype.hasOwnProperty.call(record, snakeKey);
+  if (!hasCamel && !hasSnake) return [];
+  const raw = hasCamel ? record[camelKey] : record[snakeKey];
+  return validateNativeAgentStateNonceRows(raw);
 }
 
 export function validateNativeAgentStateResponse(
@@ -151,20 +203,20 @@ export function validateNativeAgentStateResponse(
     r.source === undefined || r.source === null
       ? null
       : validateNativeAgentStateRow(r.source);
-  const issuers = readOptionalRows(r, "issuers", "issuers");
-  const attestations = readOptionalRows(r, "attestations", "attestations");
-  const consents = readOptionalRows(r, "consents", "consents");
-  const services = readOptionalRows(r, "services", "services");
+  const issuers = readOptionalNonceRows(r, "issuers", "issuers");
+  const attestations = readOptionalNonceRows(r, "attestations", "attestations");
+  const consents = readOptionalNonceRows(r, "consents", "consents");
+  const services = readOptionalNonceRows(r, "services", "services");
   const availability = readOptionalRows(r, "availability", "availability");
-  const arbiters = readOptionalRows(r, "arbiters", "arbiters");
+  const arbiters = readOptionalNonceRows(r, "arbiters", "arbiters");
   const reputationReviews = readOptionalRows(
     r,
     "reputationReviews",
     "reputation_reviews",
   );
-  const spendingPolicies = readRows(r, "spendingPolicies", "spending_policies");
+  const spendingPolicies = readNonceRows(r, "spendingPolicies", "spending_policies");
   const policySpends = readRows(r, "policySpends", "policy_spends");
-  const escrows = readRows(r, "escrows", "escrows");
+  const escrows = readNonceRows(r, "escrows", "escrows");
 
   if (
     filters === null ||
