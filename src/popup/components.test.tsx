@@ -212,6 +212,71 @@ describe("ReqSendTx native market calldata decode", () => {
     expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
   });
 
+  it("decodes native bincode NFT sweep approvals only for the market system module", () => {
+    const first = "77".repeat(32);
+    const second = "88".repeat(32);
+    const payload =
+      "0x01000000030000000200000000000000" +
+      first +
+      second +
+      "0903000000000000";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeNftSweepExpiredListings");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["listing ids", `0x${first}, 0x${second}`],
+      ["current block", "777"],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
+  it("decodes native bincode NFT auction bid approvals only for the market system module", () => {
+    const listingId = "55".repeat(32);
+    const bidder = "66".repeat(20);
+    const payload =
+      "0x0100000005000000" +
+      listingId +
+      "00000000" +
+      bidder +
+      "7b000000000000000000000000000000" +
+      "0903000000000000";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeNftPlaceAuctionBid");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["listing id", `0x${listingId}`],
+      ["bidder", addressToTypedBech32("user", `0x${bidder}`)],
+      ["amount", "123"],
+      ["current block", "777"],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
+  it("decodes native bincode NFT settle auction approvals only for the market system module", () => {
+    const listingId = "55".repeat(32);
+    const payload =
+      "0x0100000006000000" +
+      listingId +
+      "0903000000000000";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeNftSettleAuction");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["listing id", `0x${listingId}`],
+      ["current block", "777"],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
   it("decodes CLOB placeLimitOrder approvals only for the CLOB precompile", () => {
     const base = "11".repeat(32);
     const quote = "22".repeat(32);
