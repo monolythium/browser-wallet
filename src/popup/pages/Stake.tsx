@@ -20,6 +20,7 @@ import { Icon } from "../Icon";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
+import { RedemptionQueueCard } from "../components/RedemptionQueueCard";
 import { RewardCard } from "../components/RewardCard";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
@@ -30,11 +31,13 @@ import {
   bgStakingDelegationCap,
   bgStakingDelegations,
   bgStakingPendingRewards,
+  bgStakingRedemptionQueue,
   bgWalletBalance,
   bgWalletSendTx,
   type ClusterDirectoryEntry,
   type DelegationsView,
   type PendingRewardsView,
+  type RedemptionQueueView,
 } from "../bg";
 import type { Account } from "../demo-data";
 import {
@@ -145,6 +148,11 @@ export function Stake({
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
+  const [redemptionQueue, setRedemptionQueue] =
+    useState<RedemptionQueueView | null>(null);
+  const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
+  const [redemptionQueueError, setRedemptionQueueError] =
+    useState<string | null>(null);
 
   // Phase 9 — §28.5 Q29 TRADING_INTERFACE flag gates the advanced
   // reward analytics surface (per-cluster breakdown inside RewardCard).
@@ -201,12 +209,16 @@ export function Stake({
   useEffect(() => {
     if (!account.addr.startsWith("0x")) return;
     let cancelled = false;
+    setRedemptionQueue(null);
+    setRedemptionQueueMock(false);
+    setRedemptionQueueError(null);
     void (async () => {
-      const [delR, capR, balR, seedR] = await Promise.all([
+      const [delR, capR, balR, seedR, queueR] = await Promise.all([
         bgStakingDelegations(account.addr),
         bgStakingDelegationCap(),
         bgWalletBalance(account.addr, chainId),
         bgStakingAutovoteSeed(),
+        bgStakingRedemptionQueue(account.addr),
       ]);
       if (cancelled) return;
       if (delR.ok) setDelegations(delR.data);
@@ -218,6 +230,12 @@ export function Stake({
       if (seedR.ok) {
         const seedBytes = hexToBytes(seedR.seedHex);
         if (seedBytes !== null) setAutovoteSeed(seedBytes);
+      }
+      if (queueR.ok) {
+        setRedemptionQueue(queueR.data);
+        setRedemptionQueueMock(queueR.via === "mock");
+      } else {
+        setRedemptionQueueError(queueR.reason);
       }
       // Pending rewards: depends on the active delegation set, so we
       // fan it out after the delegations resolve. Chain GAP today —
@@ -474,6 +492,15 @@ export function Stake({
                 onClaim={() => void handleClaim()}
                 claimDisabled={false}
                 showAdvancedAnalytics={tradingInterfaceOn}
+              />
+            )}
+
+            {account.addr.startsWith("0x") && (
+              <RedemptionQueueCard
+                queue={redemptionQueue}
+                isMock={redemptionQueueMock}
+                error={redemptionQueueError}
+                clusters={clusters}
               />
             )}
 
