@@ -32,6 +32,9 @@ import type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
   WalletBridgeRouteReadiness,
+  MrcAccountLookupResponse,
+  MrcAccountRecord,
+  MrcPolicySpendRecord,
   WalletMrcHolder,
   WalletMrcHoldersResponse,
   WalletTokenBalance,
@@ -373,6 +376,8 @@ function AssetList({ account, network, indexer }: AssetListProps) {
   const liveRows = indexer?.tokenBalances ?? [];
   return (
     <div>
+      <MrcAccountSummary mrcAccount={indexer?.mrcAccount ?? null} />
+
       {liveRows.length > 0 && liveRows.map((row) => {
         const display = formatIndexedTokenBalanceRow(row);
         return (
@@ -430,6 +435,103 @@ function AssetList({ account, network, indexer }: AssetListProps) {
       </div>
     </div>
   );
+}
+
+export function MrcAccountSummary({
+  mrcAccount,
+}: {
+  mrcAccount: MrcAccountLookupResponse | null;
+}) {
+  if (!hasMrcAccountSummary(mrcAccount)) return null;
+  const records = [
+    mrcAccount.smartAccount,
+    mrcAccount.policyAccount,
+  ].filter((record): record is MrcAccountRecord => record !== null);
+  const spendRows = mrcAccount.policySpends.slice(0, 2);
+  const roleLabel =
+    records.length > 0
+      ? records.map((record) => mrcAccountKindLabel(record.kind)).join(" + ")
+      : "Policy";
+  return (
+    <div className="ext-asset">
+      <div className="ext-asset__ico native">MRC</div>
+      <div className="ext-asset__main">
+        <div className="sym">
+          MRC account <span className="ext-badge-att">Indexed</span>
+          {mrcAccount.smartAccount && (
+            <> <span className="ext-badge-bridged">Smart</span></>
+          )}
+          {mrcAccount.policyAccount && (
+            <> <span className="ext-badge-bridged">Policy</span></>
+          )}
+        </div>
+        <div className="chain">
+          {shortAddr(mrcAccount.account, 14)} · spend window {mrcAccount.spendLimit}
+        </div>
+        <div
+          style={{
+            marginTop: 6,
+            fontFamily: "var(--f-mono)",
+            fontSize: 9.5,
+            lineHeight: 1.45,
+            color: "var(--fg-400)",
+          }}
+        >
+          {records.map((record) => (
+            <div key={`${record.kind}:${record.account}`}>
+              {formatMrcAccountRecordLine(record)}
+            </div>
+          ))}
+          {spendRows.map((spend) => (
+            <div key={`${spend.assetId}:${spend.window}`}>
+              {formatMrcPolicySpendLine(spend)}
+            </div>
+          ))}
+          {mrcAccount.policySpends.length > spendRows.length && (
+            <div>
+              + {mrcAccount.policySpends.length - spendRows.length} more spend rows
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="ext-asset__spark" />
+      <div className="ext-asset__right">
+        <div className="amt">{roleLabel}</div>
+        <div className="chg">{mrcAccount.policySpends.length} spends</div>
+      </div>
+    </div>
+  );
+}
+
+export function hasMrcAccountSummary(
+  mrcAccount: MrcAccountLookupResponse | null,
+): mrcAccount is MrcAccountLookupResponse {
+  return (
+    mrcAccount !== null &&
+    (mrcAccount.smartAccount !== null ||
+      mrcAccount.policyAccount !== null ||
+      mrcAccount.policySpends.length > 0)
+  );
+}
+
+function mrcAccountKindLabel(kind: MrcAccountRecord["kind"]): string {
+  return kind === "smart_account" ? "Smart" : "Policy";
+}
+
+export function formatMrcAccountRecordLine(record: MrcAccountRecord): string {
+  const bits = [
+    mrcAccountKindLabel(record.kind),
+    `controller ${shortAddr(record.controller, 10)}`,
+  ];
+  if (record.recovery) bits.push(`recovery ${shortAddr(record.recovery, 10)}`);
+  if (record.policyHash) bits.push(`policy ${shortHex(record.policyHash)}`);
+  if (record.nonce) bits.push(`nonce ${record.nonce}`);
+  bits.push(`block ${record.updatedAtBlock.toLocaleString()}`);
+  return bits.join(" · ");
+}
+
+export function formatMrcPolicySpendLine(spend: MrcPolicySpendRecord): string {
+  return `Spend ${shortHex(spend.assetId)} · window ${spend.window} · spent ${spend.spent} · block ${spend.updatedAtBlock.toLocaleString()}`;
 }
 
 function MrcHolderSummary({
