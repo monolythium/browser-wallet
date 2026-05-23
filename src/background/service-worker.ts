@@ -209,6 +209,7 @@ import {
   validateMrcAccountLookupResponse,
   type MrcAccountLookupResponse,
 } from "../shared/mrc-account.js";
+import type { NativeAgentStateResponse } from "../shared/native-agent-state.js";
 import {
   collectWalletBridgeRouteDisclosures,
   validateWalletMrcHoldersResponse,
@@ -230,6 +231,7 @@ import {
   readRedemptionQueue,
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
+import { readNativeAgentState } from "./native-agent-state-client.js";
 import { readNativeMarketState } from "./native-market-state-client.js";
 
 type EthSendTransactionRequest = {
@@ -1902,6 +1904,7 @@ interface IndexerSnapshotRaw {
   bridgeRouteDisclosures: WalletBridgeRouteDisclosure[];
   bridgeRouteReadiness: WalletBridgeRouteReadiness | null;
   mrcAccount: MrcAccountLookupResponse | null;
+  nativeAgentState: NativeAgentStateResponse | null;
   addressLabel: unknown | null;
   delegationHistory: unknown[];
   addressActivity: unknown[];
@@ -1911,6 +1914,7 @@ interface IndexerSnapshotRaw {
 const MRC_HOLDER_LOOKUP_ROW_LIMIT = 4;
 const MRC_HOLDER_LOOKUP_LIMIT = 3;
 const MRC_ACCOUNT_SPEND_LOOKUP_LIMIT = 4;
+const NATIVE_AGENT_STATE_LOOKUP_LIMIT = 10;
 
 interface FetchIndexerSnapshotOptions {
   includeMrcAccount: boolean;
@@ -2062,6 +2066,26 @@ async function readMrcAccountLookup(
   return { value: mrcAccount };
 }
 
+async function readNativeAgentStateLookup(
+  address: string,
+): Promise<{ value: NativeAgentStateResponse | null; error?: string }> {
+  const outcome = await readNativeAgentState({
+    account: address,
+    includePolicySpends: true,
+    limit: NATIVE_AGENT_STATE_LOOKUP_LIMIT,
+  });
+  if (outcome.kind === "live") {
+    return { value: outcome.data };
+  }
+  if (outcome.kind === "mock-not-deployed") {
+    return { value: null };
+  }
+  return {
+    value: null,
+    error: "reason" in outcome ? outcome.reason : "native agent state unavailable",
+  };
+}
+
 /** Parallel-fetch the indexer streams used by popup-facing
  *  snapshots. Token balances are validated at the SW boundary because the
  *  popup renders them directly; other streams keep their existing raw shapes
@@ -2075,6 +2099,7 @@ async function fetchIndexerSnapshot(
     tokenBalances,
     bridgeRoutes,
     mrcAccount,
+    nativeAgentState,
     addressLabel,
     delegationHistory,
     addressActivity,
@@ -2086,6 +2111,7 @@ async function fetchIndexerSnapshot(
       : Promise.resolve<{ value: MrcAccountLookupResponse | null; error?: string }>({
           value: null,
         }),
+    readNativeAgentStateLookup(address),
     settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
     settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
     settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
@@ -2096,6 +2122,7 @@ async function fetchIndexerSnapshot(
     errors.bridgeRoutes = bridgeRoutes.reason;
   }
   if (mrcAccount.error) errors.mrcAccount = mrcAccount.error;
+  if (nativeAgentState.error) errors.nativeAgentState = nativeAgentState.error;
   if (addressLabel.error) errors.addressLabel = addressLabel.error;
   if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
   if (addressActivity.error) errors.addressActivity = addressActivity.error;
@@ -2112,6 +2139,7 @@ async function fetchIndexerSnapshot(
     ]),
     bridgeRouteReadiness: bridgeRoutes.data.readiness,
     mrcAccount: mrcAccount.value,
+    nativeAgentState: nativeAgentState.value,
     addressLabel: addressLabel.value ?? null,
     delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
     addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
@@ -4730,6 +4758,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           bridgeRouteDisclosures: fresh.bridgeRouteDisclosures,
           bridgeRouteReadiness: fresh.bridgeRouteReadiness,
           mrcAccount: fresh.mrcAccount,
+          nativeAgentState: fresh.nativeAgentState,
           addressLabel: fresh.addressLabel,
           delegationHistory: fresh.delegationHistory,
           addressActivity: fresh.addressActivity,
@@ -5424,6 +5453,28 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ...(typeof p?.limit === "number" ? { limit: p.limit } : {}),
       };
       const outcome = await readNativeMarketState(filter);
+      return { ok: true, outcome };
+    }
+    case "wallet-native-agent-state": {
+      const p = message.payload as
+        | {
+            policyId?: string;
+            escrowId?: string;
+            account?: string;
+            includePolicySpends?: boolean;
+            limit?: number;
+          }
+        | undefined;
+      const filter = {
+        ...(typeof p?.policyId === "string" ? { policyId: p.policyId } : {}),
+        ...(typeof p?.escrowId === "string" ? { escrowId: p.escrowId } : {}),
+        ...(typeof p?.account === "string" ? { account: p.account } : {}),
+        ...(typeof p?.includePolicySpends === "boolean"
+          ? { includePolicySpends: p.includePolicySpends }
+          : {}),
+        ...(typeof p?.limit === "number" ? { limit: p.limit } : {}),
+      };
+      const outcome = await readNativeAgentState(filter);
       return { ok: true, outcome };
     }
     case "chain-signing-activity": {

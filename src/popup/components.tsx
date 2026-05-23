@@ -41,6 +41,8 @@ import type {
   MrcAccountRecord,
   MrcPolicyRecord,
   MrcPolicySpendRecord,
+  NativeAgentStateResponse,
+  NativeAgentStateRow,
   WalletMrcHolder,
   WalletMrcHoldersResponse,
   WalletTokenBalance,
@@ -383,6 +385,7 @@ export function AssetList({ account, network, indexer }: AssetListProps) {
   return (
     <div>
       <MrcAccountSummary mrcAccount={indexer?.mrcAccount ?? null} />
+      <NativeAgentStateSummary nativeAgentState={indexer?.nativeAgentState ?? null} />
 
       {liveRows.length > 0 && liveRows.map((row) => {
         const display = formatIndexedTokenBalanceRow(row);
@@ -438,6 +441,97 @@ export function AssetList({ account, network, indexer }: AssetListProps) {
         <div className="ext-asset__right">
           <div className="amt">—</div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function nativeAgentRowString(row: NativeAgentStateRow, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim().length > 0) return value;
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    if (typeof value === "boolean") return value ? "true" : "false";
+  }
+  return null;
+}
+
+export function hasNativeAgentStateSummary(
+  nativeAgentState: NativeAgentStateResponse | null,
+): nativeAgentState is NativeAgentStateResponse {
+  return (
+    nativeAgentState !== null &&
+    (nativeAgentState.spendingPolicies.length > 0 ||
+      nativeAgentState.policySpends.length > 0 ||
+      nativeAgentState.escrows.length > 0)
+  );
+}
+
+export function NativeAgentStateSummary({
+  nativeAgentState,
+}: {
+  nativeAgentState: NativeAgentStateResponse | null;
+}) {
+  if (!hasNativeAgentStateSummary(nativeAgentState)) return null;
+  const policyRows = nativeAgentState.spendingPolicies.slice(0, 2);
+  const spendRows = nativeAgentState.policySpends.slice(0, 2);
+  const escrowRows = nativeAgentState.escrows.slice(0, 2);
+  const rowCount =
+    nativeAgentState.spendingPolicies.length +
+    nativeAgentState.policySpends.length +
+    nativeAgentState.escrows.length;
+
+  return (
+    <div className="ext-asset">
+      <div className="ext-asset__ico native">AGT</div>
+      <div className="ext-asset__main">
+        <div className="sym">
+          Native agent state <span className="ext-badge-att">Indexed</span>
+          {nativeAgentState.spendingPolicies.length > 0 && (
+            <> <span className="ext-badge-bridged">Policy</span></>
+          )}
+          {nativeAgentState.escrows.length > 0 && (
+            <> <span className="ext-badge-bridged">Escrow</span></>
+          )}
+        </div>
+        <div className="chain">
+          {nativeAgentState.spendingPolicies.length} policies · {nativeAgentState.policySpends.length} spends · {nativeAgentState.escrows.length} escrows
+        </div>
+        <div
+          style={{
+            marginTop: 6,
+            fontFamily: "var(--f-mono)",
+            fontSize: 9.5,
+            lineHeight: 1.45,
+            color: "var(--fg-400)",
+          }}
+        >
+          {policyRows.map((row, index) => (
+            <div key={`policy:${nativeAgentRowString(row, ["policyId", "policy_id"]) ?? index}`}>
+              policy {shortAddr(nativeAgentRowString(row, ["policyId", "policy_id"]) ?? "unknown", 10)} · limit {nativeAgentRowString(row, ["windowLimit", "window_limit"]) ?? "—"}
+            </div>
+          ))}
+          {spendRows.map((row, index) => (
+            <div key={`spend:${nativeAgentRowString(row, ["policyId", "policy_id"]) ?? index}:${nativeAgentRowString(row, ["window"]) ?? ""}`}>
+              spend {nativeAgentRowString(row, ["spent"]) ?? "0"} / {nativeAgentRowString(row, ["amount"]) ?? "0"} · window {nativeAgentRowString(row, ["window"]) ?? "—"}
+            </div>
+          ))}
+          {escrowRows.map((row, index) => (
+            <div key={`escrow:${nativeAgentRowString(row, ["escrowId", "escrow_id"]) ?? index}`}>
+              escrow {shortAddr(nativeAgentRowString(row, ["escrowId", "escrow_id"]) ?? "unknown", 10)} · {nativeAgentRowString(row, ["status"]) ?? "unknown"}
+            </div>
+          ))}
+          {rowCount > policyRows.length + spendRows.length + escrowRows.length && (
+            <div>
+              + {rowCount - policyRows.length - spendRows.length - escrowRows.length} more agent rows
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="ext-asset__spark" />
+      <div className="ext-asset__right">
+        <div className="amt">{nativeAgentState.escrows.length} escrows</div>
+        <div className="chg">{nativeAgentState.policySpends.length} spends</div>
       </div>
     </div>
   );

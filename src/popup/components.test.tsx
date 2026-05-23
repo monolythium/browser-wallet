@@ -19,9 +19,11 @@ import {
   formatExecutionUnits,
   formatLythoshiAmountHex,
   formatLythoshiPerExecutionUnit,
+  hasNativeAgentStateSummary,
   hasMrcAccountSummary,
   lythoshiToLythString,
   MrcAccountSummary,
+  NativeAgentStateSummary,
 } from "./components.js";
 import type {
   ChainEntry,
@@ -640,6 +642,79 @@ describe("MRC account summary display", () => {
     expect(html).toContain("per action 20");
     expect(html).toContain("spend window 4");
     expect(html).toContain("spent 45");
+  });
+});
+
+describe("native agent state summary", () => {
+  it("renders policy and escrow rows without placeholders", () => {
+    const empty = {
+      schemaVersion: 1,
+      limit: 10,
+      filters: {},
+      spendingPolicies: [],
+      policySpends: [],
+      escrows: [],
+      source: null,
+    };
+    expect(hasNativeAgentStateSummary(empty)).toBe(false);
+    expect(renderToStaticMarkup(<NativeAgentStateSummary nativeAgentState={empty} />)).toBe("");
+
+    const html = renderToStaticMarkup(
+      <NativeAgentStateSummary
+        nativeAgentState={{
+          ...empty,
+          spendingPolicies: [
+            {
+              policyId: "0x" + "aa".repeat(32),
+              owner: "mono1agentowner",
+              controller: "mono1agentcontroller",
+              assetId: "0x" + "cc".repeat(32),
+              enabled: true,
+              perActionLimit: "100",
+              windowLimit: "500",
+              windowSecs: 60,
+              updatedAtBlock: 42,
+            },
+          ],
+          policySpends: [
+            {
+              policyId: "0x" + "aa".repeat(32),
+              controller: "mono1agentcontroller",
+              assetId: "0x" + "cc".repeat(32),
+              window: 7,
+              amount: "25",
+              spent: "125",
+              updatedAtBlock: 43,
+            },
+          ],
+          escrows: [
+            {
+              escrowId: "0x" + "bb".repeat(32),
+              buyer: "mono1agentowner",
+              provider: "mono1agentprovider",
+              arbiter: "mono1agentarbiter",
+              assetId: "0x" + "cc".repeat(32),
+              amount: "1000",
+              termsHash: "0x" + "dd".repeat(32),
+              round: 2,
+              buyerAccepted: true,
+              providerAccepted: false,
+              submittedPayloadHash: null,
+              status: "accepted",
+              resolution: null,
+              lastActor: "mono1agentowner",
+              createdAtBlock: 40,
+              updatedAtBlock: 44,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain("Native agent state");
+    expect(html).toContain("Policy");
+    expect(html).toContain("Escrow");
+    expect(html).toContain("spend 125 / 25");
   });
 });
 
