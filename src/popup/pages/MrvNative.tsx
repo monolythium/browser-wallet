@@ -720,7 +720,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           Polling eth_getTransactionReceipt
           {state.via ? ` via ${state.via}` : ""}.
         </div>
-        <div style={submitMeta}>Native receipt proof is checked after inclusion.</div>
+        <div style={submitMeta}>Native receipt evidence is checked after inclusion.</div>
         <div style={submitMeta}>Inclusion status only; no MRV execution proof.</div>
       </div>
     );
@@ -789,6 +789,17 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
               ? ` · events ${state.receipt.nativeReceipt.eventCount}`
               : ""}
           </div>
+          {state.receipt.nativeReceipt.receiptCommitment !== null && (
+            <>
+              <div style={submitMeta}>
+                Receipt commitment evidence; no-EVM proof status is shown
+                separately.
+              </div>
+              <div style={monoWrap}>
+                {state.receipt.nativeReceipt.receiptCommitment}
+              </div>
+            </>
+          )}
           <div style={submitMeta}>
             {state.receipt.nativeReceipt.noEvmProofStatus === "missing"
               ? "Native receipt returned no no-EVM proof payload."
