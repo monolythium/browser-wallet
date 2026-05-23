@@ -59,7 +59,7 @@ jobs:
 
   publish-chrome:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/') || inputs.upload == true
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.upload == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -110,7 +110,7 @@ jobs:
 
   publish-firefox:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/') || inputs.upload == true
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.upload == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -145,7 +145,7 @@ jobs:
 
   release:
     needs: [build, publish-firefox]
-    if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -155,7 +155,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: ./artifacts/*
           draft: true
           fail_on_unmatched_files: false
