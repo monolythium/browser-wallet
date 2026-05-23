@@ -113,6 +113,22 @@ describe("buildBridgeRouteChoiceState", () => {
     );
   });
 
+  it("keeps discovery catalogue routes behind quote and submit guards", () => {
+    const state = buildBridgeRouteChoiceState([route("catalogue-only")]);
+
+    expect(state.selected?.route?.routeId).toBe("catalogue-only");
+    expect(state.transferPreview.status).toBe("intent-blocked");
+    expect(state.transferPreview.intent).toMatchObject({
+      allowedRouteIds: ["catalogue-only"],
+    });
+    expect(state.transferPreview.quoteBlockedReasons).toEqual([
+      "standalone SDK exposes route-intent selection only; no live bridge quote helper or API route is available",
+    ]);
+    expect(state.transferPreview.submitBlockedReasons).toEqual([
+      "standalone SDK exposes no live bridge submit helper or API route",
+    ]);
+  });
+
   it("keeps legacy disclosure records display-only instead of defaulting SDK fields", () => {
     const state = buildBridgeRouteChoiceState([
       {

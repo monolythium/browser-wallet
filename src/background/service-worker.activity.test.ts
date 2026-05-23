@@ -32,6 +32,25 @@ import {
 
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
 const TESTNET_CHAIN_ID_HEX = "0x10F2C";
+const DISCOVERY_ROUTE = {
+  routeId: "ccip-usdc-eth-mono",
+  bridge: "CCIP",
+  asset: "USDC",
+  sourceChain: "Ethereum",
+  destinationChain: "Mono",
+  verifier: {
+    model: "DON",
+    participantCount: 7,
+    threshold: 5,
+  },
+  drainCapAtomic: "100000000000",
+  finalityBlocks: 64,
+  cooldownSeconds: 86_400,
+  adminControl: "consensusOnly",
+  circuitBreaker: "armed",
+  insuranceAtomic: "50000000000",
+  lastIncidentDate: null,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module mocks — installed before the SW is imported.
@@ -442,6 +461,53 @@ describe("wallet-indexer-snapshot", () => {
         liquidity: { available: "900" },
       },
     ]);
+  });
+
+  it("merges discovery-only bridge route catalogue responses into the snapshot", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_bridgeRoutes"] = {
+      selection: {
+        selected: null,
+        candidates: [],
+        blockedReasons: ["bridge route selection requires transfer intent"],
+      },
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: ["bridge route selection requires transfer intent"],
+      warnings: [],
+      routes: [DISCOVERY_ROUTE],
+      bridgeRouteDisclosures: [DISCOVERY_ROUTE],
+      source: {
+        address: null,
+        routeCount: 1,
+        globalRouteIndexAvailable: true,
+        routeDisclosureSource: "indexer.bridgeRouteDisclosures",
+      },
+    };
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        bridgeRouteDisclosures: Array<Record<string, unknown>>;
+        errors: Record<string, string>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.bridgeRouteDisclosures).toEqual([DISCOVERY_ROUTE]);
+    expect(r.snapshot.errors.bridgeRoutes).toBeUndefined();
+    expect(rpcCalls).toContainEqual({
+      method: "lyth_bridgeRoutes",
+      params: [],
+    });
   });
 });
 
