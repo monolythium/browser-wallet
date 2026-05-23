@@ -5,6 +5,8 @@ import { Icon } from "../Icon";
 import {
   bgWalletBuildMrvCallPlan,
   bgWalletBuildMrvDeployPlan,
+  bgWalletSubmitMrvNativePlan,
+  type SendTxResult,
   type WalletMrvNativeSubmissionPlan,
 } from "../bg";
 
@@ -34,6 +36,13 @@ type BuildRequest =
   | { ok: true; mode: "call"; args: CallPlanArgs }
   | { ok: false; reason: string };
 
+interface MrvNativeSubmitError {
+  message: string;
+  code?: number;
+  method?: string;
+  via?: string;
+}
+
 const DEFAULT_FORM: MrvNativeFormValues = {
   artifactBytes: "",
   artifactHash: "",
@@ -51,6 +60,9 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
   const [plan, setPlan] = useState<WalletMrvNativeSubmissionPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<SendTxResult | null>(null);
+  const [submitError, setSubmitError] = useState<MrvNativeSubmitError | null>(null);
 
   const buildRequest = useMemo(
     () => buildMrvNativeRequest(mode, form, chainIdHex),
@@ -64,11 +76,15 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
     setForm((prev) => ({ ...prev, [key]: value }));
     setPlan(null);
     setError(null);
+    setSubmitResult(null);
+    setSubmitError(null);
   };
 
   const handleBuild = async () => {
     setPlan(null);
     setError(null);
+    setSubmitResult(null);
+    setSubmitError(null);
     if (!buildRequest.ok) {
       setError(buildRequest.reason);
       return;
@@ -88,6 +104,29 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (plan === null || submitting || submitResult !== null) return;
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      const r = await bgWalletSubmitMrvNativePlan({ plan, chainIdHex });
+      if (r.ok) {
+        setSubmitResult(r.result);
+      } else {
+        setSubmitError({
+          message: r.reason ?? "MRV native submission failed",
+          ...(r.code !== undefined ? { code: r.code } : {}),
+          ...(r.method !== undefined ? { method: r.method } : {}),
+          ...(r.via !== undefined ? { via: r.via } : {}),
+        });
+      }
+    } catch (e) {
+      setSubmitError({ message: (e as Error).message });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -113,7 +152,8 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           <div style={bodyCopy}>
             Build a v4.1 MRV native contract deploy or call plan. This page
             previews execution units, lythoshi fees, typed addresses, and the
-            JSON-safe transaction extension only; it does not sign or submit.
+            JSON-safe transaction extension before signing. Submission returns
+            a tx hash only; it does not confirm or prove live MRV execution.
           </div>
           <div style={chainPill}>Chain {chainIdHex}</div>
         </div>
@@ -133,6 +173,8 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
                 setMode("deploy");
                 setPlan(null);
                 setError(null);
+                setSubmitResult(null);
+                setSubmitError(null);
               }}
               type="button"
             >
@@ -146,6 +188,8 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
                 setMode("call");
                 setPlan(null);
                 setError(null);
+                setSubmitResult(null);
+                setSubmitError(null);
               }}
               type="button"
             >
@@ -262,7 +306,15 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           </button>
         </div>
 
-        {plan && <MrvNativePlanPreview plan={plan} />}
+        {plan && (
+          <MrvNativePlanPreview
+            plan={plan}
+            onSubmit={() => void handleSubmit()}
+            submitting={submitting}
+            submitResult={submitResult}
+            submitError={submitError}
+          />
+        )}
       </div>
     </>
   );
@@ -430,8 +482,18 @@ function normalizeHexBytesInput(
 
 export function MrvNativePlanPreview({
   plan,
+  onSubmit,
+  submitting = false,
+  submitResult = null,
+  submitError = null,
+  submitDisabledReason = null,
 }: {
   plan: WalletMrvNativeSubmissionPlan;
+  onSubmit?: () => void;
+  submitting?: boolean;
+  submitResult?: SendTxResult | null;
+  submitError?: MrvNativeSubmitError | null;
+  submitDisabledReason?: string | null;
 }) {
   const nativeContract =
     plan.kind === "mrv_deploy"
@@ -474,6 +536,59 @@ export function MrvNativePlanPreview({
       <pre aria-label="MRV native plan JSON" style={jsonBlock}>
         {JSON.stringify(plan, null, 2)}
       </pre>
+
+      {onSubmit && (
+        <>
+          {submitDisabledReason && (
+            <div style={warningBox}>{submitDisabledReason}</div>
+          )}
+          {submitError && (
+            <div style={errorBox}>
+              <div>{submitError.message}</div>
+              {(submitError.method || submitError.via || submitError.code !== undefined) && (
+                <div style={submitMeta}>
+                  {submitError.method ? `RPC ${submitError.method}` : "Submission"}
+                  {submitError.via ? ` via ${submitError.via}` : ""}
+                  {submitError.code !== undefined ? ` (code ${submitError.code})` : ""}
+                </div>
+              )}
+            </div>
+          )}
+          {submitResult && (
+            <div style={successBox}>
+              <div style={{ fontWeight: 700 }}>Transaction submitted</div>
+              <div style={submitMeta}>Via {submitResult.via}</div>
+              <div style={monoWrap}>{submitResult.txHash}</div>
+              <div style={submitMeta}>
+                Awaiting chain confirmation. The wallet has not verified MRV
+                execution yet.
+              </div>
+            </div>
+          )}
+          <button
+            onClick={onSubmit}
+            disabled={submitting || submitResult !== null || submitDisabledReason !== null}
+            style={{
+              ...primaryButton,
+              opacity:
+                submitting || submitResult !== null || submitDisabledReason !== null
+                  ? 0.65
+                  : 1,
+              cursor:
+                submitting || submitResult !== null || submitDisabledReason !== null
+                  ? "default"
+                  : "pointer",
+            }}
+            type="button"
+          >
+            {submitting
+              ? "Submitting..."
+              : submitResult
+                ? "Submitted"
+                : "Sign and submit"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -571,6 +686,43 @@ const errorBox: CSSProperties = {
   fontFamily: "var(--f-mono)",
   fontSize: 10.5,
   lineHeight: 1.45,
+};
+
+const warningBox: CSSProperties = {
+  marginTop: 10,
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid rgba(242,180,65,0.35)",
+  background: "rgba(242,180,65,0.08)",
+  color: "var(--gold)",
+  fontSize: 11,
+  lineHeight: 1.45,
+};
+
+const successBox: CSSProperties = {
+  marginTop: 10,
+  padding: "9px 10px",
+  borderRadius: 8,
+  border: "1px solid rgba(75,190,120,0.38)",
+  background: "rgba(75,190,120,0.08)",
+  color: "var(--fg-100)",
+  fontSize: 11,
+  lineHeight: 1.45,
+};
+
+const submitMeta: CSSProperties = {
+  marginTop: 4,
+  color: "var(--fg-300)",
+  fontSize: 10.5,
+  lineHeight: 1.45,
+};
+
+const monoWrap: CSSProperties = {
+  marginTop: 6,
+  fontFamily: "var(--f-mono)",
+  fontSize: 10.5,
+  color: "var(--fg-100)",
+  wordBreak: "break-all",
 };
 
 const summaryGrid: CSSProperties = {

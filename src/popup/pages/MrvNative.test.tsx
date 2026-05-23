@@ -22,7 +22,7 @@ const BASE_FORM: MrvNativeFormValues = {
 };
 
 describe("MrvNative", () => {
-  it("renders the preview-only v4.1 MRV native surface", () => {
+  it("renders the v4.1 MRV native preview and honest submit scope", () => {
     const html = renderToStaticMarkup(
       <MrvNative chainIdHex="0x10F2C" onBack={() => undefined} />,
     );
@@ -32,7 +32,7 @@ describe("MrvNative", () => {
     expect(html).toContain("execution units");
     expect(html).toContain("lythoshi");
     expect(html).toContain("typed addresses");
-    expect(html).toContain("does not sign or submit");
+    expect(html).toContain("does not confirm or prove live MRV execution");
   });
 
   it("renders returned JSON-safe plans with native contract and fee terms", () => {
@@ -86,6 +86,68 @@ describe("MrvNative", () => {
     expect(html).toContain("10000000 lythoshi");
     expect(html).toContain("JSON-safe plan");
     expect(html).toContain("monoc1yg3");
+  });
+
+  it("renders a submit-ready preview action without claiming confirmation", () => {
+    const plan: WalletMrvNativeSubmissionPlan = {
+      kind: "mrv_deploy",
+      request: {
+        from: "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
+        artifactBytes: "0x13000000",
+        valueLythoshi: "0",
+        executionUnitLimit: "1000000",
+        maxExecutionFeeLythoshi: "100",
+        priorityTipLythoshi: "1",
+        nonce: "7",
+      },
+      extension: { kind: 48, bodyHex: "0x01" },
+      expectedContractAddress: "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd",
+      nativeTx: {
+        chainId: "69420",
+        nonce: "7",
+        valueLythoshi: "0",
+        executionUnitLimit: "1000000",
+        maxExecutionFeeLythoshi: "100",
+        priorityTipLythoshi: "1",
+      },
+      feePreview: {
+        totalLythoshi: "100",
+        totalLyth: "0.000001",
+        cyclesUsed: "1000000",
+        executionUnitLimit: "1000000",
+        maxExecutionFeeLythoshi: "100",
+        priorityTipLythoshi: "1",
+      },
+      tx: {
+        chainIdHex: "0x10f2c",
+        nonceHex: "0x7",
+        gasLimitHex: "0xf4240",
+        maxFeePerGas: "0x64",
+        maxPriorityFeePerGas: "0x1",
+        to: null,
+        valueWeiHex: "0x0",
+        data: "0x13000000",
+        extensions: [{ kind: 48, bodyHex: "0x01" }],
+      },
+    };
+
+    const readyHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview plan={plan} onSubmit={() => undefined} />,
+    );
+    expect(readyHtml).toContain("Sign and submit");
+
+    const html = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: `0x${"a".repeat(64)}`, via: "mock-operator" }}
+      />,
+    );
+
+    expect(html).toContain("Transaction submitted");
+    expect(html).toContain("mock-operator");
+    expect(html).toContain("Awaiting chain confirmation");
+    expect(html).toContain("has not verified MRV");
   });
 });
 
