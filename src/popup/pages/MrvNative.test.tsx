@@ -21,6 +21,52 @@ const BASE_FORM: MrvNativeFormValues = {
   valueLythoshi: "42",
 };
 
+const SUBMITTED_TX_HASH = `0x${"a".repeat(64)}`;
+
+function buildDeployPlan(): WalletMrvNativeSubmissionPlan {
+  return {
+    kind: "mrv_deploy",
+    request: {
+      from: "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
+      artifactBytes: "0x13000000",
+      valueLythoshi: "0",
+      executionUnitLimit: "1000000",
+      maxExecutionFeeLythoshi: "100",
+      priorityTipLythoshi: "1",
+      nonce: "7",
+    },
+    extension: { kind: 48, bodyHex: "0x01" },
+    expectedContractAddress: "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd",
+    nativeTx: {
+      chainId: "69420",
+      nonce: "7",
+      valueLythoshi: "0",
+      executionUnitLimit: "1000000",
+      maxExecutionFeeLythoshi: "100",
+      priorityTipLythoshi: "1",
+    },
+    feePreview: {
+      totalLythoshi: "100",
+      totalLyth: "0.000001",
+      cyclesUsed: "1000000",
+      executionUnitLimit: "1000000",
+      maxExecutionFeeLythoshi: "100",
+      priorityTipLythoshi: "1",
+    },
+    tx: {
+      chainIdHex: "0x10f2c",
+      nonceHex: "0x7",
+      gasLimitHex: "0xf4240",
+      maxFeePerGas: "0x64",
+      maxPriorityFeePerGas: "0x1",
+      to: null,
+      valueWeiHex: "0x0",
+      data: "0x13000000",
+      extensions: [{ kind: 48, bodyHex: "0x01" }],
+    },
+  };
+}
+
 describe("MrvNative", () => {
   it("renders the v4.1 MRV native preview and honest submit scope", () => {
     const html = renderToStaticMarkup(
@@ -32,7 +78,8 @@ describe("MrvNative", () => {
     expect(html).toContain("execution units");
     expect(html).toContain("lythoshi");
     expect(html).toContain("typed addresses");
-    expect(html).toContain("does not confirm or prove live MRV execution");
+    expect(html).toContain("polls transaction receipt inclusion status");
+    expect(html).toContain("does not prove live MRV execution");
   });
 
   it("renders returned JSON-safe plans with native contract and fee terms", () => {
@@ -89,47 +136,7 @@ describe("MrvNative", () => {
   });
 
   it("renders a submit-ready preview action without claiming confirmation", () => {
-    const plan: WalletMrvNativeSubmissionPlan = {
-      kind: "mrv_deploy",
-      request: {
-        from: "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
-        artifactBytes: "0x13000000",
-        valueLythoshi: "0",
-        executionUnitLimit: "1000000",
-        maxExecutionFeeLythoshi: "100",
-        priorityTipLythoshi: "1",
-        nonce: "7",
-      },
-      extension: { kind: 48, bodyHex: "0x01" },
-      expectedContractAddress: "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd",
-      nativeTx: {
-        chainId: "69420",
-        nonce: "7",
-        valueLythoshi: "0",
-        executionUnitLimit: "1000000",
-        maxExecutionFeeLythoshi: "100",
-        priorityTipLythoshi: "1",
-      },
-      feePreview: {
-        totalLythoshi: "100",
-        totalLyth: "0.000001",
-        cyclesUsed: "1000000",
-        executionUnitLimit: "1000000",
-        maxExecutionFeeLythoshi: "100",
-        priorityTipLythoshi: "1",
-      },
-      tx: {
-        chainIdHex: "0x10f2c",
-        nonceHex: "0x7",
-        gasLimitHex: "0xf4240",
-        maxFeePerGas: "0x64",
-        maxPriorityFeePerGas: "0x1",
-        to: null,
-        valueWeiHex: "0x0",
-        data: "0x13000000",
-        extensions: [{ kind: 48, bodyHex: "0x01" }],
-      },
-    };
+    const plan = buildDeployPlan();
 
     const readyHtml = renderToStaticMarkup(
       <MrvNativePlanPreview plan={plan} onSubmit={() => undefined} />,
@@ -140,14 +147,67 @@ describe("MrvNative", () => {
       <MrvNativePlanPreview
         plan={plan}
         onSubmit={() => undefined}
-        submitResult={{ txHash: `0x${"a".repeat(64)}`, via: "mock-operator" }}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
       />,
     );
 
     expect(html).toContain("Transaction submitted");
     expect(html).toContain("mock-operator");
-    expect(html).toContain("Awaiting chain confirmation");
-    expect(html).toContain("has not verified MRV");
+    expect(html).toContain("Receipt polling checks transaction inclusion only");
+    expect(html).toContain("has not verified a no-EVM MRV execution proof");
+  });
+
+  it("renders MRV receipt polling, included, and unavailable states honestly", () => {
+    const plan = buildDeployPlan();
+    const pollingHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{ phase: "polling", via: "mock-operator" }}
+      />,
+    );
+    expect(pollingHtml).toContain("Receipt status: waiting for inclusion");
+    expect(pollingHtml).toContain("eth_getTransactionReceipt");
+    expect(pollingHtml).toContain("no MRV execution proof");
+
+    const includedHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "included",
+          via: "mock-operator",
+          receipt: {
+            txHash: SUBMITTED_TX_HASH,
+            status: "0x1",
+            blockNumber: "0x64",
+            contractAddress: "0x2222222222222222222222222222222222222222",
+          },
+        }}
+      />,
+    );
+    expect(includedHtml).toContain("Receipt status: included");
+    expect(includedHtml).toContain("block 100");
+    expect(includedHtml).toContain("Contract 0x222222");
+
+    const unavailableHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "unavailable",
+          reason: "method not found",
+          method: "eth_getTransactionReceipt",
+          code: -32601,
+        }}
+      />,
+    );
+    expect(unavailableHtml).toContain("Receipt polling unavailable");
+    expect(unavailableHtml).toContain("method not found");
+    expect(unavailableHtml).toContain("RPC eth_getTransactionReceipt");
   });
 });
 

@@ -855,6 +855,33 @@ export async function bgWalletSubmitMrvNativePlan(args: {
   return { ok: true, result: { txHash: r.txHash, via: r.via } };
 }
 
+export interface WalletMrvNativeReceipt {
+  txHash: string;
+  status: string | null;
+  blockNumber: string | null;
+  contractAddress: string | null;
+}
+
+export async function bgWalletMrvNativeReceiptStatus(args: {
+  txHash: string;
+  chainIdHex: string;
+}): Promise<
+  | {
+      ok: true;
+      receipt: WalletMrvNativeReceipt | null;
+      via?: string;
+    }
+  | {
+      ok: false;
+      reason?: string;
+      code?: number;
+      method?: string;
+      via?: string;
+    }
+> {
+  return send("wallet-mrv-receipt-status", args);
+}
+
 export async function bgListPending(): Promise<PendingApproval[]> {
   return send<PendingApproval[]>("list-pending");
 }
