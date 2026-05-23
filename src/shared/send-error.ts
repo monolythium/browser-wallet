@@ -18,7 +18,7 @@
 // Whitepaper alignment:
 //   §21.5  — Ferveo encrypted mempool (failure mode = "encrypted-submit
 //            failed; falling back to plaintext")
-//   §22    — EIP-1559-style fee model (gas-estimation failures)
+//   §22    — EIP-1559-style fee model (execution-unit estimation failures)
 //   §23.2  — liquid bonding (no nonce/cooldown blockers for delegators
 //            specifically — but nonce-too-low still happens on multi-
 //            tab sends)
@@ -52,14 +52,14 @@ export interface SendErrorClassification {
 /** Optional supplementary context the classifier can read for richer
  *  copy. All fields optional — only the message is required. */
 export interface SendErrorContext {
-  /** Wallet's current balance in wei, as a hex string. When supplied
+  /** Wallet's current balance in native lythoshi, as a hex string. When supplied
    *  AND error is insufficient-funds, the body line shows the actual
    *  balance + the gap. */
-  walletBalanceWeiHex?: string;
-  /** Outgoing transaction value in wei, hex. Used for the same. */
-  txValueWeiHex?: string;
-  /** Estimated gas cost in wei, hex. Used for the same. */
-  estimatedGasWeiHex?: string;
+  walletBalanceLythoshiHex?: string;
+  /** Outgoing transaction value in native lythoshi, hex. Used for the same. */
+  txValueLythoshiHex?: string;
+  /** Estimated network fee in native lythoshi, hex. Used for the same. */
+  estimatedNetworkFeeLythoshiHex?: string;
 }
 
 /** Best-effort classification. Pattern-matches against the chain-side
@@ -84,7 +84,7 @@ export function classifySendError(
     };
   }
 
-  // Gas-estimation failures (eth_estimateGas reverts).
+  // Execution-unit estimation failures (legacy eth_estimateGas errors).
   if (
     lower.includes("gas required exceeds") ||
     lower.includes("intrinsic gas too low") ||
@@ -92,10 +92,11 @@ export function classifySendError(
   ) {
     return {
       kind: "gas-estimation",
-      headline: "Could not estimate gas",
+      headline: "Could not estimate network fee",
       body:
-        "The recipient contract may reject this transaction. Check the " +
-        "recipient address and the amount, then try again.",
+        "The wallet could not estimate the execution units for this " +
+        "transaction. The recipient contract may reject it. Check the " +
+        "recipient address and amount, then try again.",
       severity: "err",
     };
   }
@@ -225,30 +226,33 @@ export function classifySendError(
   };
 }
 
+const LYTHOSHI_PER_LYTH = 100_000_000n;
+const LYTHOSHI_DECIMALS = 8;
+
 /** Format the insufficient-funds body. Adds an amount breakdown when
- *  the context supplies balance + value + gas. */
+ *  the context supplies balance + value + network fee. */
 function insufficientFundsBody(context?: SendErrorContext): string {
   if (!context) {
-    return "Your wallet doesn't have enough LYTH to cover the amount + gas.";
+    return "Your wallet doesn't have enough LYTH to cover the amount plus the network fee.";
   }
-  const balance = parseHexOrNull(context.walletBalanceWeiHex);
-  const value = parseHexOrNull(context.txValueWeiHex);
-  const gas = parseHexOrNull(context.estimatedGasWeiHex);
+  const balance = parseHexOrNull(context.walletBalanceLythoshiHex);
+  const value = parseHexOrNull(context.txValueLythoshiHex);
+  const networkFee = parseHexOrNull(context.estimatedNetworkFeeLythoshiHex);
   if (balance === null || value === null) {
-    return "Your wallet doesn't have enough LYTH to cover the amount + gas.";
+    return "Your wallet doesn't have enough LYTH to cover the amount plus the network fee.";
   }
-  const need = value + (gas ?? 0n);
-  const shortfall = need - balance;
-  const fmt = (wei: bigint) => {
-    const whole = wei / 10n ** 18n;
-    const frac = wei % 10n ** 18n;
-    const fracStr = frac.toString().padStart(18, "0").slice(0, 6);
+  const need = value + (networkFee ?? 0n);
+  const shortfall = need > balance ? need - balance : 0n;
+  const fmt = (lythoshi: bigint) => {
+    const whole = lythoshi / LYTHOSHI_PER_LYTH;
+    const frac = lythoshi % LYTHOSHI_PER_LYTH;
+    const fracStr = frac.toString().padStart(LYTHOSHI_DECIMALS, "0");
     return `${whole}.${fracStr}`;
   };
   let body =
     `You have ${fmt(balance)} LYTH but this transaction needs ${fmt(need)} LYTH`;
-  if (gas !== null) {
-    body += ` (${fmt(value)} amount + ${fmt(gas)} gas)`;
+  if (networkFee !== null) {
+    body += ` (${fmt(value)} amount + ${fmt(networkFee)} network fee)`;
   }
   body += `. Shortfall: ${fmt(shortfall)} LYTH.`;
   return body;

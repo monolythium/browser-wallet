@@ -61,39 +61,60 @@ describe("classifySendError — copy quality", () => {
 describe("classifySendError — insufficient-funds context enrichment", () => {
   it("includes balance + need + shortfall when context supplied", () => {
     const r = classifySendError("insufficient funds", {
-      // 1 LYTH = 10**18 wei
-      walletBalanceWeiHex: "0x" + (10n ** 18n).toString(16), // 1 LYTH
-      txValueWeiHex: "0x" + (3n * 10n ** 18n).toString(16), // 3 LYTH
-      estimatedGasWeiHex: "0x" + (10n ** 16n).toString(16), // 0.01 LYTH
+      // 1 LYTH = 100_000_000 lythoshi
+      walletBalanceLythoshiHex: "0x" + 100_000_000n.toString(16), // 1 LYTH
+      txValueLythoshiHex: "0x" + 300_000_000n.toString(16), // 3 LYTH
+      estimatedNetworkFeeLythoshiHex: "0x" + 1_000_000n.toString(16), // 0.01 LYTH
     });
-    expect(r.body).toContain("1.000000 LYTH");
-    expect(r.body).toContain("3.010000 LYTH"); // total needed
-    expect(r.body).toContain("2.010000 LYTH"); // shortfall
+    expect(r.body).toContain("1.00000000 LYTH");
+    expect(r.body).toContain("3.01000000 LYTH"); // total needed
+    expect(r.body).toContain("2.01000000 LYTH"); // shortfall
+    expect(r.body).toContain("network fee");
+    expect(r.body).not.toContain("gas");
   });
 
   it("falls back to generic copy when context is partial", () => {
     const r = classifySendError("insufficient funds", {
-      walletBalanceWeiHex: "0x100",
+      walletBalanceLythoshiHex: "0x100",
       // value omitted
     });
-    // Generic copy uses "amount + gas" phrasing; specific breakdown
+    // Generic copy uses "amount plus network fee" phrasing; specific breakdown
     // uses the "you have X LYTH but this transaction needs Y LYTH" form.
-    expect(r.body).toContain("amount + gas");
+    expect(r.body).toContain("amount plus the network fee");
     expect(r.body).not.toContain("Shortfall");
   });
 
   it("falls back to generic copy when no context is supplied", () => {
     const r = classifySendError("insufficient funds");
-    expect(r.body).toContain("amount + gas");
+    expect(r.body).toContain("amount plus the network fee");
   });
 
   it("handles invalid hex without throwing", () => {
     const r = classifySendError("insufficient funds", {
-      walletBalanceWeiHex: "0xZZZ",
-      txValueWeiHex: "0x100",
+      walletBalanceLythoshiHex: "0xZZZ",
+      txValueLythoshiHex: "0x100",
     });
     // parseHexOrNull returns null for invalid; falls back to generic.
-    expect(r.body).toContain("amount + gas");
+    expect(r.body).toContain("amount plus the network fee");
+  });
+
+  it("uses lythoshi precision for the smallest native shortfall", () => {
+    const r = classifySendError("insufficient funds", {
+      walletBalanceLythoshiHex: "0x0",
+      txValueLythoshiHex: "0x1",
+    });
+    expect(r.body).toContain("0.00000001 LYTH");
+  });
+});
+
+describe("classifySendError — native fee wording", () => {
+  it("uses network fee and execution-unit wording for estimation failures", () => {
+    const r = classifySendError("cannot estimate gas: execution may fail");
+    expect(r.kind).toBe("gas-estimation");
+    expect(r.headline).toBe("Could not estimate network fee");
+    expect(r.body).toContain("execution units");
+    expect(r.headline).not.toContain("gas");
+    expect(r.body).not.toContain("gas");
   });
 });
 

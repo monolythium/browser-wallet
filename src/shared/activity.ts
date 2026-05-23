@@ -77,7 +77,7 @@ export interface PendingTxRow {
   kind: "pending_tx";
   txHash: string;
   to: string;                          // 0x address, lowercase
-  amountDecimal: string;               // decimal LYTH (canonical wei → decimal LYTH conversion)
+  amountDecimal: string;               // decimal LYTH (canonical lythoshi → decimal LYTH conversion)
   broadcastedAtMs: number;
   broadcastBlockHeight: number | null;
   via: string;                         // operator name that accepted the encrypted envelope
@@ -381,7 +381,7 @@ export interface RawAddressActivity {
   direction: "in" | "out" | null;
   counterparty: string | null;
   tokenId: string | null;
-  amount: string | null;               // decimal wei or chain-native; passed through
+  amount: string | null;               // decimal LYTH for native rows; token decimal for token rows
   cluster: number | null;
   weightBps: number | null;
   subKind: string | null;

@@ -417,6 +417,15 @@ describe("mapAddressActivityToRows", () => {
     expect((rows[0] as TxSendRow).amountDecimal).toBe("1.0");
   });
 
+  it("preserves native 8-decimal LYTH amount strings for tx_send rows", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ amount: "0.00000001" })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as TxSendRow).amountDecimal).toBe("0.00000001");
+  });
+
   it("maps transfer/in (no tokenId) → TxReceiveRow", () => {
     const rows = mapAddressActivityToRows(
       [makeActivity({ direction: "in" })],
@@ -638,6 +647,15 @@ describe("reconcilePending", () => {
   it("evicts a pending row when a tx_send matches within the block window", () => {
     const pending = makePending();
     const confirmed = makeTxSend({ blockHeight: 1005 });
+    expect(reconcilePending([pending], [confirmed])).toEqual([]);
+  });
+
+  it("matches pending and confirmed rows at 1-lythoshi precision", () => {
+    const pending = makePending({ amountDecimal: "0.00000001" });
+    const confirmed = makeTxSend({
+      blockHeight: 1005,
+      amountDecimal: "0.00000001",
+    });
     expect(reconcilePending([pending], [confirmed])).toEqual([]);
   });
 
