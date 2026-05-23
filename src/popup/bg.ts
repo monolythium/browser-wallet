@@ -20,6 +20,7 @@ export type {
 export type {
   MrcAccountLookupResponse,
   MrcAccountRecord,
+  MrcPolicyRecord,
   MrcPolicySpendRecord,
 } from "../shared/mrc-account.js";
 export type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
