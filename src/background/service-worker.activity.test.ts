@@ -505,7 +505,7 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     });
     const firstFetchCount = rpcCalls.length;
-    expect(firstFetchCount).toBe(4); // tokenBalances + addressLabel + delegationHistory + addressActivity
+    expect(firstFetchCount).toBe(5); // tokenBalances + bridgeRoutes + addressLabel + delegationHistory + addressActivity
     // Second call immediately after — cache is fresh, should NOT hit RPC.
     await dispatchPopup({
       kind: "popup",
