@@ -41,6 +41,7 @@ const AGENT_STATE = {
     {
       issuerId: `0x${"11".repeat(32)}`,
       issuer: "mono1agentowner",
+      nonce: 1,
       metadataHash: `0x${"1b".repeat(32)}`,
       updatedAtBlock: 45,
     },
@@ -50,6 +51,7 @@ const AGENT_STATE = {
       attestationId: `0x${"12".repeat(32)}`,
       issuerId: `0x${"11".repeat(32)}`,
       issuer: "mono1agentowner",
+      nonce: "2",
       subject: "mono1agentcontroller",
       schemaHash: `0x${"17".repeat(32)}`,
       payloadHash: `0x${"ee".repeat(32)}`,
@@ -62,6 +64,7 @@ const AGENT_STATE = {
       consentId: `0x${"13".repeat(32)}`,
       subject: "mono1agentcontroller",
       grantee: "mono1agentarbiter",
+      nonce: 3,
       scopeHash: `0x${"19".repeat(32)}`,
       expiresAt: 10_000,
       active: true,
@@ -72,6 +75,7 @@ const AGENT_STATE = {
     {
       serviceId: `0x${"14".repeat(32)}`,
       provider: "mono1agentprovider",
+      nonce: "0x4",
       categoryHash: `0x${"1a".repeat(32)}`,
       metadataHash: `0x${"1b".repeat(32)}`,
       active: true,
@@ -91,6 +95,7 @@ const AGENT_STATE = {
     {
       arbiterId: `0x${"15".repeat(32)}`,
       arbiter: "mono1agentarbiter",
+      nonce: 5,
       tier: 2,
       metadataHash: `0x${"1b".repeat(32)}`,
       updatedAtBlock: 50,
@@ -102,6 +107,7 @@ const AGENT_STATE = {
       owner: "mono1agentowner",
       controller: "mono1agentcontroller",
       assetId: `0x${"cc".repeat(32)}`,
+      nonce: "6",
       enabled: true,
       perActionLimit: "100",
       windowLimit: "500",
@@ -127,6 +133,7 @@ const AGENT_STATE = {
       provider: "mono1agentprovider",
       arbiter: "mono1agentarbiter",
       assetId: `0x${"cc".repeat(32)}`,
+      nonce: 7,
       amount: "1000",
       termsHash: `0x${"dd".repeat(32)}`,
       round: 2,
@@ -246,6 +253,29 @@ describe("native-agent-state parsing", () => {
       validateNativeAgentStateResponse({
         ...AGENT_STATE,
         reputationReviews: "not rows",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects malformed native agent nonce fields", () => {
+    expect(
+      validateNativeAgentStateResponse({
+        ...AGENT_STATE,
+        issuers: [{ ...AGENT_STATE.issuers[0]!, nonce: true }],
+      }),
+    ).toBeNull();
+    expect(
+      validateNativeAgentStateResponse({
+        ...AGENT_STATE,
+        spendingPolicies: [
+          { ...AGENT_STATE.spendingPolicies[0]!, nonce: "not-a-quantity" },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      validateNativeAgentStateResponse({
+        ...AGENT_STATE,
+        escrows: [{ ...AGENT_STATE.escrows[0]!, nonce: Number.MAX_SAFE_INTEGER + 1 }],
       }),
     ).toBeNull();
   });
