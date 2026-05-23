@@ -1,0 +1,906 @@
+// Phase 7 commit 1 — staking-client read-path tests.
+//
+// Three property classes pinned here:
+//   1. Happy path: a well-formed RPC response normalises into the
+//      typed StakingResult envelope (cluster-directory row count
+//      preserved, regions array passed through, entity stitched in
+//      via the second `lyth_getClusterEntity` lookup).
+//   2. Sprintnet-offline fallback: when `sprintnetJsonRpc` throws,
+//      readClusterDirectory + readDelegations + readDelegationCap
+//      all serve the MOCK fixtures rather than failing the popup
+//      render (`via: "mock"`).
+//   3. Malformed-response handling: a well-formed-transport but
+//      missing-required-fields response yields `ok: false, reason`.
+//
+// Pending rewards and redemption queue now call their direct live RPCs
+// first, falling back to old mock render shapes only when the method is
+// absent or Sprintnet is unreachable.
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  ClusterDirectoryPageResponse,
+  ClusterStatusResponse,
+} from "@monolythium/core-sdk";
+
+// Stub the tx-mldsa dispatch surface; every staking read goes through
+// this single function so one mock controls the whole suite.
+vi.mock("./tx-mldsa.js", () => ({
+  sprintnetJsonRpc: vi.fn(),
+}));
+
+import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import {
+  readClusterDelegators,
+  readClusterDirectory,
+  readClusterStatus,
+  readDelegationCap,
+  readDelegationHistory,
+  readDelegations,
+  readPendingRewards,
+  readRedemptionQueue,
+} from "./staking-client.js";
+import { MOCK_CLUSTERS, MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
+import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
+
+const mockedRpc = sprintnetJsonRpc as unknown as ReturnType<typeof vi.fn>;
+
+const BPS_DENOMINATOR = 10_000n;
+const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
+const MOCK_REWARD_INTERVALS_PER_YEAR = 365n * 288n;
+
+function methodNotFoundError(method = "lyth_pendingRewards"): Error & {
+  code: number;
+  method: string;
+  via: string;
+} {
+  return Object.assign(new Error("Method not found"), {
+    code: -32601,
+    method,
+    via: "operator-1",
+  });
+}
+
+function expectedMockRewardLythoshi(weightBps: number, aprBps: number): bigint {
+  return (
+    MOCK_REWARD_PRINCIPAL_LYTHOSHI *
+    BigInt(weightBps) *
+    BigInt(aprBps)
+  ) / (BPS_DENOMINATOR * BPS_DENOMINATOR * MOCK_REWARD_INTERVALS_PER_YEAR);
+}
+
+afterEach(() => {
+  mockedRpc.mockReset();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterDirectory
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterDirectory", () => {
+  it("normalises a well-formed lyth_clusters page + stitches entity flags", async () => {
+    mockedRpc.mockImplementation(async (method: string, params: unknown[]) => {
+      if (method === "lyth_clusters") {
+        return {
+          via: "operator-2",
+          result: {
+            page: 0,
+            limit: 25,
+            totalClusters: 2,
+            clusters: [
+              {
+                clusterId: 1,
+                size: 10,
+                threshold: 7,
+                aggregateHealth: "healthy",
+                regionDiversity: ["fsn1", "nbg1"],
+                active: true,
+              },
+              {
+                clusterId: 2,
+                size: 10,
+                threshold: 7,
+                aggregateHealth: "degraded",
+                regionDiversity: ["ash"],
+                active: true,
+              },
+            ],
+          },
+        };
+      }
+      if (method === "lyth_getClusterEntity") {
+        const cluster = (params as [number])[0];
+        return {
+          via: "operator-2",
+          result: { cluster, entity: cluster === 1 ? "mono-labs" : "independent" },
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.clusters).toHaveLength(2);
+    expect(r.data.clusters[0]?.entity).toBe("mono-labs");
+    expect(r.data.clusters[1]?.entity).toBe("independent");
+    expect(r.data.clusters[0]?.regions).toEqual(["fsn1", "nbg1"]);
+    expect(r.data.clusters[0]?.health).toBe("healthy");
+    // The cluster-name registry is not yet emitted by the SDK; the
+    // wallet normalises name to null on every directory row.
+    expect(r.data.clusters[0]?.name).toBeNull();
+  });
+
+  it("falls back to MOCK_CLUSTERS when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
+    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.clusters.length).toBe(MOCK_CLUSTERS.length);
+    // The mock fixtures preserve the §14 architecture shape (10 ops per
+    // cluster, 7-of-10 threshold).
+    for (const c of r.data.clusters) {
+      expect(c.size).toBe(10);
+      expect(c.threshold).toBe(7);
+    }
+  });
+
+  it("rejects a malformed response (missing clusters[] array)", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: { page: 0, limit: 25 } });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
+  });
+
+  it("normalises an unknown health string to 'unknown'", async () => {
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusters") {
+        return {
+          via: "operator-1",
+          result: {
+            page: 0,
+            limit: 25,
+            totalClusters: 1,
+            clusters: [
+              {
+                clusterId: 7,
+                size: 10,
+                threshold: 7,
+                aggregateHealth: "fish-flavored",
+                regionDiversity: null,
+                active: true,
+              },
+            ],
+          },
+        };
+      }
+      return { via: "operator-1", result: { cluster: 7, entity: "independent" } };
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.clusters[0]?.health).toBe("unknown");
+    expect(r.data.clusters[0]?.regions).toEqual([]);
+  });
+
+  // Phase 7.1 — wire-contract anchor. Constructs the exact SDK-shape
+  // `ClusterDirectoryPageResponse` (post-normalisation) and verifies the
+  // wallet's parser handles it. If Nayiem rotates a field name on the
+  // chain side and the SDK re-exports the new shape, this fixture's
+  // type annotation forces a compile error here before the wallet
+  // ships against a stale contract.
+  it("parses a strict SDK ClusterDirectoryPageResponse without rejecting fields", async () => {
+    const sdkShape: ClusterDirectoryPageResponse = {
+      page: 0,
+      limit: 25,
+      totalClusters: 1,
+      clusters: [
+        {
+          clusterId: 42,
+          size: 10,
+          threshold: 7,
+          aggregateHealth: "healthy",
+          regionDiversity: ["fsn1", "hel1"],
+          active: true,
+        },
+      ],
+    };
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusters") return { via: "operator-3", result: sdkShape };
+      return { via: "operator-3", result: { cluster: 42, entity: "independent" } };
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.totalClusters).toBe(1);
+    expect(r.data.clusters[0]?.clusterId).toBe(42);
+    expect(r.data.clusters[0]?.entity).toBe("independent");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterStatus
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterStatus", () => {
+  it("normalises members + stringifies bigints (epoch / round / lastUpdateHeight)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-3",
+      result: {
+        clusterId: 1,
+        threshold: 7,
+        size: 10,
+        live: 9,
+        lagging: 1,
+        offline: 0,
+        maintenance: 0,
+        members: [
+          { operatorId: "op-1", blsPubkey: "0xabc", state: "active" },
+          { operatorId: "op-2", blsPubkey: "0xdef", state: "active" },
+        ],
+        epoch: 42n,
+        round: 12345n,
+        quorum: "7-of-10",
+        reputationScore: 0.91,
+        livenessScore: 0.99,
+        lastUpdateHeight: 99999n,
+      },
+    });
+    const r = await readClusterStatus(1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.members).toHaveLength(2);
+    expect(r.data.epoch).toBe("42");
+    expect(r.data.lastUpdateHeight).toBe("99999");
+    expect(r.data.reputationScore).toBe(0.91);
+  });
+
+  it("propagates RPC failure rather than mock-falling-back (status is opt-in detail)", async () => {
+    mockedRpc.mockRejectedValue(new Error("timeout"));
+    const r = await readClusterStatus(1);
+    expect(r.ok).toBe(false);
+  });
+
+  // Phase 7.1 — wire-contract anchor for cluster status. Same rationale
+  // as the directory anchor above: constructs the strict SDK shape with
+  // bigints for epoch / round / lastUpdateHeight and verifies the
+  // wallet's parser stringifies them faithfully for IPC.
+  it("parses a strict SDK ClusterStatusResponse and stringifies bigints", async () => {
+    const sdkShape: ClusterStatusResponse = {
+      clusterId: 5,
+      threshold: 7,
+      size: 10,
+      live: 8,
+      lagging: 1,
+      offline: 1,
+      maintenance: 0,
+      members: [
+        { operatorId: "op-a", blsPubkey: "0x" + "11".repeat(48), state: "active" },
+      ],
+      epoch: 17n,
+      round: 256n,
+      quorum: "7-of-10",
+      reputationScore: 0.88,
+      livenessScore: 0.97,
+      lastUpdateHeight: 524288n,
+    };
+    mockedRpc.mockResolvedValue({ via: "operator-2", result: sdkShape });
+    const r = await readClusterStatus(5);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.epoch).toBe("17");
+    expect(r.data.round).toBe("256");
+    expect(r.data.lastUpdateHeight).toBe("524288");
+    expect(r.data.members).toHaveLength(1);
+    expect(r.data.quorum).toBe("7-of-10");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readDelegations
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readDelegations", () => {
+  const wallet = "0x" + "aa".repeat(20);
+
+  it("returns the chain rows when sprintnetJsonRpc succeeds", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        wallet,
+        rows: [
+          { cluster: 1, weightBps: 3000 },
+          { cluster: 3, weightBps: 2000 },
+        ],
+        totalBps: 5000,
+      },
+    });
+    const r = await readDelegations(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.totalBps).toBe(5000);
+  });
+
+  it("falls back to an empty envelope when sprintnetJsonRpc throws", async () => {
+    mockedRpc.mockRejectedValue(new Error("transport"));
+    const r = await readDelegations(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toEqual([]);
+    expect(r.data.totalBps).toBe(0);
+  });
+
+  it("drops malformed rows but keeps valid ones", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        wallet,
+        rows: [
+          { cluster: 1, weightBps: 1000 },
+          { cluster: "not-a-number", weightBps: 500 },
+          { cluster: 2, weightBps: "not-a-number" },
+          { cluster: 4, weightBps: 2000 },
+        ],
+        totalBps: 4500, // chain-canonical total includes the malformed rows
+      },
+    });
+    const r = await readDelegations(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toEqual([
+      { cluster: 1, weightBps: 1000 },
+      { cluster: 4, weightBps: 2000 },
+    ]);
+    // totalBps is the chain-reported figure, not the per-row sum; the
+    // wallet trusts the chain on aggregates and uses the row list only
+    // for the per-cluster display.
+    expect(r.data.totalBps).toBe(4500);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readDelegationCap
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readDelegationCap", () => {
+  it("normalises u32::MAX (chain's 'disabled') to null capBps", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { capBps: 0xffffffff, lastChangedAtHeight: 0n },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.capBps).toBeNull();
+  });
+
+  it("preserves a real cap value", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { capBps: 5000, lastChangedAtHeight: 12345n },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.capBps).toBe(5000);
+    expect(r.data.lastChangedAtHeight).toBe("12345");
+  });
+
+  it("falls back to the §23.6 Phase 12 launch cap (50%) on transport failure", async () => {
+    mockedRpc.mockRejectedValue(new Error("offline"));
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.capBps).toBe(5000);
+  });
+
+  // Phase 7.1 — wire-contract anchor mirroring the cluster directory's
+  // typed fixture pattern. Constructs the strict SDK-shape envelope (cap
+  // + bigint heights + bigint block number) and verifies the wallet
+  // stringifies cleanly for IPC.
+  it("parses a strict SDK DelegationCapResponse shape (bigint heights stringified)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-2",
+      result: {
+        capBps: 5000,
+        lastChangedAtHeight: 100_000n,
+        blockNumber: 100_001n, // ignored by the wallet — chain-status covers it
+      },
+    });
+    const r = await readDelegationCap();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.capBps).toBe(5000);
+    expect(r.data.lastChangedAtHeight).toBe("100000");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterDelegators (Phase 7.1 — newly activated co-delegator reader)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterDelegators", () => {
+  it("normalises a well-formed lyth_getClusterDelegators response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-3",
+      result: {
+        cluster: 7,
+        delegators: ["0x" + "aa".repeat(20), "0x" + "bb".repeat(20)],
+        count: 2,
+      },
+    });
+    const r = await readClusterDelegators(7);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.cluster).toBe(7);
+    expect(r.data.delegators).toHaveLength(2);
+    expect(r.data.count).toBe(2);
+  });
+
+  it("preserves a chain-reported count that exceeds the returned list (cap case)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        cluster: 4,
+        delegators: ["0x" + "11".repeat(20)],
+        count: 247, // chain scanned 247 slots, capped to 1 returned
+      },
+    });
+    const r = await readClusterDelegators(4);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.delegators).toHaveLength(1);
+    expect(r.data.count).toBe(247);
+  });
+
+  it("falls back to empty on chain-offline", async () => {
+    mockedRpc.mockRejectedValue(new Error("no operator"));
+    const r = await readClusterDelegators(1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.delegators).toEqual([]);
+    expect(r.data.count).toBe(0);
+  });
+
+  it("rejects a malformed response (missing cluster id)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { delegators: [], count: 0 },
+    });
+    const r = await readClusterDelegators(1);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readPendingRewards
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readPendingRewards", () => {
+  const wallet = "0x" + "bb".repeat(20);
+
+  it("prefers lyth_pendingRewards and preserves the RPC via", async () => {
+    const total = 123_456_789n;
+    const settled = 23_456_789n;
+    const unsettled = 100_000_000n;
+    const rowOne = 70_000_000n;
+    const rowTwo = 30_000_000n;
+    mockedRpc.mockResolvedValue({
+      via: "operator-7",
+      result: {
+        wallet,
+        totalAmountLythoshi: total.toString(10),
+        settledPendingLythoshi: settled.toString(10),
+        unsettledAmountLythoshi: unsettled.toString(10),
+        autoCompound: true,
+        rows: [
+          {
+            cluster: 1,
+            weightBps: 2500,
+            unsettledAmountLythoshi: rowOne.toString(10),
+          },
+          {
+            cluster: 3,
+            weightBps: 7500,
+            unsettledAmountLythoshi: "0x" + rowTwo.toString(16),
+          },
+        ],
+        block: 99_001n,
+      },
+    });
+
+    const r = await readPendingRewards(wallet, [{ cluster: 999, weightBps: 1000 }]);
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_pendingRewards", [wallet]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("operator-7");
+    expect(r.data.wallet).toBe(wallet);
+    expect(r.data.totalAmountLythoshi).toBe(total.toString(10));
+    expect(r.data.settledPendingLythoshi).toBe(settled.toString(10));
+    expect(r.data.unsettledAmountLythoshi).toBe(unsettled.toString(10));
+    expect(r.data.autoCompound).toBe(true);
+    expect(r.data.totalAmountWei).toBe("0x" + total.toString(16));
+    expect(r.data.blockHeight).toBe("99001");
+    expect(r.data.rows).toEqual([
+      {
+        cluster: 1,
+        weightBps: 2500,
+        unsettledAmountLythoshi: rowOne.toString(10),
+        amountWei: "0x" + rowOne.toString(16),
+        effectiveAprBps: null,
+      },
+      {
+        cluster: 3,
+        weightBps: 7500,
+        unsettledAmountLythoshi: rowTwo.toString(10),
+        amountWei: "0x" + rowTwo.toString(16),
+        effectiveAprBps: null,
+      },
+    ]);
+  });
+
+  it("rejects malformed lyth_pendingRewards responses instead of mocking them", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-7",
+      result: {
+        wallet,
+        totalAmountLythoshi: "1",
+        settledPendingLythoshi: "0",
+        unsettledAmountLythoshi: "1",
+        autoCompound: false,
+        rows: [{ cluster: 1, weightBps: "2500", unsettledAmountLythoshi: "1" }],
+        block: 12,
+      },
+    });
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2500 }]);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed lyth_pendingRewards/);
+  });
+
+  it("does not mock non-absence RPC errors", async () => {
+    mockedRpc.mockRejectedValue(
+      Object.assign(new Error("staking state unavailable"), {
+        code: -32000,
+        method: "lyth_pendingRewards",
+        via: "operator-7",
+      }),
+    );
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2500 }]);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("staking state unavailable");
+  });
+
+  it("falls back to the mock derivation when lyth_pendingRewards is absent", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2000 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toHaveLength(1);
+  });
+
+  it("falls back to the mock derivation on transport failure", async () => {
+    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2000 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toHaveLength(1);
+  });
+
+  it("emits lythoshi rewards through legacy amountWei compatibility fields", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
+    const r = await readPendingRewards(wallet, [
+      { cluster: 1, weightBps: 2000 },
+      { cluster: 3, weightBps: 1000 },
+    ]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.weightBps).toBe(2000);
+    expect(r.data.rows[1]?.weightBps).toBe(1000);
+    expect(r.data.rows[0]?.effectiveAprBps).toBe(MOCK_CLUSTER_APR_BPS[1]);
+    expect(r.data.rows[1]?.effectiveAprBps).toBe(MOCK_CLUSTER_APR_BPS[3]);
+
+    const firstLythoshi = expectedMockRewardLythoshi(
+      2000,
+      MOCK_CLUSTER_APR_BPS[1] ?? 0,
+    );
+    const secondLythoshi = expectedMockRewardLythoshi(
+      1000,
+      MOCK_CLUSTER_APR_BPS[3] ?? 0,
+    );
+    expect(firstLythoshi).toBeGreaterThan(0n);
+    expect(r.data.rows[0]?.unsettledAmountLythoshi).toBe(
+      firstLythoshi.toString(10),
+    );
+    expect(r.data.rows[1]?.unsettledAmountLythoshi).toBe(
+      secondLythoshi.toString(10),
+    );
+    expect(r.data.rows[0]?.amountWei).toBe("0x" + firstLythoshi.toString(16));
+    expect(r.data.rows[1]?.amountWei).toBe("0x" + secondLythoshi.toString(16));
+    expect(r.data.totalAmountLythoshi).toBe(
+      (firstLythoshi + secondLythoshi).toString(10),
+    );
+    expect(r.data.settledPendingLythoshi).toBe("0");
+    expect(r.data.unsettledAmountLythoshi).toBe(
+      (firstLythoshi + secondLythoshi).toString(10),
+    );
+    expect(r.data.autoCompound).toBe(false);
+    expect(r.data.totalAmountWei).toBe(
+      "0x" + (firstLythoshi + secondLythoshi).toString(16),
+    );
+  });
+
+  it("emits a zero row when the cluster isn't in the mock APR table", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
+    const r = await readPendingRewards(wallet, [{ cluster: 999, weightBps: 1000 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows[0]?.effectiveAprBps).toBeNull();
+    expect(r.data.rows[0]?.weightBps).toBe(1000);
+    expect(r.data.rows[0]?.unsettledAmountLythoshi).toBe("0");
+    expect(r.data.rows[0]?.amountWei).toBe("0x0");
+    expect(r.data.totalAmountLythoshi).toBe("0");
+    expect(r.data.totalAmountWei).toBe("0x0");
+  });
+
+  it("returns an empty rows[] for an unstaked wallet", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
+    const r = await readPendingRewards(wallet, []);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toEqual([]);
+    expect(r.data.totalAmountLythoshi).toBe("0");
+    expect(r.data.totalAmountWei).toBe("0x0");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readRedemptionQueue
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readRedemptionQueue", () => {
+  const wallet = "0x" + "dd".repeat(20);
+
+  it("prefers lyth_redemptionQueue and preserves the RPC via", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-9",
+      result: {
+        wallet,
+        tickets: [
+          {
+            index: 0,
+            cluster: 7,
+            weightBps: 2500,
+            amount: "0x5f5e100",
+            createdHeight: 10n,
+            maturityHeight: "20",
+            mature: false,
+          },
+          {
+            index: 1,
+            cluster: 8,
+            weightBps: 1000,
+            createdHeight: 12,
+            maturityHeight: 22n,
+            mature: null,
+          },
+        ],
+        count: 2,
+        returned: 2,
+        block: "latest",
+      },
+    });
+
+    const r = await readRedemptionQueue(wallet);
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [wallet]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("operator-9");
+    expect(r.data.wallet).toBe(wallet);
+    expect(r.data.rows).toEqual([
+      {
+        index: 0,
+        cluster: 7,
+        weightBps: 2500,
+        amountLythoshi: "100000000",
+        amountWei: "0x5f5e100",
+        unlockAt: null,
+        createdHeight: "10",
+        maturityHeight: "20",
+        mature: false,
+      },
+      {
+        index: 1,
+        cluster: 8,
+        weightBps: 1000,
+        amountLythoshi: null,
+        amountWei: "0x0",
+        unlockAt: null,
+        createdHeight: "12",
+        maturityHeight: "22",
+        mature: null,
+      },
+    ]);
+  });
+
+  it("rejects malformed lyth_redemptionQueue responses instead of mocking them", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-9",
+      result: {
+        wallet,
+        tickets: [
+          {
+            index: 0,
+            cluster: 7,
+            weightBps: "2500",
+            createdHeight: 10,
+            maturityHeight: 20,
+            mature: false,
+          },
+        ],
+        count: 1,
+        returned: 1,
+      },
+    });
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed lyth_redemptionQueue/);
+  });
+
+  it("does not mock non-absence redemption RPC errors", async () => {
+    mockedRpc.mockRejectedValue(
+      Object.assign(new Error("redemption state unavailable"), {
+        code: -32000,
+        method: "lyth_redemptionQueue",
+        via: "operator-9",
+      }),
+    );
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("redemption state unavailable");
+  });
+
+  it("falls back to an empty mock queue when lyth_redemptionQueue is absent", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError("lyth_redemptionQueue"));
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toEqual([]);
+  });
+
+  it("falls back to an empty mock queue on transport failure", async () => {
+    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data).toEqual({ wallet, rows: [] });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readDelegationHistory (Phase 7.1 — newly activated per-wallet timeline)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readDelegationHistory", () => {
+  const wallet = "0x" + "cc".repeat(20);
+
+  it("normalises a well-formed lyth_getDelegationHistory array (bigints stringified)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-4",
+      result: [
+        {
+          blockHeight: 1234n,
+          txIndex: 0,
+          logIndex: 2,
+          wallet,
+          cluster: 1,
+          toCluster: null,
+          kind: "delegated",
+          weightBps: 3000,
+          walletTotalBps: 3000,
+        },
+        {
+          blockHeight: 5678n,
+          txIndex: 1,
+          logIndex: 0,
+          wallet,
+          cluster: 1,
+          toCluster: 2,
+          kind: "redelegated",
+          weightBps: 1500,
+          walletTotalBps: 3000,
+        },
+      ],
+    });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.blockHeight).toBe("1234");
+    expect(r.data.rows[0]?.kind).toBe("delegated");
+    expect(r.data.rows[1]?.toCluster).toBe(2);
+    expect(r.data.rows[1]?.kind).toBe("redelegated");
+  });
+
+  it("paginates: passes cursor when provided", async () => {
+    let receivedParams: unknown[] | undefined;
+    mockedRpc.mockImplementation(async (_method: string, params: unknown[]) => {
+      receivedParams = params;
+      return { via: "operator-1", result: [] };
+    });
+    await readDelegationHistory(wallet, 25, "cursor-page-2");
+    expect(receivedParams).toEqual([wallet, 25, "cursor-page-2"]);
+  });
+
+  it("omits cursor on first-page calls", async () => {
+    let receivedParams: unknown[] | undefined;
+    mockedRpc.mockImplementation(async (_method: string, params: unknown[]) => {
+      receivedParams = params;
+      return { via: "operator-1", result: [] };
+    });
+    await readDelegationHistory(wallet, 10);
+    expect(receivedParams).toEqual([wallet, 10]);
+  });
+
+  it("falls back to an empty timeline when chain is offline", async () => {
+    mockedRpc.mockRejectedValue(new Error("no operator reachable"));
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toEqual([]);
+  });
+
+  it("drops malformed rows but keeps valid ones", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: [
+        { blockHeight: 1n, txIndex: 0, logIndex: 0, wallet, cluster: 1, toCluster: null, kind: "delegated", weightBps: 1000, walletTotalBps: 1000 },
+        { blockHeight: 2n, cluster: "not-a-number", kind: "delegated", weightBps: 500 }, // bad cluster
+        { blockHeight: 3n, cluster: 2, weightBps: 500 }, // missing kind
+        { blockHeight: 4n, txIndex: 1, logIndex: 0, wallet, cluster: 3, toCluster: null, kind: "undelegated", weightBps: 500, walletTotalBps: 500 },
+      ],
+    });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.cluster).toBe(1);
+    expect(r.data.rows[1]?.cluster).toBe(3);
+  });
+
+  it("rejects a non-array response", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: { not: "an array" } });
+    const r = await readDelegationHistory(wallet);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
+  });
+});

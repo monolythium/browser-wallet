@@ -1,0 +1,158 @@
+import { useState } from "react";
+import { Icon } from "../Icon";
+import { PasswordStrengthMeter } from "../components/PasswordStrengthMeter";
+import {
+  getPasswordStrength,
+  isPasswordValid,
+} from "../../lib/password-validation";
+
+interface SetPasswordProps {
+  onSubmit: (password: string) => void;
+  onBack: () => void;
+  title?: string;
+  error?: string | null;
+}
+
+export function SetPassword({
+  onSubmit,
+  onBack,
+  title = "Set password",
+  error,
+}: SetPasswordProps) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  const strength = getPasswordStrength(password);
+  const canSubmit =
+    isPasswordValid(password) && strength !== "weak" && password === confirm;
+
+  return (
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+          <Icon name="back" size={15} />
+        </button>
+        <div
+          style={{
+            flex: 1,
+            fontSize: 13,
+            fontWeight: 600,
+            textAlign: "center",
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ width: 36 }} />
+      </div>
+
+      <div
+        style={{
+          padding: "20px 18px 12px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <div
+          style={{
+            fontSize: "var(--fs-12)",
+            color: "var(--fg-300)",
+            lineHeight: 1.5,
+          }}
+        >
+          This password unlocks your encrypted vault on this device. We can
+          not recover it for you — pick something memorable and strong.
+        </div>
+
+        <PasswordInput
+          label="Password"
+          value={password}
+          onChange={setPassword}
+          autoFocus
+        />
+        <PasswordInput
+          label="Confirm password"
+          value={confirm}
+          onChange={setConfirm}
+        />
+
+        <PasswordStrengthMeter
+          password={password}
+          confirmPassword={confirm}
+        />
+
+        {error && (
+          <div
+            style={{
+              fontSize: "var(--fs-11)",
+              color: "var(--err)",
+              fontFamily: "var(--f-mono)",
+            }}
+          >
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div
+        className="req-foot"
+        style={{ marginTop: "auto", gridTemplateColumns: "1fr" }}
+      >
+        <button
+          className="prim"
+          disabled={!canSubmit}
+          onClick={() => onSubmit(password)}
+          style={
+            canSubmit ? undefined : { opacity: 0.45, cursor: "not-allowed" }
+          }
+        >
+          Continue
+        </button>
+      </div>
+    </>
+  );
+}
+
+interface PasswordInputProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  autoFocus?: boolean;
+}
+
+function PasswordInput({ label, value, onChange, autoFocus }: PasswordInputProps) {
+  return (
+    <label style={{ display: "block" }}>
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-400)",
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </div>
+      <input
+        type="password"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoFocus={autoFocus}
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          borderRadius: 10,
+          background: "rgba(0,0,0,0.3)",
+          border: "1px solid var(--fg-700)",
+          color: "var(--fg-100)",
+          fontFamily: "var(--f-mono)",
+          fontSize: 13,
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+    </label>
+  );
+}
