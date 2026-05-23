@@ -8,6 +8,7 @@ import {
   bgWalletMrvNativeReceiptStatus,
   bgWalletSubmitMrvNativePlan,
   type SendTxResult,
+  type WalletMrvNoEvmReceiptProofTranscript,
   type WalletMrvNativeReceipt,
   type WalletMrvNativeSubmissionPlan,
 } from "../bg";
@@ -792,7 +793,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           {state.receipt.nativeReceipt.receiptCommitment !== null && (
             <>
               <div style={submitMeta}>
-                Receipt commitment evidence; no-EVM proof status is shown
+                Receipt commitment evidence; no-EVM transcript status is shown
                 separately.
               </div>
               <div style={monoWrap}>
@@ -800,11 +801,15 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
               </div>
             </>
           )}
-          <div style={submitMeta}>
-            {state.receipt.nativeReceipt.noEvmProofStatus === "missing"
-              ? "Native receipt returned no no-EVM proof payload."
-              : "No-EVM proof payload present; wallet has not verified it."}
-          </div>
+          {state.receipt.nativeReceipt.noEvmProof === null ? (
+            <div style={submitMeta}>
+              Native receipt returned no no-EVM receipt-proof transcript payload.
+            </div>
+          ) : (
+            <MrvNoEvmReceiptProofTranscriptDetails
+              proof={state.receipt.nativeReceipt.noEvmProof}
+            />
+          )}
         </>
       ) : state.receipt.nativeReceiptError ? (
         <>
@@ -825,6 +830,47 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
         <div style={submitMeta}>Native receipt evidence unavailable.</div>
       )}
       <div style={submitMeta}>Inclusion status only; no MRV execution proof has been verified.</div>
+    </div>
+  );
+}
+
+function MrvNoEvmReceiptProofTranscriptDetails({
+  proof,
+}: {
+  proof: WalletMrvNoEvmReceiptProofTranscript;
+}) {
+  return (
+    <div
+      aria-label="No-EVM receipt-proof transcript"
+      style={receiptProofDetails}
+    >
+      <div style={submitMeta}>
+        No-EVM receipt-proof transcript present; bounded receipt evidence only,
+        not finality proof.
+      </div>
+      <div style={submitMeta}>
+        {proof.proofType} · {proof.rootAlgorithm} · {proof.receiptCodec}
+      </div>
+      <div style={submitMeta}>
+        block {proof.blockHeight} · txIndex {proof.txIndex} · receipts{" "}
+        {proof.receiptCount} · transcript blobs {proof.receiptTranscript.length}
+      </div>
+      <ReceiptProofHashRow label="Block hash" value={proof.blockHash} />
+      <ReceiptProofHashRow label="Tx hash" value={proof.txHash} />
+      <ReceiptProofHashRow label="Receipts root" value={proof.receiptsRoot} />
+      <ReceiptProofHashRow
+        label="Target receipt"
+        value={proof.targetReceiptHash}
+      />
+    </div>
+  );
+}
+
+function ReceiptProofHashRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={receiptProofRow}>
+      <span style={receiptProofLabel}>{label}</span>
+      <span style={receiptProofValue}>{value}</span>
     </div>
   );
 }
@@ -996,6 +1042,35 @@ const monoWrap: CSSProperties = {
   fontFamily: "var(--f-mono)",
   fontSize: 10.5,
   color: "var(--fg-100)",
+  wordBreak: "break-all",
+};
+
+const receiptProofDetails: CSSProperties = {
+  marginTop: 6,
+  paddingTop: 6,
+  borderTop: "1px solid rgba(255,255,255,0.08)",
+};
+
+const receiptProofRow: CSSProperties = {
+  marginTop: 4,
+  display: "grid",
+  gridTemplateColumns: "86px minmax(0, 1fr)",
+  gap: 6,
+  alignItems: "start",
+};
+
+const receiptProofLabel: CSSProperties = {
+  color: "var(--fg-500)",
+  fontFamily: "var(--f-mono)",
+  fontSize: 9.5,
+  textTransform: "uppercase",
+};
+
+const receiptProofValue: CSSProperties = {
+  minWidth: 0,
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-mono)",
+  fontSize: 10.5,
   wordBreak: "break-all",
 };
 

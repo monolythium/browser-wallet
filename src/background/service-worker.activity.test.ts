@@ -98,6 +98,20 @@ vi.mock("./tx-mldsa.js", () => ({
 
 const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
 const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
+const NO_EVM_RECEIPT_PROOF = {
+  schema: "mono.no_evm_receipt_proof.v1",
+  proofType: "canonicalReceiptsTranscript",
+  rootAlgorithm: "patricia-merkle-trie-keccak",
+  receiptCodec: "rlp-eth-receipt",
+  blockHash: "0x" + "1".repeat(64),
+  txHash: SUBMITTED_TX_HASH,
+  receiptsRoot: "0x" + "2".repeat(64),
+  targetReceiptHash: "0x" + "3".repeat(64),
+  blockHeight: 100,
+  txIndex: 1,
+  receiptCount: 2,
+  receiptTranscript: ["0x01", "0x02ff"],
+} as const;
 let submitFailure: (Error & { code?: number }) | null = null;
 
 // Networks: only the bits the handlers touch. Sprintnet chain id is
@@ -1192,6 +1206,7 @@ describe("wallet-mrv-receipt-status", () => {
           artifactHash: string | null;
           receiptCommitment: string | null;
           eventCount: number | null;
+          noEvmProof: unknown;
           noEvmProofStatus: string;
           proofLikeField?: unknown;
         } | null;
@@ -1213,6 +1228,7 @@ describe("wallet-mrv-receipt-status", () => {
           artifactHash: "0x" + "b".repeat(64),
           receiptCommitment: RECEIPT_COMMITMENT,
           eventCount: 1,
+          noEvmProof: null,
           noEvmProofStatus: "missing",
         },
       },
@@ -1223,6 +1239,84 @@ describe("wallet-mrv-receipt-status", () => {
     expect(rpcCalls).toContainEqual({
       method: "lyth_nativeReceipt",
       params: [SUBMITTED_TX_HASH],
+    });
+  });
+
+  it("preserves a validated no-EVM receipt-proof transcript", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x64",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...NO_EVM_RECEIPT_PROOF,
+        extraIgnoredField: true,
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmProof: unknown;
+          noEvmProofStatus: string;
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toMatchObject({
+      noEvmProof: NO_EVM_RECEIPT_PROOF,
+      noEvmProofStatus: "present-unverified",
+    });
+  });
+
+  it("rejects malformed no-EVM receipt-proof transcripts", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x64",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...NO_EVM_RECEIPT_PROOF,
+        receiptCount: 3,
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: null;
+        nativeReceiptError?: { reason: string; method?: string };
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toBeNull();
+    expect(r.receipt.nativeReceiptError).toEqual({
+      reason: "lyth_nativeReceipt returned malformed native receipt",
+      method: "lyth_nativeReceipt",
+      via: "mock-operator",
     });
   });
 
