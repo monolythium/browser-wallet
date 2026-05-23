@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SESSION_KEY_WALLET_LOCKED } from "../shared/constants";
+import { hexLythoshiToLythNumber } from "../shared/native-amount";
 import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
@@ -294,10 +295,8 @@ export default function App() {
       return;
     }
     try {
-      const wei = BigInt(r.balanceHex);
-      // 18-decimal LYTH; Number() loses precision above ~9e15 LYTH but
-      // that's far beyond any realistic Sprintnet balance.
-      const lyth = Number(wei) / 1e18;
+      const lyth = hexLythoshiToLythNumber(r.balanceHex);
+      if (lyth === null) return;
       setAcc((prev) => ({ ...prev, balance: lyth }));
     } catch {
       // Malformed hex — ignore, balance stays null.
@@ -1128,4 +1127,3 @@ function ApprovalRoute({
     </ReqSheet>
   );
 }
-
