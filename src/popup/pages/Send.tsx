@@ -4,9 +4,9 @@
 // + the lifted helpers from the previous components.tsx Send. Preview, sending,
 // success, and error sub-states land in Commit I.
 //
-// Wire format: the SW takes `{ to, valueWeiHex, chainIdHex }` and handles the
-// encrypted-envelope path on Sprintnet (whitepaper §22). Everything below is
-// just shaping that call.
+// Wire format: the SW still names the value field `valueWeiHex` at the IPC
+// compatibility boundary. Inside this Send page, native LYTH amounts are
+// handled as 8-decimal lythoshi per v4.1.
 
 import type { ReactNode, CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -86,10 +86,10 @@ const TIER_LABELS: Record<FeeTier, string> = {
 const ADMISSION_REJECT_CODE_LO = -32049;
 const ADMISSION_REJECT_CODE_HI = -32020;
 
-// Fallback gas limit for native LYTH transfer when the chain doesn't supply
-// one (Sprintnet always returns 21000+ via wallet-fee-suggestion, but other
-// chains may omit it). Hex.
-const FALLBACK_TRANSFER_GAS_LIMIT_HEX = "0x5208"; // 21000
+// Fallback execution-unit limit for native LYTH transfer when the chain
+// doesn't supply one. The fee-suggestion IPC field is still named `gasLimit`
+// for compatibility with the background service worker.
+const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
 export function Send({
   account,
@@ -111,7 +111,7 @@ export function Send({
   // External data the form depends on.
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
-  const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
+  const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
 
   // Result state — written by handleConfirm.
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -141,7 +141,7 @@ export function Send({
     };
   }, [chainId]);
 
-  // Fetch the unlocked account's balance in wei so Max can be exact.
+  // Fetch the unlocked account's balance in native lythoshi so Max can be exact.
   useEffect(() => {
     if (!account.addr.startsWith("0x")) return;
     let cancelled = false;
@@ -150,7 +150,7 @@ export function Send({
       if (cancelled) return;
       if (!r.ok) return;
       try {
-        setBalanceWei(BigInt(r.balanceHex));
+        setBalanceLythoshi(BigInt(r.balanceHex));
       } catch {
         // Malformed hex — leave null; "Max" stays disabled.
       }
@@ -161,7 +161,7 @@ export function Send({
   }, [account.addr, chainId]);
 
   const tierMultiplier = TIER_MULTIPLIERS[tier];
-  const estimatedFeeWei = computeEstimatedFeeWei(feeSuggestion, tierMultiplier);
+  const estimatedFeeLythoshi = computeEstimatedFeeLythoshi(feeSuggestion, tierMultiplier);
 
   const parsedRecipient = useMemo(() => validateToAddress(to), [to]);
   const nameResolution = useNameForwardResolve(parsedRecipient.monoName);
@@ -175,8 +175,8 @@ export function Send({
   );
 
   const amountError = validateAmount(amountStr);
-  const amountWei = amountError === null && amountStr.length > 0
-    ? safeLythToWeiBigInt(amountStr)
+  const amountLythoshi = amountError === null && amountStr.length > 0
+    ? safeLythToLythoshiBigInt(amountStr)
     : null;
 
   // Continue is enabled iff: recipient + amount validate, fee loaded, and
@@ -184,10 +184,10 @@ export function Send({
   // gate, so we allow the user through with a warning hint instead of
   // silently blocking — the SW would surface insufficient-funds on send.
   const insufficientFunds =
-    amountWei !== null &&
-    estimatedFeeWei !== null &&
-    balanceWei !== null &&
-    amountWei + estimatedFeeWei > balanceWei;
+    amountLythoshi !== null &&
+    estimatedFeeLythoshi !== null &&
+    balanceLythoshi !== null &&
+    amountLythoshi + estimatedFeeLythoshi > balanceLythoshi;
 
   const canContinue =
     effectiveAddr0x !== null &&
@@ -207,13 +207,13 @@ export function Send({
   };
 
   const handleMax = () => {
-    if (balanceWei === null || estimatedFeeWei === null) return;
-    const maxWei = balanceWei - estimatedFeeWei;
-    if (maxWei <= 0n) {
+    if (balanceLythoshi === null || estimatedFeeLythoshi === null) return;
+    const maxLythoshi = balanceLythoshi - estimatedFeeLythoshi;
+    if (maxLythoshi <= 0n) {
       setAmountStr("0");
       return;
     }
-    setAmountStr(weiToLythString(maxWei));
+    setAmountStr(lythoshiToLythString(maxLythoshi));
   };
 
   const handleContinue = async () => {
@@ -226,11 +226,11 @@ export function Send({
     if (
       singleVaultId !== undefined &&
       multisigVaultId === undefined &&
-      amountWei !== null
+      amountLythoshi !== null
     ) {
       const r = await bgPasskeyEvaluate({
         vaultId: singleVaultId,
-        valueWeiHex: "0x" + amountWei.toString(16),
+        valueWeiHex: "0x" + amountLythoshi.toString(16),
       });
       setPasskeyDecision(r.ok ? r.decision : null);
     } else {
@@ -240,13 +240,13 @@ export function Send({
   };
 
   const handleConfirm = async () => {
-    if (amountWei === null) return;
+    if (amountLythoshi === null) return;
     if (effectiveAddr0x === null) return; // form button is gated; defensive
     setStep("sending");
     setSubmitError(null);
     setTxHash(null);
     try {
-      const valueWeiHex = "0x" + amountWei.toString(16);
+      const valueLythoshiHex = "0x" + amountLythoshi.toString(16);
       if (multisigVaultId !== undefined) {
         // Multisig path — create a proposal rather than broadcasting
         // a tx. Other signers approve via the Pending dashboard
@@ -257,7 +257,7 @@ export function Send({
           action: {
             kind: "send",
             to: effectiveAddr0x,
-            valueWeiHex,
+            valueWeiHex: valueLythoshiHex,
             chainIdHex: chainId,
           },
         });
@@ -282,7 +282,7 @@ export function Send({
       }
       const r = await bgWalletSendTx({
         to: effectiveAddr0x,
-        valueWeiHex,
+        valueWeiHex: valueLythoshiHex,
         chainIdHex: chainId,
       });
       if (r.ok) {
@@ -298,7 +298,7 @@ export function Send({
         ) {
           void bgPasskeyRecordUsage({
             vaultId: singleVaultId,
-            valueWeiHex,
+            valueWeiHex: valueLythoshiHex,
           });
         }
         setStep("success");
@@ -353,10 +353,10 @@ export function Send({
     // chain-side passkey precompile (Phase 9.1) will use the chain's
     // canonical txHash for the same binding.
     const txDigest =
-      needsPasskey && effectiveAddr0x !== null && amountWei !== null
+      needsPasskey && effectiveAddr0x !== null && amountLythoshi !== null
         ? keccak_256(
             new TextEncoder().encode(
-              `${effectiveAddr0x}|${amountWei.toString(16)}|${chainId}`,
+              `${effectiveAddr0x}|${amountLythoshi.toString(16)}|${chainId}`,
             ),
           )
         : new Uint8Array(32);
@@ -365,8 +365,8 @@ export function Send({
       <>
         <PreviewView
           to={effectiveAddr0x ?? to}
-          amountWei={amountWei}
-          estimatedFeeWei={estimatedFeeWei}
+          amountLythoshi={amountLythoshi}
+          estimatedFeeLythoshi={estimatedFeeLythoshi}
           tier={tier}
           fromAddr={account.addr}
           onConfirm={onPreviewConfirm}
@@ -541,11 +541,11 @@ export function Send({
             />
             <button
               onClick={handleMax}
-              disabled={balanceWei === null || estimatedFeeWei === null}
+              disabled={balanceLythoshi === null || estimatedFeeLythoshi === null}
               style={{
                 ...inlineButton,
                 opacity:
-                  balanceWei === null || estimatedFeeWei === null ? 0.5 : 1,
+                  balanceLythoshi === null || estimatedFeeLythoshi === null ? 0.5 : 1,
               }}
               type="button"
             >
@@ -569,11 +569,11 @@ export function Send({
           )}
           <div style={fromHint}>
             from: {shortAddr(account.addr, 18)}
-            {balanceWei !== null && (
+            {balanceLythoshi !== null && (
               <>
                 {" · balance: "}
                 <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {weiToLythString(balanceWei)} LYTH
+                  {formatNativeLythAmount(balanceLythoshi)}
                 </span>
               </>
             )}
@@ -636,33 +636,55 @@ export function Send({
                 marginTop: 10,
               }}
             >
-              <div>
-                Tip:{" "}
-                <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {scaleGwei(
-                    feeSuggestion.maxPriorityFeePerGas,
-                    tierMultiplier,
-                  )}{" "}
-                  gwei
-                </span>{" "}
-                <span style={{ color: "var(--fg-500)" }}>
-                  ({TIER_LABELS[tier]} · {tierMultiplier}×)
-                </span>
-              </div>
-              <div>
-                Base fee:{" "}
-                <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {formatGweiFromHex(feeSuggestion.baseFeePerGas)} gwei
-                </span>
-              </div>
-              <div style={{ color: "var(--fg-200)", marginTop: 4 }}>
+              <div style={{ color: "var(--fg-200)" }}>
                 Estimated fee:{" "}
                 <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {estimatedFeeWei !== null
-                    ? `${weiToLythString(estimatedFeeWei)} LYTH`
+                  {estimatedFeeLythoshi !== null
+                    ? formatNativeLythAmount(estimatedFeeLythoshi)
                     : "—"}
                 </span>
               </div>
+              <details style={{ marginTop: 4 }}>
+                <summary
+                  style={{
+                    cursor: "pointer",
+                    color: "var(--fg-500)",
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 10.5,
+                  }}
+                >
+                  Low-level compatibility fee details
+                </summary>
+                <div style={{ marginTop: 6 }}>
+                  Priority price:{" "}
+                  <span style={{ fontFamily: "var(--f-mono)" }}>
+                    {scaleLythoshiPerExecutionUnit(
+                      feeSuggestion.maxPriorityFeePerGas,
+                      tierMultiplier,
+                    )}{" "}
+                    lythoshi / execution unit
+                  </span>{" "}
+                  <span style={{ color: "var(--fg-500)" }}>
+                    ({TIER_LABELS[tier]} · {tierMultiplier}×)
+                  </span>
+                </div>
+                <div>
+                  Base price:{" "}
+                  <span style={{ fontFamily: "var(--f-mono)" }}>
+                    {formatLythoshiIntegerFromHex(feeSuggestion.baseFeePerGas)}{" "}
+                    lythoshi / execution unit
+                  </span>
+                </div>
+                <div>
+                  Execution units:{" "}
+                  <span style={{ fontFamily: "var(--f-mono)" }}>
+                    {formatExecutionUnits(
+                      feeSuggestion.gasLimit ??
+                        FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+                    )}
+                  </span>
+                </div>
+              </details>
             </div>
           )}
         </FormCard>
@@ -1127,47 +1149,138 @@ export function validateAmount(s: string): string | null {
   if (!/^\d+(\.\d+)?$/.test(s)) return "amount must be a positive decimal";
   if (parseFloat(s) <= 0) return "amount must be greater than 0";
   const dot = s.indexOf(".");
-  if (dot >= 0 && s.length - dot - 1 > 18) {
-    return "amount cannot have more than 18 decimal places";
+  if (dot >= 0 && s.length - dot - 1 > NATIVE_LYTH_DECIMALS) {
+    return "amount cannot have more than 8 decimal places";
   }
   return null;
 }
 
 // ---- amount conversion ----
 
+const NATIVE_LYTH_DECIMALS = 8;
+const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+
 /**
- * Convert a decimal LYTH amount string to wei (`0x` hex). Precision-safe —
+ * Convert a decimal LYTH amount string to lythoshi (`0x` hex). Precision-safe —
  * splits on `.` and builds the BigInt from integer + zero-padded fractional
- * parts so `0.000000000000000001` (1 wei) round-trips exactly. Throws on
+ * parts so `0.00000001` (1 lythoshi) round-trips exactly. Throws on
  * invalid input; callers should pre-validate via `validateAmount`.
  */
-export function lythToWeiHex(amountStr: string): string {
-  return "0x" + safeLythToWeiBigInt(amountStr).toString(16);
+export function lythToLythoshiHex(amountStr: string): string {
+  return "0x" + safeLythToLythoshiBigInt(amountStr).toString(16);
 }
 
-function safeLythToWeiBigInt(amountStr: string): bigint {
+function safeLythToLythoshiBigInt(amountStr: string): bigint {
   const dot = amountStr.indexOf(".");
   const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
   const fracPartRaw = dot < 0 ? "" : amountStr.slice(dot + 1);
-  if (fracPartRaw.length > 18) {
-    throw new Error("amount has more than 18 decimal places");
+  if (fracPartRaw.length > NATIVE_LYTH_DECIMALS) {
+    throw new Error("amount has more than 8 decimal places");
   }
-  const fracPadded = (fracPartRaw + "0".repeat(18)).slice(0, 18);
+  const fracPadded =
+    (fracPartRaw + "0".repeat(NATIVE_LYTH_DECIMALS)).slice(
+      0,
+      NATIVE_LYTH_DECIMALS,
+    );
   const intBig = BigInt(intPart === "" ? "0" : intPart);
   const fracBig = BigInt(fracPadded === "" ? "0" : fracPadded);
-  return intBig * 10n ** 18n + fracBig;
+  return intBig * LYTHOSHI_PER_LYTH + fracBig;
 }
 
-/** wei → decimal LYTH string, trimming trailing zeros and the decimal point.
- *
- *  Re-exported at the bottom of this file. The byte-equality golden test
- *  in src/background/wei-decimal.test.ts pairs this helper with the SW's
- *  weiHexToLythDecimal — both must produce byte-identical strings or the
- *  reconcilePending heuristic match in shared/activity.ts fails silently. */
-function weiToLythString(wei: bigint): string {
-  if (wei < 0n) return "0";
-  const intPart = wei / 10n ** 18n;
-  const fracPart = wei % 10n ** 18n;
+/** lythoshi → decimal LYTH string, trimming trailing zeros and the decimal point. */
+function lythoshiToLythString(lythoshi: bigint): string {
+  if (lythoshi < 0n) return "0";
+  const intPart = lythoshi / LYTHOSHI_PER_LYTH;
+  const fracPart = lythoshi % LYTHOSHI_PER_LYTH;
+  if (fracPart === 0n) return intPart.toString();
+  const fracStr = fracPart
+    .toString()
+    .padStart(NATIVE_LYTH_DECIMALS, "0")
+    .replace(/0+$/, "");
+  return fracStr.length === 0
+    ? intPart.toString()
+    : `${intPart.toString()}.${fracStr}`;
+}
+
+function formatNativeLythAmount(lythoshi: bigint): string {
+  return `${lythoshiToLythString(lythoshi)} LYTH`;
+}
+
+// ---- low-level fee detail display ----
+
+/** Format a hex lythoshi value as a detail-surface integer string. */
+function formatLythoshiIntegerFromHex(lythoshiHex: string): string {
+  let lythoshi: bigint;
+  try {
+    lythoshi = BigInt(lythoshiHex);
+  } catch {
+    return "?";
+  }
+  return lythoshi.toString();
+}
+
+function formatExecutionUnits(executionUnitsHex: string): string {
+  try {
+    return BigInt(executionUnitsHex).toString();
+  } catch {
+    return "?";
+  }
+}
+
+/** Multiply a hex lythoshi priority price by a tier multiplier. */
+function scaleLythoshiPerExecutionUnit(
+  lythoshiHex: string,
+  multiplier: number,
+): string {
+  let lythoshi: bigint;
+  try {
+    lythoshi = BigInt(lythoshiHex);
+  } catch {
+    return "?";
+  }
+  const milli = BigInt(Math.round(multiplier * 1000));
+  return ((lythoshi * milli) / 1000n).toString();
+}
+
+// ---- fee math ----
+
+function computeEstimatedFeeLythoshi(
+  fee: FeeSuggestion | null,
+  multiplier: number,
+): bigint | null {
+  if (!fee) return null;
+  let priority: bigint;
+  let base: bigint;
+  let executionUnits: bigint;
+  try {
+    priority = BigInt(fee.maxPriorityFeePerGas);
+    base = BigInt(fee.baseFeePerGas);
+    executionUnits = BigInt(
+      fee.gasLimit ?? FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+    );
+  } catch {
+    return null;
+  }
+  const milli = BigInt(Math.round(multiplier * 1000));
+  const scaledPriority = (priority * milli) / 1000n;
+  return (scaledPriority + base) * executionUnits;
+}
+
+/** @deprecated IPC compatibility name; use `lythToLythoshiHex`. */
+export function lythToWeiHex(amountStr: string): string {
+  return lythToLythoshiHex(amountStr);
+}
+
+/**
+ * @deprecated Legacy helper kept only for the background pending-row golden
+ * test until that shared reconciliation path moves to v4.1 lythoshi. The Send
+ * page itself uses `lythoshiToLythString`.
+ */
+function weiToLythString(compatWei: bigint): string {
+  if (compatWei < 0n) return "0";
+  const compatWeiPerLyth = 10n ** 18n;
+  const intPart = compatWei / compatWeiPerLyth;
+  const fracPart = compatWei % compatWeiPerLyth;
   if (fracPart === 0n) return intPart.toString();
   const fracStr = fracPart.toString().padStart(18, "0").replace(/0+$/, "");
   return fracStr.length === 0
@@ -1175,69 +1288,15 @@ function weiToLythString(wei: bigint): string {
     : `${intPart.toString()}.${fracStr}`;
 }
 
-// ---- gwei display ----
-
-/** Format a hex wei value as a gwei display string. */
-function formatGweiFromHex(weiHex: string): string {
-  let wei: bigint;
-  try {
-    wei = BigInt(weiHex);
-  } catch {
-    return "?";
-  }
-  return formatGwei(wei);
-}
-
-function formatGwei(wei: bigint): string {
-  const gwei = wei / 10n ** 9n;
-  const remainder = wei % 10n ** 9n;
-  if (remainder === 0n) return gwei.toString();
-  const fracStr = remainder.toString().padStart(9, "0").replace(/0+$/, "");
-  return fracStr.length === 0 ? gwei.toString() : `${gwei}.${fracStr}`;
-}
-
-/** Multiply a hex wei tip by a tier multiplier and format the result as
- *  gwei. Multiplier comes from a small fixed set so we widen to BigInt by
- *  scaling to milli-multiplier units. */
-function scaleGwei(weiHex: string, multiplier: number): string {
-  let wei: bigint;
-  try {
-    wei = BigInt(weiHex);
-  } catch {
-    return "?";
-  }
-  const milli = BigInt(Math.round(multiplier * 1000));
-  return formatGwei((wei * milli) / 1000n);
-}
-
-// ---- fee math ----
-
-function computeEstimatedFeeWei(
-  fee: FeeSuggestion | null,
-  multiplier: number,
-): bigint | null {
-  if (!fee) return null;
-  let priority: bigint;
-  let base: bigint;
-  let gas: bigint;
-  try {
-    priority = BigInt(fee.maxPriorityFeePerGas);
-    base = BigInt(fee.baseFeePerGas);
-    gas = BigInt(fee.gasLimit ?? FALLBACK_TRANSFER_GAS_LIMIT_HEX);
-  } catch {
-    return null;
-  }
-  const milli = BigInt(Math.round(multiplier * 1000));
-  const scaledPriority = (priority * milli) / 1000n;
-  return (scaledPriority + base) * gas;
-}
+/** @deprecated Compatibility export; use `computeEstimatedFeeLythoshi`. */
+const computeEstimatedFeeWei = computeEstimatedFeeLythoshi;
 
 // ---- preview / sending / success / error sub-state views ----
 
 interface PreviewViewProps {
   to: string;
-  amountWei: bigint | null;
-  estimatedFeeWei: bigint | null;
+  amountLythoshi: bigint | null;
+  estimatedFeeLythoshi: bigint | null;
   tier: FeeTier;
   fromAddr: string;
   onConfirm: () => void;
@@ -1299,10 +1358,9 @@ function PasskeyDecisionBadge({
   // over-limit
   const lyth = (() => {
     try {
-      const wei = BigInt(decision.thresholdWeiHex);
-      return (wei / 1_000_000_000_000_000_000n).toString();
+      return formatNativeLythAmount(BigInt(decision.thresholdWeiHex));
     } catch {
-      return "?";
+      return "? LYTH";
     }
   })();
   return (
@@ -1320,8 +1378,8 @@ function PasskeyDecisionBadge({
       <div style={{ fontWeight: 600 }}>Above passkey limit</div>
       <div style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
         {decision.mode === "per-tx"
-          ? `Per-tx limit is ${lyth} LYTH — this tx requires password unlock.`
-          : `Daily cap is ${lyth} LYTH — this tx requires password unlock.`}
+          ? `Per-tx limit is ${lyth} — this tx requires password unlock.`
+          : `Daily cap is ${lyth} — this tx requires password unlock.`}
       </div>
     </div>
   );
@@ -1345,11 +1403,11 @@ function PasskeyDecisionBadge({
 function PreviewHooksSection({
   fromAddr,
   to,
-  amountWei,
+  amountLythoshi,
 }: {
   fromAddr: string;
   to: string;
-  amountWei: bigint | null;
+  amountLythoshi: bigint | null;
 }) {
   const [outcome, setOutcome] = useState<PreviewTransactionHooksOutcome | null>(
     null,
@@ -1365,7 +1423,9 @@ function PreviewHooksSection({
         from: fromAddr,
         to,
       };
-      if (amountWei !== null) args.valueWeiHex = "0x" + amountWei.toString(16);
+      if (amountLythoshi !== null) {
+        args.valueWeiHex = "0x" + amountLythoshi.toString(16);
+      }
       const r = await bgPreviewTransactionHooks(args);
       if (cancelled) return;
       setLoading(false);
@@ -1378,7 +1438,7 @@ function PreviewHooksSection({
     return () => {
       cancelled = true;
     };
-  }, [fromAddr, to, amountWei]);
+  }, [fromAddr, to, amountLythoshi]);
 
   if (loading) {
     return (
@@ -1564,8 +1624,8 @@ function HookRow({
 
 function PreviewView({
   to,
-  amountWei,
-  estimatedFeeWei,
+  amountLythoshi,
+  estimatedFeeLythoshi,
   tier,
   fromAddr,
   onConfirm,
@@ -1573,8 +1633,8 @@ function PreviewView({
   isMultisig,
   passkeyDecision,
 }: PreviewViewProps) {
-  const total = amountWei !== null && estimatedFeeWei !== null
-    ? amountWei + estimatedFeeWei
+  const total = amountLythoshi !== null && estimatedFeeLythoshi !== null
+    ? amountLythoshi + estimatedFeeLythoshi
     : null;
   return (
     <>
@@ -1596,14 +1656,18 @@ function PreviewView({
           <SummaryRow label="To" value={shortAddr(to, 18)} mono />
           <SummaryRow
             label="Amount"
-            value={amountWei !== null ? `${weiToLythString(amountWei)} LYTH` : "—"}
+            value={
+              amountLythoshi !== null
+                ? formatNativeLythAmount(amountLythoshi)
+                : "—"
+            }
             mono
           />
           <SummaryRow
             label={`Fee (${TIER_LABELS[tier]})`}
             value={
-              estimatedFeeWei !== null
-                ? `${weiToLythString(estimatedFeeWei)} LYTH`
+              estimatedFeeLythoshi !== null
+                ? formatNativeLythAmount(estimatedFeeLythoshi)
                 : "—"
             }
             mono
@@ -1617,7 +1681,7 @@ function PreviewView({
           >
             <SummaryRow
               label="Total"
-              value={total !== null ? `${weiToLythString(total)} LYTH` : "—"}
+              value={total !== null ? formatNativeLythAmount(total) : "—"}
               mono
               emphasis
             />
@@ -1627,7 +1691,7 @@ function PreviewView({
         <PreviewHooksSection
           fromAddr={fromAddr}
           to={to}
-          amountWei={amountWei}
+          amountLythoshi={amountLythoshi}
         />
 
         {passkeyDecision && !isMultisig && (
@@ -2178,6 +2242,9 @@ export {
   ADMISSION_REJECT_CODE_LO,
   ADMISSION_REJECT_CODE_HI,
   TIER_LABELS,
+  computeEstimatedFeeLythoshi,
   computeEstimatedFeeWei,
+  formatNativeLythAmount,
+  lythoshiToLythString,
   weiToLythString,
 };
