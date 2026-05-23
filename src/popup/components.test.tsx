@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { addressToTypedBech32 } from "@monolythium/core-sdk";
+import { PRECOMPILE_ADDRESSES, addressToTypedBech32 } from "@monolythium/core-sdk";
 import {
   applyFeeTier,
   AssetList,
@@ -8,6 +8,7 @@ import {
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
   collectBridgeRouteDisclosuresFromIndexer,
+  decodeCalldata,
   formatMrcAccountRecordLine,
   formatIndexedTokenBalanceRow,
   formatBridgeRouteDisclosureDisplay,
@@ -88,6 +89,39 @@ describe("ReqSendTx native fee helpers", () => {
     expect(formatLythoshiAmountHex("not-hex")).toBe("—");
   });
 });
+
+describe("ReqSendTx native market calldata decode", () => {
+  it("decodes CLOB placeLimitOrder approvals only for the CLOB precompile", () => {
+    const base = "11".repeat(32);
+    const quote = "22".repeat(32);
+    const calldata =
+      "0x2468786f" +
+      base +
+      quote +
+      word(1n) +
+      word(125n) +
+      word(50n) +
+      word(999n);
+
+    const decoded = decodeCalldata(calldata, PRECOMPILE_ADDRESSES.CLOB);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("placeLimitOrder");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["base asset", `0x${base}`],
+      ["quote asset", `0x${quote}`],
+      ["side", "sell"],
+      ["price", "125"],
+      ["quantity", "50"],
+      ["expires at block", "999"],
+    ]);
+    expect(decodeCalldata(calldata, PRECOMPILE_ADDRESSES.BRIDGE)).toBeNull();
+  });
+});
+
+function word(value: bigint): string {
+  return value.toString(16).padStart(64, "0");
+}
 
 describe("indexed token balance display", () => {
   it("keeps legacy indexer rows on the historical token-id label", () => {

@@ -192,6 +192,7 @@ import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
+  type EthSendTxFields,
 } from "./tx-mldsa.js";
 import { getWsClient, type WsStatus } from "./ws-client.js";
 import {
@@ -228,6 +229,37 @@ import {
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
 import { readNativeMarketState } from "./native-market-state-client.js";
+
+type EthSendTransactionRequest = {
+  from?: string;
+  to?: string;
+  value?: string;
+  data?: string;
+  gas?: string;
+  gasPrice?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
+  nonce?: string;
+  chainId?: string;
+  mempoolClass?: unknown;
+  class?: unknown;
+};
+
+function mempoolClassOverride(
+  txReq: Pick<EthSendTransactionRequest, "mempoolClass" | "class">,
+): EthSendTxFields["mempoolClass"] | undefined {
+  const value = txReq.mempoolClass ?? txReq.class;
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > 6
+  ) {
+    throw new Error("mempoolClass must be an integer in the range 0..6");
+  }
+  return value as EthSendTxFields["mempoolClass"];
+}
 
 interface WalletMrvNativeReceiptEvidence {
   schema: string | null;
@@ -791,18 +823,39 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
       }
       const arr = Array.isArray(params) ? params : [];
-      const txReq = (arr[0] as Record<string, string> | undefined) ?? {};
+      const txReq = (arr[0] as EthSendTransactionRequest | undefined) ?? {};
+      let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
+      try {
+        mempoolClass = mempoolClassOverride(txReq);
+      } catch (e) {
+        return err(-32602, (e as Error).message);
+      }
 
       // Build the approval view BEFORE opening the popup so the user sees
       // real numbers (gas estimate, simulation outcome, nonce) instead of
       // demo placeholders. RPC failures degrade gracefully — we still let
       // the user approve, but the popup will surface the gap.
       const view = await buildSendTxView(txReq);
+      const approvalTx = {
+        ...(typeof txReq.from === "string" ? { from: txReq.from } : {}),
+        ...(typeof txReq.to === "string" ? { to: txReq.to } : {}),
+        ...(typeof txReq.value === "string" ? { value: txReq.value } : {}),
+        ...(typeof txReq.data === "string" ? { data: txReq.data } : {}),
+        ...(typeof txReq.gas === "string" ? { gas: txReq.gas } : {}),
+        ...(typeof txReq.gasPrice === "string" ? { gasPrice: txReq.gasPrice } : {}),
+        ...(typeof txReq.maxFeePerGas === "string" ? { maxFeePerGas: txReq.maxFeePerGas } : {}),
+        ...(typeof txReq.maxPriorityFeePerGas === "string"
+          ? { maxPriorityFeePerGas: txReq.maxPriorityFeePerGas }
+          : {}),
+        ...(typeof txReq.nonce === "string" ? { nonce: txReq.nonce } : {}),
+        ...(typeof txReq.chainId === "string" ? { chainId: txReq.chainId } : {}),
+        ...(mempoolClass !== undefined ? { mempoolClass } : {}),
+      };
 
       const decision = await gatedEnqueue({
         kind: "send_tx",
         origin,
-        tx: txReq,
+        tx: approvalTx,
         view,
       });
       if (!decision.ok) {
@@ -847,6 +900,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             ...(txReq.to !== undefined ? { to: txReq.to } : {}),
             ...(txReq.value !== undefined ? { value: txReq.value } : {}),
             ...(txReq.data !== undefined ? { data: txReq.data } : {}),
+            ...(mempoolClass !== undefined ? { mempoolClass } : {}),
             nonce: nonceHex,
             gas: gasHex,
             gasPrice: gasPriceHex,
@@ -1109,7 +1163,7 @@ function parseTypedData(raw: string): TypedDataEnvelope | null {
  * field `null` and the UI surfaces the gap rather than blocking approval.
  */
 async function buildSendTxView(
-  txReq: Record<string, string>,
+  txReq: EthSendTransactionRequest,
 ): Promise<SendTxView> {
   const chainId = session.chainId;
   const net = lookupChain(chainId);
@@ -5386,6 +5440,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // the ML-DSA-65 envelope.
         data?: string;
         gasLimitHex?: string;
+        mempoolClass?: unknown;
+        class?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -5406,6 +5462,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           !/^0x[0-9a-fA-F]+$/.test(p.gasLimitHex))
       ) {
         return { ok: false, reason: "gasLimitHex must be 0x-prefixed hex" };
+      }
+      let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
+      try {
+        mempoolClass = mempoolClassOverride(p);
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         // Real-send through the legacy secp256k1 path is not in scope yet —
@@ -5440,6 +5502,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           value: p.valueWeiHex,
           ...(p.data !== undefined ? { data: p.data } : {}),
+          ...(mempoolClass !== undefined ? { mempoolClass } : {}),
           gas: gasHex,
           nonce: nonceRes.result,
           maxFeePerGas: fee.maxFeePerGas,
