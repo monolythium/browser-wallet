@@ -8,6 +8,7 @@
 import {
   buildEncryptedSubmission as sdkBuildEncryptedSubmission,
   type EncryptionKey,
+  type MempoolClass,
   type NativeEvmTxFields,
   type NativeTxExtensionLike,
 } from "@monolythium/core-sdk/crypto";
@@ -26,6 +27,10 @@ export interface EthSendTxFields {
   gasPrice?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
+  /** Optional encrypted-mempool class override for protocol-owned action plans. */
+  mempoolClass?: MempoolClass;
+  /** Alias accepted from SDK transaction plans that mirror the encrypted envelope field. */
+  class?: MempoolClass;
   /** Optional native typed transaction extensions, used by MRV v1 deploy/call. */
   extensions?: readonly NativeTxExtensionLike[];
   /** Hex chain id of the target chain (e.g. `0x10F2C` for Sprintnet). */
@@ -340,6 +345,9 @@ export async function buildEncryptedSubmission(args: {
     backend,
     tx: normalizeFields(args.txReq),
     encryptionKey: args.encryptionKey,
+    ...(args.txReq.mempoolClass !== undefined || args.txReq.class !== undefined
+      ? { class: args.txReq.mempoolClass ?? args.txReq.class }
+      : {}),
   });
 }
 
