@@ -720,6 +720,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           Polling eth_getTransactionReceipt
           {state.via ? ` via ${state.via}` : ""}.
         </div>
+        <div style={submitMeta}>Native receipt proof is checked after inclusion.</div>
         <div style={submitMeta}>Inclusion status only; no MRV execution proof.</div>
       </div>
     );
@@ -777,7 +778,42 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           Contract {state.receipt.contractAddress}
         </div>
       )}
-      <div style={submitMeta}>Inclusion status only; no MRV execution proof.</div>
+      {state.receipt.nativeReceipt ? (
+        <>
+          <div style={submitMeta}>
+            Native receipt {state.receipt.nativeReceipt.schema ?? "unknown schema"}
+            {state.receipt.nativeReceipt.txType !== null
+              ? ` · txType 0x${state.receipt.nativeReceipt.txType.toString(16)}`
+              : ""}
+            {state.receipt.nativeReceipt.eventCount !== null
+              ? ` · events ${state.receipt.nativeReceipt.eventCount}`
+              : ""}
+          </div>
+          <div style={submitMeta}>
+            {state.receipt.nativeReceipt.noEvmProofStatus === "missing"
+              ? "Native receipt returned no no-EVM proof payload."
+              : "No-EVM proof payload present; wallet has not verified it."}
+          </div>
+        </>
+      ) : state.receipt.nativeReceiptError ? (
+        <>
+          <div style={submitMeta}>
+            Native receipt unavailable: {state.receipt.nativeReceiptError.reason}
+          </div>
+          <div style={submitMeta}>
+            {state.receipt.nativeReceiptError.method ?? "lyth_nativeReceipt"}
+            {state.receipt.nativeReceiptError.via
+              ? ` via ${state.receipt.nativeReceiptError.via}`
+              : ""}
+            {state.receipt.nativeReceiptError.code !== undefined
+              ? ` (code ${state.receipt.nativeReceiptError.code})`
+              : ""}
+          </div>
+        </>
+      ) : (
+        <div style={submitMeta}>Native receipt evidence unavailable.</div>
+      )}
+      <div style={submitMeta}>Inclusion status only; no MRV execution proof has been verified.</div>
     </div>
   );
 }
