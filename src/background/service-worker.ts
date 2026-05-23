@@ -223,6 +223,7 @@ interface WalletMrvNativeReceiptEvidence {
   schema: string | null;
   txType: number | null;
   artifactHash: string | null;
+  receiptCommitment: string | null;
   eventCount: number | null;
   noEvmProofStatus: "missing" | "present-unverified";
 }
@@ -1359,12 +1360,18 @@ function parseMrvNativeReceiptEvidence(
     schema: typeof r.schema === "string" ? r.schema : null,
     txType: typeof r.txType === "number" ? r.txType : null,
     artifactHash: typeof r.artifactHash === "string" ? r.artifactHash : null,
+    receiptCommitment: parseMrvReceiptCommitment(r.receiptCommitment),
     eventCount: typeof r.eventCount === "number" ? r.eventCount : null,
     noEvmProofStatus:
       r.noEvmProof === null || r.noEvmProof === undefined
         ? "missing"
         : "present-unverified",
   };
+}
+
+function parseMrvReceiptCommitment(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  return /^0x[0-9a-fA-F]{64}$/.test(raw) ? raw : null;
 }
 
 // ---- internal popup messages ----
