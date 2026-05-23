@@ -120,6 +120,8 @@ export interface SendTxRequest {
     gas?: string;
     /** Compatibility field name; hex lythoshi per execution unit. */
     gasPrice?: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
     nonce?: string;
     chainId?: string;
     mempoolClass?: number;

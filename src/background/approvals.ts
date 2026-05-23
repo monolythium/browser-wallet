@@ -99,6 +99,8 @@ export interface SendTxApprovalReq {
     data?: string;
     gas?: string;
     gasPrice?: string;
+    maxFeePerGas?: string;
+    maxPriorityFeePerGas?: string;
     nonce?: string;
     chainId?: string;
     mempoolClass?: number;

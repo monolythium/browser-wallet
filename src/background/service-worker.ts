@@ -10,6 +10,7 @@
 //   - eth_sendRawTransaction     (proxy through MonolythiumProvider)
 //   - wallet_switchEthereumChain
 //   - wallet_addEthereumChain    (real approval UI; persists to chrome.storage)
+//   - monolythium_submitMrvNativePlan (custom MRV native tx submission)
 //
 // Plus internal channels used by the popup:
 //   - get-pending-approval
@@ -962,6 +963,93 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       } catch (e) {
         return err(ERR_INTERNAL, `tx build failed: ${(e as Error).message}`);
+      }
+    }
+
+    case "monolythium_submitMrvNativePlan": {
+      if (!session.connectedOrigins.has(origin)) {
+        return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
+      }
+      const arr = Array.isArray(params) ? params : [];
+      const first = arr[0];
+      const wrapped =
+        first !== null &&
+        typeof first === "object" &&
+        "plan" in (first as Record<string, unknown>);
+      const plan = wrapped
+        ? (first as { plan?: WalletMrvNativeSubmissionPlan }).plan
+        : (first as WalletMrvNativeSubmissionPlan | undefined);
+      if (plan === null || typeof plan !== "object") {
+        return err(-32602, "monolythium_submitMrvNativePlan expects an MRV native submission plan");
+      }
+      const requestedChainId =
+        wrapped && typeof (first as { chainIdHex?: unknown }).chainIdHex === "string"
+          ? (first as { chainIdHex: string }).chainIdHex
+          : session.chainId;
+      const chainIdHex = canonicalChainKey(requestedChainId);
+      if (chainIdHex !== canonicalChainKey(session.chainId)) {
+        return err(-32602, "MRV native submission chainId must match the active wallet chain");
+      }
+      if (!chainRequiresMlDsa(chainIdHex)) {
+        return err(-32602, "MRV native submission is only wired for Sprintnet today");
+      }
+      const displayFromAddr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
+      if (!displayFromAddr) {
+        return err(ERR_UNAUTHORIZED, "wallet has no address");
+      }
+
+      let txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>;
+      try {
+        txReq = walletMrvNativePlanToSubmitTx(plan, {
+          chainIdHex,
+          fromAddress: displayFromAddr,
+        });
+      } catch (e) {
+        return err(-32602, (e as Error).message);
+      }
+
+      const chainLabel = lookupChain(chainIdHex)?.name ?? chainIdHex;
+      const decision = await gatedEnqueue({
+        kind: "send_tx",
+        origin,
+        tx: {
+          ...(txReq.to !== undefined ? { to: txReq.to } : {}),
+          value: txReq.value,
+          data: txReq.data,
+          gas: txReq.gas,
+          maxFeePerGas: txReq.maxFeePerGas,
+          maxPriorityFeePerGas: txReq.maxPriorityFeePerGas,
+          nonce: txReq.nonce,
+          chainId: txReq.chainIdHex,
+        },
+        view: {
+          estimatedGas: txReq.gas,
+          gasPrice: txReq.maxFeePerGas,
+          nonce: txReq.nonce,
+          simulation: null,
+          chainId: chainIdHex,
+          chainLabel,
+        },
+      });
+      if (!decision.ok) {
+        return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the MRV native transaction");
+      }
+      if (!isUnlockedV4()) {
+        return err(ERR_UNAUTHORIZED, "wallet is locked");
+      }
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) {
+        return err(ERR_UNAUTHORIZED, "wallet has no unlocked address");
+      }
+      try {
+        const approvedTxReq = walletMrvNativePlanToSubmitTx(plan, {
+          chainIdHex,
+          fromAddress: fromAddr,
+        });
+        const { txHash, via } = await submitEncryptedMlDsaTx(approvedTxReq);
+        return ok({ txHash, via });
+      } catch (e) {
+        return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
       }
     }
 
