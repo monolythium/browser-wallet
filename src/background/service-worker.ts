@@ -201,7 +201,9 @@ import {
   validateIndexerStatusWire,
 } from "../shared/indexer-status.js";
 import {
+  collectWalletBridgeRouteDisclosures,
   validateWalletTokenBalanceList,
+  type WalletBridgeRouteDisclosure,
   type WalletTokenBalance,
 } from "../shared/token-balances.js";
 import {
@@ -1400,10 +1402,20 @@ const CACHE_STALENESS_MS = 30 * 1000;
 
 interface IndexerSnapshotRaw {
   tokenBalances: WalletTokenBalance[];
+  bridgeRouteDisclosures: WalletBridgeRouteDisclosure[];
   addressLabel: unknown | null;
   delegationHistory: unknown[];
   addressActivity: unknown[];
   errors: Record<string, string>;
+}
+
+function readTokenBalanceRows(input: unknown): unknown[] {
+  if (Array.isArray(input)) return input;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return [];
+  }
+  const r = input as Record<string, unknown>;
+  return Array.isArray(r.tokenBalances) ? r.tokenBalances : [];
 }
 
 /** Parallel-fetch the four indexer streams used by both popup-facing
@@ -1415,7 +1427,7 @@ async function fetchIndexerSnapshot(
   _chainIdHex: string,
 ): Promise<IndexerSnapshotRaw> {
   const [tokenBalances, addressLabel, delegationHistory, addressActivity] = await Promise.all([
-    settleSprintnetRpc<unknown[]>("lyth_getTokenBalances", [address]),
+    settleSprintnetRpc<unknown>("lyth_getTokenBalances", [address]),
     settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
     settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
     settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
@@ -1425,9 +1437,10 @@ async function fetchIndexerSnapshot(
   if (addressLabel.error) errors.addressLabel = addressLabel.error;
   if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
   if (addressActivity.error) errors.addressActivity = addressActivity.error;
-  const rawTokenBalances = Array.isArray(tokenBalances.value) ? tokenBalances.value : [];
+  const rawTokenBalances = readTokenBalanceRows(tokenBalances.value);
   return {
     tokenBalances: validateWalletTokenBalanceList(rawTokenBalances),
+    bridgeRouteDisclosures: collectWalletBridgeRouteDisclosures(tokenBalances.value),
     addressLabel: addressLabel.value ?? null,
     delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
     addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
@@ -3999,6 +4012,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ok: true,
         snapshot: {
           tokenBalances: fresh.tokenBalances,
+          bridgeRouteDisclosures: fresh.bridgeRouteDisclosures,
           addressLabel: fresh.addressLabel,
           delegationHistory: fresh.delegationHistory,
           addressActivity: fresh.addressActivity,
