@@ -12,10 +12,9 @@
 //   3. Malformed-response handling: a well-formed-transport but
 //      missing-required-fields response yields `ok: false, reason`.
 //
-// Pending rewards now call the direct `lyth_pendingRewards` RPC first,
-// falling back to the old mock derivation only when that method is
-// absent or Sprintnet is unreachable. Redemption queue stays vestigial
-// per §23.2 zero unbonding.
+// Pending rewards and redemption queue now call their direct live RPCs
+// first, falling back to old mock render shapes only when the method is
+// absent or Sprintnet is unreachable.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -49,14 +48,14 @@ const BPS_DENOMINATOR = 10_000n;
 const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
 const MOCK_REWARD_INTERVALS_PER_YEAR = 365n * 288n;
 
-function methodNotFoundError(): Error & {
+function methodNotFoundError(method = "lyth_pendingRewards"): Error & {
   code: number;
   method: string;
   via: string;
 } {
   return Object.assign(new Error("Method not found"), {
     code: -32601,
-    method: "lyth_pendingRewards",
+    method,
     via: "operator-1",
   });
 }
@@ -675,16 +674,133 @@ describe("readPendingRewards", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readRedemptionQueue (chain GAP — §23.2 says zero unbonding)
+// readRedemptionQueue
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("readRedemptionQueue (chain GAP — §23.2 zero unbonding)", () => {
-  it("always returns an empty queue today", async () => {
-    const r = await readRedemptionQueue("0xdead");
+describe("readRedemptionQueue", () => {
+  const wallet = "0x" + "dd".repeat(20);
+
+  it("prefers lyth_redemptionQueue and preserves the RPC via", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-9",
+      result: {
+        wallet,
+        tickets: [
+          {
+            index: 0,
+            cluster: 7,
+            weightBps: 2500,
+            amount: "0x5f5e100",
+            createdHeight: 10n,
+            maturityHeight: "20",
+            mature: false,
+          },
+          {
+            index: 1,
+            cluster: 8,
+            weightBps: 1000,
+            createdHeight: 12,
+            maturityHeight: 22n,
+            mature: null,
+          },
+        ],
+        count: 2,
+        returned: 2,
+        block: "latest",
+      },
+    });
+
+    const r = await readRedemptionQueue(wallet);
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [wallet]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("operator-9");
+    expect(r.data.wallet).toBe(wallet);
+    expect(r.data.rows).toEqual([
+      {
+        index: 0,
+        cluster: 7,
+        weightBps: 2500,
+        amountLythoshi: "100000000",
+        amountWei: "0x5f5e100",
+        unlockAt: null,
+        createdHeight: "10",
+        maturityHeight: "20",
+        mature: false,
+      },
+      {
+        index: 1,
+        cluster: 8,
+        weightBps: 1000,
+        amountLythoshi: null,
+        amountWei: "0x0",
+        unlockAt: null,
+        createdHeight: "12",
+        maturityHeight: "22",
+        mature: null,
+      },
+    ]);
+  });
+
+  it("rejects malformed lyth_redemptionQueue responses instead of mocking them", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-9",
+      result: {
+        wallet,
+        tickets: [
+          {
+            index: 0,
+            cluster: 7,
+            weightBps: "2500",
+            createdHeight: 10,
+            maturityHeight: 20,
+            mature: false,
+          },
+        ],
+        count: 1,
+        returned: 1,
+      },
+    });
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed lyth_redemptionQueue/);
+  });
+
+  it("does not mock non-absence redemption RPC errors", async () => {
+    mockedRpc.mockRejectedValue(
+      Object.assign(new Error("redemption state unavailable"), {
+        code: -32000,
+        method: "lyth_redemptionQueue",
+        via: "operator-9",
+      }),
+    );
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("redemption state unavailable");
+  });
+
+  it("falls back to an empty mock queue when lyth_redemptionQueue is absent", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError("lyth_redemptionQueue"));
+
+    const r = await readRedemptionQueue(wallet);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.via).toBe("mock");
     expect(r.data.rows).toEqual([]);
+  });
+
+  it("falls back to an empty mock queue on transport failure", async () => {
+    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data).toEqual({ wallet, rows: [] });
   });
 });
 
