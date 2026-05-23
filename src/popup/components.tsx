@@ -1530,9 +1530,10 @@ export { ReqSheet };
 // Real-payload approval views (Stage 4)
 //
 // These render the actual EIP-1193 request the dapp sent — no demo-data here.
-// The service worker pre-populates an `SendTxView` (gas, simulation, nonce)
-// and an EIP-712 `digest` so the popup can show real numbers without RPC
-// access of its own.
+// The service worker pre-populates a `SendTxView` (execution-unit budget,
+// fee price, simulation, nonce) and an EIP-712 `digest` so the popup can
+// show real numbers without RPC access of its own. The view still carries
+// inherited `gas`/`gasPrice` field names at the EIP-1193 boundary.
 // ---------------------------------------------------------------------------
 
 // Hex / bytes helpers that don't drag a Buffer dep in.
@@ -1563,7 +1564,9 @@ function bytesToUtf8IfPrintable(b: Uint8Array): string | null {
   }
 }
 
-function parseHexQuantity(hex: string | null | undefined): bigint | null {
+const LYTHOSHI_PER_LYTH = 100_000_000n;
+
+export function parseHexQuantity(hex: string | null | undefined): bigint | null {
   if (!hex) return null;
   try {
     return BigInt(hex.startsWith("0x") || hex.startsWith("0X") ? hex : "0x" + hex);
@@ -1572,30 +1575,57 @@ function parseHexQuantity(hex: string | null | undefined): bigint | null {
   }
 }
 
-function formatGasUnits(hex: string | null | undefined): string {
+export function formatExecutionUnits(hex: string | null | undefined): string {
   const b = parseHexQuantity(hex);
   return b == null ? "—" : b.toString(10);
 }
 
-function formatGwei(hex: string | null | undefined): string {
+export function formatLythoshiPerExecutionUnit(hex: string | null | undefined): string {
   const b = parseHexQuantity(hex);
   if (b == null) return "—";
-  // gwei = wei / 1e9 ; show with 2 decimals when < 100, else integer
-  const gweiInt = b / 1_000_000_000n;
-  const gweiFrac = (b % 1_000_000_000n) / 10_000_000n; // 2-dp
-  const fracStr = gweiFrac.toString().padStart(2, "0");
-  return `${gweiInt}.${fracStr}`;
+  return b.toString(10);
 }
 
-function formatLyth(hex: string | null | undefined): string {
+export function lythoshiToLythString(lythoshi: bigint, decimals = 8): string {
+  if (lythoshi <= 0n) return "0";
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  const frac = lythoshi % LYTHOSHI_PER_LYTH;
+  const clampedDecimals = Math.max(0, Math.min(8, Math.trunc(decimals)));
+  if (frac === 0n || clampedDecimals === 0) return whole.toString();
+  const fracStr = frac
+    .toString()
+    .padStart(8, "0")
+    .slice(0, clampedDecimals)
+    .replace(/0+$/, "");
+  return fracStr.length > 0 ? `${whole}.${fracStr}` : whole.toString();
+}
+
+export function formatLythoshiAmountHex(hex: string | null | undefined): string {
   const b = parseHexQuantity(hex);
   if (b == null) return "—";
-  const wholeWei = 1_000_000_000_000_000_000n;
-  const whole = b / wholeWei;
-  const frac = b % wholeWei;
-  // Show up to 6 decimals, trim trailing zeros.
-  const fracStr = frac.toString().padStart(18, "0").slice(0, 6).replace(/0+$/, "");
-  return fracStr.length > 0 ? `${whole}.${fracStr}` : whole.toString();
+  return lythoshiToLythString(b);
+}
+
+type FeeTier = "low" | "medium" | "high";
+
+export function applyFeeTier(
+  pricePerExecutionUnitLythoshi: bigint,
+  tier: FeeTier,
+): bigint {
+  if (tier === "low") return (pricePerExecutionUnitLythoshi * 90n) / 100n;
+  if (tier === "high") return (pricePerExecutionUnitLythoshi * 130n) / 100n;
+  return pricePerExecutionUnitLythoshi;
+}
+
+export function computeNativeFeeLythoshi(
+  executionUnitsHex: string | null | undefined,
+  pricePerExecutionUnitHex: string | null | undefined,
+  tier: FeeTier,
+): bigint | null {
+  const executionUnits = parseHexQuantity(executionUnitsHex);
+  const basePrice = parseHexQuantity(pricePerExecutionUnitHex);
+  if (executionUnits == null || basePrice == null) return null;
+  return executionUnits * applyFeeTier(basePrice, tier);
 }
 
 // ---- calldata decoder ----
@@ -1719,8 +1749,6 @@ interface ReqSendTxProps {
   chain: ChainEntry;
 }
 
-type GasTier = "low" | "medium" | "high";
-
 export function ReqSendTx({
   request,
   custody,
@@ -1730,28 +1758,28 @@ export function ReqSendTx({
   chain,
 }: ReqSendTxProps) {
   const { tx, view, origin } = request;
-  const [tier, setTier] = useState<GasTier>("medium");
+  const [tier, setTier] = useState<FeeTier>("medium");
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
 
   const originWarnings = detectOriginWarnings(origin);
   const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
 
-  const baseGasPrice = parseHexQuantity(view.gasPrice);
-  const tieredGasPrice =
-    baseGasPrice == null
+  const baseExecutionUnitPrice = parseHexQuantity(view.gasPrice);
+  const tieredExecutionUnitPrice =
+    baseExecutionUnitPrice == null
       ? null
-      : tier === "low"
-        ? (baseGasPrice * 90n) / 100n
-        : tier === "high"
-          ? (baseGasPrice * 130n) / 100n
-          : baseGasPrice;
-  const tieredHex = tieredGasPrice == null ? null : "0x" + tieredGasPrice.toString(16);
+      : applyFeeTier(baseExecutionUnitPrice, tier);
+  const tieredHex =
+    tieredExecutionUnitPrice == null ? null : "0x" + tieredExecutionUnitPrice.toString(16);
 
-  const gasUsed = parseHexQuantity(view.estimatedGas);
-  const totalFeeWei =
-    gasUsed != null && tieredGasPrice != null ? gasUsed * tieredGasPrice : null;
-  const totalFeeHex = totalFeeWei == null ? null : "0x" + totalFeeWei.toString(16);
+  const totalFeeLythoshi = computeNativeFeeLythoshi(
+    view.estimatedGas,
+    view.gasPrice,
+    tier,
+  );
+  const totalFeeHex =
+    totalFeeLythoshi == null ? null : "0x" + totalFeeLythoshi.toString(16);
 
   const value = tx.value;
   const data = tx.data ?? "0x";
@@ -1797,7 +1825,7 @@ export function ReqSendTx({
         </div>
         <div className="req-kv">
           <span className="k">Value</span>
-          <span className="v">{value ? `${formatLyth(value)} LYTH` : "0 LYTH"}</span>
+          <span className="v">{value ? `${formatLythoshiAmountHex(value)} LYTH` : "0 LYTH"}</span>
         </div>
         <div className="req-kv">
           <span className="k">Nonce</span>
@@ -1844,9 +1872,9 @@ export function ReqSendTx({
       )}
 
       <div className="req-section">
-        <div className="req-section__h">Gas</div>
+        <div className="req-section__h">Network fee</div>
         <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-          {(["low", "medium", "high"] as GasTier[]).map((t) => (
+          {(["low", "medium", "high"] as FeeTier[]).map((t) => (
             <button
               key={t}
               onClick={() => setTier(t)}
@@ -1869,17 +1897,17 @@ export function ReqSendTx({
           ))}
         </div>
         <div className="req-kv">
-          <span className="k">Gas limit</span>
-          <span className="v">{formatGasUnits(view.estimatedGas)}</span>
+          <span className="k">Execution-unit limit</span>
+          <span className="v">{formatExecutionUnits(view.estimatedGas)}</span>
         </div>
         <div className="req-kv">
-          <span className="k">Gas price</span>
-          <span className="v">{formatGwei(tieredHex)} gwei</span>
+          <span className="k">Price / execution unit</span>
+          <span className="v">{formatLythoshiPerExecutionUnit(tieredHex)} lythoshi</span>
         </div>
         <div className="req-kv">
           <span className="k">Max fee</span>
           <span className="v">
-            {totalFeeHex ? `${formatLyth(totalFeeHex)} LYTH` : "—"}
+            {totalFeeHex ? `${formatLythoshiAmountHex(totalFeeHex)} LYTH` : "—"}
           </span>
         </div>
       </div>
