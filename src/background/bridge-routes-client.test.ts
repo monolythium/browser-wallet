@@ -49,32 +49,59 @@ beforeEach(() => {
 
 describe("normaliseBridgeRoutesResponse", () => {
   it("accepts direct route arrays", () => {
-    expect(normaliseBridgeRoutesResponse([ROUTE])).toEqual([ROUTE]);
+    expect(normaliseBridgeRoutesResponse([ROUTE])).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: null,
+    });
   });
 
   it("accepts bounded envelope route fields", () => {
-    expect(normaliseBridgeRoutesResponse({ routes: [ROUTE] })).toEqual([ROUTE]);
+    expect(normaliseBridgeRoutesResponse({ routes: [ROUTE] })).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: null,
+    });
     expect(
       normaliseBridgeRoutesResponse({ bridgeRouteDisclosures: [ROUTE] }),
-    ).toEqual([ROUTE]);
+    ).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: null,
+    });
   });
 
   it("accepts legacy and snake_case catalogue aliases", () => {
-    expect(normaliseBridgeRoutesResponse({ bridgeRoutes: [ROUTE] })).toEqual([
-      ROUTE,
-    ]);
+    expect(normaliseBridgeRoutesResponse({ bridgeRoutes: [ROUTE] })).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: null,
+    });
     expect(
       normaliseBridgeRoutesResponse({ bridge_route_disclosures: [ROUTE] }),
-    ).toEqual([ROUTE]);
-    expect(normaliseBridgeRoutesResponse({ bridge_routes: [ROUTE] })).toEqual([
-      ROUTE,
-    ]);
-    expect(normaliseBridgeRoutesResponse({ route_disclosures: [ROUTE] })).toEqual([
-      ROUTE,
-    ]);
+    ).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: null,
+    });
+    expect(normaliseBridgeRoutesResponse({ bridge_routes: [ROUTE] })).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: null,
+    });
+    expect(normaliseBridgeRoutesResponse({ route_disclosures: [ROUTE] })).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: null,
+    });
   });
 
-  it("accepts discovery-only readiness envelopes with catalogue routes", () => {
+  it("combines discovery-only readiness envelopes with catalogue routes", () => {
+    const bridgeBoundDuplicate = {
+      ...ROUTE,
+      bridgeId: "catalogue-bridge-eth-usdc",
+      wrappedAsset: "mrc:wrapped-usdc",
+    };
+    const bridgeBoundRoute = {
+      ...ROUTE,
+      routeId: "arb-usdc-mainnet",
+      bridgeId: "catalogue-bridge-arb-usdc",
+      wrappedAsset: "mrc:wrapped-usdc",
+      sourceChain: "Arbitrum",
+    };
     expect(
       normaliseBridgeRoutesResponse({
         selection: {
@@ -88,15 +115,24 @@ describe("normaliseBridgeRoutesResponse", () => {
         blockedReasons: ["bridge route selection requires transfer intent"],
         warnings: [],
         routes: [ROUTE],
-        bridgeRouteDisclosures: [ROUTE],
+        bridgeRouteDisclosures: [bridgeBoundDuplicate, bridgeBoundRoute],
         source: {
           address: null,
-          routeCount: 1,
+          routeCount: 2,
           globalRouteIndexAvailable: true,
           routeDisclosureSource: "indexer.bridgeRouteDisclosures",
         },
       }),
-    ).toEqual([ROUTE]);
+    ).toEqual({
+      bridgeRouteDisclosures: [bridgeBoundDuplicate, bridgeBoundRoute],
+      readiness: {
+        routeSelectionReady: false,
+        quoteReady: false,
+        submitReady: false,
+        blockedReasons: ["bridge route selection requires transfer intent"],
+        warnings: [],
+      },
+    });
   });
 
   it("rejects unknown object shapes", () => {
@@ -125,7 +161,16 @@ describe("readBridgeRoutes", () => {
 
     expect(stub.calls).toEqual([{ method: "lyth_bridgeRoutes", params: [] }]);
     expect(out.kind).toBe("live");
-    expect(out.data).toEqual([ROUTE]);
+    expect(out.data).toEqual({
+      bridgeRouteDisclosures: [ROUTE],
+      readiness: {
+        routeSelectionReady: false,
+        quoteReady: false,
+        submitReady: false,
+        blockedReasons: ["bridge route selection requires transfer intent"],
+        warnings: [],
+      },
+    });
   });
 
   it("keeps route discovery closed when the method is absent", async () => {
@@ -136,6 +181,9 @@ describe("readBridgeRoutes", () => {
     const out = await readBridgeRoutes();
 
     expect(out.kind).toBe("mock-not-deployed");
-    expect(out.data).toEqual([]);
+    expect(out.data).toEqual({
+      bridgeRouteDisclosures: [],
+      readiness: null,
+    });
   });
 });
