@@ -22,6 +22,8 @@ interface SettingsProps {
   onResetWallet: () => void;
   /** Routes to the Sprintnet operators sub-page (Phase 4.3). */
   onOpenOperators: () => void;
+  /** Routes to the MRV native contract plan preview surface. */
+  onOpenMrvNative: () => void;
   /** Routes to the About page (Phase 6 commit 4) — version stack,
    *  operator health, genesis hash, §28.5 differentiation pitch. */
   onOpenAbout: () => void;
@@ -74,6 +76,7 @@ export function Settings({
   onShowConnectedSites,
   onResetWallet,
   onOpenOperators,
+  onOpenMrvNative,
   onOpenAbout,
   onOpenDelegations,
   onOpenSecurity,
@@ -525,6 +528,48 @@ export function Settings({
             }}
           >
             <span>Manage operators</span>
+            <Icon name="chev" size={12} />
+          </button>
+        </div>
+
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Developer tools</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            Preview MRV native contract deploy and call transaction plans with
+            v4.1 execution-unit and lythoshi fee fields.
+          </div>
+          <button
+            onClick={onOpenMrvNative}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon name="contract" size={13} />
+              MRV native plan preview
+            </span>
             <Icon name="chev" size={12} />
           </button>
         </div>
