@@ -51,6 +51,7 @@ import { RevealPhrase } from "./pages/RevealPhrase";
 import { ResetWallet } from "./pages/ResetWallet";
 import { ConnectedSites } from "./pages/ConnectedSites";
 import { ForgotPassword } from "./pages/ForgotPassword";
+import { MrvNative } from "./pages/MrvNative";
 import { Pending as MultisigPending } from "./pages/Pending";
 import { MultisigGovernance } from "./components/MultisigGovernance";
 import { ACCOUNTS, type Account } from "./demo-data";
@@ -109,6 +110,7 @@ type Screen =
   | "delegations"
   | "cluster-detail"
   | "bridge"
+  | "mrv-native"
   | "approval"
   | "connected-sites"
   | "multisig-pending"
@@ -578,6 +580,7 @@ export default function App() {
     screen === "network-edit" ||
     screen === "settings" ||
     screen === "operators" ||
+    screen === "mrv-native" ||
     screen === "receive" ||
     screen === "send" ||
     screen === "reveal-phrase" ||
@@ -794,6 +797,7 @@ export default function App() {
           onShowConnectedSites={() => setScreen("connected-sites")}
           onResetWallet={() => setScreen("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
+          onOpenMrvNative={() => setScreen("mrv-native")}
           onOpenAbout={() => setScreen("about")}
           onOpenDelegations={() => setScreen("delegations")}
           {...(activeVaultSummary
@@ -831,6 +835,13 @@ export default function App() {
 
       {screen === "operators" && (
         <Operators onBack={() => setScreen("settings")} />
+      )}
+
+      {screen === "mrv-native" && (
+        <MrvNative
+          chainIdHex={activeChain.chainId}
+          onBack={() => setScreen("settings")}
+        />
       )}
 
       {screen === "about" && (
