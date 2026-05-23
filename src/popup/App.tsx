@@ -1002,7 +1002,10 @@ export default function App() {
       )}
 
       {screen === "bridge" && (
-        <Bridge onBack={() => setScreen("home")} />
+        <Bridge
+          indexer={indexerSnapshot}
+          onBack={() => setScreen("home")}
+        />
       )}
 
       {screen === "approval" && activeApproval && (

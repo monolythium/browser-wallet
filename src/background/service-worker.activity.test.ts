@@ -391,6 +391,58 @@ describe("wallet-indexer-snapshot", () => {
       updatedAtBlock: 124,
     });
   });
+
+  it("passes through bridge route disclosures from token-balance envelopes", async () => {
+    rpcResponses["lyth_getTokenBalances"] = {
+      tokenBalances: [
+        {
+          tokenId: "0xbridged",
+          balance: "9",
+          updatedAtBlock: 125,
+          bridgeRouteDisclosure: {
+            trustModel: "committee",
+            liquidityFloor: "1000",
+          },
+        },
+      ],
+      bridgeRouteDisclosures: [
+        {
+          trust: { threshold: "5/7" },
+          liquidity: { available: "900" },
+        },
+      ],
+    };
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        tokenBalances: Array<{
+          tokenId: string;
+          bridgeRouteDisclosure?: Record<string, unknown>;
+        }>;
+        bridgeRouteDisclosures: Array<Record<string, unknown>>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.tokenBalances[0]?.bridgeRouteDisclosure).toEqual({
+      trustModel: "committee",
+      liquidityFloor: "1000",
+    });
+    expect(r.snapshot.bridgeRouteDisclosures).toEqual([
+      {
+        trust: { threshold: "5/7" },
+        liquidity: { available: "900" },
+      },
+    ]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
