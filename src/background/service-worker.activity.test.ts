@@ -1447,6 +1447,66 @@ describe("wallet-mrv-submit-plan", () => {
     });
   });
 
+  it("builds and submits an MRV native call through the dapp provider boundary", async () => {
+    const origin = "https://mrv-provider-call.example";
+    await dispatchRpc("eth_requestAccounts", [], origin);
+    enqueuedApprovals.length = 0;
+    rpcResponses["eth_getTransactionCount"] = "0x8";
+    rpcResponses["eth_feeHistory"] = {
+      baseFeePerGas: ["0x1"],
+      reward: [["0x1"]],
+    };
+
+    const r = await dispatchRpc(
+      "monolythium_submitMrvNativeCall",
+      [{
+        contractAddress: CONTRACT,
+        input: "0xaabbccdd",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        executionUnitLimitHex: "0x200000",
+        valueWeiHex: "0x2a",
+      }],
+      origin,
+    );
+
+    expect(r.error).toBeUndefined();
+    expect(r.result).toMatchObject({
+      txHash: SUBMITTED_TX_HASH,
+      via: "mock-operator",
+      plan: {
+        kind: "mrv_call",
+        request: {
+          input: "0xaabbccdd",
+          valueLythoshi: "42",
+        },
+      },
+    });
+    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
+    const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
+    expect(approval?.tx).toMatchObject({
+      to: CONTRACT,
+      value: "0x2a",
+      data: "0xaabbccdd",
+      gas: "0x200000",
+      gasPrice: "0x2540be401",
+      maxFeePerGas: "0x2540be401",
+      maxPriorityFeePerGas: "0x2540be400",
+      nonce: "0x8",
+      chainId: "0x10f2c",
+    });
+    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+      to: CONTRACT,
+      value: "0x2a",
+      data: "0xaabbccdd",
+      gas: "0x200000",
+      nonce: "0x8",
+      maxFeePerGas: "0x2540be401",
+      maxPriorityFeePerGas: "0x2540be400",
+      chainIdHex: "0x10f2c",
+      extensions: [{ kind: 48, bodyHex: "0x01" }],
+    });
+  });
+
   it("rejects provider MRV submissions from unconnected origins", async () => {
     const r = await dispatchRpc(
       "monolythium_submitMrvNativePlan",
