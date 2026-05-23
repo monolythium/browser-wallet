@@ -757,6 +757,13 @@ describe("native agent state summary", () => {
       schemaVersion: 1,
       limit: 10,
       filters: {},
+      issuers: [],
+      attestations: [],
+      consents: [],
+      services: [],
+      availability: [],
+      arbiters: [],
+      reputationReviews: [],
       spendingPolicies: [],
       policySpends: [],
       escrows: [],
@@ -769,6 +776,54 @@ describe("native agent state summary", () => {
       <NativeAgentStateSummary
         nativeAgentState={{
           ...empty,
+          issuers: [
+            {
+              issuer_id: "0x" + "11".repeat(32),
+              issuer: "mono1agentowner",
+              updated_at_block: 45,
+            },
+          ],
+          attestations: [
+            {
+              attestationId: "0x" + "12".repeat(32),
+              subject: "mono1agentcontroller",
+              active: false,
+              updatedAtBlock: 46,
+            },
+          ],
+          consents: [
+            {
+              consent_id: "0x" + "13".repeat(32),
+              grantee: "mono1agentarbiter",
+              active: true,
+              updated_at_block: 47,
+            },
+          ],
+          services: [
+            {
+              serviceId: "0x" + "14".repeat(32),
+              provider: "mono1agentprovider",
+              active: true,
+              updatedAtBlock: 48,
+            },
+          ],
+          availability: [
+            {
+              provider: "mono1agentprovider",
+              max_concurrent: 8,
+              open_requests: 2,
+              paused: false,
+              updated_at_block: 49,
+            },
+          ],
+          arbiters: [
+            {
+              arbiter_id: "0x" + "15".repeat(32),
+              arbiter: "mono1agentarbiter",
+              tier: 2,
+              updated_at_block: 50,
+            },
+          ],
           spendingPolicies: [
             {
               policyId: "0x" + "aa".repeat(32),
@@ -813,13 +868,35 @@ describe("native agent state summary", () => {
               updatedAtBlock: 44,
             },
           ],
+          reputationReviews: [
+            {
+              review_id: "0x" + "16".repeat(32),
+              reviewer: "mono1agentowner",
+              subject: "mono1agentprovider",
+              quality_score: 8,
+              accuracy_score: 9,
+              updated_at_block: 51,
+            },
+          ],
         }}
       />,
     );
 
     expect(html).toContain("Native agent state");
+    expect(html).toContain("Registry");
+    expect(html).toContain("Trust");
     expect(html).toContain("Policy");
     expect(html).toContain("Escrow");
+    expect(html).toContain("10 indexed rows");
+    expect(html).toContain("issuer");
+    expect(html).toContain("attestation");
+    expect(html).toContain("consent");
+    expect(html).toContain("service");
+    expect(html).toContain("availability");
+    expect(html).toContain("2 / 8 open");
+    expect(html).toContain("arbiter");
+    expect(html).toContain("review");
+    expect(html).toContain("quality 8");
     expect(html).toContain("spend 125 / 25");
   });
 });
