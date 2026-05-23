@@ -87,6 +87,18 @@ export interface WalletMrvNativeSubmissionPlan {
   tx: WalletMrvSerializedTx;
 }
 
+export interface WalletMrvNativeSubmitTxFields {
+  to?: string;
+  value: string;
+  data: string;
+  gas: string;
+  nonce: string;
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  chainIdHex: string;
+  extensions: WalletMrvTransactionExtension[];
+}
+
 export function buildWalletMrvDeployNativePlan(
   input: WalletMrvDeployNativePlanInput,
 ): WalletMrvNativeSubmissionPlan {
@@ -146,6 +158,128 @@ export function buildWalletMrvCallNativePlan(
     "mrv_call",
     buildMrvCallNativeTxPlan(normalizeContractAddress(input.contractAddress).typed, input.input, options),
   );
+}
+
+export function walletMrvNativePlanToSubmitTx(
+  plan: WalletMrvNativeSubmissionPlan,
+  opts: { chainIdHex: string; fromAddress: string },
+): WalletMrvNativeSubmitTxFields {
+  if (plan === null || typeof plan !== "object") {
+    throw new Error("MRV native submission plan is required");
+  }
+  if (plan.request === null || typeof plan.request !== "object") {
+    throw new Error("MRV native submission plan request is required");
+  }
+  if (plan.nativeTx === null || typeof plan.nativeTx !== "object") {
+    throw new Error("MRV native submission plan nativeTx is required");
+  }
+  if (plan.tx === null || typeof plan.tx !== "object") {
+    throw new Error("MRV native submission plan tx is required");
+  }
+  const activeChainIdHex = canonicalHexQuantityString(opts.chainIdHex, "chainIdHex");
+  const txChainIdHex = canonicalHexQuantityString(plan.tx.chainIdHex, "tx.chainIdHex");
+  if (txChainIdHex !== activeChainIdHex) {
+    throw new Error("MRV native submission plan chainId does not match active chain");
+  }
+  assertDecimalMatchesHex(plan.nativeTx.chainId, txChainIdHex, "nativeTx.chainId");
+
+  const expectedFrom = addressToTypedBech32("user", opts.fromAddress);
+  if (plan.request.from !== expectedFrom) {
+    throw new Error("MRV native submission plan from address does not match unlocked wallet");
+  }
+
+  assertDecimalMatchesHex(plan.nativeTx.nonce, plan.tx.nonceHex, "nativeTx.nonce");
+  assertDecimalMatchesHex(
+    plan.nativeTx.executionUnitLimit,
+    plan.tx.gasLimitHex,
+    "nativeTx.executionUnitLimit",
+  );
+  assertDecimalMatchesHex(
+    plan.nativeTx.maxExecutionFeeLythoshi,
+    plan.tx.maxFeePerGas,
+    "nativeTx.maxExecutionFeeLythoshi",
+  );
+  assertDecimalMatchesHex(
+    plan.nativeTx.priorityTipLythoshi,
+    plan.tx.maxPriorityFeePerGas,
+    "nativeTx.priorityTipLythoshi",
+  );
+  assertDecimalMatchesHex(
+    plan.nativeTx.valueLythoshi,
+    plan.tx.valueWeiHex,
+    "nativeTx.valueLythoshi",
+  );
+  if (plan.request.valueLythoshi !== plan.nativeTx.valueLythoshi) {
+    throw new Error("MRV native submission plan request value must match nativeTx");
+  }
+
+  const extension = assertMrvV1SerializedExtension(plan.extension, "extension");
+  if (!Array.isArray(plan.tx.extensions) || plan.tx.extensions.length !== 1) {
+    throw new Error("MRV native submission plan must carry exactly one transaction extension");
+  }
+  const txExtension = assertMrvV1SerializedExtension(
+    plan.tx.extensions[0]!,
+    "tx.extensions[0]",
+  );
+  if (
+    txExtension.kind !== extension.kind ||
+    txExtension.bodyHex !== extension.bodyHex
+  ) {
+    throw new Error("MRV native submission plan tx extension must match extension");
+  }
+
+  if (plan.kind === "mrv_deploy") {
+    if (plan.tx.to !== null) {
+      throw new Error("MRV deploy submission tx.to must be null");
+    }
+    const artifactBytes = normalizeHexBytes(
+      plan.request.artifactBytes ?? "",
+      "request.artifactBytes",
+    );
+    const txData = normalizeHexBytes(plan.tx.data, "tx.data");
+    if (artifactBytes.length <= 2) {
+      throw new Error("MRV deploy submission artifactBytes cannot be empty");
+    }
+    if (txData !== artifactBytes) {
+      throw new Error("MRV deploy submission tx.data must match artifactBytes");
+    }
+  } else if (plan.kind === "mrv_call") {
+    if (plan.tx.to === null) {
+      throw new Error("MRV call submission tx.to must be a contract address");
+    }
+    const contractAddress = plan.request.contractAddress;
+    if (typeof contractAddress !== "string") {
+      throw new Error("MRV call submission request.contractAddress is required");
+    }
+    const expectedTo = typedBech32ToAddress(contractAddress, "contract").hex.toLowerCase();
+    if (normalizeAddressHex(plan.tx.to) !== expectedTo) {
+      throw new Error("MRV call submission tx.to must match contractAddress");
+    }
+    const input = normalizeHexBytes(plan.request.input ?? "", "request.input");
+    if (normalizeHexBytes(plan.tx.data, "tx.data") !== input) {
+      throw new Error("MRV call submission tx.data must match request input");
+    }
+  } else {
+    throw new Error("unsupported MRV native submission plan kind");
+  }
+
+  return {
+    ...(plan.tx.to !== null ? { to: normalizeAddressHex(plan.tx.to) } : {}),
+    value: canonicalHexQuantityString(plan.tx.valueWeiHex, "tx.valueWeiHex"),
+    data: normalizeHexBytes(plan.tx.data, "tx.data"),
+    gas: canonicalHexQuantityString(plan.tx.gasLimitHex, "tx.gasLimitHex"),
+    nonce: canonicalHexQuantityString(plan.tx.nonceHex, "tx.nonceHex"),
+    maxFeePerGas: canonicalHexQuantityString(
+      plan.tx.maxFeePerGas,
+      "tx.maxFeePerGas",
+    ),
+    maxPriorityFeePerGas: canonicalHexQuantityString(
+      plan.tx.maxPriorityFeePerGas,
+      "tx.maxPriorityFeePerGas",
+    ),
+    chainIdHex: txChainIdHex,
+    extensions: [txExtension],
+  };
 }
 
 function serializeSdkPlan(
@@ -277,4 +411,42 @@ function normalizeAddressHex(address: string): string {
     throw new Error("expected 0x-prefixed 20-byte hex address");
   }
   return `0x${parsed.slice(2).toLowerCase()}`;
+}
+
+function canonicalHexQuantityString(value: string, field: string): string {
+  return bigintToHexQuantity(hexQuantityToBigint(value, field));
+}
+
+function decimalStringToBigint(value: string, field: string): bigint {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error(`${field} must be a decimal integer string`);
+  }
+  return BigInt(value);
+}
+
+function assertDecimalMatchesHex(
+  decimal: string,
+  hex: string,
+  field: string,
+): void {
+  if (decimalStringToBigint(decimal, field) !== hexQuantityToBigint(hex, field)) {
+    throw new Error(`${field} must match tx`);
+  }
+}
+
+function assertMrvV1SerializedExtension(
+  extension: WalletMrvTransactionExtension,
+  field: string,
+): WalletMrvTransactionExtension {
+  if (extension === null || typeof extension !== "object") {
+    throw new Error(`${field} is required`);
+  }
+  if (extension.kind !== WALLET_MRV_TX_EXTENSION_KIND) {
+    throw new Error(`${field}.kind must be MRV v1 extension kind`);
+  }
+  const bodyHex = normalizeHexBytes(extension.bodyHex, `${field}.bodyHex`);
+  if (bodyHex !== "0x01") {
+    throw new Error(`${field}.bodyHex must be MRV v1 extension body`);
+  }
+  return { kind: extension.kind, bodyHex };
 }

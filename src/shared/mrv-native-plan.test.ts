@@ -3,6 +3,7 @@ import {
   WALLET_MRV_TX_EXTENSION_KIND,
   buildWalletMrvCallNativePlan,
   buildWalletMrvDeployNativePlan,
+  walletMrvNativePlanToSubmitTx,
 } from "./mrv-native-plan.js";
 
 const USER = "0x1111111111111111111111111111111111111111";
@@ -86,6 +87,55 @@ describe("wallet MRV native tx plans", () => {
       data: "0xaabbccdd",
     });
     expect(JSON.parse(JSON.stringify(plan))).toEqual(plan);
+  });
+
+  it("converts a previewed MRV call plan into an extension-carrying submit tx", () => {
+    const plan = buildWalletMrvCallNativePlan({
+      fromAddress: USER,
+      contractAddress: CONTRACT,
+      chainIdHex: "0x10f2c",
+      nonceHex: "0x8",
+      executionUnitLimitHex: "0x200000",
+      maxExecutionFeeLythoshiHex: "0x1312d00",
+      priorityTipLythoshiHex: "0x5",
+      input: "0xaabbccdd",
+      valueWeiHex: "0x2a",
+    });
+
+    expect(
+      walletMrvNativePlanToSubmitTx(plan, {
+        chainIdHex: "0x10F2C",
+        fromAddress: USER,
+      }),
+    ).toEqual({
+      to: CONTRACT,
+      value: "0x2a",
+      data: "0xaabbccdd",
+      gas: "0x200000",
+      nonce: "0x8",
+      maxFeePerGas: "0x1312d00",
+      maxPriorityFeePerGas: "0x5",
+      chainIdHex: "0x10f2c",
+      extensions: [{ kind: WALLET_MRV_TX_EXTENSION_KIND, bodyHex: "0x01" }],
+    });
+  });
+
+  it("blocks submit conversion when the MRV extension is missing", () => {
+    const plan = buildWalletMrvDeployNativePlan({
+      fromAddress: USER,
+      chainIdHex: "0x10f2c",
+      nonceHex: "0x7",
+      executionUnitLimitHex: "0x100000",
+      maxExecutionFeeLythoshiHex: "0x989680",
+      artifactBytes: "0x13000000",
+    });
+
+    expect(() =>
+      walletMrvNativePlanToSubmitTx(
+        { ...plan, tx: { ...plan.tx, extensions: [] } },
+        { chainIdHex: "0x10f2c", fromAddress: USER },
+      ),
+    ).toThrow(/exactly one transaction extension/);
   });
 
   it("rejects non-canonical hex quantities before building a plan", () => {
