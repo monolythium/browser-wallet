@@ -11,6 +11,7 @@ import {
 import type {
   WalletMrvNativeSubmissionPlan,
   WalletMrvNoEvmReceiptProofTranscript,
+  WalletMrvNoEvmReceiptProofVerification,
 } from "../bg.js";
 
 const BASE_FORM: MrvNativeFormValues = {
@@ -29,16 +30,28 @@ const RECEIPT_COMMITMENT = `0x${"c".repeat(64)}`;
 const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   schema: "mono.no_evm_receipt_proof.v1",
   proofType: "canonicalReceiptsTranscript",
-  rootAlgorithm: "patricia-merkle-trie-keccak",
+  rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
   blockHash: `0x${"1".repeat(64)}`,
   txHash: SUBMITTED_TX_HASH,
-  receiptsRoot: `0x${"2".repeat(64)}`,
-  targetReceiptHash: `0x${"3".repeat(64)}`,
+  receiptsRoot:
+    "0x73d29f250b2f46be15d1ad19c5dc039449e5236e47c9662266ca13b71ed84928",
+  targetReceiptHash:
+    "0xe4cfff110d648eb1821542b3805ded1e3df86e85b26cc19021f55168ed1a2ede",
   blockHeight: 100,
   txIndex: 1,
   receiptCount: 2,
   receiptTranscript: ["0x01", "0x02ff"],
+};
+const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification = {
+  status: "verified",
+  receiptCountMatches: true,
+  receiptsRootMatches: true,
+  targetReceiptHashMatches: true,
+  receiptCount: 2,
+  transcriptCount: 2,
+  computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
+  computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
 };
 
 function buildDeployPlan(): WalletMrvNativeSubmissionPlan {
@@ -171,8 +184,8 @@ describe("MrvNative", () => {
 
     expect(html).toContain("Transaction submitted");
     expect(html).toContain("mock-operator");
-    expect(html).toContain("Receipt polling checks transaction inclusion only");
-    expect(html).toContain("has not verified a no-EVM MRV execution proof");
+    expect(html).toContain("Receipt polling checks transaction inclusion");
+    expect(html).toContain("transcript self-check runs after native evidence");
   });
 
   it("renders MRV receipt polling, included, and unavailable states honestly", () => {
@@ -187,7 +200,7 @@ describe("MrvNative", () => {
     );
     expect(pollingHtml).toContain("Receipt status: waiting for inclusion");
     expect(pollingHtml).toContain("eth_getTransactionReceipt");
-    expect(pollingHtml).toContain("no MRV execution proof");
+    expect(pollingHtml).toContain("Validator finality is not established here");
 
     const includedHtml = renderToStaticMarkup(
       <MrvNativePlanPreview
@@ -210,6 +223,7 @@ describe("MrvNative", () => {
               eventCount: 1,
               noEvmProof: null,
               noEvmProofStatus: "missing",
+              noEvmProofVerification: null,
             },
           },
         }}
@@ -244,7 +258,8 @@ describe("MrvNative", () => {
               receiptCommitment: RECEIPT_COMMITMENT,
               eventCount: 1,
               noEvmProof: NO_EVM_RECEIPT_PROOF,
-              noEvmProofStatus: "present-unverified",
+              noEvmProofStatus: "transcript-verified",
+              noEvmProofVerification: NO_EVM_RECEIPT_PROOF_VERIFICATION,
             },
           },
         }}
@@ -252,12 +267,53 @@ describe("MrvNative", () => {
     );
     expect(proofHtml).toContain("No-EVM receipt-proof transcript present");
     expect(proofHtml).toContain("bounded receipt evidence only");
-    expect(proofHtml).toContain("not finality proof");
+    expect(proofHtml).toContain("Transcript self-check verified");
     expect(proofHtml).toContain("canonicalReceiptsTranscript");
-    expect(proofHtml).toContain("patricia-merkle-trie-keccak");
+    expect(proofHtml).toContain("keccak256(monolythium/v2/receipts_root/1)");
     expect(proofHtml).toContain("txIndex 1");
     expect(proofHtml).toContain("transcript blobs 2");
+    expect(proofHtml).toContain("Count check");
+    expect(proofHtml).toContain("Root check");
     expect(proofHtml).toContain(NO_EVM_RECEIPT_PROOF.receiptsRoot);
+
+    const mismatchRoot = `0x${"4".repeat(64)}`;
+    const mismatchHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "included",
+          receipt: {
+            txHash: SUBMITTED_TX_HASH,
+            status: "0x1",
+            blockNumber: "0x64",
+            contractAddress: null,
+            nativeReceipt: {
+              schema: "riscv.receipt.v1",
+              txType: 0x41,
+              artifactHash: "0x" + "b".repeat(64),
+              receiptCommitment: RECEIPT_COMMITMENT,
+              eventCount: 1,
+              noEvmProof: {
+                ...NO_EVM_RECEIPT_PROOF,
+                receiptsRoot: mismatchRoot,
+              },
+              noEvmProofStatus: "transcript-mismatch",
+              noEvmProofVerification: {
+                ...NO_EVM_RECEIPT_PROOF_VERIFICATION,
+                status: "mismatch",
+                receiptsRootMatches: false,
+              },
+            },
+          },
+        }}
+      />,
+    );
+    expect(mismatchHtml).toContain("Transcript self-check mismatch");
+    expect(mismatchHtml).toContain("Computed root");
+    expect(mismatchHtml).toContain(NO_EVM_RECEIPT_PROOF.receiptsRoot);
+    expect(mismatchHtml).toContain(mismatchRoot);
 
     const unavailableHtml = renderToStaticMarkup(
       <MrvNativePlanPreview

@@ -101,12 +101,14 @@ const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
 const NO_EVM_RECEIPT_PROOF = {
   schema: "mono.no_evm_receipt_proof.v1",
   proofType: "canonicalReceiptsTranscript",
-  rootAlgorithm: "patricia-merkle-trie-keccak",
+  rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
   blockHash: "0x" + "1".repeat(64),
   txHash: SUBMITTED_TX_HASH,
-  receiptsRoot: "0x" + "2".repeat(64),
-  targetReceiptHash: "0x" + "3".repeat(64),
+  receiptsRoot:
+    "0x73d29f250b2f46be15d1ad19c5dc039449e5236e47c9662266ca13b71ed84928",
+  targetReceiptHash:
+    "0xe4cfff110d648eb1821542b3805ded1e3df86e85b26cc19021f55168ed1a2ede",
   blockHeight: 100,
   txIndex: 1,
   receiptCount: 2,
@@ -1208,6 +1210,7 @@ describe("wallet-mrv-receipt-status", () => {
           eventCount: number | null;
           noEvmProof: unknown;
           noEvmProofStatus: string;
+          noEvmProofVerification: unknown;
           proofLikeField?: unknown;
         } | null;
         logs?: unknown[];
@@ -1230,6 +1233,7 @@ describe("wallet-mrv-receipt-status", () => {
           eventCount: 1,
           noEvmProof: null,
           noEvmProofStatus: "missing",
+          noEvmProofVerification: null,
         },
       },
       via: "mock-operator",
@@ -1242,7 +1246,7 @@ describe("wallet-mrv-receipt-status", () => {
     });
   });
 
-  it("preserves a validated no-EVM receipt-proof transcript", async () => {
+  it("verifies a self-consistent no-EVM receipt-proof transcript", async () => {
     rpcResponses["eth_getTransactionReceipt"] = {
       transactionHash: SUBMITTED_TX_HASH,
       status: "0x1",
@@ -1271,13 +1275,78 @@ describe("wallet-mrv-receipt-status", () => {
         nativeReceipt: {
           noEvmProof: unknown;
           noEvmProofStatus: string;
+          noEvmProofVerification: unknown;
         } | null;
       };
     };
 
     expect(r.receipt.nativeReceipt).toMatchObject({
       noEvmProof: NO_EVM_RECEIPT_PROOF,
-      noEvmProofStatus: "present-unverified",
+      noEvmProofStatus: "transcript-verified",
+      noEvmProofVerification: {
+        status: "verified",
+        receiptCountMatches: true,
+        receiptsRootMatches: true,
+        targetReceiptHashMatches: true,
+        receiptCount: 2,
+        transcriptCount: 2,
+        computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
+        computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
+      },
+    });
+  });
+
+  it("keeps well-formed no-EVM transcript mismatches visible with computed evidence", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x64",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...NO_EVM_RECEIPT_PROOF,
+        receiptsRoot: "0x" + "4".repeat(64),
+        targetReceiptHash: "0x" + "5".repeat(64),
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmProofStatus: string;
+          noEvmProofVerification: {
+            status: string;
+            receiptCountMatches: boolean;
+            receiptsRootMatches: boolean;
+            targetReceiptHashMatches: boolean;
+            computedReceiptsRoot: string;
+            computedTargetReceiptHash: string;
+          };
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toMatchObject({
+      noEvmProofStatus: "transcript-mismatch",
+      noEvmProofVerification: {
+        status: "mismatch",
+        receiptCountMatches: true,
+        receiptsRootMatches: false,
+        targetReceiptHashMatches: false,
+        computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
+        computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
+      },
     });
   });
 
