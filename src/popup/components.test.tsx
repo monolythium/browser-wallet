@@ -257,7 +257,19 @@ describe("bridge route disclosure display", () => {
       <Bridge
         onBack={() => undefined}
         indexer={{
-          bridgeRouteDisclosures: [sdkBridgeRoute("catalogue-only")],
+          bridgeRouteDisclosures: [
+            sdkBridgeRoute("catalogue-only", {
+              bridgeId: "catalogue-bridge-arb-usdc",
+              wrappedAsset: "mrc:wrapped-usdc",
+            }),
+          ],
+          bridgeRouteReadiness: {
+            routeSelectionReady: false,
+            quoteReady: false,
+            submitReady: false,
+            blockedReasons: ["bridge route selection requires transfer intent"],
+            warnings: [],
+          },
           tokenBalances: [],
           addressLabel: null,
           delegationHistory: [],
@@ -269,10 +281,24 @@ describe("bridge route disclosure display", () => {
 
     expect(html).toContain("catalogue-only is the top SDK-ranked accepted route.");
     expect(html).toMatch(/SDK rank 1[\s\S]*catalogue-only[\s\S]*Selected/);
+    expect(html).toContain("Bridge ID");
+    expect(html).toContain("catalogue-bridge-arb-usdc");
+    expect(html).toContain("Wrapped asset");
+    expect(html).toContain("mrc:wrapped-usdc");
+    expect(html).toContain("Catalogue readiness");
+    expect(html).toContain("Selection");
+    expect(html).toContain("blocked");
+    expect(html).toContain("Quote");
+    expect(html).toContain("disabled");
+    expect(html).toContain("Submit");
+    expect(html).toContain("bridge route selection requires transfer intent");
     expect(html).toContain("Transfer intent / quote preview");
+    expect(html).toContain("catalogue readiness reports quote disabled");
+    expect(html).toContain("catalogue readiness reports submit disabled");
     expect(html).toContain("standalone SDK exposes route-intent selection only");
     expect(html).toContain("standalone SDK exposes no live bridge submit helper");
     expect(html).toContain("Request quote");
+    expect(html).toContain("Submit bridge");
     expect(html).toContain("disabled");
   });
 

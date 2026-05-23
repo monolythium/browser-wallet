@@ -3,12 +3,14 @@
 
 import type {
   WalletBridgeRouteDisclosure,
+  WalletBridgeRouteReadiness,
   WalletTokenBalance,
 } from "../shared/token-balances.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
+  WalletBridgeRouteReadiness,
   WalletTokenBalance,
   WalletTokenBalanceMrcIdentity,
 } from "../shared/token-balances.js";
@@ -399,6 +401,7 @@ export interface WalletIndexerSnapshot {
   tokenBalances: WalletTokenBalance[];
   bridgeRouteDisclosure?: WalletBridgeRouteDisclosure;
   bridgeRouteDisclosures?: WalletBridgeRouteDisclosure[];
+  bridgeRouteReadiness?: WalletBridgeRouteReadiness | null;
   addressLabel: WalletAddressLabel | null;
   delegationHistory: WalletDelegationHistoryRow[];
   addressActivity: WalletAddressActivityRow[];

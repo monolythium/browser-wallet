@@ -13,6 +13,7 @@ import {
 import type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
+  WalletBridgeRouteReadiness,
 } from "../bg";
 
 type BridgeRouteCandidateState =
@@ -29,6 +30,9 @@ export interface BridgeRouteChoiceCandidate {
   route: SdkBridgeRouteDisclosure | null;
   assessment: BridgeRouteAssessment | null;
   parseFailure: string | null;
+  bridgeId: string | null;
+  wrappedAsset: string | null;
+  readiness: WalletBridgeRouteReadiness | null;
 }
 
 export interface BridgeRouteChoiceState {
@@ -37,6 +41,7 @@ export interface BridgeRouteChoiceState {
   blockedReasons: string[];
   sdkRouteCount: number;
   displayOnlyCount: number;
+  catalogueReadiness: WalletBridgeRouteReadiness | null;
   transferPreview: BridgeTransferPreviewState;
 }
 
@@ -47,23 +52,34 @@ export interface BridgeTransferPreviewState {
   blockedReasons: string[];
   quoteBlockedReasons: string[];
   submitBlockedReasons: string[];
+  quoteDisabled: boolean;
+  submitDisabled: boolean;
+  readiness: WalletBridgeRouteReadiness | null;
 }
 
 interface SdkRouteRow {
   disclosure: WalletBridgeRouteDisclosure;
   originalIndex: number;
   route: SdkBridgeRouteDisclosure;
+  metadata: BridgeRouteCatalogueMetadata;
 }
 
 interface DisplayOnlyRouteRow {
   disclosure: WalletBridgeRouteDisclosure;
   originalIndex: number;
   reason: string;
+  metadata: BridgeRouteCatalogueMetadata;
 }
 
 type SdkRouteParseResult =
   | { ok: true; route: SdkBridgeRouteDisclosure }
   | { ok: false; reason: string };
+
+interface BridgeRouteCatalogueMetadata {
+  bridgeId: string | null;
+  wrappedAsset: string | null;
+  readiness: WalletBridgeRouteReadiness | null;
+}
 
 const BRIDGE_ADMIN_CONTROLS = new Set<string>([
   "none",
@@ -81,19 +97,30 @@ const BRIDGE_CIRCUIT_BREAKERS = new Set<string>([
 
 export function buildBridgeRouteChoiceState(
   disclosures: readonly WalletBridgeRouteDisclosure[],
+  catalogueReadiness: WalletBridgeRouteReadiness | null = null,
 ): BridgeRouteChoiceState {
   const sdkRows: SdkRouteRow[] = [];
   const displayOnlyRows: DisplayOnlyRouteRow[] = [];
 
   disclosures.forEach((disclosure, originalIndex) => {
     const parsed = readSdkBridgeRouteDisclosure(disclosure);
+    const metadata = readBridgeRouteCatalogueMetadata(
+      disclosure,
+      catalogueReadiness,
+    );
     if (parsed.ok) {
-      sdkRows.push({ disclosure, originalIndex, route: parsed.route });
+      sdkRows.push({
+        disclosure,
+        originalIndex,
+        route: parsed.route,
+        metadata,
+      });
     } else {
       displayOnlyRows.push({
         disclosure,
         originalIndex,
         reason: parsed.reason,
+        metadata,
       });
     }
   });
@@ -118,6 +145,9 @@ export function buildBridgeRouteChoiceState(
       route: ranked.route,
       assessment: ranked.assessment,
       parseFailure: null,
+      bridgeId: row.metadata.bridgeId,
+      wrappedAsset: row.metadata.wrappedAsset,
+      readiness: row.metadata.readiness,
     };
 
     if (selected === null && ranked.assessment.accepted) {
@@ -137,6 +167,9 @@ export function buildBridgeRouteChoiceState(
       route: null,
       assessment: null,
       parseFailure: row.reason,
+      bridgeId: row.metadata.bridgeId,
+      wrappedAsset: row.metadata.wrappedAsset,
+      readiness: row.metadata.readiness,
     });
   }
 
@@ -150,6 +183,7 @@ export function buildBridgeRouteChoiceState(
     sdkRows.map((row) => row.route),
     selected,
     blockedReasons,
+    catalogueReadiness,
   );
 
   return {
@@ -158,14 +192,19 @@ export function buildBridgeRouteChoiceState(
     blockedReasons,
     sdkRouteCount: sdkRows.length,
     displayOnlyCount: displayOnlyRows.length,
+    catalogueReadiness,
     transferPreview,
   };
 }
 
 export function useBridgeRouteSelection(
   disclosures: readonly WalletBridgeRouteDisclosure[],
+  catalogueReadiness: WalletBridgeRouteReadiness | null = null,
 ): BridgeRouteChoiceState {
-  return useMemo(() => buildBridgeRouteChoiceState(disclosures), [disclosures]);
+  return useMemo(
+    () => buildBridgeRouteChoiceState(disclosures, catalogueReadiness),
+    [catalogueReadiness, disclosures],
+  );
 }
 
 function bridgeRouteChoiceBlockedReasons(
@@ -188,9 +227,13 @@ function buildBridgeTransferPreviewState(
   routes: readonly SdkBridgeRouteDisclosure[],
   selected: BridgeRouteChoiceCandidate | null,
   routeBlockedReasons: readonly string[],
+  catalogueReadiness: WalletBridgeRouteReadiness | null,
 ): BridgeTransferPreviewState {
   if (selected?.route == null) {
-    const blockedReasons = [...routeBlockedReasons];
+    const blockedReasons = uniqueStrings([
+      ...routeBlockedReasons,
+      ...(catalogueReadiness?.blockedReasons ?? []),
+    ]);
     const routeMessage =
       disclosureCount === 0
         ? "no route disclosures supplied"
@@ -201,12 +244,17 @@ function buildBridgeTransferPreviewState(
       intent: null,
       selection: null,
       blockedReasons,
-      quoteBlockedReasons: [
+      quoteBlockedReasons: bridgeQuoteBlockedReasons(
+        catalogueReadiness,
         "live bridge quote is blocked until a route satisfies the SDK disclosure floor",
-      ],
-      submitBlockedReasons: [
+      ),
+      submitBlockedReasons: bridgeSubmitBlockedReasons(
+        catalogueReadiness,
         "live bridge submit is blocked until quote and submit API primitives are available",
-      ],
+      ),
+      quoteDisabled: true,
+      submitDisabled: true,
+      readiness: catalogueReadiness,
     };
   }
 
@@ -219,20 +267,171 @@ function buildBridgeTransferPreviewState(
     allowedRouteIds: [selected.route.routeId],
   };
   const selection = selectBridgeTransferRoute(intent, routes);
-  const blockedReasons = selection.blockedReasons;
+  const readiness = selected.readiness ?? catalogueReadiness;
+  const blockedReasons = uniqueStrings([
+    ...selection.blockedReasons,
+    ...(readiness?.blockedReasons ?? []),
+  ]);
 
   return {
     status: "intent-blocked",
     intent,
     selection,
     blockedReasons,
-    quoteBlockedReasons: [
+    quoteBlockedReasons: bridgeQuoteBlockedReasons(
+      readiness,
       "standalone SDK exposes route-intent selection only; no live bridge quote helper or API route is available",
-    ],
-    submitBlockedReasons: [
+    ),
+    submitBlockedReasons: bridgeSubmitBlockedReasons(
+      readiness,
       "standalone SDK exposes no live bridge submit helper or API route",
-    ],
+    ),
+    quoteDisabled: true,
+    submitDisabled: true,
+    readiness,
   };
+}
+
+function bridgeQuoteBlockedReasons(
+  readiness: WalletBridgeRouteReadiness | null,
+  baseReason: string,
+): string[] {
+  const reasons =
+    readiness?.quoteReady === false
+      ? ["catalogue readiness reports quote disabled"]
+      : [];
+  reasons.push(baseReason);
+  return uniqueStrings(reasons);
+}
+
+function bridgeSubmitBlockedReasons(
+  readiness: WalletBridgeRouteReadiness | null,
+  baseReason: string,
+): string[] {
+  const reasons =
+    readiness?.submitReady === false
+      ? ["catalogue readiness reports submit disabled"]
+      : [];
+  reasons.push(baseReason);
+  return uniqueStrings(reasons);
+}
+
+function readBridgeRouteCatalogueMetadata(
+  disclosure: WalletBridgeRouteDisclosure,
+  fallbackReadiness: WalletBridgeRouteReadiness | null,
+): BridgeRouteCatalogueMetadata {
+  return {
+    bridgeId: readNullableStringAlias(disclosure, [
+      "bridgeId",
+      "bridge_id",
+      "trustedBridgeId",
+      "trusted_bridge_id",
+      "bridgeConfigId",
+      "bridge_config_id",
+    ]),
+    wrappedAsset: readNullableStringAlias(disclosure, [
+      "wrappedAsset",
+      "wrapped_asset",
+      "wrappedAssetId",
+      "wrapped_asset_id",
+      "wrappedToken",
+      "wrapped_token",
+    ]),
+    readiness: readBridgeRouteReadiness(disclosure) ?? fallbackReadiness,
+  };
+}
+
+function readBridgeRouteReadiness(
+  disclosure: WalletBridgeRouteDisclosure,
+): WalletBridgeRouteReadiness | null {
+  const routeSelectionReady = readBooleanAlias(disclosure, [
+    "routeSelectionReady",
+    "route_selection_ready",
+  ]);
+  const quoteReady = readBooleanAlias(disclosure, ["quoteReady", "quote_ready"]);
+  const submitReady = readBooleanAlias(disclosure, [
+    "submitReady",
+    "submit_ready",
+  ]);
+  const blockedReasons = readStringListAlias(disclosure, [
+    "readinessBlockedReasons",
+    "blockedReasons",
+    "blocked_reasons",
+  ]);
+  const warnings = readStringListAlias(disclosure, [
+    "readinessWarnings",
+    "warnings",
+  ]);
+
+  if (
+    routeSelectionReady === null &&
+    quoteReady === null &&
+    submitReady === null &&
+    blockedReasons.length === 0 &&
+    warnings.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    routeSelectionReady: routeSelectionReady ?? false,
+    quoteReady: quoteReady ?? false,
+    submitReady: submitReady ?? false,
+    blockedReasons,
+    warnings,
+  };
+}
+
+function readNullableStringAlias(
+  disclosure: WalletBridgeRouteDisclosure,
+  aliases: readonly string[],
+): string | null {
+  for (const alias of aliases) {
+    const value = disclosure[alias];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readBooleanAlias(
+  disclosure: WalletBridgeRouteDisclosure,
+  aliases: readonly string[],
+): boolean | null {
+  for (const alias of aliases) {
+    const value = disclosure[alias];
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
+function readStringListAlias(
+  disclosure: WalletBridgeRouteDisclosure,
+  aliases: readonly string[],
+): string[] {
+  for (const alias of aliases) {
+    const value = disclosure[alias];
+    if (!Array.isArray(value)) continue;
+    const out: string[] = [];
+    for (const item of value) {
+      if (typeof item !== "string") return [];
+      out.push(item);
+    }
+    return out;
+  }
+  return [];
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
 }
 
 function readSdkBridgeRouteDisclosure(
