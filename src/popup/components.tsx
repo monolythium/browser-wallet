@@ -2696,6 +2696,9 @@ function decodeNativeMarketBincodePayload(data: string): DecodedCall | null {
     if (nftCall === 0) return decodeNativeNftCreateListingPayload(r);
     if (nftCall === 1) return decodeNativeNftBuyListingPayload(r);
     if (nftCall === 2) return decodeNativeNftCancelListingPayload(r);
+    if (nftCall === 3) return decodeNativeNftSweepExpiredListingsPayload(r);
+    if (nftCall === 5) return decodeNativeNftPlaceAuctionBidPayload(r);
+    if (nftCall === 6) return decodeNativeNftSettleAuctionPayload(r);
     return null;
   }
 
@@ -2833,6 +2836,55 @@ function decodeNativeNftCancelListingPayload(r: NativeMarketPayloadReader): Deco
   };
 }
 
+function decodeNativeNftSweepExpiredListingsPayload(r: NativeMarketPayloadReader): DecodedCall | null {
+  const listingIds = r.bytes32Vec(64);
+  const currentBlock = r.u64();
+  if (!listingIds || currentBlock == null || !r.done()) return null;
+  return {
+    name: "nativeNftSweepExpiredListings",
+    selector: "native-bincode",
+    surface: "native-market",
+    args: [
+      { name: "listing ids", type: "bytes32[]", value: listingIds.join(", ") },
+      { name: "current block", type: "uint64", value: currentBlock.toString(10) },
+    ],
+  };
+}
+
+function decodeNativeNftPlaceAuctionBidPayload(r: NativeMarketPayloadReader): DecodedCall | null {
+  const listingId = r.bytesHex(32);
+  const bidder = r.monoAddress();
+  const amount = r.u128();
+  const currentBlock = r.u64();
+  if (!listingId || !bidder || amount == null || currentBlock == null || !r.done()) return null;
+  return {
+    name: "nativeNftPlaceAuctionBid",
+    selector: "native-bincode",
+    surface: "native-market",
+    args: [
+      { name: "listing id", type: "bytes32", value: listingId },
+      { name: "bidder", type: bidder.kind, value: bidder.display },
+      { name: "amount", type: "uint128", value: amount.toString(10) },
+      { name: "current block", type: "uint64", value: currentBlock.toString(10) },
+    ],
+  };
+}
+
+function decodeNativeNftSettleAuctionPayload(r: NativeMarketPayloadReader): DecodedCall | null {
+  const listingId = r.bytesHex(32);
+  const currentBlock = r.u64();
+  if (!listingId || currentBlock == null || !r.done()) return null;
+  return {
+    name: "nativeNftSettleAuction",
+    selector: "native-bincode",
+    surface: "native-market",
+    args: [
+      { name: "listing id", type: "bytes32", value: listingId },
+      { name: "current block", type: "uint64", value: currentBlock.toString(10) },
+    ],
+  };
+}
+
 function decodeNativeNftListingKind(r: NativeMarketPayloadReader): string | null {
   const kind = r.u32();
   if (kind == null) return null;
@@ -2874,6 +2926,18 @@ class NativeMarketPayloadReader {
     const slice = this.bytes.slice(this.offset, this.offset + length);
     this.offset += length;
     return `0x${[...slice].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  bytes32Vec(maxItems: number): string[] | null {
+    const length = this.u64();
+    if (length == null || length > BigInt(maxItems)) return null;
+    const out: string[] = [];
+    for (let i = 0n; i < length; i++) {
+      const value = this.bytesHex(32);
+      if (!value) return null;
+      out.push(value);
+    }
+    return out;
   }
 
   u32(): number | null {
