@@ -186,8 +186,14 @@ vi.mock("./keystore-mldsa.js", () => ({
   signTypedDataV4FromV4: vi.fn(() => new Uint8Array(65)),
 }));
 
+let approvalDecision: { ok: true } | { ok: false; reason?: string } = { ok: true };
+const enqueuedApprovals: Array<{ kind: string; [k: string]: unknown }> = [];
+
 vi.mock("./approvals.js", () => ({
-  enqueue: vi.fn(async () => ({ ok: true })),
+  enqueue: vi.fn(async (req: { kind: string; [k: string]: unknown }) => {
+    enqueuedApprovals.push(req);
+    return approvalDecision;
+  }),
   resolve: vi.fn(() => true),
   rejectByWindow: vi.fn(),
   getPending: vi.fn(() => null),
@@ -342,10 +348,42 @@ interface PopupEnvelope {
   payload?: unknown;
 }
 
+interface RpcEnvelope {
+  kind: "rpc";
+  id: string;
+  args: {
+    method: string;
+    params?: unknown[];
+  };
+  origin: string;
+}
+
 async function dispatchPopup(envelope: PopupEnvelope): Promise<unknown> {
   if (!capturedOnMessage) throw new Error("SW did not register onMessage handler");
   return new Promise((resolve) => {
     capturedOnMessage!(envelope, {}, resolve);
+  });
+}
+
+async function dispatchRpc(
+  method: string,
+  params: unknown[] = [],
+  origin = "https://dapp.example",
+): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+  if (!capturedOnMessage) throw new Error("SW did not register onMessage handler");
+  return new Promise((resolve) => {
+    const envelope: RpcEnvelope = {
+      kind: "rpc",
+      id: Math.random().toString(36).slice(2),
+      args: { method, params },
+      origin,
+    };
+    const handled = capturedOnMessage!(envelope, {}, (response: unknown) => {
+      resolve(response as { result?: unknown; error?: { code: number; message: string } });
+    });
+    if (handled !== true) {
+      resolve({ error: { code: -32603, message: "handler did not signal async response" } });
+    }
   });
 }
 
@@ -362,6 +400,8 @@ beforeEach(() => {
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
+  approvalDecision = { ok: true };
+  enqueuedApprovals.length = 0;
   unlocked = true;
   storageLocal = {};
   storageSession = {};
@@ -1355,6 +1395,90 @@ describe("wallet-mrv-submit-plan", () => {
 
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/exactly one transaction extension/);
+    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("submits a previewed MRV plan through the dapp provider boundary", async () => {
+    const origin = "https://mrv-provider.example";
+    await dispatchRpc("eth_requestAccounts", [], origin);
+    enqueuedApprovals.length = 0;
+
+    const plan = buildSubmitPlan();
+    const r = await dispatchRpc(
+      "monolythium_submitMrvNativePlan",
+      [{ plan, chainIdHex: TESTNET_CHAIN_ID_HEX }],
+      origin,
+    );
+
+    expect(r.error).toBeUndefined();
+    expect(r.result).toEqual({
+      txHash: SUBMITTED_TX_HASH,
+      via: "mock-operator",
+    });
+    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
+    const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
+    expect(approval?.tx).toMatchObject({
+      to: CONTRACT,
+      value: "0x2a",
+      data: "0xaabbccdd",
+      gas: "0x200000",
+      maxFeePerGas: "0x989680",
+      maxPriorityFeePerGas: "0x5",
+      nonce: "0x8",
+      chainId: "0x10f2c",
+    });
+    expect(approval?.view).toMatchObject({
+      estimatedGas: "0x200000",
+      gasPrice: "0x989680",
+      nonce: "0x8",
+      chainId: TESTNET_CHAIN_ID_HEX,
+      chainLabel: "Sprintnet",
+    });
+    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+      to: CONTRACT,
+      value: "0x2a",
+      data: "0xaabbccdd",
+      gas: "0x200000",
+      nonce: "0x8",
+      maxFeePerGas: "0x989680",
+      maxPriorityFeePerGas: "0x5",
+      chainIdHex: "0x10f2c",
+      extensions: [{ kind: 48, bodyHex: "0x01" }],
+    });
+  });
+
+  it("rejects provider MRV submissions from unconnected origins", async () => {
+    const r = await dispatchRpc(
+      "monolythium_submitMrvNativePlan",
+      [{ plan: buildSubmitPlan(), chainIdHex: TESTNET_CHAIN_ID_HEX }],
+      "https://mrv-provider-unconnected.example",
+    );
+
+    expect(r.result).toBeUndefined();
+    expect(r.error?.code).toBe(4100);
+    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
+    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("blocks tampered provider MRV plans before approval", async () => {
+    const origin = "https://mrv-provider-tampered.example";
+    await dispatchRpc("eth_requestAccounts", [], origin);
+    enqueuedApprovals.length = 0;
+    const plan = buildSubmitPlan();
+
+    const r = await dispatchRpc(
+      "monolythium_submitMrvNativePlan",
+      [{
+        plan: { ...plan, tx: { ...plan.tx, extensions: [] } },
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      }],
+      origin,
+    );
+
+    expect(r.result).toBeUndefined();
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error?.message).toMatch(/exactly one transaction extension/);
+    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
     expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
   });
 });
