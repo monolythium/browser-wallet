@@ -4429,10 +4429,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readDelegationCap();
     }
     case "staking-pending-rewards": {
-      // The wallet derives pending rewards from current delegations + the
-      // chain APR table (chain GAP — see staking-client.ts header). The
-      // popup passes its already-fetched delegation rows through so the
-      // SW doesn't double-read.
+      // The wallet reads `lyth_pendingRewards` first; delegation rows are
+      // passed through only for the offline/absent-method mock fallback.
       const p = message.payload as {
         wallet?: string;
         delegations?: Array<{ cluster?: number; weightBps?: number }>;

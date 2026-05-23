@@ -1451,8 +1451,8 @@ export async function bgStakingDelegationCap(): Promise<StakingResult<Delegation
 
 /** Read pending rewards for a wallet's active delegations. The popup
  *  passes its already-fetched delegation rows through so the SW does
- *  not double-read. Returns mock-derived values until the chain side
- *  surfaces a `lyth_pendingRewards` reader (chain GAP). */
+ *  not double-read. Falls back to mock-derived values only when the
+ *  live `lyth_pendingRewards` reader is unavailable. */
 export async function bgStakingPendingRewards(
   wallet: string,
   delegations: ReadonlyArray<DelegationRow>,
