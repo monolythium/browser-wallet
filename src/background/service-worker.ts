@@ -99,6 +99,8 @@ import {
 } from "./keystore-mldsa.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
+  DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+  DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
   evaluatePolicy as evaluatePasskeyPolicy,
   validateCredentialName,
   validatePasskeyPolicy,
@@ -1133,14 +1135,15 @@ let cachedOperator: {
 
 // ---- Phase 9 — in-memory passkey usage ledger ----
 //
-// Per-vault list of `{ at, valueWei }` entries for txs signed under
-// the passkey-unlock path. Used to enforce the daily-cap mode of
-// `PasskeyPolicy`. Lives in memory only — SW hibernation drops it,
-// which is fine: the daily cap is purely a wallet-side spam guard,
-// not a security invariant, and a fresh SW boot starts the window at
-// zero (so a user who reboots their browser and immediately makes a
-// large passkey-unlocked tx is the worst-case "the cap doesn't bind"
-// scenario — still within the per-tx limit, which is the real ceiling).
+// Per-vault list of compatibility-shaped `{ at, valueWei }` entries
+// containing lythoshi for txs signed under the passkey-unlock path.
+// Used to enforce the daily-cap mode of `PasskeyPolicy`. Lives in memory
+// only — SW hibernation drops it, which is fine: the daily cap is purely
+// a wallet-side spam guard, not a security invariant, and a fresh SW boot
+// starts the window at zero (so a user who reboots their browser and
+// immediately makes a large passkey-unlocked tx is the worst-case "the cap
+// doesn't bind" scenario — still within the per-tx limit, which is the real
+// ceiling).
 const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
 
 /**
@@ -1203,7 +1206,7 @@ async function suggestFee(chainIdHex: string): Promise<{
 // `bigint` does not survive `chrome.runtime.sendMessage` — the
 // structured-clone algorithm preserves it in DOM contexts but the
 // extension messaging layer JSON-serialises payloads. Encode every
-// wei value as a decimal string on the wire; parse back on receive.
+// lythoshi value as a decimal string on the wire; parse back on receive.
 
 interface SerializedPasskeyPolicy {
   enabled: boolean;
@@ -1232,11 +1235,11 @@ function serializePasskeyState(s: {
   const policy = s?.policy ?? {};
   const safeLimit = bigintFieldToString(
     (policy as PasskeyPolicy).limitWei,
-    "100000000000000000000",
+    DEFAULT_PASSKEY_LIMIT_LYTHOSHI.toString(),
   );
   const safeDaily = bigintFieldToString(
     (policy as PasskeyPolicy).dailyCapWei,
-    "500000000000000000000",
+    DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI.toString(),
   );
   return {
     credentials: Array.isArray(s?.credentials)
@@ -3408,9 +3411,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
         return { ok: false, reason: "missing vaultId or valueWeiHex" };
       }
-      let valueWei: bigint;
+      let valueLythoshi: bigint;
       try {
-        valueWei = BigInt(p.valueWeiHex);
+        valueLythoshi = BigInt(p.valueWeiHex);
       } catch {
         return { ok: false, reason: "valueWeiHex is not a hex bigint" };
       }
@@ -3419,7 +3422,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const usage = passkeyUsage.get(p.vaultId) ?? [];
         const decision = evaluatePasskeyPolicy({
           state,
-          valueWei,
+          valueWei: valueLythoshi,
           recentUsage: usage,
           now: Date.now(),
         });
@@ -3461,10 +3464,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "passkey-record-usage": {
-      // Append a `{at, valueWei}` entry to the in-memory daily-cap
-      // ledger. Popup calls this after a successful passkey-unlocked
-      // tx submit. Prune-on-read keeps the list bounded — no explicit
-      // GC required.
+      // Append a compatibility-shaped `{at, valueWei}` entry containing
+      // lythoshi to the in-memory daily-cap ledger. Popup calls this after
+      // a successful passkey-unlocked tx submit. Prune-on-read keeps the
+      // list bounded — no explicit GC required.
       const p = (message.payload ?? {}) as {
         vaultId?: string;
         valueWeiHex?: string;
@@ -3472,14 +3475,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
         return { ok: false, reason: "missing vaultId or valueWeiHex" };
       }
-      let valueWei: bigint;
+      let valueLythoshi: bigint;
       try {
-        valueWei = BigInt(p.valueWeiHex);
+        valueLythoshi = BigInt(p.valueWeiHex);
       } catch {
         return { ok: false, reason: "valueWeiHex is not a hex bigint" };
       }
       const entries = passkeyUsage.get(p.vaultId) ?? [];
-      entries.push({ at: Date.now(), valueWei });
+      entries.push({ at: Date.now(), valueWei: valueLythoshi });
       passkeyUsage.set(p.vaultId, entries);
       return { ok: true };
     }

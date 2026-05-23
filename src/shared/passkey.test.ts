@@ -8,11 +8,11 @@
 import { describe, it, expect } from "vitest";
 import {
   DAILY_CAP_WINDOW_MS,
-  DEFAULT_PASSKEY_DAILY_CAP_WEI,
-  DEFAULT_PASSKEY_LIMIT_WEI,
+  DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+  DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
   MAX_CREDENTIALS_PER_VAULT,
-  MAX_PASSKEY_LIMIT_WEI,
-  MIN_PASSKEY_LIMIT_WEI,
+  MAX_PASSKEY_LIMIT_LYTHOSHI,
+  MIN_PASSKEY_LIMIT_LYTHOSHI,
   appendCredential,
   buildPasskeyChallenge,
   defaultPasskeyPolicy,
@@ -44,8 +44,8 @@ describe("defaultPasskeyPolicy", () => {
     const p = defaultPasskeyPolicy();
     expect(p.enabled).toBe(false);
     expect(p.mode).toBe("per-tx");
-    expect(p.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_WEI);
-    expect(p.dailyCapWei).toBe(DEFAULT_PASSKEY_DAILY_CAP_WEI);
+    expect(p.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_LYTHOSHI);
+    expect(p.dailyCapWei).toBe(DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI);
   });
 
   it("default daily cap is at least the per-tx limit (passes validation)", () => {
@@ -61,15 +61,15 @@ describe("validatePasskeyPolicy", () => {
   });
 
   it("rejects per-tx limit above the ceiling", () => {
-    const p = { ...defaultPasskeyPolicy(), limitWei: MAX_PASSKEY_LIMIT_WEI + 1n };
+    const p = { ...defaultPasskeyPolicy(), limitWei: MAX_PASSKEY_LIMIT_LYTHOSHI + 1n };
     expect(validatePasskeyPolicy(p)).toBe("limit-above-ceiling");
   });
 
   it("rejects daily cap below the per-tx limit", () => {
     const p = {
       ...defaultPasskeyPolicy(),
-      limitWei: 5n * MIN_PASSKEY_LIMIT_WEI,
-      dailyCapWei: 2n * MIN_PASSKEY_LIMIT_WEI,
+      limitWei: 5n * MIN_PASSKEY_LIMIT_LYTHOSHI,
+      dailyCapWei: 2n * MIN_PASSKEY_LIMIT_LYTHOSHI,
     };
     expect(validatePasskeyPolicy(p)).toBe("daily-cap-below-per-tx");
   });
@@ -77,7 +77,7 @@ describe("validatePasskeyPolicy", () => {
   it("rejects daily cap above the ceiling", () => {
     const p = {
       ...defaultPasskeyPolicy(),
-      dailyCapWei: MAX_PASSKEY_LIMIT_WEI + 1n,
+      dailyCapWei: MAX_PASSKEY_LIMIT_LYTHOSHI + 1n,
     };
     expect(validatePasskeyPolicy(p)).toBe("daily-cap-above-ceiling");
   });
@@ -86,8 +86,8 @@ describe("validatePasskeyPolicy", () => {
     const p = {
       enabled: true,
       mode: "per-tx" as const,
-      limitWei: MIN_PASSKEY_LIMIT_WEI,
-      dailyCapWei: MIN_PASSKEY_LIMIT_WEI,
+      limitWei: MIN_PASSKEY_LIMIT_LYTHOSHI,
+      dailyCapWei: MIN_PASSKEY_LIMIT_LYTHOSHI,
     };
     expect(validatePasskeyPolicy(p)).toBeNull();
   });
@@ -256,7 +256,7 @@ describe("evaluatePolicy", () => {
     s = setPolicy(s, { ...s.policy, enabled: true });
     const d = evaluatePolicy({
       state: s,
-      valueWei: DEFAULT_PASSKEY_LIMIT_WEI - 1n,
+      valueWei: DEFAULT_PASSKEY_LIMIT_LYTHOSHI - 1n,
       recentUsage: [],
       now,
     });
@@ -268,7 +268,7 @@ describe("evaluatePolicy", () => {
     s = setPolicy(s, { ...s.policy, enabled: true });
     const d = evaluatePolicy({
       state: s,
-      valueWei: DEFAULT_PASSKEY_LIMIT_WEI,
+      valueWei: DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
       recentUsage: [],
       now,
     });
@@ -280,15 +280,15 @@ describe("evaluatePolicy", () => {
     s = setPolicy(s, { ...s.policy, enabled: true });
     const d = evaluatePolicy({
       state: s,
-      valueWei: DEFAULT_PASSKEY_LIMIT_WEI + 1n,
+      valueWei: DEFAULT_PASSKEY_LIMIT_LYTHOSHI + 1n,
       recentUsage: [],
       now,
     });
     expect(d).toEqual({
       kind: "over-limit",
       mode: "per-tx",
-      threshold: DEFAULT_PASSKEY_LIMIT_WEI,
-      attempted: DEFAULT_PASSKEY_LIMIT_WEI + 1n,
+      threshold: DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+      attempted: DEFAULT_PASSKEY_LIMIT_LYTHOSHI + 1n,
     });
   });
 
@@ -298,14 +298,14 @@ describe("evaluatePolicy", () => {
       ...s.policy,
       enabled: true,
       mode: "daily",
-      dailyCapWei: 100n * MIN_PASSKEY_LIMIT_WEI,
+      dailyCapWei: 100n * MIN_PASSKEY_LIMIT_LYTHOSHI,
     });
     const d = evaluatePolicy({
       state: s,
-      valueWei: 10n * MIN_PASSKEY_LIMIT_WEI,
+      valueWei: 10n * MIN_PASSKEY_LIMIT_LYTHOSHI,
       recentUsage: [
-        { at: now - 1000, valueWei: 30n * MIN_PASSKEY_LIMIT_WEI },
-        { at: now - 500, valueWei: 20n * MIN_PASSKEY_LIMIT_WEI },
+        { at: now - 1000, valueWei: 30n * MIN_PASSKEY_LIMIT_LYTHOSHI },
+        { at: now - 500, valueWei: 20n * MIN_PASSKEY_LIMIT_LYTHOSHI },
       ],
       now,
     });
@@ -320,23 +320,23 @@ describe("evaluatePolicy", () => {
       mode: "daily",
       // Keep limitWei ≤ dailyCapWei to satisfy validation; we're
       // testing the daily-window arithmetic, not per-tx semantics.
-      limitWei: 10n * MIN_PASSKEY_LIMIT_WEI,
-      dailyCapWei: 50n * MIN_PASSKEY_LIMIT_WEI,
+      limitWei: 10n * MIN_PASSKEY_LIMIT_LYTHOSHI,
+      dailyCapWei: 50n * MIN_PASSKEY_LIMIT_LYTHOSHI,
     });
     const d = evaluatePolicy({
       state: s,
-      valueWei: 10n * MIN_PASSKEY_LIMIT_WEI,
+      valueWei: 10n * MIN_PASSKEY_LIMIT_LYTHOSHI,
       recentUsage: [
-        { at: now - 1000, valueWei: 30n * MIN_PASSKEY_LIMIT_WEI },
-        { at: now - 500, valueWei: 20n * MIN_PASSKEY_LIMIT_WEI },
+        { at: now - 1000, valueWei: 30n * MIN_PASSKEY_LIMIT_LYTHOSHI },
+        { at: now - 500, valueWei: 20n * MIN_PASSKEY_LIMIT_LYTHOSHI },
       ],
       now,
     });
     expect(d.kind).toBe("over-limit");
     if (d.kind !== "over-limit") return;
     expect(d.mode).toBe("daily");
-    expect(d.threshold).toBe(50n * MIN_PASSKEY_LIMIT_WEI);
-    expect(d.attempted).toBe(60n * MIN_PASSKEY_LIMIT_WEI);
+    expect(d.threshold).toBe(50n * MIN_PASSKEY_LIMIT_LYTHOSHI);
+    expect(d.attempted).toBe(60n * MIN_PASSKEY_LIMIT_LYTHOSHI);
   });
 
   it("daily: prunes stale entries before checking the cap", () => {
@@ -345,15 +345,15 @@ describe("evaluatePolicy", () => {
       ...s.policy,
       enabled: true,
       mode: "daily",
-      limitWei: 10n * MIN_PASSKEY_LIMIT_WEI,
-      dailyCapWei: 50n * MIN_PASSKEY_LIMIT_WEI,
+      limitWei: 10n * MIN_PASSKEY_LIMIT_LYTHOSHI,
+      dailyCapWei: 50n * MIN_PASSKEY_LIMIT_LYTHOSHI,
     });
     const d = evaluatePolicy({
       state: s,
-      valueWei: 10n * MIN_PASSKEY_LIMIT_WEI,
+      valueWei: 10n * MIN_PASSKEY_LIMIT_LYTHOSHI,
       // Big spend 25h ago — outside the window, should not count
       recentUsage: [
-        { at: now - DAILY_CAP_WINDOW_MS - 1, valueWei: 999n * MIN_PASSKEY_LIMIT_WEI },
+        { at: now - DAILY_CAP_WINDOW_MS - 1, valueWei: 999n * MIN_PASSKEY_LIMIT_LYTHOSHI },
       ],
       now,
     });

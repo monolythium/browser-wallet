@@ -1131,6 +1131,8 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
     async () => {
       installJsonStorageStub();
       const ks = await import("./keystore-mldsa.js");
+      const { DEFAULT_PASSKEY_LIMIT_LYTHOSHI } =
+        await import("../shared/passkey.js");
       const password = "pk-bigint-roundtrip-password";
       await ks.createVaultFromNewMnemonic(password);
       await ks.unlockContainerV4(password);
@@ -1146,7 +1148,7 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
       // The policy bigints came back through the round-trip intact.
       expect(typeof after.policy.limitWei).toBe("bigint");
       expect(typeof after.policy.dailyCapWei).toBe("bigint");
-      expect(after.policy.limitWei).toBe(100_000_000_000_000_000_000n);
+      expect(after.policy.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_LYTHOSHI);
 
       // Drop the module + re-import; the SAME bigint values come
       // back after a fresh load from the JSON-stringified storage.
@@ -1156,7 +1158,53 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
       const reread = await ks2.readPasskeyStateV4(id);
       expect(reread.credentials[0]!.credentialId).toBe("cred-1");
       expect(typeof reread.policy.limitWei).toBe("bigint");
-      expect(reread.policy.limitWei).toBe(100_000_000_000_000_000_000n);
+      expect(reread.policy.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_LYTHOSHI);
+    },
+    180_000,
+  );
+
+  it(
+    "stored legacy wei passkey policy normalizes to lythoshi",
+    async () => {
+      installJsonStorageStub();
+      const ks = await import("./keystore-mldsa.js");
+      const {
+        DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+        DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+      } = await import("../shared/passkey.js");
+      const password = "pk-legacy-wei-policy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const list = (await ks.listVaultsV4())!;
+      const id = list[0]!.id;
+
+      await ks.addPasskeyCredentialV4(id, fakeCred(1));
+
+      const got = await new Promise<Record<string, unknown>>((resolve) => {
+        chrome.storage.local.get(["mono.vaults.v4"], (g) => resolve(g));
+      });
+      const parsed = got["mono.vaults.v4"] as {
+        vaults: { passkey?: { policy: Record<string, unknown> } }[];
+      };
+      parsed.vaults[0]!.passkey!.policy.limitWei =
+        "100000000000000000000";
+      parsed.vaults[0]!.passkey!.policy.dailyCapWei =
+        "500000000000000000000";
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { "mono.vaults.v4": parsed },
+          () => resolve(),
+        );
+      });
+
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      await ks2.unlockContainerV4(password);
+      const state = await ks2.readPasskeyStateV4(id);
+      expect(state.policy.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_LYTHOSHI);
+      expect(state.policy.dailyCapWei).toBe(
+        DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+      );
     },
     180_000,
   );
@@ -1166,8 +1214,10 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
     async () => {
       installJsonStorageStub();
       const ks = await import("./keystore-mldsa.js");
-      const { DEFAULT_PASSKEY_LIMIT_WEI, DEFAULT_PASSKEY_DAILY_CAP_WEI } =
-        await import("../shared/passkey.js");
+      const {
+        DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+        DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+      } = await import("../shared/passkey.js");
       const password = "pk-corrupt-policy-password";
       await ks.createVaultFromNewMnemonic(password);
       await ks.unlockContainerV4(password);
@@ -1211,8 +1261,10 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
       expect(state.credentials.length).toBe(1);
       // Missing policy fields healed to defaults — and crucially
       // they are bigints, so any downstream `.toString()` works.
-      expect(state.policy.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_WEI);
-      expect(state.policy.dailyCapWei).toBe(DEFAULT_PASSKEY_DAILY_CAP_WEI);
+      expect(state.policy.limitWei).toBe(DEFAULT_PASSKEY_LIMIT_LYTHOSHI);
+      expect(state.policy.dailyCapWei).toBe(
+        DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+      );
     },
     180_000,
   );
