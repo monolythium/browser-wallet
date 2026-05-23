@@ -252,6 +252,30 @@ describe("bridge route disclosure display", () => {
     expect(html).toContain("disabled");
   });
 
+  it("renders discovery catalogue routes while keeping quote and submit disabled", () => {
+    const html = renderToStaticMarkup(
+      <Bridge
+        onBack={() => undefined}
+        indexer={{
+          bridgeRouteDisclosures: [sdkBridgeRoute("catalogue-only")],
+          tokenBalances: [],
+          addressLabel: null,
+          delegationHistory: [],
+          addressActivity: [],
+          errors: {},
+        }}
+      />,
+    );
+
+    expect(html).toContain("catalogue-only is the top SDK-ranked accepted route.");
+    expect(html).toMatch(/SDK rank 1[\s\S]*catalogue-only[\s\S]*Selected/);
+    expect(html).toContain("Transfer intent / quote preview");
+    expect(html).toContain("standalone SDK exposes route-intent selection only");
+    expect(html).toContain("standalone SDK exposes no live bridge submit helper");
+    expect(html).toContain("Request quote");
+    expect(html).toContain("disabled");
+  });
+
   it("renders blocked route quote guards without constructing an intent", () => {
     const html = renderToStaticMarkup(
       <Bridge
