@@ -13,16 +13,19 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { RedemptionQueueCard } from "../components/RedemptionQueueCard";
 import { RewardCard } from "../components/RewardCard";
 import {
   bgStakingClusterDirectory,
   bgStakingDelegations,
   bgStakingPendingRewards,
+  bgStakingRedemptionQueue,
   bgWalletBalance,
   bgWalletSendTx,
   type ClusterDirectoryEntry,
   type DelegationsView,
   type PendingRewardsView,
+  type RedemptionQueueView,
 } from "../bg";
 import type { Account } from "../demo-data";
 import {
@@ -65,6 +68,11 @@ export function Delegations({
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
+  const [redemptionQueue, setRedemptionQueue] =
+    useState<RedemptionQueueView | null>(null);
+  const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
+  const [redemptionQueueError, setRedemptionQueueError] =
+    useState<string | null>(null);
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [claimResult, setClaimResult] = useState<
     | { ok: true; txHash: string }
@@ -79,11 +87,15 @@ export function Delegations({
   useEffect(() => {
     if (!account.addr.startsWith("0x")) return;
     let cancelled = false;
+    setRedemptionQueue(null);
+    setRedemptionQueueMock(false);
+    setRedemptionQueueError(null);
     void (async () => {
-      const [dirR, delR, balR] = await Promise.all([
+      const [dirR, delR, balR, queueR] = await Promise.all([
         bgStakingClusterDirectory(),
         bgStakingDelegations(account.addr),
         bgWalletBalance(account.addr, chainId),
+        bgStakingRedemptionQueue(account.addr),
       ]);
       if (cancelled) return;
       if (dirR.ok) setClusters(dirR.data.clusters.slice());
@@ -91,6 +103,12 @@ export function Delegations({
       if (balR.ok) {
         const parsedBalance = parseHexQuantity(balR.balanceHex);
         if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
+      }
+      if (queueR.ok) {
+        setRedemptionQueue(queueR.data);
+        setRedemptionQueueMock(queueR.via === "mock");
+      } else {
+        setRedemptionQueueError(queueR.reason);
       }
       if (delR.ok) {
         const rewR = await bgStakingPendingRewards(account.addr, delR.data.rows);
@@ -194,6 +212,15 @@ export function Delegations({
             clusters={clusters}
             onClaim={() => void handleClaim()}
             claimDisabled={claimSubmitting}
+          />
+        )}
+
+        {account.addr.startsWith("0x") && (
+          <RedemptionQueueCard
+            queue={redemptionQueue}
+            isMock={redemptionQueueMock}
+            error={redemptionQueueError}
+            clusters={clusters}
           />
         )}
 
