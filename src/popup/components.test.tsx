@@ -9,6 +9,7 @@ import {
   formatIndexedTokenBalanceRow,
   formatBridgeRouteDisclosureDisplay,
   formatMrcHolderDisplayLine,
+  formatMrcHolderSummaryTitle,
   formatExecutionUnits,
   formatLythoshiAmountHex,
   formatLythoshiPerExecutionUnit,
@@ -129,6 +130,25 @@ describe("indexed token balance display", () => {
     });
   });
 
+  it("labels MRC-4626 vault share balances by vault id", () => {
+    const vaultId = "0x" + "4".repeat(64);
+    expect(
+      formatIndexedTokenBalanceRow({
+        tokenId: vaultId,
+        balance: "321",
+        updatedAtBlock: 4626,
+        mrc: {
+          standard: "mrc4626",
+          assetId: vaultId,
+        },
+      }),
+    ).toEqual({
+      title: "MRC-4626 shares 0x444444444444…44444444",
+      subtitle: "vault 0x444444444444…44444444 · updated at block 4,626",
+      unitsLabel: "shares",
+    });
+  });
+
   it("formats native MRC holder summary rows without inventing totals", () => {
     expect(
       formatMrcHolderDisplayLine({
@@ -138,6 +158,19 @@ describe("indexed token balance display", () => {
         updatedAtBlock: 12345,
       }),
     ).toBe("#1 0x11111111…1111 · 42 · block 12,345");
+  });
+
+  it("labels MRC-4626 holder summaries as vault share holders", () => {
+    expect(
+      formatMrcHolderSummaryTitle({
+        schemaVersion: 1,
+        standard: "mrc4626",
+        assetId: "0xvault",
+        tokenId: null,
+        limit: 1,
+        holders: [],
+      }),
+    ).toBe("Vault share holders");
   });
 });
 

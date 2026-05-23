@@ -66,6 +66,64 @@ describe("wallet token-balance validators", () => {
     ]);
   });
 
+  it("preserves MRC-4626 vault share balances with null holder token ids", () => {
+    const vaultId = `0x${"46".repeat(32)}`;
+    expect(
+      validateWalletTokenBalanceList([
+        {
+          tokenId: vaultId,
+          balance: "12345",
+          updatedAtBlock: 4626,
+          mrc: {
+            standard: "mrc4626",
+            assetId: vaultId,
+            tokenId: null,
+          },
+          mrcHolders: {
+            schemaVersion: 1,
+            standard: "mrc4626",
+            assetId: vaultId,
+            tokenId: null,
+            limit: 1,
+            holders: [
+              {
+                rank: 1,
+                address: "0x1111111111111111111111111111111111111111",
+                balance: "12345",
+                updatedAtBlock: 5000,
+              },
+            ],
+          },
+        },
+      ]),
+    ).toEqual([
+      {
+        tokenId: vaultId,
+        balance: "12345",
+        updatedAtBlock: 4626,
+        mrc: {
+          standard: "mrc4626",
+          assetId: vaultId,
+        },
+        mrcHolders: {
+          schemaVersion: 1,
+          standard: "mrc4626",
+          assetId: vaultId,
+          tokenId: null,
+          limit: 1,
+          holders: [
+            {
+              rank: 1,
+              address: "0x1111111111111111111111111111111111111111",
+              balance: "12345",
+              updatedAtBlock: 5000,
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("drops malformed rows instead of leaking partial MRC identity", () => {
     expect(
       validateWalletTokenBalanceList([
@@ -389,6 +447,55 @@ describe("MRC holder validators", () => {
         { rank: 1, address: "0x2", balance: "2", updatedAtBlock: 2 },
       ],
     });
+  });
+
+  it("accepts MRC-4626 holder responses without token ids", () => {
+    const vaultId = `0x${"46".repeat(32)}`;
+    expect(
+      validateWalletMrcHoldersResponse({
+        schemaVersion: 1,
+        standard: "mrc4626",
+        assetId: vaultId,
+        tokenId: null,
+        limit: 1,
+        holders: [],
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      standard: "mrc4626",
+      assetId: vaultId,
+      tokenId: null,
+      limit: 1,
+      holders: [],
+    });
+
+    expect(
+      validateWalletMrcHoldersResponse({
+        schemaVersion: 1,
+        standard: "mrc4626",
+        assetId: vaultId,
+        limit: 1,
+        holders: [],
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      standard: "mrc4626",
+      assetId: vaultId,
+      tokenId: null,
+      limit: 1,
+      holders: [],
+    });
+
+    expect(
+      validateWalletMrcHoldersResponse({
+        schemaVersion: 1,
+        standard: "mrc4626",
+        assetId: vaultId,
+        tokenId: "0xnot-a-share-token",
+        limit: 1,
+        holders: [],
+      }),
+    ).toBeNull();
   });
 });
 
