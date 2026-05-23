@@ -23,6 +23,11 @@ export type {
   MrcPolicySpendRecord,
 } from "../shared/mrc-account.js";
 export type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
+export type {
+  NativeMarketStateFilter,
+  NativeMarketStateResponse,
+  NativeMarketStateRow,
+} from "../shared/native-market-state.js";
 
 export type Custody = "tpm" | "passkey" | "hw" | "sw";
 export type SignAlgo = "secp256k1" | "slhdsa" | "mldsa";
@@ -608,6 +613,20 @@ export async function bgPreviewTransactionHooks(args: {
 export type PreviewTransactionHooksOutcome =
   import("../shared/chain-readiness.js").ChainOutcome<
     import("../shared/audit-followup-types.js").TransactionHookPreview
+  >;
+
+export async function bgNativeMarketState(
+  args: import("../shared/native-market-state.js").NativeMarketStateFilter = {},
+): Promise<
+  | { ok: true; outcome: NativeMarketStateOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-native-market-state", args);
+}
+
+export type NativeMarketStateOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/native-market-state.js").NativeMarketStateResponse | null
   >;
 
 /** Phase 11.5 Commit 3 — chain-wide signing-activity sample. Calls
