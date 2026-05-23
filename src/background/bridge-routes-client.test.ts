@@ -59,14 +59,67 @@ describe("normaliseBridgeRoutesResponse", () => {
     ).toEqual([ROUTE]);
   });
 
+  it("accepts legacy and snake_case catalogue aliases", () => {
+    expect(normaliseBridgeRoutesResponse({ bridgeRoutes: [ROUTE] })).toEqual([
+      ROUTE,
+    ]);
+    expect(
+      normaliseBridgeRoutesResponse({ bridge_route_disclosures: [ROUTE] }),
+    ).toEqual([ROUTE]);
+    expect(normaliseBridgeRoutesResponse({ bridge_routes: [ROUTE] })).toEqual([
+      ROUTE,
+    ]);
+    expect(normaliseBridgeRoutesResponse({ route_disclosures: [ROUTE] })).toEqual([
+      ROUTE,
+    ]);
+  });
+
+  it("accepts discovery-only readiness envelopes with catalogue routes", () => {
+    expect(
+      normaliseBridgeRoutesResponse({
+        selection: {
+          selected: null,
+          candidates: [],
+          blockedReasons: ["bridge route selection requires transfer intent"],
+        },
+        routeSelectionReady: false,
+        quoteReady: false,
+        submitReady: false,
+        blockedReasons: ["bridge route selection requires transfer intent"],
+        warnings: [],
+        routes: [ROUTE],
+        bridgeRouteDisclosures: [ROUTE],
+        source: {
+          address: null,
+          routeCount: 1,
+          globalRouteIndexAvailable: true,
+          routeDisclosureSource: "indexer.bridgeRouteDisclosures",
+        },
+      }),
+    ).toEqual([ROUTE]);
+  });
+
   it("rejects unknown object shapes", () => {
     expect(normaliseBridgeRoutesResponse({ data: [ROUTE] })).toBeNull();
   });
 });
 
 describe("readBridgeRoutes", () => {
-  it("calls lyth_bridgeRoutes with no params and returns live disclosures", async () => {
-    stub.response = { routes: [ROUTE] };
+  it("calls lyth_bridgeRoutes with no params and returns discovery catalogues", async () => {
+    stub.response = {
+      selection: {
+        selected: null,
+        candidates: [],
+        blockedReasons: ["bridge route selection requires transfer intent"],
+      },
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: ["bridge route selection requires transfer intent"],
+      warnings: [],
+      routes: [ROUTE],
+      bridgeRouteDisclosures: [ROUTE],
+    };
 
     const out = await readBridgeRoutes();
 
