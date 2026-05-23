@@ -37,6 +37,65 @@ const AGENT_STATE = {
     account: "mono1agentowner",
     includePolicySpends: true,
   },
+  issuers: [
+    {
+      issuerId: `0x${"11".repeat(32)}`,
+      issuer: "mono1agentowner",
+      metadataHash: `0x${"1b".repeat(32)}`,
+      updatedAtBlock: 45,
+    },
+  ],
+  attestations: [
+    {
+      attestationId: `0x${"12".repeat(32)}`,
+      issuerId: `0x${"11".repeat(32)}`,
+      issuer: "mono1agentowner",
+      subject: "mono1agentcontroller",
+      schemaHash: `0x${"17".repeat(32)}`,
+      payloadHash: `0x${"ee".repeat(32)}`,
+      active: false,
+      updatedAtBlock: 46,
+    },
+  ],
+  consents: [
+    {
+      consentId: `0x${"13".repeat(32)}`,
+      subject: "mono1agentcontroller",
+      grantee: "mono1agentarbiter",
+      scopeHash: `0x${"19".repeat(32)}`,
+      expiresAt: 10_000,
+      active: true,
+      updatedAtBlock: 47,
+    },
+  ],
+  services: [
+    {
+      serviceId: `0x${"14".repeat(32)}`,
+      provider: "mono1agentprovider",
+      categoryHash: `0x${"1a".repeat(32)}`,
+      metadataHash: `0x${"1b".repeat(32)}`,
+      active: true,
+      updatedAtBlock: 48,
+    },
+  ],
+  availability: [
+    {
+      provider: "mono1agentprovider",
+      maxConcurrent: 8,
+      openRequests: 2,
+      paused: false,
+      updatedAtBlock: 49,
+    },
+  ],
+  arbiters: [
+    {
+      arbiterId: `0x${"15".repeat(32)}`,
+      arbiter: "mono1agentarbiter",
+      tier: 2,
+      metadataHash: `0x${"1b".repeat(32)}`,
+      updatedAtBlock: 50,
+    },
+  ],
   spendingPolicies: [
     {
       policyId: `0x${"aa".repeat(32)}`,
@@ -81,6 +140,20 @@ const AGENT_STATE = {
       updatedAtBlock: 44,
     },
   ],
+  reputationReviews: [
+    {
+      reviewId: `0x${"16".repeat(32)}`,
+      reviewer: "mono1agentowner",
+      subject: "mono1agentprovider",
+      categoryId: 7,
+      speedScore: 9,
+      qualityScore: 8,
+      communicationScore: 10,
+      accuracyScore: 9,
+      payloadHash: `0x${"ee".repeat(32)}`,
+      updatedAtBlock: 51,
+    },
+  ],
   source: {
     indexerProvider: "native_agent_state",
     projection: "native_agent_state",
@@ -94,24 +167,87 @@ beforeEach(() => {
 });
 
 describe("native-agent-state parsing", () => {
-  it("preserves spending policy, spend, and escrow rows", () => {
+  it("preserves all native agent current-state row families", () => {
     expect(validateNativeAgentStateResponse(AGENT_STATE)).toEqual(AGENT_STATE);
   });
 
   it("accepts snake_case row arrays from REST-style envelopes", () => {
+    const reputationReviews = [
+      {
+        review_id: `0x${"16".repeat(32)}`,
+        reviewer: "mono1agentowner",
+        subject: "mono1agentprovider",
+        quality_score: 8,
+        accuracy_score: 9,
+      },
+    ];
     const parsed = validateNativeAgentStateResponse({
       schemaVersion: 1,
       limit: 10,
       filters: {},
+      issuers: AGENT_STATE.issuers,
+      attestations: AGENT_STATE.attestations,
+      consents: AGENT_STATE.consents,
+      services: AGENT_STATE.services,
+      availability: AGENT_STATE.availability,
+      arbiters: AGENT_STATE.arbiters,
+      reputation_reviews: reputationReviews,
       spending_policies: AGENT_STATE.spendingPolicies,
       policy_spends: AGENT_STATE.policySpends,
       escrows: AGENT_STATE.escrows,
       source: null,
     });
 
+    expect(parsed?.issuers).toEqual(AGENT_STATE.issuers);
+    expect(parsed?.attestations).toEqual(AGENT_STATE.attestations);
+    expect(parsed?.consents).toEqual(AGENT_STATE.consents);
+    expect(parsed?.services).toEqual(AGENT_STATE.services);
+    expect(parsed?.availability).toEqual(AGENT_STATE.availability);
+    expect(parsed?.arbiters).toEqual(AGENT_STATE.arbiters);
+    expect(parsed?.reputationReviews).toEqual(reputationReviews);
     expect(parsed?.spendingPolicies).toEqual(AGENT_STATE.spendingPolicies);
     expect(parsed?.policySpends).toEqual(AGENT_STATE.policySpends);
     expect(parsed?.escrows).toEqual(AGENT_STATE.escrows);
+  });
+
+  it("defaults additive row families to empty arrays for legacy current-state responses", () => {
+    const parsed = validateNativeAgentStateResponse({
+      schemaVersion: 1,
+      limit: 10,
+      filters: {},
+      spendingPolicies: AGENT_STATE.spendingPolicies,
+      policySpends: AGENT_STATE.policySpends,
+      escrows: AGENT_STATE.escrows,
+      source: null,
+    });
+
+    expect(parsed).toMatchObject({
+      issuers: [],
+      attestations: [],
+      consents: [],
+      services: [],
+      availability: [],
+      arbiters: [],
+      reputationReviews: [],
+      spendingPolicies: AGENT_STATE.spendingPolicies,
+      policySpends: AGENT_STATE.policySpends,
+      escrows: AGENT_STATE.escrows,
+    });
+  });
+
+  it("rejects malformed additive current-state rows", () => {
+    expect(
+      validateNativeAgentStateResponse({
+        ...AGENT_STATE,
+        issuers: [{ issuerId: `0x${"11".repeat(32)}`, metadata: new Date(0) }],
+      }),
+    ).toBeNull();
+    expect(
+      validateNativeAgentStateResponse({
+        ...AGENT_STATE,
+        reputationReviews: "not rows",
+      }),
+    ).toBeNull();
   });
 
   it("rejects envelopes without the current-state row families", () => {
