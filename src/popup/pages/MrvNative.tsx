@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../Icon";
 import {
   bgWalletBuildMrvCallPlan,
   bgWalletBuildMrvDeployPlan,
+  bgWalletMrvNativeReceiptStatus,
   bgWalletSubmitMrvNativePlan,
   type SendTxResult,
+  type WalletMrvNativeReceipt,
   type WalletMrvNativeSubmissionPlan,
 } from "../bg";
 
@@ -43,6 +45,21 @@ interface MrvNativeSubmitError {
   via?: string;
 }
 
+export type MrvNativeReceiptState =
+  | { phase: "idle" }
+  | { phase: "polling"; via?: string }
+  | { phase: "included"; receipt: WalletMrvNativeReceipt; via?: string }
+  | { phase: "reverted"; receipt: WalletMrvNativeReceipt; via?: string }
+  | { phase: "unknown"; receipt: WalletMrvNativeReceipt; via?: string }
+  | { phase: "timeout" }
+  | {
+      phase: "unavailable";
+      reason: string;
+      code?: number;
+      method?: string;
+      via?: string;
+    };
+
 const DEFAULT_FORM: MrvNativeFormValues = {
   artifactBytes: "",
   artifactHash: "",
@@ -54,6 +71,10 @@ const DEFAULT_FORM: MrvNativeFormValues = {
   valueLythoshi: "0",
 };
 
+const MRV_RECEIPT_POLL_INTERVAL_MS = 5_000;
+const MRV_RECEIPT_POLL_MAX_MS = 5 * 60_000;
+const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+
 export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
   const [mode, setMode] = useState<MrvNativeMode>("deploy");
   const [form, setForm] = useState<MrvNativeFormValues>(DEFAULT_FORM);
@@ -63,11 +84,22 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<SendTxResult | null>(null);
   const [submitError, setSubmitError] = useState<MrvNativeSubmitError | null>(null);
+  const [receiptState, setReceiptState] = useState<MrvNativeReceiptState>({
+    phase: "idle",
+  });
+  const receiptPollStartedAtRef = useRef<number | null>(null);
 
   const buildRequest = useMemo(
     () => buildMrvNativeRequest(mode, form, chainIdHex),
     [mode, form, chainIdHex],
   );
+
+  const resetSubmissionState = () => {
+    setSubmitResult(null);
+    setSubmitError(null);
+    setReceiptState({ phase: "idle" });
+    receiptPollStartedAtRef.current = null;
+  };
 
   const setField = <K extends keyof MrvNativeFormValues>(
     key: K,
@@ -76,15 +108,13 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
     setForm((prev) => ({ ...prev, [key]: value }));
     setPlan(null);
     setError(null);
-    setSubmitResult(null);
-    setSubmitError(null);
+    resetSubmissionState();
   };
 
   const handleBuild = async () => {
     setPlan(null);
     setError(null);
-    setSubmitResult(null);
-    setSubmitError(null);
+    resetSubmissionState();
     if (!buildRequest.ok) {
       setError(buildRequest.reason);
       return;
@@ -115,6 +145,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       const r = await bgWalletSubmitMrvNativePlan({ plan, chainIdHex });
       if (r.ok) {
         setSubmitResult(r.result);
+        setReceiptState({ phase: "polling" });
       } else {
         setSubmitError({
           message: r.reason ?? "MRV native submission failed",
@@ -129,6 +160,88 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       setSubmitting(false);
     }
   };
+
+  const submittedTxHash = submitResult?.txHash ?? null;
+
+  useEffect(() => {
+    if (submittedTxHash === null) {
+      receiptPollStartedAtRef.current = null;
+      return;
+    }
+    if (!TX_HASH_RE.test(submittedTxHash)) {
+      setReceiptState({
+        phase: "unavailable",
+        reason: "MRV receipt polling requires a 32-byte transaction hash",
+      });
+      return;
+    }
+
+    receiptPollStartedAtRef.current = Date.now();
+    setReceiptState({ phase: "polling" });
+
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (interval !== null) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      const startedAt = receiptPollStartedAtRef.current;
+      if (
+        startedAt !== null &&
+        Date.now() - startedAt > MRV_RECEIPT_POLL_MAX_MS
+      ) {
+        setReceiptState({ phase: "timeout" });
+        stop();
+        return;
+      }
+
+      const r = await bgWalletMrvNativeReceiptStatus({
+        txHash: submittedTxHash,
+        chainIdHex,
+      });
+      if (cancelled) return;
+      if (!r.ok) {
+        setReceiptState({
+          phase: "unavailable",
+          reason: r.reason ?? "MRV native receipt polling failed",
+          ...(r.code !== undefined ? { code: r.code } : {}),
+          ...(r.method !== undefined ? { method: r.method } : {}),
+          ...(r.via !== undefined ? { via: r.via } : {}),
+        });
+        stop();
+        return;
+      }
+      if (r.receipt === null) {
+        setReceiptState((prev) => {
+          const via = r.via ?? (prev.phase === "polling" ? prev.via : undefined);
+          return {
+            phase: "polling",
+            ...(via !== undefined ? { via } : {}),
+          };
+        });
+        return;
+      }
+      setReceiptState({
+        phase: receiptPhase(r.receipt.status),
+        receipt: r.receipt,
+        ...(r.via !== undefined ? { via: r.via } : {}),
+      });
+      stop();
+    };
+
+    interval = setInterval(() => void poll(), MRV_RECEIPT_POLL_INTERVAL_MS);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [chainIdHex, submittedTxHash]);
 
   return (
     <>
@@ -152,8 +265,9 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           <div style={bodyCopy}>
             Build a v4.1 MRV native contract deploy or call plan. This page
             previews execution units, lythoshi fees, typed addresses, and the
-            JSON-safe transaction extension before signing. Submission returns
-            a tx hash only; it does not confirm or prove live MRV execution.
+            JSON-safe transaction extension before signing. After submission,
+            the wallet polls transaction receipt inclusion status when the RPC
+            supports it; it does not prove live MRV execution.
           </div>
           <div style={chainPill}>Chain {chainIdHex}</div>
         </div>
@@ -173,8 +287,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
                 setMode("deploy");
                 setPlan(null);
                 setError(null);
-                setSubmitResult(null);
-                setSubmitError(null);
+                resetSubmissionState();
               }}
               type="button"
             >
@@ -188,8 +301,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
                 setMode("call");
                 setPlan(null);
                 setError(null);
-                setSubmitResult(null);
-                setSubmitError(null);
+                resetSubmissionState();
               }}
               type="button"
             >
@@ -313,6 +425,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
             submitting={submitting}
             submitResult={submitResult}
             submitError={submitError}
+            receiptState={receiptState}
           />
         )}
       </div>
@@ -486,6 +599,7 @@ export function MrvNativePlanPreview({
   submitting = false,
   submitResult = null,
   submitError = null,
+  receiptState = { phase: "idle" },
   submitDisabledReason = null,
 }: {
   plan: WalletMrvNativeSubmissionPlan;
@@ -493,6 +607,7 @@ export function MrvNativePlanPreview({
   submitting?: boolean;
   submitResult?: SendTxResult | null;
   submitError?: MrvNativeSubmitError | null;
+  receiptState?: MrvNativeReceiptState;
   submitDisabledReason?: string | null;
 }) {
   const nativeContract =
@@ -560,9 +675,10 @@ export function MrvNativePlanPreview({
               <div style={submitMeta}>Via {submitResult.via}</div>
               <div style={monoWrap}>{submitResult.txHash}</div>
               <div style={submitMeta}>
-                Awaiting chain confirmation. The wallet has not verified MRV
-                execution yet.
+                Receipt polling checks transaction inclusion only. The wallet
+                has not verified a no-EVM MRV execution proof.
               </div>
+              <MrvNativeReceiptStatus state={receiptState} />
             </div>
           )}
           <button
@@ -591,6 +707,98 @@ export function MrvNativePlanPreview({
       )}
     </div>
   );
+}
+
+function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
+  if (state.phase === "idle") return null;
+
+  if (state.phase === "polling") {
+    return (
+      <div style={receiptBox}>
+        <div style={receiptTitle}>Receipt status: waiting for inclusion</div>
+        <div style={submitMeta}>
+          Polling eth_getTransactionReceipt
+          {state.via ? ` via ${state.via}` : ""}.
+        </div>
+        <div style={submitMeta}>Inclusion status only; no MRV execution proof.</div>
+      </div>
+    );
+  }
+
+  if (state.phase === "timeout") {
+    return (
+      <div style={warningBox}>
+        <div style={receiptTitle}>Receipt status unavailable</div>
+        <div style={submitMeta}>
+          No receipt returned within this popup polling window.
+        </div>
+        <div style={submitMeta}>No MRV execution proof has been verified.</div>
+      </div>
+    );
+  }
+
+  if (state.phase === "unavailable") {
+    return (
+      <div style={warningBox}>
+        <div style={receiptTitle}>Receipt polling unavailable</div>
+        <div style={submitMeta}>{state.reason}</div>
+        {(state.method || state.via || state.code !== undefined) && (
+          <div style={submitMeta}>
+            {state.method ? `RPC ${state.method}` : "Receipt RPC"}
+            {state.via ? ` via ${state.via}` : ""}
+            {state.code !== undefined ? ` (code ${state.code})` : ""}
+          </div>
+        )}
+        <div style={submitMeta}>No MRV execution proof has been verified.</div>
+      </div>
+    );
+  }
+
+  const blockNumber = formatHexQuantity(state.receipt.blockNumber);
+  const statusHex = state.receipt.status ?? "-";
+  const isReverted = state.phase === "reverted";
+  const title =
+    state.phase === "included"
+      ? "Receipt status: included"
+      : state.phase === "reverted"
+        ? "Receipt status: reverted"
+        : "Receipt status: included, status unavailable";
+
+  return (
+    <div style={isReverted ? receiptErrorBox : receiptBox}>
+      <div style={receiptTitle}>{title}</div>
+      <div style={submitMeta}>
+        Status {statusHex}
+        {blockNumber ? ` · block ${blockNumber}` : ""}
+        {state.via ? ` · via ${state.via}` : ""}
+      </div>
+      {state.receipt.contractAddress && (
+        <div style={submitMeta}>
+          Contract {state.receipt.contractAddress}
+        </div>
+      )}
+      <div style={submitMeta}>Inclusion status only; no MRV execution proof.</div>
+    </div>
+  );
+}
+
+function receiptPhase(
+  status: string | null,
+): "included" | "reverted" | "unknown" {
+  if (typeof status !== "string" || !/^0x[0-9a-fA-F]+$/.test(status)) {
+    return "unknown";
+  }
+  const parsed = BigInt(status);
+  if (parsed === 1n) return "included";
+  if (parsed === 0n) return "reverted";
+  return "unknown";
+}
+
+function formatHexQuantity(value: string | null): string | null {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]+$/.test(value)) {
+    return null;
+  }
+  return BigInt(value).toString(10);
 }
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
@@ -708,6 +916,25 @@ const successBox: CSSProperties = {
   color: "var(--fg-100)",
   fontSize: 11,
   lineHeight: 1.45,
+};
+
+const receiptBox: CSSProperties = {
+  marginTop: 8,
+  padding: "8px 9px",
+  borderRadius: 8,
+  border: "1px solid rgba(75,190,120,0.26)",
+  background: "rgba(0,0,0,0.16)",
+};
+
+const receiptErrorBox: CSSProperties = {
+  ...receiptBox,
+  border: "1px solid rgba(220,80,80,0.4)",
+  background: "rgba(220,80,80,0.08)",
+};
+
+const receiptTitle: CSSProperties = {
+  fontWeight: 700,
+  color: "var(--fg-100)",
 };
 
 const submitMeta: CSSProperties = {

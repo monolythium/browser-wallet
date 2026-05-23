@@ -923,3 +923,88 @@ describe("wallet-mrv-submit-plan", () => {
     expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-mrv-receipt-status
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-mrv-receipt-status", () => {
+  it("returns null while the MRV submission receipt is still pending", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = null;
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; receipt: null; via?: string };
+
+    expect(r).toEqual({ ok: true, receipt: null, via: "mock-operator" });
+    expect(rpcCalls).toContainEqual({
+      method: "eth_getTransactionReceipt",
+      params: [SUBMITTED_TX_HASH],
+    });
+  });
+
+  it("returns MRV transaction inclusion status without proof fields", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x64",
+      contractAddress: "0x2222222222222222222222222222222222222222",
+      logs: [{ fabricatedProof: true }],
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        txHash: string;
+        status: string | null;
+        blockNumber: string | null;
+        contractAddress: string | null;
+        logs?: unknown[];
+      };
+      via?: string;
+    };
+
+    expect(r).toEqual({
+      ok: true,
+      receipt: {
+        txHash: SUBMITTED_TX_HASH,
+        status: "0x1",
+        blockNumber: "0x64",
+        contractAddress: "0x2222222222222222222222222222222222222222",
+      },
+      via: "mock-operator",
+    });
+    expect(r.receipt.logs).toBeUndefined();
+  });
+
+  it("surfaces exact receipt RPC blockers instead of fabricating status", async () => {
+    rpcErrors["eth_getTransactionReceipt"] = {
+      code: -32601,
+      message: "method not found",
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: false;
+      reason?: string;
+      code?: number;
+      method?: string;
+    };
+
+    expect(r).toEqual({
+      ok: false,
+      reason: "method not found",
+      method: "eth_getTransactionReceipt",
+      code: -32601,
+    });
+  });
+});
