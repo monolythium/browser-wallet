@@ -458,14 +458,206 @@ function nativeAgentRowString(row: NativeAgentStateRow, keys: string[]): string 
   return null;
 }
 
+const NATIVE_AGENT_STATE_ROW_KEYS = [
+  "issuers",
+  "attestations",
+  "consents",
+  "services",
+  "availability",
+  "arbiters",
+  "reputationReviews",
+  "spendingPolicies",
+  "policySpends",
+  "escrows",
+] as const;
+
+type NativeAgentStateRowKey = (typeof NATIVE_AGENT_STATE_ROW_KEYS)[number];
+
+function nativeAgentRowsForKey(
+  nativeAgentState: NativeAgentStateResponse,
+  key: NativeAgentStateRowKey,
+): NativeAgentStateRow[] {
+  const rows = nativeAgentState[key];
+  return Array.isArray(rows) ? rows : [];
+}
+
+function nativeAgentStateRowCount(nativeAgentState: NativeAgentStateResponse): number {
+  return NATIVE_AGENT_STATE_ROW_KEYS.reduce(
+    (sum, key) => sum + nativeAgentRowsForKey(nativeAgentState, key).length,
+    0,
+  );
+}
+
+function nativeAgentCountLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function nativeAgentShortRowValue(
+  row: NativeAgentStateRow,
+  keys: string[],
+  fallback = "unknown",
+): string {
+  return shortAddr(nativeAgentRowString(row, keys) ?? fallback, 10);
+}
+
+function nativeAgentFlagLabel(
+  row: NativeAgentStateRow,
+  keys: string[],
+  trueLabel: string,
+  falseLabel: string,
+): string | null {
+  const value = nativeAgentRowString(row, keys);
+  if (value === "true") return trueLabel;
+  if (value === "false") return falseLabel;
+  return null;
+}
+
+function nativeAgentParts(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => typeof part === "string" && part.length > 0).join(" · ");
+}
+
+interface NativeAgentSummaryFamily {
+  key: NativeAgentStateRowKey;
+  singular: string;
+  plural?: string;
+  rows: NativeAgentStateRow[];
+  idKeys: string[];
+  render: (row: NativeAgentStateRow) => string;
+}
+
+function nativeAgentSummaryFamilies(
+  nativeAgentState: NativeAgentStateResponse,
+): NativeAgentSummaryFamily[] {
+  return [
+    {
+      key: "issuers",
+      singular: "issuer",
+      rows: nativeAgentRowsForKey(nativeAgentState, "issuers"),
+      idKeys: ["issuerId", "issuer_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `issuer ${nativeAgentShortRowValue(row, ["issuerId", "issuer_id"])}`,
+          nativeAgentShortRowValue(row, ["issuer"]),
+        ]),
+    },
+    {
+      key: "attestations",
+      singular: "attestation",
+      rows: nativeAgentRowsForKey(nativeAgentState, "attestations"),
+      idKeys: ["attestationId", "attestation_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `attestation ${nativeAgentShortRowValue(row, ["attestationId", "attestation_id"])}`,
+          nativeAgentFlagLabel(row, ["active"], "active", "inactive"),
+          `subject ${nativeAgentShortRowValue(row, ["subject"])}`,
+        ]),
+    },
+    {
+      key: "consents",
+      singular: "consent",
+      rows: nativeAgentRowsForKey(nativeAgentState, "consents"),
+      idKeys: ["consentId", "consent_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `consent ${nativeAgentShortRowValue(row, ["consentId", "consent_id"])}`,
+          nativeAgentFlagLabel(row, ["active"], "active", "inactive"),
+          `grantee ${nativeAgentShortRowValue(row, ["grantee"])}`,
+        ]),
+    },
+    {
+      key: "services",
+      singular: "service",
+      rows: nativeAgentRowsForKey(nativeAgentState, "services"),
+      idKeys: ["serviceId", "service_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `service ${nativeAgentShortRowValue(row, ["serviceId", "service_id"])}`,
+          nativeAgentFlagLabel(row, ["active"], "active", "inactive"),
+          nativeAgentShortRowValue(row, ["provider"]),
+        ]),
+    },
+    {
+      key: "availability",
+      singular: "availability",
+      plural: "availability",
+      rows: nativeAgentRowsForKey(nativeAgentState, "availability"),
+      idKeys: ["provider"],
+      render: (row) => {
+        const openRequests = nativeAgentRowString(row, ["openRequests", "open_requests"]) ?? "0";
+        const maxConcurrent = nativeAgentRowString(row, ["maxConcurrent", "max_concurrent"]) ?? "0";
+        return nativeAgentParts([
+          `availability ${nativeAgentShortRowValue(row, ["provider"])}`,
+          `${openRequests} / ${maxConcurrent} open`,
+          nativeAgentFlagLabel(row, ["paused"], "paused", "available"),
+        ]);
+      },
+    },
+    {
+      key: "arbiters",
+      singular: "arbiter",
+      rows: nativeAgentRowsForKey(nativeAgentState, "arbiters"),
+      idKeys: ["arbiterId", "arbiter_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `arbiter ${nativeAgentShortRowValue(row, ["arbiterId", "arbiter_id"])}`,
+          `tier ${nativeAgentRowString(row, ["tier"]) ?? "—"}`,
+        ]),
+    },
+    {
+      key: "spendingPolicies",
+      singular: "policy",
+      plural: "policies",
+      rows: nativeAgentRowsForKey(nativeAgentState, "spendingPolicies"),
+      idKeys: ["policyId", "policy_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `policy ${nativeAgentShortRowValue(row, ["policyId", "policy_id"])}`,
+          `limit ${nativeAgentRowString(row, ["windowLimit", "window_limit"]) ?? "—"}`,
+        ]),
+    },
+    {
+      key: "policySpends",
+      singular: "spend",
+      rows: nativeAgentRowsForKey(nativeAgentState, "policySpends"),
+      idKeys: ["policyId", "policy_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `spend ${nativeAgentRowString(row, ["spent"]) ?? "0"} / ${nativeAgentRowString(row, ["amount"]) ?? "0"}`,
+          `window ${nativeAgentRowString(row, ["window"]) ?? "—"}`,
+        ]),
+    },
+    {
+      key: "escrows",
+      singular: "escrow",
+      rows: nativeAgentRowsForKey(nativeAgentState, "escrows"),
+      idKeys: ["escrowId", "escrow_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `escrow ${nativeAgentShortRowValue(row, ["escrowId", "escrow_id"])}`,
+          nativeAgentRowString(row, ["status"]) ?? "unknown",
+        ]),
+    },
+    {
+      key: "reputationReviews",
+      singular: "review",
+      rows: nativeAgentRowsForKey(nativeAgentState, "reputationReviews"),
+      idKeys: ["reviewId", "review_id"],
+      render: (row) =>
+        nativeAgentParts([
+          `review ${nativeAgentShortRowValue(row, ["reviewId", "review_id"])}`,
+          `quality ${nativeAgentRowString(row, ["qualityScore", "quality_score"]) ?? "—"}`,
+          `accuracy ${nativeAgentRowString(row, ["accuracyScore", "accuracy_score"]) ?? "—"}`,
+        ]),
+    },
+  ];
+}
+
 export function hasNativeAgentStateSummary(
   nativeAgentState: NativeAgentStateResponse | null,
 ): nativeAgentState is NativeAgentStateResponse {
   return (
     nativeAgentState !== null &&
-    (nativeAgentState.spendingPolicies.length > 0 ||
-      nativeAgentState.policySpends.length > 0 ||
-      nativeAgentState.escrows.length > 0)
+    nativeAgentStateRowCount(nativeAgentState) > 0
   );
 }
 
@@ -475,13 +667,38 @@ export function NativeAgentStateSummary({
   nativeAgentState: NativeAgentStateResponse | null;
 }) {
   if (!hasNativeAgentStateSummary(nativeAgentState)) return null;
-  const policyRows = nativeAgentState.spendingPolicies.slice(0, 2);
-  const spendRows = nativeAgentState.policySpends.slice(0, 2);
-  const escrowRows = nativeAgentState.escrows.slice(0, 2);
-  const rowCount =
-    nativeAgentState.spendingPolicies.length +
-    nativeAgentState.policySpends.length +
-    nativeAgentState.escrows.length;
+  const families = nativeAgentSummaryFamilies(nativeAgentState);
+  const activeFamilies = families.filter((family) => family.rows.length > 0);
+  const visibleRows = activeFamilies.flatMap((family) =>
+    family.rows.slice(0, 1).map((row, index) => ({
+      key: `${family.key}:${nativeAgentRowString(row, family.idKeys) ?? index}`,
+      line: family.render(row),
+    })),
+  );
+  const rowCount = nativeAgentStateRowCount(nativeAgentState);
+  const countSummary =
+    activeFamilies.length <= 4
+      ? activeFamilies
+          .map((family) =>
+            nativeAgentCountLabel(
+              family.rows.length,
+              family.singular,
+              family.plural,
+            ),
+          )
+          .join(" · ")
+      : `${nativeAgentCountLabel(rowCount, "indexed row")} · ${nativeAgentCountLabel(activeFamilies.length, "group")}`;
+  const registryRows =
+    nativeAgentRowsForKey(nativeAgentState, "issuers").length +
+    nativeAgentRowsForKey(nativeAgentState, "services").length +
+    nativeAgentRowsForKey(nativeAgentState, "availability").length +
+    nativeAgentRowsForKey(nativeAgentState, "arbiters").length;
+  const trustRows =
+    nativeAgentRowsForKey(nativeAgentState, "attestations").length +
+    nativeAgentRowsForKey(nativeAgentState, "consents").length +
+    nativeAgentRowsForKey(nativeAgentState, "reputationReviews").length;
+  const policyRows = nativeAgentRowsForKey(nativeAgentState, "spendingPolicies");
+  const escrowRows = nativeAgentRowsForKey(nativeAgentState, "escrows");
 
   return (
     <div className="ext-asset">
@@ -489,15 +706,21 @@ export function NativeAgentStateSummary({
       <div className="ext-asset__main">
         <div className="sym">
           Native agent state <span className="ext-badge-att">Indexed</span>
-          {nativeAgentState.spendingPolicies.length > 0 && (
+          {registryRows > 0 && (
+            <> <span className="ext-badge-bridged">Registry</span></>
+          )}
+          {trustRows > 0 && (
+            <> <span className="ext-badge-bridged">Trust</span></>
+          )}
+          {policyRows.length > 0 && (
             <> <span className="ext-badge-bridged">Policy</span></>
           )}
-          {nativeAgentState.escrows.length > 0 && (
+          {escrowRows.length > 0 && (
             <> <span className="ext-badge-bridged">Escrow</span></>
           )}
         </div>
         <div className="chain">
-          {nativeAgentState.spendingPolicies.length} policies · {nativeAgentState.policySpends.length} spends · {nativeAgentState.escrows.length} escrows
+          {countSummary}
         </div>
         <div
           style={{
@@ -508,32 +731,20 @@ export function NativeAgentStateSummary({
             color: "var(--fg-400)",
           }}
         >
-          {policyRows.map((row, index) => (
-            <div key={`policy:${nativeAgentRowString(row, ["policyId", "policy_id"]) ?? index}`}>
-              policy {shortAddr(nativeAgentRowString(row, ["policyId", "policy_id"]) ?? "unknown", 10)} · limit {nativeAgentRowString(row, ["windowLimit", "window_limit"]) ?? "—"}
-            </div>
+          {visibleRows.map((row) => (
+            <div key={row.key}>{row.line}</div>
           ))}
-          {spendRows.map((row, index) => (
-            <div key={`spend:${nativeAgentRowString(row, ["policyId", "policy_id"]) ?? index}:${nativeAgentRowString(row, ["window"]) ?? ""}`}>
-              spend {nativeAgentRowString(row, ["spent"]) ?? "0"} / {nativeAgentRowString(row, ["amount"]) ?? "0"} · window {nativeAgentRowString(row, ["window"]) ?? "—"}
-            </div>
-          ))}
-          {escrowRows.map((row, index) => (
-            <div key={`escrow:${nativeAgentRowString(row, ["escrowId", "escrow_id"]) ?? index}`}>
-              escrow {shortAddr(nativeAgentRowString(row, ["escrowId", "escrow_id"]) ?? "unknown", 10)} · {nativeAgentRowString(row, ["status"]) ?? "unknown"}
-            </div>
-          ))}
-          {rowCount > policyRows.length + spendRows.length + escrowRows.length && (
+          {rowCount > visibleRows.length && (
             <div>
-              + {rowCount - policyRows.length - spendRows.length - escrowRows.length} more agent rows
+              + {rowCount - visibleRows.length} more agent rows
             </div>
           )}
         </div>
       </div>
       <div className="ext-asset__spark" />
       <div className="ext-asset__right">
-        <div className="amt">{nativeAgentState.escrows.length} escrows</div>
-        <div className="chg">{nativeAgentState.policySpends.length} spends</div>
+        <div className="amt">{rowCount} rows</div>
+        <div className="chg">{activeFamilies.length} groups</div>
       </div>
     </div>
   );
