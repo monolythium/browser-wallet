@@ -216,6 +216,7 @@ import {
   readPendingRewards,
   readRedemptionQueue,
 } from "./staking-client.js";
+import { readBridgeRoutes } from "./bridge-routes-client.js";
 
 interface WalletMrvNativeReceiptEvidence {
   schema: string | null;
@@ -1426,26 +1427,56 @@ async function fetchIndexerSnapshot(
   address: string,
   _chainIdHex: string,
 ): Promise<IndexerSnapshotRaw> {
-  const [tokenBalances, addressLabel, delegationHistory, addressActivity] = await Promise.all([
+  const [
+    tokenBalances,
+    bridgeRoutes,
+    addressLabel,
+    delegationHistory,
+    addressActivity,
+  ] = await Promise.all([
     settleSprintnetRpc<unknown>("lyth_getTokenBalances", [address]),
+    readBridgeRoutes(),
     settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
     settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
     settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
+  if (bridgeRoutes.kind !== "live" && "reason" in bridgeRoutes) {
+    errors.bridgeRoutes = bridgeRoutes.reason;
+  }
   if (addressLabel.error) errors.addressLabel = addressLabel.error;
   if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
   if (addressActivity.error) errors.addressActivity = addressActivity.error;
   const rawTokenBalances = readTokenBalanceRows(tokenBalances.value);
   return {
     tokenBalances: validateWalletTokenBalanceList(rawTokenBalances),
-    bridgeRouteDisclosures: collectWalletBridgeRouteDisclosures(tokenBalances.value),
+    bridgeRouteDisclosures: dedupeWalletBridgeRouteDisclosures([
+      ...bridgeRoutes.data,
+      ...collectWalletBridgeRouteDisclosures(tokenBalances.value),
+    ]),
     addressLabel: addressLabel.value ?? null,
     delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
     addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
     errors,
   };
+}
+
+function dedupeWalletBridgeRouteDisclosures(
+  disclosures: readonly WalletBridgeRouteDisclosure[],
+): WalletBridgeRouteDisclosure[] {
+  const seen = new Set<string>();
+  const out: WalletBridgeRouteDisclosure[] = [];
+  for (const disclosure of disclosures) {
+    const key =
+      typeof disclosure.routeId === "string"
+        ? `routeId:${disclosure.routeId}`
+        : `json:${JSON.stringify(disclosure)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(disclosure);
+  }
+  return out;
 }
 
 // Structural validators for the raw wire shapes. These guard the SW

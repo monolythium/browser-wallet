@@ -402,7 +402,7 @@ export interface WalletIndexerSnapshot {
   addressLabel: WalletAddressLabel | null;
   delegationHistory: WalletDelegationHistoryRow[];
   addressActivity: WalletAddressActivityRow[];
-  errors: Partial<Record<"tokenBalances" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
+  errors: Partial<Record<"tokenBalances" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
 }
 
 export async function bgWalletIndexerSnapshot(
