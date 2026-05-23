@@ -45,6 +45,10 @@ import { VaultPicker } from "./components/VaultPicker";
 import { NftTab } from "./components/NftTab";
 import type { SendNftTarget } from "./pages/SendNft";
 import {
+  useBridgeRouteSelection,
+  type BridgeRouteChoiceCandidate,
+} from "./hooks/useBridgeRouteSelection";
+import {
   detectOriginWarnings,
   detectMessageWarnings,
   type OriginWarning,
@@ -507,7 +511,7 @@ export interface BridgeRouteDisclosureDisplay {
 }
 
 const TRUST_DISCLOSURE_KEY_RE =
-  /trust|guardian|committee|validator|multisig|light[_-]?client|zk|proof|verification|attestation|custody|permission/i;
+  /trust|guardian|committee|validator|verifier|multisig|light[_-]?client|zk|proof|verification|attestation|custody|permission/i;
 const LIQUIDITY_DISCLOSURE_KEY_RE =
   /liquidity|floor|cap|limit|insurance|reserve|tvl|depth|slippage|inventory|available/i;
 
@@ -1279,10 +1283,8 @@ interface BridgeProps {
 
 export function Bridge({ onBack, indexer }: BridgeProps) {
   const disclosures = collectBridgeRouteDisclosuresFromIndexer(indexer);
-  const displays = disclosures.map(formatBridgeRouteDisclosureDisplay);
-  const hasSubmitReadyDisclosure = displays.some(
-    bridgeRouteDisclosureHasRequiredFloorData,
-  );
+  const routeChoice = useBridgeRouteSelection(disclosures);
+  const hasSubmitReadyDisclosure = routeChoice.selected !== null;
 
   return (
     <>
@@ -1311,7 +1313,64 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
           </p>
         </div>
 
-        {displays.length === 0 ? (
+        <div className="ext-card" style={{ padding: 14 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              marginBottom: 10,
+            }}
+          >
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-400)",
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+              }}
+            >
+              SDK route choice
+            </div>
+            <span className={routeChoice.selected ? "ext-badge-att" : "ext-badge-bridged"}>
+              {routeChoice.selected ? "Selected" : "Closed"}
+            </span>
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              lineHeight: 1.45,
+              color: "var(--fg-200)",
+            }}
+          >
+            {routeChoice.selected?.route
+              ? `${routeChoice.selected.route.routeId} is the top SDK-ranked accepted route.`
+              : "No SDK-ranked bridge route is selectable from the active disclosures."}
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 8,
+              marginTop: 10,
+            }}
+          >
+            <BridgeRouteMetric label="Disclosures" value={String(disclosures.length)} />
+            <BridgeRouteMetric label="SDK routes" value={String(routeChoice.sdkRouteCount)} />
+            <BridgeRouteMetric label="Display only" value={String(routeChoice.displayOnlyCount)} />
+          </div>
+          {routeChoice.blockedReasons.length > 0 && (
+            <BridgeRouteReasonList
+              title="Selection closed"
+              reasons={routeChoice.blockedReasons}
+              tone="blocked"
+            />
+          )}
+        </div>
+
+        {routeChoice.candidates.length === 0 ? (
           <div className="ext-card" style={{ padding: 14 }}>
             <div
               style={{
@@ -1335,58 +1394,11 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
             </div>
           </div>
         ) : (
-          displays.map((display, index) => (
-            <div className="ext-card" style={{ padding: 14 }} key={index}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  marginBottom: 10,
-                }}
-              >
-                <div
-                  style={{
-                    fontFamily: "var(--f-mono)",
-                    fontSize: 10,
-                    color: "var(--fg-400)",
-                    letterSpacing: "0.14em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  Route disclosure {index + 1}
-                </div>
-                <span
-                  className={
-                    bridgeRouteDisclosureHasRequiredFloorData(display)
-                      ? "ext-badge-att"
-                      : "ext-badge-bridged"
-                  }
-                >
-                  {bridgeRouteDisclosureHasRequiredFloorData(display)
-                    ? "Published"
-                    : "Incomplete"}
-                </span>
-              </div>
-              <BridgeDisclosureSection
-                title="Trust"
-                rows={display.trustRows}
-                empty="No trust disclosure fields returned."
-              />
-              <BridgeDisclosureSection
-                title="Liquidity / floors"
-                rows={display.liquidityRows}
-                empty="No liquidity or floor fields returned."
-              />
-              {display.otherRows.length > 0 && (
-                <BridgeDisclosureSection
-                  title="Other published fields"
-                  rows={display.otherRows}
-                  empty=""
-                />
-              )}
-            </div>
+          routeChoice.candidates.map((candidate) => (
+            <BridgeRouteCandidateCard
+              candidate={candidate}
+              key={`${candidate.originalIndex}:${candidate.route?.routeId ?? "display-only"}`}
+            />
           ))
         )}
 
@@ -1412,13 +1424,250 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
             }}
           >
             {hasSubmitReadyDisclosure
-              ? "The wallet can display the published disclosure data, but this build has no bridge submit path."
-              : "Disabled because no route returned both trust and liquidity/floor disclosure data."}
+              ? "The wallet can display an SDK-ranked route choice, but this build has no bridge submit path."
+              : "Disabled because no route satisfied the SDK disclosure floor."}
+          </div>
+          <div className="req-foot" style={{ margin: "12px 0 0" }}>
+            <button
+              className="prim"
+              disabled
+              style={{ cursor: "not-allowed", opacity: 0.55 }}
+            >
+              Submit bridge
+            </button>
           </div>
         </div>
       </div>
     </>
   );
+}
+
+interface BridgeRouteCandidateCardProps {
+  candidate: BridgeRouteChoiceCandidate;
+}
+
+function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) {
+  const display = formatBridgeRouteDisclosureDisplay(candidate.disclosure);
+  const route = candidate.route;
+  const assessment = candidate.assessment;
+
+  return (
+    <div className="ext-card" style={{ padding: 14 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 10,
+        }}
+      >
+        <div
+          style={{
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 3,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+            }}
+          >
+            {candidate.rank === null
+              ? `Route disclosure ${candidate.originalIndex + 1}`
+              : `SDK rank ${candidate.rank}`}
+          </div>
+          <div
+            style={{
+              minWidth: 0,
+              fontSize: 12.5,
+              fontWeight: 600,
+              color: "var(--fg-100)",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {route?.routeId ?? "Display-only disclosure"}
+          </div>
+        </div>
+        <span className={bridgeRouteCandidateBadgeClass(candidate)}>
+          {bridgeRouteCandidateBadge(candidate)}
+        </span>
+      </div>
+
+      {route && assessment ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: 8,
+          }}
+        >
+          <BridgeRouteMetric label="Score" value={`${assessment.score}/100`} />
+          <BridgeRouteMetric label="Risk" value={assessment.riskTier} />
+          <BridgeRouteMetric label="Cooldown" value={`${route.cooldownSeconds}s`} />
+          <BridgeRouteMetric label="Finality" value={`${route.finalityBlocks} blocks`} />
+        </div>
+      ) : (
+        <BridgeRouteReasonList
+          title="SDK route parser"
+          reasons={[candidate.parseFailure ?? "not an SDK bridge route disclosure"]}
+          tone="muted"
+        />
+      )}
+
+      {assessment && assessment.blockedReasons.length > 0 && (
+        <BridgeRouteReasonList
+          title="Blocking reasons"
+          reasons={assessment.blockedReasons}
+          tone="blocked"
+        />
+      )}
+      {assessment && assessment.warnings.length > 0 && (
+        <BridgeRouteReasonList
+          title="Warnings"
+          reasons={assessment.warnings}
+          tone="warning"
+        />
+      )}
+
+      <BridgeDisclosureSection
+        title="Trust"
+        rows={display.trustRows}
+        empty="No trust disclosure fields returned."
+      />
+      <BridgeDisclosureSection
+        title="Liquidity / floors"
+        rows={display.liquidityRows}
+        empty="No liquidity or floor fields returned."
+      />
+      {display.otherRows.length > 0 && (
+        <BridgeDisclosureSection
+          title="Other published fields"
+          rows={display.otherRows}
+          empty=""
+        />
+      )}
+    </div>
+  );
+}
+
+interface BridgeRouteMetricProps {
+  label: string;
+  value: string;
+}
+
+function BridgeRouteMetric({ label, value }: BridgeRouteMetricProps) {
+  return (
+    <div
+      style={{
+        minWidth: 0,
+        padding: "8px 10px",
+        borderRadius: 8,
+        border: "1px solid var(--fg-700)",
+        background: "rgba(255,255,255,0.02)",
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9.5,
+          color: "var(--fg-500)",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          minWidth: 0,
+          marginTop: 3,
+          fontSize: 11.5,
+          color: "var(--fg-100)",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+interface BridgeRouteReasonListProps {
+  title: string;
+  reasons: string[];
+  tone: "blocked" | "warning" | "muted";
+}
+
+function BridgeRouteReasonList({
+  title,
+  reasons,
+  tone,
+}: BridgeRouteReasonListProps) {
+  const color =
+    tone === "blocked"
+      ? "#ffaaaa"
+      : tone === "warning"
+        ? "var(--warn)"
+        : "var(--fg-400)";
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: "var(--fg-200)",
+          marginBottom: 6,
+        }}
+      >
+        {title}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {reasons.map((reason) => (
+          <div
+            key={reason}
+            style={{
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--fg-700)",
+              color,
+              fontSize: 11,
+              lineHeight: 1.4,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {reason}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function bridgeRouteCandidateBadge(candidate: BridgeRouteChoiceCandidate): string {
+  switch (candidate.state) {
+    case "selected":
+      return "Selected";
+    case "candidate":
+      return "Candidate";
+    case "blocked":
+      return "Blocked";
+    case "display-only":
+      return "Display only";
+  }
+}
+
+function bridgeRouteCandidateBadgeClass(
+  candidate: BridgeRouteChoiceCandidate,
+): string {
+  return candidate.state === "selected" ? "ext-badge-att" : "ext-badge-bridged";
 }
 
 interface BridgeDisclosureSectionProps {

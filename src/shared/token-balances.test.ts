@@ -142,6 +142,102 @@ describe("wallet token-balance validators", () => {
     ]);
   });
 
+  it("preserves SDK-shaped bridge route disclosures from token balance rows", () => {
+    expect(
+      validateWalletTokenBalanceList([
+        {
+          tokenId: "0xsdkroute",
+          balance: "10",
+          updatedAtBlock: 77,
+          bridgeRouteDisclosures: [
+            {
+              routeId: "ccip-usdc-eth",
+              bridge: "CCIP",
+              asset: "USDC",
+              sourceChain: "Ethereum",
+              destinationChain: "Mono",
+              verifier: {
+                model: "DON",
+                participantCount: 7,
+                threshold: 5,
+              },
+              drainCapAtomic: "100000000000",
+              finalityBlocks: 64,
+              cooldownSeconds: 86400,
+              adminControl: "consensusOnly",
+              circuitBreaker: "armed",
+              insuranceAtomic: "50000000000",
+              lastIncidentDate: null,
+            },
+            {
+              routeId: "paused-usdc-eth",
+              bridge: "CCIP",
+              asset: "USDC",
+              sourceChain: "Ethereum",
+              destinationChain: "Mono",
+              verifier: {
+                model: "DON",
+                participantCount: 7,
+                threshold: 5,
+              },
+              drainCapAtomic: "100000000000",
+              finalityBlocks: 64,
+              cooldownSeconds: 0,
+              adminControl: "consensusOnly",
+              circuitBreaker: "paused",
+              insuranceAtomic: "0",
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        tokenId: "0xsdkroute",
+        balance: "10",
+        updatedAtBlock: 77,
+        bridgeRouteDisclosures: [
+          {
+            routeId: "ccip-usdc-eth",
+            bridge: "CCIP",
+            asset: "USDC",
+            sourceChain: "Ethereum",
+            destinationChain: "Mono",
+            verifier: {
+              model: "DON",
+              participantCount: 7,
+              threshold: 5,
+            },
+            drainCapAtomic: "100000000000",
+            finalityBlocks: 64,
+            cooldownSeconds: 86400,
+            adminControl: "consensusOnly",
+            circuitBreaker: "armed",
+            insuranceAtomic: "50000000000",
+            lastIncidentDate: null,
+          },
+          {
+            routeId: "paused-usdc-eth",
+            bridge: "CCIP",
+            asset: "USDC",
+            sourceChain: "Ethereum",
+            destinationChain: "Mono",
+            verifier: {
+              model: "DON",
+              participantCount: 7,
+              threshold: 5,
+            },
+            drainCapAtomic: "100000000000",
+            finalityBlocks: 64,
+            cooldownSeconds: 0,
+            adminControl: "consensusOnly",
+            circuitBreaker: "paused",
+            insuranceAtomic: "0",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("drops malformed bridge disclosure data while keeping the balance row neutral", () => {
     expect(
       validateWalletTokenBalanceList([
