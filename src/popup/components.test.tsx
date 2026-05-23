@@ -1,6 +1,8 @@
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   applyFeeTier,
+  Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
   collectBridgeRouteDisclosuresFromIndexer,
@@ -11,6 +13,33 @@ import {
   formatLythoshiPerExecutionUnit,
   lythoshiToLythString,
 } from "./components.js";
+import type { WalletBridgeRouteDisclosure } from "./bg.js";
+
+function sdkBridgeRoute(
+  routeId: string,
+  overrides: Partial<WalletBridgeRouteDisclosure> = {},
+): WalletBridgeRouteDisclosure {
+  return {
+    routeId,
+    bridge: "CCIP",
+    asset: "USDC",
+    sourceChain: "Ethereum",
+    destinationChain: "Mono",
+    verifier: {
+      model: "DON",
+      participantCount: 7,
+      threshold: 5,
+    },
+    drainCapAtomic: "100000000000",
+    finalityBlocks: 64,
+    cooldownSeconds: 86_400,
+    adminControl: "consensusOnly",
+    circuitBreaker: "armed",
+    insuranceAtomic: "50000000000",
+    lastIncidentDate: null,
+    ...overrides,
+  };
+}
 
 describe("ReqSendTx native fee helpers", () => {
   it("formats native LYTH values with 8-decimal lythoshi precision", () => {
@@ -173,5 +202,47 @@ describe("bridge route disclosure display", () => {
       { keyPath: "liquidity.available", value: "900" },
     ]);
     expect(bridgeRouteDisclosureHasRequiredFloorData(missingFloor)).toBe(false);
+  });
+
+  it("renders SDK-ranked route choice, candidates, and floor failures", () => {
+    const html = renderToStaticMarkup(
+      <Bridge
+        onBack={() => undefined}
+        indexer={{
+          bridgeRouteDisclosures: [
+            sdkBridgeRoute("under-disclosed", {
+              cooldownSeconds: 0,
+              drainCapAtomic: "0",
+              insuranceAtomic: "0",
+            }),
+            sdkBridgeRoute("short-cooldown", { cooldownSeconds: 60 }),
+          ],
+          tokenBalances: [
+            {
+              tokenId: "0xwrapped",
+              balance: "7",
+              updatedAtBlock: 12,
+              bridgeRouteDisclosure: sdkBridgeRoute("healthy"),
+            },
+          ],
+          addressLabel: null,
+          delegationHistory: [],
+          addressActivity: [],
+          errors: {},
+        }}
+      />,
+    );
+
+    expect(html).toContain("SDK route choice");
+    expect(html).toContain("healthy is the top SDK-ranked accepted route.");
+    expect(html).toMatch(/SDK rank 1[\s\S]*healthy[\s\S]*Selected/);
+    expect(html).toMatch(/SDK rank 2[\s\S]*short-cooldown[\s\S]*Candidate/);
+    expect(html).toContain("cooldown is under one hour");
+    expect(html).toMatch(/SDK rank 3[\s\S]*under-disclosed[\s\S]*Blocked/);
+    expect(html).toContain("route cooldown missing");
+    expect(html).toContain("per-asset drain cap missing or zero");
+    expect(html).toContain("slashable insurance pool missing or zero");
+    expect(html).toContain("Submit bridge");
+    expect(html).toContain("disabled");
   });
 });
