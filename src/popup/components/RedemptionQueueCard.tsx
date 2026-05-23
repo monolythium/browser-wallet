@@ -13,7 +13,7 @@ interface RedemptionQueueCardProps {
   clusters: ReadonlyArray<ClusterDirectoryEntry>;
 }
 
-type TicketTone = "ok" | "cooldown" | "pending";
+type TicketTone = "unavailable" | "cooldown" | "pending";
 
 export function RedemptionQueueCard({
   queue,
@@ -89,7 +89,7 @@ export function RedemptionQueueCard({
                     value={`block ${ticket.createdHeight}`}
                   />
                   <TicketKv
-                    label="Matures"
+                    label="Maturity height"
                     value={`block ${ticket.maturityHeight}`}
                   />
                 </div>
@@ -113,21 +113,23 @@ export function redemptionTicketStatus(ticket: RedemptionQueueRow): {
 } {
   if (ticket.mature === true) {
     return {
-      label: "Mature",
-      detail: "Mature at the probed block height.",
-      tone: "ok",
+      label: "Height reached",
+      detail:
+        "Height maturity is reached, but principal payout is unavailable until chain escrow accounting lands.",
+      tone: "unavailable",
     };
   }
   if (ticket.mature === false) {
     return {
-      label: "Cooldown",
-      detail: `Height-based cooldown until block ${ticket.maturityHeight}.`,
+      label: "Height cooldown",
+      detail: `Height maturity is pending until block ${ticket.maturityHeight}; principal payout is unavailable until chain escrow accounting lands.`,
       tone: "cooldown",
     };
   }
   return {
-    label: "Pending",
-    detail: "Maturity probe unavailable for this block selector.",
+    label: "Probe pending",
+    detail:
+      "Maturity probe unavailable for this block selector; principal payout is unavailable until chain escrow accounting lands.",
     tone: "pending",
   };
 }
@@ -268,6 +270,7 @@ const kvValueStyle: CSSProperties = {
 };
 
 function statusBadgeStyle(tone: TicketTone): CSSProperties {
+  const attentionTone = tone === "unavailable" || tone === "cooldown";
   return {
     flex: "0 0 auto",
     fontFamily: "var(--f-mono)",
@@ -276,38 +279,23 @@ function statusBadgeStyle(tone: TicketTone): CSSProperties {
     textTransform: "uppercase",
     padding: "2px 6px",
     borderRadius: 999,
-    color:
-      tone === "ok"
-        ? "var(--ok)"
-        : tone === "cooldown"
-          ? "var(--warn)"
-          : "var(--fg-300)",
-    border:
-      tone === "ok"
-        ? "1px solid rgba(80,200,120,0.45)"
-        : tone === "cooldown"
-          ? "1px solid rgba(244,201,122,0.45)"
-          : "1px solid var(--fg-700)",
-    background:
-      tone === "ok"
-        ? "rgba(80,200,120,0.08)"
-        : tone === "cooldown"
-          ? "rgba(244,201,122,0.08)"
-          : "rgba(255,255,255,0.03)",
+    color: attentionTone ? "var(--warn)" : "var(--fg-300)",
+    border: attentionTone
+      ? "1px solid rgba(244,201,122,0.45)"
+      : "1px solid var(--fg-700)",
+    background: attentionTone
+      ? "rgba(244,201,122,0.08)"
+      : "rgba(255,255,255,0.03)",
   };
 }
 
 function statusDetailStyle(tone: TicketTone): CSSProperties {
+  const attentionTone = tone === "unavailable" || tone === "cooldown";
   return {
     marginTop: 8,
     fontFamily: "var(--f-mono)",
     fontSize: 9.5,
-    color:
-      tone === "ok"
-        ? "var(--ok)"
-        : tone === "cooldown"
-          ? "var(--warn)"
-          : "var(--fg-500)",
+    color: attentionTone ? "var(--warn)" : "var(--fg-500)",
     lineHeight: 1.45,
   };
 }
