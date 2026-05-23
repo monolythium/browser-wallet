@@ -20,6 +20,10 @@ import {
   type MultisigSigner,
   type PendingProposal,
 } from "../../shared/multisig";
+import {
+  lythoshiToLythDecimal,
+  parseHexQuantity,
+} from "../../shared/native-amount";
 
 export interface MultisigProposalDetailProps {
   proposal: PendingProposal;
@@ -78,7 +82,8 @@ function ActionSummary({
 }: {
   action: PendingProposal["action"];
 }) {
-  const value = action.kind === "send" ? action.valueWeiHex : action.valueWeiHex ?? "0x0";
+  const valueLythoshiHex =
+    action.kind === "send" ? action.valueWeiHex : action.valueWeiHex ?? "0x0";
   const hasData =
     action.kind === "contract" ||
     (action.kind === "send" && action.data && action.data !== "0x");
@@ -86,7 +91,7 @@ function ActionSummary({
     <div style={sectionStyle}>
       <SectionLabel>{action.kind === "send" ? "Send" : "Contract call"}</SectionLabel>
       <Row label="To">{bech32mDisplay(action.to)}</Row>
-      <Row label="Value (wei)">{formatHexValue(value)}</Row>
+      <Row label="Value">{formatLythoshiValue(valueLythoshiHex)}</Row>
       <Row label="Chain">{action.chainIdHex}</Row>
       {hasData && action.kind === "contract" && (
         <Row label="Calldata">
@@ -359,15 +364,15 @@ export function formatRemaining(ms: number): string {
   return "<1m";
 }
 
-/** Format a 0x-prefixed wei hex value as a decimal string for human
- *  readability. Returns "0" for the empty/zero case. Pure. */
-export function formatHexValue(hexWei: string): string {
-  if (!hexWei || hexWei === "0x" || hexWei === "0x0") return "0";
-  try {
-    return BigInt(hexWei).toString(10);
-  } catch {
-    return hexWei;
+/** Format the compatibility `valueWeiHex` field as native LYTH. The field
+ *  name is historical; for v4.1 native proposals it carries lythoshi. */
+export function formatLythoshiValue(hexLythoshi: string): string {
+  if (!hexLythoshi || hexLythoshi === "0x" || hexLythoshi === "0X") {
+    return "0 LYTH";
   }
+  const lythoshi = parseHexQuantity(hexLythoshi);
+  if (lythoshi == null) return "? LYTH";
+  return `${lythoshiToLythDecimal(lythoshi)} LYTH`;
 }
 
 /** Truncate a hex blob to "0xabcd…wxyz" for tight UI rows. Pure. */

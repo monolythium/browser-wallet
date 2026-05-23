@@ -1,11 +1,18 @@
 // Phase 8 Commit 3 — pure-helper tests for MultisigProposalDetail.
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
-  formatHexValue,
+  formatLythoshiValue,
   formatRemaining,
+  MultisigProposalDetail,
   shortenHex,
 } from "./MultisigProposalDetail.js";
+import type {
+  MultisigSigner,
+  PendingProposal,
+} from "../../shared/multisig.js";
 
 describe("formatRemaining", () => {
   const MIN = 60 * 1000;
@@ -40,21 +47,84 @@ describe("formatRemaining", () => {
   });
 });
 
-describe("formatHexValue", () => {
-  it('returns "0" for zero/empty input', () => {
-    expect(formatHexValue("")).toBe("0");
-    expect(formatHexValue("0x")).toBe("0");
-    expect(formatHexValue("0x0")).toBe("0");
+describe("formatLythoshiValue", () => {
+  it('returns "0 LYTH" for zero/empty input', () => {
+    expect(formatLythoshiValue("")).toBe("0 LYTH");
+    expect(formatLythoshiValue("0x")).toBe("0 LYTH");
+    expect(formatLythoshiValue("0x0")).toBe("0 LYTH");
   });
 
-  it("converts hex to decimal string", () => {
-    expect(formatHexValue("0x1")).toBe("1");
-    expect(formatHexValue("0xff")).toBe("255");
-    expect(formatHexValue("0xde0b6b3a7640000")).toBe("1000000000000000000");
+  it("formats hex lythoshi as native LYTH with 8-decimal precision", () => {
+    expect(formatLythoshiValue("0x1")).toBe("0.00000001 LYTH");
+    expect(formatLythoshiValue("0xff")).toBe("0.00000255 LYTH");
+    expect(formatLythoshiValue("0x" + 100_000_000n.toString(16))).toBe(
+      "1 LYTH",
+    );
+    expect(formatLythoshiValue("0x" + 123_456_789n.toString(16))).toBe(
+      "1.23456789 LYTH",
+    );
   });
 
-  it("returns the raw input for unparseable hex", () => {
-    expect(formatHexValue("not-hex")).toBe("not-hex");
+  it("does not expose raw input for unparseable hex", () => {
+    expect(formatLythoshiValue("not-hex")).toBe("? LYTH");
+  });
+});
+
+describe("MultisigProposalDetail value display", () => {
+  const NOW = 1_700_000_000_000;
+  const ONE_LYTH_IN_LYTHOSHI_HEX = "0x" + 100_000_000n.toString(16);
+  const signers: MultisigSigner[] = [
+    {
+      id: "s-1",
+      label: "Signer 1",
+      address: "0x" + "11".repeat(20),
+      pubkey: "0x01",
+      role: "self",
+    },
+    {
+      id: "s-2",
+      label: "Signer 2",
+      address: "0x" + "22".repeat(20),
+      pubkey: "0x02",
+      role: "external",
+    },
+  ];
+
+  function makeProposal(valueWeiHex: string): PendingProposal {
+    return {
+      id: "p-1",
+      proposedBy: "s-1",
+      createdAt: NOW,
+      expiresAt: NOW + 60_000,
+      vaultAddress: "0x" + "33".repeat(20),
+      action: {
+        kind: "send",
+        to: "0x" + "44".repeat(20),
+        valueWeiHex,
+        chainIdHex: "0x10F2C",
+      },
+      approvals: [{ signerId: "s-1", signature: "0x01", signedAt: NOW }],
+      rejections: [],
+      status: "pending",
+      txHash: null,
+    };
+  }
+
+  it("renders native LYTH instead of the raw compatibility value", () => {
+    const html = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+
+    expect(html).toContain(">Value</div>");
+    expect(html).toContain(">1 LYTH</div>");
+    expect(html).not.toContain("Value (wei)");
+    expect(html).not.toContain("valueWeiHex");
+    expect(html).not.toContain(">100000000</div>");
   });
 });
 
