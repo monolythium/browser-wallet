@@ -25,6 +25,11 @@ export type {
 } from "../shared/mrc-account.js";
 export type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 export type {
+  NativeAgentStateFilter,
+  NativeAgentStateResponse,
+  NativeAgentStateRow,
+} from "../shared/native-agent-state.js";
+export type {
   NativeMarketStateFilter,
   NativeMarketStateResponse,
   NativeMarketStateRow,
@@ -421,10 +426,11 @@ export interface WalletIndexerSnapshot {
   bridgeRouteDisclosures?: WalletBridgeRouteDisclosure[];
   bridgeRouteReadiness?: WalletBridgeRouteReadiness | null;
   mrcAccount: MrcAccountLookupResponse | null;
+  nativeAgentState?: import("../shared/native-agent-state.js").NativeAgentStateResponse | null;
   addressLabel: WalletAddressLabel | null;
   delegationHistory: WalletDelegationHistoryRow[];
   addressActivity: WalletAddressActivityRow[];
-  errors: Partial<Record<"tokenBalances" | "mrcHolders" | "mrcAccount" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
+  errors: Partial<Record<"tokenBalances" | "mrcHolders" | "mrcAccount" | "nativeAgentState" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
 }
 
 export async function bgWalletIndexerSnapshot(
@@ -632,6 +638,20 @@ export async function bgNativeMarketState(
 export type NativeMarketStateOutcome =
   import("../shared/chain-readiness.js").ChainOutcome<
     import("../shared/native-market-state.js").NativeMarketStateResponse | null
+  >;
+
+export async function bgNativeAgentState(
+  args: import("../shared/native-agent-state.js").NativeAgentStateFilter = {},
+): Promise<
+  | { ok: true; outcome: NativeAgentStateOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-native-agent-state", args);
+}
+
+export type NativeAgentStateOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/native-agent-state.js").NativeAgentStateResponse | null
   >;
 
 /** Phase 11.5 Commit 3 — chain-wide signing-activity sample. Calls

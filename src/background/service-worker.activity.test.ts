@@ -734,6 +734,95 @@ describe("wallet-indexer-snapshot", () => {
     expect(r.snapshot.errors.mrcAccount).toBe("Method not found");
   });
 
+  it("preserves native agent state rows in popup snapshots", async () => {
+    const policyId = `0x${"aa".repeat(32)}`;
+    const escrowId = `0x${"bb".repeat(32)}`;
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+    rpcErrors["lyth_mrcAccount"] = { code: -32601, message: "Method not found" };
+    rpcResponses["lyth_nativeAgentState"] = {
+      schemaVersion: 1,
+      limit: 10,
+      filters: {
+        account: DETERMINISTIC_ADDRESS,
+        includePolicySpends: true,
+      },
+      spendingPolicies: [
+        {
+          policyId,
+          owner: DETERMINISTIC_ADDRESS,
+          controller: "mono1agentcontroller",
+          assetId: `0x${"cc".repeat(32)}`,
+          enabled: true,
+          perActionLimit: "100",
+          windowLimit: "500",
+          windowSecs: 60,
+          updatedAtBlock: 42,
+        },
+      ],
+      policySpends: [],
+      escrows: [
+        {
+          escrowId,
+          buyer: DETERMINISTIC_ADDRESS,
+          provider: "mono1agentprovider",
+          arbiter: "mono1agentarbiter",
+          assetId: `0x${"cc".repeat(32)}`,
+          amount: "1000",
+          termsHash: `0x${"dd".repeat(32)}`,
+          round: 2,
+          buyerAccepted: true,
+          providerAccepted: false,
+          submittedPayloadHash: null,
+          status: "accepted",
+          resolution: null,
+          lastActor: DETERMINISTIC_ADDRESS,
+          createdAtBlock: 40,
+          updatedAtBlock: 44,
+        },
+      ],
+      source: {
+        indexerProvider: "native_agent_state",
+        projection: "native_agent_state",
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        nativeAgentState: {
+          spendingPolicies: Array<{ policyId: string }>;
+          escrows: Array<{ escrowId: string; status: string }>;
+        } | null;
+        errors: Record<string, string>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.nativeAgentState?.spendingPolicies[0]?.policyId).toBe(policyId);
+    expect(r.snapshot.nativeAgentState?.escrows[0]).toMatchObject({
+      escrowId,
+      status: "accepted",
+    });
+    expect(r.snapshot.errors.nativeAgentState).toBeUndefined();
+    expect(rpcCalls).toContainEqual({
+      method: "lyth_nativeAgentState",
+      params: [
+        {
+          account: DETERMINISTIC_ADDRESS,
+          includePolicySpends: true,
+          limit: 10,
+        },
+      ],
+    });
+  });
+
   it("passes through bridge route disclosures from token-balance envelopes", async () => {
     rpcResponses["lyth_getTokenBalances"] = {
       tokenBalances: [
@@ -908,7 +997,7 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     });
     const firstFetchCount = rpcCalls.length;
-    expect(firstFetchCount).toBe(5); // tokenBalances + bridgeRoutes + addressLabel + delegationHistory + addressActivity
+    expect(firstFetchCount).toBe(6); // tokenBalances + bridgeRoutes + nativeAgentState + addressLabel + delegationHistory + addressActivity
     expect(rpcCalls.some((c) => c.method === "lyth_mrcAccount")).toBe(false);
     // Second call immediately after — cache is fresh, should NOT hit RPC.
     await dispatchPopup({
