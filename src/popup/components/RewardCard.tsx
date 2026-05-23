@@ -21,6 +21,8 @@ import {
 } from "../../shared/staking";
 
 interface RewardCardProps {
+  /** Compatibility reward fields are still named `*Wei` in
+   *  PendingRewardsView; values rendered here are v4.1 lythoshi. */
   rewards: PendingRewardsView | null;
   /** `true` when the SW returned mock data (chain side not yet live). */
   isMock: boolean;
@@ -73,14 +75,14 @@ export function RewardCard({
     );
   }
 
-  const totalWei = (() => {
+  const totalLythoshi = (() => {
     try {
       return BigInt(rewards.totalAmountWei);
     } catch {
       return 0n;
     }
   })();
-  const totalIsZero = totalWei === 0n;
+  const totalIsZero = totalLythoshi === 0n;
 
   return (
     <div className="ext-card" style={{ padding: 12 }}>
@@ -117,7 +119,7 @@ export function RewardCard({
             color: totalIsZero ? "var(--fg-400)" : "var(--gold)",
           }}
         >
-          {formatLyth(totalWei, 6)}
+          {formatLythoshiAsLyth(totalLythoshi, NATIVE_LYTH_DECIMALS)}
         </span>
         <span
           style={{
@@ -147,9 +149,9 @@ export function RewardCard({
         >
           {rewards.rows.map((row) => {
             const c = clusterById.get(row.cluster);
-            let weiVal = 0n;
+            let rowLythoshi = 0n;
             try {
-              weiVal = BigInt(row.amountWei);
+              rowLythoshi = BigInt(row.amountWei);
             } catch {
               // malformed mock entry — skip the row content
             }
@@ -185,7 +187,7 @@ export function RewardCard({
                     color: "var(--fg-200)",
                   }}
                 >
-                  {formatLyth(weiVal, 6)} LYTH
+                  {formatLythoshiAsLyth(rowLythoshi, NATIVE_LYTH_DECIMALS)} LYTH
                   {row.effectiveAprBps !== null && (
                     <span style={{ color: "var(--fg-500)", marginLeft: 6 }}>
                       · APR {(row.effectiveAprBps / 100).toFixed(2)}%
@@ -252,12 +254,21 @@ export function RewardCard({
 // Helpers + styles
 // ─────────────────────────────────────────────────────────────────────────────
 
-function formatLyth(wei: bigint, decimals: number): string {
-  if (wei <= 0n) return "0";
-  const whole = wei / 10n ** 18n;
-  const rem = wei % 10n ** 18n;
+const NATIVE_LYTH_DECIMALS = 8;
+const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+
+export function formatLythoshiAsLyth(
+  lythoshi: bigint,
+  decimals: number,
+): string {
+  if (lythoshi <= 0n) return "0";
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  const rem = lythoshi % LYTHOSHI_PER_LYTH;
   if (rem === 0n || decimals === 0) return whole.toString();
-  const remStr = rem.toString().padStart(18, "0").slice(0, decimals);
+  const remStr = rem
+    .toString()
+    .padStart(NATIVE_LYTH_DECIMALS, "0")
+    .slice(0, decimals);
   const trimmed = remStr.replace(/0+$/, "");
   return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
 }

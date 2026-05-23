@@ -34,30 +34,42 @@ export interface RedelegateFormProps {
   /** Open the destination picker. The parent handles cluster picking
    *  via the same ClusterPicker the stake flow uses. */
   onPickDestination: () => void;
+  /** Compatibility prop name retained for existing callers. Value is
+   *  v4.1 native lythoshi, not 18-decimal EVM wei. */
   balanceWei: bigint | null;
   onContinue: () => void;
   onBack: () => void;
 }
 
-function lythToWei(amountStr: string): bigint | null {
+const NATIVE_LYTH_DECIMALS = 8;
+const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+
+export function lythToLythoshi(amountStr: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(amountStr)) return null;
   const dot = amountStr.indexOf(".");
   const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
   const fracPart = dot < 0 ? "" : amountStr.slice(dot + 1);
-  if (fracPart.length > 18) return null;
-  const padded = fracPart + "0".repeat(18 - fracPart.length);
+  if (fracPart.length > NATIVE_LYTH_DECIMALS) return null;
+  const padded =
+    fracPart + "0".repeat(NATIVE_LYTH_DECIMALS - fracPart.length);
   try {
-    return BigInt(intPart) * 10n ** 18n + (padded.length > 0 ? BigInt(padded) : 0n);
+    return (
+      BigInt(intPart) * LYTHOSHI_PER_LYTH +
+      (padded.length > 0 ? BigInt(padded) : 0n)
+    );
   } catch {
     return null;
   }
 }
 
-function weiToLyth(wei: bigint, decimals = 4): string {
-  const whole = wei / 10n ** 18n;
-  const rem = wei % 10n ** 18n;
+export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  const rem = lythoshi % LYTHOSHI_PER_LYTH;
   if (rem === 0n || decimals === 0) return whole.toString();
-  const remStr = rem.toString().padStart(18, "0").slice(0, decimals);
+  const remStr = rem
+    .toString()
+    .padStart(NATIVE_LYTH_DECIMALS, "0")
+    .slice(0, decimals);
   const trimmed = remStr.replace(/0+$/, "");
   return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
 }
@@ -75,17 +87,17 @@ export function RedelegateForm({
   onContinue,
   onBack,
 }: RedelegateFormProps) {
-  const amountWei = useMemo(() => lythToWei(amountStr), [amountStr]);
+  const amountLythoshi = useMemo(() => lythToLythoshi(amountStr), [amountStr]);
   const moveBps =
-    amountWei !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountWei, balanceWei)
+    amountLythoshi !== null && balanceWei !== null && balanceWei > 0n
+      ? lythAmountToBps(amountLythoshi, balanceWei)
       : 0;
 
   const exceedsSource = moveBps > srcWeightBps;
   const totalAtDstAfter = dstExistingWeightBps + moveBps;
   const exceedsDstCap = capBps !== null && totalAtDstAfter > capBps;
 
-  const amountIsZero = amountWei === null || amountWei === 0n;
+  const amountIsZero = amountLythoshi === null || amountLythoshi === 0n;
   const dstChosen = dstCluster !== null;
   const sameAsSrc = dstCluster?.clusterId === srcCluster.clusterId;
   const canContinue =
@@ -100,19 +112,24 @@ export function RedelegateForm({
     if (balanceWei === null || srcWeightBps <= 0) return;
     // Max from source = full source delegation amount, then capped by
     // destination's headroom if applicable.
-    const srcAmountWei = (balanceWei * BigInt(srcWeightBps)) / 10_000n;
+    const srcAmountLythoshi = (balanceWei * BigInt(srcWeightBps)) / 10_000n;
     if (capBps !== null) {
       const headroomBps = Math.max(0, capBps - dstExistingWeightBps);
       if (headroomBps === 0) {
         onAmountChange("0");
         return;
       }
-      const headroomWei = (balanceWei * BigInt(headroomBps)) / 10_000n;
-      const limit = srcAmountWei < headroomWei ? srcAmountWei : headroomWei;
-      onAmountChange(weiToLyth(limit, 6));
+      const headroomLythoshi = (balanceWei * BigInt(headroomBps)) / 10_000n;
+      const limit =
+        srcAmountLythoshi < headroomLythoshi
+          ? srcAmountLythoshi
+          : headroomLythoshi;
+      onAmountChange(lythoshiToLyth(limit, NATIVE_LYTH_DECIMALS));
       return;
     }
-    onAmountChange(weiToLyth(srcAmountWei, 6));
+    onAmountChange(
+      lythoshiToLyth(srcAmountLythoshi, NATIVE_LYTH_DECIMALS),
+    );
   };
 
   return (
