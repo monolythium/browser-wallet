@@ -97,6 +97,7 @@ vi.mock("./tx-mldsa.js", () => ({
 }));
 
 const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
+const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
 let submitFailure: (Error & { code?: number }) | null = null;
 
 // Networks: only the bits the handlers touch. Sprintnet chain id is
@@ -1089,6 +1090,7 @@ describe("wallet-mrv-receipt-status", () => {
       schema: "riscv.receipt.v1",
       txType: 0x41,
       artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
       eventCount: 1,
       noEvmProof: null,
       proofLikeField: { ignored: true },
@@ -1109,6 +1111,7 @@ describe("wallet-mrv-receipt-status", () => {
           schema: string | null;
           txType: number | null;
           artifactHash: string | null;
+          receiptCommitment: string | null;
           eventCount: number | null;
           noEvmProofStatus: string;
           proofLikeField?: unknown;
@@ -1129,6 +1132,7 @@ describe("wallet-mrv-receipt-status", () => {
           schema: "riscv.receipt.v1",
           txType: 0x41,
           artifactHash: "0x" + "b".repeat(64),
+          receiptCommitment: RECEIPT_COMMITMENT,
           eventCount: 1,
           noEvmProofStatus: "missing",
         },

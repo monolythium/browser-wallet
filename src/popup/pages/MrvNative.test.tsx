@@ -22,6 +22,7 @@ const BASE_FORM: MrvNativeFormValues = {
 };
 
 const SUBMITTED_TX_HASH = `0x${"a".repeat(64)}`;
+const RECEIPT_COMMITMENT = `0x${"c".repeat(64)}`;
 
 function buildDeployPlan(): WalletMrvNativeSubmissionPlan {
   return {
@@ -188,6 +189,7 @@ describe("MrvNative", () => {
               schema: "riscv.receipt.v1",
               txType: 0x41,
               artifactHash: "0x" + "b".repeat(64),
+              receiptCommitment: RECEIPT_COMMITMENT,
               eventCount: 1,
               noEvmProofStatus: "missing",
             },
@@ -199,6 +201,8 @@ describe("MrvNative", () => {
     expect(includedHtml).toContain("block 100");
     expect(includedHtml).toContain("Contract 0x222222");
     expect(includedHtml).toContain("Native receipt riscv.receipt.v1");
+    expect(includedHtml).toContain("Receipt commitment evidence");
+    expect(includedHtml).toContain(RECEIPT_COMMITMENT);
     expect(includedHtml).toContain("returned no no-EVM proof payload");
 
     const unavailableHtml = renderToStaticMarkup(

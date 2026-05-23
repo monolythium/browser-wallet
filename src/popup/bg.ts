@@ -878,6 +878,7 @@ export interface WalletMrvNativeReceiptEvidence {
   schema: string | null;
   txType: number | null;
   artifactHash: string | null;
+  receiptCommitment: string | null;
   eventCount: number | null;
   noEvmProofStatus: "missing" | "present-unverified";
 }
