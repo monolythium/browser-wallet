@@ -87,9 +87,15 @@ describe("RedemptionQueueCard", () => {
     expect(html).toContain("3 tickets");
     expect(html).toContain("halcyon.cluster.mono");
     expect(html).toContain("cluster-9");
-    expect(html).toContain("Mature");
-    expect(html).toContain("Cooldown");
-    expect(html).toContain("Pending");
+    expect(html).toContain("Height reached");
+    expect(html).toContain(
+      "Height maturity is reached, but principal payout is unavailable until chain escrow accounting lands.",
+    );
+    expect(html).toContain("Height cooldown");
+    expect(html).toContain(
+      "Height maturity is pending until block 22; principal payout is unavailable until chain escrow accounting lands.",
+    );
+    expect(html).toContain("Probe pending");
     expect(html).toContain("25.00%");
     expect(html).toContain("10.00%");
     expect(html).toContain("3.33%");
@@ -98,6 +104,33 @@ describe("RedemptionQueueCard", () => {
     expect(html).toContain("1 LYTH");
     expect(html).not.toContain("0 LYTH");
     expect(html).not.toContain("Unlock");
+    expect(html).not.toContain("Mature at the probed block height");
+    expect(html).not.toMatch(/<button\b/i);
+  });
+
+  it("does not render a principal payout action for height-mature tickets", () => {
+    const html = renderToStaticMarkup(
+      <RedemptionQueueCard
+        queue={queue([
+          ticket({
+            mature: true,
+            amountLythoshi: "100000000",
+            createdHeight: "10",
+            maturityHeight: "20",
+          }),
+        ])}
+        isMock={false}
+        error={null}
+        clusters={clusters}
+      />,
+    );
+
+    expect(html).toContain("Height reached");
+    expect(html).toContain("principal payout is unavailable");
+    expect(html).not.toMatch(/<button\b/i);
+    expect(html).not.toContain("completeRedemption");
+    expect(html).not.toContain("Withdraw");
+    expect(html).not.toContain("Claim principal");
   });
 
   it("renders an honest empty live queue", () => {
@@ -153,9 +186,18 @@ describe("redemption queue formatting helpers", () => {
     expect(formatRedemptionQueueAmount("not-a-quantity")).toBeNull();
   });
 
-  it("maps mature, cooldown, and unknown probes to distinct labels", () => {
-    expect(redemptionTicketStatus(ticket({ mature: true })).label).toBe("Mature");
-    expect(redemptionTicketStatus(ticket({ mature: false })).label).toBe("Cooldown");
-    expect(redemptionTicketStatus(ticket({ mature: null })).label).toBe("Pending");
+  it("maps mature, cooldown, and unknown probes to non-payout labels", () => {
+    expect(redemptionTicketStatus(ticket({ mature: true })).label).toBe(
+      "Height reached",
+    );
+    expect(redemptionTicketStatus(ticket({ mature: true })).detail).toContain(
+      "principal payout is unavailable",
+    );
+    expect(redemptionTicketStatus(ticket({ mature: false })).label).toBe(
+      "Height cooldown",
+    );
+    expect(redemptionTicketStatus(ticket({ mature: null })).label).toBe(
+      "Probe pending",
+    );
   });
 });
