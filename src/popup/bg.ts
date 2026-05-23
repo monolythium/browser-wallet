@@ -883,7 +883,8 @@ export interface WalletMrvNativeReceiptEvidence {
   receiptCommitment: string | null;
   eventCount: number | null;
   noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
-  noEvmProofStatus: "missing" | "present-unverified";
+  noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
+  noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
 }
 
 export interface WalletMrvNoEvmReceiptProofTranscript {
@@ -899,6 +900,22 @@ export interface WalletMrvNoEvmReceiptProofTranscript {
   txIndex: number;
   receiptCount: number;
   receiptTranscript: string[];
+}
+
+export type WalletMrvNoEvmReceiptProofStatus =
+  | "missing"
+  | "transcript-verified"
+  | "transcript-mismatch";
+
+export interface WalletMrvNoEvmReceiptProofVerification {
+  status: "verified" | "mismatch";
+  receiptCountMatches: boolean;
+  receiptsRootMatches: boolean;
+  targetReceiptHashMatches: boolean;
+  receiptCount: number;
+  transcriptCount: number;
+  computedReceiptsRoot: string;
+  computedTargetReceiptHash: string;
 }
 
 export interface WalletMrvNativeReceiptEvidenceError {

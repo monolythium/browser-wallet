@@ -9,6 +9,7 @@ import {
   bgWalletSubmitMrvNativePlan,
   type SendTxResult,
   type WalletMrvNoEvmReceiptProofTranscript,
+  type WalletMrvNoEvmReceiptProofVerification,
   type WalletMrvNativeReceipt,
   type WalletMrvNativeSubmissionPlan,
 } from "../bg";
@@ -676,8 +677,8 @@ export function MrvNativePlanPreview({
               <div style={submitMeta}>Via {submitResult.via}</div>
               <div style={monoWrap}>{submitResult.txHash}</div>
               <div style={submitMeta}>
-                Receipt polling checks transaction inclusion only. The wallet
-                has not verified a no-EVM MRV execution proof.
+                Receipt polling checks transaction inclusion; no-EVM transcript
+                self-check runs after native evidence is returned.
               </div>
               <MrvNativeReceiptStatus state={receiptState} />
             </div>
@@ -722,7 +723,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           {state.via ? ` via ${state.via}` : ""}.
         </div>
         <div style={submitMeta}>Native receipt evidence is checked after inclusion.</div>
-        <div style={submitMeta}>Inclusion status only; no MRV execution proof.</div>
+        <div style={submitMeta}>Validator finality is not established here.</div>
       </div>
     );
   }
@@ -734,7 +735,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
         <div style={submitMeta}>
           No receipt returned within this popup polling window.
         </div>
-        <div style={submitMeta}>No MRV execution proof has been verified.</div>
+        <div style={submitMeta}>No receipt transcript self-check is available.</div>
       </div>
     );
   }
@@ -751,7 +752,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
             {state.code !== undefined ? ` (code ${state.code})` : ""}
           </div>
         )}
-        <div style={submitMeta}>No MRV execution proof has been verified.</div>
+        <div style={submitMeta}>No receipt transcript self-check is available.</div>
       </div>
     );
   }
@@ -808,6 +809,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           ) : (
             <MrvNoEvmReceiptProofTranscriptDetails
               proof={state.receipt.nativeReceipt.noEvmProof}
+              verification={state.receipt.nativeReceipt.noEvmProofVerification}
             />
           )}
         </>
@@ -829,24 +831,42 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
       ) : (
         <div style={submitMeta}>Native receipt evidence unavailable.</div>
       )}
-      <div style={submitMeta}>Inclusion status only; no MRV execution proof has been verified.</div>
+      <div style={submitMeta}>
+        Transcript self-consistency only; validator finality is not established
+        here.
+      </div>
     </div>
   );
 }
 
 function MrvNoEvmReceiptProofTranscriptDetails({
   proof,
+  verification,
 }: {
   proof: WalletMrvNoEvmReceiptProofTranscript;
+  verification: WalletMrvNoEvmReceiptProofVerification | null;
 }) {
+  const isVerified = verification?.status === "verified";
+  const statusText =
+    verification === null
+      ? "Transcript self-check unavailable."
+      : isVerified
+        ? [
+            "Transcript self-check verified:",
+            "count, receipts root, and target receipt hash match.",
+          ].join(" ")
+        : "Transcript self-check mismatch: recomputed transcript values differ.";
+
   return (
     <div
       aria-label="No-EVM receipt-proof transcript"
       style={receiptProofDetails}
     >
       <div style={submitMeta}>
-        No-EVM receipt-proof transcript present; bounded receipt evidence only,
-        not finality proof.
+        No-EVM receipt-proof transcript present; bounded receipt evidence only.
+      </div>
+      <div style={isVerified ? receiptProofVerifiedMeta : receiptProofMismatchMeta}>
+        {statusText}
       </div>
       <div style={submitMeta}>
         {proof.proofType} · {proof.rootAlgorithm} · {proof.receiptCodec}
@@ -862,6 +882,40 @@ function MrvNoEvmReceiptProofTranscriptDetails({
         label="Target receipt"
         value={proof.targetReceiptHash}
       />
+      {verification !== null && (
+        <>
+          <ReceiptProofHashRow
+            label="Count check"
+            value={
+              verification.receiptCountMatches
+                ? "matches"
+                : `declared ${verification.receiptCount} / decoded ${verification.transcriptCount}`
+            }
+          />
+          <ReceiptProofHashRow
+            label="Root check"
+            value={verification.receiptsRootMatches ? "matches" : "mismatch"}
+          />
+          {!verification.receiptsRootMatches && (
+            <ReceiptProofHashRow
+              label="Computed root"
+              value={verification.computedReceiptsRoot}
+            />
+          )}
+          <ReceiptProofHashRow
+            label="Target check"
+            value={
+              verification.targetReceiptHashMatches ? "matches" : "mismatch"
+            }
+          />
+          {!verification.targetReceiptHashMatches && (
+            <ReceiptProofHashRow
+              label="Computed target"
+              value={verification.computedTargetReceiptHash}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1035,6 +1089,16 @@ const submitMeta: CSSProperties = {
   color: "var(--fg-300)",
   fontSize: 10.5,
   lineHeight: 1.45,
+};
+
+const receiptProofVerifiedMeta: CSSProperties = {
+  ...submitMeta,
+  color: "#7bd99c",
+};
+
+const receiptProofMismatchMeta: CSSProperties = {
+  ...submitMeta,
+  color: "#ff9f9f",
 };
 
 const monoWrap: CSSProperties = {
