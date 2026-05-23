@@ -8,12 +8,13 @@
 // Wire shape:
 //   - `to` = NFT contract address (NOT the recipient — the recipient
 //     is encoded into the calldata)
-//   - `valueWeiHex` = 0 (no LYTH attached)
+//   - `valueWeiHex` = 0 (low-level compatibility name; no LYTH attached)
 //   - `data` = hand-rolled safeTransferFrom calldata. Selectors
 //     0x42842e0e for ERC-721 and 0xf242432a for ERC-1155 (amount=1,
 //     data=0x) per the prompt.
-//   - `gasLimitHex` = conservative 250 000 covering both standards
-//     plus Sprintnet's intrinsic-gas envelope overhead.
+//   - `gasLimitHex` = low-level compatibility field carrying a
+//     conservative 250 000 execution-unit limit covering both standards
+//     plus Sprintnet's intrinsic transaction envelope overhead.
 //
 // Pre-submit ownership re-check fires after Sign & send: ERC-721
 // `ownerOf` must match the active vault, ERC-1155 balance must be
@@ -72,12 +73,12 @@ interface SubmitError {
   via: string | null;
 }
 
-// Conservative gas limit covering ERC-721 transferFrom (~50-90k),
-// ERC-1155 safeTransferFrom (~60-100k), and Sprintnet's intrinsic-
-// gas envelope overhead (~24k) with margin. Higher than reality is
-// safe — only actual gas used is paid for under EIP-1559 mechanics.
-const SEND_NFT_GAS_LIMIT = 250_000n;
-const SEND_NFT_GAS_LIMIT_HEX = "0x" + SEND_NFT_GAS_LIMIT.toString(16);
+// Conservative execution-unit limit covering ERC-721 transferFrom (~50-90k),
+// ERC-1155 safeTransferFrom (~60-100k), and Sprintnet's intrinsic
+// transaction envelope overhead (~24k) with margin. Higher than reality is
+// safe: only actual execution consumed is paid for under EIP-1559 mechanics.
+const SEND_NFT_EXECUTION_UNIT_LIMIT = 250_000n;
+const SEND_NFT_EXECUTION_UNIT_LIMIT_HEX = "0x" + SEND_NFT_EXECUTION_UNIT_LIMIT.toString(16);
 
 export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
   const [step, setStep] = useState<Step>("form");
@@ -126,14 +127,10 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
 
   const parsed = validateToAddress(recipient);
   const recipientReady = parsed.addr0x !== null;
-  const estimatedFeeWei = useMemo(() => {
-    if (!feeSuggestion) return null;
-    try {
-      return BigInt(feeSuggestion.maxFeePerGas) * SEND_NFT_GAS_LIMIT;
-    } catch {
-      return null;
-    }
-  }, [feeSuggestion]);
+  const estimatedFeeLythoshi = useMemo(
+    () => computeEstimatedNftFeeLythoshi(feeSuggestion),
+    [feeSuggestion],
+  );
 
   const handleConfirm = async () => {
     if (!fromAddress || parsed.addr0x === null) return;
@@ -197,7 +194,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data,
-        gasLimitHex: SEND_NFT_GAS_LIMIT_HEX,
+        gasLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -288,7 +285,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
   }
 
   if (step === "preview") {
-    const feeStr = estimatedFeeWei !== null ? formatWeiAsLyth(estimatedFeeWei) : "—";
+    const feeStr = estimatedFeeLythoshi !== null ? lythoshiToLythString(estimatedFeeLythoshi) : "—";
     return (
       <Shell title="Review send" onBack={() => setStep("form")}>
         <div className="ext-card" style={{ padding: 14 }}>
@@ -301,7 +298,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
           <div style={{ marginTop: 8, paddingTop: 10, borderTop: "1px solid var(--fg-700)" }}>
             <Row label="Network fee" value={`${feeStr} LYTH`} emphasis />
             <div style={{ fontSize: 10, color: "var(--fg-500)", marginTop: 4, fontFamily: "var(--f-mono)" }}>
-              Estimated · gas limit {SEND_NFT_GAS_LIMIT.toLocaleString()}
+              Estimated for this NFT transfer
             </div>
             {feeError && <div style={errText}>{feeError}</div>}
           </div>
@@ -346,7 +343,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
       >
         Sending an NFT is irreversible. Confirm the recipient matches
         the wallet you intend; transfers to a contract that can&apos;t
-        receive ERC-721 / ERC-1155 will revert and waste gas.
+        receive ERC-721 / ERC-1155 will revert and waste the network fee.
       </div>
       <Foot>
         <button type="button" onClick={onBack} style={btn2}>Cancel</button>
@@ -640,14 +637,31 @@ function shortenAddr(addr: string): string {
   return addr.length <= 18 ? addr : `${addr.slice(0, 8)}…${addr.slice(-6)}`;
 }
 
-function formatWeiAsLyth(wei: bigint): string {
-  const SCALE = 1_000_000_000_000_000_000n;
-  const whole = wei / SCALE;
-  const frac = wei % SCALE;
+const NATIVE_LYTH_DECIMALS = 8;
+const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+
+export function computeEstimatedNftFeeLythoshi(
+  fee: FeeSuggestion | null,
+): bigint | null {
+  if (!fee) return null;
+  try {
+    return BigInt(fee.maxFeePerGas) * SEND_NFT_EXECUTION_UNIT_LIMIT;
+  } catch {
+    return null;
+  }
+}
+
+export function lythoshiToLythString(lythoshi: bigint): string {
+  if (lythoshi < 0n) return "0";
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  const frac = lythoshi % LYTHOSHI_PER_LYTH;
   if (frac === 0n) return whole.toString();
-  const fracStr = frac.toString().padStart(18, "0").replace(/0+$/, "");
+  const fracStr = frac
+    .toString()
+    .padStart(NATIVE_LYTH_DECIMALS, "0")
+    .replace(/0+$/, "");
   if (fracStr.length === 0) return whole.toString();
-  return `${whole.toString()}.${fracStr.slice(0, 6)}`;
+  return `${whole.toString()}.${fracStr}`;
 }
 
 // ---------------------------------------------------------------------------
