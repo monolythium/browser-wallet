@@ -242,7 +242,67 @@ describe("bridge route disclosure display", () => {
     expect(html).toContain("route cooldown missing");
     expect(html).toContain("per-asset drain cap missing or zero");
     expect(html).toContain("slashable insurance pool missing or zero");
-    expect(html).toContain("Submit bridge");
+    expect(html).toContain("Transfer intent / quote preview");
+    expect(html).toContain("The SDK can evaluate a transfer intent");
+    expect(html).toContain("transfer amount missing or zero");
+    expect(html).toContain("transfer recipient missing");
+    expect(html).toContain("standalone SDK exposes route-intent selection only");
+    expect(html).toContain("standalone SDK exposes no live bridge submit helper");
+    expect(html).toContain("Request quote");
+    expect(html).toContain("disabled");
+  });
+
+  it("renders blocked route quote guards without constructing an intent", () => {
+    const html = renderToStaticMarkup(
+      <Bridge
+        onBack={() => undefined}
+        indexer={{
+          bridgeRouteDisclosures: [
+            sdkBridgeRoute("under-disclosed", {
+              cooldownSeconds: 0,
+              drainCapAtomic: "0",
+              insuranceAtomic: "0",
+            }),
+          ],
+          tokenBalances: [],
+          addressLabel: null,
+          delegationHistory: [],
+          addressActivity: [],
+          errors: {},
+        }}
+      />,
+    );
+
+    expect(html).toContain("No SDK-ranked bridge route is selectable");
+    expect(html).toContain("no SDK-ranked bridge route satisfies the v4.1 disclosure floor");
+    expect(html).toContain("No transfer intent is constructed until an SDK-shaped route is selected.");
+    expect(html).toContain("quote preview requires an SDK-selected route");
+    expect(html).not.toContain("transfer amount missing or zero");
+    expect(html).toContain("Request quote");
+    expect(html).toContain("disabled");
+  });
+
+  it("renders no-disclosure behavior without leaking route defaults", () => {
+    const html = renderToStaticMarkup(
+      <Bridge
+        onBack={() => undefined}
+        indexer={{
+          tokenBalances: [],
+          addressLabel: null,
+          delegationHistory: [],
+          addressActivity: [],
+          errors: {},
+        }}
+      />,
+    );
+
+    expect(html).toContain("Disclosure unavailable");
+    expect(html).toContain("No bridgeRouteDisclosure or bridgeRouteDisclosures field was");
+    expect(html).toContain("No transfer intent is constructed until an SDK-shaped route is selected.");
+    expect(html).toContain("no route disclosures supplied");
+    expect(html).not.toContain("SDK rank");
+    expect(html).not.toContain("Asset</div>");
+    expect(html).toContain("Request quote");
     expect(html).toContain("disabled");
   });
 });
