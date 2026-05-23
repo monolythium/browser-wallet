@@ -9,6 +9,7 @@ import {
   buildEncryptedSubmission as sdkBuildEncryptedSubmission,
   type EncryptionKey,
   type NativeEvmTxFields,
+  type NativeTxExtensionLike,
 } from "@monolythium/core-sdk/crypto";
 import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
 import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
@@ -25,6 +26,8 @@ export interface EthSendTxFields {
   gasPrice?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
+  /** Optional native typed transaction extensions, used by MRV v1 deploy/call. */
+  extensions?: readonly NativeTxExtensionLike[];
   /** Hex chain id of the target chain (e.g. `0x10F2C` for Sprintnet). */
   chainIdHex: string;
 }
@@ -313,6 +316,7 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
     to: req.to ?? null,
     value: req.value ?? "0x0",
     input: req.data ?? "0x",
+    ...(req.extensions !== undefined ? { extensions: req.extensions } : {}),
   };
 }
 

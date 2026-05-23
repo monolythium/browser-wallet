@@ -828,6 +828,33 @@ export async function bgWalletBuildMrvCallPlan(args: {
   return send("wallet-mrv-build-call-plan", args);
 }
 
+export async function bgWalletSubmitMrvNativePlan(args: {
+  plan: WalletMrvNativeSubmissionPlan;
+  chainIdHex: string;
+}): Promise<
+  { ok: true; result: SendTxResult }
+  | {
+      ok: false;
+      reason?: string;
+      code?: number;
+      method?: string;
+      via?: string;
+    }
+> {
+  type Reply =
+    | { ok: true; txHash: string; via: string }
+    | {
+        ok: false;
+        reason?: string;
+        code?: number;
+        method?: string;
+        via?: string;
+      };
+  const r = await send<Reply>("wallet-mrv-submit-plan", args);
+  if (!r.ok) return r;
+  return { ok: true, result: { txHash: r.txHash, via: r.via } };
+}
+
 export async function bgListPending(): Promise<PendingApproval[]> {
   return send<PendingApproval[]>("list-pending");
 }
