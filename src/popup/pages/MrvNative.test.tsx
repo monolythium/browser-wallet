@@ -184,6 +184,13 @@ describe("MrvNative", () => {
             status: "0x1",
             blockNumber: "0x64",
             contractAddress: "0x2222222222222222222222222222222222222222",
+            nativeReceipt: {
+              schema: "riscv.receipt.v1",
+              txType: 0x41,
+              artifactHash: "0x" + "b".repeat(64),
+              eventCount: 1,
+              noEvmProofStatus: "missing",
+            },
           },
         }}
       />,
@@ -191,6 +198,8 @@ describe("MrvNative", () => {
     expect(includedHtml).toContain("Receipt status: included");
     expect(includedHtml).toContain("block 100");
     expect(includedHtml).toContain("Contract 0x222222");
+    expect(includedHtml).toContain("Native receipt riscv.receipt.v1");
+    expect(includedHtml).toContain("returned no no-EVM proof payload");
 
     const unavailableHtml = renderToStaticMarkup(
       <MrvNativePlanPreview
