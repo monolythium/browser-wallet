@@ -122,6 +122,8 @@ export interface SendTxRequest {
     gasPrice?: string;
     nonce?: string;
     chainId?: string;
+    mempoolClass?: number;
+    class?: number;
   };
   view: SendTxView;
 }
@@ -814,6 +816,8 @@ export async function bgWalletSendTx(args: {
    *  floor). NFT calldata pushes that floor well past 21k, so the
    *  Send-NFT page passes a conservative overhead-aware estimate. */
   gasLimitHex?: string;
+  /** Optional encrypted-mempool class override for SDK-built action plans. */
+  mempoolClass?: number;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {

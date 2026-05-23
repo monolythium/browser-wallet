@@ -10,6 +10,7 @@
 
 import type { ReactNode, CSSProperties } from "react";
 import { useState, useEffect } from "react";
+import { PRECOMPILE_ADDRESSES } from "@monolythium/core-sdk";
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
@@ -2462,14 +2463,22 @@ interface DecodedCall {
   name: string;
   /** Selector hex, e.g. `0xa9059cbb`. */
   selector: string;
+  /** Optional protocol surface for first-party native precompile actions. */
+  surface?: "native-market";
   /** Decoded args in display order. */
   args: Array<{ name: string; type: string; value: string }>;
 }
 
-function decodeCalldata(data: string): DecodedCall | null {
+const CLOB_PLACE_LIMIT_ORDER_SELECTOR = "0x2468786f";
+
+export function decodeCalldata(data: string, to?: string): DecodedCall | null {
   if (!data || !data.startsWith("0x") || data.length < 10) return null;
   const selector = data.slice(0, 10).toLowerCase();
   const body = data.slice(10);
+  if (to?.toLowerCase() === PRECOMPILE_ADDRESSES.CLOB.toLowerCase()) {
+    const nativeMarket = decodeNativeMarketCalldata(selector, body);
+    if (nativeMarket) return nativeMarket;
+  }
   switch (selector) {
     case "0xa9059cbb": {
       // ERC-20 transfer(address,uint256)
@@ -2538,6 +2547,44 @@ function decodeCalldata(data: string): DecodedCall | null {
   }
 }
 
+function decodeNativeMarketCalldata(selector: string, body: string): DecodedCall | null {
+  switch (selector) {
+    case CLOB_PLACE_LIMIT_ORDER_SELECTOR: {
+      // placeLimitOrder(bytes32,bytes32,uint8,uint256,uint256,uint64)
+      const base = readBytes32(body, 0);
+      const quote = readBytes32(body, 1);
+      const side = readUint256(body, 2);
+      const price = readUint256(body, 3);
+      const quantity = readUint256(body, 4);
+      const expiresAtBlock = readUint256(body, 5);
+      if (!base || !quote || side == null || price == null || quantity == null || expiresAtBlock == null) {
+        return null;
+      }
+      const sideLabel = side === 0n ? "buy" : side === 1n ? "sell" : `unknown (${side.toString(10)})`;
+      return {
+        name: "placeLimitOrder",
+        selector,
+        surface: "native-market",
+        args: [
+          { name: "base asset", type: "bytes32", value: base },
+          { name: "quote asset", type: "bytes32", value: quote },
+          { name: "side", type: "uint8", value: sideLabel },
+          { name: "price", type: "uint256", value: price.toString(10) },
+          { name: "quantity", type: "uint256", value: quantity.toString(10) },
+          { name: "expires at block", type: "uint64", value: expiresAtBlock.toString(10) },
+        ],
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function readBytes32(body: string, slot: number): string | null {
+  const word = body.slice(slot * 64, (slot + 1) * 64);
+  return word.length === 64 ? "0x" + word : null;
+}
+
 function readAddress(body: string, slot: number): string | null {
   const word = body.slice(slot * 64, (slot + 1) * 64);
   if (word.length !== 64) return null;
@@ -2600,7 +2647,7 @@ export function ReqSendTx({
   const value = tx.value;
   const data = tx.data ?? "0x";
   const hasCalldata = data.length > 2;
-  const decoded = hasCalldata ? decodeCalldata(data) : null;
+  const decoded = hasCalldata ? decodeCalldata(data, tx.to) : null;
   const [showDecoded, setShowDecoded] = useState(true);
 
   return (
@@ -2731,7 +2778,7 @@ export function ReqSendTx({
       {decoded && (
         <div className="req-section">
           <div className="req-section__h">
-            <span>Decoded call</span>
+            <span>{decoded.surface === "native-market" ? "Native market action" : "Decoded call"}</span>
             <button onClick={() => setShowDecoded((v) => !v)}>
               {showDecoded ? "hide" : "show"} ↓
             </button>
