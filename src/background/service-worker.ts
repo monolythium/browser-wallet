@@ -27,6 +27,12 @@ import {
   MONOLYTHIUM_TESTNET_CHAIN_ID,
 } from "@monolythium/core-sdk";
 import {
+  buildWalletMrvCallNativePlan,
+  buildWalletMrvDeployNativePlan,
+  type WalletMrvCallNativePlanInput,
+  type WalletMrvDeployNativePlanInput,
+} from "../shared/mrv-native-plan.js";
+import {
   enqueue as enqueueApproval,
   resolve as resolveApproval,
   rejectByWindow,
@@ -4331,6 +4337,125 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const fee = await suggestFee(p.chainIdHex);
         return { ok: true, ...fee };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-mrv-build-deploy-plan": {
+      const p = message.payload as {
+        artifactBytes?: string;
+        artifactHash?: string;
+        chainIdHex?: string;
+        executionUnitLimitHex?: string;
+        maxExecutionFeeLythoshiHex?: string;
+        priorityTipLythoshiHex?: string;
+        valueWeiHex?: string;
+      };
+      if (typeof p?.artifactBytes !== "string") {
+        return { ok: false, reason: "missing artifactBytes" };
+      }
+      if (typeof p?.executionUnitLimitHex !== "string") {
+        return { ok: false, reason: "missing executionUnitLimitHex" };
+      }
+      const chainIdHex = p.chainIdHex ?? session.chainId;
+      if (!chainRequiresMlDsa(chainIdHex)) {
+        return { ok: false, reason: "MRV planning is only wired for Sprintnet today" };
+      }
+      if (!isUnlockedV4()) {
+        return { ok: false, reason: "wallet locked" };
+      }
+      const fromAddress = getUnlockedAddressV4();
+      if (!fromAddress) {
+        return { ok: false, reason: "wallet has no unlocked address" };
+      }
+      try {
+        const nonceRes = await sprintnetJsonRpc<string>(
+          "eth_getTransactionCount",
+          [fromAddress, "latest"],
+        );
+        const fee =
+          p.maxExecutionFeeLythoshiHex === undefined ||
+          p.priorityTipLythoshiHex === undefined
+            ? await suggestFee(chainIdHex)
+            : null;
+        const input: WalletMrvDeployNativePlanInput = {
+          fromAddress,
+          chainIdHex,
+          nonceHex: nonceRes.result,
+          executionUnitLimitHex: p.executionUnitLimitHex,
+          maxExecutionFeeLythoshiHex:
+            p.maxExecutionFeeLythoshiHex ?? fee?.maxFeePerGas ?? "0x0",
+          artifactBytes: p.artifactBytes,
+        };
+        if (p.priorityTipLythoshiHex !== undefined) {
+          input.priorityTipLythoshiHex = p.priorityTipLythoshiHex;
+        } else if (fee !== null) {
+          input.priorityTipLythoshiHex = fee.maxPriorityFeePerGas;
+        }
+        if (p.valueWeiHex !== undefined) input.valueWeiHex = p.valueWeiHex;
+        if (p.artifactHash !== undefined) input.artifactHash = p.artifactHash;
+        return { ok: true, plan: buildWalletMrvDeployNativePlan(input) };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "wallet-mrv-build-call-plan": {
+      const p = message.payload as {
+        contractAddress?: string;
+        input?: string;
+        chainIdHex?: string;
+        executionUnitLimitHex?: string;
+        maxExecutionFeeLythoshiHex?: string;
+        priorityTipLythoshiHex?: string;
+        valueWeiHex?: string;
+      };
+      if (typeof p?.contractAddress !== "string") {
+        return { ok: false, reason: "missing contractAddress" };
+      }
+      if (typeof p?.input !== "string") {
+        return { ok: false, reason: "missing input" };
+      }
+      if (typeof p?.executionUnitLimitHex !== "string") {
+        return { ok: false, reason: "missing executionUnitLimitHex" };
+      }
+      const chainIdHex = p.chainIdHex ?? session.chainId;
+      if (!chainRequiresMlDsa(chainIdHex)) {
+        return { ok: false, reason: "MRV planning is only wired for Sprintnet today" };
+      }
+      if (!isUnlockedV4()) {
+        return { ok: false, reason: "wallet locked" };
+      }
+      const fromAddress = getUnlockedAddressV4();
+      if (!fromAddress) {
+        return { ok: false, reason: "wallet has no unlocked address" };
+      }
+      try {
+        const nonceRes = await sprintnetJsonRpc<string>(
+          "eth_getTransactionCount",
+          [fromAddress, "latest"],
+        );
+        const fee =
+          p.maxExecutionFeeLythoshiHex === undefined ||
+          p.priorityTipLythoshiHex === undefined
+            ? await suggestFee(chainIdHex)
+            : null;
+        const input: WalletMrvCallNativePlanInput = {
+          fromAddress,
+          chainIdHex,
+          nonceHex: nonceRes.result,
+          executionUnitLimitHex: p.executionUnitLimitHex,
+          maxExecutionFeeLythoshiHex:
+            p.maxExecutionFeeLythoshiHex ?? fee?.maxFeePerGas ?? "0x0",
+          contractAddress: p.contractAddress,
+          input: p.input,
+        };
+        if (p.priorityTipLythoshiHex !== undefined) {
+          input.priorityTipLythoshiHex = p.priorityTipLythoshiHex;
+        } else if (fee !== null) {
+          input.priorityTipLythoshiHex = fee.maxPriorityFeePerGas;
+        }
+        if (p.valueWeiHex !== undefined) input.valueWeiHex = p.valueWeiHex;
+        return { ok: true, plan: buildWalletMrvCallNativePlan(input) };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }

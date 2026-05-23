@@ -2,10 +2,12 @@
 // All calls go through chrome.runtime.sendMessage with `{ kind: "popup", ... }`.
 
 import type { WalletTokenBalance } from "../shared/token-balances.js";
+import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 export type {
   WalletTokenBalance,
   WalletTokenBalanceMrcIdentity,
 } from "../shared/token-balances.js";
+export type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 
 export type Custody = "tpm" | "passkey" | "hw" | "sw";
 export type SignAlgo = "secp256k1" | "slhdsa" | "mldsa";
@@ -796,6 +798,34 @@ export async function bgWalletSendTx(args: {
   const r = await send<Reply>("wallet-send-tx", args);
   if (!r.ok) return r;
   return { ok: true, result: { txHash: r.txHash, via: r.via } };
+}
+
+export async function bgWalletBuildMrvDeployPlan(args: {
+  artifactBytes: string;
+  artifactHash?: string;
+  chainIdHex?: string;
+  executionUnitLimitHex: string;
+  maxExecutionFeeLythoshiHex?: string;
+  priorityTipLythoshiHex?: string;
+  valueWeiHex?: string;
+}): Promise<
+  { ok: true; plan: WalletMrvNativeSubmissionPlan } | { ok: false; reason?: string }
+> {
+  return send("wallet-mrv-build-deploy-plan", args);
+}
+
+export async function bgWalletBuildMrvCallPlan(args: {
+  contractAddress: string;
+  input: string;
+  chainIdHex?: string;
+  executionUnitLimitHex: string;
+  maxExecutionFeeLythoshiHex?: string;
+  priorityTipLythoshiHex?: string;
+  valueWeiHex?: string;
+}): Promise<
+  { ok: true; plan: WalletMrvNativeSubmissionPlan } | { ok: false; reason?: string }
+> {
+  return send("wallet-mrv-build-call-plan", args);
 }
 
 export async function bgListPending(): Promise<PendingApproval[]> {
