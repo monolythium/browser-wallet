@@ -2470,6 +2470,9 @@ interface DecodedCall {
 }
 
 const CLOB_PLACE_LIMIT_ORDER_SELECTOR = "0x2468786f";
+const CLOB_PLACE_MARKET_ORDER_SELECTOR = "0xb9b1fa86";
+const CLOB_PLACE_MARKET_ORDER_EX_SELECTOR = "0xa6f092f0";
+const CLOB_CANCEL_ORDER_SELECTOR = "0x7489ec23";
 
 export function decodeCalldata(data: string, to?: string): DecodedCall | null {
   if (!data || !data.startsWith("0x") || data.length < 10) return null;
@@ -2573,6 +2576,69 @@ function decodeNativeMarketCalldata(selector: string, body: string): DecodedCall
           { name: "quantity", type: "uint256", value: quantity.toString(10) },
           { name: "expires at block", type: "uint64", value: expiresAtBlock.toString(10) },
         ],
+      };
+    }
+    case CLOB_PLACE_MARKET_ORDER_SELECTOR: {
+      // placeMarketOrder(bytes32,bytes32,uint8,uint256,uint16)
+      const base = readBytes32(body, 0);
+      const quote = readBytes32(body, 1);
+      const side = readUint256(body, 2);
+      const amount = readUint256(body, 3);
+      const maxSlippageBps = readUint256(body, 4);
+      if (!base || !quote || side == null || amount == null || maxSlippageBps == null) {
+        return null;
+      }
+      const sideLabel = side === 0n ? "buy" : side === 1n ? "sell" : `unknown (${side.toString(10)})`;
+      return {
+        name: "placeMarketOrder",
+        selector,
+        surface: "native-market",
+        args: [
+          { name: "base asset", type: "bytes32", value: base },
+          { name: "quote asset", type: "bytes32", value: quote },
+          { name: "side", type: "uint8", value: sideLabel },
+          { name: "amount", type: "uint256", value: amount.toString(10) },
+          { name: "max slippage bps", type: "uint16", value: maxSlippageBps.toString(10) },
+        ],
+      };
+    }
+    case CLOB_PLACE_MARKET_ORDER_EX_SELECTOR: {
+      // placeMarketOrderEx(bytes32,bytes32,uint8,uint256,uint16,uint8)
+      const base = readBytes32(body, 0);
+      const quote = readBytes32(body, 1);
+      const side = readUint256(body, 2);
+      const amount = readUint256(body, 3);
+      const maxSlippageBps = readUint256(body, 4);
+      const mode = readUint256(body, 5);
+      if (!base || !quote || side == null || amount == null || maxSlippageBps == null || mode == null) {
+        return null;
+      }
+      const sideLabel = side === 0n ? "buy" : side === 1n ? "sell" : `unknown (${side.toString(10)})`;
+      const modeLabel =
+        mode === 0n ? "fill or refund" : mode === 1n ? "fill or rest at cap" : `unknown (${mode.toString(10)})`;
+      return {
+        name: "placeMarketOrderEx",
+        selector,
+        surface: "native-market",
+        args: [
+          { name: "base asset", type: "bytes32", value: base },
+          { name: "quote asset", type: "bytes32", value: quote },
+          { name: "side", type: "uint8", value: sideLabel },
+          { name: "amount", type: "uint256", value: amount.toString(10) },
+          { name: "max slippage bps", type: "uint16", value: maxSlippageBps.toString(10) },
+          { name: "mode", type: "uint8", value: modeLabel },
+        ],
+      };
+    }
+    case CLOB_CANCEL_ORDER_SELECTOR: {
+      // cancelOrder(bytes32)
+      const orderId = readBytes32(body, 0);
+      if (!orderId) return null;
+      return {
+        name: "cancelOrder",
+        selector,
+        surface: "native-market",
+        args: [{ name: "order id", type: "bytes32", value: orderId }],
       };
     }
     default:

@@ -117,6 +117,72 @@ describe("ReqSendTx native market calldata decode", () => {
     ]);
     expect(decodeCalldata(calldata, PRECOMPILE_ADDRESSES.BRIDGE)).toBeNull();
   });
+
+  it("decodes CLOB placeMarketOrder approvals only for the CLOB precompile", () => {
+    const base = "33".repeat(32);
+    const quote = "44".repeat(32);
+    const calldata =
+      "0xb9b1fa86" +
+      base +
+      quote +
+      word(0n) +
+      word(75n) +
+      word(250n);
+
+    const decoded = decodeCalldata(calldata, PRECOMPILE_ADDRESSES.CLOB);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("placeMarketOrder");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["base asset", `0x${base}`],
+      ["quote asset", `0x${quote}`],
+      ["side", "buy"],
+      ["amount", "75"],
+      ["max slippage bps", "250"],
+    ]);
+    expect(decodeCalldata(calldata, PRECOMPILE_ADDRESSES.BRIDGE)).toBeNull();
+  });
+
+  it("decodes CLOB placeMarketOrderEx approvals only for the CLOB precompile", () => {
+    const base = "55".repeat(32);
+    const quote = "66".repeat(32);
+    const calldata =
+      "0xa6f092f0" +
+      base +
+      quote +
+      word(1n) +
+      word(125n) +
+      word(100n) +
+      word(1n);
+
+    const decoded = decodeCalldata(calldata, PRECOMPILE_ADDRESSES.CLOB);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("placeMarketOrderEx");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["base asset", `0x${base}`],
+      ["quote asset", `0x${quote}`],
+      ["side", "sell"],
+      ["amount", "125"],
+      ["max slippage bps", "100"],
+      ["mode", "fill or rest at cap"],
+    ]);
+    expect(decodeCalldata(calldata, PRECOMPILE_ADDRESSES.BRIDGE)).toBeNull();
+  });
+
+  it("decodes CLOB cancelOrder approvals only for the CLOB precompile", () => {
+    const orderId = "77".repeat(32);
+    const calldata = "0x7489ec23" + orderId;
+
+    const decoded = decodeCalldata(calldata, PRECOMPILE_ADDRESSES.CLOB);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("cancelOrder");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["order id", `0x${orderId}`],
+    ]);
+    expect(decodeCalldata(calldata, PRECOMPILE_ADDRESSES.BRIDGE)).toBeNull();
+  });
 });
 
 function word(value: bigint): string {
