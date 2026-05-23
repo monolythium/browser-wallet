@@ -227,6 +227,7 @@ import {
   readRedemptionQueue,
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
+import { readNativeMarketState } from "./native-market-state-client.js";
 
 interface WalletMrvNativeReceiptEvidence {
   schema: string | null;
@@ -5148,6 +5149,32 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (typeof p.valueWeiHex === "string") input.valueWeiHex = p.valueWeiHex;
       if (typeof p.data === "string") input.data = p.data;
       const outcome = await previewTransactionHooks(input);
+      return { ok: true, outcome };
+    }
+    case "wallet-native-market-state": {
+      const p = message.payload as
+        | {
+            marketId?: string;
+            orderId?: string;
+            listingId?: string;
+            collectionId?: string;
+            includeSpotOrders?: boolean;
+            limit?: number;
+          }
+        | undefined;
+      const filter = {
+        ...(typeof p?.marketId === "string" ? { marketId: p.marketId } : {}),
+        ...(typeof p?.orderId === "string" ? { orderId: p.orderId } : {}),
+        ...(typeof p?.listingId === "string" ? { listingId: p.listingId } : {}),
+        ...(typeof p?.collectionId === "string"
+          ? { collectionId: p.collectionId }
+          : {}),
+        ...(typeof p?.includeSpotOrders === "boolean"
+          ? { includeSpotOrders: p.includeSpotOrders }
+          : {}),
+        ...(typeof p?.limit === "number" ? { limit: p.limit } : {}),
+      };
+      const outcome = await readNativeMarketState(filter);
       return { ok: true, outcome };
     }
     case "chain-signing-activity": {
