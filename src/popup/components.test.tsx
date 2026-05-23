@@ -29,6 +29,11 @@ import type {
 } from "./bg.js";
 import type { Account } from "./demo-data.js";
 
+const NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
+  "systemModule",
+  "0x4d41524b45545f4e41544956455f4d4f445f5631",
+);
+
 function sdkBridgeRoute(
   routeId: string,
   overrides: Partial<WalletBridgeRouteDisclosure> = {},
@@ -91,6 +96,66 @@ describe("ReqSendTx native fee helpers", () => {
 });
 
 describe("ReqSendTx native market calldata decode", () => {
+  it("decodes native bincode spot limit order approvals only for the market system module", () => {
+    const marketId = "11".repeat(32);
+    const owner = "22".repeat(20);
+    const payload =
+      "0x000000000100000011111111111111111111111111111111111111111111111111111111111111110000000022222222222222222222222222222222222222220700000000000000000000007d00000000000000000000000000000032000000000000000000000000000000e703000000000000";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeSpotPlaceLimitOrder");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["market id", `0x${marketId}`],
+      ["owner", addressToTypedBech32("user", `0x${owner}`)],
+      ["nonce", "7"],
+      ["side", "bid"],
+      ["price", "125"],
+      ["quantity", "50"],
+      ["expires at block", "999"],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
+  it("decodes native bincode spot cancel order approvals only for the market system module", () => {
+    const orderId = "33".repeat(32);
+    const caller = "44".repeat(20);
+    const payload =
+      "0x00000000040000003333333333333333333333333333333333333333333333333333333333333333000000004444444444444444444444444444444444444444";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeSpotCancelOrder");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["order id", `0x${orderId}`],
+      ["caller", addressToTypedBech32("user", `0x${caller}`)],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
+  it("decodes native bincode NFT buy listing approvals only for the market system module", () => {
+    const listingId = "55".repeat(32);
+    const buyer = "66".repeat(20);
+    const payload =
+      "0x010000000100000055555555555555555555555555555555555555555555555555555555555555550000000066666666666666666666666666666666666666660903000000000000";
+
+    const decoded = decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-market");
+    expect(decoded?.name).toBe("nativeNftBuyListing");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["listing id", `0x${listingId}`],
+      ["buyer", addressToTypedBech32("user", `0x${buyer}`)],
+      ["current block", "777"],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
   it("decodes CLOB placeLimitOrder approvals only for the CLOB precompile", () => {
     const base = "11".repeat(32);
     const quote = "22".repeat(32);
