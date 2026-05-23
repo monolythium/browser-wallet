@@ -1,6 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PRECOMPILE_ADDRESSES, addressToTypedBech32 } from "@monolythium/core-sdk";
+import {
+  NATIVE_AGENT_MODULE_ADDRESS,
+  PRECOMPILE_ADDRESSES,
+  addressToTypedBech32,
+  encodeNativeAgentCreateEscrowCall,
+  encodeNativeAgentRecordReputationCall,
+  encodeNativeAgentSetSpendingPolicyCall,
+} from "@monolythium/core-sdk";
 import {
   applyFeeTier,
   AssetList,
@@ -371,6 +378,105 @@ describe("ReqSendTx native market calldata decode", () => {
       ["order id", `0x${orderId}`],
     ]);
     expect(decodeCalldata(calldata, PRECOMPILE_ADDRESSES.BRIDGE)).toBeNull();
+  });
+});
+
+describe("ReqSendTx native agent calldata decode", () => {
+  it("decodes native spending-policy approvals only for the agent system module", () => {
+    const owner = "11".repeat(20);
+    const controller = "22".repeat(20);
+    const assetId = "33".repeat(32);
+    const payload = encodeNativeAgentSetSpendingPolicyCall({
+      owner: `0x${owner}`,
+      controller: `0x${controller}`,
+      nonce: 7,
+      assetId: `0x${assetId}`,
+      perActionLimit: "125",
+      windowLimit: "500",
+      windowSecs: 3600,
+    });
+
+    const decoded = decodeCalldata(payload, NATIVE_AGENT_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-agent");
+    expect(decoded?.name).toBe("nativeAgentSetSpendingPolicy");
+    expect(decoded?.selector).toBe("native-bincode");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["owner", addressToTypedBech32("user", `0x${owner}`)],
+      ["controller", addressToTypedBech32("user", `0x${controller}`)],
+      ["nonce", "7"],
+      ["asset id", `0x${assetId}`],
+      ["per-action limit", "125"],
+      ["window limit", "500"],
+      ["window seconds", "3600"],
+    ]);
+    expect(decodeCalldata(payload, NATIVE_MARKET_MODULE_ADDRESS)).toBeNull();
+  });
+
+  it("decodes native escrow approvals only for the agent system module", () => {
+    const buyer = "11".repeat(20);
+    const provider = "22".repeat(20);
+    const arbiter = "33".repeat(20);
+    const assetId = "44".repeat(32);
+    const termsHash = "55".repeat(32);
+    const payload = encodeNativeAgentCreateEscrowCall({
+      buyer: `0x${buyer}`,
+      provider: `0x${provider}`,
+      arbiter: `0x${arbiter}`,
+      nonce: 9,
+      assetId: `0x${assetId}`,
+      amount: "123",
+      termsHash: `0x${termsHash}`,
+    });
+
+    const decoded = decodeCalldata(payload, NATIVE_AGENT_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-agent");
+    expect(decoded?.name).toBe("nativeAgentCreateEscrow");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["buyer", addressToTypedBech32("user", `0x${buyer}`)],
+      ["provider", addressToTypedBech32("user", `0x${provider}`)],
+      ["arbiter", addressToTypedBech32("user", `0x${arbiter}`)],
+      ["nonce", "9"],
+      ["asset id", `0x${assetId}`],
+      ["amount", "123"],
+      ["terms hash", `0x${termsHash}`],
+    ]);
+    expect(decodeCalldata(payload, PRECOMPILE_ADDRESSES.CLOB)).toBeNull();
+  });
+
+  it("decodes native reputation approvals only for the agent system module", () => {
+    const reviewer = "66".repeat(20);
+    const subject = "77".repeat(20);
+    const payloadHash = "88".repeat(32);
+    const payload = encodeNativeAgentRecordReputationCall({
+      reviewer: `0x${reviewer}`,
+      subject: `0x${subject}`,
+      categoryId: 42,
+      scores: {
+        speed: 5,
+        quality: 4,
+        communication: 3,
+        accuracy: 2,
+      },
+      payloadHash: `0x${payloadHash}`,
+    });
+
+    const decoded = decodeCalldata(payload, NATIVE_AGENT_MODULE_ADDRESS);
+
+    expect(decoded?.surface).toBe("native-agent");
+    expect(decoded?.name).toBe("nativeAgentRecordReputation");
+    expect(decoded?.args.map((arg) => [arg.name, arg.value])).toEqual([
+      ["reviewer", addressToTypedBech32("user", `0x${reviewer}`)],
+      ["subject", addressToTypedBech32("user", `0x${subject}`)],
+      ["category id", "42"],
+      ["speed", "5"],
+      ["quality", "4"],
+      ["communication", "3"],
+      ["accuracy", "2"],
+      ["payload hash", `0x${payloadHash}`],
+    ]);
+    expect(decodeCalldata(`${payload}00`, NATIVE_AGENT_MODULE_ADDRESS)).toBeNull();
   });
 });
 
