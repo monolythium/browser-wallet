@@ -8,6 +8,7 @@ import {
   collectBridgeRouteDisclosuresFromIndexer,
   formatIndexedTokenBalanceRow,
   formatBridgeRouteDisclosureDisplay,
+  formatMrcHolderDisplayLine,
   formatExecutionUnits,
   formatLythoshiAmountHex,
   formatLythoshiPerExecutionUnit,
@@ -126,6 +127,17 @@ describe("indexed token balance display", () => {
       subtitle: "asset 0xaaaaaaaaaaaa…aaaaaaaa · updated at block 88",
       unitsLabel: "raw units",
     });
+  });
+
+  it("formats native MRC holder summary rows without inventing totals", () => {
+    expect(
+      formatMrcHolderDisplayLine({
+        rank: 1,
+        address: "0x1111111111111111111111111111111111111111",
+        balance: "42",
+        updatedAtBlock: 12345,
+      }),
+    ).toBe("#1 0x11111111…1111 · 42 · block 12,345");
   });
 });
 

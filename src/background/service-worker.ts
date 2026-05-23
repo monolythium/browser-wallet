@@ -202,9 +202,12 @@ import {
 } from "../shared/indexer-status.js";
 import {
   collectWalletBridgeRouteDisclosures,
+  validateWalletMrcHoldersResponse,
   validateWalletTokenBalanceList,
   type WalletBridgeRouteDisclosure,
   type WalletBridgeRouteReadiness,
+  type WalletMrcHolderStandard,
+  type WalletMrcHoldersResponse,
   type WalletTokenBalance,
 } from "../shared/token-balances.js";
 import {
@@ -1419,6 +1422,9 @@ interface IndexerSnapshotRaw {
   errors: Record<string, string>;
 }
 
+const MRC_HOLDER_LOOKUP_ROW_LIMIT = 4;
+const MRC_HOLDER_LOOKUP_LIMIT = 3;
+
 function readTokenBalanceRows(input: unknown): unknown[] {
   if (Array.isArray(input)) return input;
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -1426,6 +1432,93 @@ function readTokenBalanceRows(input: unknown): unknown[] {
   }
   const r = input as Record<string, unknown>;
   return Array.isArray(r.tokenBalances) ? r.tokenBalances : [];
+}
+
+interface MrcHolderLookup {
+  standard: WalletMrcHolderStandard;
+  assetId: string;
+  tokenId: string;
+  key: string;
+}
+
+function normalizeMrcHolderStandard(
+  standard: string | undefined,
+): WalletMrcHolderStandard | null {
+  const normalized = standard?.toLowerCase().replace(/[-_]/g, "");
+  if (normalized !== "mrc721" && normalized !== "mrc1155") return null;
+  return normalized;
+}
+
+function mrcHolderLookupForRow(row: WalletTokenBalance): MrcHolderLookup | null {
+  const standard = normalizeMrcHolderStandard(row.mrc?.standard);
+  const assetId = row.mrc?.assetId;
+  const tokenId = row.mrc?.tokenId;
+  if (!standard || !assetId || !tokenId) return null;
+  return {
+    standard,
+    assetId,
+    tokenId,
+    key: `${standard}:${assetId}:${tokenId}`,
+  };
+}
+
+function identityMatchesMrcHolders(
+  lookup: MrcHolderLookup,
+  response: WalletMrcHoldersResponse,
+): boolean {
+  return (
+    response.standard === lookup.standard &&
+    response.assetId === lookup.assetId &&
+    response.tokenId === lookup.tokenId
+  );
+}
+
+async function enrichMrcHolderRows(
+  tokenBalances: WalletTokenBalance[],
+): Promise<{ tokenBalances: WalletTokenBalance[]; error?: string }> {
+  const lookups: MrcHolderLookup[] = [];
+  const seen = new Set<string>();
+  for (const row of tokenBalances) {
+    const lookup = mrcHolderLookupForRow(row);
+    if (lookup === null || seen.has(lookup.key)) continue;
+    seen.add(lookup.key);
+    lookups.push(lookup);
+    if (lookups.length >= MRC_HOLDER_LOOKUP_ROW_LIMIT) break;
+  }
+  if (lookups.length === 0) return { tokenBalances };
+
+  const holderRows = new Map<string, WalletMrcHoldersResponse>();
+  const errors: string[] = [];
+  await Promise.all(
+    lookups.map(async (lookup) => {
+      const response = await settleSprintnetRpc<unknown>("lyth_mrcHolders", [
+        lookup.standard,
+        lookup.assetId,
+        lookup.tokenId,
+        MRC_HOLDER_LOOKUP_LIMIT,
+      ]);
+      if (response.error) {
+        errors.push(response.error);
+        return;
+      }
+      const holders = validateWalletMrcHoldersResponse(response.value);
+      if (holders === null || !identityMatchesMrcHolders(lookup, holders)) {
+        errors.push("malformed lyth_mrcHolders response");
+        return;
+      }
+      holderRows.set(lookup.key, holders);
+    }),
+  );
+
+  return {
+    tokenBalances: tokenBalances.map((row) => {
+      const lookup = mrcHolderLookupForRow(row);
+      if (lookup === null) return row;
+      const holders = holderRows.get(lookup.key);
+      return holders ? { ...row, mrcHolders: holders } : row;
+    }),
+    ...(errors.length > 0 ? { error: errors[0] } : {}),
+  };
 }
 
 /** Parallel-fetch the four indexer streams used by both popup-facing
@@ -1458,8 +1551,12 @@ async function fetchIndexerSnapshot(
   if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
   if (addressActivity.error) errors.addressActivity = addressActivity.error;
   const rawTokenBalances = readTokenBalanceRows(tokenBalances.value);
+  const mrcHolderEnrichment = await enrichMrcHolderRows(
+    validateWalletTokenBalanceList(rawTokenBalances),
+  );
+  if (mrcHolderEnrichment.error) errors.mrcHolders = mrcHolderEnrichment.error;
   return {
-    tokenBalances: validateWalletTokenBalanceList(rawTokenBalances),
+    tokenBalances: mrcHolderEnrichment.tokenBalances,
     bridgeRouteDisclosures: dedupeWalletBridgeRouteDisclosures([
       ...bridgeRoutes.data.bridgeRouteDisclosures,
       ...collectWalletBridgeRouteDisclosures(tokenBalances.value),

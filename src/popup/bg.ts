@@ -11,6 +11,8 @@ export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
   WalletBridgeRouteReadiness,
+  WalletMrcHolder,
+  WalletMrcHoldersResponse,
   WalletTokenBalance,
   WalletTokenBalanceMrcIdentity,
 } from "../shared/token-balances.js";
@@ -405,7 +407,7 @@ export interface WalletIndexerSnapshot {
   addressLabel: WalletAddressLabel | null;
   delegationHistory: WalletDelegationHistoryRow[];
   addressActivity: WalletAddressActivityRow[];
-  errors: Partial<Record<"tokenBalances" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
+  errors: Partial<Record<"tokenBalances" | "mrcHolders" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
 }
 
 export async function bgWalletIndexerSnapshot(
