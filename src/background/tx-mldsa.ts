@@ -18,7 +18,7 @@ export interface EthSendTxFields {
   to?: string;
   value?: string;
   data?: string;
-  /** Gas limit (EIP-1193 calls this `gas`). */
+  /** Execution-unit limit (EIP-1193 calls this `gas`). */
   gas: string;
   nonce: string;
   /** Legacy single-fee field; mapped onto `maxFeePerGas` when 1559 fields are absent. */

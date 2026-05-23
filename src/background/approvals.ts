@@ -68,9 +68,9 @@ export interface TypedDataEnvelope {
  * without making its own RPC calls (the popup has no RpcClient).
  */
 export interface SendTxView {
-  /** Estimated gas as a hex quantity, populated from `eth_estimateGas`. */
+  /** Estimated execution units as a hex quantity, populated from `eth_estimateGas`. */
   estimatedGas: string | null;
-  /** Node minimum gas price, hex quantity, from `eth_gasPrice`. */
+  /** Node minimum lythoshi-per-execution-unit price, hex quantity, from `eth_gasPrice`. */
   gasPrice: string | null;
   /** Sender's pending nonce, hex quantity. */
   nonce: string | null;

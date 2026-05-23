@@ -206,7 +206,7 @@ import { previewTransactionHooks } from "./preview-hooks-client.js";
 import { readSigningActivity } from "./signing-activity-client.js";
 import { readOperatorRisk } from "./operator-risk-client.js";
 import { readUpcomingDuties } from "./upcoming-duties-client.js";
-import { weiHexToLythDecimal } from "./wei-decimal.js";
+import { lythoshiHexToLythDecimal } from "./wei-decimal.js";
 import {
   loadConnectedSites,
   saveConnectedSite,
@@ -746,7 +746,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         try {
           const fromAddr =
             getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
-          // Resolve missing nonce/gas/fee from the operators directly —
+          // Resolve missing nonce/execution units/fee from the operators directly —
           // the chain registry's RPC alias resolves NXDOMAIN and the
           // existing `view` was built against that broken alias too, so
           // its fields are usually null on Sprintnet.
@@ -756,9 +756,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           const gasPriceHex =
             txReq.gasPrice ?? view.gasPrice ??
             (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
-          // Sprintnet's mempool intrinsic floor is above what
+          // Sprintnet's mempool intrinsic execution-unit floor is above what
           // `eth_estimateGas` reports (the latter only covers EVM
-          // execution). Honour an explicit dapp gas hint if provided —
+          // execution). Honour an explicit dapp execution-unit hint if provided —
           // a dapp may know better than us and we'd rather surface a
           // chain reject than silently override — otherwise default to
           // the wallet's audited Sprintnet floor with headroom.
@@ -1103,12 +1103,12 @@ async function buildSendTxView(
 
 /**
  * Sprintnet-specific minimum priority tip discovered empirically via
- * smoke-test admission rejection: 10 gwei (10_000_000_000 wei). The
+ * smoke-test admission rejection: 10_000_000_000 lythoshi per execution unit. The
  * chain doesn't expose this via RPC and `eth_maxPriorityFeePerGas`
  * is method-not-found, so it lives here as a chain constant. If the
  * chain operators ever change the floor, this is the one place to bump.
  */
-const SPRINTNET_MIN_PRIORITY_FEE_HEX = "0x2540be400";
+const SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX = "0x2540be400";
 
 // ---- Operator liveness cache ----
 //
@@ -1151,7 +1151,7 @@ const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
  * given chain. On Sprintnet we ignore `eth_gasPrice` (returns `0x0`)
  * and `eth_maxPriorityFeePerGas` (method-not-found) and instead read
  * the next-block base fee via `eth_feeHistory(1, "latest", [])` and
- * stack the hardcoded 10 gwei tip floor on top.
+ * stack the hardcoded lythoshi-per-execution-unit tip floor on top.
  *
  * For non-Sprintnet chains we fall back to `eth_gasPrice` for now —
  * close enough for the legacy path that the popup may eventually use,
@@ -1161,7 +1161,7 @@ async function suggestFee(chainIdHex: string): Promise<{
   maxPriorityFeePerGas: string;
   maxFeePerGas: string;
   baseFeePerGas: string;
-  /** Hex gas-limit recommendation. Sprintnet has a known intrinsic
+  /** Hex execution-unit limit recommendation. Sprintnet has a known intrinsic
    * floor that `eth_estimateGas` doesn't reflect — surface the
    * pre-resolved value to the popup so the fee preview is accurate.
    * Other chains return null and let the caller estimate themselves. */
@@ -1182,12 +1182,15 @@ async function suggestFee(chainIdHex: string): Promise<{
     // pending base fee; with a single requested block we get two
     // entries (current + next).
     const baseHex = baseList[baseList.length - 1]!;
-    const baseWei = BigInt(baseHex);
-    const tipWei = BigInt(SPRINTNET_MIN_PRIORITY_FEE_HEX);
+    const baseLythoshiPerExecutionUnit = BigInt(baseHex);
+    const tipLythoshiPerExecutionUnit = BigInt(
+      SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX,
+    );
     return {
       baseFeePerGas: baseHex,
-      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_HEX,
-      maxFeePerGas: "0x" + (baseWei + tipWei).toString(16),
+      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX,
+      maxFeePerGas:
+        "0x" + (baseLythoshiPerExecutionUnit + tipLythoshiPerExecutionUnit).toString(16),
       gasLimit: SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
     };
   }
@@ -1695,10 +1698,11 @@ async function fetchOneAddressLabel(
  *     in shared/activity.ts skip the heuristic match. The PENDING_TTL_MS
  *     backstop still evicts the row after 5 minutes regardless.
  *
- *  Wei → decimal LYTH conversion happens inline via weiHexToLythDecimal
- *  so the amountDecimal field is consistent with what mergeIndexerSnapshot
- *  receives on the confirmed side (AddressActivityEntry.amount is
- *  already a decimal string per the SDK binding). */
+ *  The compatibility `valueWeiHex` field carries lythoshi here. Conversion
+ *  to decimal LYTH happens inline via lythoshiHexToLythDecimal so the
+ *  amountDecimal field is consistent with what mergeIndexerSnapshot receives
+ *  on the confirmed side (AddressActivityEntry.amount is already a decimal
+ *  string per the SDK binding). */
 async function persistPendingRowBackground(args: {
   address: string;
   chainIdHex: string;
@@ -1722,7 +1726,7 @@ async function persistPendingRowBackground(args: {
       // shared/activity.ts skips heuristic matching when the anchor
       // is null.
     }
-    const amountDecimal = weiHexToLythDecimal(args.valueWeiHex);
+    const amountDecimal = lythoshiHexToLythDecimal(args.valueWeiHex);
     const addrLower = args.address.toLowerCase();
     const pendingKey = activityPendingKey(addrLower, args.chainIdHex);
     const stored = await new Promise<unknown>((resolve) => {
@@ -4605,13 +4609,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           [fromAddr, "latest"],
         );
         const fee = await suggestFee(p.chainIdHex);
-        // Sprintnet's mempool enforces an intrinsic-gas floor (~24309 as
+        // Sprintnet's mempool enforces an intrinsic execution-unit floor (~24309 as
         // of audit) that `eth_estimateGas` doesn't reflect — it returns
-        // EVM execution gas only and ignores ML-DSA verify + envelope
+        // EVM execution units only and ignores ML-DSA verify + envelope
         // decrypt + state proof overhead. Native transfers use the
         // pre-resolved hex from suggestFee. Contract calls (NFT
         // safeTransferFrom from the SendNft screen) carry their own
-        // caller-supplied estimate because the suggestFee gas hint is
+        // caller-supplied estimate because the suggestFee execution-unit hint is
         // sized for native transfers only.
         const gasHex = p.gasLimitHex ?? fee.gasLimit ?? "0x5208";
         const { txHash, via } = await submitEncryptedMlDsaTx({
