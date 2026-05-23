@@ -1509,9 +1509,9 @@ export async function bgStakingAutovoteSeed(): Promise<
 export interface BgPasskeyPolicy {
   enabled: boolean;
   mode: BgPolicyMode;
-  /** Decimal-string wei. */
+  /** Compatibility field name; decimal-string lythoshi. */
   limitWei: string;
-  /** Decimal-string wei. */
+  /** Compatibility field name; decimal-string lythoshi. */
   dailyCapWei: string;
 }
 
@@ -1558,14 +1558,16 @@ export async function bgPasskeySetPolicy(args: {
 }
 
 /** Wire-format passkey decision — mirrors `PolicyDecision` in
- *  `shared/passkey.ts` with bigint values encoded as hex strings. */
+ *  `shared/passkey.ts` with lythoshi bigint values encoded as hex strings. */
 export type BgPasskeyDecision =
   | { kind: "passkey-ok"; credentials: BgPasskeyCredential[] }
   | { kind: "password-required"; reason: "disabled" | "no-credential" }
   | {
       kind: "over-limit";
       mode: BgPolicyMode;
+      /** Compatibility field name; hex lythoshi. */
       thresholdWeiHex: string;
+      /** Compatibility field name; hex lythoshi. */
       attemptedWeiHex: string;
     };
 
@@ -1573,6 +1575,7 @@ export type BgPasskeyDecision =
  *  the preview screen so the user sees which unlock path applies. */
 export async function bgPasskeyEvaluate(args: {
   vaultId: string;
+  /** Compatibility field name; hex lythoshi. */
   valueWeiHex: string;
 }): Promise<
   | { ok: true; decision: BgPasskeyDecision }
@@ -1586,6 +1589,7 @@ export async function bgPasskeyEvaluate(args: {
  *  Confirm → submit → success transition. */
 export async function bgPasskeyRecordUsage(args: {
   vaultId: string;
+  /** Compatibility field name; hex lythoshi. */
   valueWeiHex: string;
 }): Promise<{ ok: boolean; reason?: string }> {
   return send("passkey-record-usage", args);

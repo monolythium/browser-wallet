@@ -24,10 +24,11 @@ import {
 import { PasskeyRegisterModal } from "../components/PasskeyRegisterModal";
 import { SlhDsaBackupCard } from "../components/SlhDsaBackupCard";
 import {
-  DEFAULT_PASSKEY_DAILY_CAP_WEI,
-  DEFAULT_PASSKEY_LIMIT_WEI,
-  MAX_PASSKEY_LIMIT_WEI,
-  MIN_PASSKEY_LIMIT_WEI,
+  DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+  DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+  LYTHOSHI_PER_LYTH,
+  MAX_PASSKEY_LIMIT_LYTHOSHI,
+  MIN_PASSKEY_LIMIT_LYTHOSHI,
 } from "../../shared/passkey";
 
 export interface SecurityProps {
@@ -43,18 +44,16 @@ export interface SecurityProps {
   chainIdHex: string;
 }
 
-/** Convert wei (decimal string) → LYTH (decimal string with ≤ 4 dp).
+/** Convert lythoshi (decimal string) → LYTH (decimal string with ≤ 8 dp).
  *  Used for the slider readout and the policy summary card. Exported
  *  for the unit-test seam. */
-export function weiStrToLythStr(weiStr: string): string {
+export function lythoshiStrToLythStr(lythoshiStr: string): string {
   try {
-    const wei = BigInt(weiStr);
-    const ONE = 1_000_000_000_000_000_000n;
-    const integer = wei / ONE;
-    const fraction = wei % ONE;
+    const lythoshi = BigInt(lythoshiStr);
+    const integer = lythoshi / LYTHOSHI_PER_LYTH;
+    const fraction = lythoshi % LYTHOSHI_PER_LYTH;
     if (fraction === 0n) return integer.toString();
-    // 4 dp display ceiling. Pad and trim.
-    const fracStr = fraction.toString().padStart(18, "0").slice(0, 4);
+    const fracStr = fraction.toString().padStart(8, "0");
     const trimmed = fracStr.replace(/0+$/, "");
     return trimmed ? `${integer}.${trimmed}` : integer.toString();
   } catch {
@@ -62,13 +61,13 @@ export function weiStrToLythStr(weiStr: string): string {
   }
 }
 
-/** Convert LYTH integer → wei decimal-string. Used by the slider.
+/** Convert LYTH integer → lythoshi decimal-string. Used by the slider.
  *  Exported for the unit-test seam. */
-export function lythToWeiStr(lyth: number): string {
+export function lythToLythoshiStr(lyth: number): string {
   // Use bigint to avoid the float-imprecision footgun at large
-  // values. 1 LYTH = 1e18 wei.
+  // values. 1 LYTH = 100_000_000 lythoshi.
   const whole = BigInt(Math.floor(lyth));
-  return (whole * 1_000_000_000_000_000_000n).toString();
+  return (whole * LYTHOSHI_PER_LYTH).toString();
 }
 
 /** Slider domain — 11 stops covering 1, 5, 10, 25, 50, 100, 250, 500,
@@ -77,12 +76,12 @@ export function lythToWeiStr(lyth: number): string {
  *  [MIN, MAX]. */
 const SLIDER_STOPS_LYTH = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000] as const;
 
-/** Index of the slider stop that's closest to the supplied wei value.
+/** Index of the slider stop that's closest to the supplied lythoshi value.
  *  Exported for the unit-test seam. */
-export function closestStopIndex(weiStr: string): number {
+export function closestStopIndex(lythoshiStr: string): number {
   try {
-    const wei = BigInt(weiStr);
-    const lyth = Number(wei / 1_000_000_000_000_000_000n);
+    const lythoshi = BigInt(lythoshiStr);
+    const lyth = Number(lythoshi / LYTHOSHI_PER_LYTH);
     let best = 0;
     let bestDelta = Infinity;
     for (let i = 0; i < SLIDER_STOPS_LYTH.length; i++) {
@@ -149,13 +148,17 @@ export function Security({
     const idx = parseInt(e.target.value, 10);
     if (Number.isNaN(idx)) return;
     const lyth = SLIDER_STOPS_LYTH[idx]!;
-    const weiStr = lythToWeiStr(lyth);
-    // Keep dailyCap ≥ limitWei to avoid the daily-cap-below-per-tx
-    // validation tripwire — promote the cap when the slider pushes
-    // the limit past it.
-    const currentDaily = state ? BigInt(state.policy.dailyCapWei) : DEFAULT_PASSKEY_DAILY_CAP_WEI;
-    const dailyCapStr = currentDaily < BigInt(weiStr) ? weiStr : currentDaily.toString();
-    void handleSetPolicy({ limitWei: weiStr, dailyCapWei: dailyCapStr });
+    const lythoshiStr = lythToLythoshiStr(lyth);
+    // Keep the daily-cap compatibility field >= the per-tx compatibility
+    // field to avoid the daily-cap-below-per-tx validation tripwire.
+    const currentDailyLythoshi = state
+      ? BigInt(state.policy.dailyCapWei)
+      : DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI;
+    const dailyCapStr =
+      currentDailyLythoshi < BigInt(lythoshiStr)
+        ? lythoshiStr
+        : currentDailyLythoshi.toString();
+    void handleSetPolicy({ limitWei: lythoshiStr, dailyCapWei: dailyCapStr });
   };
 
   return (
@@ -276,7 +279,7 @@ export function Security({
                 <div style={labelLabel}>
                   Per-tx limit:{" "}
                   <span style={{ color: "var(--gold)" }}>
-                    {weiStrToLythStr(state.policy.limitWei)} LYTH
+                    {lythoshiStrToLythStr(state.policy.limitWei)} LYTH
                   </span>
                 </div>
                 <input
@@ -298,9 +301,9 @@ export function Security({
                     fontFamily: "var(--f-mono)",
                   }}
                 >
-                  <span>{weiStrToLythStr(MIN_PASSKEY_LIMIT_WEI.toString())} LYTH</span>
-                  <span>{weiStrToLythStr(DEFAULT_PASSKEY_LIMIT_WEI.toString())} LYTH (default)</span>
-                  <span>{weiStrToLythStr(MAX_PASSKEY_LIMIT_WEI.toString())} LYTH</span>
+                  <span>{lythoshiStrToLythStr(MIN_PASSKEY_LIMIT_LYTHOSHI.toString())} LYTH</span>
+                  <span>{lythoshiStrToLythStr(DEFAULT_PASSKEY_LIMIT_LYTHOSHI.toString())} LYTH (default)</span>
+                  <span>{lythoshiStrToLythStr(MAX_PASSKEY_LIMIT_LYTHOSHI.toString())} LYTH</span>
                 </div>
               </div>
 
@@ -310,7 +313,7 @@ export function Security({
                   <div style={labelLabel}>
                     Daily cap:{" "}
                     <span style={{ color: "var(--gold)" }}>
-                      {weiStrToLythStr(state.policy.dailyCapWei)} LYTH
+                      {lythoshiStrToLythStr(state.policy.dailyCapWei)} LYTH
                     </span>
                   </div>
                   <div style={{ fontSize: 10.5, color: "var(--fg-400)", lineHeight: 1.5 }}>

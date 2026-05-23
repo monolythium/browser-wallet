@@ -58,33 +58,45 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
  *  bloating the per-vault record. */
 export const MAX_CREDENTIALS_PER_VAULT = 8;
 
-/** Default per-tx passkey limit, in wei. §28.5 Q30 anchors this to
+/** Native LYTH precision for v4.1 wallet-owned amount policy. */
+export const LYTHOSHI_PER_LYTH = 100_000_000n;
+
+/** Default per-tx passkey limit, in lythoshi. §28.5 Q30 anchors this to
  *  "~$500"; in the absence of a LYTH/USD oracle in the wallet today
  *  (chain GAP), we hardcode 100 LYTH as a stand-in. The limit is
  *  user-configurable from the Security page (Commit 3).
  *
- *  100 LYTH = 100 * 1e18 wei = 100_000_000_000_000_000_000n
+ *  100 LYTH = 100 * 100_000_000 lythoshi = 10_000_000_000n
  *
  *  Reasoning for 100 LYTH proxy: at testnet pricing (no public mainnet
  *  price yet) this is a comfortable median user spend — large enough
  *  that routine transfers don't constantly hit the cap, small enough
  *  that an attacker with passkey access (e.g. evil maid with thumbprint
  *  spoof) can drain at most this much per attempt. */
-export const DEFAULT_PASSKEY_LIMIT_WEI = 100_000_000_000_000_000_000n;
+export const DEFAULT_PASSKEY_LIMIT_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
 
-/** Floor on the user-configurable passkey limit. 1 LYTH (1e18 wei) —
- *  below this, passkey unlock is too narrow to be useful. */
-export const MIN_PASSKEY_LIMIT_WEI = 1_000_000_000_000_000_000n;
+/** Floor on the user-configurable passkey limit. 1 LYTH
+ *  (100_000_000 lythoshi) — below this, passkey unlock is too narrow
+ *  to be useful. */
+export const MIN_PASSKEY_LIMIT_LYTHOSHI = LYTHOSHI_PER_LYTH;
 
 /** Ceiling on the user-configurable passkey limit. 10_000 LYTH —
  *  above this, the passkey-unlock path stops being a "small-value
  *  fast unlock" and becomes an attacker-friendly bypass of password
  *  protection. The wallet caps the slider at this value. */
-export const MAX_PASSKEY_LIMIT_WEI = 10_000_000_000_000_000_000_000n;
+export const MAX_PASSKEY_LIMIT_LYTHOSHI = 10_000n * LYTHOSHI_PER_LYTH;
 
 /** Default daily cap when `dailyCap` mode is enabled. 500 LYTH —
  *  five normal-sized txs at the default per-tx limit. */
-export const DEFAULT_PASSKEY_DAILY_CAP_WEI = 500_000_000_000_000_000_000n;
+export const DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI = 500n * LYTHOSHI_PER_LYTH;
+
+/** Compatibility aliases for IPC/storage surfaces that still expose
+ *  `limitWei` / `dailyCapWei` field names. Values are v4.1 lythoshi. */
+export const DEFAULT_PASSKEY_LIMIT_WEI = DEFAULT_PASSKEY_LIMIT_LYTHOSHI;
+export const MIN_PASSKEY_LIMIT_WEI = MIN_PASSKEY_LIMIT_LYTHOSHI;
+export const MAX_PASSKEY_LIMIT_WEI = MAX_PASSKEY_LIMIT_LYTHOSHI;
+export const DEFAULT_PASSKEY_DAILY_CAP_WEI =
+  DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI;
 
 /** Domain tag mixed into every passkey challenge hash. Keeps WebAuthn
  *  assertions over wallet challenges cryptographically separate from
@@ -139,13 +151,13 @@ export interface PasskeyCredential {
 
 /** Spending-limit enforcement mode for the passkey policy.
  *
- *   - `"per-tx"` — every transaction's `value` is compared against the
- *                  configured `limitWei`. Simple, predictable; doesn't
+ *   - `"per-tx"` — every transaction's native value is compared against
+ *                  the configured limit. Simple, predictable; doesn't
  *                  catch the "drain via many small txs" pattern.
- *   - `"daily"`  — sum of all `value`s signed via passkey within a
- *                  rolling 24-hour window is compared against
- *                  `dailyCapWei`. Catches the drain-via-many-small case
- *                  but requires the wallet to maintain a usage ledger.
+ *   - `"daily"`  — sum of all native values signed via passkey within a
+ *                  rolling 24-hour window is compared against the daily
+ *                  cap. Catches the drain-via-many-small case but requires
+ *                  the wallet to maintain a usage ledger.
  *
  *  Both modes coexist on the same policy record. The active mode
  *  drives which threshold the IPC boundary checks; the inactive
@@ -161,9 +173,9 @@ export interface PasskeyPolicy {
   enabled: boolean;
   /** Active enforcement mode. */
   mode: PolicyMode;
-  /** Per-tx threshold in wei. Used when `mode === "per-tx"`. */
+  /** Per-tx threshold in lythoshi. Field name is retained for IPC/storage. */
   limitWei: bigint;
-  /** Daily total threshold in wei. Used when `mode === "daily"`. */
+  /** Daily total threshold in lythoshi. Field name is retained for IPC/storage. */
   dailyCapWei: bigint;
 }
 
@@ -174,8 +186,8 @@ export function defaultPasskeyPolicy(): PasskeyPolicy {
   return {
     enabled: false,
     mode: "per-tx",
-    limitWei: DEFAULT_PASSKEY_LIMIT_WEI,
-    dailyCapWei: DEFAULT_PASSKEY_DAILY_CAP_WEI,
+    limitWei: DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+    dailyCapWei: DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
   };
 }
 
@@ -207,10 +219,10 @@ export type PolicyValidationError =
 export function validatePasskeyPolicy(
   p: PasskeyPolicy,
 ): PolicyValidationError | null {
-  if (p.limitWei < MIN_PASSKEY_LIMIT_WEI) return "limit-below-floor";
-  if (p.limitWei > MAX_PASSKEY_LIMIT_WEI) return "limit-above-ceiling";
-  if (p.dailyCapWei < MIN_PASSKEY_LIMIT_WEI) return "daily-cap-below-floor";
-  if (p.dailyCapWei > MAX_PASSKEY_LIMIT_WEI) return "daily-cap-above-ceiling";
+  if (p.limitWei < MIN_PASSKEY_LIMIT_LYTHOSHI) return "limit-below-floor";
+  if (p.limitWei > MAX_PASSKEY_LIMIT_LYTHOSHI) return "limit-above-ceiling";
+  if (p.dailyCapWei < MIN_PASSKEY_LIMIT_LYTHOSHI) return "daily-cap-below-floor";
+  if (p.dailyCapWei > MAX_PASSKEY_LIMIT_LYTHOSHI) return "daily-cap-above-ceiling";
   // A daily cap below the per-tx limit is internally inconsistent —
   // a single tx at the per-tx limit would already exceed the daily cap.
   if (p.dailyCapWei < p.limitWei) return "daily-cap-below-per-tx";
@@ -249,7 +261,7 @@ export type PolicyDecision =
 export interface PasskeyUsageEntry {
   /** Date.now() at signing time. */
   at: number;
-  /** Tx value in wei. */
+  /** Tx native value in lythoshi. Field name is retained for IPC callers. */
   valueWei: bigint;
 }
 
@@ -279,6 +291,7 @@ export function sumUsage(entries: ReadonlyArray<PasskeyUsageEntry>): bigint {
  *  Caller passes `now` so tests can pin time. */
 export function evaluatePolicy(args: {
   state: VaultPasskeyState;
+  /** Native tx value in lythoshi. Field name remains `valueWei` at IPC. */
   valueWei: bigint;
   recentUsage: ReadonlyArray<PasskeyUsageEntry>;
   now: number;

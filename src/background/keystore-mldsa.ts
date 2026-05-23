@@ -84,8 +84,10 @@ import type {
   VaultPasskeyState,
 } from "../shared/passkey.js";
 import {
-  DEFAULT_PASSKEY_DAILY_CAP_WEI,
-  DEFAULT_PASSKEY_LIMIT_WEI,
+  DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+  DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+  MAX_PASSKEY_LIMIT_LYTHOSHI,
+  MIN_PASSKEY_LIMIT_LYTHOSHI,
   appendCredential,
   defaultPasskeyPolicy,
   emptyVaultPasskeyState,
@@ -1464,8 +1466,8 @@ interface StoredPasskeyState {
 
 /** Normalise an arbitrary `policy` blob back into a `PasskeyPolicy`.
  *  Accepts either the in-memory (bigint-typed) or the on-disk
- *  (string- or missing-typed) shape; coerces by way of
- *  `toBigIntOrDefault`. */
+ *  (string- or missing-typed) shape; coerces passkey amounts to v4.1
+ *  lythoshi at the storage boundary. */
 function clonePasskeyPolicy(raw: unknown): PasskeyPolicy {
   const def = defaultPasskeyPolicy();
   if (!raw || typeof raw !== "object") return def;
@@ -1473,8 +1475,14 @@ function clonePasskeyPolicy(raw: unknown): PasskeyPolicy {
   return {
     enabled: typeof r.enabled === "boolean" ? r.enabled : def.enabled,
     mode: r.mode === "daily" ? "daily" : "per-tx",
-    limitWei: toBigIntOrDefault(r.limitWei, DEFAULT_PASSKEY_LIMIT_WEI),
-    dailyCapWei: toBigIntOrDefault(r.dailyCapWei, DEFAULT_PASSKEY_DAILY_CAP_WEI),
+    limitWei: toPasskeyLythoshiOrDefault(
+      r.limitWei,
+      DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+    ),
+    dailyCapWei: toPasskeyLythoshiOrDefault(
+      r.dailyCapWei,
+      DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
+    ),
   };
 }
 
@@ -1499,6 +1507,29 @@ function toBigIntOrDefault(v: unknown, fallback: bigint): bigint {
     }
   }
   return fallback;
+}
+
+const LEGACY_WEI_PER_LYTHOSHI = 10_000_000_000n;
+
+/** Coerce a passkey policy amount into v4.1 lythoshi. Older builds
+ *  persisted these compatibility-named fields as 18-decimal wei; if
+ *  that value maps cleanly into the allowed lythoshi range, normalize
+ *  it at the storage boundary. */
+function toPasskeyLythoshiOrDefault(v: unknown, fallback: bigint): bigint {
+  const raw = toBigIntOrDefault(v, fallback);
+  if (
+    raw > MAX_PASSKEY_LIMIT_LYTHOSHI &&
+    raw % LEGACY_WEI_PER_LYTHOSHI === 0n
+  ) {
+    const maybeLythoshi = raw / LEGACY_WEI_PER_LYTHOSHI;
+    if (
+      maybeLythoshi >= MIN_PASSKEY_LIMIT_LYTHOSHI &&
+      maybeLythoshi <= MAX_PASSKEY_LIMIT_LYTHOSHI
+    ) {
+      return maybeLythoshi;
+    }
+  }
+  return raw;
 }
 
 /** Project a `VaultPasskeyState` down to the JSON-safe shape that's
