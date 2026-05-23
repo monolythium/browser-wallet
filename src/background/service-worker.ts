@@ -193,6 +193,10 @@ import {
   validateIndexerStatusWire,
 } from "../shared/indexer-status.js";
 import {
+  validateWalletTokenBalanceList,
+  type WalletTokenBalance,
+} from "../shared/token-balances.js";
+import {
   readClusterDelegators,
   readClusterDirectory,
   readClusterStatus,
@@ -1355,7 +1359,7 @@ async function settleSprintnetRpc<T>(method: string, params: unknown[]): Promise
 const CACHE_STALENESS_MS = 30 * 1000;
 
 interface IndexerSnapshotRaw {
-  tokenBalances: unknown[];
+  tokenBalances: WalletTokenBalance[];
   addressLabel: unknown | null;
   delegationHistory: unknown[];
   addressActivity: unknown[];
@@ -1363,9 +1367,9 @@ interface IndexerSnapshotRaw {
 }
 
 /** Parallel-fetch the four indexer streams used by both popup-facing
- *  snapshots. Returns the raw `unknown`-typed shapes the existing
- *  `wallet-indexer-snapshot` consumer expects — validation is the caller's
- *  responsibility when a typed shape is needed. */
+ *  snapshots. Token balances are validated at the SW boundary because the
+ *  popup renders them directly; other streams keep their existing raw shapes
+ *  and are validated by the consumers that need typed rows. */
 async function fetchIndexerSnapshot(
   address: string,
   _chainIdHex: string,
@@ -1381,8 +1385,9 @@ async function fetchIndexerSnapshot(
   if (addressLabel.error) errors.addressLabel = addressLabel.error;
   if (delegationHistory.error) errors.delegationHistory = delegationHistory.error;
   if (addressActivity.error) errors.addressActivity = addressActivity.error;
+  const rawTokenBalances = Array.isArray(tokenBalances.value) ? tokenBalances.value : [];
   return {
-    tokenBalances: Array.isArray(tokenBalances.value) ? tokenBalances.value : [],
+    tokenBalances: validateWalletTokenBalanceList(rawTokenBalances),
     addressLabel: addressLabel.value ?? null,
     delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
     addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
