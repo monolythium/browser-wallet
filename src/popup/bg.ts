@@ -1,9 +1,14 @@
 // Popup-side helpers for talking to the background service worker.
 // All calls go through chrome.runtime.sendMessage with `{ kind: "popup", ... }`.
 
-import type { WalletTokenBalance } from "../shared/token-balances.js";
+import type {
+  WalletBridgeRouteDisclosure,
+  WalletTokenBalance,
+} from "../shared/token-balances.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 export type {
+  WalletBridgeDisclosureValue,
+  WalletBridgeRouteDisclosure,
   WalletTokenBalance,
   WalletTokenBalanceMrcIdentity,
 } from "../shared/token-balances.js";
@@ -392,6 +397,8 @@ export interface WalletAddressActivityRow {
 
 export interface WalletIndexerSnapshot {
   tokenBalances: WalletTokenBalance[];
+  bridgeRouteDisclosure?: WalletBridgeRouteDisclosure;
+  bridgeRouteDisclosures?: WalletBridgeRouteDisclosure[];
   addressLabel: WalletAddressLabel | null;
   delegationHistory: WalletDelegationHistoryRow[];
   addressActivity: WalletAddressActivityRow[];

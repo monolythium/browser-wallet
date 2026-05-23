@@ -29,6 +29,8 @@ import type {
   ChainEntry,
   PendingApproval,
   WalletIndexerSnapshot,
+  WalletBridgeDisclosureValue,
+  WalletBridgeRouteDisclosure,
   WalletTokenBalance,
 } from "./bg";
 import {
@@ -372,6 +374,9 @@ function AssetList({ account, network, indexer }: AssetListProps) {
             <div className="ext-asset__main">
               <div className="sym">
                 {display.title} <span className="ext-badge-att">Indexed</span>
+                {tokenHasBridgeRouteDisclosure(row) && (
+                  <> <span className="ext-badge-bridged">Disclosure</span></>
+                )}
               </div>
               <div className="chain">{display.subtitle}</div>
             </div>
@@ -488,6 +493,124 @@ export function formatIndexedTokenBalanceRow(
     subtitle: `${assetKind} ${assetId} · ${updated}`,
     unitsLabel: "raw units",
   };
+}
+
+export interface BridgeDisclosureRowDisplay {
+  keyPath: string;
+  value: string;
+}
+
+export interface BridgeRouteDisclosureDisplay {
+  trustRows: BridgeDisclosureRowDisplay[];
+  liquidityRows: BridgeDisclosureRowDisplay[];
+  otherRows: BridgeDisclosureRowDisplay[];
+}
+
+const TRUST_DISCLOSURE_KEY_RE =
+  /trust|guardian|committee|validator|multisig|light[_-]?client|zk|proof|verification|attestation|custody|permission/i;
+const LIQUIDITY_DISCLOSURE_KEY_RE =
+  /liquidity|floor|cap|limit|insurance|reserve|tvl|depth|slippage|inventory|available/i;
+
+function isBridgeDisclosureObject(
+  value: WalletBridgeDisclosureValue,
+): value is Record<string, WalletBridgeDisclosureValue> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatBridgeDisclosureValue(value: string | number | boolean | null): string {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return String(value);
+}
+
+function appendBridgeDisclosurePath(prefix: string, key: string): string {
+  return prefix.length > 0 ? `${prefix}.${key}` : key;
+}
+
+function flattenBridgeDisclosureRows(
+  value: WalletBridgeDisclosureValue,
+  keyPath: string,
+  out: BridgeDisclosureRowDisplay[],
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      flattenBridgeDisclosureRows(item, `${keyPath}[${index}]`, out);
+    });
+    return;
+  }
+
+  if (isBridgeDisclosureObject(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      flattenBridgeDisclosureRows(
+        child,
+        appendBridgeDisclosurePath(keyPath, key),
+        out,
+      );
+    }
+    return;
+  }
+
+  out.push({ keyPath, value: formatBridgeDisclosureValue(value) });
+}
+
+export function formatBridgeRouteDisclosureDisplay(
+  disclosure: WalletBridgeRouteDisclosure,
+): BridgeRouteDisclosureDisplay {
+  const rows: BridgeDisclosureRowDisplay[] = [];
+  for (const [key, value] of Object.entries(disclosure)) {
+    flattenBridgeDisclosureRows(value, key, rows);
+  }
+
+  const trustRows: BridgeDisclosureRowDisplay[] = [];
+  const liquidityRows: BridgeDisclosureRowDisplay[] = [];
+  const otherRows: BridgeDisclosureRowDisplay[] = [];
+
+  for (const row of rows) {
+    if (LIQUIDITY_DISCLOSURE_KEY_RE.test(row.keyPath)) {
+      liquidityRows.push(row);
+    } else if (TRUST_DISCLOSURE_KEY_RE.test(row.keyPath)) {
+      trustRows.push(row);
+    } else {
+      otherRows.push(row);
+    }
+  }
+
+  return { trustRows, liquidityRows, otherRows };
+}
+
+export function bridgeRouteDisclosureHasRequiredFloorData(
+  display: BridgeRouteDisclosureDisplay,
+): boolean {
+  return (
+    display.trustRows.length > 0 &&
+    display.liquidityRows.some((row) => /floor/i.test(row.keyPath))
+  );
+}
+
+function tokenBridgeRouteDisclosures(
+  row: WalletTokenBalance,
+): WalletBridgeRouteDisclosure[] {
+  const out: WalletBridgeRouteDisclosure[] = [];
+  if (row.bridgeRouteDisclosure) out.push(row.bridgeRouteDisclosure);
+  if (row.bridgeRouteDisclosures) out.push(...row.bridgeRouteDisclosures);
+  return out;
+}
+
+function tokenHasBridgeRouteDisclosure(row: WalletTokenBalance): boolean {
+  return tokenBridgeRouteDisclosures(row).length > 0;
+}
+
+export function collectBridgeRouteDisclosuresFromIndexer(
+  indexer: WalletIndexerSnapshot | null,
+): WalletBridgeRouteDisclosure[] {
+  if (indexer === null) return [];
+  const out: WalletBridgeRouteDisclosure[] = [];
+  if (indexer.bridgeRouteDisclosure) out.push(indexer.bridgeRouteDisclosure);
+  if (indexer.bridgeRouteDisclosures) out.push(...indexer.bridgeRouteDisclosures);
+  for (const row of indexer.tokenBalances) {
+    out.push(...tokenBridgeRouteDisclosures(row));
+  }
+  return out;
 }
 
 // ---- Pending requests shelf ----
@@ -1145,34 +1268,22 @@ export function Accounts({ current, onBack, onPick }: AccountsProps) {
 
 // ---- Bridge sheet ----
 //
-// Pre-stage of the cross-chain bridge surface (whitepaper §26). Pure
-// presentational — IBC + SP1 sync-committee bridges are documented in
-// the source tree (crates/ibc, crates/zk-bridge-verifier) but not
-// active on Sprintnet. The safety-guarantees list here mirrors §26.3
-// (drain caps), §26.4 (slashable insurance), and §30.2 D (Foundation
-// multisig 5-of-7 circuit-breaker threshold).
+// Disclosure-only bridge surface. It renders route trust/liquidity fields
+// only when the active API returns bridgeRouteDisclosure(s); absent or
+// incomplete disclosure keeps the wallet in a closed, non-submit state.
 
 interface BridgeProps {
   onBack: () => void;
+  indexer: WalletIndexerSnapshot | null;
 }
 
-export function Bridge({ onBack }: BridgeProps) {
-  const bridgeTypes: Array<{ name: string; desc: string }> = [
-    {
-      name: "IBC",
-      desc: "Trustless light-client bridging to Cosmos ecosystem chains",
-    },
-    {
-      name: "SP1 zk-sync committee",
-      desc: "Zero-knowledge proofs of Ethereum sync-committee state transitions",
-    },
-  ];
-  const guarantees = [
-    "Per-asset hourly drain caps",
-    "Slashable insurance pool funded by bridge fees",
-    "On-chain trust-disclosure metadata",
-    "Circuit breaker tripped by anomaly detection or Foundation multisig (5-of-7)",
-  ];
+export function Bridge({ onBack, indexer }: BridgeProps) {
+  const disclosures = collectBridgeRouteDisclosuresFromIndexer(indexer);
+  const displays = disclosures.map(formatBridgeRouteDisclosureDisplay);
+  const hasSubmitReadyDisclosure = displays.some(
+    bridgeRouteDisclosureHasRequiredFloorData,
+  );
+
   return (
     <>
       <div className="ext-top">
@@ -1194,55 +1305,90 @@ export function Bridge({ onBack }: BridgeProps) {
               color: "var(--fg-100)",
             }}
           >
-            Move assets between Monolythium and other chains via
-            trust-minimized bridges. Each bridge publishes its trust
-            model, drain caps, and insurance pool size on-chain.
+            Bridge routes require published trust disclosure and liquidity or
+            floor data. This wallet only displays fields returned by the active
+            operator API and does not infer missing route metadata.
           </p>
         </div>
 
-        <div className="ext-card" style={{ padding: 14 }}>
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 10,
-              color: "var(--fg-400)",
-              letterSpacing: "0.14em",
-              textTransform: "uppercase",
-              marginBottom: 10,
-            }}
-          >
-            Supported bridge types
+        {displays.length === 0 ? (
+          <div className="ext-card" style={{ padding: 14 }}>
+            <div
+              style={{
+                fontSize: 12.5,
+                fontWeight: 600,
+                color: "var(--fg-100)",
+              }}
+            >
+              Disclosure unavailable
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                lineHeight: 1.45,
+                color: "var(--fg-400)",
+                marginTop: 6,
+              }}
+            >
+              No bridgeRouteDisclosure or bridgeRouteDisclosures field was
+              returned for the active wallet data.
+            </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {bridgeTypes.map((b) => (
+        ) : (
+          displays.map((display, index) => (
+            <div className="ext-card" style={{ padding: 14 }} key={index}>
               <div
-                key={b.name}
                 style={{
-                  padding: 12,
-                  borderRadius: 10,
-                  border: "1px solid var(--fg-700)",
-                  background: "transparent",
-                  opacity: 0.6,
-                  cursor: "default",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  marginBottom: 10,
                 }}
               >
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-100)" }}>
-                  {b.name}
-                </div>
                 <div
                   style={{
-                    fontSize: 11,
-                    lineHeight: 1.4,
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 10,
                     color: "var(--fg-400)",
-                    marginTop: 4,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
                   }}
                 >
-                  {b.desc}
+                  Route disclosure {index + 1}
                 </div>
+                <span
+                  className={
+                    bridgeRouteDisclosureHasRequiredFloorData(display)
+                      ? "ext-badge-att"
+                      : "ext-badge-bridged"
+                  }
+                >
+                  {bridgeRouteDisclosureHasRequiredFloorData(display)
+                    ? "Published"
+                    : "Incomplete"}
+                </span>
               </div>
-            ))}
-          </div>
-        </div>
+              <BridgeDisclosureSection
+                title="Trust"
+                rows={display.trustRows}
+                empty="No trust disclosure fields returned."
+              />
+              <BridgeDisclosureSection
+                title="Liquidity / floors"
+                rows={display.liquidityRows}
+                empty="No liquidity or floor fields returned."
+              />
+              {display.otherRows.length > 0 && (
+                <BridgeDisclosureSection
+                  title="Other published fields"
+                  rows={display.otherRows}
+                  empty=""
+                />
+              )}
+            </div>
+          ))
+        )}
 
         <div className="ext-card" style={{ padding: 14 }}>
           <div
@@ -1255,41 +1401,104 @@ export function Bridge({ onBack }: BridgeProps) {
               marginBottom: 10,
             }}
           >
-            Safety guarantees
+            Bridge submission
           </div>
-          <ul
+          <div
             style={{
               margin: 0,
-              padding: 0,
-              listStyle: "none",
-              fontSize: 12,
-              lineHeight: 1.6,
-              color: "var(--fg-200)",
+              fontSize: 11.5,
+              lineHeight: 1.45,
+              color: "var(--fg-400)",
             }}
           >
-            {guarantees.map((line) => (
-              <li key={line} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{ color: "var(--fg-500)", flexShrink: 0 }}>·</span>
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div
-          style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            color: "var(--fg-500)",
-            letterSpacing: "0.08em",
-            textAlign: "center",
-            marginTop: 4,
-          }}
-        >
-          — Per Monolythium v4.0 §26
+            {hasSubmitReadyDisclosure
+              ? "The wallet can display the published disclosure data, but this build has no bridge submit path."
+              : "Disabled because no route returned both trust and liquidity/floor disclosure data."}
+          </div>
         </div>
       </div>
     </>
+  );
+}
+
+interface BridgeDisclosureSectionProps {
+  title: string;
+  rows: BridgeDisclosureRowDisplay[];
+  empty: string;
+}
+
+function BridgeDisclosureSection({
+  title,
+  rows,
+  empty,
+}: BridgeDisclosureSectionProps) {
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: "var(--fg-200)",
+          marginBottom: 6,
+        }}
+      >
+        {title}
+      </div>
+      {rows.length === 0 ? (
+        <div
+          style={{
+            padding: "8px 10px",
+            borderRadius: 8,
+            border: "1px dashed var(--fg-700)",
+            color: "var(--fg-500)",
+            fontSize: 11,
+            lineHeight: 1.4,
+          }}
+        >
+          {empty}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {rows.map((row) => (
+            <div
+              key={`${row.keyPath}:${row.value}`}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                gap: 8,
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: "1px solid var(--fg-700)",
+                background: "rgba(255,255,255,0.02)",
+              }}
+            >
+              <div
+                style={{
+                  minWidth: 0,
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 10,
+                  color: "var(--fg-400)",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {row.keyPath}
+              </div>
+              <div
+                style={{
+                  minWidth: 0,
+                  fontSize: 11,
+                  color: "var(--fg-100)",
+                  textAlign: "right",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {row.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
