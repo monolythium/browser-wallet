@@ -10,6 +10,7 @@ import {
   collectBridgeRouteDisclosuresFromIndexer,
   decodeCalldata,
   formatMrcAccountRecordLine,
+  formatMrcPolicyLine,
   formatIndexedTokenBalanceRow,
   formatBridgeRouteDisclosureDisplay,
   formatMrcHolderDisplayLine,
@@ -541,6 +542,7 @@ describe("MRC account summary display", () => {
         controller,
         recovery,
         policyHash: null,
+        policy: null,
         nonce: "7",
         updatedAtBlock: 1234,
       }),
@@ -552,6 +554,12 @@ describe("MRC account summary display", () => {
         controller,
         recovery: null,
         policyHash: "0x" + "55".repeat(32),
+        policy: {
+          enabled: true,
+          perActionLimit: "20",
+          windowLimit: "100",
+          allowedAssets: ["0x" + "44".repeat(32)],
+        },
         nonce: null,
         updatedAtBlock: 1235,
       }),
@@ -566,6 +574,20 @@ describe("MRC account summary display", () => {
         updatedAtBlock: 1236,
       }),
     ).toBe("Spend 0x444444444444…44444444 · window 9 · spent 45 · block 1,236");
+    expect(
+      formatMrcPolicyLine({
+        enabled: true,
+        perActionLimit: "20",
+        windowLimit: "100",
+        allowedAssets: [
+          "0x" + "44".repeat(32),
+          "0x" + "45".repeat(32),
+          "0x" + "46".repeat(32),
+        ],
+      }),
+    ).toBe(
+      "Policy body enabled · per action 20 · window 100 · assets 0x444444444444…44444444, 0x454545454545…45454545 + 1 more",
+    );
   });
 
   it("renders the summary only when a record or spend row exists", () => {
@@ -590,6 +612,12 @@ describe("MRC account summary display", () => {
             controller,
             recovery: null,
             policyHash: "0x" + "55".repeat(32),
+            policy: {
+              enabled: true,
+              perActionLimit: "20",
+              windowLimit: "100",
+              allowedAssets: ["0x" + "44".repeat(32)],
+            },
             nonce: null,
             updatedAtBlock: 99,
           },
@@ -608,6 +636,8 @@ describe("MRC account summary display", () => {
     );
     expect(html).toContain("MRC account");
     expect(html).toContain("Policy");
+    expect(html).toContain("Policy body enabled");
+    expect(html).toContain("per action 20");
     expect(html).toContain("spend window 4");
     expect(html).toContain("spent 45");
   });

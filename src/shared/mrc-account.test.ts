@@ -32,6 +32,7 @@ describe("MRC account lookup validator", () => {
           controller: CONTROLLER,
           recovery: RECOVERY,
           policyHash: null,
+          policy: null,
           nonce: "7",
           updatedAtBlock: "42",
         },
@@ -41,6 +42,12 @@ describe("MRC account lookup validator", () => {
           controller: CONTROLLER,
           recovery: null,
           policyHash: "0x" + "55".repeat(32),
+          policy: {
+            enabled: true,
+            perActionLimit: "20",
+            windowLimit: "100",
+            allowedAssets: ["0x" + "44".repeat(32)],
+          },
           nonce: null,
           updatedAtBlock: 43n,
         },
@@ -81,6 +88,7 @@ describe("MRC account lookup validator", () => {
         controller: CONTROLLER,
         recovery: RECOVERY,
         policyHash: null,
+        policy: null,
         nonce: "7",
         updatedAtBlock: 42,
       },
@@ -90,6 +98,12 @@ describe("MRC account lookup validator", () => {
         controller: CONTROLLER,
         recovery: null,
         policyHash: "0x" + "55".repeat(32),
+        policy: {
+          enabled: true,
+          perActionLimit: "20",
+          windowLimit: "100",
+          allowedAssets: ["0x" + "44".repeat(32)],
+        },
         nonce: null,
         updatedAtBlock: 43,
       },
@@ -132,6 +146,45 @@ describe("MRC account lookup validator", () => {
       policyAccount: null,
       policySpends: [],
     });
+  });
+
+  it("accepts legacy policy-account rows with null or omitted policy bodies", () => {
+    const withNull = validateMrcAccountLookupResponse({
+      schemaVersion: 1,
+      account: ACCOUNT,
+      spendLimit: 4,
+      smartAccount: null,
+      policyAccount: {
+        kind: "policy_account",
+        account: ACCOUNT,
+        controller: CONTROLLER,
+        recovery: null,
+        policyHash: "0x" + "55".repeat(32),
+        policy: null,
+        nonce: null,
+        updatedAtBlock: 1,
+      },
+      policySpends: [],
+    });
+    expect(withNull?.policyAccount?.policy).toBeNull();
+
+    const omitted = validateMrcAccountLookupResponse({
+      schemaVersion: 1,
+      account: ACCOUNT,
+      spendLimit: 4,
+      smartAccount: null,
+      policyAccount: {
+        kind: "policy_account",
+        account: ACCOUNT,
+        controller: CONTROLLER,
+        recovery: null,
+        policyHash: "0x" + "55".repeat(32),
+        nonce: null,
+        updatedAtBlock: 1,
+      },
+      policySpends: [],
+    });
+    expect(omitted?.policyAccount?.policy).toBeNull();
   });
 
   it("rejects malformed required envelope and account fields", () => {
@@ -199,6 +252,30 @@ describe("MRC account lookup validator", () => {
           updatedAtBlock: 1,
         },
         policyAccount: null,
+        policySpends: [],
+      }),
+    ).toBeNull();
+    expect(
+      validateMrcAccountLookupResponse({
+        schemaVersion: 1,
+        account: ACCOUNT,
+        spendLimit: 4,
+        smartAccount: null,
+        policyAccount: {
+          kind: "policy_account",
+          account: ACCOUNT,
+          controller: CONTROLLER,
+          recovery: null,
+          policyHash: "0x" + "55".repeat(32),
+          policy: {
+            enabled: "true",
+            perActionLimit: "20",
+            windowLimit: "100",
+            allowedAssets: ["0x" + "44".repeat(32)],
+          },
+          nonce: null,
+          updatedAtBlock: 1,
+        },
         policySpends: [],
       }),
     ).toBeNull();
