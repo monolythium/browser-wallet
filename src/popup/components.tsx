@@ -33,6 +33,7 @@ import type {
   WalletBridgeRouteDisclosure,
   WalletBridgeRouteReadiness,
   WalletMrcHolder,
+  WalletMrcHoldersResponse,
   WalletTokenBalance,
 } from "./bg";
 import {
@@ -385,7 +386,7 @@ function AssetList({ account, network, indexer }: AssetListProps) {
                 )}
               </div>
               <div className="chain">{display.subtitle}</div>
-              <MrcHolderSummary holders={row.mrcHolders?.holders ?? []} />
+              <MrcHolderSummary mrcHolders={row.mrcHolders} />
             </div>
             <div className="ext-asset__spark" />
             <div className="ext-asset__right">
@@ -431,8 +432,13 @@ function AssetList({ account, network, indexer }: AssetListProps) {
   );
 }
 
-function MrcHolderSummary({ holders }: { holders: WalletMrcHolder[] }) {
-  if (holders.length === 0) return null;
+function MrcHolderSummary({
+  mrcHolders,
+}: {
+  mrcHolders: WalletMrcHoldersResponse | undefined;
+}) {
+  if (!mrcHolders || mrcHolders.holders.length === 0) return null;
+  const holders = mrcHolders.holders;
   return (
     <div
       style={{
@@ -444,7 +450,7 @@ function MrcHolderSummary({ holders }: { holders: WalletMrcHolder[] }) {
       }}
     >
       <div style={{ color: "var(--fg-300)", textTransform: "uppercase" }}>
-        Native holders
+        {formatMrcHolderSummaryTitle(mrcHolders)}
       </div>
       {holders.map((holder) => (
         <div key={`${holder.rank}:${holder.address}`}>
@@ -487,9 +493,19 @@ function formatMrcStandardLabel(standard: string): string {
       return "MRC-721";
     case "mrc1155":
       return "MRC-1155";
+    case "mrc4626":
+      return "MRC-4626";
     default:
       return standard.toUpperCase();
   }
+}
+
+export function formatMrcHolderSummaryTitle(
+  holders: WalletMrcHoldersResponse,
+): string {
+  return normaliseMrcStandard(holders.standard) === "mrc4626"
+    ? "Vault share holders"
+    : "Native holders";
 }
 
 export function formatIndexedTokenBalanceRow(
@@ -507,8 +523,17 @@ export function formatIndexedTokenBalanceRow(
   const standard = normaliseMrcStandard(row.mrc.standard);
   const label = formatMrcStandardLabel(row.mrc.standard);
   const isCollectionToken = standard === "mrc721" || standard === "mrc1155";
-  const assetKind = isCollectionToken ? "collection" : "asset";
   const assetId = shortHex(row.mrc.assetId);
+
+  if (standard === "mrc4626") {
+    return {
+      title: `${label} shares ${assetId}`,
+      subtitle: `vault ${assetId} · ${updated}`,
+      unitsLabel: "shares",
+    };
+  }
+
+  const assetKind = isCollectionToken ? "collection" : "asset";
 
   if (isCollectionToken && row.mrc.tokenId) {
     const tokenId = shortHex(row.mrc.tokenId);

@@ -507,6 +507,73 @@ describe("wallet-indexer-snapshot", () => {
     });
   });
 
+  it("enriches MRC-4626 vault share balances with null-token holder rows", async () => {
+    const vaultId = `0x${"46".repeat(32)}`;
+    const holderAddress = "0x2222222222222222222222222222222222222222";
+    rpcResponses["lyth_getTokenBalances"] = [
+      {
+        tokenId: vaultId,
+        balance: "55",
+        updatedAtBlock: 130,
+        mrc: {
+          standard: "mrc4626",
+          assetId: vaultId,
+        },
+      },
+    ];
+    rpcResponses["lyth_mrcHolders"] = {
+      schemaVersion: 1,
+      standard: "mrc4626",
+      assetId: vaultId,
+      tokenId: null,
+      limit: 3,
+      holders: [
+        {
+          rank: 1,
+          address: holderAddress,
+          balance: "55",
+          updatedAtBlock: 131,
+        },
+      ],
+    };
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [];
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: {
+        tokenBalances: Array<{
+          tokenId: string;
+          mrcHolders?: {
+            standard: string;
+            assetId: string;
+            tokenId: string | null;
+            limit: number;
+            holders: Array<{ address: string; balance: string }>;
+          };
+        }>;
+      };
+    };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.tokenBalances[0]?.mrcHolders).toMatchObject({
+      standard: "mrc4626",
+      assetId: vaultId,
+      tokenId: null,
+      limit: 3,
+      holders: [{ address: holderAddress, balance: "55" }],
+    });
+    expect(rpcCalls).toContainEqual({
+      method: "lyth_mrcHolders",
+      params: ["mrc4626", vaultId, null, 3],
+    });
+  });
+
   it("passes through bridge route disclosures from token-balance envelopes", async () => {
     rpcResponses["lyth_getTokenBalances"] = {
       tokenBalances: [
