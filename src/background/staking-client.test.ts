@@ -12,10 +12,10 @@
 //   3. Malformed-response handling: a well-formed-transport but
 //      missing-required-fields response yields `ok: false, reason`.
 //
-// Pending-rewards + redemption-queue paths are chain-GAP mocks today
-// (the SDK at 0fd8a79 doesn't expose either reader); the tests pin the
-// mock-derivation shape so a future chain-side activation breaks the
-// fixture loudly rather than silently.
+// Pending rewards now call the direct `lyth_pendingRewards` RPC first,
+// falling back to the old mock derivation only when that method is
+// absent or Sprintnet is unreachable. Redemption queue stays vestigial
+// per §23.2 zero unbonding.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -48,6 +48,18 @@ const mockedRpc = sprintnetJsonRpc as unknown as ReturnType<typeof vi.fn>;
 const BPS_DENOMINATOR = 10_000n;
 const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
 const MOCK_REWARD_INTERVALS_PER_YEAR = 365n * 288n;
+
+function methodNotFoundError(): Error & {
+  code: number;
+  method: string;
+  via: string;
+} {
+  return Object.assign(new Error("Method not found"), {
+    code: -32601,
+    method: "lyth_pendingRewards",
+    via: "operator-1",
+  });
+}
 
 function expectedMockRewardLythoshi(weightBps: number, aprBps: number): bigint {
   return (
@@ -469,13 +481,130 @@ describe("readClusterDelegators", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readPendingRewards (chain GAP — verify mock-derivation shape)
+// readPendingRewards
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("readPendingRewards (chain GAP — mock fixture)", () => {
+describe("readPendingRewards", () => {
   const wallet = "0x" + "bb".repeat(20);
 
+  it("prefers lyth_pendingRewards and preserves the RPC via", async () => {
+    const total = 123_456_789n;
+    const settled = 23_456_789n;
+    const unsettled = 100_000_000n;
+    const rowOne = 70_000_000n;
+    const rowTwo = 30_000_000n;
+    mockedRpc.mockResolvedValue({
+      via: "operator-7",
+      result: {
+        wallet,
+        totalAmountLythoshi: total.toString(10),
+        settledPendingLythoshi: settled.toString(10),
+        unsettledAmountLythoshi: unsettled.toString(10),
+        autoCompound: true,
+        rows: [
+          {
+            cluster: 1,
+            weightBps: 2500,
+            unsettledAmountLythoshi: rowOne.toString(10),
+          },
+          {
+            cluster: 3,
+            weightBps: 7500,
+            unsettledAmountLythoshi: "0x" + rowTwo.toString(16),
+          },
+        ],
+        block: 99_001n,
+      },
+    });
+
+    const r = await readPendingRewards(wallet, [{ cluster: 999, weightBps: 1000 }]);
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_pendingRewards", [wallet]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("operator-7");
+    expect(r.data.wallet).toBe(wallet);
+    expect(r.data.totalAmountLythoshi).toBe(total.toString(10));
+    expect(r.data.settledPendingLythoshi).toBe(settled.toString(10));
+    expect(r.data.unsettledAmountLythoshi).toBe(unsettled.toString(10));
+    expect(r.data.autoCompound).toBe(true);
+    expect(r.data.totalAmountWei).toBe("0x" + total.toString(16));
+    expect(r.data.blockHeight).toBe("99001");
+    expect(r.data.rows).toEqual([
+      {
+        cluster: 1,
+        weightBps: 2500,
+        unsettledAmountLythoshi: rowOne.toString(10),
+        amountWei: "0x" + rowOne.toString(16),
+        effectiveAprBps: null,
+      },
+      {
+        cluster: 3,
+        weightBps: 7500,
+        unsettledAmountLythoshi: rowTwo.toString(10),
+        amountWei: "0x" + rowTwo.toString(16),
+        effectiveAprBps: null,
+      },
+    ]);
+  });
+
+  it("rejects malformed lyth_pendingRewards responses instead of mocking them", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-7",
+      result: {
+        wallet,
+        totalAmountLythoshi: "1",
+        settledPendingLythoshi: "0",
+        unsettledAmountLythoshi: "1",
+        autoCompound: false,
+        rows: [{ cluster: 1, weightBps: "2500", unsettledAmountLythoshi: "1" }],
+        block: 12,
+      },
+    });
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2500 }]);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed lyth_pendingRewards/);
+  });
+
+  it("does not mock non-absence RPC errors", async () => {
+    mockedRpc.mockRejectedValue(
+      Object.assign(new Error("staking state unavailable"), {
+        code: -32000,
+        method: "lyth_pendingRewards",
+        via: "operator-7",
+      }),
+    );
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2500 }]);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("staking state unavailable");
+  });
+
+  it("falls back to the mock derivation when lyth_pendingRewards is absent", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2000 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toHaveLength(1);
+  });
+
+  it("falls back to the mock derivation on transport failure", async () => {
+    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2000 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toHaveLength(1);
+  });
+
   it("emits lythoshi rewards through legacy amountWei compatibility fields", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
     const r = await readPendingRewards(wallet, [
       { cluster: 1, weightBps: 2000 },
       { cluster: 3, weightBps: 1000 },
@@ -484,6 +613,8 @@ describe("readPendingRewards (chain GAP — mock fixture)", () => {
     if (!r.ok) return;
     expect(r.via).toBe("mock");
     expect(r.data.rows).toHaveLength(2);
+    expect(r.data.rows[0]?.weightBps).toBe(2000);
+    expect(r.data.rows[1]?.weightBps).toBe(1000);
     expect(r.data.rows[0]?.effectiveAprBps).toBe(MOCK_CLUSTER_APR_BPS[1]);
     expect(r.data.rows[1]?.effectiveAprBps).toBe(MOCK_CLUSTER_APR_BPS[3]);
 
@@ -496,27 +627,49 @@ describe("readPendingRewards (chain GAP — mock fixture)", () => {
       MOCK_CLUSTER_APR_BPS[3] ?? 0,
     );
     expect(firstLythoshi).toBeGreaterThan(0n);
+    expect(r.data.rows[0]?.unsettledAmountLythoshi).toBe(
+      firstLythoshi.toString(10),
+    );
+    expect(r.data.rows[1]?.unsettledAmountLythoshi).toBe(
+      secondLythoshi.toString(10),
+    );
     expect(r.data.rows[0]?.amountWei).toBe("0x" + firstLythoshi.toString(16));
     expect(r.data.rows[1]?.amountWei).toBe("0x" + secondLythoshi.toString(16));
+    expect(r.data.totalAmountLythoshi).toBe(
+      (firstLythoshi + secondLythoshi).toString(10),
+    );
+    expect(r.data.settledPendingLythoshi).toBe("0");
+    expect(r.data.unsettledAmountLythoshi).toBe(
+      (firstLythoshi + secondLythoshi).toString(10),
+    );
+    expect(r.data.autoCompound).toBe(false);
     expect(r.data.totalAmountWei).toBe(
       "0x" + (firstLythoshi + secondLythoshi).toString(16),
     );
   });
 
   it("emits a zero row when the cluster isn't in the mock APR table", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
     const r = await readPendingRewards(wallet, [{ cluster: 999, weightBps: 1000 }]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.rows[0]?.effectiveAprBps).toBeNull();
+    expect(r.data.rows[0]?.weightBps).toBe(1000);
+    expect(r.data.rows[0]?.unsettledAmountLythoshi).toBe("0");
     expect(r.data.rows[0]?.amountWei).toBe("0x0");
+    expect(r.data.totalAmountLythoshi).toBe("0");
     expect(r.data.totalAmountWei).toBe("0x0");
   });
 
   it("returns an empty rows[] for an unstaked wallet", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError());
+
     const r = await readPendingRewards(wallet, []);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.rows).toEqual([]);
+    expect(r.data.totalAmountLythoshi).toBe("0");
     expect(r.data.totalAmountWei).toBe("0x0");
   });
 });

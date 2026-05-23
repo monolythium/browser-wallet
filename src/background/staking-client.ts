@@ -548,7 +548,7 @@ export async function readClusterDelegators(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rewards + redemption queue (chain GAPs)
+// Rewards + redemption queue
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BPS_DENOMINATOR = 10_000n;
@@ -569,60 +569,208 @@ function mockPendingRewardLythoshi(weightBps: number, aprBps: number): bigint {
   );
 }
 
-/** Per-account pending rewards. The SDK at 0fd8a79 (Phase 7.1 head) does
- *  NOT yet expose a `lyth_pendingRewards` reader; the wallet returns a
- *  mock derived from the active delegations + MOCK_CLUSTER_APR_BPS until
- *  Nayiem surfaces the chain side.
- *
- *  Mock derivation: for each active delegation row, the wallet computes
- *  a small fake reward in lythoshi (8-decimal native LYTH) proportional to
- *  a 100 LYTH notional principal × delegation weight × APR / 365 / 288 —
- *  i.e. "as if 5 minutes of accrual at the cluster's nominal APR." The
- *  returned field names are still `amountWei` / `totalAmountWei` only
- *  because the upstream staking API shape uses those compatibility keys.
- *  This is purely a render-shape hint; the UI labels the figures `MOCK`
- *  until the chain side lands.
- *
- *  TODO: chain GAP — needs Nayiem
- *  ────────────────────────────────
- *  Phase 7.1 audit (2026-05-15): mono-core-sdk @0fd8a79 has no
- *  `lyth_pendingRewards` and no `/api/v1/staking/rewards` REST route
- *  either. Commit 964b0a3 "Expose advanced read API routes" exposed
- *  certificates, registry, and DAG routes but not pending-rewards
- *  aggregation. Once a chain reader lands, replace this body with a
- *  direct call via `sprintnetJsonRpc` and drop the mock derivation. */
-export async function readPendingRewards(
+// Direct RPC contract: `lyth_pendingRewards(wallet)` returns a pending-
+// rewards snapshot with canonical lythoshi quantities. The SDK may lag
+// the chain binding here, so the wallet calls JSON-RPC directly and
+// validates the wire shape locally.
+interface RawPendingRewardsResponse {
+  wallet?: unknown;
+  totalAmountLythoshi?: unknown;
+  settledPendingLythoshi?: unknown;
+  unsettledAmountLythoshi?: unknown;
+  autoCompound?: unknown;
+  rows?: unknown;
+  block?: unknown;
+}
+
+interface RawPendingRewardsRow {
+  cluster?: unknown;
+  weightBps?: unknown;
+  unsettledAmountLythoshi?: unknown;
+}
+
+function parseNonNegativeIntegerQuantity(raw: unknown): bigint | null {
+  if (typeof raw === "bigint") return raw >= 0n ? raw : null;
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw >= 0 ? BigInt(raw) : null;
+  }
+  if (typeof raw !== "string") return null;
+  const s = raw.trim();
+  if (/^0[xX][0-9a-fA-F]+$/.test(s) || /^[0-9]+$/.test(s)) {
+    try {
+      return BigInt(s);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function lythoshiHex(amount: bigint): string {
+  return "0x" + amount.toString(16);
+}
+
+function normalisePendingRewardsRow(raw: unknown): PendingRewardsRow | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as RawPendingRewardsRow;
+  const amount = parseNonNegativeIntegerQuantity(row.unsettledAmountLythoshi);
+  if (
+    typeof row.cluster !== "number" ||
+    !Number.isSafeInteger(row.cluster) ||
+    row.cluster < 0 ||
+    typeof row.weightBps !== "number" ||
+    !Number.isSafeInteger(row.weightBps) ||
+    row.weightBps < 0 ||
+    row.weightBps > 10_000 ||
+    amount === null
+  ) {
+    return null;
+  }
+  return {
+    cluster: row.cluster,
+    weightBps: row.weightBps,
+    unsettledAmountLythoshi: amount.toString(10),
+    amountWei: lythoshiHex(amount),
+    effectiveAprBps: null,
+  };
+}
+
+function isPendingRewardsUnavailableError(e: unknown): boolean {
+  const err = e as Partial<Error> & {
+    code?: unknown;
+    via?: unknown;
+    method?: unknown;
+  };
+  const message = typeof err.message === "string" ? err.message.toLowerCase() : "";
+  const hasAbsenceMessage =
+    message.includes("method not found") ||
+    message.includes("unknown method") ||
+    message.includes("unsupported method") ||
+    message.includes("not implemented") ||
+    message.includes("no such method");
+  if (typeof err.code === "number") return err.code === -32601 || hasAbsenceMessage;
+  if (hasAbsenceMessage) return true;
+  const isRpcError =
+    typeof err.via === "string" || err.method === "lyth_pendingRewards";
+  return !isRpcError;
+}
+
+function mockPendingRewardsView(
   wallet: string,
   delegations: ReadonlyArray<DelegationRow>,
-): Promise<StakingResult<PendingRewardsView>> {
-
+): PendingRewardsView {
   let totalLythoshi = 0n;
   const rows: PendingRewardsRow[] = [];
   for (const d of delegations) {
     const aprBps = MOCK_CLUSTER_APR_BPS[d.cluster] ?? null;
     if (aprBps === null) {
-      rows.push({ cluster: d.cluster, amountWei: "0x0", effectiveAprBps: null });
+      rows.push({
+        cluster: d.cluster,
+        weightBps: d.weightBps,
+        unsettledAmountLythoshi: "0",
+        amountWei: "0x0",
+        effectiveAprBps: null,
+      });
       continue;
     }
     const rewardLythoshi = mockPendingRewardLythoshi(d.weightBps, aprBps);
     totalLythoshi += rewardLythoshi;
     rows.push({
       cluster: d.cluster,
-      amountWei: "0x" + rewardLythoshi.toString(16),
+      weightBps: d.weightBps,
+      unsettledAmountLythoshi: rewardLythoshi.toString(10),
+      amountWei: lythoshiHex(rewardLythoshi),
       effectiveAprBps: aprBps,
     });
   }
 
   return {
-    ok: true,
-    via: "mock",
-    data: {
-      wallet,
-      totalAmountWei: "0x" + totalLythoshi.toString(16),
-      rows,
-      blockHeight: null,
-    },
+    wallet,
+    totalAmountLythoshi: totalLythoshi.toString(10),
+    settledPendingLythoshi: "0",
+    unsettledAmountLythoshi: totalLythoshi.toString(10),
+    autoCompound: false,
+    totalAmountWei: lythoshiHex(totalLythoshi),
+    rows,
+    blockHeight: null,
   };
+}
+
+/** Per-account pending rewards. The wallet calls the chain's
+ *  `lyth_pendingRewards(wallet)` first and preserves the RPC `via` on a
+ *  successful parse. If the method is absent on the contacted operator or
+ *  Sprintnet is unreachable, it falls back to the old render-shape mock
+ *  derived from active delegations + MOCK_CLUSTER_APR_BPS.
+ *
+ *  Mock derivation: for each active delegation row, the wallet computes
+ *  a small fake reward in lythoshi (8-decimal native LYTH) proportional to
+ *  a 100 LYTH notional principal × delegation weight × APR / 365 / 288 —
+ *  i.e. "as if 5 minutes of accrual at the cluster's nominal APR." */
+export async function readPendingRewards(
+  wallet: string,
+  delegations: ReadonlyArray<DelegationRow>,
+): Promise<StakingResult<PendingRewardsView>> {
+  try {
+    const { result, via } = await sprintnetJsonRpc<RawPendingRewardsResponse>(
+      "lyth_pendingRewards",
+      [wallet],
+    );
+    if (!result || typeof result !== "object") {
+      return { ok: false, reason: "malformed lyth_pendingRewards response" };
+    }
+    const raw = result as RawPendingRewardsResponse;
+    const totalAmount = parseNonNegativeIntegerQuantity(raw.totalAmountLythoshi);
+    const settledAmount = parseNonNegativeIntegerQuantity(raw.settledPendingLythoshi);
+    const unsettledAmount = parseNonNegativeIntegerQuantity(
+      raw.unsettledAmountLythoshi,
+    );
+    const block = parseNonNegativeIntegerQuantity(raw.block);
+    if (
+      typeof raw.wallet !== "string" ||
+      typeof raw.autoCompound !== "boolean" ||
+      !Array.isArray(raw.rows) ||
+      totalAmount === null ||
+      settledAmount === null ||
+      unsettledAmount === null ||
+      block === null
+    ) {
+      return { ok: false, reason: "malformed lyth_pendingRewards response" };
+    }
+
+    const rows: PendingRewardsRow[] = [];
+    for (const rawRow of raw.rows) {
+      const row = normalisePendingRewardsRow(rawRow);
+      if (row === null) {
+        return { ok: false, reason: "malformed lyth_pendingRewards response" };
+      }
+      rows.push(row);
+    }
+
+    return {
+      ok: true,
+      via,
+      data: {
+        wallet: raw.wallet,
+        totalAmountLythoshi: totalAmount.toString(10),
+        settledPendingLythoshi: settledAmount.toString(10),
+        unsettledAmountLythoshi: unsettledAmount.toString(10),
+        autoCompound: raw.autoCompound,
+        totalAmountWei: lythoshiHex(totalAmount),
+        rows,
+        blockHeight: block.toString(10),
+      },
+    };
+  } catch (e) {
+    if (isPendingRewardsUnavailableError(e)) {
+      return {
+        ok: true,
+        via: "mock",
+        data: mockPendingRewardsView(wallet, delegations),
+      };
+    }
+    const reason = (e as Error)?.message ?? "lyth_pendingRewards failed";
+    return { ok: false, reason };
+  }
 }
 
 /** Redemption queue. Per whitepaper §23.2 ("zero unbonding period"),
