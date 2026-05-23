@@ -651,7 +651,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       op: "wallet-send-tx",
       payload: {
         to: "0xrecipient",
-        valueWeiHex: "0x16345785d8a0000", // 0.1 LYTH
+        valueWeiHex: "0x989680", // 0.1 LYTH in lythoshi
         chainIdHex: TESTNET_CHAIN_ID_HEX,
       },
     })) as { ok: true; txHash: string };
@@ -694,7 +694,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       op: "wallet-send-tx",
       payload: {
         to: "0xrecipient",
-        valueWeiHex: "0x16345785d8a0000",
+        valueWeiHex: "0x989680",
         chainIdHex: TESTNET_CHAIN_ID_HEX,
       },
     })) as { ok: false; reason?: string };
@@ -728,7 +728,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       op: "wallet-send-tx",
       payload: {
         to: "0xrecipient",
-        valueWeiHex: "0x16345785d8a0000",
+        valueWeiHex: "0x989680",
         chainIdHex: TESTNET_CHAIN_ID_HEX,
       },
     }).then(() => {
@@ -763,7 +763,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       op: "wallet-send-tx",
       payload: {
         to: "0xrecipient",
-        valueWeiHex: "0x16345785d8a0000",
+        valueWeiHex: "0x989680",
         chainIdHex: TESTNET_CHAIN_ID_HEX,
       },
     });

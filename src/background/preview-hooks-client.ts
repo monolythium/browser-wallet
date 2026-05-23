@@ -35,8 +35,8 @@ export interface PreviewHooksInput {
   from?: string;
   /** Hex 0x address — recipient. Required. */
   to: string;
-  /** Hex-encoded wei value. Omitted treats the tx as a zero-value
-   *  call (the chain default). */
+  /** Compatibility field name; hex-encoded lythoshi value. Omitted
+   *  treats the tx as a zero-value call (the chain default). */
   valueWeiHex?: string;
   /** Hex-encoded calldata. Omitted for native LYTH transfers. */
   data?: string;

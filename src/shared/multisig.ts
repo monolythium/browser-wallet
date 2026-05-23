@@ -162,7 +162,7 @@ export type ProposalAction =
       kind: "send";
       /** Recipient (0x... or bech32m display form; lowercased before hashing). */
       to: string;
-      /** Hex wei (0x...). */
+      /** Compatibility field name; hex lythoshi native value (0x...). */
       valueWeiHex: string;
       chainIdHex: string;
       /** Optional EVM calldata for an ERC-20 / NFT transfer initiated

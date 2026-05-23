@@ -521,13 +521,13 @@ export async function bgWalletIndexerStatus(
 
 /** Fee strategy returned by `bgWalletFeeSuggestion`. */
 export interface FeeSuggestion {
-  /** Hex wei — sender's tip target (the only revenue path on Sprintnet). */
+  /** Hex lythoshi per execution unit — sender's tip target (the only revenue path on Sprintnet). */
   maxPriorityFeePerGas: string;
-  /** Hex wei — hard cap (priority + base). */
+  /** Hex lythoshi per execution unit — hard cap (priority + base). */
   maxFeePerGas: string;
-  /** Hex wei — current/next-block base fee. Surfaced for the UI fee preview. */
+  /** Hex lythoshi per execution unit — current/next-block base fee. Surfaced for the UI fee preview. */
   baseFeePerGas: string;
-  /** Hex gas-limit recommendation. Non-null on Sprintnet (the chain has
+  /** Hex execution-unit limit recommendation. Non-null on Sprintnet (the chain has
    * an intrinsic floor `eth_estimateGas` doesn't report); null on other
    * chains where the popup should estimate itself if needed. */
   gasLimit: string | null;
@@ -769,8 +769,8 @@ export async function bgWalletSendTx(args: {
    *  ML-DSA-65 envelope path; signing semantics are unchanged.
    *  Phase 5 Commit 7 added this field for the SendNft screen. */
   data?: string;
-  /** Optional gas-limit override (hex). When omitted the SW falls
-   *  back to its native-transfer default (Sprintnet's intrinsic-gas
+  /** Optional execution-unit limit override (hex). When omitted the SW falls
+   *  back to its native-transfer default (Sprintnet's intrinsic execution-unit
    *  floor). NFT calldata pushes that floor well past 21k, so the
    *  Send-NFT page passes a conservative overhead-aware estimate. */
   gasLimitHex?: string;

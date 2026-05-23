@@ -151,7 +151,7 @@ export function lythAmountToBps(
 }
 
 /** Inverse of `lythAmountToBps`: convert a bp weight + balance back to
- *  a wei amount. Used by the stake-form's preview card to render the
+ *  a lythoshi amount. Used by the stake-form's preview card to render the
  *  exact LYTH amount the chain will record. Floors any truncation. */
 export function bpsToLythAmountWei(
   bps: number,

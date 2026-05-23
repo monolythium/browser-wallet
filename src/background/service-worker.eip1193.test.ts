@@ -398,8 +398,9 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(r.result).toBe(DETERMINISTIC_TX_HASH);
     // Approval queue must have seen a `send_tx` request (auto-approved here).
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
-    // The dispatcher must have asked the node for nonce, gas, gas-price and
-    // then broadcast the raw tx — this is the contract surface area we gate.
+    // The dispatcher must have asked the node for nonce, execution-unit
+    // limit, execution-unit price and then broadcast the raw tx — this is
+    // the contract surface area we gate.
     const methods = rpcCalls.map((c) => c.method);
     expect(methods).toContain("eth_getTransactionCount");
     expect(methods).toContain("eth_gasPrice");
