@@ -10,7 +10,11 @@
 
 import type { ReactNode, CSSProperties } from "react";
 import { useState, useEffect } from "react";
-import { PRECOMPILE_ADDRESSES } from "@monolythium/core-sdk";
+import {
+  PRECOMPILE_ADDRESSES,
+  addressToTypedBech32,
+  type AddressKind,
+} from "@monolythium/core-sdk";
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
@@ -2461,7 +2465,7 @@ export function computeNativeFeeLythoshi(
 interface DecodedCall {
   /** Function name pulled from the matched selector. */
   name: string;
-  /** Selector hex, e.g. `0xa9059cbb`. */
+  /** Selector hex, e.g. `0xa9059cbb`, or native payload encoding marker. */
   selector: string;
   /** Optional protocol surface for first-party native precompile actions. */
   surface?: "native-market";
@@ -2473,9 +2477,19 @@ const CLOB_PLACE_LIMIT_ORDER_SELECTOR = "0x2468786f";
 const CLOB_PLACE_MARKET_ORDER_SELECTOR = "0xb9b1fa86";
 const CLOB_PLACE_MARKET_ORDER_EX_SELECTOR = "0xa6f092f0";
 const CLOB_CANCEL_ORDER_SELECTOR = "0x7489ec23";
+const NATIVE_MARKET_MODULE_ADDRESS_HEX = "0x4d41524b45545f4e41544956455f4d4f445f5631";
+const NATIVE_MARKET_MODULE_ADDRESS_TYPED = addressToTypedBech32(
+  "systemModule",
+  NATIVE_MARKET_MODULE_ADDRESS_HEX,
+);
 
 export function decodeCalldata(data: string, to?: string): DecodedCall | null {
-  if (!data || !data.startsWith("0x") || data.length < 10) return null;
+  if (!data || !data.startsWith("0x")) return null;
+  if (isNativeMarketModuleTarget(to)) {
+    const nativePayload = decodeNativeMarketBincodePayload(data);
+    if (nativePayload) return nativePayload;
+  }
+  if (data.length < 10) return null;
   const selector = data.slice(0, 10).toLowerCase();
   const body = data.slice(10);
   if (to?.toLowerCase() === PRECOMPILE_ADDRESSES.CLOB.toLowerCase()) {
@@ -2643,6 +2657,183 @@ function decodeNativeMarketCalldata(selector: string, body: string): DecodedCall
     }
     default:
       return null;
+  }
+}
+
+function isNativeMarketModuleTarget(to: string | undefined): boolean {
+  if (typeof to !== "string") return false;
+  const normalized = to.toLowerCase();
+  return (
+    normalized === NATIVE_MARKET_MODULE_ADDRESS_HEX ||
+    normalized === NATIVE_MARKET_MODULE_ADDRESS_TYPED
+  );
+}
+
+const NATIVE_MARKET_KIND_LABELS: Record<number, AddressKind> = {
+  0: "user",
+  1: "smartAccount",
+  2: "contract",
+  3: "cluster",
+  4: "multisig",
+  5: "systemModule",
+};
+
+function decodeNativeMarketBincodePayload(data: string): DecodedCall | null {
+  const r = NativeMarketPayloadReader.fromHex(data);
+  if (!r) return null;
+  const nativeCall = r.u32();
+  if (nativeCall == null) return null;
+
+  if (nativeCall === 0) {
+    const spotCall = r.u32();
+    if (spotCall === 1) return decodeNativeSpotLimitOrderPayload(r);
+    if (spotCall === 4) return decodeNativeSpotCancelOrderPayload(r);
+    return null;
+  }
+
+  if (nativeCall === 1) {
+    const nftCall = r.u32();
+    if (nftCall === 1) return decodeNativeNftBuyListingPayload(r);
+    return null;
+  }
+
+  return null;
+}
+
+function decodeNativeSpotLimitOrderPayload(r: NativeMarketPayloadReader): DecodedCall | null {
+  const marketId = r.bytesHex(32);
+  const owner = r.monoAddress();
+  const nonce = r.u64();
+  const side = r.u32();
+  const price = r.u128();
+  const quantity = r.u128();
+  const expiresAtBlock = r.u64();
+  if (
+    !marketId ||
+    !owner ||
+    nonce == null ||
+    side == null ||
+    price == null ||
+    quantity == null ||
+    expiresAtBlock == null ||
+    !r.done()
+  ) {
+    return null;
+  }
+  const sideLabel = side === 0 ? "bid" : side === 1 ? "ask" : `unknown (${side})`;
+  return {
+    name: "nativeSpotPlaceLimitOrder",
+    selector: "native-bincode",
+    surface: "native-market",
+    args: [
+      { name: "market id", type: "bytes32", value: marketId },
+      { name: "owner", type: owner.kind, value: owner.display },
+      { name: "nonce", type: "uint64", value: nonce.toString(10) },
+      { name: "side", type: "enum", value: sideLabel },
+      { name: "price", type: "uint128", value: price.toString(10) },
+      { name: "quantity", type: "uint128", value: quantity.toString(10) },
+      { name: "expires at block", type: "uint64", value: expiresAtBlock.toString(10) },
+    ],
+  };
+}
+
+function decodeNativeSpotCancelOrderPayload(r: NativeMarketPayloadReader): DecodedCall | null {
+  const orderId = r.bytesHex(32);
+  const caller = r.monoAddress();
+  if (!orderId || !caller || !r.done()) return null;
+  return {
+    name: "nativeSpotCancelOrder",
+    selector: "native-bincode",
+    surface: "native-market",
+    args: [
+      { name: "order id", type: "bytes32", value: orderId },
+      { name: "caller", type: caller.kind, value: caller.display },
+    ],
+  };
+}
+
+function decodeNativeNftBuyListingPayload(r: NativeMarketPayloadReader): DecodedCall | null {
+  const listingId = r.bytesHex(32);
+  const buyer = r.monoAddress();
+  const currentBlock = r.u64();
+  if (!listingId || !buyer || currentBlock == null || !r.done()) return null;
+  return {
+    name: "nativeNftBuyListing",
+    selector: "native-bincode",
+    surface: "native-market",
+    args: [
+      { name: "listing id", type: "bytes32", value: listingId },
+      { name: "buyer", type: buyer.kind, value: buyer.display },
+      { name: "current block", type: "uint64", value: currentBlock.toString(10) },
+    ],
+  };
+}
+
+class NativeMarketPayloadReader {
+  private constructor(
+    private readonly bytes: Uint8Array,
+    private offset: number,
+  ) {}
+
+  static fromHex(hex: string): NativeMarketPayloadReader | null {
+    const raw = hex.slice(2);
+    if (raw.length === 0 || raw.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(raw)) {
+      return null;
+    }
+    const bytes = new Uint8Array(raw.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Number.parseInt(raw.slice(i * 2, i * 2 + 2), 16);
+    }
+    return new NativeMarketPayloadReader(bytes, 0);
+  }
+
+  done(): boolean {
+    return this.offset === this.bytes.length;
+  }
+
+  bytesHex(length: number): string | null {
+    if (this.offset + length > this.bytes.length) return null;
+    const slice = this.bytes.slice(this.offset, this.offset + length);
+    this.offset += length;
+    return `0x${[...slice].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  u32(): number | null {
+    if (this.offset + 4 > this.bytes.length) return null;
+    const value =
+      this.bytes[this.offset]! |
+      (this.bytes[this.offset + 1]! << 8) |
+      (this.bytes[this.offset + 2]! << 16) |
+      (this.bytes[this.offset + 3]! << 24);
+    this.offset += 4;
+    return value >>> 0;
+  }
+
+  u64(): bigint | null {
+    return this.uintLe(8);
+  }
+
+  u128(): bigint | null {
+    return this.uintLe(16);
+  }
+
+  monoAddress(): { kind: AddressKind; display: string } | null {
+    const kindVariant = this.u32();
+    const addressHex = this.bytesHex(20);
+    if (kindVariant == null || !addressHex) return null;
+    const kind = NATIVE_MARKET_KIND_LABELS[kindVariant];
+    if (!kind) return null;
+    return { kind, display: addressToTypedBech32(kind, addressHex) };
+  }
+
+  private uintLe(length: number): bigint | null {
+    if (this.offset + length > this.bytes.length) return null;
+    let value = 0n;
+    for (let i = 0; i < length; i++) {
+      value |= BigInt(this.bytes[this.offset + i]!) << BigInt(8 * i);
+    }
+    this.offset += length;
+    return value;
   }
 }
 
