@@ -204,6 +204,7 @@ import {
   collectWalletBridgeRouteDisclosures,
   validateWalletTokenBalanceList,
   type WalletBridgeRouteDisclosure,
+  type WalletBridgeRouteReadiness,
   type WalletTokenBalance,
 } from "../shared/token-balances.js";
 import {
@@ -1404,6 +1405,7 @@ const CACHE_STALENESS_MS = 30 * 1000;
 interface IndexerSnapshotRaw {
   tokenBalances: WalletTokenBalance[];
   bridgeRouteDisclosures: WalletBridgeRouteDisclosure[];
+  bridgeRouteReadiness: WalletBridgeRouteReadiness | null;
   addressLabel: unknown | null;
   delegationHistory: unknown[];
   addressActivity: unknown[];
@@ -1452,9 +1454,10 @@ async function fetchIndexerSnapshot(
   return {
     tokenBalances: validateWalletTokenBalanceList(rawTokenBalances),
     bridgeRouteDisclosures: dedupeWalletBridgeRouteDisclosures([
-      ...bridgeRoutes.data,
+      ...bridgeRoutes.data.bridgeRouteDisclosures,
       ...collectWalletBridgeRouteDisclosures(tokenBalances.value),
     ]),
+    bridgeRouteReadiness: bridgeRoutes.data.readiness,
     addressLabel: addressLabel.value ?? null,
     delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
     addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
@@ -1472,11 +1475,36 @@ function dedupeWalletBridgeRouteDisclosures(
       typeof disclosure.routeId === "string"
         ? `routeId:${disclosure.routeId}`
         : `json:${JSON.stringify(disclosure)}`;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      const index = out.findIndex((row) => {
+        const rowKey =
+          typeof row.routeId === "string"
+            ? `routeId:${row.routeId}`
+            : `json:${JSON.stringify(row)}`;
+        return rowKey === key;
+      });
+      if (index >= 0) {
+        out[index] = mergeWalletBridgeRouteDisclosure(out[index]!, disclosure);
+      }
+      continue;
+    }
     seen.add(key);
     out.push(disclosure);
   }
   return out;
+}
+
+function mergeWalletBridgeRouteDisclosure(
+  primary: WalletBridgeRouteDisclosure,
+  secondary: WalletBridgeRouteDisclosure,
+): WalletBridgeRouteDisclosure {
+  const merged: WalletBridgeRouteDisclosure = { ...primary };
+  for (const [key, value] of Object.entries(secondary)) {
+    if (merged[key] === undefined || merged[key] === null) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 // Structural validators for the raw wire shapes. These guard the SW
@@ -4044,6 +4072,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         snapshot: {
           tokenBalances: fresh.tokenBalances,
           bridgeRouteDisclosures: fresh.bridgeRouteDisclosures,
+          bridgeRouteReadiness: fresh.bridgeRouteReadiness,
           addressLabel: fresh.addressLabel,
           delegationHistory: fresh.delegationHistory,
           addressActivity: fresh.addressActivity,

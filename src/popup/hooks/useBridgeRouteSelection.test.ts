@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { WalletBridgeRouteDisclosure } from "../bg.js";
+import type {
+  WalletBridgeRouteDisclosure,
+  WalletBridgeRouteReadiness,
+} from "../bg.js";
 import { buildBridgeRouteChoiceState } from "./useBridgeRouteSelection.js";
 
 function route(
@@ -28,6 +31,14 @@ function route(
     ...overrides,
   };
 }
+
+const DISCOVERY_ONLY_READINESS: WalletBridgeRouteReadiness = {
+  routeSelectionReady: false,
+  quoteReady: false,
+  submitReady: false,
+  blockedReasons: ["bridge route selection requires transfer intent"],
+  warnings: [],
+};
 
 describe("buildBridgeRouteChoiceState", () => {
   it("uses SDK ranking to pick the deterministic accepted route", () => {
@@ -114,18 +125,67 @@ describe("buildBridgeRouteChoiceState", () => {
   });
 
   it("keeps discovery catalogue routes behind quote and submit guards", () => {
-    const state = buildBridgeRouteChoiceState([route("catalogue-only")]);
+    const state = buildBridgeRouteChoiceState(
+      [
+        route("catalogue-only", {
+          bridgeId: "catalogue-bridge-arb-usdc",
+          wrappedAsset: "mrc:wrapped-usdc",
+        }),
+      ],
+      DISCOVERY_ONLY_READINESS,
+    );
 
     expect(state.selected?.route?.routeId).toBe("catalogue-only");
+    expect(state.selected?.bridgeId).toBe("catalogue-bridge-arb-usdc");
+    expect(state.selected?.wrappedAsset).toBe("mrc:wrapped-usdc");
+    expect(state.selected?.readiness).toEqual(DISCOVERY_ONLY_READINESS);
+    expect(state.catalogueReadiness).toEqual(DISCOVERY_ONLY_READINESS);
     expect(state.transferPreview.status).toBe("intent-blocked");
     expect(state.transferPreview.intent).toMatchObject({
       allowedRouteIds: ["catalogue-only"],
     });
+    expect(state.transferPreview.readiness).toEqual(DISCOVERY_ONLY_READINESS);
+    expect(state.transferPreview.quoteDisabled).toBe(true);
+    expect(state.transferPreview.submitDisabled).toBe(true);
+    expect(state.transferPreview.blockedReasons).toContain(
+      "bridge route selection requires transfer intent",
+    );
     expect(state.transferPreview.quoteBlockedReasons).toEqual([
+      "catalogue readiness reports quote disabled",
       "standalone SDK exposes route-intent selection only; no live bridge quote helper or API route is available",
     ]);
     expect(state.transferPreview.submitBlockedReasons).toEqual([
+      "catalogue readiness reports submit disabled",
       "standalone SDK exposes no live bridge submit helper or API route",
+    ]);
+  });
+
+  it("reads route-level catalogue readiness aliases for display-only rows", () => {
+    const state = buildBridgeRouteChoiceState([
+      {
+        route_id: "catalogue-usdc-mainnet",
+        bridge_id: "bridge-catalogue-1",
+        wrapped_asset: "mrc:wrapped-usdc",
+        route_selection_ready: false,
+        quote_ready: false,
+        submit_ready: false,
+        blocked_reasons: ["bridge route selection requires transfer intent"],
+      },
+    ]);
+
+    expect(state.sdkRouteCount).toBe(0);
+    expect(state.displayOnlyCount).toBe(1);
+    expect(state.candidates[0]?.bridgeId).toBe("bridge-catalogue-1");
+    expect(state.candidates[0]?.wrappedAsset).toBe("mrc:wrapped-usdc");
+    expect(state.candidates[0]?.readiness).toEqual({
+      routeSelectionReady: false,
+      quoteReady: false,
+      submitReady: false,
+      blockedReasons: ["bridge route selection requires transfer intent"],
+      warnings: [],
+    });
+    expect(state.transferPreview.quoteBlockedReasons).toEqual([
+      "live bridge quote is blocked until a route satisfies the SDK disclosure floor",
     ]);
   });
 
