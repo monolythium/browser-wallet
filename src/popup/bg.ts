@@ -6,6 +6,7 @@ import type {
   WalletBridgeRouteReadiness,
   WalletTokenBalance,
 } from "../shared/token-balances.js";
+import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 export type {
   WalletBridgeDisclosureValue,
@@ -16,6 +17,11 @@ export type {
   WalletTokenBalance,
   WalletTokenBalanceMrcIdentity,
 } from "../shared/token-balances.js";
+export type {
+  MrcAccountLookupResponse,
+  MrcAccountRecord,
+  MrcPolicySpendRecord,
+} from "../shared/mrc-account.js";
 export type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 
 export type Custody = "tpm" | "passkey" | "hw" | "sw";
@@ -404,10 +410,11 @@ export interface WalletIndexerSnapshot {
   bridgeRouteDisclosure?: WalletBridgeRouteDisclosure;
   bridgeRouteDisclosures?: WalletBridgeRouteDisclosure[];
   bridgeRouteReadiness?: WalletBridgeRouteReadiness | null;
+  mrcAccount: MrcAccountLookupResponse | null;
   addressLabel: WalletAddressLabel | null;
   delegationHistory: WalletDelegationHistoryRow[];
   addressActivity: WalletAddressActivityRow[];
-  errors: Partial<Record<"tokenBalances" | "mrcHolders" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
+  errors: Partial<Record<"tokenBalances" | "mrcHolders" | "mrcAccount" | "bridgeRoutes" | "addressLabel" | "delegationHistory" | "addressActivity", string>>;
 }
 
 export async function bgWalletIndexerSnapshot(

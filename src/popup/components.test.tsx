@@ -1,19 +1,24 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { addressToTypedBech32 } from "@monolythium/core-sdk";
 import {
   applyFeeTier,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
   collectBridgeRouteDisclosuresFromIndexer,
+  formatMrcAccountRecordLine,
   formatIndexedTokenBalanceRow,
   formatBridgeRouteDisclosureDisplay,
   formatMrcHolderDisplayLine,
   formatMrcHolderSummaryTitle,
+  formatMrcPolicySpendLine,
   formatExecutionUnits,
   formatLythoshiAmountHex,
   formatLythoshiPerExecutionUnit,
+  hasMrcAccountSummary,
   lythoshiToLythString,
+  MrcAccountSummary,
 } from "./components.js";
 import type { WalletBridgeRouteDisclosure } from "./bg.js";
 
@@ -174,6 +179,100 @@ describe("indexed token balance display", () => {
   });
 });
 
+describe("MRC account summary display", () => {
+  const account = addressToTypedBech32(
+    "smartAccount",
+    "0x1111111111111111111111111111111111111111",
+  );
+  const controller = addressToTypedBech32(
+    "user",
+    "0x2222222222222222222222222222222222222222",
+  );
+  const recovery = addressToTypedBech32(
+    "user",
+    "0x3333333333333333333333333333333333333333",
+  );
+
+  it("formats compact smart, policy, and spend rows", () => {
+    expect(
+      formatMrcAccountRecordLine({
+        kind: "smart_account",
+        account,
+        controller,
+        recovery,
+        policyHash: null,
+        nonce: "7",
+        updatedAtBlock: 1234,
+      }),
+    ).toContain("Smart");
+    expect(
+      formatMrcAccountRecordLine({
+        kind: "policy_account",
+        account,
+        controller,
+        recovery: null,
+        policyHash: "0x" + "55".repeat(32),
+        nonce: null,
+        updatedAtBlock: 1235,
+      }),
+    ).toContain("Policy");
+    expect(
+      formatMrcPolicySpendLine({
+        account,
+        assetId: "0x" + "44".repeat(32),
+        window: "9",
+        amount: "20",
+        spent: "45",
+        updatedAtBlock: 1236,
+      }),
+    ).toBe("Spend 0x444444444444…44444444 · window 9 · spent 45 · block 1,236");
+  });
+
+  it("renders the summary only when a record or spend row exists", () => {
+    const empty = {
+      schemaVersion: 1 as const,
+      account,
+      spendLimit: 4,
+      smartAccount: null,
+      policyAccount: null,
+      policySpends: [],
+    };
+    expect(hasMrcAccountSummary(empty)).toBe(false);
+    expect(renderToStaticMarkup(<MrcAccountSummary mrcAccount={empty} />)).toBe("");
+
+    const html = renderToStaticMarkup(
+      <MrcAccountSummary
+        mrcAccount={{
+          ...empty,
+          policyAccount: {
+            kind: "policy_account",
+            account,
+            controller,
+            recovery: null,
+            policyHash: "0x" + "55".repeat(32),
+            nonce: null,
+            updatedAtBlock: 99,
+          },
+          policySpends: [
+            {
+              account,
+              assetId: "0x" + "44".repeat(32),
+              window: "9",
+              amount: "20",
+              spent: "45",
+              updatedAtBlock: 100,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("MRC account");
+    expect(html).toContain("Policy");
+    expect(html).toContain("spend window 4");
+    expect(html).toContain("spent 45");
+  });
+});
+
 describe("bridge route disclosure display", () => {
   it("collects top-level and token-level disclosures without defaults", () => {
     expect(
@@ -195,6 +294,7 @@ describe("bridge route disclosure display", () => {
             },
           },
         ],
+        mrcAccount: null,
         addressLabel: null,
         delegationHistory: [],
         addressActivity: [],
@@ -270,6 +370,7 @@ describe("bridge route disclosure display", () => {
               bridgeRouteDisclosure: sdkBridgeRoute("healthy"),
             },
           ],
+          mrcAccount: null,
           addressLabel: null,
           delegationHistory: [],
           addressActivity: [],
@@ -316,6 +417,7 @@ describe("bridge route disclosure display", () => {
             warnings: [],
           },
           tokenBalances: [],
+          mrcAccount: null,
           addressLabel: null,
           delegationHistory: [],
           addressActivity: [],
@@ -360,6 +462,7 @@ describe("bridge route disclosure display", () => {
             }),
           ],
           tokenBalances: [],
+          mrcAccount: null,
           addressLabel: null,
           delegationHistory: [],
           addressActivity: [],
@@ -383,6 +486,7 @@ describe("bridge route disclosure display", () => {
         onBack={() => undefined}
         indexer={{
           tokenBalances: [],
+          mrcAccount: null,
           addressLabel: null,
           delegationHistory: [],
           addressActivity: [],
