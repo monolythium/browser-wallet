@@ -41,8 +41,21 @@ import {
   readRedemptionQueue,
 } from "./staking-client.js";
 import { MOCK_CLUSTERS, MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
+import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
 
 const mockedRpc = sprintnetJsonRpc as unknown as ReturnType<typeof vi.fn>;
+
+const BPS_DENOMINATOR = 10_000n;
+const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
+const MOCK_REWARD_INTERVALS_PER_YEAR = 365n * 288n;
+
+function expectedMockRewardLythoshi(weightBps: number, aprBps: number): bigint {
+  return (
+    MOCK_REWARD_PRINCIPAL_LYTHOSHI *
+    BigInt(weightBps) *
+    BigInt(aprBps)
+  ) / (BPS_DENOMINATOR * BPS_DENOMINATOR * MOCK_REWARD_INTERVALS_PER_YEAR);
+}
 
 afterEach(() => {
   mockedRpc.mockReset();
@@ -462,7 +475,7 @@ describe("readClusterDelegators", () => {
 describe("readPendingRewards (chain GAP — mock fixture)", () => {
   const wallet = "0x" + "bb".repeat(20);
 
-  it("emits a row per active delegation, attached APR from MOCK_CLUSTER_APR_BPS", async () => {
+  it("emits lythoshi rewards through legacy amountWei compatibility fields", async () => {
     const r = await readPendingRewards(wallet, [
       { cluster: 1, weightBps: 2000 },
       { cluster: 3, weightBps: 1000 },
@@ -473,9 +486,21 @@ describe("readPendingRewards (chain GAP — mock fixture)", () => {
     expect(r.data.rows).toHaveLength(2);
     expect(r.data.rows[0]?.effectiveAprBps).toBe(MOCK_CLUSTER_APR_BPS[1]);
     expect(r.data.rows[1]?.effectiveAprBps).toBe(MOCK_CLUSTER_APR_BPS[3]);
-    // The total is a non-empty hex; verifies the BigInt arithmetic
-    // doesn't underflow to zero on small weights.
-    expect(r.data.totalAmountWei).toMatch(/^0x[0-9a-f]+$/);
+
+    const firstLythoshi = expectedMockRewardLythoshi(
+      2000,
+      MOCK_CLUSTER_APR_BPS[1] ?? 0,
+    );
+    const secondLythoshi = expectedMockRewardLythoshi(
+      1000,
+      MOCK_CLUSTER_APR_BPS[3] ?? 0,
+    );
+    expect(firstLythoshi).toBeGreaterThan(0n);
+    expect(r.data.rows[0]?.amountWei).toBe("0x" + firstLythoshi.toString(16));
+    expect(r.data.rows[1]?.amountWei).toBe("0x" + secondLythoshi.toString(16));
+    expect(r.data.totalAmountWei).toBe(
+      "0x" + (firstLythoshi + secondLythoshi).toString(16),
+    );
   });
 
   it("emits a zero row when the cluster isn't in the mock APR table", async () => {

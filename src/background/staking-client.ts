@@ -45,6 +45,7 @@ import {
   type RedemptionQueueView,
   type StakingResult,
 } from "../shared/staking.js";
+import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
 
 // SDK-contract anchors live in `staking-client.test.ts` as typed fixtures
 // (`const sdkShape: ClusterDirectoryPageResponse = ...`). When Nayiem
@@ -550,16 +551,37 @@ export async function readClusterDelegators(
 // Rewards + redemption queue (chain GAPs)
 // ─────────────────────────────────────────────────────────────────────────────
 
+const BPS_DENOMINATOR = 10_000n;
+const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
+const MOCK_REWARD_INTERVALS_PER_DAY = 288n;
+const MOCK_REWARD_DAYS_PER_YEAR = 365n;
+
+function mockPendingRewardLythoshi(weightBps: number, aprBps: number): bigint {
+  return (
+    MOCK_REWARD_PRINCIPAL_LYTHOSHI *
+    BigInt(weightBps) *
+    BigInt(aprBps)
+  ) / (
+    BPS_DENOMINATOR *
+    BPS_DENOMINATOR *
+    MOCK_REWARD_DAYS_PER_YEAR *
+    MOCK_REWARD_INTERVALS_PER_DAY
+  );
+}
+
 /** Per-account pending rewards. The SDK at 0fd8a79 (Phase 7.1 head) does
  *  NOT yet expose a `lyth_pendingRewards` reader; the wallet returns a
  *  mock derived from the active delegations + MOCK_CLUSTER_APR_BPS until
  *  Nayiem surfaces the chain side.
  *
  *  Mock derivation: for each active delegation row, the wallet computes
- *  a small fake reward proportional to the weight × APR / (365 × 24 × 12)
- *  — i.e. "as if 5 minutes of accrual at the cluster's nominal APR." This
- *  is purely a render-shape hint; the UI labels the figures `MOCK` until
- *  the chain side lands.
+ *  a small fake reward in lythoshi (8-decimal native LYTH) proportional to
+ *  a 100 LYTH notional principal × delegation weight × APR / 365 / 288 —
+ *  i.e. "as if 5 minutes of accrual at the cluster's nominal APR." The
+ *  returned field names are still `amountWei` / `totalAmountWei` only
+ *  because the upstream staking API shape uses those compatibility keys.
+ *  This is purely a render-shape hint; the UI labels the figures `MOCK`
+ *  until the chain side lands.
  *
  *  TODO: chain GAP — needs Nayiem
  *  ────────────────────────────────
@@ -574,7 +596,7 @@ export async function readPendingRewards(
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
 
-  let total = 0n;
+  let totalLythoshi = 0n;
   const rows: PendingRewardsRow[] = [];
   for (const d of delegations) {
     const aprBps = MOCK_CLUSTER_APR_BPS[d.cluster] ?? null;
@@ -582,14 +604,11 @@ export async function readPendingRewards(
       rows.push({ cluster: d.cluster, amountWei: "0x0", effectiveAprBps: null });
       continue;
     }
-    // Illustrative-only: amount ≈ weight × APR / (365 × 288) where 288
-    // is the 5-minute-tick count in a day. Numbers stay small enough to
-    // render but visually plausible.
-    const wei = (BigInt(d.weightBps) * BigInt(aprBps) * 100n) / (365n * 288n);
-    total += wei;
+    const rewardLythoshi = mockPendingRewardLythoshi(d.weightBps, aprBps);
+    totalLythoshi += rewardLythoshi;
     rows.push({
       cluster: d.cluster,
-      amountWei: "0x" + wei.toString(16),
+      amountWei: "0x" + rewardLythoshi.toString(16),
       effectiveAprBps: aprBps,
     });
   }
@@ -599,7 +618,7 @@ export async function readPendingRewards(
     via: "mock",
     data: {
       wallet,
-      totalAmountWei: "0x" + total.toString(16),
+      totalAmountWei: "0x" + totalLythoshi.toString(16),
       rows,
       blockHeight: null,
     },
