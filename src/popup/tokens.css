@@ -1,0 +1,129 @@
+/* =====================================================
+   Monarch Desktop — Design tokens
+   Single source of truth. Theme variants live in themes.css.
+===================================================== */
+:root {
+  /* ---------- Typography ---------- */
+  --f-sans:  "General Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --f-sansc: "General Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --f-mono:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---------- Canvas: cool near-black with blue undertone ---------- */
+  --ink:     #0a0b14;
+  --ink-000: #0a0b14;
+  --ink-050: #0d0e18;
+  --ink-100: #10121c;
+  --ink-200: #151723;   /* card surface */
+  --ink-300: #1b1e2c;   /* elevated card / hover */
+  --ink-400: #232638;   /* divider / stronger hover */
+  --ink-500: #2c3044;
+
+  /* ---------- Foreground ---------- */
+  --fg-000: #ffffff;
+  --fg-100: #ecedf3;    /* primary text */
+  --fg-200: #c9ccd8;    /* secondary */
+  --fg-300: #8c90a3;    /* tertiary */
+  --fg-400: #646879;    /* quiet labels */
+  --fg-500: #464a5c;
+  --fg-600: #2d3040;    /* subtle stroke */
+  --fg-700: #1a1c28;    /* divider */
+  --fg-800: #12131c;
+
+  /* ---------- Semantic surfaces ---------- */
+  --surface-0: var(--ink-050);   /* body */
+  --surface-1: var(--ink-200);   /* card */
+  --surface-2: var(--ink-300);   /* hover / elevated */
+  --surface-3: #262a3e;
+
+  /* ---------- Brand: indigo / periwinkle ----------
+     Historical token name "gold" retained to avoid a
+     sweeping rename; actual value is indigo. */
+  --gold:      #7c7fff;
+  --gold-hi:   #9a9dff;
+  --gold-lo:   #5a5ee0;
+  --gold-soft: rgba(124, 127, 255, 0.18);
+  --gold-glow: 124, 127, 255;
+  --gold-bg:   rgba(124, 127, 255, 0.14);
+
+  /* Semantic aliases for new code */
+  --indigo:    #7c7fff;
+  --indigo-hi: #9a9dff;
+  --indigo-lo: #5a5ee0;
+  --indigo-bg: rgba(124, 127, 255, 0.14);
+
+  /* ---------- Secondary accents ---------- */
+  --mint:    #7ee3c1;  --mint-bg:  rgba(126, 227, 193, 0.14);
+  --lilac:   #b8aaff;  --lilac-bg: rgba(184, 170, 255, 0.14);
+  --coral:   #ff8a9a;  --coral-bg: rgba(255, 138, 154, 0.14);
+
+  /* ---------- Status ---------- */
+  --ok:     #7ee3c1;
+  --warn:   #f4c97a;
+  --alert:  #ff8a9a;
+  --err:    #ff8a9a;
+  --info:   #7c7fff;
+  --accent: var(--gold);
+
+  /* State machine palette */
+  --state-nominal:     #7ee3c1;
+  --state-maintenance: #f4c97a;
+  --state-jail:        #ff8a9a;
+  --state-collapsed:   #8a5a62;
+
+  /* ---------- Two-denomination ---------- */
+  --denom-public-fg:   var(--gold);
+  --denom-public-bg:   var(--gold-bg);
+  --denom-private-fg:  #c9ccd8;
+  --denom-private-bg:  #15172d;
+  --denom-private-ring:#2c3044;
+
+  /* ---------- Crypto algos ---------- */
+  --algo-slhdsa:  #7c7fff;
+  --algo-mldsa:   #7ec7d8;
+  --algo-bls:     #f4c97a;
+  --algo-ed25519: #b8aaff;
+  --algo-passkey: #7ee3c1;
+
+  /* ---------- Phase 4.4 — AddressLabelRecord.category palette ----------
+     Indexer pragmatic taxonomy surfaced by lyth_getAddressLabel today
+     (foundation / exchange / bridge / treasury / contract / operator),
+     plus §22.8 TLD categories (human / agent / cluster / system) that
+     CategoryBadge renders when a displayName parses as a `.mono`
+     hierarchical name. `contract` is shared between both taxonomies. */
+  --cat-foundation-fg: #f4c97a;  --cat-foundation-bg: rgba(244,201,122,0.16);
+  --cat-exchange-fg:   #7ec7d8;  --cat-exchange-bg:   rgba(126,199,216,0.16);
+  --cat-bridge-fg:     #7ee3c1;  --cat-bridge-bg:     rgba(126,227,193,0.16);
+  --cat-treasury-fg:   #9ad88a;  --cat-treasury-bg:   rgba(154,216,138,0.16);
+  --cat-contract-fg:   #c9ccd8;  --cat-contract-bg:   rgba(201,204,216,0.12);
+  --cat-operator-fg:   #b8aaff;  --cat-operator-bg:   rgba(184,170,255,0.16);
+  --cat-human-fg:      #e6c79a;  --cat-human-bg:      rgba(230,199,154,0.16);
+  --cat-agent-fg:      #c8a3ff;  --cat-agent-bg:      rgba(200,163,255,0.16);
+  --cat-cluster-fg:    #9adfff;  --cat-cluster-bg:    rgba(154,223,255,0.16);
+  --cat-system-fg:     #ffb380;  --cat-system-bg:     rgba(255,179,128,0.16);
+
+  /* ---------- Radii ---------- */
+  --r-2: 4px; --r-4: 6px; --r-6: 8px; --r-8: 12px; --r-10: 14px;
+  --r-sm: 14px; --r-md: 18px; --r-14: 18px; --r-lg: 22px; --r-20: 24px; --r-xl: 30px;
+  --r-pill: 999px;
+
+  /* ---------- Type scale ---------- */
+  --fs-10: 11px; --fs-11: 12px; --fs-12: 13px; --fs-13: 14px; --fs-14: 15px;
+  --fs-16: 16px; --fs-18: 18px; --fs-20: 20px; --fs-24: 26px; --fs-32: 36px;
+  --fs-44: 52px; --fs-64: 72px; --fs-96: 112px;
+
+  /* ---------- Shadows ---------- */
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.25);
+  --shadow-2: 0 6px 20px -8px rgba(0,0,0,0.45);
+  --shadow-3: 0 24px 48px -16px rgba(0,0,0,0.55);
+
+  /* ---------- Motion ---------- */
+  --e-out:    cubic-bezier(.22,.61,.36,1);
+  --e-in-out: cubic-bezier(.65,0,.35,1);
+  --e-std:    cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ---------- Layout ---------- */
+  --sidebar-w: 232px;
+  --attest-h:  0px;
+  --topbar-h:  64px;
+  --ask-w:     0px;
+}
