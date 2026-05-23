@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import {
   rankBridgeRoutes,
+  selectBridgeTransferRoute,
   type BridgeAdminControl,
   type BridgeCircuitBreakerState,
   type BridgeRouteAssessment,
+  type BridgeRouteSelection,
   type BridgeRouteDisclosure as SdkBridgeRouteDisclosure,
+  type BridgeTransferIntent,
 } from "@monolythium/core-sdk";
 
 import type {
@@ -34,6 +37,16 @@ export interface BridgeRouteChoiceState {
   blockedReasons: string[];
   sdkRouteCount: number;
   displayOnlyCount: number;
+  transferPreview: BridgeTransferPreviewState;
+}
+
+export interface BridgeTransferPreviewState {
+  status: "intent-blocked" | "route-blocked" | "no-disclosure";
+  intent: BridgeTransferIntent | null;
+  selection: BridgeRouteSelection | null;
+  blockedReasons: string[];
+  quoteBlockedReasons: string[];
+  submitBlockedReasons: string[];
 }
 
 interface SdkRouteRow {
@@ -132,6 +145,12 @@ export function buildBridgeRouteChoiceState(
     sdkRows.length,
     selected,
   );
+  const transferPreview = buildBridgeTransferPreviewState(
+    disclosures.length,
+    sdkRows.map((row) => row.route),
+    selected,
+    blockedReasons,
+  );
 
   return {
     candidates,
@@ -139,6 +158,7 @@ export function buildBridgeRouteChoiceState(
     blockedReasons,
     sdkRouteCount: sdkRows.length,
     displayOnlyCount: displayOnlyRows.length,
+    transferPreview,
   };
 }
 
@@ -161,6 +181,58 @@ function bridgeRouteChoiceBlockedReasons(
     return ["no SDK-ranked bridge route satisfies the v4.1 disclosure floor"];
   }
   return [];
+}
+
+function buildBridgeTransferPreviewState(
+  disclosureCount: number,
+  routes: readonly SdkBridgeRouteDisclosure[],
+  selected: BridgeRouteChoiceCandidate | null,
+  routeBlockedReasons: readonly string[],
+): BridgeTransferPreviewState {
+  if (selected?.route == null) {
+    const blockedReasons = [...routeBlockedReasons];
+    const routeMessage =
+      disclosureCount === 0
+        ? "no route disclosures supplied"
+        : "quote preview requires an SDK-selected route";
+    if (!blockedReasons.includes(routeMessage)) blockedReasons.push(routeMessage);
+    return {
+      status: disclosureCount === 0 ? "no-disclosure" : "route-blocked",
+      intent: null,
+      selection: null,
+      blockedReasons,
+      quoteBlockedReasons: [
+        "live bridge quote is blocked until a route satisfies the SDK disclosure floor",
+      ],
+      submitBlockedReasons: [
+        "live bridge submit is blocked until quote and submit API primitives are available",
+      ],
+    };
+  }
+
+  const intent: BridgeTransferIntent = {
+    asset: selected.route.asset,
+    amountAtomic: "",
+    sourceChain: selected.route.sourceChain,
+    destinationChain: selected.route.destinationChain,
+    recipient: "",
+    allowedRouteIds: [selected.route.routeId],
+  };
+  const selection = selectBridgeTransferRoute(intent, routes);
+  const blockedReasons = selection.blockedReasons;
+
+  return {
+    status: "intent-blocked",
+    intent,
+    selection,
+    blockedReasons,
+    quoteBlockedReasons: [
+      "standalone SDK exposes route-intent selection only; no live bridge quote helper or API route is available",
+    ],
+    submitBlockedReasons: [
+      "standalone SDK exposes no live bridge submit helper or API route",
+    ],
+  };
 }
 
 function readSdkBridgeRouteDisclosure(

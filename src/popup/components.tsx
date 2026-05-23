@@ -1284,7 +1284,7 @@ interface BridgeProps {
 export function Bridge({ onBack, indexer }: BridgeProps) {
   const disclosures = collectBridgeRouteDisclosuresFromIndexer(indexer);
   const routeChoice = useBridgeRouteSelection(disclosures);
-  const hasSubmitReadyDisclosure = routeChoice.selected !== null;
+  const transferPreview = routeChoice.transferPreview;
 
   return (
     <>
@@ -1413,7 +1413,7 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
               marginBottom: 10,
             }}
           >
-            Bridge submission
+            Transfer intent / quote preview
           </div>
           <div
             style={{
@@ -1423,17 +1423,60 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
               color: "var(--fg-400)",
             }}
           >
-            {hasSubmitReadyDisclosure
-              ? "The wallet can display an SDK-ranked route choice, but this build has no bridge submit path."
-              : "Disabled because no route satisfied the SDK disclosure floor."}
+            {transferPreview.status === "intent-blocked"
+              ? "The SDK can evaluate a transfer intent against the selected route, but this build has no live quote or submit primitive."
+              : "No transfer intent is constructed until an SDK-shaped route is selected."}
           </div>
+          {transferPreview.intent && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 8,
+                marginTop: 10,
+              }}
+            >
+              <BridgeRouteMetric label="Asset" value={transferPreview.intent.asset} />
+              <BridgeRouteMetric
+                label="Route"
+                value={transferPreview.intent.allowedRouteIds?.[0] ?? "unselected"}
+              />
+              <BridgeRouteMetric
+                label="From"
+                value={transferPreview.intent.sourceChain}
+              />
+              <BridgeRouteMetric
+                label="To"
+                value={transferPreview.intent.destinationChain}
+              />
+              <BridgeRouteMetric label="Amount" value="required" />
+              <BridgeRouteMetric label="Recipient" value="required" />
+            </div>
+          )}
+          {transferPreview.blockedReasons.length > 0 && (
+            <BridgeRouteReasonList
+              title="Intent guard"
+              reasons={transferPreview.blockedReasons}
+              tone="blocked"
+            />
+          )}
+          <BridgeRouteReasonList
+            title="Quote unavailable"
+            reasons={transferPreview.quoteBlockedReasons}
+            tone="muted"
+          />
+          <BridgeRouteReasonList
+            title="Submit unavailable"
+            reasons={transferPreview.submitBlockedReasons}
+            tone="muted"
+          />
           <div className="req-foot" style={{ margin: "12px 0 0" }}>
             <button
               className="prim"
               disabled
               style={{ cursor: "not-allowed", opacity: 0.55 }}
             >
-              Submit bridge
+              Request quote
             </button>
           </div>
         </div>
