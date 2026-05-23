@@ -145,7 +145,7 @@ import {
   type ProposalAction,
   type ProposalSignature,
 } from "../shared/multisig.js";
-import { shake256 } from "@noble/hashes/sha3.js";
+import { keccak_256, shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
   SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
@@ -229,7 +229,8 @@ interface WalletMrvNativeReceiptEvidence {
   receiptCommitment: string | null;
   eventCount: number | null;
   noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
-  noEvmProofStatus: "missing" | "present-unverified";
+  noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
+  noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
 }
 
 interface WalletMrvNoEvmReceiptProofTranscript {
@@ -245,6 +246,22 @@ interface WalletMrvNoEvmReceiptProofTranscript {
   txIndex: number;
   receiptCount: number;
   receiptTranscript: string[];
+}
+
+type WalletMrvNoEvmReceiptProofStatus =
+  | "missing"
+  | "transcript-verified"
+  | "transcript-mismatch";
+
+interface WalletMrvNoEvmReceiptProofVerification {
+  status: "verified" | "mismatch";
+  receiptCountMatches: boolean;
+  receiptsRootMatches: boolean;
+  targetReceiptHashMatches: boolean;
+  receiptCount: number;
+  transcriptCount: number;
+  computedReceiptsRoot: string;
+  computedTargetReceiptHash: string;
 }
 
 interface WalletMrvNativeReceiptEvidenceError {
@@ -1370,6 +1387,12 @@ function parsePasskeyPolicy(raw: unknown): PasskeyPolicy | null {
   return { enabled: r.enabled, mode: r.mode, limitWei, dailyCapWei };
 }
 
+const MRV_RECEIPTS_ROOT_DOMAIN = "monolythium/v2/receipts_root/1";
+const MRV_RECEIPTS_ROOT_DOMAIN_BYTES = new TextEncoder().encode(
+  MRV_RECEIPTS_ROOT_DOMAIN,
+);
+const MAX_U32 = 0xffff_ffff;
+
 function parseMrvNativeReceiptEvidence(
   raw: unknown,
 ): WalletMrvNativeReceiptEvidence | null {
@@ -1387,6 +1410,8 @@ function parseMrvNativeReceiptEvidence(
   ) {
     return null;
   }
+  const noEvmProofVerification =
+    noEvmProof === null ? null : verifyMrvNoEvmReceiptProofTranscript(noEvmProof);
   return {
     schema: typeof r.schema === "string" ? r.schema : null,
     txType: typeof r.txType === "number" ? r.txType : null,
@@ -1394,7 +1419,13 @@ function parseMrvNativeReceiptEvidence(
     receiptCommitment: parseMrvReceiptCommitment(r.receiptCommitment),
     eventCount: typeof r.eventCount === "number" ? r.eventCount : null,
     noEvmProof,
-    noEvmProofStatus: noEvmProof === null ? "missing" : "present-unverified",
+    noEvmProofStatus:
+      noEvmProofVerification === null
+        ? "missing"
+        : noEvmProofVerification.status === "verified"
+          ? "transcript-verified"
+          : "transcript-mismatch",
+    noEvmProofVerification,
   };
 }
 
@@ -1418,8 +1449,8 @@ function parseMrvNoEvmReceiptProofTranscript(
   const receiptsRoot = parseMrvReceiptHash(r.receiptsRoot);
   const targetReceiptHash = parseMrvReceiptHash(r.targetReceiptHash);
   const blockHeight = parseNonNegativeSafeInteger(r.blockHeight);
-  const txIndex = parseNonNegativeSafeInteger(r.txIndex);
-  const receiptCount = parsePositiveSafeInteger(r.receiptCount);
+  const txIndex = parseNonNegativeU32(r.txIndex);
+  const receiptCount = parsePositiveU32(r.receiptCount);
   const receiptTranscript = parseMrvReceiptTranscript(r.receiptTranscript);
 
   if (
@@ -1465,10 +1496,14 @@ function parseNonNegativeSafeInteger(raw: unknown): number | null {
     : null;
 }
 
-function parsePositiveSafeInteger(raw: unknown): number | null {
-  return typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0
-    ? raw
-    : null;
+function parseNonNegativeU32(raw: unknown): number | null {
+  const value = parseNonNegativeSafeInteger(raw);
+  return value !== null && value <= MAX_U32 ? value : null;
+}
+
+function parsePositiveU32(raw: unknown): number | null {
+  const value = parseNonNegativeU32(raw);
+  return value !== null && value > 0 ? value : null;
 }
 
 function parseMrvReceiptHash(raw: unknown): string | null {
@@ -1486,6 +1521,89 @@ function parseMrvReceiptTranscript(raw: unknown): string[] | null {
     transcript.push(entry);
   }
   return transcript;
+}
+
+function verifyMrvNoEvmReceiptProofTranscript(
+  proof: WalletMrvNoEvmReceiptProofTranscript,
+): WalletMrvNoEvmReceiptProofVerification {
+  const receipts = proof.receiptTranscript.map(hexToMrvReceiptBytes);
+  const targetReceipt = receipts[proof.txIndex] ?? new Uint8Array();
+  const computedReceiptsRoot = computeMrvReceiptsRoot(receipts);
+  const computedTargetReceiptHash = mrvKeccakHex(targetReceipt);
+  const receiptCountMatches = proof.receiptCount === receipts.length;
+  const receiptsRootMatches = sameMrvHash(
+    proof.receiptsRoot,
+    computedReceiptsRoot,
+  );
+  const targetReceiptHashMatches = sameMrvHash(
+    proof.targetReceiptHash,
+    computedTargetReceiptHash,
+  );
+  const status =
+    receiptCountMatches && receiptsRootMatches && targetReceiptHashMatches
+      ? "verified"
+      : "mismatch";
+
+  return {
+    status,
+    receiptCountMatches,
+    receiptsRootMatches,
+    targetReceiptHashMatches,
+    receiptCount: proof.receiptCount,
+    transcriptCount: receipts.length,
+    computedReceiptsRoot,
+    computedTargetReceiptHash,
+  };
+}
+
+function computeMrvReceiptsRoot(receipts: Uint8Array[]): string {
+  let totalLength = MRV_RECEIPTS_ROOT_DOMAIN_BYTES.length + 4;
+  for (const receipt of receipts) {
+    totalLength += 8 + receipt.length;
+  }
+
+  const payload = new Uint8Array(totalLength);
+  let offset = 0;
+  payload.set(MRV_RECEIPTS_ROOT_DOMAIN_BYTES, offset);
+  offset += MRV_RECEIPTS_ROOT_DOMAIN_BYTES.length;
+  writeU32Le(payload, offset, receipts.length);
+  offset += 4;
+
+  for (let index = 0; index < receipts.length; index += 1) {
+    const receipt = receipts[index]!;
+    writeU32Le(payload, offset, index);
+    offset += 4;
+    writeU32Le(payload, offset, receipt.length);
+    offset += 4;
+    payload.set(receipt, offset);
+    offset += receipt.length;
+  }
+
+  return mrvKeccakHex(payload);
+}
+
+function hexToMrvReceiptBytes(hex: string): Uint8Array {
+  const body = hex.slice(2);
+  const bytes = new Uint8Array(body.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(body.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function writeU32Le(target: Uint8Array, offset: number, value: number): void {
+  target[offset] = value & 0xff;
+  target[offset + 1] = (value >>> 8) & 0xff;
+  target[offset + 2] = (value >>> 16) & 0xff;
+  target[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function mrvKeccakHex(bytes: Uint8Array): string {
+  return `0x${bytesToHex(keccak_256(bytes))}`;
+}
+
+function sameMrvHash(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
 }
 
 // ---- internal popup messages ----
