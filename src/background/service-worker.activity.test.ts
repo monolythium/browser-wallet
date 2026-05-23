@@ -1182,6 +1182,38 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(storageLocal[pendingKey]).toBeUndefined();
   });
 
+  it("passes SDK market plans through with the CLOB mempool class", async () => {
+    rpcResponses["eth_getTransactionCount"] = "0x0";
+    rpcResponses["eth_feeHistory"] = {
+      baseFeePerGas: ["0x1"],
+      reward: [["0x1"]],
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0x0000000000000000000000000000000000001001",
+        valueWeiHex: "0x0",
+        data: "0x2468786f" + "00".repeat(192),
+        gasLimitHex: "0x30d40",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        mempoolClass: 3,
+      },
+    })) as { ok: true; txHash: string };
+    expect(r.ok).toBe(true);
+    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+      to: "0x0000000000000000000000000000000000001001",
+      value: "0x0",
+      data: "0x2468786f" + "00".repeat(192),
+      mempoolClass: 3,
+      gas: "0x30d40",
+      nonce: "0x0",
+      maxFeePerGas: "0x2540be401",
+      maxPriorityFeePerGas: "0x2540be400",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    });
+  });
+
   it("fire-and-forget timing: send-tx reply resolves BEFORE pending storage write completes", async () => {
     rpcResponses["eth_getTransactionCount"] = "0x0";
     rpcResponses["eth_feeHistory"] = {

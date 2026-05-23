@@ -101,6 +101,8 @@ export interface SendTxApprovalReq {
     gasPrice?: string;
     nonce?: string;
     chainId?: string;
+    mempoolClass?: number;
+    class?: number;
   };
   view: SendTxView;
 }
