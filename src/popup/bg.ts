@@ -38,7 +38,9 @@ export type ApprovalKind =
   | "add_chain";
 
 export interface SendTxView {
+  /** Compatibility field name; hex execution-unit limit. */
   estimatedGas: string | null;
+  /** Compatibility field name; hex lythoshi per execution unit. */
   gasPrice: string | null;
   nonce: string | null;
   simulation:
@@ -83,9 +85,12 @@ export interface SendTxRequest {
   tx: {
     from?: string;
     to?: string;
+    /** Compatibility field name; hex lythoshi native value. */
     value?: string;
     data?: string;
+    /** Compatibility field name; hex execution-unit limit. */
     gas?: string;
+    /** Compatibility field name; hex lythoshi per execution unit. */
     gasPrice?: string;
     nonce?: string;
     chainId?: string;
