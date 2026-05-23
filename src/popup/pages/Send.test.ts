@@ -5,7 +5,15 @@
 // for mixed-case, wrong-HRP, and malformed inputs.
 
 import { describe, expect, it } from "vitest";
-import { formatSendError, validateToAddress } from "./Send.js";
+import {
+  computeEstimatedFeeLythoshi,
+  formatNativeLythAmount,
+  formatSendError,
+  lythToLythoshiHex,
+  lythoshiToLythString,
+  validateAmount,
+  validateToAddress,
+} from "./Send.js";
 import { addressToBech32m } from "../../shared/bech32m.js";
 
 const ADDR0X = "0x2aa6a8c4e2f64c4d8b1c3e9b3e1f4d2a8c5e7d3f";
@@ -148,6 +156,61 @@ describe("validateToAddress — unknown / garbage", () => {
     expect(r.monoName).not.toBeNull();
     expect(r.monoName?.tld).toBe("human");
     expect(r.monoName?.canonical).toBe("alice.mono");
+  });
+});
+
+describe("native LYTH amount conversion — lythoshi precision", () => {
+  it("accepts and round-trips the smallest 8-decimal LYTH amount", () => {
+    expect(validateAmount("0.00000001")).toBeNull();
+    expect(lythToLythoshiHex("0.00000001")).toBe("0x1");
+    expect(lythoshiToLythString(1n)).toBe("0.00000001");
+  });
+
+  it("formats mixed whole/fractional lythoshi without trailing zeros", () => {
+    expect(lythToLythoshiHex("1.23456789")).toBe("0x75bcd15");
+    expect(lythoshiToLythString(123_456_789n)).toBe("1.23456789");
+    expect(lythoshiToLythString(100_000_000n)).toBe("1");
+  });
+
+  it("rejects 9-decimal native LYTH input", () => {
+    expect(validateAmount("0.000000001")).toBe(
+      "amount cannot have more than 8 decimal places",
+    );
+  });
+});
+
+describe("native LYTH fee display math", () => {
+  const fee = {
+    maxPriorityFeePerGas: "0x5",
+    maxFeePerGas: "0x8",
+    baseFeePerGas: "0x3",
+    gasLimit: "0xa",
+  };
+
+  it("computes estimated fees in lythoshi from price-per-execution-unit fields", () => {
+    expect(computeEstimatedFeeLythoshi(fee, 0.5)).toBe(50n);
+    expect(computeEstimatedFeeLythoshi(fee, 1)).toBe(80n);
+    expect(computeEstimatedFeeLythoshi(fee, 2)).toBe(130n);
+  });
+
+  it("uses the native-transfer fallback execution-unit limit when omitted", () => {
+    expect(
+      computeEstimatedFeeLythoshi(
+        {
+          maxPriorityFeePerGas: "0x1",
+          maxFeePerGas: "0x3",
+          baseFeePerGas: "0x2",
+          gasLimit: null,
+        },
+        1,
+      ),
+    ).toBe(63_000n);
+  });
+
+  it("renders the default fee quote as one LYTH amount without gwei wording", () => {
+    const text = formatNativeLythAmount(80n);
+    expect(text).toBe("0.0000008 LYTH");
+    expect(text).not.toMatch(/gwei|lythoshi|execution unit/i);
   });
 });
 
