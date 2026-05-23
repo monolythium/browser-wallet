@@ -1666,7 +1666,7 @@ function readTokenBalanceRows(input: unknown): unknown[] {
 interface MrcHolderLookup {
   standard: WalletMrcHolderStandard;
   assetId: string;
-  tokenId: string;
+  tokenId: string | null;
   key: string;
 }
 
@@ -1674,15 +1674,30 @@ function normalizeMrcHolderStandard(
   standard: string | undefined,
 ): WalletMrcHolderStandard | null {
   const normalized = standard?.toLowerCase().replace(/[-_]/g, "");
-  if (normalized !== "mrc721" && normalized !== "mrc1155") return null;
+  if (
+    normalized !== "mrc721" &&
+    normalized !== "mrc1155" &&
+    normalized !== "mrc4626"
+  ) {
+    return null;
+  }
   return normalized;
 }
 
 function mrcHolderLookupForRow(row: WalletTokenBalance): MrcHolderLookup | null {
   const standard = normalizeMrcHolderStandard(row.mrc?.standard);
   const assetId = row.mrc?.assetId;
+  if (!standard || !assetId) return null;
+  if (standard === "mrc4626") {
+    return {
+      standard,
+      assetId,
+      tokenId: null,
+      key: `${standard}:${assetId}:`,
+    };
+  }
   const tokenId = row.mrc?.tokenId;
-  if (!standard || !assetId || !tokenId) return null;
+  if (!tokenId) return null;
   return {
     standard,
     assetId,

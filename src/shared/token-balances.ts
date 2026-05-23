@@ -4,7 +4,7 @@ export interface WalletTokenBalanceMrcIdentity {
   tokenId?: string;
 }
 
-export type WalletMrcHolderStandard = "mrc721" | "mrc1155";
+export type WalletMrcHolderStandard = "mrc721" | "mrc1155" | "mrc4626";
 
 export interface WalletMrcHolder {
   rank: number;
@@ -17,7 +17,7 @@ export interface WalletMrcHoldersResponse {
   schemaVersion: number;
   standard: WalletMrcHolderStandard;
   assetId: string;
-  tokenId: string;
+  tokenId: string | null;
   limit: number;
   holders: WalletMrcHolder[];
 }
@@ -254,7 +254,9 @@ function validateWalletTokenBalanceMrcIdentity(
 function normalizeWalletMrcHolderStandard(
   input: unknown,
 ): WalletMrcHolderStandard | null {
-  if (input !== "mrc721" && input !== "mrc1155") return null;
+  if (input !== "mrc721" && input !== "mrc1155" && input !== "mrc4626") {
+    return null;
+  }
   return input;
 }
 
@@ -305,7 +307,14 @@ export function validateWalletMrcHoldersResponse(
   const standard = normalizeWalletMrcHolderStandard(r.standard);
   if (standard === null) return null;
   if (typeof r.assetId !== "string" || r.assetId.length === 0) return null;
-  if (typeof r.tokenId !== "string" || r.tokenId.length === 0) return null;
+  let tokenId: string | null;
+  if (standard === "mrc4626") {
+    if (r.tokenId !== null && r.tokenId !== undefined) return null;
+    tokenId = null;
+  } else {
+    if (typeof r.tokenId !== "string" || r.tokenId.length === 0) return null;
+    tokenId = r.tokenId;
+  }
   if (!isFiniteNum(r.limit) || !Number.isSafeInteger(r.limit) || r.limit < 1) {
     return null;
   }
@@ -321,7 +330,7 @@ export function validateWalletMrcHoldersResponse(
     schemaVersion: r.schemaVersion,
     standard,
     assetId: r.assetId,
-    tokenId: r.tokenId,
+    tokenId,
     limit: Math.trunc(r.limit),
     holders,
   };
