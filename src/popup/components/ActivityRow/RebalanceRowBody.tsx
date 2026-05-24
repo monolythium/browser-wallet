@@ -19,7 +19,7 @@ export function RebalanceRowBody({ row }: RebalanceRowBodyProps) {
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">Auto-rebalanced (cap tightening §23.7)</div>
         <div className="ext-act-row__meta">
-          <span>block {row.blockHeight.toLocaleString()}</span>
+          <span>block {row.blockHeight.toLocaleString("en-US")}</span>
           <span>·</span>
           <span>tx {row.txIndex}</span>
         </div>
