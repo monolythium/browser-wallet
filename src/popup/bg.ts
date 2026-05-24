@@ -985,6 +985,7 @@ export interface WalletMrvNoEvmArchiveProof {
   source: "indexerReceiptArchiveContentDigest";
   manifestHash: string;
   contentHash: string;
+  signatureDigest?: string;
   signatures: string[];
 }
 
