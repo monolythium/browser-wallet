@@ -232,6 +232,7 @@ import {
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
 import { readNativeAgentState } from "./native-agent-state-client.js";
+import { readNativeMarketOrderBookDeltas } from "./native-market-orderbook-client.js";
 import { readNativeMarketState } from "./native-market-state-client.js";
 
 type EthSendTransactionRequest = {
@@ -5453,6 +5454,44 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ...(typeof p?.limit === "number" ? { limit: p.limit } : {}),
       };
       const outcome = await readNativeMarketState(filter);
+      return { ok: true, outcome };
+    }
+    case "wallet-native-market-orderbook-deltas": {
+      const p = message.payload as
+        | {
+            fromBlock?: number;
+            toBlock?: number;
+            limit?: number;
+            cursor?: string;
+            marketId?: string;
+            eventName?: string;
+            primaryId?: string;
+            relatedId?: string;
+            tokenId?: string;
+            account?: string;
+            counterparty?: string;
+          }
+        | undefined;
+      if (
+        typeof p?.fromBlock !== "number" ||
+        typeof p?.toBlock !== "number"
+      ) {
+        return { ok: false, reason: "missing block range" };
+      }
+      const filter = {
+        fromBlock: p.fromBlock,
+        toBlock: p.toBlock,
+        ...(typeof p.limit === "number" ? { limit: p.limit } : {}),
+        ...(typeof p.cursor === "string" ? { cursor: p.cursor } : {}),
+        ...(typeof p.marketId === "string" ? { marketId: p.marketId } : {}),
+        ...(typeof p.eventName === "string" ? { eventName: p.eventName } : {}),
+        ...(typeof p.primaryId === "string" ? { primaryId: p.primaryId } : {}),
+        ...(typeof p.relatedId === "string" ? { relatedId: p.relatedId } : {}),
+        ...(typeof p.tokenId === "string" ? { tokenId: p.tokenId } : {}),
+        ...(typeof p.account === "string" ? { account: p.account } : {}),
+        ...(typeof p.counterparty === "string" ? { counterparty: p.counterparty } : {}),
+      };
+      const outcome = await readNativeMarketOrderBookDeltas(filter);
       return { ok: true, outcome };
     }
     case "wallet-native-agent-state": {
