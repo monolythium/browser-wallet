@@ -30,6 +30,7 @@ import {
   vi,
 } from "vitest";
 import { addressToTypedBech32 } from "@monolythium/core-sdk";
+import { MlDsa65Backend, hexToBytes } from "@monolythium/core-sdk/crypto";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
@@ -109,6 +110,14 @@ const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
 const ARCHIVE_PROOF_SIGNATURE =
   "mono.snapshot.sig.v1:0x" + "d".repeat(40) + ":0x1234abcd";
 const ARCHIVE_SIGNATURE_DIGEST = "0x" + "e".repeat(64);
+const TRUSTED_ARCHIVE_SIGNER = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(7));
+const TRUSTED_ARCHIVE_PUBLIC_KEY = mrvTestBytesToHex(
+  TRUSTED_ARCHIVE_SIGNER.publicKey(),
+);
+const TRUSTED_ARCHIVE_SIGNATURE = archiveSignatureForDigest(
+  ARCHIVE_SIGNATURE_DIGEST,
+  TRUSTED_ARCHIVE_SIGNER,
+);
 const ARCHIVE_COVERING_SNAPSHOT = {
   snapshotHeight: 101,
   manifestHash: "0x" + "a".repeat(64),
@@ -200,6 +209,17 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF = {
   receiptTranscript: [],
   targetReceiptBytes: COMPACT_RECEIPT_BYTES_HEX,
 } as const;
+
+function archiveSignatureForDigest(
+  signatureDigest: string,
+  signer: MlDsa65Backend,
+): string {
+  return [
+    "mono.snapshot.sig.v1",
+    signer.getAddress(),
+    mrvTestBytesToHex(signer.sign(hexToBytes(signatureDigest))),
+  ].join(":");
+}
 
 function mrvTestCompactLeafHashHex(bytes: Uint8Array, txIndex: number): string {
   const domain = new TextEncoder().encode("monolythium/v4.1/receipt_leaf/1");
@@ -508,6 +528,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   rpcCalls.length = 0;
   rpcResponses = {};
   rpcErrors = {};
@@ -521,6 +542,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -1932,6 +1954,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: unknown;
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
+          noEvmArchiveVerification: unknown;
           noEvmFinalityVerification: unknown;
           proofLikeField?: unknown;
         } | null;
@@ -1956,6 +1979,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: null,
           noEvmProofStatus: "missing",
           noEvmProofVerification: null,
+          noEvmArchiveVerification: null,
           noEvmFinalityVerification: null,
         },
       },
@@ -1999,6 +2023,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: unknown;
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
+          noEvmArchiveVerification: unknown;
           noEvmFinalityVerification: unknown;
         } | null;
       };
@@ -2007,6 +2032,7 @@ describe("wallet-mrv-receipt-status", () => {
     expect(r.receipt.nativeReceipt).toMatchObject({
       noEvmProof: NO_EVM_RECEIPT_PROOF,
       noEvmProofStatus: "transcript-verified",
+      noEvmArchiveVerification: null,
       noEvmFinalityVerification: null,
       noEvmProofVerification: {
         status: "verified",
@@ -2048,6 +2074,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: unknown;
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
+          noEvmArchiveVerification: unknown;
           noEvmFinalityVerification: unknown;
         } | null;
       };
@@ -2056,6 +2083,11 @@ describe("wallet-mrv-receipt-status", () => {
     expect(r.receipt.nativeReceipt).toMatchObject({
       noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
       noEvmProofStatus: "proof-verified",
+      noEvmArchiveVerification: {
+        status: "unconfigured",
+        reason: "trusted archive signer config not configured",
+        details: null,
+      },
       noEvmFinalityVerification: {
         status: "unverified",
         reason: "trusted BLS finality config not configured",
@@ -2075,6 +2107,226 @@ describe("wallet-mrv-receipt-status", () => {
         computedTargetReceiptHash: COMPACT_RECEIPT_HASH,
         computedCompactLeafHash: COMPACT_RECEIPT_LEAF_HASH,
       },
+    });
+  });
+
+  it("verifies archive proof signatures with configured trusted ML-DSA signers", async () => {
+    vi.stubEnv(
+      "VITE_WALLET_MRV_ARCHIVE_TRUSTED_PUBKEYS",
+      TRUSTED_ARCHIVE_PUBLIC_KEY,
+    );
+    vi.stubEnv("VITE_WALLET_MRV_ARCHIVE_SIGNATURE_THRESHOLD", "1");
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          signatureDigest: ARCHIVE_SIGNATURE_DIGEST,
+          signatures: [TRUSTED_ARCHIVE_SIGNATURE],
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmArchiveVerification: unknown;
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification).toEqual({
+      status: "verified",
+      reason: null,
+      details: {
+        verified: true,
+        threshold: 1,
+        validSigners: [TRUSTED_ARCHIVE_SIGNER.getAddress()],
+        checkedSignatures: 1,
+        issues: [],
+      },
+    });
+  });
+
+  it("falls back to covering snapshot signatures when exact-height signatures are absent", async () => {
+    vi.stubEnv(
+      "VITE_WALLET_MRV_ARCHIVE_TRUSTED_PUBKEYS",
+      TRUSTED_ARCHIVE_PUBLIC_KEY,
+    );
+    vi.stubEnv("VITE_WALLET_MRV_ARCHIVE_SIGNATURE_THRESHOLD", "1");
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    const coveringSnapshotSignature = archiveSignatureForDigest(
+      ARCHIVE_COVERING_SNAPSHOT.signatureDigest,
+      TRUSTED_ARCHIVE_SIGNER,
+    );
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          signatures: [],
+          coveringSnapshot: {
+            ...ARCHIVE_COVERING_SNAPSHOT,
+            signatures: [coveringSnapshotSignature],
+          },
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmArchiveVerification: {
+            status: string;
+            details: { checkedSignatures: number; validSigners: string[] } | null;
+          };
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification.status).toBe(
+      "verified",
+    );
+    expect(
+      r.receipt.nativeReceipt?.noEvmArchiveVerification.details?.checkedSignatures,
+    ).toBe(1);
+    expect(
+      r.receipt.nativeReceipt?.noEvmArchiveVerification.details?.validSigners,
+    ).toEqual([TRUSTED_ARCHIVE_SIGNER.getAddress()]);
+  });
+
+  it("reports archive signature mismatches against configured trusted signers", async () => {
+    vi.stubEnv(
+      "VITE_WALLET_MRV_ARCHIVE_TRUSTED_PUBKEYS",
+      TRUSTED_ARCHIVE_PUBLIC_KEY,
+    );
+    vi.stubEnv("VITE_WALLET_MRV_ARCHIVE_SIGNATURE_THRESHOLD", "1");
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          signatureDigest: ARCHIVE_SIGNATURE_DIGEST,
+          signatures: [ARCHIVE_PROOF_SIGNATURE],
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmArchiveVerification: {
+            status: string;
+            reason: string | null;
+            details: { issues: Array<{ code: string }> } | null;
+          };
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification.status).toBe(
+      "mismatch",
+    );
+    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification.reason).toBe(
+      "archive proof signatures did not verify against configured trusted signers",
+    );
+    expect(
+      r.receipt.nativeReceipt?.noEvmArchiveVerification.details?.issues.map(
+        (issue) => issue.code,
+      ),
+    ).toContain("untrusted_signer");
+  });
+
+  it("reports invalid archive trust config without verifying signatures", async () => {
+    vi.stubEnv(
+      "VITE_WALLET_MRV_ARCHIVE_TRUSTED_PUBKEYS",
+      TRUSTED_ARCHIVE_PUBLIC_KEY,
+    );
+    vi.stubEnv("VITE_WALLET_MRV_ARCHIVE_SIGNATURE_THRESHOLD", "2");
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmArchiveVerification: {
+            status: string;
+            reason: string | null;
+            details: unknown;
+          };
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification).toEqual({
+      status: "config-invalid",
+      reason:
+        "environment archive signature threshold exceeds trusted signer count",
+      details: null,
     });
   });
 

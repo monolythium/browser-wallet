@@ -28,8 +28,12 @@ import {
   addressToTypedBech32,
   MonolythiumProvider,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
+  ML_DSA_65_PUBLIC_KEY_LEN,
   typedBech32ToAddress,
+  verifyNoEvmArchiveProofSignatures,
   verifyNoEvmFinalityEvidenceThreshold,
+  type NoEvmArchiveSignatureVerification,
+  type NoEvmArchiveTrustedSigner,
   type NoEvmBlsFinalityVerification,
 } from "@monolythium/core-sdk";
 import {
@@ -277,6 +281,7 @@ interface WalletMrvNativeReceiptEvidence {
   noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
   noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
+  noEvmArchiveVerification: WalletMrvNoEvmArchiveVerification | null;
   noEvmFinalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }
 
@@ -409,6 +414,24 @@ interface WalletMrvNoEvmFinalityTrustConfig {
   threshold: number;
 }
 
+interface WalletMrvNoEvmArchiveTrustConfig {
+  trustedPublicKeys: string[];
+  threshold: number;
+}
+
+type WalletMrvNoEvmArchiveVerificationStatus =
+  | "verified"
+  | "unconfigured"
+  | "mismatch"
+  | "malformed"
+  | "config-invalid";
+
+interface WalletMrvNoEvmArchiveVerification {
+  status: WalletMrvNoEvmArchiveVerificationStatus;
+  reason: string | null;
+  details: NoEvmArchiveSignatureVerification | null;
+}
+
 type WalletMrvNoEvmFinalityVerificationStatus =
   | "verified"
   | "unverified"
@@ -427,9 +450,19 @@ interface ResolvedMrvNoEvmFinalityTrustConfig {
   threshold: number;
 }
 
+interface ResolvedMrvNoEvmArchiveTrustConfig {
+  trustedSigners: NoEvmArchiveTrustedSigner[];
+  threshold: number;
+}
+
 type WalletMrvNoEvmFinalityTrustResolution =
   | { kind: "none" }
   | { kind: "configured"; config: ResolvedMrvNoEvmFinalityTrustConfig }
+  | { kind: "invalid"; reason: string };
+
+type WalletMrvNoEvmArchiveTrustResolution =
+  | { kind: "none" }
+  | { kind: "configured"; config: ResolvedMrvNoEvmArchiveTrustConfig }
   | { kind: "invalid"; reason: string };
 
 interface WalletMrvNativeReceiptEvidenceError {
@@ -1785,6 +1818,7 @@ const MAX_U32 = 0xffff_ffff;
 function parseMrvNativeReceiptEvidence(
   raw: unknown,
   finalityTrust: WalletMrvNoEvmFinalityTrustResolution,
+  archiveTrust: WalletMrvNoEvmArchiveTrustResolution,
 ): WalletMrvNativeReceiptEvidence | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -1802,6 +1836,13 @@ function parseMrvNativeReceiptEvidence(
   }
   const noEvmProofVerification =
     noEvmProof === null ? null : verifyMrvNoEvmReceiptProofTranscript(noEvmProof);
+  const noEvmArchiveVerification =
+    noEvmProof === null
+      ? null
+      : verifyMrvNoEvmArchiveProofSignatures(
+          noEvmProof.archiveProof,
+          archiveTrust,
+        );
   const noEvmFinalityVerification =
     noEvmProof === null
       ? null
@@ -1827,6 +1868,7 @@ function parseMrvNativeReceiptEvidence(
             ? "proof-mismatch"
             : "transcript-mismatch",
     noEvmProofVerification,
+    noEvmArchiveVerification,
     noEvmFinalityVerification,
   };
 }
@@ -2303,6 +2345,38 @@ function readMrvNoEvmFinalityTrustEnv(): WalletMrvNoEvmFinalityTrustConfig | nul
   };
 }
 
+function resolveMrvNoEvmArchiveTrustConfig(): WalletMrvNoEvmArchiveTrustResolution {
+  const envRaw = readMrvNoEvmArchiveTrustEnv();
+  if (envRaw === null) return { kind: "none" };
+  return parseMrvNoEvmArchiveTrustConfig(envRaw, "environment");
+}
+
+function readMrvNoEvmArchiveTrustEnv(): WalletMrvNoEvmArchiveTrustConfig | null {
+  const trustedPublicKeysRaw = readMrvEnvString([
+    "VITE_WALLET_MRV_ARCHIVE_TRUSTED_PUBKEYS",
+    "VITE_MONO_MRV_ARCHIVE_TRUSTED_PUBKEYS",
+  ]);
+  const threshold = readMrvEnvString([
+    "VITE_WALLET_MRV_ARCHIVE_SIGNATURE_THRESHOLD",
+    "VITE_MONO_MRV_ARCHIVE_SIGNATURE_THRESHOLD",
+  ]);
+
+  if (trustedPublicKeysRaw === undefined && threshold === undefined) {
+    return null;
+  }
+
+  return {
+    trustedPublicKeys:
+      trustedPublicKeysRaw === undefined
+        ? []
+        : trustedPublicKeysRaw
+            .split(",")
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0),
+    threshold: threshold === undefined ? Number.NaN : Number(threshold),
+  };
+}
+
 function readMrvEnvString(names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = import.meta.env[name];
@@ -2408,6 +2482,87 @@ function parseMrvNoEvmFinalityTrustConfig(
   };
 }
 
+function parseMrvNoEvmArchiveTrustConfig(
+  raw: unknown,
+  source: "environment",
+): WalletMrvNoEvmArchiveTrustResolution {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      kind: "invalid",
+      reason: `${source} archive trust config must be an object`,
+    };
+  }
+  const r = raw as Record<string, unknown>;
+  const trustedPublicKeysRaw =
+    r.trustedPublicKeys ?? r.publicKeys ?? r.trustedPubkeys ?? r.pubkeys;
+  const trustedPublicKeys = parseMrvArchiveTrustedPublicKeyList(
+    trustedPublicKeysRaw,
+  );
+  const threshold = parsePositiveSafeIntegerValue(r.threshold);
+
+  if (trustedPublicKeys === null || trustedPublicKeys.length === 0) {
+    return {
+      kind: "invalid",
+      reason: `${source} archive trust config is missing trustedPublicKeys`,
+    };
+  }
+  if (threshold === null) {
+    return {
+      kind: "invalid",
+      reason: `${source} archive trust config has invalid threshold`,
+    };
+  }
+  if (threshold > trustedPublicKeys.length) {
+    return {
+      kind: "invalid",
+      reason: `${source} archive signature threshold exceeds trusted signer count`,
+    };
+  }
+
+  const trustedSigners: NoEvmArchiveTrustedSigner[] = [];
+  for (let index = 0; index < trustedPublicKeys.length; index += 1) {
+    const publicKeyRaw = trustedPublicKeys[index];
+    const publicKeyHex =
+      publicKeyRaw === undefined ? null : parseMrvReceiptBytesHex(publicKeyRaw);
+    if (publicKeyHex === null) {
+      return {
+        kind: "invalid",
+        reason: `${source} archive trust config has malformed trustedPublicKeys[${index}]`,
+      };
+    }
+    const publicKey = hexToMrvReceiptBytes(publicKeyHex);
+    if (publicKey.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
+      return {
+        kind: "invalid",
+        reason: `${source} archive trustedPublicKeys[${index}] must be ${ML_DSA_65_PUBLIC_KEY_LEN} bytes`,
+      };
+    }
+    trustedSigners.push({ publicKey });
+  }
+
+  return {
+    kind: "configured",
+    config: { trustedSigners, threshold },
+  };
+}
+
+function parseMrvArchiveTrustedPublicKeyList(raw: unknown): string[] | null {
+  if (typeof raw === "string") {
+    return raw
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }
+  if (!Array.isArray(raw)) return null;
+  const publicKeys: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (trimmed.length > 0) publicKeys.push(trimmed);
+  }
+  return publicKeys;
+}
+
 function parsePositiveSafeIntegerValue(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0) {
     return raw;
@@ -2425,6 +2580,67 @@ function parseMrvChainIdBigInt(raw: string): bigint | null {
   } catch {
     return null;
   }
+}
+
+function verifyMrvNoEvmArchiveProofSignatures(
+  archiveProof: WalletMrvNoEvmArchiveProof | null,
+  archiveTrust: WalletMrvNoEvmArchiveTrustResolution,
+): WalletMrvNoEvmArchiveVerification | null {
+  if (archiveProof === null) return null;
+  if (archiveTrust.kind === "none") {
+    return {
+      status: "unconfigured",
+      reason: "trusted archive signer config not configured",
+      details: null,
+    };
+  }
+  if (archiveTrust.kind === "invalid") {
+    return {
+      status: "config-invalid",
+      reason: archiveTrust.reason,
+      details: null,
+    };
+  }
+
+  try {
+    const proofForVerification =
+      archiveProofForSignatureVerification(archiveProof);
+    const details = verifyNoEvmArchiveProofSignatures(
+      proofForVerification,
+      archiveTrust.config.trustedSigners,
+      archiveTrust.config.threshold,
+    );
+    return {
+      status: details.verified ? "verified" : "mismatch",
+      reason: details.verified
+        ? null
+        : "archive proof signatures did not verify against configured trusted signers",
+      details,
+    };
+  } catch (e) {
+    return {
+      status: "malformed",
+      reason: `archive proof signature verification failed: ${mrvErrorMessage(e)}`,
+      details: null,
+    };
+  }
+}
+
+function archiveProofForSignatureVerification(
+  archiveProof: WalletMrvNoEvmArchiveProof,
+): WalletMrvNoEvmArchiveProof {
+  if (
+    archiveProof.signatureDigest !== undefined ||
+    archiveProof.signatures.length > 0 ||
+    archiveProof.coveringSnapshot === undefined
+  ) {
+    return archiveProof;
+  }
+  return {
+    ...archiveProof,
+    signatureDigest: archiveProof.coveringSnapshot.signatureDigest,
+    signatures: archiveProof.coveringSnapshot.signatures,
+  };
 }
 
 function verifyMrvNoEvmFinalityEvidence(
@@ -6130,6 +6346,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         p.finalityTrust,
         p.chainIdHex,
       );
+      const archiveTrust = resolveMrvNoEvmArchiveTrustConfig();
       try {
         const { result, via } = await sprintnetJsonRpc<{
           transactionHash?: string;
@@ -6149,6 +6366,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           nativeReceipt = parseMrvNativeReceiptEvidence(
             native.result,
             finalityTrust,
+            archiveTrust,
           );
           if (nativeReceipt === null) {
             nativeReceiptError = {
