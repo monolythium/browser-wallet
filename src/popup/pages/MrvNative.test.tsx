@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   MrvNative,
+  NativeMarketReplayReadinessCard,
   MrvNativePlanPreview,
   buildMrvNativeRequest,
   coerceHexQuantityInput,
   type MrvNativeFormValues,
+  type NativeMarketReplayReadinessState,
 } from "./MrvNative.js";
 import type {
   WalletMrvNativeSubmissionPlan,
@@ -53,6 +55,8 @@ const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification 
   computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
   computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
 };
+const MARKET_ID = `0x${"a".repeat(64)}`;
+const ORDER_ID = `0x${"b".repeat(64)}`;
 
 function buildDeployPlan(): WalletMrvNativeSubmissionPlan {
   return {
@@ -111,6 +115,95 @@ describe("MrvNative", () => {
     expect(html).toContain("typed addresses");
     expect(html).toContain("polls transaction receipt inclusion status");
     expect(html).toContain("does not prove live MRV execution");
+    expect(html).toContain("Native market replay");
+    expect(html).toContain("Checking recent orderbook replay status");
+  });
+
+  it("renders native market replay readiness from returned deltas only", () => {
+    const state: NativeMarketReplayReadinessState = {
+      phase: "ready",
+      fromBlock: 100,
+      toBlock: 228,
+      operator: "operator-test",
+      outcome: {
+        kind: "live",
+        via: "/api/v1/native-market-orderbook-deltas",
+        durationMs: 12,
+        data: {
+          schemaVersion: 1,
+          fromBlock: 100,
+          toBlock: 228,
+          limit: 5,
+          cursor: null,
+          nextCursor: null,
+          filters: {},
+          replay: true,
+          streamTopic: "nativeMarketOrderBook",
+          source: {
+            indexerProvider: "native_events",
+            projection: "native_market_orderbook_deltas",
+          },
+          deltas: [
+            {
+              marketId: MARKET_ID,
+              orderId: ORDER_ID,
+              eventName: "market.spot.order_placed",
+              action: "upsert",
+              side: "bid",
+              price: "101",
+              quantity: "9",
+              remaining: "7",
+              status: "open",
+              blockHeight: 120,
+              txIndex: 0,
+              logIndex: 1,
+            },
+          ],
+        },
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <NativeMarketReplayReadinessCard state={state} />,
+    );
+
+    expect(html).toContain("Replay endpoint live");
+    expect(html).toContain("blocks 100-228");
+    expect(html).toContain("operator operator-test");
+    expect(html).toContain("Rows returned 1");
+    expect(html).toContain("source native_events/native_market_orderbook_deltas");
+    expect(html).toContain("upsert");
+    expect(html).toContain("market.spot.order_placed");
+    expect(html).toContain("bid 101 @ 7");
+    expect(html).toContain("0xaaaaaaaa");
+    expect(html).toContain("0xbbbbbbbb");
+  });
+
+  it("renders native market replay fallback states without fabricated rows", () => {
+    const state: NativeMarketReplayReadinessState = {
+      phase: "ready",
+      fromBlock: 100,
+      toBlock: 228,
+      operator: null,
+      outcome: {
+        kind: "mock-not-deployed",
+        via: "mock",
+        durationMs: 5,
+        reason: "/api/v1/native-market-orderbook-deltas: HTTP 404",
+        data: null,
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <NativeMarketReplayReadinessCard state={state} />,
+    );
+
+    expect(html).toContain("Replay endpoint not deployed");
+    expect(html).toContain("operator unknown");
+    expect(html).toContain("No market rows shown from fallback data");
+    expect(html).toContain("/api/v1/native-market-orderbook-deltas: HTTP 404");
+    expect(html).not.toContain("Rows returned");
+    expect(html).not.toContain("market.spot.order_placed");
   });
 
   it("renders returned JSON-safe plans with native contract and fee terms", () => {
