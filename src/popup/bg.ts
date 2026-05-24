@@ -648,6 +648,20 @@ export type NativeMarketStateOutcome =
     import("../shared/native-market-state.js").NativeMarketStateResponse | null
   >;
 
+export async function bgNativeMarketOrderBookDeltas(
+  args: import("../shared/native-market-orderbook.js").NativeMarketOrderBookReplayFilter,
+): Promise<
+  | { ok: true; outcome: NativeMarketOrderBookDeltasOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-native-market-orderbook-deltas", args);
+}
+
+export type NativeMarketOrderBookDeltasOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("../shared/native-market-orderbook.js").NativeMarketOrderBookReplayResponse | null
+  >;
+
 export async function bgNativeAgentState(
   args: import("../shared/native-agent-state.js").NativeAgentStateFilter = {},
 ): Promise<
