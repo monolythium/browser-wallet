@@ -300,6 +300,7 @@ interface WalletMrvNoEvmArchiveProof {
   source: "indexerReceiptArchiveContentDigest";
   manifestHash: string;
   contentHash: string;
+  signatureDigest?: string;
   signatures: string[];
 }
 
@@ -2019,10 +2020,15 @@ function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
   if (r.source !== "indexerReceiptArchiveContentDigest") return null;
   const manifestHash = parseMrvReceiptHash(r.manifestHash);
   const contentHash = parseMrvReceiptHash(r.contentHash);
+  const signatureDigest =
+    r.signatureDigest === null || r.signatureDigest === undefined
+      ? undefined
+      : parseMrvReceiptHash(r.signatureDigest);
   const signatures = parseMrvArchiveProofSignatures(r.signatures);
   if (
     manifestHash === null ||
     contentHash === null ||
+    signatureDigest === null ||
     signatures === null
   ) {
     return null;
@@ -2032,6 +2038,7 @@ function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
     source: "indexerReceiptArchiveContentDigest",
     manifestHash,
     contentHash,
+    ...(signatureDigest === undefined ? {} : { signatureDigest }),
     signatures,
   };
 }
