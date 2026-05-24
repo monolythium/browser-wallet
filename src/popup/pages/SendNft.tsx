@@ -41,6 +41,14 @@ import {
   type NftMetadata,
 } from "../../lib/nft-client";
 import { formatSendError, validateToAddress } from "./Send";
+import {
+  computeNativeFeeFromPrice,
+  formatNativeLythAmount,
+  lythoshiToLythString,
+  nativeFeeDisplayFromPrice,
+} from "../../shared/native-fee-display";
+
+export { lythoshiToLythString };
 
 export type SendNftStandard = "erc721" | "erc1155";
 
@@ -131,6 +139,25 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
     () => computeEstimatedNftFeeLythoshi(feeSuggestion),
     [feeSuggestion],
   );
+  const estimatedFeeResult = useMemo(
+    () =>
+      feeSuggestion === null
+        ? null
+        : nativeFeeDisplayFromPrice({
+            executionUnitsHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+            pricePerExecutionUnitHex: feeSuggestion.maxFeePerGas,
+            ...(feeSuggestion.structuredFee !== undefined
+              ? { structuredFee: feeSuggestion.structuredFee }
+              : {}),
+          }),
+    [feeSuggestion],
+  );
+  const estimatedFeeDisplay =
+    estimatedFeeResult?.ok === true ? estimatedFeeResult.display : null;
+  const feeDisplayError =
+    estimatedFeeResult !== null && estimatedFeeResult.ok === false
+      ? estimatedFeeResult.failures.join("; ")
+      : null;
 
   const handleConfirm = async () => {
     if (!fromAddress || parsed.addr0x === null) return;
@@ -285,7 +312,8 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
   }
 
   if (step === "preview") {
-    const feeStr = estimatedFeeLythoshi !== null ? lythoshiToLythString(estimatedFeeLythoshi) : "—";
+    const feeText = estimatedFeeDisplay?.defaultText ??
+      (estimatedFeeLythoshi !== null ? formatNativeLythAmount(estimatedFeeLythoshi) : "—");
     return (
       <Shell title="Review send" onBack={() => setStep("form")}>
         <div className="ext-card" style={{ padding: 14 }}>
@@ -296,11 +324,12 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
           <Row label="Token ID" value={`#${nft.tokenId}`} />
           <Row label="Standard" value={nft.standard === "erc1155" ? "ERC-1155" : "ERC-721"} />
           <div style={{ marginTop: 8, paddingTop: 10, borderTop: "1px solid var(--fg-700)" }}>
-            <Row label="Network fee" value={`${feeStr} LYTH`} emphasis />
+            <Row label="Network fee" value={feeText} emphasis />
             <div style={{ fontSize: 10, color: "var(--fg-500)", marginTop: 4, fontFamily: "var(--f-mono)" }}>
               Estimated for this NFT transfer
             </div>
             {feeError && <div style={errText}>{feeError}</div>}
+            {feeDisplayError && <div style={errText}>Malformed fee data: {feeDisplayError}</div>}
           </div>
         </div>
         <Foot>
@@ -637,31 +666,15 @@ function shortenAddr(addr: string): string {
   return addr.length <= 18 ? addr : `${addr.slice(0, 8)}…${addr.slice(-6)}`;
 }
 
-const NATIVE_LYTH_DECIMALS = 8;
-const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
-
 export function computeEstimatedNftFeeLythoshi(
   fee: FeeSuggestion | null,
 ): bigint | null {
   if (!fee) return null;
-  try {
-    return BigInt(fee.maxFeePerGas) * SEND_NFT_EXECUTION_UNIT_LIMIT;
-  } catch {
-    return null;
-  }
-}
-
-export function lythoshiToLythString(lythoshi: bigint): string {
-  if (lythoshi < 0n) return "0";
-  const whole = lythoshi / LYTHOSHI_PER_LYTH;
-  const frac = lythoshi % LYTHOSHI_PER_LYTH;
-  if (frac === 0n) return whole.toString();
-  const fracStr = frac
-    .toString()
-    .padStart(NATIVE_LYTH_DECIMALS, "0")
-    .replace(/0+$/, "");
-  if (fracStr.length === 0) return whole.toString();
-  return `${whole.toString()}.${fracStr}`;
+  return computeNativeFeeFromPrice({
+    executionUnitsHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+    pricePerExecutionUnitHex: fee.maxFeePerGas,
+    ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------
