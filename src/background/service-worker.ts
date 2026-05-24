@@ -300,7 +300,7 @@ interface WalletMrvNoEvmArchiveProof {
   source: "indexerReceiptArchiveContentDigest";
   manifestHash: string;
   contentHash: string;
-  signatures: unknown[];
+  signatures: string[];
 }
 
 interface WalletMrvNoEvmFinalityCertificate {
@@ -2019,10 +2019,11 @@ function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
   if (r.source !== "indexerReceiptArchiveContentDigest") return null;
   const manifestHash = parseMrvReceiptHash(r.manifestHash);
   const contentHash = parseMrvReceiptHash(r.contentHash);
+  const signatures = parseMrvArchiveProofSignatures(r.signatures);
   if (
     manifestHash === null ||
     contentHash === null ||
-    !Array.isArray(r.signatures)
+    signatures === null
   ) {
     return null;
   }
@@ -2031,8 +2032,21 @@ function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
     source: "indexerReceiptArchiveContentDigest",
     manifestHash,
     contentHash,
-    signatures: r.signatures,
+    signatures,
   };
+}
+
+function parseMrvArchiveProofSignatures(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const signatures: string[] = [];
+  for (const signature of raw) {
+    if (typeof signature !== "string") return null;
+    if (!/^mono\.snapshot\.sig\.v1:0x[0-9a-fA-F]{40}:0x[0-9a-fA-F]+$/.test(signature)) {
+      return null;
+    }
+    signatures.push(signature);
+  }
+  return signatures;
 }
 
 function parseMrvFinalityEvidence(
