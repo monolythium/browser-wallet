@@ -988,6 +988,18 @@ export interface WalletMrvNoEvmArchiveProof {
   contentHash: string;
   signatureDigest?: string;
   signatures: string[];
+  coveringSnapshot?: WalletMrvNoEvmArchiveCoveringSnapshot;
+}
+
+export interface WalletMrvNoEvmArchiveCoveringSnapshot {
+  snapshotHeight: number;
+  manifestHash: string;
+  signatureDigest: string;
+  contentHash: string;
+  checkpointContentHash: string;
+  checkpointFrom: number;
+  checkpointTo: number;
+  signatures: string[];
 }
 
 export interface WalletMrvNoEvmFinalityCertificate {
