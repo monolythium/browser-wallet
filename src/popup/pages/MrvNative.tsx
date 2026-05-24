@@ -973,6 +973,8 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
       : state.phase === "reverted"
         ? "Receipt status: reverted"
         : "Receipt status: included, status unavailable";
+  const noEvmProof = state.receipt.nativeReceipt?.noEvmProof ?? null;
+  const hasFinalityEvidence = noEvmProof?.finalityEvidence != null;
 
   return (
     <div style={isReverted ? receiptErrorBox : receiptBox}>
@@ -1039,8 +1041,9 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
         <div style={submitMeta}>Native receipt evidence unavailable.</div>
       )}
       <div style={submitMeta}>
-        Transcript self-consistency only; validator finality is not established
-        here.
+        {hasFinalityEvidence
+          ? "Receipt self-check and BLS round-certificate material are shown; live seven-node finality is not established here."
+          : "Transcript self-consistency only; validator finality is not established here."}
       </div>
     </div>
   );
@@ -1094,7 +1097,10 @@ function MrvNoEvmReceiptProofTranscriptDetails({
         {statusText}
       </div>
       <div style={submitMeta}>
-        Source: {sourceText}. Validator finality is not established here.
+        Source: {sourceText}.{" "}
+        {proof.finalityEvidence === null
+          ? "Validator finality is not established here."
+          : "BLS round-certificate material is present."}
       </div>
       {proof.archiveProof !== null && (
         <div style={submitMeta}>
@@ -1103,8 +1109,36 @@ function MrvNoEvmReceiptProofTranscriptDetails({
           {proof.archiveProof.signatures.length > 0
             ? `present (${proof.archiveProof.signatures.length})`
             : "absent"}
-          ; validator finality is not established here.
+          ; finality evidence is reported separately.
         </div>
+      )}
+      {proof.finalityEvidence === null ? (
+        <div style={submitMeta}>
+          Finality evidence: absent; missing proof material remains authoritative.
+        </div>
+      ) : (
+        <>
+          <div style={submitMeta}>
+            Finality evidence: BLS round certificate · round{" "}
+            {proof.finalityEvidence.round} · signer count{" "}
+            {proof.finalityEvidence.certificate.signerCount}. Live seven-node
+            finality is not established here.
+          </div>
+          <ReceiptProofHashRow
+            label="BLS signature"
+            value={proof.finalityEvidence.certificate.signature}
+          />
+          <ReceiptProofHashRow
+            label="BLS signers"
+            value={formatSignerIndices(
+              proof.finalityEvidence.certificate.signerIndices,
+            )}
+          />
+          <ReceiptProofHashRow
+            label="BLS bitmap"
+            value={proof.finalityEvidence.certificate.signersBitmap}
+          />
+        </>
       )}
       <div style={submitMeta}>
         {proof.proofKind} · {proof.proofType} · {proof.rootAlgorithm} ·{" "}
@@ -1219,6 +1253,10 @@ function receiptArchiveProofSourceText(
     case "indexerReceiptArchiveContentDigest":
       return "indexer receipt archive content digest";
   }
+}
+
+function formatSignerIndices(indices: number[]): string {
+  return indices.length === 0 ? "none" : indices.join(", ");
 }
 
 function ReceiptProofHashRow({ label, value }: { label: string; value: string }) {
