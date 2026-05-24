@@ -1140,6 +1140,39 @@ function MrvNoEvmReceiptProofTranscriptDetails({
               />
             </>
           )}
+          {proof.archiveProof.coveringSnapshot !== undefined && (
+            <>
+              <div style={submitMeta}>
+                Covering snapshot parsed; archive snapshot signatures{" "}
+                {proof.archiveProof.coveringSnapshot.signatures.length > 0
+                  ? `present (${proof.archiveProof.coveringSnapshot.signatures.length})`
+                  : "absent"}
+                . The wallet has not cryptographically verified these archive
+                signatures.
+              </div>
+              <div style={submitMeta}>
+                Snapshot height {proof.archiveProof.coveringSnapshot.snapshotHeight} ·
+                checkpoint {proof.archiveProof.coveringSnapshot.checkpointFrom}-
+                {proof.archiveProof.coveringSnapshot.checkpointTo}.
+              </div>
+              <ReceiptProofHashRow
+                label="Snapshot manifest"
+                value={proof.archiveProof.coveringSnapshot.manifestHash}
+              />
+              <ReceiptProofHashRow
+                label="Snapshot signature digest"
+                value={proof.archiveProof.coveringSnapshot.signatureDigest}
+              />
+              <ReceiptProofHashRow
+                label="Snapshot content"
+                value={proof.archiveProof.coveringSnapshot.contentHash}
+              />
+              <ReceiptProofHashRow
+                label="Checkpoint content"
+                value={proof.archiveProof.coveringSnapshot.checkpointContentHash}
+              />
+            </>
+          )}
         </>
       )}
       {proof.finalityEvidence === null ? (

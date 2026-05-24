@@ -33,6 +33,16 @@ const BASE_FORM: MrvNativeFormValues = {
 const SUBMITTED_TX_HASH = `0x${"a".repeat(64)}`;
 const RECEIPT_COMMITMENT = `0x${"c".repeat(64)}`;
 const ARCHIVE_SIGNATURE_DIGEST = `0x${"e".repeat(64)}`;
+const ARCHIVE_COVERING_SNAPSHOT = {
+  snapshotHeight: 101,
+  manifestHash: `0x${"a".repeat(64)}`,
+  signatureDigest: `0x${"b".repeat(64)}`,
+  contentHash: `0x${"c".repeat(64)}`,
+  checkpointContentHash: `0x${"9".repeat(64)}`,
+  checkpointFrom: 0,
+  checkpointTo: 101,
+  signatures: [`mono.snapshot.sig.v1:0x${"d".repeat(40)}:0x1234abcd`],
+};
 const MISSING_FINALITY_PROOF_MATERIAL =
   "BLS aggregate finality certificate for block round";
 const NO_EVM_FINALITY_EVIDENCE: WalletMrvNoEvmFinalityEvidence = {
@@ -657,6 +667,57 @@ describe("MrvNative", () => {
     );
     expect(digestArchiveHtml).toContain("Archive signature digest");
     expect(digestArchiveHtml).toContain(ARCHIVE_SIGNATURE_DIGEST);
+
+    const coveringSnapshotProof: WalletMrvNoEvmCompactReceiptProofTranscript = {
+      ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+      archiveProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof!,
+        coveringSnapshot: ARCHIVE_COVERING_SNAPSHOT,
+      },
+    };
+    const coveringSnapshotHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "included",
+          receipt: {
+            txHash: SUBMITTED_TX_HASH,
+            status: "0x1",
+            blockNumber: "0x65",
+            contractAddress: null,
+            nativeReceipt: {
+              schema: "riscv.receipt.v1",
+              txType: 0x41,
+              artifactHash: "0x" + "b".repeat(64),
+              receiptCommitment: RECEIPT_COMMITMENT,
+              eventCount: 1,
+              noEvmProof: coveringSnapshotProof,
+              noEvmProofStatus: "proof-verified",
+              noEvmProofVerification:
+                INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
+              noEvmFinalityVerification:
+                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
+            },
+          },
+        }}
+      />,
+    );
+    expect(coveringSnapshotHtml).toContain("Covering snapshot parsed");
+    expect(coveringSnapshotHtml).toContain(
+      "wallet has not cryptographically verified these archive signatures",
+    );
+    expect(coveringSnapshotHtml).toContain("Snapshot height 101");
+    expect(coveringSnapshotHtml).toContain("checkpoint 0-101");
+    expect(coveringSnapshotHtml).toContain("Snapshot manifest");
+    expect(coveringSnapshotHtml).toContain("Snapshot signature digest");
+    expect(coveringSnapshotHtml).toContain("Snapshot content");
+    expect(coveringSnapshotHtml).toContain("Checkpoint content");
+    expect(coveringSnapshotHtml).toContain(ARCHIVE_COVERING_SNAPSHOT.manifestHash);
+    expect(coveringSnapshotHtml).toContain(
+      ARCHIVE_COVERING_SNAPSHOT.checkpointContentHash,
+    );
 
     const mismatchRoot = `0x${"4".repeat(64)}`;
     const mismatchHtml = renderToStaticMarkup(
