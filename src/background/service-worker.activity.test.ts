@@ -104,6 +104,20 @@ vi.mock("./tx-mldsa.js", () => ({
 
 const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
 const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
+const MISSING_FINALITY_PROOF_MATERIAL =
+  "BLS aggregate finality certificate for block round";
+const NO_EVM_FINALITY_EVIDENCE = {
+  schema: "mono.no_evm_receipt_finality.v1",
+  source: "blsRoundCertificate",
+  round: 57,
+  certificate: {
+    round: 57,
+    signature: "0x1234",
+    signersBitmap: "0xabcd",
+    signerIndices: [1, 3],
+    signerCount: 2,
+  },
+} as const;
 const NO_EVM_RECEIPT_PROOF = {
   schema: "mono.no_evm_receipt_proof.v1",
   proofKind: "boundedCacheTranscript",
@@ -111,7 +125,8 @@ const NO_EVM_RECEIPT_PROOF = {
   historySource: "liveBlockCache",
   compactInclusionProof: null,
   archiveProof: null,
-  missingProofMaterial: [],
+  finalityEvidence: null,
+  missingProofMaterial: [MISSING_FINALITY_PROOF_MATERIAL],
   rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
   blockHash: "0x" + "1".repeat(64),
@@ -154,6 +169,7 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF = {
     contentHash: "0x" + "9".repeat(64),
     signatures: [],
   },
+  finalityEvidence: NO_EVM_FINALITY_EVIDENCE,
   missingProofMaterial: [],
   rootAlgorithm:
     "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
@@ -2103,6 +2119,51 @@ describe("wallet-mrv-receipt-status", () => {
       noEvmProof: {
         ...NO_EVM_RECEIPT_PROOF,
         receiptCount: 3,
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: null;
+        nativeReceiptError?: { reason: string; method?: string };
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toBeNull();
+    expect(r.receipt.nativeReceiptError).toEqual({
+      reason: "lyth_nativeReceipt returned malformed native receipt",
+      method: "lyth_nativeReceipt",
+      via: "mock-operator",
+    });
+  });
+
+  it("rejects malformed no-EVM finality evidence", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x64",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...NO_EVM_RECEIPT_PROOF,
+        finalityEvidence: {
+          ...NO_EVM_FINALITY_EVIDENCE,
+          certificate: {
+            ...NO_EVM_FINALITY_EVIDENCE.certificate,
+            signerCount: 1,
+          },
+        },
       },
     };
 

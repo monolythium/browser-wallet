@@ -303,6 +303,21 @@ interface WalletMrvNoEvmArchiveProof {
   signatures: unknown[];
 }
 
+interface WalletMrvNoEvmFinalityCertificate {
+  round: number;
+  signature: string;
+  signersBitmap: string;
+  signerIndices: number[];
+  signerCount: number;
+}
+
+interface WalletMrvNoEvmFinalityEvidence {
+  schema: "mono.no_evm_receipt_finality.v1";
+  source: "blsRoundCertificate";
+  round: number;
+  certificate: WalletMrvNoEvmFinalityCertificate;
+}
+
 interface WalletMrvNoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   proofKind: WalletMrvNoEvmReceiptProofKind;
@@ -310,6 +325,7 @@ interface WalletMrvNoEvmReceiptProofBase {
   historySource: WalletMrvNoEvmReceiptProofHistorySource;
   compactInclusionProof: WalletMrvNoEvmCompactInclusionProof | null;
   archiveProof: WalletMrvNoEvmArchiveProof | null;
+  finalityEvidence: WalletMrvNoEvmFinalityEvidence | null;
   missingProofMaterial: string[];
   rootAlgorithm: string;
   receiptCodec: string;
@@ -1789,6 +1805,10 @@ function parseMrvNoEvmReceiptProofTranscript(
   const txIndex = parseNonNegativeU32(r.txIndex);
   const receiptCount = parsePositiveU32(r.receiptCount);
   const missingProofMaterial = parseOptionalStringArray(r.missingProofMaterial);
+  const finalityEvidence =
+    r.finalityEvidence === null || r.finalityEvidence === undefined
+      ? null
+      : parseMrvFinalityEvidence(r.finalityEvidence);
 
   if (
     rootAlgorithm === null ||
@@ -1801,6 +1821,9 @@ function parseMrvNoEvmReceiptProofTranscript(
     txIndex === null ||
     receiptCount === null ||
     missingProofMaterial === null ||
+    (finalityEvidence === null &&
+      r.finalityEvidence !== null &&
+      r.finalityEvidence !== undefined) ||
     txIndex >= receiptCount
   ) {
     return null;
@@ -1826,6 +1849,7 @@ function parseMrvNoEvmReceiptProofTranscript(
       historySource,
       compactInclusionProof: null,
       archiveProof: null,
+      finalityEvidence,
       missingProofMaterial,
       rootAlgorithm,
       receiptCodec,
@@ -1871,6 +1895,7 @@ function parseMrvNoEvmReceiptProofTranscript(
     historySource,
     compactInclusionProof,
     archiveProof,
+    finalityEvidence,
     missingProofMaterial,
     rootAlgorithm,
     receiptCodec,
@@ -2008,6 +2033,66 @@ function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
     contentHash,
     signatures: r.signatures,
   };
+}
+
+function parseMrvFinalityEvidence(
+  raw: unknown,
+): WalletMrvNoEvmFinalityEvidence | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.schema !== "mono.no_evm_receipt_finality.v1") return null;
+  if (r.source !== "blsRoundCertificate") return null;
+  const round = parseNonNegativeSafeInteger(r.round);
+  const certificate = parseMrvFinalityCertificate(r.certificate);
+  if (round === null || certificate === null || certificate.round !== round) {
+    return null;
+  }
+  return {
+    schema: "mono.no_evm_receipt_finality.v1",
+    source: "blsRoundCertificate",
+    round,
+    certificate,
+  };
+}
+
+function parseMrvFinalityCertificate(
+  raw: unknown,
+): WalletMrvNoEvmFinalityCertificate | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const round = parseNonNegativeSafeInteger(r.round);
+  const signature = parseMrvReceiptBytesHex(r.signature);
+  const signersBitmap = parseMrvReceiptBytesHex(r.signersBitmap);
+  const signerIndices = parseMrvSignerIndices(r.signerIndices);
+  const signerCount = parseNonNegativeU32(r.signerCount);
+  if (
+    round === null ||
+    signature === null ||
+    signersBitmap === null ||
+    signerIndices === null ||
+    signerCount === null ||
+    signerCount !== signerIndices.length
+  ) {
+    return null;
+  }
+  return {
+    round,
+    signature,
+    signersBitmap,
+    signerIndices,
+    signerCount,
+  };
+}
+
+function parseMrvSignerIndices(raw: unknown): number[] | null {
+  if (!Array.isArray(raw)) return null;
+  const indices: number[] = [];
+  for (const entry of raw) {
+    const index = parseNonNegativeU32(entry);
+    if (index === null) return null;
+    indices.push(index);
+  }
+  return indices;
 }
 
 function parseMrvHashArray(raw: unknown): string[] | null {
