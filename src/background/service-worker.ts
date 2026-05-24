@@ -26,6 +26,7 @@
 
 import {
   addressToTypedBech32,
+  getNoEvmReceiptTrustPolicy,
   MonolythiumProvider,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   ML_DSA_65_PUBLIC_KEY_LEN,
@@ -35,6 +36,7 @@ import {
   type NoEvmArchiveSignatureVerification,
   type NoEvmArchiveTrustedSigner,
   type NoEvmBlsFinalityVerification,
+  type NoEvmReceiptTrustPolicy,
 } from "@monolythium/core-sdk";
 import {
   buildWalletMrvCallNativePlan,
@@ -448,11 +450,15 @@ interface ResolvedMrvNoEvmFinalityTrustConfig {
   clusterPublicKey: Uint8Array;
   committeeSize: number;
   threshold: number;
+  validFromRound?: bigint;
+  validToRound?: bigint;
 }
 
 interface ResolvedMrvNoEvmArchiveTrustConfig {
   trustedSigners: NoEvmArchiveTrustedSigner[];
   threshold: number;
+  validFromHeight?: bigint;
+  validToHeight?: bigint;
 }
 
 type WalletMrvNoEvmFinalityTrustResolution =
@@ -463,6 +469,11 @@ type WalletMrvNoEvmFinalityTrustResolution =
 type WalletMrvNoEvmArchiveTrustResolution =
   | { kind: "none" }
   | { kind: "configured"; config: ResolvedMrvNoEvmArchiveTrustConfig }
+  | { kind: "invalid"; reason: string };
+
+type WalletMrvNoEvmRegistryTrustPolicyResolution =
+  | { kind: "none" }
+  | { kind: "policy"; policy: NoEvmReceiptTrustPolicy }
   | { kind: "invalid"; reason: string };
 
 interface WalletMrvNativeReceiptEvidenceError {
@@ -1814,6 +1825,7 @@ const MRV_COMPACT_RECEIPT_NODE_DOMAIN_BYTES = new TextEncoder().encode(
   "monolythium/v4.1/receipt_node/1",
 );
 const MAX_U32 = 0xffff_ffff;
+const MRV_NO_EVM_RECEIPT_TRUST_REGISTRY_NETWORK = "testnet-69420";
 
 function parseMrvNativeReceiptEvidence(
   raw: unknown,
@@ -1842,6 +1854,7 @@ function parseMrvNativeReceiptEvidence(
       : verifyMrvNoEvmArchiveProofSignatures(
           noEvmProof.archiveProof,
           archiveTrust,
+          noEvmProof.blockHeight,
         );
   const noEvmFinalityVerification =
     noEvmProof === null
@@ -2294,6 +2307,7 @@ function parseBooleanArray(raw: unknown): boolean[] | null {
 function resolveMrvNoEvmFinalityTrustConfig(
   raw: unknown,
   requestChainIdHex: string,
+  readRegistryTrust: () => WalletMrvNoEvmRegistryTrustPolicyResolution,
 ): WalletMrvNoEvmFinalityTrustResolution {
   if (raw !== undefined) {
     return raw === null
@@ -2302,11 +2316,16 @@ function resolveMrvNoEvmFinalityTrustConfig(
   }
 
   const envRaw = readMrvNoEvmFinalityTrustEnv();
-  if (envRaw === null) return { kind: "none" };
-  return parseMrvNoEvmFinalityTrustConfig(
-    envRaw,
+  if (envRaw !== null) {
+    return parseMrvNoEvmFinalityTrustConfig(
+      envRaw,
+      requestChainIdHex,
+      "environment",
+    );
+  }
+  return resolveMrvNoEvmRegistryFinalityTrustConfig(
+    readRegistryTrust(),
     requestChainIdHex,
-    "environment",
   );
 }
 
@@ -2345,9 +2364,17 @@ function readMrvNoEvmFinalityTrustEnv(): WalletMrvNoEvmFinalityTrustConfig | nul
   };
 }
 
-function resolveMrvNoEvmArchiveTrustConfig(): WalletMrvNoEvmArchiveTrustResolution {
+function resolveMrvNoEvmArchiveTrustConfig(
+  requestChainIdHex: string,
+  readRegistryTrust: () => WalletMrvNoEvmRegistryTrustPolicyResolution,
+): WalletMrvNoEvmArchiveTrustResolution {
   const envRaw = readMrvNoEvmArchiveTrustEnv();
-  if (envRaw === null) return { kind: "none" };
+  if (envRaw === null) {
+    return resolveMrvNoEvmRegistryArchiveTrustConfig(
+      readRegistryTrust(),
+      requestChainIdHex,
+    );
+  }
   return parseMrvNoEvmArchiveTrustConfig(envRaw, "environment");
 }
 
@@ -2375,6 +2402,298 @@ function readMrvNoEvmArchiveTrustEnv(): WalletMrvNoEvmArchiveTrustConfig | null 
             .filter((value) => value.length > 0),
     threshold: threshold === undefined ? Number.NaN : Number(threshold),
   };
+}
+
+function resolveMrvNoEvmRegistryReceiptTrustPolicy(
+  requestChainIdHex: string,
+): WalletMrvNoEvmRegistryTrustPolicyResolution {
+  const requestChainId = parseMrvChainIdBigInt(requestChainIdHex);
+  if (requestChainId === null) {
+    return { kind: "invalid", reason: "receipt request chain id is malformed" };
+  }
+  if (requestChainId !== MONOLYTHIUM_TESTNET_CHAIN_ID) return { kind: "none" };
+
+  try {
+    const policy = getNoEvmReceiptTrustPolicy(
+      MRV_NO_EVM_RECEIPT_TRUST_REGISTRY_NETWORK,
+    );
+    return policy === null ? { kind: "none" } : { kind: "policy", policy };
+  } catch (e) {
+    return {
+      kind: "invalid",
+      reason: `registry no-EVM receipt trust policy failed to load: ${mrvErrorMessage(e)}`,
+    };
+  }
+}
+
+function resolveMrvNoEvmRegistryFinalityTrustConfig(
+  registryTrust: WalletMrvNoEvmRegistryTrustPolicyResolution,
+  requestChainIdHex: string,
+): WalletMrvNoEvmFinalityTrustResolution {
+  if (registryTrust.kind === "none") return { kind: "none" };
+  if (registryTrust.kind === "invalid") {
+    return { kind: "invalid", reason: registryTrust.reason };
+  }
+
+  const finality = registryTrust.policy.finality;
+  if (finality === undefined) return { kind: "none" };
+  if (finality.mode === "multisig") {
+    return {
+      kind: "invalid",
+      reason:
+        "registry BLS finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
+    };
+  }
+
+  const chainId = parseMrvRegistryPolicyChainId(
+    finality.chainId ?? registryTrust.policy.chainId,
+  );
+  if (chainId === null) {
+    return {
+      kind: "invalid",
+      reason: "registry BLS finality trust policy is missing chainId",
+    };
+  }
+  const requestChainId = parseMrvChainIdBigInt(requestChainIdHex);
+  if (requestChainId === null) {
+    return { kind: "invalid", reason: "receipt request chain id is malformed" };
+  }
+  if (chainId !== requestChainId) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry BLS finality chain id does not match the receipt request chain id",
+    };
+  }
+
+  const committeeSize = parsePositiveSafeIntegerValue(finality.committeeSize);
+  if (committeeSize === null) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry BLS finality trust policy has invalid committeeSize",
+    };
+  }
+  const threshold = parsePositiveSafeIntegerValue(finality.threshold);
+  if (threshold === null) {
+    return {
+      kind: "invalid",
+      reason: "registry BLS finality trust policy has invalid threshold",
+    };
+  }
+  if (threshold > committeeSize) {
+    return {
+      kind: "invalid",
+      reason: "registry BLS finality threshold exceeds committee size",
+    };
+  }
+
+  const clusterPublicKey = parseMrvTrustPolicyBytes(
+    finality.clusterPublicKey,
+    48,
+  );
+  if (clusterPublicKey === null) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry BLS finality clusterPublicKey must be 48 bytes",
+    };
+  }
+
+  const validFromRound = parseMrvOptionalTrustPolicyBound(
+    finality.validFromRound,
+  );
+  if (validFromRound === null) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry BLS finality trust policy has invalid validFromRound",
+    };
+  }
+  const validToRound = parseMrvOptionalTrustPolicyBound(finality.validToRound);
+  if (validToRound === null) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry BLS finality trust policy has invalid validToRound",
+    };
+  }
+  if (
+    validFromRound !== undefined &&
+    validToRound !== undefined &&
+    validFromRound > validToRound
+  ) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry BLS finality trust policy validFromRound exceeds validToRound",
+    };
+  }
+
+  const config: ResolvedMrvNoEvmFinalityTrustConfig = {
+    chainId,
+    clusterPublicKey,
+    committeeSize,
+    threshold,
+  };
+  if (validFromRound !== undefined) config.validFromRound = validFromRound;
+  if (validToRound !== undefined) config.validToRound = validToRound;
+  return { kind: "configured", config };
+}
+
+function resolveMrvNoEvmRegistryArchiveTrustConfig(
+  registryTrust: WalletMrvNoEvmRegistryTrustPolicyResolution,
+  requestChainIdHex: string,
+): WalletMrvNoEvmArchiveTrustResolution {
+  if (registryTrust.kind === "none") return { kind: "none" };
+  if (registryTrust.kind === "invalid") {
+    return { kind: "invalid", reason: registryTrust.reason };
+  }
+
+  const archive = registryTrust.policy.archive;
+  if (archive === undefined) return { kind: "none" };
+
+  const chainId = parseMrvRegistryPolicyChainId(registryTrust.policy.chainId);
+  if (chainId === null) {
+    return {
+      kind: "invalid",
+      reason: "registry archive trust policy is missing chainId",
+    };
+  }
+  const requestChainId = parseMrvChainIdBigInt(requestChainIdHex);
+  if (requestChainId === null) {
+    return { kind: "invalid", reason: "receipt request chain id is malformed" };
+  }
+  if (chainId !== requestChainId) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry archive trust policy chain id does not match the receipt request chain id",
+    };
+  }
+
+  const threshold = parsePositiveSafeIntegerValue(archive.threshold);
+  if (threshold === null) {
+    return {
+      kind: "invalid",
+      reason: "registry archive trust policy has invalid threshold",
+    };
+  }
+  if (!Array.isArray(archive.trustedSigners)) {
+    return {
+      kind: "invalid",
+      reason: "registry archive trust policy is missing trustedSigners",
+    };
+  }
+  if (archive.trustedSigners.length === 0) {
+    return {
+      kind: "invalid",
+      reason: "registry archive trust policy is missing trustedSigners",
+    };
+  }
+  if (threshold > archive.trustedSigners.length) {
+    return {
+      kind: "invalid",
+      reason: "registry archive signature threshold exceeds trusted signer count",
+    };
+  }
+
+  const validFromHeight = parseMrvOptionalTrustPolicyBound(
+    archive.validFromHeight,
+  );
+  if (validFromHeight === null) {
+    return {
+      kind: "invalid",
+      reason: "registry archive trust policy has invalid validFromHeight",
+    };
+  }
+  const validToHeight = parseMrvOptionalTrustPolicyBound(archive.validToHeight);
+  if (validToHeight === null) {
+    return {
+      kind: "invalid",
+      reason: "registry archive trust policy has invalid validToHeight",
+    };
+  }
+  if (
+    validFromHeight !== undefined &&
+    validToHeight !== undefined &&
+    validFromHeight > validToHeight
+  ) {
+    return {
+      kind: "invalid",
+      reason:
+        "registry archive trust policy validFromHeight exceeds validToHeight",
+    };
+  }
+
+  const trustedSigners: NoEvmArchiveTrustedSigner[] = [];
+  for (let index = 0; index < archive.trustedSigners.length; index += 1) {
+    const signer = archive.trustedSigners[index];
+    if (signer === undefined) {
+      return {
+        kind: "invalid",
+        reason: `registry archive trust policy has invalid trustedSigners[${index}]`,
+      };
+    }
+    const publicKey = parseMrvTrustPolicyBytes(
+      signer.publicKey,
+      ML_DSA_65_PUBLIC_KEY_LEN,
+    );
+    if (publicKey === null) {
+      return {
+        kind: "invalid",
+        reason: `registry archive trustedSigners[${index}].publicKey must be ${ML_DSA_65_PUBLIC_KEY_LEN} bytes`,
+      };
+    }
+    const signerValidFromHeight = parseMrvOptionalTrustPolicyBound(
+      signer.validFromHeight,
+    );
+    if (signerValidFromHeight === null) {
+      return {
+        kind: "invalid",
+        reason: `registry archive trustedSigners[${index}] has invalid validFromHeight`,
+      };
+    }
+    const signerValidToHeight = parseMrvOptionalTrustPolicyBound(
+      signer.validToHeight,
+    );
+    if (signerValidToHeight === null) {
+      return {
+        kind: "invalid",
+        reason: `registry archive trustedSigners[${index}] has invalid validToHeight`,
+      };
+    }
+    if (
+      signerValidFromHeight !== undefined &&
+      signerValidToHeight !== undefined &&
+      signerValidFromHeight > signerValidToHeight
+    ) {
+      return {
+        kind: "invalid",
+        reason: `registry archive trustedSigners[${index}] validFromHeight exceeds validToHeight`,
+      };
+    }
+
+    const trustedSigner: NoEvmArchiveTrustedSigner = { publicKey };
+    if (typeof signer.signerId === "string") {
+      trustedSigner.signerId = signer.signerId;
+    }
+    if (signerValidFromHeight !== undefined) {
+      trustedSigner.validFromHeight = signerValidFromHeight;
+    }
+    if (signerValidToHeight !== undefined) {
+      trustedSigner.validToHeight = signerValidToHeight;
+    }
+    trustedSigners.push(trustedSigner);
+  }
+
+  const config: ResolvedMrvNoEvmArchiveTrustConfig = {
+    trustedSigners,
+    threshold,
+  };
+  if (validFromHeight !== undefined) config.validFromHeight = validFromHeight;
+  if (validToHeight !== undefined) config.validToHeight = validToHeight;
+  return { kind: "configured", config };
 }
 
 function readMrvEnvString(names: readonly string[]): string | undefined {
@@ -2572,6 +2891,60 @@ function parsePositiveSafeIntegerValue(raw: unknown): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parseMrvRegistryPolicyChainId(raw: unknown): bigint | null {
+  if (typeof raw === "bigint" && raw > 0n) return raw;
+  if (typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0) {
+    return BigInt(raw);
+  }
+  return null;
+}
+
+function parseMrvTrustPolicyBytes(
+  raw: Uint8Array | readonly number[],
+  expectedLength: number,
+): Uint8Array | null {
+  let bytes: Uint8Array;
+  if (raw instanceof Uint8Array) {
+    bytes = raw;
+  } else if (Array.isArray(raw)) {
+    bytes = new Uint8Array(raw.length);
+    for (let index = 0; index < raw.length; index += 1) {
+      const value = raw[index];
+      if (
+        typeof value !== "number" ||
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value > 0xff
+      ) {
+        return null;
+      }
+      bytes[index] = value;
+    }
+  } else {
+    return null;
+  }
+  return bytes.length === expectedLength ? bytes : null;
+}
+
+function parseMrvOptionalTrustPolicyBound(raw: unknown): bigint | undefined | null {
+  if (raw === undefined) return undefined;
+  if (typeof raw === "bigint" && raw >= 0n) return raw;
+  if (typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0) {
+    return BigInt(raw);
+  }
+  return null;
+}
+
+function mrvIsWithinOptionalTrustBounds(
+  value: bigint,
+  validFrom: number | bigint | undefined,
+  validTo: number | bigint | undefined,
+): boolean {
+  if (validFrom !== undefined && value < BigInt(validFrom)) return false;
+  if (validTo !== undefined && value > BigInt(validTo)) return false;
+  return true;
+}
+
 function parseMrvChainIdBigInt(raw: string): bigint | null {
   try {
     if (/^0x[0-9a-fA-F]+$/.test(raw)) return BigInt(raw);
@@ -2585,6 +2958,7 @@ function parseMrvChainIdBigInt(raw: string): bigint | null {
 function verifyMrvNoEvmArchiveProofSignatures(
   archiveProof: WalletMrvNoEvmArchiveProof | null,
   archiveTrust: WalletMrvNoEvmArchiveTrustResolution,
+  blockHeight: number,
 ): WalletMrvNoEvmArchiveVerification | null {
   if (archiveProof === null) return null;
   if (archiveTrust.kind === "none") {
@@ -2602,12 +2976,34 @@ function verifyMrvNoEvmArchiveProofSignatures(
     };
   }
 
+  const blockHeightBig = BigInt(blockHeight);
+  if (
+    !mrvIsWithinOptionalTrustBounds(
+      blockHeightBig,
+      archiveTrust.config.validFromHeight,
+      archiveTrust.config.validToHeight,
+    )
+  ) {
+    return {
+      status: "mismatch",
+      reason: `archive trust policy is not valid at block height ${blockHeight}`,
+      details: null,
+    };
+  }
+
   try {
     const proofForVerification =
       archiveProofForSignatureVerification(archiveProof);
+    const trustedSigners = archiveTrust.config.trustedSigners.filter((signer) =>
+      mrvIsWithinOptionalTrustBounds(
+        blockHeightBig,
+        signer.validFromHeight,
+        signer.validToHeight,
+      ),
+    );
     const details = verifyNoEvmArchiveProofSignatures(
       proofForVerification,
-      archiveTrust.config.trustedSigners,
+      trustedSigners,
       archiveTrust.config.threshold,
     );
     return {
@@ -2659,6 +3055,20 @@ function verifyMrvNoEvmFinalityEvidence(
     return {
       status: "mismatch",
       reason: finalityTrust.reason,
+      details: null,
+    };
+  }
+
+  if (
+    !mrvIsWithinOptionalTrustBounds(
+      BigInt(finalityEvidence.round),
+      finalityTrust.config.validFromRound,
+      finalityTrust.config.validToRound,
+    )
+  ) {
+    return {
+      status: "mismatch",
+      reason: `BLS finality trust policy is not valid at round ${finalityEvidence.round}`,
       details: null,
     };
   }
@@ -6336,17 +6746,31 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing chainIdHex" };
       }
-      if (!chainRequiresMlDsa(p.chainIdHex)) {
+      const requestChainIdHex = p.chainIdHex;
+      if (!chainRequiresMlDsa(requestChainIdHex)) {
         return {
           ok: false,
           reason: "MRV receipt polling is only wired for Sprintnet today",
         };
       }
+      let registryTrust:
+        | WalletMrvNoEvmRegistryTrustPolicyResolution
+        | undefined;
+      const readRegistryTrust = (): WalletMrvNoEvmRegistryTrustPolicyResolution => {
+        registryTrust ??= resolveMrvNoEvmRegistryReceiptTrustPolicy(
+          requestChainIdHex,
+        );
+        return registryTrust;
+      };
       const finalityTrust = resolveMrvNoEvmFinalityTrustConfig(
         p.finalityTrust,
-        p.chainIdHex,
+        requestChainIdHex,
+        readRegistryTrust,
       );
-      const archiveTrust = resolveMrvNoEvmArchiveTrustConfig();
+      const archiveTrust = resolveMrvNoEvmArchiveTrustConfig(
+        requestChainIdHex,
+        readRegistryTrust,
+      );
       try {
         const { result, via } = await sprintnetJsonRpc<{
           transactionHash?: string;
