@@ -988,6 +988,21 @@ export interface WalletMrvNoEvmArchiveProof {
   signatures: unknown[];
 }
 
+export interface WalletMrvNoEvmFinalityCertificate {
+  round: number;
+  signature: string;
+  signersBitmap: string;
+  signerIndices: number[];
+  signerCount: number;
+}
+
+export interface WalletMrvNoEvmFinalityEvidence {
+  schema: "mono.no_evm_receipt_finality.v1";
+  source: "blsRoundCertificate";
+  round: number;
+  certificate: WalletMrvNoEvmFinalityCertificate;
+}
+
 export interface WalletMrvNoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   proofKind: WalletMrvNoEvmReceiptProofKind;
@@ -995,6 +1010,7 @@ export interface WalletMrvNoEvmReceiptProofBase {
   historySource: WalletMrvNoEvmReceiptProofHistorySource;
   compactInclusionProof: WalletMrvNoEvmCompactInclusionProof | null;
   archiveProof: WalletMrvNoEvmArchiveProof | null;
+  finalityEvidence: WalletMrvNoEvmFinalityEvidence | null;
   missingProofMaterial: string[];
   rootAlgorithm: string;
   receiptCodec: string;

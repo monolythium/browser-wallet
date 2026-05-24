@@ -11,6 +11,7 @@ import {
   type NativeMarketReplayReadinessState,
 } from "./MrvNative.js";
 import type {
+  WalletMrvNoEvmFinalityEvidence,
   WalletMrvNoEvmCompactReceiptProofTranscript,
   WalletMrvNativeSubmissionPlan,
   WalletMrvNoEvmReceiptProofTranscript,
@@ -30,6 +31,20 @@ const BASE_FORM: MrvNativeFormValues = {
 
 const SUBMITTED_TX_HASH = `0x${"a".repeat(64)}`;
 const RECEIPT_COMMITMENT = `0x${"c".repeat(64)}`;
+const MISSING_FINALITY_PROOF_MATERIAL =
+  "BLS aggregate finality certificate for block round";
+const NO_EVM_FINALITY_EVIDENCE: WalletMrvNoEvmFinalityEvidence = {
+  schema: "mono.no_evm_receipt_finality.v1",
+  source: "blsRoundCertificate",
+  round: 57,
+  certificate: {
+    round: 57,
+    signature: "0x1234",
+    signersBitmap: "0xabcd",
+    signerIndices: [1, 3],
+    signerCount: 2,
+  },
+};
 const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   schema: "mono.no_evm_receipt_proof.v1",
   proofKind: "boundedCacheTranscript",
@@ -37,7 +52,8 @@ const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   historySource: "liveBlockCache",
   compactInclusionProof: null,
   archiveProof: null,
-  missingProofMaterial: [],
+  finalityEvidence: null,
+  missingProofMaterial: [MISSING_FINALITY_PROOF_MATERIAL],
   rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
   blockHash: `0x${"1".repeat(64)}`,
@@ -83,6 +99,7 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmCompactReceipt
     contentHash: `0x${"9".repeat(64)}`,
     signatures: [],
   },
+  finalityEvidence: NO_EVM_FINALITY_EVIDENCE,
   missingProofMaterial: [],
   rootAlgorithm:
     "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
@@ -423,6 +440,8 @@ describe("MrvNative", () => {
     expect(proofHtml).toContain("keccak256(monolythium/v2/receipts_root/1)");
     expect(proofHtml).toContain("txIndex 1");
     expect(proofHtml).toContain("transcript blobs 2");
+    expect(proofHtml).toContain("Finality evidence: absent");
+    expect(proofHtml).toContain(MISSING_FINALITY_PROOF_MATERIAL);
     expect(proofHtml).toContain("Count check");
     expect(proofHtml).toContain("Root check");
     expect(proofHtml).toContain(NO_EVM_RECEIPT_PROOF.receiptsRoot);
@@ -458,7 +477,13 @@ describe("MrvNative", () => {
     expect(compactArchiveHtml).toContain("indexer receipt archive");
     expect(compactArchiveHtml).toContain("indexer receipt archive content digest");
     expect(compactArchiveHtml).toContain("Archive signatures absent");
-    expect(compactArchiveHtml).toContain("Validator finality is not established here");
+    expect(compactArchiveHtml).toContain("BLS round certificate");
+    expect(compactArchiveHtml).toContain("round 57");
+    expect(compactArchiveHtml).toContain("signer count 2");
+    expect(compactArchiveHtml).toContain("0x1234");
+    expect(compactArchiveHtml).toContain("1, 3");
+    expect(compactArchiveHtml).toContain("0xabcd");
+    expect(compactArchiveHtml).toContain("Live seven-node finality is not established here");
     expect(compactArchiveHtml).toContain("Compact inclusion self-check verified");
     expect(compactArchiveHtml).toContain("target-only receipt evidence");
     expect(compactArchiveHtml).toContain("canonicalReceiptInclusion");
