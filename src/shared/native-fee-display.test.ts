@@ -30,26 +30,38 @@ describe("native fee display conformance", () => {
   });
 
   it("accepts valid ADR-0039 structured fee objects", () => {
-    const result = nativeFeeDisplayFromStructuredFee({
+    const structuredFee = {
       total_lythoshi: "123456789",
-      total_lyth: "1.23456789",
       cycles_used: 21_000,
       base_price_per_cycle_lythoshi: "5",
       state_io_units: 0,
       state_io_price_per_unit_lythoshi: "0",
       priority_tip_lythoshi: "123351789",
-    });
+    };
+    expect(Object.keys(structuredFee)).toEqual([
+      "total_lythoshi",
+      "cycles_used",
+      "base_price_per_cycle_lythoshi",
+      "state_io_units",
+      "state_io_price_per_unit_lythoshi",
+      "priority_tip_lythoshi",
+    ]);
+
+    const result = nativeFeeDisplayFromStructuredFee(structuredFee);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.display.source).toBe("structured");
     expect(result.display.defaultText).toBe("1.23456789 LYTH");
+    expect(result.display.detailTexts).toEqual([
+      "cycles 21000, state I/O 0, total 123456789 lythoshi",
+      "cycle price 5 lythoshi, state I/O price 0 lythoshi, priority tip 123351789 lythoshi",
+    ]);
   });
 
   it("rejects structured fee objects that embed inherited legacy fee keys", () => {
     const result = nativeFeeDisplayFromStructuredFee({
       total_lythoshi: "123456789",
-      total_lyth: "1.23456789",
       cycles_used: 21_000,
       base_price_per_cycle_lythoshi: "5",
       state_io_units: 0,
