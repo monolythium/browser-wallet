@@ -11,6 +11,7 @@ import {
   bgWalletSubmitMrvNativePlan,
   type NativeMarketOrderBookDeltasOutcome,
   type SendTxResult,
+  type WalletMrvNoEvmArchiveVerification,
   type WalletMrvNoEvmFinalityVerification,
   type WalletMrvNoEvmReceiptProofTranscript,
   type WalletMrvNoEvmReceiptProofVerification,
@@ -976,6 +977,8 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
         : "Receipt status: included, status unavailable";
   const noEvmProof = state.receipt.nativeReceipt?.noEvmProof ?? null;
   const hasFinalityEvidence = noEvmProof?.finalityEvidence != null;
+  const archiveVerification =
+    state.receipt.nativeReceipt?.noEvmArchiveVerification ?? null;
   const finalityVerification =
     state.receipt.nativeReceipt?.noEvmFinalityVerification ?? null;
 
@@ -1022,6 +1025,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
             <MrvNoEvmReceiptProofTranscriptDetails
               proof={state.receipt.nativeReceipt.noEvmProof}
               verification={state.receipt.nativeReceipt.noEvmProofVerification}
+              archiveVerification={archiveVerification}
               finalityVerification={finalityVerification}
             />
           )}
@@ -1060,10 +1064,12 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
 function MrvNoEvmReceiptProofTranscriptDetails({
   proof,
   verification,
+  archiveVerification,
   finalityVerification,
 }: {
   proof: WalletMrvNoEvmReceiptProofTranscript;
   verification: WalletMrvNoEvmReceiptProofVerification | null;
+  archiveVerification: WalletMrvNoEvmArchiveVerification | null;
   finalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }) {
   const isVerified = verification?.status === "verified";
@@ -1098,6 +1104,14 @@ function MrvNoEvmReceiptProofTranscriptDetails({
       : finalityVerification?.status === "mismatch"
         ? receiptProofMismatchMeta
         : submitMeta;
+  const archiveStatusStyle =
+    archiveVerification?.status === "verified"
+      ? receiptProofVerifiedMeta
+      : archiveVerification?.status === "mismatch" ||
+          archiveVerification?.status === "malformed" ||
+          archiveVerification?.status === "config-invalid"
+        ? receiptProofMismatchMeta
+        : submitMeta;
 
   return (
     <div
@@ -1128,11 +1142,44 @@ function MrvNoEvmReceiptProofTranscriptDetails({
               : "absent"}
             ; finality evidence is reported separately.
           </div>
+          <div style={archiveStatusStyle}>
+            Archive signature check:{" "}
+            {archiveVerificationStatusText(archiveVerification)}
+            {archiveVerification?.details !== null &&
+            archiveVerification?.details !== undefined
+              ? ` · checked ${archiveVerification.details.checkedSignatures} · trusted ${archiveVerification.details.validSigners.length}/${archiveVerification.details.threshold}`
+              : ""}
+            .
+          </div>
+          {archiveVerification?.reason && (
+            <div style={submitMeta}>
+              Wallet archive check: {archiveVerification.reason}.
+            </div>
+          )}
+          {archiveVerification?.details !== null &&
+            archiveVerification?.details !== undefined &&
+            archiveVerification.details.issues.length > 0 && (
+              <ReceiptProofHashRow
+                label="Archive signature issue"
+                value={formatArchiveVerificationIssues(
+                  archiveVerification.details.issues,
+                )}
+              />
+            )}
+          {archiveVerification?.details !== null &&
+            archiveVerification?.details !== undefined &&
+            archiveVerification.details.validSigners.length > 0 && (
+              <ReceiptProofHashRow
+                label="Trusted archive signers"
+                value={archiveVerification.details.validSigners.join(", ")}
+              />
+            )}
           {proof.archiveProof.signatureDigest !== undefined && (
             <>
               <div style={submitMeta}>
                 Snapshot archive signature digest material is present; this is
-                not validator finality or wallet-side cryptographic verification.
+                not validator finality, and archive signature verification is
+                reported separately.
               </div>
               <ReceiptProofHashRow
                 label="Archive signature digest"
@@ -1147,8 +1194,7 @@ function MrvNoEvmReceiptProofTranscriptDetails({
                 {proof.archiveProof.coveringSnapshot.signatures.length > 0
                   ? `present (${proof.archiveProof.coveringSnapshot.signatures.length})`
                   : "absent"}
-                . The wallet has not cryptographically verified these archive
-                signatures.
+                . Archive signature verification is reported separately.
               </div>
               <div style={submitMeta}>
                 Snapshot height {proof.archiveProof.coveringSnapshot.snapshotHeight} ·
@@ -1329,6 +1375,37 @@ function receiptArchiveProofSourceText(
     case "indexerReceiptArchiveContentDigest":
       return "indexer receipt archive content digest";
   }
+}
+
+function archiveVerificationStatusText(
+  verification: WalletMrvNoEvmArchiveVerification | null,
+): string {
+  switch (verification?.status) {
+    case "verified":
+      return "wallet-verified trusted snapshot signatures";
+    case "mismatch":
+      return "trusted snapshot signature verification mismatch";
+    case "malformed":
+      return "archive signature material malformed";
+    case "config-invalid":
+      return "trusted archive signer config invalid";
+    case "unconfigured":
+    case undefined:
+      return "parsed, not wallet-verified";
+  }
+}
+
+function formatArchiveVerificationIssues(
+  issues: NonNullable<WalletMrvNoEvmArchiveVerification["details"]>["issues"],
+): string {
+  return issues
+    .slice(0, 3)
+    .map((issue) =>
+      issue.signerId === undefined
+        ? issue.message
+        : `${issue.message} (${issue.signerId})`,
+    )
+    .join("; ");
 }
 
 function formatSignerIndices(indices: number[]): string {
