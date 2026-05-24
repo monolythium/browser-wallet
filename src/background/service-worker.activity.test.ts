@@ -30,6 +30,7 @@ import {
   vi,
 } from "vitest";
 import { addressToTypedBech32 } from "@monolythium/core-sdk";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
 const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
@@ -105,7 +106,12 @@ const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
 const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
 const NO_EVM_RECEIPT_PROOF = {
   schema: "mono.no_evm_receipt_proof.v1",
+  proofKind: "boundedCacheTranscript",
   proofType: "canonicalReceiptsTranscript",
+  historySource: "liveBlockCache",
+  compactInclusionProof: null,
+  archiveProof: null,
+  missingProofMaterial: [],
   rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
   blockHash: "0x" + "1".repeat(64),
@@ -118,7 +124,79 @@ const NO_EVM_RECEIPT_PROOF = {
   txIndex: 1,
   receiptCount: 2,
   receiptTranscript: ["0x01", "0x02ff"],
+  targetReceiptBytes: null,
 } as const;
+
+const COMPACT_RECEIPT_BYTES = new Uint8Array([0x04, 0x05, 0x06, 0x07]);
+const COMPACT_RECEIPT_BYTES_HEX = mrvTestBytesToHex(COMPACT_RECEIPT_BYTES);
+const COMPACT_RECEIPT_HASH = mrvTestKeccakHex(COMPACT_RECEIPT_BYTES);
+const COMPACT_RECEIPT_LEAF_HASH = mrvTestCompactLeafHashHex(
+  COMPACT_RECEIPT_BYTES,
+  0,
+);
+const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF = {
+  schema: "mono.no_evm_receipt_proof.v1",
+  proofKind: "compactInclusion",
+  proofType: "canonicalReceiptInclusion",
+  historySource: "indexerReceiptArchive",
+  compactInclusionProof: {
+    schema: "mono.no_evm_receipt_compact_inclusion.v1",
+    treeAlgorithm: "binary-keccak-receipt-tree",
+    root: COMPACT_RECEIPT_LEAF_HASH,
+    leafHash: COMPACT_RECEIPT_LEAF_HASH,
+    siblingHashes: [],
+    pathSides: [],
+  },
+  archiveProof: {
+    schema: "mono.no_evm_receipt_archive_binding.v1",
+    source: "indexerReceiptArchiveContentDigest",
+    manifestHash: "0x" + "6".repeat(64),
+    contentHash: "0x" + "9".repeat(64),
+    signatures: [],
+  },
+  missingProofMaterial: [],
+  rootAlgorithm:
+    "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
+  receiptCodec: "bincode(protocore_evm::Receipt)",
+  blockHash: "0x" + "2".repeat(64),
+  txHash: SUBMITTED_TX_HASH,
+  receiptsRoot: COMPACT_RECEIPT_LEAF_HASH,
+  targetReceiptHash: COMPACT_RECEIPT_HASH,
+  blockHeight: 101,
+  txIndex: 0,
+  receiptCount: 1,
+  receiptTranscript: [],
+  targetReceiptBytes: COMPACT_RECEIPT_BYTES_HEX,
+} as const;
+
+function mrvTestCompactLeafHashHex(bytes: Uint8Array, txIndex: number): string {
+  const domain = new TextEncoder().encode("monolythium/v4.1/receipt_leaf/1");
+  const payload = new Uint8Array(domain.length + 8 + bytes.length);
+  let offset = 0;
+  payload.set(domain, offset);
+  offset += domain.length;
+  mrvTestWriteU32Le(payload, offset, txIndex);
+  offset += 4;
+  mrvTestWriteU32Le(payload, offset, bytes.length);
+  offset += 4;
+  payload.set(bytes, offset);
+  return mrvTestKeccakHex(payload);
+}
+
+function mrvTestWriteU32Le(target: Uint8Array, offset: number, value: number): void {
+  target[offset] = value & 0xff;
+  target[offset + 1] = (value >>> 8) & 0xff;
+  target[offset + 2] = (value >>> 16) & 0xff;
+  target[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function mrvTestKeccakHex(bytes: Uint8Array): string {
+  return mrvTestBytesToHex(keccak_256(bytes));
+}
+
+function mrvTestBytesToHex(bytes: Uint8Array): string {
+  return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
 let submitFailure: (Error & { code?: number }) | null = null;
 
 // Networks: only the bits the handlers touch. Sprintnet chain id is
@@ -1900,6 +1978,57 @@ describe("wallet-mrv-receipt-status", () => {
         transcriptCount: 2,
         computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
         computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
+      },
+    });
+  });
+
+  it("accepts compact no-EVM receipt proofs from the indexer receipt archive", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmProof: unknown;
+          noEvmProofStatus: string;
+          noEvmProofVerification: unknown;
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toMatchObject({
+      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+      noEvmProofStatus: "proof-verified",
+      noEvmProofVerification: {
+        status: "verified",
+        proofKind: "compactInclusion",
+        receiptCountMatches: true,
+        receiptsRootMatches: true,
+        targetReceiptHashMatches: true,
+        compactLeafHashMatches: true,
+        compactPathMatches: true,
+        receiptCount: 1,
+        transcriptCount: 0,
+        computedReceiptsRoot: COMPACT_RECEIPT_LEAF_HASH,
+        computedTargetReceiptHash: COMPACT_RECEIPT_HASH,
+        computedCompactLeafHash: COMPACT_RECEIPT_LEAF_HASH,
       },
     });
   });
