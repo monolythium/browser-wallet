@@ -109,6 +109,16 @@ const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
 const ARCHIVE_PROOF_SIGNATURE =
   "mono.snapshot.sig.v1:0x" + "d".repeat(40) + ":0x1234abcd";
 const ARCHIVE_SIGNATURE_DIGEST = "0x" + "e".repeat(64);
+const ARCHIVE_COVERING_SNAPSHOT = {
+  snapshotHeight: 101,
+  manifestHash: "0x" + "a".repeat(64),
+  signatureDigest: "0x" + "b".repeat(64),
+  contentHash: "0x" + "c".repeat(64),
+  checkpointContentHash: "0x" + "9".repeat(64),
+  checkpointFrom: 0,
+  checkpointTo: 101,
+  signatures: [ARCHIVE_PROOF_SIGNATURE],
+};
 const FINALITY_CLUSTER_PUBLIC_KEY = "0x" + "1".repeat(96);
 const MISSING_FINALITY_PROOF_MATERIAL =
   "BLS aggregate finality certificate for block round";
@@ -2293,6 +2303,52 @@ describe("wallet-mrv-receipt-status", () => {
     expect(r.receipt.nativeReceipt?.noEvmProofStatus).toBe("proof-verified");
   });
 
+  it("preserves a valid archive proof covering snapshot without claiming archive signature verification", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          coveringSnapshot: ARCHIVE_COVERING_SNAPSHOT,
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmProof: {
+            archiveProof: {
+              coveringSnapshot?: typeof ARCHIVE_COVERING_SNAPSHOT;
+            } | null;
+          };
+          noEvmProofStatus: string;
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt?.noEvmProof.archiveProof?.coveringSnapshot).toEqual(
+      ARCHIVE_COVERING_SNAPSHOT,
+    );
+    expect(r.receipt.nativeReceipt?.noEvmProofStatus).toBe("proof-verified");
+  });
+
   it.each([
     ["absent", undefined],
     ["null", null],
@@ -2429,6 +2485,62 @@ describe("wallet-mrv-receipt-status", () => {
         archiveProof: {
           ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
           signatures: [signature],
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: null;
+        nativeReceiptError?: { reason: string; method?: string };
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toBeNull();
+    expect(r.receipt.nativeReceiptError).toEqual({
+      reason: "lyth_nativeReceipt returned malformed native receipt",
+      method: "lyth_nativeReceipt",
+      via: "mock-operator",
+    });
+  });
+
+  it.each([
+    ["snapshotHeight", { snapshotHeight: "101" }],
+    ["manifestHash", { manifestHash: "0x" + "a".repeat(62) }],
+    ["signatureDigest", { signatureDigest: null }],
+    ["contentHash", { contentHash: "0x" + "c".repeat(63) + "z" }],
+    ["checkpointContentHash", { checkpointContentHash: "0x" + "8".repeat(64) }],
+    ["checkpointFrom", { checkpointFrom: 1 }],
+    ["checkpointTo beyond snapshotHeight", { checkpointTo: 102 }],
+    ["checkpointTo blockHeight mismatch", { checkpointTo: 100 }],
+    ["signatures", { signatures: [ "mono.snapshot.sig.v1:0x" + "d".repeat(40) + ":0x" ] }],
+    ["empty signatures", { signatures: [] }],
+  ])("rejects archive covering snapshot with malformed %s", async (_case, patch) => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          coveringSnapshot: {
+            ...ARCHIVE_COVERING_SNAPSHOT,
+            ...patch,
+          },
         },
       },
     };

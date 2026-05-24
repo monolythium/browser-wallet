@@ -305,6 +305,18 @@ interface WalletMrvNoEvmArchiveProof {
   contentHash: string;
   signatureDigest?: string;
   signatures: string[];
+  coveringSnapshot?: WalletMrvNoEvmArchiveCoveringSnapshot;
+}
+
+interface WalletMrvNoEvmArchiveCoveringSnapshot {
+  snapshotHeight: number;
+  manifestHash: string;
+  signatureDigest: string;
+  contentHash: string;
+  checkpointContentHash: string;
+  checkpointFrom: number;
+  checkpointTo: number;
+  signatures: string[];
 }
 
 interface WalletMrvNoEvmFinalityCertificate {
@@ -1916,7 +1928,7 @@ function parseMrvNoEvmReceiptProofTranscript(
   const archiveProof =
     r.archiveProof === null || r.archiveProof === undefined
       ? null
-      : parseMrvArchiveProof(r.archiveProof);
+      : parseMrvArchiveProof(r.archiveProof, blockHeight);
   const targetReceiptBytes = parseMrvReceiptBytesHex(r.targetReceiptBytes);
   const receiptTranscript = parseOptionalMrvReceiptTranscript(r.receiptTranscript);
   if (
@@ -2055,7 +2067,10 @@ function parseMrvCompactInclusionProof(
   };
 }
 
-function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
+function parseMrvArchiveProof(
+  raw: unknown,
+  blockHeight: number,
+): WalletMrvNoEvmArchiveProof | null {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (r.schema !== "mono.no_evm_receipt_archive_binding.v1") return null;
@@ -2067,11 +2082,20 @@ function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
       ? undefined
       : parseMrvReceiptHash(r.signatureDigest);
   const signatures = parseMrvArchiveProofSignatures(r.signatures);
+  const coveringSnapshot =
+    r.coveringSnapshot === null || r.coveringSnapshot === undefined
+      ? undefined
+      : parseMrvArchiveCoveringSnapshot(
+          r.coveringSnapshot,
+          contentHash,
+          blockHeight,
+        );
   if (
     manifestHash === null ||
     contentHash === null ||
     signatureDigest === null ||
-    signatures === null
+    signatures === null ||
+    coveringSnapshot === null
   ) {
     return null;
   }
@@ -2081,6 +2105,52 @@ function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
     manifestHash,
     contentHash,
     ...(signatureDigest === undefined ? {} : { signatureDigest }),
+    signatures,
+    ...(coveringSnapshot === undefined ? {} : { coveringSnapshot }),
+  };
+}
+
+function parseMrvArchiveCoveringSnapshot(
+  raw: unknown,
+  archiveContentHash: string | null,
+  blockHeight: number,
+): WalletMrvNoEvmArchiveCoveringSnapshot | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const snapshotHeight = parseNonNegativeSafeInteger(r.snapshotHeight);
+  const manifestHash = parseMrvReceiptHash(r.manifestHash);
+  const signatureDigest = parseMrvReceiptHash(r.signatureDigest);
+  const contentHash = parseMrvReceiptHash(r.contentHash);
+  const checkpointContentHash = parseMrvReceiptHash(r.checkpointContentHash);
+  const checkpointFrom = parseNonNegativeSafeInteger(r.checkpointFrom);
+  const checkpointTo = parseNonNegativeSafeInteger(r.checkpointTo);
+  const signatures = parseMrvArchiveProofSignatures(r.signatures);
+  if (
+    snapshotHeight === null ||
+    manifestHash === null ||
+    signatureDigest === null ||
+    contentHash === null ||
+    checkpointContentHash === null ||
+    checkpointFrom === null ||
+    checkpointTo === null ||
+    signatures === null ||
+    signatures.length === 0 ||
+    checkpointFrom !== 0 ||
+    checkpointTo > snapshotHeight ||
+    checkpointTo !== blockHeight ||
+    archiveContentHash === null ||
+    !sameMrvHash(checkpointContentHash, archiveContentHash)
+  ) {
+    return null;
+  }
+  return {
+    snapshotHeight,
+    manifestHash,
+    signatureDigest,
+    contentHash,
+    checkpointContentHash,
+    checkpointFrom,
+    checkpointTo,
     signatures,
   };
 }
