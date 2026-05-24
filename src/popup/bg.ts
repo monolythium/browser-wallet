@@ -962,9 +962,40 @@ export interface WalletMrvNativeReceiptEvidence {
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
 }
 
-export interface WalletMrvNoEvmReceiptProofTranscript {
+export type WalletMrvNoEvmReceiptProofKind =
+  | "boundedCacheTranscript"
+  | "compactInclusion";
+
+export type WalletMrvNoEvmReceiptProofHistorySource =
+  | "legacyUnspecified"
+  | "liveBlockCache"
+  | "indexerReceiptArchive";
+
+export interface WalletMrvNoEvmCompactInclusionProof {
+  schema: "mono.no_evm_receipt_compact_inclusion.v1";
+  treeAlgorithm: "binary-keccak-receipt-tree";
+  root: string;
+  leafHash: string;
+  siblingHashes: string[];
+  pathSides: boolean[];
+}
+
+export interface WalletMrvNoEvmArchiveProof {
+  schema: "mono.no_evm_receipt_archive_binding.v1";
+  source: "indexerReceiptArchiveContentDigest";
+  manifestHash: string;
+  contentHash: string;
+  signatures: unknown[];
+}
+
+export interface WalletMrvNoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
-  proofType: "canonicalReceiptsTranscript";
+  proofKind: WalletMrvNoEvmReceiptProofKind;
+  proofType: "canonicalReceiptsTranscript" | "canonicalReceiptInclusion";
+  historySource: WalletMrvNoEvmReceiptProofHistorySource;
+  compactInclusionProof: WalletMrvNoEvmCompactInclusionProof | null;
+  archiveProof: WalletMrvNoEvmArchiveProof | null;
+  missingProofMaterial: string[];
   rootAlgorithm: string;
   receiptCodec: string;
   blockHash: string;
@@ -975,22 +1006,53 @@ export interface WalletMrvNoEvmReceiptProofTranscript {
   txIndex: number;
   receiptCount: number;
   receiptTranscript: string[];
+  targetReceiptBytes: string | null;
 }
+
+export interface WalletMrvNoEvmBoundedReceiptProofTranscript
+  extends WalletMrvNoEvmReceiptProofBase {
+  proofKind: "boundedCacheTranscript";
+  proofType: "canonicalReceiptsTranscript";
+  historySource: "legacyUnspecified" | "liveBlockCache";
+  compactInclusionProof: null;
+  archiveProof: null;
+  targetReceiptBytes: null;
+}
+
+export interface WalletMrvNoEvmCompactReceiptProofTranscript
+  extends WalletMrvNoEvmReceiptProofBase {
+  proofKind: "compactInclusion";
+  proofType: "canonicalReceiptInclusion";
+  historySource: "liveBlockCache" | "indexerReceiptArchive";
+  compactInclusionProof: WalletMrvNoEvmCompactInclusionProof;
+  archiveProof: WalletMrvNoEvmArchiveProof | null;
+  targetReceiptBytes: string;
+}
+
+export type WalletMrvNoEvmReceiptProofTranscript =
+  | WalletMrvNoEvmBoundedReceiptProofTranscript
+  | WalletMrvNoEvmCompactReceiptProofTranscript;
 
 export type WalletMrvNoEvmReceiptProofStatus =
   | "missing"
   | "transcript-verified"
-  | "transcript-mismatch";
+  | "transcript-mismatch"
+  | "proof-verified"
+  | "proof-mismatch";
 
 export interface WalletMrvNoEvmReceiptProofVerification {
   status: "verified" | "mismatch";
+  proofKind: WalletMrvNoEvmReceiptProofKind;
   receiptCountMatches: boolean;
   receiptsRootMatches: boolean;
   targetReceiptHashMatches: boolean;
+  compactLeafHashMatches?: boolean;
+  compactPathMatches?: boolean;
   receiptCount: number;
   transcriptCount: number;
   computedReceiptsRoot: string;
   computedTargetReceiptHash: string;
+  computedCompactLeafHash?: string;
 }
 
 export interface WalletMrvNativeReceiptEvidenceError {

@@ -1054,34 +1054,72 @@ function MrvNoEvmReceiptProofTranscriptDetails({
   verification: WalletMrvNoEvmReceiptProofVerification | null;
 }) {
   const isVerified = verification?.status === "verified";
+  const isCompact = proof.proofKind === "compactInclusion";
+  const proofLabel = isCompact
+    ? "compact inclusion proof"
+    : "receipt-proof transcript";
   const statusText =
     verification === null
-      ? "Transcript self-check unavailable."
+      ? "Receipt proof self-check unavailable."
       : isVerified
-        ? [
-            "Transcript self-check verified:",
-            "count, receipts root, and target receipt hash match.",
-          ].join(" ")
-        : "Transcript self-check mismatch: recomputed transcript values differ.";
+        ? isCompact
+          ? [
+              "Compact inclusion self-check verified:",
+              "target receipt, leaf, path, and receipts root match.",
+            ].join(" ")
+          : [
+              "Transcript self-check verified:",
+              "count, receipts root, and target receipt hash match.",
+            ].join(" ")
+        : isCompact
+          ? "Compact inclusion self-check mismatch: recomputed path values differ."
+          : "Transcript self-check mismatch: recomputed transcript values differ.";
+  const sourceText = receiptProofHistorySourceText(proof);
+  const targetBytesLength =
+    proof.targetReceiptBytes === null
+      ? null
+      : Math.max(0, (proof.targetReceiptBytes.length - 2) / 2);
 
   return (
     <div
-      aria-label="No-EVM receipt-proof transcript"
+      aria-label="No-EVM receipt proof"
       style={receiptProofDetails}
     >
       <div style={submitMeta}>
-        No-EVM receipt-proof transcript present; bounded receipt evidence only.
+        No-EVM {proofLabel} present;{" "}
+        {isCompact ? "target-only receipt evidence" : "bounded receipt evidence"}{" "}
+        only.
       </div>
       <div style={isVerified ? receiptProofVerifiedMeta : receiptProofMismatchMeta}>
         {statusText}
       </div>
       <div style={submitMeta}>
-        {proof.proofType} · {proof.rootAlgorithm} · {proof.receiptCodec}
+        Source: {sourceText}. Validator finality is not established here.
+      </div>
+      {proof.archiveProof !== null && (
+        <div style={submitMeta}>
+          Archive binding: {receiptArchiveProofSourceText(proof.archiveProof.source)}.
+          Archive signatures{" "}
+          {proof.archiveProof.signatures.length > 0
+            ? `present (${proof.archiveProof.signatures.length})`
+            : "absent"}
+          ; validator finality is not established here.
+        </div>
+      )}
+      <div style={submitMeta}>
+        {proof.proofKind} · {proof.proofType} · {proof.rootAlgorithm} ·{" "}
+        {proof.receiptCodec}
       </div>
       <div style={submitMeta}>
         block {proof.blockHeight} · txIndex {proof.txIndex} · receipts{" "}
         {proof.receiptCount} · transcript blobs {proof.receiptTranscript.length}
+        {targetBytesLength !== null ? ` · target bytes ${targetBytesLength}` : ""}
       </div>
+      {proof.missingProofMaterial.length > 0 && (
+        <div style={submitMeta}>
+          Missing proof material: {proof.missingProofMaterial.join("; ")}
+        </div>
+      )}
       <ReceiptProofHashRow label="Block hash" value={proof.blockHash} />
       <ReceiptProofHashRow label="Tx hash" value={proof.txHash} />
       <ReceiptProofHashRow label="Receipts root" value={proof.receiptsRoot} />
@@ -1089,13 +1127,27 @@ function MrvNoEvmReceiptProofTranscriptDetails({
         label="Target receipt"
         value={proof.targetReceiptHash}
       />
+      {proof.compactInclusionProof !== null && (
+        <>
+          <ReceiptProofHashRow
+            label="Compact root"
+            value={proof.compactInclusionProof.root}
+          />
+          <ReceiptProofHashRow
+            label="Compact leaf"
+            value={proof.compactInclusionProof.leafHash}
+          />
+        </>
+      )}
       {verification !== null && (
         <>
           <ReceiptProofHashRow
-            label="Count check"
+            label={isCompact ? "Index check" : "Count check"}
             value={
               verification.receiptCountMatches
-                ? "matches"
+                ? isCompact
+                  ? "in bounds"
+                  : "matches"
                 : `declared ${verification.receiptCount} / decoded ${verification.transcriptCount}`
             }
           />
@@ -1121,10 +1173,52 @@ function MrvNoEvmReceiptProofTranscriptDetails({
               value={verification.computedTargetReceiptHash}
             />
           )}
+          {isCompact && verification.compactLeafHashMatches !== undefined && (
+            <ReceiptProofHashRow
+              label="Leaf check"
+              value={verification.compactLeafHashMatches ? "matches" : "mismatch"}
+            />
+          )}
+          {isCompact && verification.compactPathMatches !== undefined && (
+            <ReceiptProofHashRow
+              label="Path check"
+              value={verification.compactPathMatches ? "matches" : "mismatch"}
+            />
+          )}
+          {isCompact &&
+            verification.compactLeafHashMatches === false &&
+            verification.computedCompactLeafHash !== undefined && (
+              <ReceiptProofHashRow
+                label="Computed leaf"
+                value={verification.computedCompactLeafHash}
+              />
+            )}
         </>
       )}
     </div>
   );
+}
+
+function receiptProofHistorySourceText(
+  proof: WalletMrvNoEvmReceiptProofTranscript,
+): string {
+  switch (proof.historySource) {
+    case "indexerReceiptArchive":
+      return "indexer receipt archive";
+    case "liveBlockCache":
+      return "live block cache";
+    case "legacyUnspecified":
+      return "legacy or unspecified source";
+  }
+}
+
+function receiptArchiveProofSourceText(
+  source: NonNullable<WalletMrvNoEvmReceiptProofTranscript["archiveProof"]>["source"],
+): string {
+  switch (source) {
+    case "indexerReceiptArchiveContentDigest":
+      return "indexer receipt archive content digest";
+  }
 }
 
 function ReceiptProofHashRow({ label, value }: { label: string; value: string }) {
