@@ -960,6 +960,7 @@ export interface WalletMrvNativeReceiptEvidence {
   noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
   noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
+  noEvmArchiveVerification: WalletMrvNoEvmArchiveVerification | null;
   noEvmFinalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }
 
@@ -1090,6 +1091,38 @@ export interface WalletMrvNoEvmFinalityTrustConfig {
   clusterPublicKey: string;
   committeeSize: number;
   threshold: number;
+}
+
+export interface WalletMrvNoEvmArchiveSignatureVerificationIssue {
+  code:
+    | "missing_signature_digest"
+    | "threshold_not_met"
+    | "duplicate_signer"
+    | "untrusted_signer"
+    | "invalid_signature"
+    | "invalid_trusted_public_key";
+  message: string;
+  signatureIndex?: number;
+  signerId?: string;
+}
+
+export interface WalletMrvNoEvmArchiveSignatureVerification {
+  verified: boolean;
+  threshold: number;
+  validSigners: string[];
+  checkedSignatures: number;
+  issues: WalletMrvNoEvmArchiveSignatureVerificationIssue[];
+}
+
+export interface WalletMrvNoEvmArchiveVerification {
+  status:
+    | "verified"
+    | "unconfigured"
+    | "mismatch"
+    | "malformed"
+    | "config-invalid";
+  reason: string | null;
+  details: WalletMrvNoEvmArchiveSignatureVerification | null;
 }
 
 export interface WalletMrvNoEvmBlsFinalityVerification {
