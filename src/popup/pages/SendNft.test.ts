@@ -39,4 +39,22 @@ describe("SendNft native fee display math", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not fall back to compatibility fee fields when structured fee is malformed", () => {
+    expect(
+      computeEstimatedNftFeeLythoshi({
+        ...fee,
+        structuredFee: {
+          total_lythoshi: "2000000",
+          total_lyth: "0.02",
+          cycles_used: 250_000,
+          base_price_per_cycle_lythoshi: "3",
+          state_io_units: 0,
+          state_io_price_per_unit_lythoshi: "0",
+          priority_tip_lythoshi: "1250000",
+          gas: "0x3d090",
+        },
+      }),
+    ).toBeNull();
+  });
 });

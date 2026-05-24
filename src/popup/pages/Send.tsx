@@ -44,6 +44,19 @@ import {
   type ActivityCache,
   type PendingActivityCache,
 } from "../../shared/activity";
+import {
+  FEE_MULTIPLIER_BPS_BASE,
+  LYTHOSHI_PER_LYTH,
+  NATIVE_LYTH_DECIMALS,
+  computeNativeFeeFromBaseAndPriority,
+  formatExecutionUnits,
+  formatLythoshiPerExecutionUnit,
+  formatNativeLythAmount,
+  lythoshiToLythString,
+  nativeFeeDisplayFromFeeSuggestion,
+  parseNativeHexQuantity,
+  scaleByBps,
+} from "../../shared/native-fee-display";
 
 interface SendProps {
   account: Account;
@@ -71,10 +84,16 @@ type Step = "form" | "preview" | "sending" | "success" | "error";
 
 type FeeTier = "slow" | "normal" | "fast";
 
-const TIER_MULTIPLIERS: Record<FeeTier, number> = {
-  slow: 0.5,
-  normal: 1,
-  fast: 2,
+const TIER_MULTIPLIERS_BPS: Record<FeeTier, bigint> = {
+  slow: 5_000n,
+  normal: FEE_MULTIPLIER_BPS_BASE,
+  fast: 20_000n,
+};
+
+const TIER_MULTIPLIER_TEXT: Record<FeeTier, string> = {
+  slow: "0.5",
+  normal: "1",
+  fast: "2",
 };
 
 const TIER_LABELS: Record<FeeTier, string> = {
@@ -160,8 +179,24 @@ export function Send({
     };
   }, [account.addr, chainId]);
 
-  const tierMultiplier = TIER_MULTIPLIERS[tier];
-  const estimatedFeeLythoshi = computeEstimatedFeeLythoshi(feeSuggestion, tierMultiplier);
+  const tierMultiplierBps = TIER_MULTIPLIERS_BPS[tier];
+  const estimatedFeeResult = useMemo(
+    () =>
+      feeSuggestion === null
+        ? null
+        : nativeFeeDisplayFromFeeSuggestion(feeSuggestion, {
+            fallbackExecutionUnitsHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+            priorityMultiplierBps: tierMultiplierBps,
+          }),
+    [feeSuggestion, tierMultiplierBps],
+  );
+  const estimatedFeeDisplay =
+    estimatedFeeResult?.ok === true ? estimatedFeeResult.display : null;
+  const feeDisplayError =
+    estimatedFeeResult !== null && estimatedFeeResult.ok === false
+      ? estimatedFeeResult.failures.join("; ")
+      : null;
+  const estimatedFeeLythoshi = estimatedFeeDisplay?.totalLythoshi ?? null;
 
   const parsedRecipient = useMemo(() => validateToAddress(to), [to]);
   const nameResolution = useNameForwardResolve(parsedRecipient.monoName);
@@ -194,7 +229,7 @@ export function Send({
     amountError === null &&
     amountStr.length > 0 &&
     parseFloat(amountStr) > 0 &&
-    feeSuggestion !== null &&
+    estimatedFeeLythoshi !== null &&
     !insufficientFunds;
 
   const handlePaste = async () => {
@@ -589,7 +624,7 @@ export function Send({
               marginTop: 4,
             }}
           >
-            {(Object.keys(TIER_MULTIPLIERS) as FeeTier[]).map((t) => {
+            {(Object.keys(TIER_MULTIPLIERS_BPS) as FeeTier[]).map((t) => {
               const active = t === tier;
               return (
                 <button
@@ -627,6 +662,10 @@ export function Send({
             >
               Loading fee…
             </div>
+          ) : feeDisplayError !== null ? (
+            <div style={{ ...inlineError, marginTop: 8 }}>
+              Malformed fee data: {feeDisplayError}
+            </div>
           ) : (
             <div
               style={{
@@ -639,9 +678,7 @@ export function Send({
               <div style={{ color: "var(--fg-200)" }}>
                 Estimated fee:{" "}
                 <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {estimatedFeeLythoshi !== null
-                    ? formatNativeLythAmount(estimatedFeeLythoshi)
-                    : "—"}
+                  {estimatedFeeDisplay?.defaultText ?? "—"}
                 </span>
               </div>
               <details style={{ marginTop: 4 }}>
@@ -655,35 +692,45 @@ export function Send({
                 >
                   Low-level compatibility fee details
                 </summary>
-                <div style={{ marginTop: 6 }}>
-                  Priority price:{" "}
-                  <span style={{ fontFamily: "var(--f-mono)" }}>
-                    {scaleLythoshiPerExecutionUnit(
-                      feeSuggestion.maxPriorityFeePerGas,
-                      tierMultiplier,
-                    )}{" "}
-                    lythoshi / execution unit
-                  </span>{" "}
-                  <span style={{ color: "var(--fg-500)" }}>
-                    ({TIER_LABELS[tier]} · {tierMultiplier}×)
-                  </span>
-                </div>
-                <div>
-                  Base price:{" "}
-                  <span style={{ fontFamily: "var(--f-mono)" }}>
-                    {formatLythoshiIntegerFromHex(feeSuggestion.baseFeePerGas)}{" "}
-                    lythoshi / execution unit
-                  </span>
-                </div>
-                <div>
-                  Execution units:{" "}
-                  <span style={{ fontFamily: "var(--f-mono)" }}>
-                    {formatExecutionUnits(
-                      feeSuggestion.gasLimit ??
-                        FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
-                    )}
-                  </span>
-                </div>
+                {estimatedFeeDisplay?.source === "structured" ? (
+                  estimatedFeeDisplay.detailTexts.map((detail) => (
+                    <div key={detail} style={{ marginTop: 6 }}>
+                      {detail}
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    <div style={{ marginTop: 6 }}>
+                      Priority price:{" "}
+                      <span style={{ fontFamily: "var(--f-mono)" }}>
+                        {scaleLythoshiPerExecutionUnit(
+                          feeSuggestion.maxPriorityFeePerGas,
+                          tierMultiplierBps,
+                        )}{" "}
+                        lythoshi / execution unit
+                      </span>{" "}
+                      <span style={{ color: "var(--fg-500)" }}>
+                        ({TIER_LABELS[tier]} · {TIER_MULTIPLIER_TEXT[tier]}×)
+                      </span>
+                    </div>
+                    <div>
+                      Base price:{" "}
+                      <span style={{ fontFamily: "var(--f-mono)" }}>
+                        {formatLythoshiPerExecutionUnit(feeSuggestion.baseFeePerGas)}{" "}
+                        lythoshi / execution unit
+                      </span>
+                    </div>
+                    <div>
+                      Execution units:{" "}
+                      <span style={{ fontFamily: "var(--f-mono)" }}>
+                        {formatExecutionUnits(
+                          feeSuggestion.gasLimit ??
+                            FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+                        )}
+                      </span>
+                    </div>
+                  </>
+                )}
               </details>
             </div>
           )}
@@ -1157,9 +1204,6 @@ export function validateAmount(s: string): string | null {
 
 // ---- amount conversion ----
 
-const NATIVE_LYTH_DECIMALS = 8;
-const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
-
 /**
  * Convert a decimal LYTH amount string to lythoshi (`0x` hex). Precision-safe —
  * splits on `.` and builds the BigInt from integer + zero-padded fractional
@@ -1187,83 +1231,35 @@ function safeLythToLythoshiBigInt(amountStr: string): bigint {
   return intBig * LYTHOSHI_PER_LYTH + fracBig;
 }
 
-/** lythoshi → decimal LYTH string, trimming trailing zeros and the decimal point. */
-function lythoshiToLythString(lythoshi: bigint): string {
-  if (lythoshi < 0n) return "0";
-  const intPart = lythoshi / LYTHOSHI_PER_LYTH;
-  const fracPart = lythoshi % LYTHOSHI_PER_LYTH;
-  if (fracPart === 0n) return intPart.toString();
-  const fracStr = fracPart
-    .toString()
-    .padStart(NATIVE_LYTH_DECIMALS, "0")
-    .replace(/0+$/, "");
-  return fracStr.length === 0
-    ? intPart.toString()
-    : `${intPart.toString()}.${fracStr}`;
-}
-
-function formatNativeLythAmount(lythoshi: bigint): string {
-  return `${lythoshiToLythString(lythoshi)} LYTH`;
-}
-
 // ---- low-level fee detail display ----
 
-/** Format a hex lythoshi value as a detail-surface integer string. */
-function formatLythoshiIntegerFromHex(lythoshiHex: string): string {
-  let lythoshi: bigint;
-  try {
-    lythoshi = BigInt(lythoshiHex);
-  } catch {
-    return "?";
-  }
-  return lythoshi.toString();
-}
-
-function formatExecutionUnits(executionUnitsHex: string): string {
-  try {
-    return BigInt(executionUnitsHex).toString();
-  } catch {
-    return "?";
-  }
-}
-
-/** Multiply a hex lythoshi priority price by a tier multiplier. */
+/** Multiply a hex lythoshi priority price by a basis-point tier multiplier. */
 function scaleLythoshiPerExecutionUnit(
   lythoshiHex: string,
-  multiplier: number,
+  multiplierBps: bigint,
 ): string {
-  let lythoshi: bigint;
-  try {
-    lythoshi = BigInt(lythoshiHex);
-  } catch {
+  const lythoshi = parseNativeHexQuantity(lythoshiHex);
+  if (lythoshi === null) {
     return "?";
   }
-  const milli = BigInt(Math.round(multiplier * 1000));
-  return ((lythoshi * milli) / 1000n).toString();
+  return scaleByBps(lythoshi, multiplierBps).toString();
 }
 
 // ---- fee math ----
 
 function computeEstimatedFeeLythoshi(
   fee: FeeSuggestion | null,
-  multiplier: number,
+  priorityMultiplierBps: bigint,
 ): bigint | null {
   if (!fee) return null;
-  let priority: bigint;
-  let base: bigint;
-  let executionUnits: bigint;
-  try {
-    priority = BigInt(fee.maxPriorityFeePerGas);
-    base = BigInt(fee.baseFeePerGas);
-    executionUnits = BigInt(
-      fee.gasLimit ?? FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
-    );
-  } catch {
-    return null;
-  }
-  const milli = BigInt(Math.round(multiplier * 1000));
-  const scaledPriority = (priority * milli) / 1000n;
-  return (scaledPriority + base) * executionUnits;
+  return computeNativeFeeFromBaseAndPriority({
+    executionUnitsHex: fee.gasLimit,
+    fallbackExecutionUnitsHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+    basePricePerExecutionUnitHex: fee.baseFeePerGas,
+    priorityPricePerExecutionUnitHex: fee.maxPriorityFeePerGas,
+    priorityMultiplierBps,
+    ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
+  });
 }
 
 /** @deprecated IPC compatibility name; use `lythToLythoshiHex`. */

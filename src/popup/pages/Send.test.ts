@@ -188,9 +188,9 @@ describe("native LYTH fee display math", () => {
   };
 
   it("computes estimated fees in lythoshi from price-per-execution-unit fields", () => {
-    expect(computeEstimatedFeeLythoshi(fee, 0.5)).toBe(50n);
-    expect(computeEstimatedFeeLythoshi(fee, 1)).toBe(80n);
-    expect(computeEstimatedFeeLythoshi(fee, 2)).toBe(130n);
+    expect(computeEstimatedFeeLythoshi(fee, 5_000n)).toBe(50n);
+    expect(computeEstimatedFeeLythoshi(fee, 10_000n)).toBe(80n);
+    expect(computeEstimatedFeeLythoshi(fee, 20_000n)).toBe(130n);
   });
 
   it("uses the native-transfer fallback execution-unit limit when omitted", () => {
@@ -202,9 +202,30 @@ describe("native LYTH fee display math", () => {
           baseFeePerGas: "0x2",
           gasLimit: null,
         },
-        1,
+        10_000n,
       ),
     ).toBe(63_000n);
+  });
+
+  it("does not fall back to compatibility fee fields when structured fee is malformed", () => {
+    expect(
+      computeEstimatedFeeLythoshi(
+        {
+          ...fee,
+          structuredFee: {
+            total_lythoshi: "80",
+            total_lyth: "0.0000008",
+            cycles_used: 10,
+            base_price_per_cycle_lythoshi: "3",
+            state_io_units: 0,
+            state_io_price_per_unit_lythoshi: "0",
+            priority_tip_lythoshi: "50",
+            gasPrice: "0x5",
+          },
+        },
+        10_000n,
+      ),
+    ).toBeNull();
   });
 
   it("renders the default fee quote as one LYTH amount without gwei wording", () => {

@@ -72,6 +72,10 @@ export interface SendTxView {
   estimatedGas: string | null;
   /** Node minimum lythoshi-per-execution-unit price, hex quantity, from `eth_gasPrice`. */
   gasPrice: string | null;
+  /** Optional ADR-0039 native structured fee object. When present, popup fee
+   * display validates it strictly instead of falling back to compatibility
+   * `gas*` fields. */
+  structuredFee?: unknown;
   /** Sender's pending nonce, hex quantity. */
   nonce: string | null;
   /**
