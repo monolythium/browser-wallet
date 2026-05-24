@@ -11,6 +11,7 @@ import {
   type NativeMarketReplayReadinessState,
 } from "./MrvNative.js";
 import type {
+  WalletMrvNoEvmCompactReceiptProofTranscript,
   WalletMrvNativeSubmissionPlan,
   WalletMrvNoEvmReceiptProofTranscript,
   WalletMrvNoEvmReceiptProofVerification,
@@ -31,7 +32,12 @@ const SUBMITTED_TX_HASH = `0x${"a".repeat(64)}`;
 const RECEIPT_COMMITMENT = `0x${"c".repeat(64)}`;
 const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   schema: "mono.no_evm_receipt_proof.v1",
+  proofKind: "boundedCacheTranscript",
   proofType: "canonicalReceiptsTranscript",
+  historySource: "liveBlockCache",
+  compactInclusionProof: null,
+  archiveProof: null,
+  missingProofMaterial: [],
   rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
   blockHash: `0x${"1".repeat(64)}`,
@@ -44,9 +50,11 @@ const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   txIndex: 1,
   receiptCount: 2,
   receiptTranscript: ["0x01", "0x02ff"],
+  targetReceiptBytes: null,
 };
 const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification = {
   status: "verified",
+  proofKind: "boundedCacheTranscript",
   receiptCountMatches: true,
   receiptsRootMatches: true,
   targetReceiptHashMatches: true,
@@ -54,6 +62,56 @@ const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification 
   transcriptCount: 2,
   computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
   computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
+};
+const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmCompactReceiptProofTranscript = {
+  schema: "mono.no_evm_receipt_proof.v1",
+  proofKind: "compactInclusion",
+  proofType: "canonicalReceiptInclusion",
+  historySource: "indexerReceiptArchive",
+  compactInclusionProof: {
+    schema: "mono.no_evm_receipt_compact_inclusion.v1",
+    treeAlgorithm: "binary-keccak-receipt-tree",
+    root: `0x${"7".repeat(64)}`,
+    leafHash: `0x${"7".repeat(64)}`,
+    siblingHashes: [],
+    pathSides: [],
+  },
+  archiveProof: {
+    schema: "mono.no_evm_receipt_archive_binding.v1",
+    source: "indexerReceiptArchiveContentDigest",
+    manifestHash: `0x${"6".repeat(64)}`,
+    contentHash: `0x${"9".repeat(64)}`,
+    signatures: [],
+  },
+  missingProofMaterial: [],
+  rootAlgorithm:
+    "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
+  receiptCodec: "bincode(protocore_evm::Receipt)",
+  blockHash: `0x${"2".repeat(64)}`,
+  txHash: SUBMITTED_TX_HASH,
+  receiptsRoot: `0x${"7".repeat(64)}`,
+  targetReceiptHash: `0x${"8".repeat(64)}`,
+  blockHeight: 101,
+  txIndex: 0,
+  receiptCount: 1,
+  receiptTranscript: [],
+  targetReceiptBytes: "0x04050607",
+};
+const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification = {
+  status: "verified",
+  proofKind: "compactInclusion",
+  receiptCountMatches: true,
+  receiptsRootMatches: true,
+  targetReceiptHashMatches: true,
+  compactLeafHashMatches: true,
+  compactPathMatches: true,
+  receiptCount: 1,
+  transcriptCount: 0,
+  computedReceiptsRoot: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.receiptsRoot,
+  computedTargetReceiptHash:
+    INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.targetReceiptHash,
+  computedCompactLeafHash:
+    INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.compactInclusionProof.leafHash,
 };
 const MARKET_ID = `0x${"a".repeat(64)}`;
 const ORDER_ID = `0x${"b".repeat(64)}`;
@@ -368,6 +426,46 @@ describe("MrvNative", () => {
     expect(proofHtml).toContain("Count check");
     expect(proofHtml).toContain("Root check");
     expect(proofHtml).toContain(NO_EVM_RECEIPT_PROOF.receiptsRoot);
+
+    const compactArchiveHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "included",
+          receipt: {
+            txHash: SUBMITTED_TX_HASH,
+            status: "0x1",
+            blockNumber: "0x65",
+            contractAddress: null,
+            nativeReceipt: {
+              schema: "riscv.receipt.v1",
+              txType: 0x41,
+              artifactHash: "0x" + "b".repeat(64),
+              receiptCommitment: RECEIPT_COMMITMENT,
+              eventCount: 1,
+              noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+              noEvmProofStatus: "proof-verified",
+              noEvmProofVerification:
+                INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
+            },
+          },
+        }}
+      />,
+    );
+    expect(compactArchiveHtml).toContain("No-EVM compact inclusion proof");
+    expect(compactArchiveHtml).toContain("indexer receipt archive");
+    expect(compactArchiveHtml).toContain("indexer receipt archive content digest");
+    expect(compactArchiveHtml).toContain("Archive signatures absent");
+    expect(compactArchiveHtml).toContain("Validator finality is not established here");
+    expect(compactArchiveHtml).toContain("Compact inclusion self-check verified");
+    expect(compactArchiveHtml).toContain("target-only receipt evidence");
+    expect(compactArchiveHtml).toContain("canonicalReceiptInclusion");
+    expect(compactArchiveHtml).toContain("target bytes 4");
+    expect(compactArchiveHtml).toContain("Index check");
+    expect(compactArchiveHtml).toContain("Leaf check");
+    expect(compactArchiveHtml).toContain("Path check");
 
     const mismatchRoot = `0x${"4".repeat(64)}`;
     const mismatchHtml = renderToStaticMarkup(

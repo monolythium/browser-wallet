@@ -277,9 +277,40 @@ interface WalletMrvNativeReceiptEvidence {
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
 }
 
-interface WalletMrvNoEvmReceiptProofTranscript {
+type WalletMrvNoEvmReceiptProofKind =
+  | "boundedCacheTranscript"
+  | "compactInclusion";
+
+type WalletMrvNoEvmReceiptProofHistorySource =
+  | "legacyUnspecified"
+  | "liveBlockCache"
+  | "indexerReceiptArchive";
+
+interface WalletMrvNoEvmCompactInclusionProof {
+  schema: "mono.no_evm_receipt_compact_inclusion.v1";
+  treeAlgorithm: "binary-keccak-receipt-tree";
+  root: string;
+  leafHash: string;
+  siblingHashes: string[];
+  pathSides: boolean[];
+}
+
+interface WalletMrvNoEvmArchiveProof {
+  schema: "mono.no_evm_receipt_archive_binding.v1";
+  source: "indexerReceiptArchiveContentDigest";
+  manifestHash: string;
+  contentHash: string;
+  signatures: unknown[];
+}
+
+interface WalletMrvNoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
-  proofType: "canonicalReceiptsTranscript";
+  proofKind: WalletMrvNoEvmReceiptProofKind;
+  proofType: "canonicalReceiptsTranscript" | "canonicalReceiptInclusion";
+  historySource: WalletMrvNoEvmReceiptProofHistorySource;
+  compactInclusionProof: WalletMrvNoEvmCompactInclusionProof | null;
+  archiveProof: WalletMrvNoEvmArchiveProof | null;
+  missingProofMaterial: string[];
   rootAlgorithm: string;
   receiptCodec: string;
   blockHash: string;
@@ -290,22 +321,53 @@ interface WalletMrvNoEvmReceiptProofTranscript {
   txIndex: number;
   receiptCount: number;
   receiptTranscript: string[];
+  targetReceiptBytes: string | null;
 }
+
+interface WalletMrvNoEvmBoundedReceiptProofTranscript
+  extends WalletMrvNoEvmReceiptProofBase {
+  proofKind: "boundedCacheTranscript";
+  proofType: "canonicalReceiptsTranscript";
+  historySource: "legacyUnspecified" | "liveBlockCache";
+  compactInclusionProof: null;
+  archiveProof: null;
+  targetReceiptBytes: null;
+}
+
+interface WalletMrvNoEvmCompactReceiptProofTranscript
+  extends WalletMrvNoEvmReceiptProofBase {
+  proofKind: "compactInclusion";
+  proofType: "canonicalReceiptInclusion";
+  historySource: "liveBlockCache" | "indexerReceiptArchive";
+  compactInclusionProof: WalletMrvNoEvmCompactInclusionProof;
+  archiveProof: WalletMrvNoEvmArchiveProof | null;
+  targetReceiptBytes: string;
+}
+
+type WalletMrvNoEvmReceiptProofTranscript =
+  | WalletMrvNoEvmBoundedReceiptProofTranscript
+  | WalletMrvNoEvmCompactReceiptProofTranscript;
 
 type WalletMrvNoEvmReceiptProofStatus =
   | "missing"
   | "transcript-verified"
-  | "transcript-mismatch";
+  | "transcript-mismatch"
+  | "proof-verified"
+  | "proof-mismatch";
 
 interface WalletMrvNoEvmReceiptProofVerification {
   status: "verified" | "mismatch";
+  proofKind: WalletMrvNoEvmReceiptProofKind;
   receiptCountMatches: boolean;
   receiptsRootMatches: boolean;
   targetReceiptHashMatches: boolean;
+  compactLeafHashMatches?: boolean;
+  compactPathMatches?: boolean;
   receiptCount: number;
   transcriptCount: number;
   computedReceiptsRoot: string;
   computedTargetReceiptHash: string;
+  computedCompactLeafHash?: string;
 }
 
 interface WalletMrvNativeReceiptEvidenceError {
@@ -1650,6 +1712,12 @@ const MRV_RECEIPTS_ROOT_DOMAIN = "monolythium/v2/receipts_root/1";
 const MRV_RECEIPTS_ROOT_DOMAIN_BYTES = new TextEncoder().encode(
   MRV_RECEIPTS_ROOT_DOMAIN,
 );
+const MRV_COMPACT_RECEIPT_LEAF_DOMAIN_BYTES = new TextEncoder().encode(
+  "monolythium/v4.1/receipt_leaf/1",
+);
+const MRV_COMPACT_RECEIPT_NODE_DOMAIN_BYTES = new TextEncoder().encode(
+  "monolythium/v4.1/receipt_node/1",
+);
 const MAX_U32 = 0xffff_ffff;
 
 function parseMrvNativeReceiptEvidence(
@@ -1682,8 +1750,12 @@ function parseMrvNativeReceiptEvidence(
       noEvmProofVerification === null
         ? "missing"
         : noEvmProofVerification.status === "verified"
-          ? "transcript-verified"
-          : "transcript-mismatch",
+          ? noEvmProof?.proofKind === "compactInclusion"
+            ? "proof-verified"
+            : "transcript-verified"
+          : noEvmProof?.proofKind === "compactInclusion"
+            ? "proof-mismatch"
+            : "transcript-mismatch",
     noEvmProofVerification,
   };
 }
@@ -1699,7 +1771,13 @@ function parseMrvNoEvmReceiptProofTranscript(
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (r.schema !== "mono.no_evm_receipt_proof.v1") return null;
-  if (r.proofType !== "canonicalReceiptsTranscript") return null;
+  const proofKindRaw = r.proofKind ?? "boundedCacheTranscript";
+  if (
+    proofKindRaw !== "boundedCacheTranscript" &&
+    proofKindRaw !== "compactInclusion"
+  ) {
+    return null;
+  }
 
   const rootAlgorithm = parseNonEmptyString(r.rootAlgorithm);
   const receiptCodec = parseNonEmptyString(r.receiptCodec);
@@ -1710,7 +1788,7 @@ function parseMrvNoEvmReceiptProofTranscript(
   const blockHeight = parseNonNegativeSafeInteger(r.blockHeight);
   const txIndex = parseNonNegativeU32(r.txIndex);
   const receiptCount = parsePositiveU32(r.receiptCount);
-  const receiptTranscript = parseMrvReceiptTranscript(r.receiptTranscript);
+  const missingProofMaterial = parseOptionalStringArray(r.missingProofMaterial);
 
   if (
     rootAlgorithm === null ||
@@ -1722,16 +1800,78 @@ function parseMrvNoEvmReceiptProofTranscript(
     blockHeight === null ||
     txIndex === null ||
     receiptCount === null ||
-    receiptTranscript === null ||
-    txIndex >= receiptCount ||
-    receiptTranscript.length !== receiptCount
+    missingProofMaterial === null ||
+    txIndex >= receiptCount
+  ) {
+    return null;
+  }
+
+  if (proofKindRaw === "boundedCacheTranscript") {
+    if (r.proofType !== "canonicalReceiptsTranscript") return null;
+    const historySource = parseMrvNoEvmBoundedHistorySource(r.historySource);
+    const receiptTranscript = parseMrvReceiptTranscript(r.receiptTranscript);
+    if (
+      historySource === null ||
+      receiptTranscript === null ||
+      receiptTranscript.length !== receiptCount ||
+      r.compactInclusionProof !== null && r.compactInclusionProof !== undefined
+    ) {
+      return null;
+    }
+
+    return {
+      schema: "mono.no_evm_receipt_proof.v1",
+      proofKind: "boundedCacheTranscript",
+      proofType: "canonicalReceiptsTranscript",
+      historySource,
+      compactInclusionProof: null,
+      archiveProof: null,
+      missingProofMaterial,
+      rootAlgorithm,
+      receiptCodec,
+      blockHash,
+      txHash,
+      receiptsRoot,
+      targetReceiptHash,
+      blockHeight,
+      txIndex,
+      receiptCount,
+      receiptTranscript,
+      targetReceiptBytes: null,
+    };
+  }
+
+  if (r.proofType !== "canonicalReceiptInclusion") return null;
+  const historySource = parseMrvNoEvmCompactHistorySource(r.historySource);
+  const compactInclusionProof = parseMrvCompactInclusionProof(
+    r.compactInclusionProof,
+  );
+  const archiveProof =
+    r.archiveProof === null || r.archiveProof === undefined
+      ? null
+      : parseMrvArchiveProof(r.archiveProof);
+  const targetReceiptBytes = parseMrvReceiptBytesHex(r.targetReceiptBytes);
+  const receiptTranscript = parseOptionalMrvReceiptTranscript(r.receiptTranscript);
+  if (
+    historySource === null ||
+    compactInclusionProof === null ||
+    (archiveProof === null &&
+      r.archiveProof !== null &&
+      r.archiveProof !== undefined) ||
+    targetReceiptBytes === null ||
+    receiptTranscript === null
   ) {
     return null;
   }
 
   return {
     schema: "mono.no_evm_receipt_proof.v1",
-    proofType: "canonicalReceiptsTranscript",
+    proofKind: "compactInclusion",
+    proofType: "canonicalReceiptInclusion",
+    historySource,
+    compactInclusionProof,
+    archiveProof,
+    missingProofMaterial,
     rootAlgorithm,
     receiptCodec,
     blockHash,
@@ -1742,6 +1882,7 @@ function parseMrvNoEvmReceiptProofTranscript(
     txIndex,
     receiptCount,
     receiptTranscript,
+    targetReceiptBytes,
   };
 }
 
@@ -1774,17 +1915,129 @@ function parseMrvReceiptTranscript(raw: unknown): string[] | null {
   if (!Array.isArray(raw)) return null;
   const transcript: string[] = [];
   for (const entry of raw) {
-    if (typeof entry !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(entry)) {
-      return null;
-    }
-    transcript.push(entry);
+    const parsed = parseMrvReceiptBytesHex(entry);
+    if (parsed === null) return null;
+    transcript.push(parsed);
   }
   return transcript;
+}
+
+function parseOptionalMrvReceiptTranscript(raw: unknown): string[] | null {
+  return raw === null || raw === undefined ? [] : parseMrvReceiptTranscript(raw);
+}
+
+function parseMrvReceiptBytesHex(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  return /^0x(?:[0-9a-fA-F]{2})*$/.test(raw) ? raw : null;
+}
+
+function parseOptionalStringArray(raw: unknown): string[] | null {
+  if (raw === null || raw === undefined) return [];
+  if (!Array.isArray(raw)) return null;
+  const values: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") return null;
+    values.push(value);
+  }
+  return values;
+}
+
+function parseMrvNoEvmBoundedHistorySource(
+  raw: unknown,
+): WalletMrvNoEvmBoundedReceiptProofTranscript["historySource"] | null {
+  if (raw === null || raw === undefined) return "legacyUnspecified";
+  return raw === "legacyUnspecified" || raw === "liveBlockCache" ? raw : null;
+}
+
+function parseMrvNoEvmCompactHistorySource(
+  raw: unknown,
+): WalletMrvNoEvmCompactReceiptProofTranscript["historySource"] | null {
+  return raw === "liveBlockCache" || raw === "indexerReceiptArchive"
+    ? raw
+    : null;
+}
+
+function parseMrvCompactInclusionProof(
+  raw: unknown,
+): WalletMrvNoEvmCompactInclusionProof | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.schema !== "mono.no_evm_receipt_compact_inclusion.v1") return null;
+  if (r.treeAlgorithm !== "binary-keccak-receipt-tree") return null;
+  const root = parseMrvReceiptHash(r.root);
+  const leafHash = parseMrvReceiptHash(r.leafHash);
+  const siblingHashes = parseMrvHashArray(r.siblingHashes);
+  const pathSides = parseBooleanArray(r.pathSides);
+  if (
+    root === null ||
+    leafHash === null ||
+    siblingHashes === null ||
+    pathSides === null ||
+    siblingHashes.length !== pathSides.length
+  ) {
+    return null;
+  }
+  return {
+    schema: "mono.no_evm_receipt_compact_inclusion.v1",
+    treeAlgorithm: "binary-keccak-receipt-tree",
+    root,
+    leafHash,
+    siblingHashes,
+    pathSides,
+  };
+}
+
+function parseMrvArchiveProof(raw: unknown): WalletMrvNoEvmArchiveProof | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.schema !== "mono.no_evm_receipt_archive_binding.v1") return null;
+  if (r.source !== "indexerReceiptArchiveContentDigest") return null;
+  const manifestHash = parseMrvReceiptHash(r.manifestHash);
+  const contentHash = parseMrvReceiptHash(r.contentHash);
+  if (
+    manifestHash === null ||
+    contentHash === null ||
+    !Array.isArray(r.signatures)
+  ) {
+    return null;
+  }
+  return {
+    schema: "mono.no_evm_receipt_archive_binding.v1",
+    source: "indexerReceiptArchiveContentDigest",
+    manifestHash,
+    contentHash,
+    signatures: r.signatures,
+  };
+}
+
+function parseMrvHashArray(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const hashes: string[] = [];
+  for (const entry of raw) {
+    const hash = parseMrvReceiptHash(entry);
+    if (hash === null) return null;
+    hashes.push(hash);
+  }
+  return hashes;
+}
+
+function parseBooleanArray(raw: unknown): boolean[] | null {
+  if (!Array.isArray(raw)) return null;
+  const values: boolean[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "boolean") return null;
+    values.push(entry);
+  }
+  return values;
 }
 
 function verifyMrvNoEvmReceiptProofTranscript(
   proof: WalletMrvNoEvmReceiptProofTranscript,
 ): WalletMrvNoEvmReceiptProofVerification {
+  if (proof.proofKind === "compactInclusion") {
+    return verifyMrvNoEvmCompactReceiptProof(proof);
+  }
+
   const receipts = proof.receiptTranscript.map(hexToMrvReceiptBytes);
   const targetReceipt = receipts[proof.txIndex] ?? new Uint8Array();
   const computedReceiptsRoot = computeMrvReceiptsRoot(receipts);
@@ -1805,6 +2058,7 @@ function verifyMrvNoEvmReceiptProofTranscript(
 
   return {
     status,
+    proofKind: "boundedCacheTranscript",
     receiptCountMatches,
     receiptsRootMatches,
     targetReceiptHashMatches,
@@ -1812,6 +2066,67 @@ function verifyMrvNoEvmReceiptProofTranscript(
     transcriptCount: receipts.length,
     computedReceiptsRoot,
     computedTargetReceiptHash,
+  };
+}
+
+function verifyMrvNoEvmCompactReceiptProof(
+  proof: WalletMrvNoEvmCompactReceiptProofTranscript,
+): WalletMrvNoEvmReceiptProofVerification {
+  const targetReceipt = hexToMrvReceiptBytes(proof.targetReceiptBytes);
+  const computedTargetReceiptHash = mrvKeccakHex(targetReceipt);
+  const computedLeafHashBytes = computeMrvCompactReceiptLeafHashBytes(
+    targetReceipt,
+    proof.txIndex,
+  );
+  const computedCompactLeafHash = mrvHashBytesToHex(computedLeafHashBytes);
+  let foldedRoot = computedLeafHashBytes;
+  for (let index = 0; index < proof.compactInclusionProof.siblingHashes.length; index += 1) {
+    const sibling = mrvHashHexToBytes(
+      proof.compactInclusionProof.siblingHashes[index]!,
+    );
+    foldedRoot = proof.compactInclusionProof.pathSides[index]!
+      ? computeMrvCompactReceiptNodeHashBytes(sibling, foldedRoot)
+      : computeMrvCompactReceiptNodeHashBytes(foldedRoot, sibling);
+  }
+  const computedReceiptsRoot = mrvHashBytesToHex(foldedRoot);
+  const receiptCountMatches = proof.receiptCount > proof.txIndex;
+  const targetReceiptHashMatches = sameMrvHash(
+    proof.targetReceiptHash,
+    computedTargetReceiptHash,
+  );
+  const compactLeafHashMatches = sameMrvHash(
+    proof.compactInclusionProof.leafHash,
+    computedCompactLeafHash,
+  );
+  const compactPathMatches = sameMrvHash(
+    proof.compactInclusionProof.root,
+    computedReceiptsRoot,
+  );
+  const receiptsRootMatches =
+    sameMrvHash(proof.receiptsRoot, proof.compactInclusionProof.root) &&
+    sameMrvHash(proof.receiptsRoot, computedReceiptsRoot);
+  const status =
+    receiptCountMatches &&
+    receiptsRootMatches &&
+    targetReceiptHashMatches &&
+    compactLeafHashMatches &&
+    compactPathMatches
+      ? "verified"
+      : "mismatch";
+
+  return {
+    status,
+    proofKind: "compactInclusion",
+    receiptCountMatches,
+    receiptsRootMatches,
+    targetReceiptHashMatches,
+    compactLeafHashMatches,
+    compactPathMatches,
+    receiptCount: proof.receiptCount,
+    transcriptCount: proof.receiptTranscript.length,
+    computedReceiptsRoot,
+    computedTargetReceiptHash,
+    computedCompactLeafHash,
   };
 }
 
@@ -1841,6 +2156,40 @@ function computeMrvReceiptsRoot(receipts: Uint8Array[]): string {
   return mrvKeccakHex(payload);
 }
 
+function computeMrvCompactReceiptLeafHashBytes(
+  receipt: Uint8Array,
+  txIndex: number,
+): Uint8Array {
+  const payload = new Uint8Array(
+    MRV_COMPACT_RECEIPT_LEAF_DOMAIN_BYTES.length + 8 + receipt.length,
+  );
+  let offset = 0;
+  payload.set(MRV_COMPACT_RECEIPT_LEAF_DOMAIN_BYTES, offset);
+  offset += MRV_COMPACT_RECEIPT_LEAF_DOMAIN_BYTES.length;
+  writeU32Le(payload, offset, txIndex);
+  offset += 4;
+  writeU32Le(payload, offset, receipt.length);
+  offset += 4;
+  payload.set(receipt, offset);
+  return keccak_256(payload);
+}
+
+function computeMrvCompactReceiptNodeHashBytes(
+  left: Uint8Array,
+  right: Uint8Array,
+): Uint8Array {
+  const payload = new Uint8Array(
+    MRV_COMPACT_RECEIPT_NODE_DOMAIN_BYTES.length + left.length + right.length,
+  );
+  let offset = 0;
+  payload.set(MRV_COMPACT_RECEIPT_NODE_DOMAIN_BYTES, offset);
+  offset += MRV_COMPACT_RECEIPT_NODE_DOMAIN_BYTES.length;
+  payload.set(left, offset);
+  offset += left.length;
+  payload.set(right, offset);
+  return keccak_256(payload);
+}
+
 function hexToMrvReceiptBytes(hex: string): Uint8Array {
   const body = hex.slice(2);
   const bytes = new Uint8Array(body.length / 2);
@@ -1859,6 +2208,14 @@ function writeU32Le(target: Uint8Array, offset: number, value: number): void {
 
 function mrvKeccakHex(bytes: Uint8Array): string {
   return `0x${bytesToHex(keccak_256(bytes))}`;
+}
+
+function mrvHashHexToBytes(hex: string): Uint8Array {
+  return hexToMrvReceiptBytes(hex);
+}
+
+function mrvHashBytesToHex(bytes: Uint8Array): string {
+  return `0x${bytesToHex(bytes)}`;
 }
 
 function sameMrvHash(left: string, right: string): boolean {
