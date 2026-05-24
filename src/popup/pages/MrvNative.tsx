@@ -3,10 +3,13 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../Icon";
 import {
+  bgNativeMarketOrderBookDeltas,
+  bgWalletChainBlockNumber,
   bgWalletBuildMrvCallPlan,
   bgWalletBuildMrvDeployPlan,
   bgWalletMrvNativeReceiptStatus,
   bgWalletSubmitMrvNativePlan,
+  type NativeMarketOrderBookDeltasOutcome,
   type SendTxResult,
   type WalletMrvNoEvmReceiptProofTranscript,
   type WalletMrvNoEvmReceiptProofVerification,
@@ -62,6 +65,23 @@ export type MrvNativeReceiptState =
       via?: string;
     };
 
+export type NativeMarketReplayReadinessState =
+  | { phase: "loading" }
+  | {
+      phase: "ready";
+      fromBlock: number;
+      toBlock: number;
+      operator: string | null;
+      outcome: NativeMarketOrderBookDeltasOutcome;
+    }
+  | {
+      phase: "unavailable";
+      reason: string;
+      fromBlock?: number;
+      toBlock?: number;
+      operator?: string | null;
+    };
+
 const DEFAULT_FORM: MrvNativeFormValues = {
   artifactBytes: "",
   artifactHash: "",
@@ -75,6 +95,8 @@ const DEFAULT_FORM: MrvNativeFormValues = {
 
 const MRV_RECEIPT_POLL_INTERVAL_MS = 5_000;
 const MRV_RECEIPT_POLL_MAX_MS = 5 * 60_000;
+const NATIVE_MARKET_REPLAY_LOOKBACK_BLOCKS = 128;
+const NATIVE_MARKET_REPLAY_LIMIT = 5;
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
 export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
@@ -89,6 +111,8 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
   const [receiptState, setReceiptState] = useState<MrvNativeReceiptState>({
     phase: "idle",
   });
+  const [marketReplayState, setMarketReplayState] =
+    useState<NativeMarketReplayReadinessState>({ phase: "loading" });
   const receiptPollStartedAtRef = useRef<number | null>(null);
 
   const buildRequest = useMemo(
@@ -245,6 +269,76 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
     };
   }, [chainIdHex, submittedTxHash]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkReplayReadiness = async () => {
+      setMarketReplayState({ phase: "loading" });
+      try {
+        const head = await bgWalletChainBlockNumber();
+        if (cancelled) return;
+        if (!head.ok) {
+          setMarketReplayState({
+            phase: "unavailable",
+            reason: head.reason ?? "current block unavailable",
+          });
+          return;
+        }
+
+        const toBlock = parseSafeHexBlockNumber(head.blockHex);
+        if (toBlock === null) {
+          setMarketReplayState({
+            phase: "unavailable",
+            reason: `invalid block height ${head.blockHex}`,
+            operator: head.operator,
+          });
+          return;
+        }
+
+        const fromBlock = Math.max(
+          0,
+          toBlock - NATIVE_MARKET_REPLAY_LOOKBACK_BLOCKS,
+        );
+        const reply = await bgNativeMarketOrderBookDeltas({
+          fromBlock,
+          toBlock,
+          limit: NATIVE_MARKET_REPLAY_LIMIT,
+        });
+        if (cancelled) return;
+        if (!reply.ok) {
+          setMarketReplayState({
+            phase: "unavailable",
+            reason: reply.reason ?? "native market replay check failed",
+            fromBlock,
+            toBlock,
+            operator: head.operator,
+          });
+          return;
+        }
+
+        setMarketReplayState({
+          phase: "ready",
+          fromBlock,
+          toBlock,
+          operator: head.operator,
+          outcome: reply.outcome,
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setMarketReplayState({
+          phase: "unavailable",
+          reason: (e as Error).message,
+        });
+      }
+    };
+
+    void checkReplayReadiness();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chainIdHex]);
+
   return (
     <>
       <div className="ext-top">
@@ -273,6 +367,8 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           </div>
           <div style={chainPill}>Chain {chainIdHex}</div>
         </div>
+
+        <NativeMarketReplayReadinessCard state={marketReplayState} />
 
         <div className="ext-card" style={{ padding: 14 }}>
           <div
@@ -432,6 +528,117 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
         )}
       </div>
     </>
+  );
+}
+
+export function NativeMarketReplayReadinessCard({
+  state,
+}: {
+  state: NativeMarketReplayReadinessState;
+}) {
+  if (state.phase === "loading") {
+    return (
+      <div className="ext-card" style={{ padding: 14 }}>
+        <div className="ext-card__head">
+          <h3>Native market replay</h3>
+        </div>
+        <div style={bodyCopy}>Checking recent orderbook replay status...</div>
+      </div>
+    );
+  }
+
+  if (state.phase === "unavailable") {
+    return (
+      <div className="ext-card" style={{ padding: 14 }}>
+        <div className="ext-card__head">
+          <h3>Native market replay</h3>
+        </div>
+        <div style={replayStatusRow}>
+          <span style={replayStatusWarn}>unavailable</span>
+          {state.fromBlock !== undefined && state.toBlock !== undefined && (
+            <span style={submitMeta}>
+              blocks {state.fromBlock}-{state.toBlock}
+            </span>
+          )}
+        </div>
+        <div style={submitMeta}>{state.reason}</div>
+        {state.operator && <div style={submitMeta}>operator {state.operator}</div>}
+        <div style={submitMeta}>No market rows shown from fallback data.</div>
+      </div>
+    );
+  }
+
+  const { outcome } = state;
+  const deltas = outcome.data?.deltas ?? [];
+  const isLive = outcome.kind === "live";
+  const statusLabel =
+    outcome.kind === "live"
+      ? "Replay endpoint live"
+      : outcome.kind === "mock-not-deployed"
+        ? "Replay endpoint not deployed"
+        : outcome.kind === "mock-error"
+          ? "Replay response rejected"
+          : "Replay endpoint offline";
+
+  return (
+    <div className="ext-card" style={{ padding: 14 }}>
+      <div className="ext-card__head">
+        <h3>Native market replay</h3>
+      </div>
+      <div style={replayStatusRow}>
+        <span style={isLive ? replayStatusLive : replayStatusWarn}>
+          {statusLabel}
+        </span>
+        <span style={submitMeta}>
+          blocks {state.fromBlock}-{state.toBlock}
+        </span>
+      </div>
+      <div style={submitMeta}>
+        {state.operator ? `operator ${state.operator}` : "operator unknown"}
+        {` · ${outcome.durationMs}ms`}
+      </div>
+      {isLive && outcome.data !== null ? (
+        <>
+          <div style={submitMeta}>
+            Rows returned {deltas.length}
+            {outcome.data.nextCursor ? " · more pages available" : ""}
+          </div>
+          {readReplaySourceLabel(outcome.data.source) && (
+            <div style={submitMeta}>
+              source {readReplaySourceLabel(outcome.data.source)}
+            </div>
+          )}
+          {deltas.length === 0 ? (
+            <div style={submitMeta}>No replay deltas returned for this window.</div>
+          ) : (
+            <div style={replayDeltaList}>
+              {deltas.slice(0, 3).map((delta) => (
+                <div
+                  key={`${delta.blockHeight}:${delta.txIndex}:${delta.logIndex}:${delta.orderId}`}
+                  style={replayDeltaRow}
+                >
+                  <div style={receiptTitle}>
+                    {delta.action} · {delta.eventName}
+                  </div>
+                  <div style={submitMeta}>
+                    block {delta.blockHeight} · {delta.side ?? "side -"}{" "}
+                    {delta.price ?? "-"} @ {delta.remaining ?? delta.quantity ?? "-"}
+                  </div>
+                  <div style={monoWrap}>
+                    {shortReplayId(delta.marketId)} / {shortReplayId(delta.orderId)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {"reason" in outcome && <div style={submitMeta}>{outcome.reason}</div>}
+          <div style={submitMeta}>No market rows shown from fallback data.</div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -948,6 +1155,32 @@ function formatHexQuantity(value: string | null): string | null {
   return BigInt(value).toString(10);
 }
 
+function parseSafeHexBlockNumber(value: string): number | null {
+  if (!/^0x[0-9a-fA-F]+$/.test(value)) return null;
+  const parsed = BigInt(value);
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(parsed);
+}
+
+function readReplaySourceLabel(
+  source: import("../../shared/native-market-orderbook.js").NativeMarketOrderBookRow | null,
+): string | null {
+  if (source === null) return null;
+  const projection = source.projection;
+  const provider = source.indexerProvider;
+  if (typeof projection === "string" && typeof provider === "string") {
+    return `${provider}/${projection}`;
+  }
+  if (typeof projection === "string") return projection;
+  if (typeof provider === "string") return provider;
+  return null;
+}
+
+function shortReplayId(value: string): string {
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 10)}...${value.slice(-6)}`;
+}
+
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
     <div style={summaryRow}>
@@ -1136,6 +1369,40 @@ const receiptProofValue: CSSProperties = {
   fontFamily: "var(--f-mono)",
   fontSize: 10.5,
   wordBreak: "break-all",
+};
+
+const replayStatusRow: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const replayStatusLive: CSSProperties = {
+  color: "#7bd99c",
+  fontSize: 11,
+  fontWeight: 700,
+};
+
+const replayStatusWarn: CSSProperties = {
+  color: "var(--gold)",
+  fontSize: 11,
+  fontWeight: 700,
+};
+
+const replayDeltaList: CSSProperties = {
+  marginTop: 8,
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const replayDeltaRow: CSSProperties = {
+  padding: "8px 9px",
+  borderRadius: 8,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(0,0,0,0.18)",
 };
 
 const summaryGrid: CSSProperties = {
