@@ -960,6 +960,7 @@ export interface WalletMrvNativeReceiptEvidence {
   noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
   noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
+  noEvmFinalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }
 
 export type WalletMrvNoEvmReceiptProofKind =
@@ -1072,6 +1073,32 @@ export interface WalletMrvNoEvmReceiptProofVerification {
   computedCompactLeafHash?: string;
 }
 
+export interface WalletMrvNoEvmFinalityTrustConfig {
+  chainIdHex: string;
+  clusterPublicKey: string;
+  committeeSize: number;
+  threshold: number;
+}
+
+export interface WalletMrvNoEvmBlsFinalityVerification {
+  finalityEvidencePresent: boolean;
+  signerCountMatches: boolean;
+  signerBitmapMatchesIndices: boolean;
+  signerIndicesInRange: boolean;
+  allSignersTrusted: boolean;
+  thresholdMet: boolean;
+  signatureValid: boolean;
+  acceptedSignatureCount: number;
+  requiredSignatureCount: number;
+  verified: boolean;
+}
+
+export interface WalletMrvNoEvmFinalityVerification {
+  status: "verified" | "unverified" | "mismatch";
+  reason: string | null;
+  details: WalletMrvNoEvmBlsFinalityVerification | null;
+}
+
 export interface WalletMrvNativeReceiptEvidenceError {
   reason: string;
   code?: number;
@@ -1082,6 +1109,7 @@ export interface WalletMrvNativeReceiptEvidenceError {
 export async function bgWalletMrvNativeReceiptStatus(args: {
   txHash: string;
   chainIdHex: string;
+  finalityTrust?: WalletMrvNoEvmFinalityTrustConfig;
 }): Promise<
   | {
       ok: true;
