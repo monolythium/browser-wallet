@@ -11,6 +11,7 @@ import {
   bgWalletSubmitMrvNativePlan,
   type NativeMarketOrderBookDeltasOutcome,
   type SendTxResult,
+  type WalletMrvNoEvmFinalityVerification,
   type WalletMrvNoEvmReceiptProofTranscript,
   type WalletMrvNoEvmReceiptProofVerification,
   type WalletMrvNativeReceipt,
@@ -975,6 +976,8 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
         : "Receipt status: included, status unavailable";
   const noEvmProof = state.receipt.nativeReceipt?.noEvmProof ?? null;
   const hasFinalityEvidence = noEvmProof?.finalityEvidence != null;
+  const finalityVerification =
+    state.receipt.nativeReceipt?.noEvmFinalityVerification ?? null;
 
   return (
     <div style={isReverted ? receiptErrorBox : receiptBox}>
@@ -1019,6 +1022,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
             <MrvNoEvmReceiptProofTranscriptDetails
               proof={state.receipt.nativeReceipt.noEvmProof}
               verification={state.receipt.nativeReceipt.noEvmProofVerification}
+              finalityVerification={finalityVerification}
             />
           )}
         </>
@@ -1042,7 +1046,11 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
       )}
       <div style={submitMeta}>
         {hasFinalityEvidence
-          ? "Receipt self-check and BLS round-certificate material are shown; live seven-node finality is not established here."
+          ? finalityVerification?.status === "verified"
+            ? "Receipt self-check and wallet-side BLS finality verification is shown."
+            : finalityVerification?.status === "mismatch"
+              ? "Receipt self-check and BLS round-certificate material are shown; wallet-side BLS finality verification did not pass."
+              : "Receipt self-check and parsed BLS round-certificate material are shown; wallet-side BLS finality verification is not configured here."
           : "Transcript self-consistency only; validator finality is not established here."}
       </div>
     </div>
@@ -1052,9 +1060,11 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
 function MrvNoEvmReceiptProofTranscriptDetails({
   proof,
   verification,
+  finalityVerification,
 }: {
   proof: WalletMrvNoEvmReceiptProofTranscript;
   verification: WalletMrvNoEvmReceiptProofVerification | null;
+  finalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }) {
   const isVerified = verification?.status === "verified";
   const isCompact = proof.proofKind === "compactInclusion";
@@ -1082,6 +1092,12 @@ function MrvNoEvmReceiptProofTranscriptDetails({
     proof.targetReceiptBytes === null
       ? null
       : Math.max(0, (proof.targetReceiptBytes.length - 2) / 2);
+  const finalityStatusStyle =
+    finalityVerification?.status === "verified"
+      ? receiptProofVerifiedMeta
+      : finalityVerification?.status === "mismatch"
+        ? receiptProofMismatchMeta
+        : submitMeta;
 
   return (
     <div
@@ -1132,12 +1148,25 @@ function MrvNoEvmReceiptProofTranscriptDetails({
         </div>
       ) : (
         <>
-          <div style={submitMeta}>
-            Finality evidence: BLS round certificate · round{" "}
-            {proof.finalityEvidence.round} · signer count{" "}
-            {proof.finalityEvidence.certificate.signerCount}. Live seven-node
-            finality is not established here.
+          <div style={finalityStatusStyle}>
+            {finalityVerification?.status === "verified"
+              ? "Finality evidence: wallet-verified BLS round certificate"
+              : finalityVerification?.status === "mismatch"
+                ? "Finality evidence: BLS round certificate verification mismatch"
+                : "Finality evidence: BLS round certificate parsed, not wallet-verified"}{" "}
+            · round {proof.finalityEvidence.round} · signer count{" "}
+            {proof.finalityEvidence.certificate.signerCount}.
           </div>
+          {finalityVerification?.reason && (
+            <div style={submitMeta}>Wallet BLS check: {finalityVerification.reason}.</div>
+          )}
+          {finalityVerification?.details !== null &&
+            finalityVerification?.details !== undefined && (
+              <ReceiptProofHashRow
+                label="BLS threshold check"
+                value={`${finalityVerification.details.acceptedSignatureCount}/${finalityVerification.details.requiredSignatureCount} signatures · ${finalityVerification.details.signatureValid ? "signature valid" : "signature invalid"}`}
+              />
+            )}
           <ReceiptProofHashRow
             label="BLS signature"
             value={proof.finalityEvidence.certificate.signature}

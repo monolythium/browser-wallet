@@ -32,6 +32,8 @@ import {
 import { addressToTypedBech32 } from "@monolythium/core-sdk";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 
+const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
+
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
 const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
   "smartAccount",
@@ -107,6 +109,7 @@ const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
 const ARCHIVE_PROOF_SIGNATURE =
   "mono.snapshot.sig.v1:0x" + "d".repeat(40) + ":0x1234abcd";
 const ARCHIVE_SIGNATURE_DIGEST = "0x" + "e".repeat(64);
+const FINALITY_CLUSTER_PUBLIC_KEY = "0x" + "1".repeat(96);
 const MISSING_FINALITY_PROOF_MATERIAL =
   "BLS aggregate finality certificate for block round";
 const NO_EVM_FINALITY_EVIDENCE = {
@@ -316,6 +319,8 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
       }
     },
     MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
+    verifyNoEvmFinalityEvidenceThreshold:
+      mockVerifyNoEvmFinalityEvidenceThreshold,
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
     ],
@@ -502,6 +507,7 @@ beforeEach(() => {
   unlocked = true;
   storageLocal = {};
   storageSession = {};
+  mockVerifyNoEvmFinalityEvidenceThreshold.mockReset();
 });
 
 afterEach(() => {
@@ -1916,6 +1922,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: unknown;
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
+          noEvmFinalityVerification: unknown;
           proofLikeField?: unknown;
         } | null;
         logs?: unknown[];
@@ -1939,6 +1946,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: null,
           noEvmProofStatus: "missing",
           noEvmProofVerification: null,
+          noEvmFinalityVerification: null,
         },
       },
       via: "mock-operator",
@@ -1981,6 +1989,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: unknown;
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
+          noEvmFinalityVerification: unknown;
         } | null;
       };
     };
@@ -1988,6 +1997,7 @@ describe("wallet-mrv-receipt-status", () => {
     expect(r.receipt.nativeReceipt).toMatchObject({
       noEvmProof: NO_EVM_RECEIPT_PROOF,
       noEvmProofStatus: "transcript-verified",
+      noEvmFinalityVerification: null,
       noEvmProofVerification: {
         status: "verified",
         receiptCountMatches: true,
@@ -2028,6 +2038,7 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProof: unknown;
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
+          noEvmFinalityVerification: unknown;
         } | null;
       };
     };
@@ -2035,6 +2046,11 @@ describe("wallet-mrv-receipt-status", () => {
     expect(r.receipt.nativeReceipt).toMatchObject({
       noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
       noEvmProofStatus: "proof-verified",
+      noEvmFinalityVerification: {
+        status: "unverified",
+        reason: "trusted BLS finality config not configured",
+        details: null,
+      },
       noEvmProofVerification: {
         status: "verified",
         proofKind: "compactInclusion",
@@ -2050,6 +2066,142 @@ describe("wallet-mrv-receipt-status", () => {
         computedCompactLeafHash: COMPACT_RECEIPT_LEAF_HASH,
       },
     });
+  });
+
+  it("verifies BLS finality evidence with caller-supplied threshold cluster trust", async () => {
+    const blsResult = {
+      finalityEvidencePresent: true,
+      signerCountMatches: true,
+      signerBitmapMatchesIndices: true,
+      signerIndicesInRange: true,
+      allSignersTrusted: true,
+      thresholdMet: true,
+      signatureValid: true,
+      acceptedSignatureCount: 2,
+      requiredSignatureCount: 2,
+      verified: true,
+    };
+    mockVerifyNoEvmFinalityEvidenceThreshold.mockReturnValue(blsResult);
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: {
+        txHash: SUBMITTED_TX_HASH,
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        finalityTrust: {
+          chainIdHex: TESTNET_CHAIN_ID_HEX,
+          clusterPublicKey: FINALITY_CLUSTER_PUBLIC_KEY,
+          committeeSize: 7,
+          threshold: 2,
+        },
+      },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmFinalityVerification: unknown;
+        } | null;
+      };
+    };
+
+    expect(mockVerifyNoEvmFinalityEvidenceThreshold).toHaveBeenCalledTimes(1);
+    expect(mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[0]).toEqual(
+      NO_EVM_FINALITY_EVIDENCE,
+    );
+    const options = mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[1] as {
+      chainId: bigint;
+      clusterPublicKey: Uint8Array;
+      committeeSize: number;
+      threshold: number;
+    };
+    expect(options.chainId).toBe(69420n);
+    expect(options.clusterPublicKey).toBeInstanceOf(Uint8Array);
+    expect(options.clusterPublicKey).toHaveLength(48);
+    expect(options.committeeSize).toBe(7);
+    expect(options.threshold).toBe(2);
+    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
+      status: "verified",
+      reason: null,
+      details: blsResult,
+    });
+  });
+
+  it.each([
+    [
+      "malformed cluster key",
+      {
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        clusterPublicKey: "0x1234",
+        committeeSize: 7,
+        threshold: 2,
+      },
+      "clusterPublicKey must be 48 bytes",
+    ],
+    [
+      "mismatched chain id",
+      {
+        chainIdHex: "0x1",
+        clusterPublicKey: FINALITY_CLUSTER_PUBLIC_KEY,
+        committeeSize: 7,
+        threshold: 2,
+      },
+      "does not match the receipt request chain id",
+    ],
+  ])("fails closed on %s in caller finality trust config", async (_case, finalityTrust, reason) => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: {
+        txHash: SUBMITTED_TX_HASH,
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        finalityTrust,
+      },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmFinalityVerification: { status: string; reason: string | null };
+        } | null;
+      };
+    };
+
+    expect(mockVerifyNoEvmFinalityEvidenceThreshold).not.toHaveBeenCalled();
+    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification.status).toBe(
+      "mismatch",
+    );
+    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification.reason).toContain(
+      reason,
+    );
   });
 
   it("accepts non-empty archive proof signatures with the snapshot signature envelope", async () => {

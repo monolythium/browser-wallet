@@ -29,6 +29,8 @@ import {
   MonolythiumProvider,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   typedBech32ToAddress,
+  verifyNoEvmFinalityEvidenceThreshold,
+  type NoEvmBlsFinalityVerification,
 } from "@monolythium/core-sdk";
 import {
   buildWalletMrvCallNativePlan,
@@ -275,6 +277,7 @@ interface WalletMrvNativeReceiptEvidence {
   noEvmProof: WalletMrvNoEvmReceiptProofTranscript | null;
   noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
+  noEvmFinalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }
 
 type WalletMrvNoEvmReceiptProofKind =
@@ -386,6 +389,36 @@ interface WalletMrvNoEvmReceiptProofVerification {
   computedTargetReceiptHash: string;
   computedCompactLeafHash?: string;
 }
+
+interface WalletMrvNoEvmFinalityTrustConfig {
+  chainIdHex: string;
+  clusterPublicKey: string;
+  committeeSize: number;
+  threshold: number;
+}
+
+type WalletMrvNoEvmFinalityVerificationStatus =
+  | "verified"
+  | "unverified"
+  | "mismatch";
+
+interface WalletMrvNoEvmFinalityVerification {
+  status: WalletMrvNoEvmFinalityVerificationStatus;
+  reason: string | null;
+  details: NoEvmBlsFinalityVerification | null;
+}
+
+interface ResolvedMrvNoEvmFinalityTrustConfig {
+  chainId: bigint;
+  clusterPublicKey: Uint8Array;
+  committeeSize: number;
+  threshold: number;
+}
+
+type WalletMrvNoEvmFinalityTrustResolution =
+  | { kind: "none" }
+  | { kind: "configured"; config: ResolvedMrvNoEvmFinalityTrustConfig }
+  | { kind: "invalid"; reason: string };
 
 interface WalletMrvNativeReceiptEvidenceError {
   reason: string;
@@ -1739,6 +1772,7 @@ const MAX_U32 = 0xffff_ffff;
 
 function parseMrvNativeReceiptEvidence(
   raw: unknown,
+  finalityTrust: WalletMrvNoEvmFinalityTrustResolution,
 ): WalletMrvNativeReceiptEvidence | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -1756,6 +1790,13 @@ function parseMrvNativeReceiptEvidence(
   }
   const noEvmProofVerification =
     noEvmProof === null ? null : verifyMrvNoEvmReceiptProofTranscript(noEvmProof);
+  const noEvmFinalityVerification =
+    noEvmProof === null
+      ? null
+      : verifyMrvNoEvmFinalityEvidence(
+          noEvmProof.finalityEvidence,
+          finalityTrust,
+        );
   return {
     schema: typeof r.schema === "string" ? r.schema : null,
     txType: typeof r.txType === "number" ? r.txType : null,
@@ -1774,6 +1815,7 @@ function parseMrvNativeReceiptEvidence(
             ? "proof-mismatch"
             : "transcript-mismatch",
     noEvmProofVerification,
+    noEvmFinalityVerification,
   };
 }
 
@@ -2135,6 +2177,232 @@ function parseBooleanArray(raw: unknown): boolean[] | null {
     values.push(entry);
   }
   return values;
+}
+
+function resolveMrvNoEvmFinalityTrustConfig(
+  raw: unknown,
+  requestChainIdHex: string,
+): WalletMrvNoEvmFinalityTrustResolution {
+  if (raw !== undefined) {
+    return raw === null
+      ? { kind: "none" }
+      : parseMrvNoEvmFinalityTrustConfig(raw, requestChainIdHex, "caller");
+  }
+
+  const envRaw = readMrvNoEvmFinalityTrustEnv();
+  if (envRaw === null) return { kind: "none" };
+  return parseMrvNoEvmFinalityTrustConfig(
+    envRaw,
+    requestChainIdHex,
+    "environment",
+  );
+}
+
+function readMrvNoEvmFinalityTrustEnv(): WalletMrvNoEvmFinalityTrustConfig | null {
+  const chainIdHex = readMrvEnvString([
+    "VITE_WALLET_MRV_FINALITY_CHAIN_ID_HEX",
+    "VITE_MONO_MRV_FINALITY_CHAIN_ID_HEX",
+  ]);
+  const clusterPublicKey = readMrvEnvString([
+    "VITE_WALLET_MRV_FINALITY_CLUSTER_PUBLIC_KEY",
+    "VITE_MONO_MRV_FINALITY_CLUSTER_PUBLIC_KEY",
+  ]);
+  const committeeSize = readMrvEnvString([
+    "VITE_WALLET_MRV_FINALITY_COMMITTEE_SIZE",
+    "VITE_MONO_MRV_FINALITY_COMMITTEE_SIZE",
+  ]);
+  const threshold = readMrvEnvString([
+    "VITE_WALLET_MRV_FINALITY_THRESHOLD",
+    "VITE_MONO_MRV_FINALITY_THRESHOLD",
+  ]);
+
+  if (
+    chainIdHex === undefined &&
+    clusterPublicKey === undefined &&
+    committeeSize === undefined &&
+    threshold === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    chainIdHex: chainIdHex ?? "",
+    clusterPublicKey: clusterPublicKey ?? "",
+    committeeSize: committeeSize === undefined ? Number.NaN : Number(committeeSize),
+    threshold: threshold === undefined ? Number.NaN : Number(threshold),
+  };
+}
+
+function readMrvEnvString(names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const value = import.meta.env[name];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function parseMrvNoEvmFinalityTrustConfig(
+  raw: unknown,
+  requestChainIdHex: string,
+  source: "caller" | "environment",
+): WalletMrvNoEvmFinalityTrustResolution {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality trust config must be an object`,
+    };
+  }
+  const r = raw as Record<string, unknown>;
+  const chainIdRaw = r.chainIdHex ?? r.chainId;
+  const clusterPublicKeyRaw =
+    r.clusterPublicKey ?? r.thresholdClusterPublicKey;
+  const committeeSize = parsePositiveSafeIntegerValue(r.committeeSize);
+  const threshold = parsePositiveSafeIntegerValue(r.threshold);
+  if (typeof chainIdRaw !== "string" || chainIdRaw.length === 0) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality trust config is missing chainIdHex`,
+    };
+  }
+  if (typeof clusterPublicKeyRaw !== "string" || clusterPublicKeyRaw.length === 0) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality trust config is missing clusterPublicKey`,
+    };
+  }
+  if (committeeSize === null) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality trust config has invalid committeeSize`,
+    };
+  }
+  if (threshold === null) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality trust config has invalid threshold`,
+    };
+  }
+  if (threshold > committeeSize) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality threshold exceeds committee size`,
+    };
+  }
+
+  const requestChainId = parseMrvChainIdBigInt(requestChainIdHex);
+  const configuredChainId = parseMrvChainIdBigInt(chainIdRaw);
+  if (requestChainId === null) {
+    return {
+      kind: "invalid",
+      reason: "receipt request chain id is malformed",
+    };
+  }
+  if (configuredChainId === null) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality trust config has invalid chainIdHex`,
+    };
+  }
+  if (configuredChainId !== requestChainId) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality chain id does not match the receipt request chain id`,
+    };
+  }
+
+  const clusterPublicKeyHex = parseMrvReceiptBytesHex(clusterPublicKeyRaw);
+  if (clusterPublicKeyHex === null) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality trust config has malformed clusterPublicKey`,
+    };
+  }
+  const clusterPublicKey = hexToMrvReceiptBytes(clusterPublicKeyHex);
+  if (clusterPublicKey.length !== 48) {
+    return {
+      kind: "invalid",
+      reason: `${source} BLS finality clusterPublicKey must be 48 bytes`,
+    };
+  }
+
+  return {
+    kind: "configured",
+    config: {
+      chainId: configuredChainId,
+      clusterPublicKey,
+      committeeSize,
+      threshold,
+    },
+  };
+}
+
+function parsePositiveSafeIntegerValue(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0) {
+    return raw;
+  }
+  if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseMrvChainIdBigInt(raw: string): bigint | null {
+  try {
+    if (/^0x[0-9a-fA-F]+$/.test(raw)) return BigInt(raw);
+    if (/^[0-9]+$/.test(raw)) return BigInt(raw);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function verifyMrvNoEvmFinalityEvidence(
+  finalityEvidence: WalletMrvNoEvmFinalityEvidence | null,
+  finalityTrust: WalletMrvNoEvmFinalityTrustResolution,
+): WalletMrvNoEvmFinalityVerification | null {
+  if (finalityEvidence === null) return null;
+  if (finalityTrust.kind === "none") {
+    return {
+      status: "unverified",
+      reason: "trusted BLS finality config not configured",
+      details: null,
+    };
+  }
+  if (finalityTrust.kind === "invalid") {
+    return {
+      status: "mismatch",
+      reason: finalityTrust.reason,
+      details: null,
+    };
+  }
+
+  try {
+    const details = verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, {
+      chainId: finalityTrust.config.chainId,
+      clusterPublicKey: finalityTrust.config.clusterPublicKey,
+      committeeSize: finalityTrust.config.committeeSize,
+      threshold: finalityTrust.config.threshold,
+    });
+    return {
+      status: details.verified ? "verified" : "mismatch",
+      reason: details.verified
+        ? null
+        : "BLS finality evidence did not verify against configured trust inputs",
+      details,
+    };
+  } catch (e) {
+    return {
+      status: "mismatch",
+      reason: `BLS finality verification failed: ${mrvErrorMessage(e)}`,
+      details: null,
+    };
+  }
+}
+
+function mrvErrorMessage(e: unknown): string {
+  if (e instanceof Error && e.message.length > 0) return e.message;
+  return typeof e === "string" && e.length > 0 ? e : "unknown error";
 }
 
 function verifyMrvNoEvmReceiptProofTranscript(
@@ -5771,6 +6039,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = message.payload as {
         txHash?: string;
         chainIdHex?: string;
+        finalityTrust?: unknown;
       };
       if (
         typeof p?.txHash !== "string" ||
@@ -5787,6 +6056,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           reason: "MRV receipt polling is only wired for Sprintnet today",
         };
       }
+      const finalityTrust = resolveMrvNoEvmFinalityTrustConfig(
+        p.finalityTrust,
+        p.chainIdHex,
+      );
       try {
         const { result, via } = await sprintnetJsonRpc<{
           transactionHash?: string;
@@ -5803,7 +6076,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           const native = await sprintnetJsonRpc<unknown>("lyth_nativeReceipt", [
             p.txHash,
           ]);
-          nativeReceipt = parseMrvNativeReceiptEvidence(native.result);
+          nativeReceipt = parseMrvNativeReceiptEvidence(
+            native.result,
+            finalityTrust,
+          );
           if (nativeReceipt === null) {
             nativeReceiptError = {
               reason: "lyth_nativeReceipt returned malformed native receipt",

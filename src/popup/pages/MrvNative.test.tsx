@@ -12,6 +12,7 @@ import {
 } from "./MrvNative.js";
 import type {
   WalletMrvNoEvmFinalityEvidence,
+  WalletMrvNoEvmFinalityVerification,
   WalletMrvNoEvmCompactReceiptProofTranscript,
   WalletMrvNativeSubmissionPlan,
   WalletMrvNoEvmReceiptProofTranscript,
@@ -79,6 +80,36 @@ const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification 
   transcriptCount: 2,
   computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
   computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
+};
+const NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED: WalletMrvNoEvmFinalityVerification = {
+  status: "unverified",
+  reason: "trusted BLS finality config not configured",
+  details: null,
+};
+const NO_EVM_FINALITY_VERIFICATION_VERIFIED: WalletMrvNoEvmFinalityVerification = {
+  status: "verified",
+  reason: null,
+  details: {
+    finalityEvidencePresent: true,
+    signerCountMatches: true,
+    signerBitmapMatchesIndices: true,
+    signerIndicesInRange: true,
+    allSignersTrusted: true,
+    thresholdMet: true,
+    signatureValid: true,
+    acceptedSignatureCount: 2,
+    requiredSignatureCount: 2,
+    verified: true,
+  },
+};
+const NO_EVM_FINALITY_VERIFICATION_MISMATCH: WalletMrvNoEvmFinalityVerification = {
+  status: "mismatch",
+  reason: "BLS finality evidence did not verify against configured trust inputs",
+  details: {
+    ...NO_EVM_FINALITY_VERIFICATION_VERIFIED.details!,
+    signatureValid: false,
+    verified: false,
+  },
 };
 const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmCompactReceiptProofTranscript = {
   schema: "mono.no_evm_receipt_proof.v1",
@@ -393,6 +424,7 @@ describe("MrvNative", () => {
               noEvmProof: null,
               noEvmProofStatus: "missing",
               noEvmProofVerification: null,
+              noEvmFinalityVerification: null,
             },
           },
         }}
@@ -429,6 +461,7 @@ describe("MrvNative", () => {
               noEvmProof: NO_EVM_RECEIPT_PROOF,
               noEvmProofStatus: "transcript-verified",
               noEvmProofVerification: NO_EVM_RECEIPT_PROOF_VERIFICATION,
+              noEvmFinalityVerification: null,
             },
           },
         }}
@@ -469,6 +502,8 @@ describe("MrvNative", () => {
               noEvmProofStatus: "proof-verified",
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
+              noEvmFinalityVerification:
+                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -485,7 +520,15 @@ describe("MrvNative", () => {
     expect(compactArchiveHtml).toContain("0x1234");
     expect(compactArchiveHtml).toContain("1, 3");
     expect(compactArchiveHtml).toContain("0xabcd");
-    expect(compactArchiveHtml).toContain("Live seven-node finality is not established here");
+    expect(compactArchiveHtml).toContain(
+      "BLS round certificate parsed, not wallet-verified",
+    );
+    expect(compactArchiveHtml).toContain(
+      "Wallet BLS check: trusted BLS finality config not configured",
+    );
+    expect(compactArchiveHtml).toContain(
+      "wallet-side BLS finality verification is not configured here",
+    );
     expect(compactArchiveHtml).toContain("Compact inclusion self-check verified");
     expect(compactArchiveHtml).toContain("target-only receipt evidence");
     expect(compactArchiveHtml).toContain("canonicalReceiptInclusion");
@@ -493,6 +536,82 @@ describe("MrvNative", () => {
     expect(compactArchiveHtml).toContain("Index check");
     expect(compactArchiveHtml).toContain("Leaf check");
     expect(compactArchiveHtml).toContain("Path check");
+
+    const verifiedFinalityHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "included",
+          receipt: {
+            txHash: SUBMITTED_TX_HASH,
+            status: "0x1",
+            blockNumber: "0x65",
+            contractAddress: null,
+            nativeReceipt: {
+              schema: "riscv.receipt.v1",
+              txType: 0x41,
+              artifactHash: "0x" + "b".repeat(64),
+              receiptCommitment: RECEIPT_COMMITMENT,
+              eventCount: 1,
+              noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+              noEvmProofStatus: "proof-verified",
+              noEvmProofVerification:
+                INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
+              noEvmFinalityVerification: NO_EVM_FINALITY_VERIFICATION_VERIFIED,
+            },
+          },
+        }}
+      />,
+    );
+    expect(verifiedFinalityHtml).toContain(
+      "wallet-verified BLS round certificate",
+    );
+    expect(verifiedFinalityHtml).toContain("BLS threshold check");
+    expect(verifiedFinalityHtml).toContain("2/2 signatures · signature valid");
+    expect(verifiedFinalityHtml).toContain(
+      "wallet-side BLS finality verification is shown",
+    );
+
+    const mismatchFinalityHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "included",
+          receipt: {
+            txHash: SUBMITTED_TX_HASH,
+            status: "0x1",
+            blockNumber: "0x65",
+            contractAddress: null,
+            nativeReceipt: {
+              schema: "riscv.receipt.v1",
+              txType: 0x41,
+              artifactHash: "0x" + "b".repeat(64),
+              receiptCommitment: RECEIPT_COMMITMENT,
+              eventCount: 1,
+              noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+              noEvmProofStatus: "proof-verified",
+              noEvmProofVerification:
+                INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
+              noEvmFinalityVerification: NO_EVM_FINALITY_VERIFICATION_MISMATCH,
+            },
+          },
+        }}
+      />,
+    );
+    expect(mismatchFinalityHtml).toContain(
+      "BLS round certificate verification mismatch",
+    );
+    expect(mismatchFinalityHtml).toContain(
+      "Wallet BLS check: BLS finality evidence did not verify against configured trust inputs",
+    );
+    expect(mismatchFinalityHtml).toContain("2/2 signatures · signature invalid");
+    expect(mismatchFinalityHtml).toContain(
+      "wallet-side BLS finality verification did not pass",
+    );
 
     const digestArchiveProof: WalletMrvNoEvmCompactReceiptProofTranscript = {
       ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
@@ -523,6 +642,8 @@ describe("MrvNative", () => {
               noEvmProofStatus: "proof-verified",
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
+              noEvmFinalityVerification:
+                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -566,6 +687,7 @@ describe("MrvNative", () => {
                 status: "mismatch",
                 receiptsRootMatches: false,
               },
+              noEvmFinalityVerification: null,
             },
           },
         }}
