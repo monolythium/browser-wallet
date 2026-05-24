@@ -867,7 +867,7 @@ export function formatMrcAccountRecordLine(record: MrcAccountRecord): string {
   if (record.recovery) bits.push(`recovery ${shortAddr(record.recovery, 10)}`);
   if (record.policyHash) bits.push(`policy ${shortHex(record.policyHash)}`);
   if (record.nonce) bits.push(`nonce ${record.nonce}`);
-  bits.push(`block ${record.updatedAtBlock.toLocaleString()}`);
+  bits.push(`block ${record.updatedAtBlock.toLocaleString("en-US")}`);
   return bits.join(" · ");
 }
 
@@ -883,7 +883,7 @@ export function formatMrcPolicyLine(policy: MrcPolicyRecord): string {
 }
 
 export function formatMrcPolicySpendLine(spend: MrcPolicySpendRecord): string {
-  return `Spend ${shortHex(spend.assetId)} · window ${spend.window} · spent ${spend.spent} · block ${spend.updatedAtBlock.toLocaleString()}`;
+  return `Spend ${shortHex(spend.assetId)} · window ${spend.window} · spent ${spend.spent} · block ${spend.updatedAtBlock.toLocaleString("en-US")}`;
 }
 
 function MrcHolderSummary({
@@ -965,7 +965,7 @@ export function formatMrcHolderSummaryTitle(
 export function formatIndexedTokenBalanceRow(
   row: WalletTokenBalance,
 ): IndexedTokenBalanceDisplay {
-  const updated = `updated at block ${row.updatedAtBlock.toLocaleString()}`;
+  const updated = `updated at block ${row.updatedAtBlock.toLocaleString("en-US")}`;
   if (!row.mrc) {
     return {
       title: shortHex(row.tokenId),
@@ -1006,7 +1006,7 @@ export function formatIndexedTokenBalanceRow(
 }
 
 export function formatMrcHolderDisplayLine(holder: WalletMrcHolder): string {
-  return `#${holder.rank} ${shortAddr(holder.address, 10)} · ${holder.balance} · block ${holder.updatedAtBlock.toLocaleString()}`;
+  return `#${holder.rank} ${shortAddr(holder.address, 10)} · ${holder.balance} · block ${holder.updatedAtBlock.toLocaleString("en-US")}`;
 }
 
 export interface BridgeDisclosureRowDisplay {
