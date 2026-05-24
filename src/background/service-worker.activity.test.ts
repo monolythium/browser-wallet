@@ -106,6 +106,7 @@ const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
 const RECEIPT_COMMITMENT = "0x" + "c".repeat(64);
 const ARCHIVE_PROOF_SIGNATURE =
   "mono.snapshot.sig.v1:0x" + "d".repeat(40) + ":0x1234abcd";
+const ARCHIVE_SIGNATURE_DIGEST = "0x" + "e".repeat(64);
 const MISSING_FINALITY_PROOF_MATERIAL =
   "BLS aggregate finality certificate for block round";
 const NO_EVM_FINALITY_EVIDENCE = {
@@ -2094,6 +2095,149 @@ describe("wallet-mrv-receipt-status", () => {
       ARCHIVE_PROOF_SIGNATURE,
     ]);
     expect(r.receipt.nativeReceipt?.noEvmProofStatus).toBe("proof-verified");
+  });
+
+  it("preserves a valid archive proof snapshot signature digest", async () => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          signatureDigest: ARCHIVE_SIGNATURE_DIGEST,
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmProof: {
+            archiveProof: { signatureDigest?: string } | null;
+          };
+          noEvmProofStatus: string;
+        } | null;
+      };
+    };
+
+    expect(r.receipt.nativeReceipt?.noEvmProof.archiveProof?.signatureDigest).toBe(
+      ARCHIVE_SIGNATURE_DIGEST,
+    );
+    expect(r.receipt.nativeReceipt?.noEvmProofStatus).toBe("proof-verified");
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["null", null],
+  ])("accepts archive proof signatureDigest when %s", async (_case, signatureDigest) => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    const archiveProof =
+      signatureDigest === undefined
+        ? INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof
+        : {
+            ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+            signatureDigest,
+          };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof,
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmProof: {
+            archiveProof: { signatureDigest?: string } | null;
+          };
+          noEvmProofStatus: string;
+        } | null;
+      };
+    };
+
+    expect(
+      r.receipt.nativeReceipt?.noEvmProof.archiveProof?.signatureDigest,
+    ).toBeUndefined();
+    expect(r.receipt.nativeReceipt?.noEvmProofStatus).toBe("proof-verified");
+  });
+
+  it.each([
+    ["not a string", 12],
+    ["short hash", "0x" + "e".repeat(62)],
+    ["long hash", "0x" + "e".repeat(66)],
+    ["missing prefix", "e".repeat(64)],
+    ["non-hex", "0x" + "e".repeat(63) + "z"],
+  ])("rejects archive proof signatureDigest with malformed %s", async (_case, signatureDigest) => {
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          signatureDigest,
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: null;
+        nativeReceiptError?: { reason: string; method?: string };
+      };
+    };
+
+    expect(r.receipt.nativeReceipt).toBeNull();
+    expect(r.receipt.nativeReceiptError).toEqual({
+      reason: "lyth_nativeReceipt returned malformed native receipt",
+      method: "lyth_nativeReceipt",
+      via: "mock-operator",
+    });
   });
 
   it.each([

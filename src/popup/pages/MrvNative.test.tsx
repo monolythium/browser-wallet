@@ -31,6 +31,7 @@ const BASE_FORM: MrvNativeFormValues = {
 
 const SUBMITTED_TX_HASH = `0x${"a".repeat(64)}`;
 const RECEIPT_COMMITMENT = `0x${"c".repeat(64)}`;
+const ARCHIVE_SIGNATURE_DIGEST = `0x${"e".repeat(64)}`;
 const MISSING_FINALITY_PROOF_MATERIAL =
   "BLS aggregate finality certificate for block round";
 const NO_EVM_FINALITY_EVIDENCE: WalletMrvNoEvmFinalityEvidence = {
@@ -477,6 +478,7 @@ describe("MrvNative", () => {
     expect(compactArchiveHtml).toContain("indexer receipt archive");
     expect(compactArchiveHtml).toContain("indexer receipt archive content digest");
     expect(compactArchiveHtml).toContain("Archive signatures absent");
+    expect(compactArchiveHtml).not.toContain("Archive signature digest");
     expect(compactArchiveHtml).toContain("BLS round certificate");
     expect(compactArchiveHtml).toContain("round 57");
     expect(compactArchiveHtml).toContain("signer count 2");
@@ -491,6 +493,49 @@ describe("MrvNative", () => {
     expect(compactArchiveHtml).toContain("Index check");
     expect(compactArchiveHtml).toContain("Leaf check");
     expect(compactArchiveHtml).toContain("Path check");
+
+    const digestArchiveProof: WalletMrvNoEvmCompactReceiptProofTranscript = {
+      ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+      archiveProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof!,
+        signatureDigest: ARCHIVE_SIGNATURE_DIGEST,
+      },
+    };
+    const digestArchiveHtml = renderToStaticMarkup(
+      <MrvNativePlanPreview
+        plan={plan}
+        onSubmit={() => undefined}
+        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
+        receiptState={{
+          phase: "included",
+          receipt: {
+            txHash: SUBMITTED_TX_HASH,
+            status: "0x1",
+            blockNumber: "0x65",
+            contractAddress: null,
+            nativeReceipt: {
+              schema: "riscv.receipt.v1",
+              txType: 0x41,
+              artifactHash: "0x" + "b".repeat(64),
+              receiptCommitment: RECEIPT_COMMITMENT,
+              eventCount: 1,
+              noEvmProof: digestArchiveProof,
+              noEvmProofStatus: "proof-verified",
+              noEvmProofVerification:
+                INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
+            },
+          },
+        }}
+      />,
+    );
+    expect(digestArchiveHtml).toContain(
+      "Snapshot archive signature digest material is present",
+    );
+    expect(digestArchiveHtml).toContain(
+      "not validator finality or wallet-side cryptographic verification",
+    );
+    expect(digestArchiveHtml).toContain("Archive signature digest");
+    expect(digestArchiveHtml).toContain(ARCHIVE_SIGNATURE_DIGEST);
 
     const mismatchRoot = `0x${"4".repeat(64)}`;
     const mismatchHtml = renderToStaticMarkup(
