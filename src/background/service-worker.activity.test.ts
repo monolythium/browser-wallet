@@ -29,11 +29,15 @@ import {
   it,
   vi,
 } from "vitest";
-import { addressToTypedBech32 } from "@monolythium/core-sdk";
+import {
+  addressToTypedBech32,
+  type NoEvmReceiptTrustPolicy,
+} from "@monolythium/core-sdk";
 import { MlDsa65Backend, hexToBytes } from "@monolythium/core-sdk/crypto";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
+const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
 
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
 const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
@@ -118,6 +122,11 @@ const TRUSTED_ARCHIVE_SIGNATURE = archiveSignatureForDigest(
   ARCHIVE_SIGNATURE_DIGEST,
   TRUSTED_ARCHIVE_SIGNER,
 );
+const REGISTRY_ARCHIVE_SIGNER = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(9));
+const REGISTRY_ARCHIVE_SIGNATURE = archiveSignatureForDigest(
+  ARCHIVE_SIGNATURE_DIGEST,
+  REGISTRY_ARCHIVE_SIGNER,
+);
 const ARCHIVE_COVERING_SNAPSHOT = {
   snapshotHeight: 101,
   manifestHash: "0x" + "a".repeat(64),
@@ -129,6 +138,7 @@ const ARCHIVE_COVERING_SNAPSHOT = {
   signatures: [ARCHIVE_PROOF_SIGNATURE],
 };
 const FINALITY_CLUSTER_PUBLIC_KEY = "0x" + "1".repeat(96);
+const REGISTRY_FINALITY_CLUSTER_PUBLIC_KEY = new Uint8Array(48).fill(0x22);
 const MISSING_FINALITY_PROOF_MATERIAL =
   "BLS aggregate finality certificate for block round";
 const NO_EVM_FINALITY_EVIDENCE = {
@@ -249,6 +259,28 @@ function mrvTestKeccakHex(bytes: Uint8Array): string {
 function mrvTestBytesToHex(bytes: Uint8Array): string {
   return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
+
+function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
+  return {
+    chainId: 69420,
+    archive: {
+      threshold: 1,
+      trustedSigners: [
+        {
+          publicKey: REGISTRY_ARCHIVE_SIGNER.publicKey(),
+          signerId: REGISTRY_ARCHIVE_SIGNER.getAddress(),
+        },
+      ],
+    },
+    finality: {
+      mode: "cluster",
+      chainId: 69420,
+      clusterPublicKey: REGISTRY_FINALITY_CLUSTER_PUBLIC_KEY,
+      committeeSize: 7,
+      threshold: 2,
+    },
+  };
+}
 let submitFailure: (Error & { code?: number }) | null = null;
 
 // Networks: only the bits the handlers touch. Sprintnet chain id is
@@ -351,6 +383,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
     verifyNoEvmFinalityEvidenceThreshold:
       mockVerifyNoEvmFinalityEvidenceThreshold,
+    getNoEvmReceiptTrustPolicy: mockGetNoEvmReceiptTrustPolicy,
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
     ],
@@ -539,6 +572,8 @@ beforeEach(() => {
   storageLocal = {};
   storageSession = {};
   mockVerifyNoEvmFinalityEvidenceThreshold.mockReset();
+  mockGetNoEvmReceiptTrustPolicy.mockReset();
+  mockGetNoEvmReceiptTrustPolicy.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -2107,6 +2142,236 @@ describe("wallet-mrv-receipt-status", () => {
         computedTargetReceiptHash: COMPACT_RECEIPT_HASH,
         computedCompactLeafHash: COMPACT_RECEIPT_LEAF_HASH,
       },
+    });
+    expect(mockGetNoEvmReceiptTrustPolicy).toHaveBeenCalledWith("testnet-69420");
+  });
+
+  it("uses bundled registry archive and finality trust when caller and env trust are absent", async () => {
+    const blsResult = {
+      finalityEvidencePresent: true,
+      signerCountMatches: true,
+      signerBitmapMatchesIndices: true,
+      signerIndicesInRange: true,
+      allSignersTrusted: true,
+      thresholdMet: true,
+      signatureValid: true,
+      acceptedSignatureCount: 2,
+      requiredSignatureCount: 2,
+      verified: true,
+    };
+    mockGetNoEvmReceiptTrustPolicy.mockReturnValue(registryReceiptTrustPolicy());
+    mockVerifyNoEvmFinalityEvidenceThreshold.mockReturnValue(blsResult);
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          signatureDigest: ARCHIVE_SIGNATURE_DIGEST,
+          signatures: [REGISTRY_ARCHIVE_SIGNATURE],
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmArchiveVerification: unknown;
+          noEvmFinalityVerification: unknown;
+        } | null;
+      };
+    };
+
+    expect(mockGetNoEvmReceiptTrustPolicy).toHaveBeenCalledTimes(1);
+    expect(mockGetNoEvmReceiptTrustPolicy).toHaveBeenCalledWith("testnet-69420");
+    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification).toEqual({
+      status: "verified",
+      reason: null,
+      details: {
+        verified: true,
+        threshold: 1,
+        validSigners: [REGISTRY_ARCHIVE_SIGNER.getAddress()],
+        checkedSignatures: 1,
+        issues: [],
+      },
+    });
+    expect(mockVerifyNoEvmFinalityEvidenceThreshold).toHaveBeenCalledTimes(1);
+    const options = mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[1] as {
+      chainId: bigint;
+      clusterPublicKey: Uint8Array;
+      committeeSize: number;
+      threshold: number;
+    };
+    expect(options.chainId).toBe(69420n);
+    expect(Array.from(options.clusterPublicKey)).toEqual(
+      Array.from(REGISTRY_FINALITY_CLUSTER_PUBLIC_KEY),
+    );
+    expect(options.committeeSize).toBe(7);
+    expect(options.threshold).toBe(2);
+    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
+      status: "verified",
+      reason: null,
+      details: blsResult,
+    });
+  });
+
+  it("fails closed when registry finality trust uses unsupported multisig mode", async () => {
+    mockGetNoEvmReceiptTrustPolicy.mockReturnValue({
+      chainId: 69420,
+      finality: {
+        mode: "multisig",
+        chainId: 69420,
+        threshold: 1,
+        trustedSigners: [],
+      },
+    } satisfies NoEvmReceiptTrustPolicy);
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmFinalityVerification: {
+            status: string;
+            reason: string | null;
+            details: unknown;
+          };
+        } | null;
+      };
+    };
+
+    expect(mockVerifyNoEvmFinalityEvidenceThreshold).not.toHaveBeenCalled();
+    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
+      status: "mismatch",
+      reason:
+        "registry BLS finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
+      details: null,
+    });
+  });
+
+  it("uses caller finality and env archive trust ahead of bundled registry trust", async () => {
+    const blsResult = {
+      finalityEvidencePresent: true,
+      signerCountMatches: true,
+      signerBitmapMatchesIndices: true,
+      signerIndicesInRange: true,
+      allSignersTrusted: true,
+      thresholdMet: true,
+      signatureValid: true,
+      acceptedSignatureCount: 2,
+      requiredSignatureCount: 2,
+      verified: true,
+    };
+    vi.stubEnv(
+      "VITE_WALLET_MRV_ARCHIVE_TRUSTED_PUBKEYS",
+      TRUSTED_ARCHIVE_PUBLIC_KEY,
+    );
+    vi.stubEnv("VITE_WALLET_MRV_ARCHIVE_SIGNATURE_THRESHOLD", "1");
+    mockGetNoEvmReceiptTrustPolicy.mockReturnValue(registryReceiptTrustPolicy());
+    mockVerifyNoEvmFinalityEvidenceThreshold.mockReturnValue(blsResult);
+    rpcResponses["eth_getTransactionReceipt"] = {
+      transactionHash: SUBMITTED_TX_HASH,
+      status: "0x1",
+      blockNumber: "0x65",
+      contractAddress: null,
+    };
+    rpcResponses["lyth_nativeReceipt"] = {
+      schema: "riscv.receipt.v1",
+      txType: 0x41,
+      artifactHash: "0x" + "b".repeat(64),
+      receiptCommitment: RECEIPT_COMMITMENT,
+      eventCount: 1,
+      noEvmProof: {
+        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
+        archiveProof: {
+          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
+          signatureDigest: ARCHIVE_SIGNATURE_DIGEST,
+          signatures: [TRUSTED_ARCHIVE_SIGNATURE],
+        },
+      },
+    };
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-mrv-receipt-status",
+      payload: {
+        txHash: SUBMITTED_TX_HASH,
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        finalityTrust: {
+          chainIdHex: TESTNET_CHAIN_ID_HEX,
+          clusterPublicKey: FINALITY_CLUSTER_PUBLIC_KEY,
+          committeeSize: 7,
+          threshold: 2,
+        },
+      },
+    })) as {
+      ok: true;
+      receipt: {
+        nativeReceipt: {
+          noEvmArchiveVerification: unknown;
+          noEvmFinalityVerification: unknown;
+        } | null;
+      };
+    };
+
+    expect(mockGetNoEvmReceiptTrustPolicy).not.toHaveBeenCalled();
+    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification).toEqual({
+      status: "verified",
+      reason: null,
+      details: {
+        verified: true,
+        threshold: 1,
+        validSigners: [TRUSTED_ARCHIVE_SIGNER.getAddress()],
+        checkedSignatures: 1,
+        issues: [],
+      },
+    });
+    const options = mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[1] as {
+      chainId: bigint;
+      clusterPublicKey: Uint8Array;
+      committeeSize: number;
+      threshold: number;
+    };
+    expect(options.chainId).toBe(69420n);
+    expect(mrvTestBytesToHex(options.clusterPublicKey)).toBe(FINALITY_CLUSTER_PUBLIC_KEY);
+    expect(options.committeeSize).toBe(7);
+    expect(options.threshold).toBe(2);
+    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
+      status: "verified",
+      reason: null,
+      details: blsResult,
     });
   });
 
