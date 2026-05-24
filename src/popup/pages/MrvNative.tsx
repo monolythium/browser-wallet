@@ -1103,14 +1103,28 @@ function MrvNoEvmReceiptProofTranscriptDetails({
           : "BLS round-certificate material is present."}
       </div>
       {proof.archiveProof !== null && (
-        <div style={submitMeta}>
-          Archive binding: {receiptArchiveProofSourceText(proof.archiveProof.source)}.
-          Archive signatures{" "}
-          {proof.archiveProof.signatures.length > 0
-            ? `present (${proof.archiveProof.signatures.length})`
-            : "absent"}
-          ; finality evidence is reported separately.
-        </div>
+        <>
+          <div style={submitMeta}>
+            Archive binding: {receiptArchiveProofSourceText(proof.archiveProof.source)}.
+            Archive signatures{" "}
+            {proof.archiveProof.signatures.length > 0
+              ? `present (${proof.archiveProof.signatures.length})`
+              : "absent"}
+            ; finality evidence is reported separately.
+          </div>
+          {proof.archiveProof.signatureDigest !== undefined && (
+            <>
+              <div style={submitMeta}>
+                Snapshot archive signature digest material is present; this is
+                not validator finality or wallet-side cryptographic verification.
+              </div>
+              <ReceiptProofHashRow
+                label="Archive signature digest"
+                value={proof.archiveProof.signatureDigest}
+              />
+            </>
+          )}
+        </>
       )}
       {proof.finalityEvidence === null ? (
         <div style={submitMeta}>
