@@ -76,6 +76,10 @@ export interface SendTxView {
   estimatedGas: string | null;
   /** Compatibility field name; hex lythoshi per execution unit. */
   gasPrice: string | null;
+  /** Optional ADR-0039 native structured fee object. When present, popup fee
+   * display validates it strictly instead of falling back to compatibility
+   * `gas*` fields. */
+  structuredFee?: unknown;
   nonce: string | null;
   simulation:
     | null
@@ -568,6 +572,9 @@ export interface FeeSuggestion {
    * an intrinsic floor `eth_estimateGas` doesn't report); null on other
    * chains where the popup should estimate itself if needed. */
   gasLimit: string | null;
+  /** Optional ADR-0039 native structured fee object. Existing IPCs still return
+   * compatibility fee fields; this is additive for native-aware providers. */
+  structuredFee?: unknown;
 }
 
 /** Tx hash + diagnostic operator id from `bgWalletSendTx`. */
@@ -592,6 +599,7 @@ export async function bgWalletFeeSuggestion(
       maxFeePerGas: r.maxFeePerGas,
       baseFeePerGas: r.baseFeePerGas,
       gasLimit: r.gasLimit,
+      ...(r.structuredFee !== undefined ? { structuredFee: r.structuredFee } : {}),
     },
   };
 }
