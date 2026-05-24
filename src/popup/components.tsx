@@ -70,6 +70,16 @@ import {
   type OriginWarning,
   type MessageWarning,
 } from "../shared/phishing";
+import {
+  computeNativeFeeFromPrice,
+  formatExecutionUnits as formatNativeExecutionUnits,
+  formatLythoshiAmountHex as formatNativeLythoshiAmountHex,
+  formatLythoshiPerExecutionUnit as formatNativeLythoshiPerExecutionUnit,
+  lythoshiToLythString as formatLythoshiAsLythString,
+  nativeFeeDisplayFromPrice,
+  parseNativeHexQuantity,
+  scaleByBps,
+} from "../shared/native-fee-display";
 
 
 // ---- Chain status banner (replaces DemoBanner) ----
@@ -2722,57 +2732,25 @@ function bytesToUtf8IfPrintable(b: Uint8Array): string | null {
   }
 }
 
-const LYTHOSHI_PER_LYTH = 100_000_000n;
-
-export function parseHexQuantity(hex: string | null | undefined): bigint | null {
-  if (!hex) return null;
-  try {
-    return BigInt(hex.startsWith("0x") || hex.startsWith("0X") ? hex : "0x" + hex);
-  } catch {
-    return null;
-  }
-}
-
-export function formatExecutionUnits(hex: string | null | undefined): string {
-  const b = parseHexQuantity(hex);
-  return b == null ? "—" : b.toString(10);
-}
-
-export function formatLythoshiPerExecutionUnit(hex: string | null | undefined): string {
-  const b = parseHexQuantity(hex);
-  if (b == null) return "—";
-  return b.toString(10);
-}
-
-export function lythoshiToLythString(lythoshi: bigint, decimals = 8): string {
-  if (lythoshi <= 0n) return "0";
-  const whole = lythoshi / LYTHOSHI_PER_LYTH;
-  const frac = lythoshi % LYTHOSHI_PER_LYTH;
-  const clampedDecimals = Math.max(0, Math.min(8, Math.trunc(decimals)));
-  if (frac === 0n || clampedDecimals === 0) return whole.toString();
-  const fracStr = frac
-    .toString()
-    .padStart(8, "0")
-    .slice(0, clampedDecimals)
-    .replace(/0+$/, "");
-  return fracStr.length > 0 ? `${whole}.${fracStr}` : whole.toString();
-}
-
-export function formatLythoshiAmountHex(hex: string | null | undefined): string {
-  const b = parseHexQuantity(hex);
-  if (b == null) return "—";
-  return lythoshiToLythString(b);
-}
+export const parseHexQuantity = parseNativeHexQuantity;
+export const formatExecutionUnits = formatNativeExecutionUnits;
+export const formatLythoshiPerExecutionUnit = formatNativeLythoshiPerExecutionUnit;
+export const lythoshiToLythString = formatLythoshiAsLythString;
+export const formatLythoshiAmountHex = formatNativeLythoshiAmountHex;
 
 type FeeTier = "low" | "medium" | "high";
+
+const APPROVAL_FEE_TIER_BPS: Record<FeeTier, bigint> = {
+  low: 9_000n,
+  medium: 10_000n,
+  high: 13_000n,
+};
 
 export function applyFeeTier(
   pricePerExecutionUnitLythoshi: bigint,
   tier: FeeTier,
 ): bigint {
-  if (tier === "low") return (pricePerExecutionUnitLythoshi * 90n) / 100n;
-  if (tier === "high") return (pricePerExecutionUnitLythoshi * 130n) / 100n;
-  return pricePerExecutionUnitLythoshi;
+  return scaleByBps(pricePerExecutionUnitLythoshi, APPROVAL_FEE_TIER_BPS[tier]);
 }
 
 export function computeNativeFeeLythoshi(
@@ -2780,10 +2758,11 @@ export function computeNativeFeeLythoshi(
   pricePerExecutionUnitHex: string | null | undefined,
   tier: FeeTier,
 ): bigint | null {
-  const executionUnits = parseHexQuantity(executionUnitsHex);
-  const basePrice = parseHexQuantity(pricePerExecutionUnitHex);
-  if (executionUnits == null || basePrice == null) return null;
-  return executionUnits * applyFeeTier(basePrice, tier);
+  return computeNativeFeeFromPrice({
+    executionUnitsHex,
+    pricePerExecutionUnitHex,
+    priceMultiplierBps: APPROVAL_FEE_TIER_BPS[tier],
+  });
 }
 
 // ---- calldata decoder ----
@@ -3789,7 +3768,8 @@ export function ReqSendTx({
   const originWarnings = detectOriginWarnings(origin);
   const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
 
-  const baseExecutionUnitPrice = parseHexQuantity(view.gasPrice);
+  const hasStructuredFee = view.structuredFee !== undefined;
+  const baseExecutionUnitPrice = hasStructuredFee ? null : parseHexQuantity(view.gasPrice);
   const tieredExecutionUnitPrice =
     baseExecutionUnitPrice == null
       ? null
@@ -3797,13 +3777,16 @@ export function ReqSendTx({
   const tieredHex =
     tieredExecutionUnitPrice == null ? null : "0x" + tieredExecutionUnitPrice.toString(16);
 
-  const totalFeeLythoshi = computeNativeFeeLythoshi(
-    view.estimatedGas,
-    view.gasPrice,
-    tier,
-  );
-  const totalFeeHex =
-    totalFeeLythoshi == null ? null : "0x" + totalFeeLythoshi.toString(16);
+  const feeDisplayResult = nativeFeeDisplayFromPrice({
+    executionUnitsHex: view.estimatedGas,
+    pricePerExecutionUnitHex: view.gasPrice,
+    priceMultiplierBps: APPROVAL_FEE_TIER_BPS[tier],
+    ...(view.structuredFee !== undefined ? { structuredFee: view.structuredFee } : {}),
+  });
+  const feeDisplay = feeDisplayResult.ok ? feeDisplayResult.display : null;
+  const feeDisplayError = feeDisplayResult.ok
+    ? null
+    : feeDisplayResult.failures.join("; ");
 
   const value = tx.value;
   const data = tx.data ?? "0x";
@@ -3897,43 +3880,73 @@ export function ReqSendTx({
 
       <div className="req-section">
         <div className="req-section__h">Network fee</div>
-        <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-          {(["low", "medium", "high"] as FeeTier[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTier(t)}
-              style={{
-                flex: 1,
-                padding: "7px 6px",
-                borderRadius: 8,
-                fontSize: 10,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                fontFamily: "var(--f-mono)",
-                background: tier === t ? "var(--gold-bg)" : "transparent",
-                color: tier === t ? "var(--gold)" : "var(--fg-300)",
-                border: tier === t ? "1px solid rgba(124,127,255,0.4)" : "1px solid var(--fg-700)",
-                cursor: "pointer",
-              }}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-        <div className="req-kv">
-          <span className="k">Execution-unit limit</span>
-          <span className="v">{formatExecutionUnits(view.estimatedGas)}</span>
-        </div>
-        <div className="req-kv">
-          <span className="k">Price / execution unit</span>
-          <span className="v">{formatLythoshiPerExecutionUnit(tieredHex)} lythoshi</span>
-        </div>
-        <div className="req-kv">
-          <span className="k">Max fee</span>
-          <span className="v">
-            {totalFeeHex ? `${formatLythoshiAmountHex(totalFeeHex)} LYTH` : "—"}
-          </span>
-        </div>
+        {!hasStructuredFee && (
+          <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+            {(["low", "medium", "high"] as FeeTier[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTier(t)}
+                style={{
+                  flex: 1,
+                  padding: "7px 6px",
+                  borderRadius: 8,
+                  fontSize: 10,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  fontFamily: "var(--f-mono)",
+                  background: tier === t ? "var(--gold-bg)" : "transparent",
+                  color: tier === t ? "var(--gold)" : "var(--fg-300)",
+                  border: tier === t ? "1px solid rgba(124,127,255,0.4)" : "1px solid var(--fg-700)",
+                  cursor: "pointer",
+                }}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
+        {feeDisplay?.source === "structured" ? (
+          <>
+            <div className="req-kv">
+              <span className="k">Max fee</span>
+              <span className="v">{feeDisplay.defaultText}</span>
+            </div>
+            {feeDisplay.detailTexts.map((detail, index) => (
+              <div className="req-kv" key={`${index}-${detail}`}>
+                <span className="k">Detail {index + 1}</span>
+                <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 10 }}>
+                  {detail}
+                </span>
+              </div>
+            ))}
+          </>
+        ) : hasStructuredFee ? (
+          <div className="req-kv">
+            <span className="k">Max fee</span>
+            <span className="v">—</span>
+          </div>
+        ) : (
+          <>
+            <div className="req-kv">
+              <span className="k">Execution-unit limit</span>
+              <span className="v">{formatExecutionUnits(view.estimatedGas)}</span>
+            </div>
+            <div className="req-kv">
+              <span className="k">Price / execution unit</span>
+              <span className="v">{formatLythoshiPerExecutionUnit(tieredHex)} lythoshi</span>
+            </div>
+            <div className="req-kv">
+              <span className="k">Max fee</span>
+              <span className="v">{feeDisplay?.defaultText ?? "—"}</span>
+            </div>
+          </>
+        )}
+        {feeDisplayError !== null && (
+          <div className="req-warn warn" style={{ marginTop: 8 }}>
+            <Icon name="warn" size={14} />
+            <div>Malformed fee data: {feeDisplayError}</div>
+          </div>
+        )}
       </div>
 
       {decoded && (
