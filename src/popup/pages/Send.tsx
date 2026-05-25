@@ -1226,31 +1226,6 @@ function computeEstimatedFeeLythoshi(
   });
 }
 
-/** @deprecated IPC compatibility name; use `lythToLythoshiHex`. */
-export function lythToWeiHex(amountStr: string): string {
-  return lythToLythoshiHex(amountStr);
-}
-
-/**
- * @deprecated Legacy helper kept only for the background pending-row golden
- * test until that shared reconciliation path moves to v4.1 lythoshi. The Send
- * page itself uses `lythoshiToLythString`.
- */
-function weiToLythString(compatWei: bigint): string {
-  if (compatWei < 0n) return "0";
-  const compatWeiPerLyth = 10n ** 18n;
-  const intPart = compatWei / compatWeiPerLyth;
-  const fracPart = compatWei % compatWeiPerLyth;
-  if (fracPart === 0n) return intPart.toString();
-  const fracStr = fracPart.toString().padStart(18, "0").replace(/0+$/, "");
-  return fracStr.length === 0
-    ? intPart.toString()
-    : `${intPart.toString()}.${fracStr}`;
-}
-
-/** @deprecated Compatibility export; use `computeEstimatedFeeLythoshi`. */
-const computeEstimatedFeeWei = computeEstimatedFeeLythoshi;
-
 // ---- preview / sending / success / error sub-state views ----
 
 interface PreviewViewProps {
@@ -2203,8 +2178,6 @@ export {
   ADMISSION_REJECT_CODE_HI,
   TIER_LABELS,
   computeEstimatedFeeLythoshi,
-  computeEstimatedFeeWei,
   formatNativeLythAmount,
   lythoshiToLythString,
-  weiToLythString,
 };
