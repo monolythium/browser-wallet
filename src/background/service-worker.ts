@@ -6059,7 +6059,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-active-account": {
       // Surface the unlocked v3 keypair to the popup so Home can render
-      // the real ML-DSA-65 address instead of the demo `mono1:…` placeholder.
+      // the real ML-DSA-65 address instead of the static demo fixture.
       // Stays scoped to v3 — the legacy v2 keystore goes through the
       // existing demo-data path until the Networks list switch lands.
       //
