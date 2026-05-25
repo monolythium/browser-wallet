@@ -8,6 +8,7 @@ import type {
 } from "../shared/token-balances.js";
 import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
+import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
@@ -560,21 +561,19 @@ export async function bgWalletIndexerStatus(
   };
 }
 
-/** Fee strategy returned by `bgWalletFeeSuggestion`. */
-export interface FeeSuggestion {
-  /** Hex lythoshi per execution unit — sender's tip target (the only revenue path on Sprintnet). */
+/** Raw background-service-worker fee reply. Field names mirror EIP-1193/RPC. */
+interface FeeSuggestionWire {
   maxPriorityFeePerGas: string;
-  /** Hex lythoshi per execution unit — hard cap (priority + base). */
   maxFeePerGas: string;
-  /** Hex lythoshi per execution unit — current/next-block base fee. Surfaced for the UI fee preview. */
   baseFeePerGas: string;
-  /** Hex execution-unit limit recommendation. Non-null on Sprintnet (the chain has
-   * an intrinsic floor `eth_estimateGas` doesn't report); null on other
-   * chains where the popup should estimate itself if needed. */
   gasLimit: string | null;
-  /** Optional ADR-0039 native structured fee object. Existing IPCs still return
-   * compatibility fee fields; this is additive for native-aware providers. */
   structuredFee?: unknown;
+}
+
+/** Native fee strategy returned by `bgWalletFeeSuggestion`. */
+export interface FeeSuggestion extends NativeExecutionFeeSuggestion {
+  /** Hex lythoshi per execution unit — hard cap (priority + base). */
+  maxPricePerExecutionUnitLythoshiHex: string;
 }
 
 /** Tx hash + diagnostic operator id from `bgWalletSendTx`. */
@@ -588,17 +587,17 @@ export async function bgWalletFeeSuggestion(
 ): Promise<{ ok: true; suggestion: FeeSuggestion } | { ok: false; reason?: string }> {
   // The IPC handler returns the fee fields inline; reshape for callers.
   type Reply =
-    | ({ ok: true } & FeeSuggestion)
+    | ({ ok: true } & FeeSuggestionWire)
     | { ok: false; reason?: string };
   const r = await send<Reply>("wallet-fee-suggestion", { chainIdHex });
   if (!r.ok) return r;
   return {
     ok: true,
     suggestion: {
-      maxPriorityFeePerGas: r.maxPriorityFeePerGas,
-      maxFeePerGas: r.maxFeePerGas,
-      baseFeePerGas: r.baseFeePerGas,
-      gasLimit: r.gasLimit,
+      executionUnitLimitHex: r.gasLimit,
+      basePricePerExecutionUnitLythoshiHex: r.baseFeePerGas,
+      priorityPricePerExecutionUnitLythoshiHex: r.maxPriorityFeePerGas,
+      maxPricePerExecutionUnitLythoshiHex: r.maxFeePerGas,
       ...(r.structuredFee !== undefined ? { structuredFee: r.structuredFee } : {}),
     },
   };
