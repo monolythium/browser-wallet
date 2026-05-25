@@ -7,6 +7,8 @@
 // surface yet); the rendering is verified manually via the dev popup.
 
 import { describe, expect, it } from "vitest";
+import { keccak_256 } from "@noble/hashes/sha3.js";
+import { bytesToHex, hexToBytes } from "@monolythium/core-sdk/crypto";
 import {
   draftsToSigners,
   pubkeyToAddress,
@@ -47,12 +49,13 @@ describe("pubkeyToAddress", () => {
     expect(pubkeyToAddress(fakePubkey(0xab).slice(0, -2))).toBe("");
   });
 
-  it("derives an address shorter than the pubkey (last 20 of keccak256)", () => {
+  it("derives an address shorter than the pubkey with ADR-0038", () => {
     const pk = fakePubkey(0xab);
     const addr = pubkeyToAddress(pk);
     // Sanity — the address is hashed-derived, not a literal prefix.
     expect(addr.length).toBe(42);
     expect(addr).not.toBe(pk.slice(0, 42));
+    expect(addr).not.toBe(bytesToHex(keccak_256(hexToBytes(pk)).slice(12)));
   });
 });
 

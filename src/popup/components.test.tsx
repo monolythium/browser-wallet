@@ -430,8 +430,8 @@ describe("ReqSendTx native agent calldata decode", () => {
     const controller = "22".repeat(20);
     const assetId = "33".repeat(32);
     const payload = encodeNativeAgentSetSpendingPolicyCall({
-      owner: `0x${owner}`,
-      controller: `0x${controller}`,
+      owner: addressToTypedBech32("user", `0x${owner}`),
+      controller: addressToTypedBech32("user", `0x${controller}`),
       nonce: 7,
       assetId: `0x${assetId}`,
       perActionLimit: "125",
@@ -463,9 +463,9 @@ describe("ReqSendTx native agent calldata decode", () => {
     const assetId = "44".repeat(32);
     const termsHash = "55".repeat(32);
     const payload = encodeNativeAgentCreateEscrowCall({
-      buyer: `0x${buyer}`,
-      provider: `0x${provider}`,
-      arbiter: `0x${arbiter}`,
+      buyer: addressToTypedBech32("user", `0x${buyer}`),
+      provider: addressToTypedBech32("user", `0x${provider}`),
+      arbiter: addressToTypedBech32("user", `0x${arbiter}`),
       nonce: 9,
       assetId: `0x${assetId}`,
       amount: "123",
@@ -493,8 +493,8 @@ describe("ReqSendTx native agent calldata decode", () => {
     const subject = "77".repeat(20);
     const payloadHash = "88".repeat(32);
     const payload = encodeNativeAgentRecordReputationCall({
-      reviewer: `0x${reviewer}`,
-      subject: `0x${subject}`,
+      reviewer: addressToTypedBech32("user", `0x${reviewer}`),
+      subject: addressToTypedBech32("user", `0x${subject}`),
       categoryId: 42,
       scores: {
         speed: 5,
