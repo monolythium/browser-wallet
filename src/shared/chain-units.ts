@@ -59,9 +59,11 @@ export function chainAmountToLythoshi(chainAmount: bigint): bigint {
 }
 
 /**
- * Coerce a chain-returned `0x`-hex balance into wallet-internal lythoshi
- * `0x`-hex. Defensive: malformed input is returned unchanged so the
- * caller's existing parse failure mode is preserved.
+ * Coerce a chain-returned `0x`-hex value into wallet-internal lythoshi
+ * `0x`-hex. The body is generic: any wei-magnitude hex (balance, fee
+ * field, base price) round-trips through the same division. Defensive:
+ * malformed input is returned unchanged so the caller's existing parse
+ * failure mode is preserved.
  */
 export function legacyChainBalanceHexToLythoshiHex(chainHex: string): string {
   if (!CHAIN_RETURNS_LEGACY_WEI) return chainHex;
@@ -74,4 +76,41 @@ export function legacyChainBalanceHexToLythoshiHex(chainHex: string): string {
   }
   const lythoshi = chainAmountToLythoshi(chainAmount);
   return "0x" + lythoshi.toString(16);
+}
+
+/**
+ * Wire shape for the `wallet-fee-suggestion` IPC reply at the popup
+ * boundary. Mirrors `FeeSuggestion` (`popup/bg.ts`) without importing
+ * across the boundary.
+ *
+ * Magnitude contract: the popup `FeeSuggestion` is documented as
+ * lythoshi-per-execution-unit. The SW handler however returns
+ * chain-wire wei magnitudes because `wallet-send-tx` /
+ * `wallet-multisig-execute` need wei on the wire (V4-LIVE-0008
+ * operators expect wei). The popup-side boundary applies this helper
+ * to honour the lythoshi contract for display + intra-popup math.
+ */
+export interface LegacyChainFeeSuggestionFields {
+  maxPriorityFeePerGas: string;
+  maxFeePerGas: string;
+  baseFeePerGas: string;
+}
+
+/**
+ * Convert the wei-magnitude fee fields returned by the service-worker
+ * `wallet-fee-suggestion` IPC into lythoshi-magnitude, matching the
+ * popup `FeeSuggestion` documented contract. Pass-through when the
+ * chain is in lythoshi-native mode. Non-fee fields (`gasLimit`,
+ * `structuredFee`) are preserved unchanged.
+ */
+export function legacyChainFeeSuggestionWeiToLythoshi<
+  T extends LegacyChainFeeSuggestionFields,
+>(fee: T): T {
+  if (!CHAIN_RETURNS_LEGACY_WEI) return fee;
+  return {
+    ...fee,
+    maxPriorityFeePerGas: legacyChainBalanceHexToLythoshiHex(fee.maxPriorityFeePerGas),
+    maxFeePerGas: legacyChainBalanceHexToLythoshiHex(fee.maxFeePerGas),
+    baseFeePerGas: legacyChainBalanceHexToLythoshiHex(fee.baseFeePerGas),
+  };
 }
