@@ -2700,8 +2700,8 @@ export { ReqSheet };
 // These render the actual EIP-1193 request the dapp sent — no demo-data here.
 // The service worker pre-populates a `SendTxView` (execution-unit budget,
 // fee price, simulation, nonce) and an EIP-712 `digest` so the popup can
-// show real numbers without RPC access of its own. The view still carries
-// inherited `gas`/`gasPrice` field names at the EIP-1193 boundary.
+// show real numbers without RPC access of its own. The request `tx` still
+// carries inherited EIP-1193 field names at the dapp boundary.
 // ---------------------------------------------------------------------------
 
 // Hex / bytes helpers that don't drag a Buffer dep in.
@@ -3769,7 +3769,9 @@ export function ReqSendTx({
   const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
 
   const hasStructuredFee = view.structuredFee !== undefined;
-  const baseExecutionUnitPrice = hasStructuredFee ? null : parseHexQuantity(view.gasPrice);
+  const baseExecutionUnitPrice = hasStructuredFee
+    ? null
+    : parseHexQuantity(view.pricePerExecutionUnitLythoshiHex);
   const tieredExecutionUnitPrice =
     baseExecutionUnitPrice == null
       ? null
@@ -3778,8 +3780,8 @@ export function ReqSendTx({
     tieredExecutionUnitPrice == null ? null : "0x" + tieredExecutionUnitPrice.toString(16);
 
   const feeDisplayResult = nativeFeeDisplayFromPrice({
-    executionUnitLimitHex: view.estimatedGas,
-    pricePerExecutionUnitLythoshiHex: view.gasPrice,
+    executionUnitLimitHex: view.executionUnitLimitHex,
+    pricePerExecutionUnitLythoshiHex: view.pricePerExecutionUnitLythoshiHex,
     priceMultiplierBps: APPROVAL_FEE_TIER_BPS[tier],
     ...(view.structuredFee !== undefined ? { structuredFee: view.structuredFee } : {}),
   });
@@ -3929,7 +3931,7 @@ export function ReqSendTx({
           <>
             <div className="req-kv">
               <span className="k">Execution-unit limit</span>
-              <span className="v">{formatExecutionUnits(view.estimatedGas)}</span>
+              <span className="v">{formatExecutionUnits(view.executionUnitLimitHex)}</span>
             </div>
             <div className="req-kv">
               <span className="k">Price / execution unit</span>

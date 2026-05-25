@@ -1815,8 +1815,8 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: "0x10f2c",
     });
     expect(approval?.view).toMatchObject({
-      estimatedGas: "0x200000",
-      gasPrice: "0x989680",
+      executionUnitLimitHex: "0x200000",
+      pricePerExecutionUnitLythoshiHex: "0x989680",
       nonce: "0x8",
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Sprintnet",
@@ -1880,6 +1880,13 @@ describe("wallet-mrv-submit-plan", () => {
       maxPriorityFeePerGas: "0x2540be400",
       nonce: "0x8",
       chainId: "0x10f2c",
+    });
+    expect(approval?.view).toMatchObject({
+      executionUnitLimitHex: "0x200000",
+      pricePerExecutionUnitLythoshiHex: "0x2540be401",
+      nonce: "0x8",
+      chainId: TESTNET_CHAIN_ID_HEX,
+      chainLabel: "Sprintnet",
     });
     expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,

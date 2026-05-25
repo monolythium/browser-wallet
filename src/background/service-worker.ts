@@ -1005,9 +1005,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
 
       // Build the approval view BEFORE opening the popup so the user sees
-      // real numbers (gas estimate, simulation outcome, nonce) instead of
-      // demo placeholders. RPC failures degrade gracefully — we still let
-      // the user approve, but the popup will surface the gap.
+      // real numbers (execution-unit estimate, simulation outcome, nonce)
+      // instead of demo placeholders. RPC failures degrade gracefully; the
+      // user can still approve, but the popup will surface the gap.
       const view = await buildSendTxView(txReq);
       const approvalTx = {
         ...(typeof txReq.from === "string" ? { from: txReq.from } : {}),
@@ -1055,7 +1055,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             txReq.nonce ?? view.nonce ??
             (await sprintnetJsonRpc<string>("eth_getTransactionCount", [fromAddr, "pending"])).result;
           const executionUnitPriceHex =
-            txReq.gasPrice ?? view.gasPrice ??
+            txReq.gasPrice ?? view.pricePerExecutionUnitLythoshiHex ??
             (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
           // Sprintnet's mempool intrinsic execution-unit floor is above what
           // `eth_estimateGas` reports (the latter only covers EVM
@@ -1064,7 +1064,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // chain reject than silently override — otherwise default to
           // the wallet's audited Sprintnet floor with headroom.
           const executionUnitsHex =
-            txReq.gas ?? view.estimatedGas ?? SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
+            txReq.gas ??
+            view.executionUnitLimitHex ??
+            SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
 
           // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
           // The chain rejects plaintext at admission (Law §4.5 / Q2), so
@@ -1094,17 +1096,19 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         if (!net) throw new Error(`unknown chain ${session.chainId}`);
         const provider = providerFor(session.chainId);
 
-        // Re-resolve gas with the latest node values at sign time. The view
-        // we showed the user is the same shape (and usually identical
-        // numbers) but we don't trust stale views to be authoritative.
+        // Re-resolve execution units and fee with the latest node values at
+        // sign time. The view we showed the user is usually identical, but we
+        // don't trust stale views to be authoritative.
         const fromAddr = getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
         const nonceHex =
           txReq.nonce ?? view.nonce ??
           (await rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]));
         const gasPriceHex =
-          txReq.gasPrice ?? view.gasPrice ?? (await rpcSend<string>(provider, "eth_gasPrice", []));
+          txReq.gasPrice ??
+          view.pricePerExecutionUnitLythoshiHex ??
+          (await rpcSend<string>(provider, "eth_gasPrice", []));
         const gasHex =
-          txReq.gas ?? view.estimatedGas ??
+          txReq.gas ?? view.executionUnitLimitHex ??
           (await rpcSend<string>(provider, "eth_estimateGas", [
             {
               from: fromAddr,
@@ -1505,8 +1509,8 @@ async function buildSendTxView(
   const chainLabel = net?.name ?? chainId;
 
   const view: SendTxView = {
-    estimatedGas: txReq.gas ?? null,
-    gasPrice: txReq.gasPrice ?? null,
+    executionUnitLimitHex: txReq.gas ?? null,
+    pricePerExecutionUnitLythoshiHex: txReq.gasPrice ?? null,
     nonce: txReq.nonce ?? null,
     simulation: null,
     chainId,
@@ -1540,13 +1544,13 @@ async function buildSendTxView(
           )
       : Promise.resolve(null);
 
-  const [gasEst, gasPrice, nonce, sim] = await Promise.all([
-    view.estimatedGas != null
-      ? Promise.resolve(view.estimatedGas)
+  const [executionUnitLimitHex, pricePerExecutionUnitLythoshiHex, nonce, sim] = await Promise.all([
+    view.executionUnitLimitHex != null
+      ? Promise.resolve(view.executionUnitLimitHex)
       : rpcSend<string>(provider, "eth_estimateGas", [callShape])
           .catch(() => null as string | null),
-    view.gasPrice != null
-      ? Promise.resolve(view.gasPrice)
+    view.pricePerExecutionUnitLythoshiHex != null
+      ? Promise.resolve(view.pricePerExecutionUnitLythoshiHex)
       : rpcSend<string>(provider, "eth_gasPrice", [])
           .catch(() => null as string | null),
     view.nonce != null
@@ -1556,8 +1560,8 @@ async function buildSendTxView(
     simPromise,
   ]);
 
-  view.estimatedGas = gasEst;
-  view.gasPrice = gasPrice;
+  view.executionUnitLimitHex = executionUnitLimitHex;
+  view.pricePerExecutionUnitLythoshiHex = pricePerExecutionUnitLythoshiHex;
   view.nonce = nonce;
   view.simulation = sim;
   return view;
@@ -1584,8 +1588,8 @@ function buildMrvNativeSendTxApproval(
       chainId: txReq.chainIdHex,
     },
     view: {
-      estimatedGas: txReq.gas,
-      gasPrice: txReq.maxFeePerGas,
+      executionUnitLimitHex: txReq.gas,
+      pricePerExecutionUnitLythoshiHex: txReq.maxFeePerGas,
       nonce: txReq.nonce,
       simulation: null,
       chainId: chainIdHex,
