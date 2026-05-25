@@ -214,7 +214,7 @@ function NftAddBody({
         } catch {
           setError(
             !contractResponds
-              ? "This address doesn't look like an ERC-721 contract on the active chain."
+              ? "This address doesn't look like an MRC-721 contract on the active chain."
               : `Token #${parsedTokenId.toString()} doesn't exist on ${collectionName}.`,
           );
           setVerifying(false);
@@ -290,9 +290,11 @@ function NftAddBody({
   return (
     <div style={colStyle}>
       <div style={hintStyle}>
-        Pin any ERC-721 or ERC-1155 token by its contract address and
+        Pin any MRC-721 or MRC-1155 token by its contract address and
         token id. Sprintnet&apos;s indexer is currently disabled cluster-
         wide, so discovery isn&apos;t automatic — pinning is the way in.
+        (ERC-shaped contracts are read via the EVM compat path until
+        operators ship the native lyth_mrc* RPC; whitepaper §22.5.)
       </div>
 
       <div style={fieldGroupStyle}>
@@ -345,7 +347,7 @@ function NftAddBody({
           <PreviewRow label="Symbol" value={preview.collectionSymbol} />
           <PreviewRow
             label="Standard"
-            value={preview.standard === "erc1155" ? "ERC-1155" : "ERC-721"}
+            value={preview.standard === "erc1155" ? "MRC-1155" : "MRC-721"}
           />
           <PreviewRow
             label="Token ID"
