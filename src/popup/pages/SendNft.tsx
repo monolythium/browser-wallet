@@ -146,7 +146,8 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
         ? null
         : nativeFeeDisplayFromPrice({
             executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
-            pricePerExecutionUnitLythoshiHex: feeSuggestion.maxFeePerGas,
+            pricePerExecutionUnitLythoshiHex:
+              feeSuggestion.maxPricePerExecutionUnitLythoshiHex,
             ...(feeSuggestion.structuredFee !== undefined
               ? { structuredFee: feeSuggestion.structuredFee }
               : {}),
@@ -677,7 +678,7 @@ export function computeEstimatedNftFeeLythoshi(
 function feeSuggestionToNftPriceInput(fee: FeeSuggestion): NativeFeeFromPriceInput {
   return {
     executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
-    pricePerExecutionUnitLythoshiHex: fee.maxFeePerGas,
+    pricePerExecutionUnitLythoshiHex: fee.maxPricePerExecutionUnitLythoshiHex,
     ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
   };
 }

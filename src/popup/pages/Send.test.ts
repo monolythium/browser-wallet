@@ -181,10 +181,10 @@ describe("native LYTH amount conversion — lythoshi precision", () => {
 
 describe("native LYTH fee display math", () => {
   const fee = {
-    maxPriorityFeePerGas: "0x5",
-    maxFeePerGas: "0x8",
-    baseFeePerGas: "0x3",
-    gasLimit: "0xa",
+    priorityPricePerExecutionUnitLythoshiHex: "0x5",
+    maxPricePerExecutionUnitLythoshiHex: "0x8",
+    basePricePerExecutionUnitLythoshiHex: "0x3",
+    executionUnitLimitHex: "0xa",
   };
 
   it("computes estimated fees in lythoshi from price-per-execution-unit fields", () => {
@@ -197,10 +197,10 @@ describe("native LYTH fee display math", () => {
     expect(
       computeEstimatedFeeLythoshi(
         {
-          maxPriorityFeePerGas: "0x1",
-          maxFeePerGas: "0x3",
-          baseFeePerGas: "0x2",
-          gasLimit: null,
+          priorityPricePerExecutionUnitLythoshiHex: "0x1",
+          maxPricePerExecutionUnitLythoshiHex: "0x3",
+          basePricePerExecutionUnitLythoshiHex: "0x2",
+          executionUnitLimitHex: null,
         },
         10_000n,
       ),
