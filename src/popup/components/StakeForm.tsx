@@ -11,10 +11,9 @@
 //   - Cap can be `null` (chain returned `u32::MAX` = disabled). When
 //     disabled, the form skips the cap check entirely.
 //
-// MOCK fee: the wallet still uses the §22 fee model (EIP-1559 base-
-// fee burn) for delegation tx; the form quotes the standard intrinsic
-// gas + small fee. Real fee suggestion arrives from `wallet-fee-
-// suggestion` IPC at the parent.
+// MOCK fee: the wallet still uses the §22 native fee model for delegation tx;
+// the form quotes a standard execution-unit budget plus a small native fee.
+// Real fee suggestion arrives from `wallet-fee-suggestion` IPC at the parent.
 
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
