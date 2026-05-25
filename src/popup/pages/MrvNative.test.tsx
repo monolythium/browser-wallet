@@ -269,7 +269,7 @@ describe("MrvNative", () => {
     expect(html).toContain("MRV native");
     expect(html).toContain("Native contract preview");
     expect(html).toContain("execution units");
-    expect(html).toContain("lythoshi");
+    expect(html).toContain("native fees");
     expect(html).toContain("typed addresses");
     expect(html).toContain("polls transaction receipt inclusion status");
     expect(html).toContain("does not prove live MRV execution");
@@ -412,7 +412,11 @@ describe("MrvNative", () => {
     expect(html).toContain("Native contract");
     expect(html).toContain("Typed user address");
     expect(html).toContain("2097152");
-    expect(html).toContain("10000000 lythoshi");
+    expect(html).toContain("0.1 LYTH");
+    expect(html).toContain("0.00000005 LYTH");
+    expect(html).toContain("209,715.20000042 LYTH");
+    expect(html).not.toContain("10000000 lythoshi");
+    expect(html).not.toContain("20971520000042 lythoshi");
     expect(html).toContain("JSON-safe plan");
     expect(html).toContain("monoc1yg3");
   });
@@ -1008,22 +1012,22 @@ describe("coerceHexQuantityInput", () => {
       }),
     ).toEqual({ ok: true, value: "0xf4240" });
     expect(
-      coerceHexQuantityInput("0x000F", "priority tip lythoshi", {
+      coerceHexQuantityInput("0x000F", "priority tip", {
         required: false,
         allowZero: true,
       }),
     ).toEqual({ ok: true, value: "0xf" });
   });
 
-  it("rejects fractional lythoshi values", () => {
+  it("rejects fractional raw quantity values", () => {
     expect(
-      coerceHexQuantityInput("1.5", "value lythoshi", {
+      coerceHexQuantityInput("1.5", "value", {
         required: false,
         allowZero: true,
       }),
     ).toEqual({
       ok: false,
-      reason: "value lythoshi must be a non-negative integer or 0x hex quantity",
+      reason: "value must be a non-negative integer or 0x hex quantity",
     });
   });
 });
