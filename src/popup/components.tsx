@@ -2754,13 +2754,13 @@ export function applyFeeTier(
 }
 
 export function computeNativeFeeLythoshi(
-  executionUnitsHex: string | null | undefined,
-  pricePerExecutionUnitHex: string | null | undefined,
+  executionUnitLimitHex: string | null | undefined,
+  pricePerExecutionUnitLythoshiHex: string | null | undefined,
   tier: FeeTier,
 ): bigint | null {
   return computeNativeFeeFromPrice({
-    executionUnitsHex,
-    pricePerExecutionUnitHex,
+    executionUnitLimitHex,
+    pricePerExecutionUnitLythoshiHex,
     priceMultiplierBps: APPROVAL_FEE_TIER_BPS[tier],
   });
 }
@@ -3778,8 +3778,8 @@ export function ReqSendTx({
     tieredExecutionUnitPrice == null ? null : "0x" + tieredExecutionUnitPrice.toString(16);
 
   const feeDisplayResult = nativeFeeDisplayFromPrice({
-    executionUnitsHex: view.estimatedGas,
-    pricePerExecutionUnitHex: view.gasPrice,
+    executionUnitLimitHex: view.estimatedGas,
+    pricePerExecutionUnitLythoshiHex: view.gasPrice,
     priceMultiplierBps: APPROVAL_FEE_TIER_BPS[tier],
     ...(view.structuredFee !== undefined ? { structuredFee: view.structuredFee } : {}),
   });

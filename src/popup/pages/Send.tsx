@@ -53,9 +53,10 @@ import {
   formatLythoshiPerExecutionUnit,
   formatNativeLythAmount,
   lythoshiToLythString,
-  nativeFeeDisplayFromFeeSuggestion,
+  nativeFeeDisplayFromExecutionFeeSuggestion,
   parseNativeHexQuantity,
   scaleByBps,
+  type NativeExecutionFeeSuggestion,
 } from "../../shared/native-fee-display";
 
 interface SendProps {
@@ -180,15 +181,19 @@ export function Send({
   }, [account.addr, chainId]);
 
   const tierMultiplierBps = TIER_MULTIPLIERS_BPS[tier];
+  const nativeFeeSuggestion = useMemo(
+    () => (feeSuggestion === null ? null : feeSuggestionToNativeExecutionFee(feeSuggestion)),
+    [feeSuggestion],
+  );
   const estimatedFeeResult = useMemo(
     () =>
-      feeSuggestion === null
+      nativeFeeSuggestion === null
         ? null
-        : nativeFeeDisplayFromFeeSuggestion(feeSuggestion, {
-            fallbackExecutionUnitsHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+        : nativeFeeDisplayFromExecutionFeeSuggestion(nativeFeeSuggestion, {
+            fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
             priorityMultiplierBps: tierMultiplierBps,
           }),
-    [feeSuggestion, tierMultiplierBps],
+    [nativeFeeSuggestion, tierMultiplierBps],
   );
   const estimatedFeeDisplay =
     estimatedFeeResult?.ok === true ? estimatedFeeResult.display : null;
@@ -703,10 +708,12 @@ export function Send({
                     <div style={{ marginTop: 6 }}>
                       Priority price:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
-                        {scaleLythoshiPerExecutionUnit(
-                          feeSuggestion.maxPriorityFeePerGas,
-                          tierMultiplierBps,
-                        )}{" "}
+                        {nativeFeeSuggestion === null
+                          ? "?"
+                          : scaleLythoshiPerExecutionUnit(
+                              nativeFeeSuggestion.priorityPricePerExecutionUnitLythoshiHex,
+                              tierMultiplierBps,
+                            )}{" "}
                         lythoshi / execution unit
                       </span>{" "}
                       <span style={{ color: "var(--fg-500)" }}>
@@ -716,7 +723,9 @@ export function Send({
                     <div>
                       Base price:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
-                        {formatLythoshiPerExecutionUnit(feeSuggestion.baseFeePerGas)}{" "}
+                        {formatLythoshiPerExecutionUnit(
+                          nativeFeeSuggestion?.basePricePerExecutionUnitLythoshiHex,
+                        )}{" "}
                         lythoshi / execution unit
                       </span>
                     </div>
@@ -724,7 +733,7 @@ export function Send({
                       Execution units:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
                         {formatExecutionUnits(
-                          feeSuggestion.gasLimit ??
+                          nativeFeeSuggestion?.executionUnitLimitHex ??
                             FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
                         )}
                       </span>
@@ -1247,18 +1256,32 @@ function scaleLythoshiPerExecutionUnit(
 
 // ---- fee math ----
 
+function feeSuggestionToNativeExecutionFee(
+  fee: FeeSuggestion,
+): NativeExecutionFeeSuggestion {
+  return {
+    executionUnitLimitHex: fee.gasLimit,
+    basePricePerExecutionUnitLythoshiHex: fee.baseFeePerGas,
+    priorityPricePerExecutionUnitLythoshiHex: fee.maxPriorityFeePerGas,
+    ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
+  };
+}
+
 function computeEstimatedFeeLythoshi(
   fee: FeeSuggestion | null,
   priorityMultiplierBps: bigint,
 ): bigint | null {
   if (!fee) return null;
+  const nativeFee = feeSuggestionToNativeExecutionFee(fee);
   return computeNativeFeeFromBaseAndPriority({
-    executionUnitsHex: fee.gasLimit,
-    fallbackExecutionUnitsHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
-    basePricePerExecutionUnitHex: fee.baseFeePerGas,
-    priorityPricePerExecutionUnitHex: fee.maxPriorityFeePerGas,
+    executionUnitLimitHex: nativeFee.executionUnitLimitHex,
+    fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+    basePricePerExecutionUnitLythoshiHex:
+      nativeFee.basePricePerExecutionUnitLythoshiHex,
+    priorityPricePerExecutionUnitLythoshiHex:
+      nativeFee.priorityPricePerExecutionUnitLythoshiHex,
     priorityMultiplierBps,
-    ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
+    ...(nativeFee.structuredFee !== undefined ? { structuredFee: nativeFee.structuredFee } : {}),
   });
 }
 

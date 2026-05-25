@@ -46,6 +46,7 @@ import {
   formatNativeLythAmount,
   lythoshiToLythString,
   nativeFeeDisplayFromPrice,
+  type NativeFeeFromPriceInput,
 } from "../../shared/native-fee-display";
 
 export { lythoshiToLythString };
@@ -144,8 +145,8 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
       feeSuggestion === null
         ? null
         : nativeFeeDisplayFromPrice({
-            executionUnitsHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
-            pricePerExecutionUnitHex: feeSuggestion.maxFeePerGas,
+            executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+            pricePerExecutionUnitLythoshiHex: feeSuggestion.maxFeePerGas,
             ...(feeSuggestion.structuredFee !== undefined
               ? { structuredFee: feeSuggestion.structuredFee }
               : {}),
@@ -670,11 +671,15 @@ export function computeEstimatedNftFeeLythoshi(
   fee: FeeSuggestion | null,
 ): bigint | null {
   if (!fee) return null;
-  return computeNativeFeeFromPrice({
-    executionUnitsHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
-    pricePerExecutionUnitHex: fee.maxFeePerGas,
+  return computeNativeFeeFromPrice(feeSuggestionToNftPriceInput(fee));
+}
+
+function feeSuggestionToNftPriceInput(fee: FeeSuggestion): NativeFeeFromPriceInput {
+  return {
+    executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+    pricePerExecutionUnitLythoshiHex: fee.maxFeePerGas,
     ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
-  });
+  };
 }
 
 // ---------------------------------------------------------------------------

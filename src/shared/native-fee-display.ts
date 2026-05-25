@@ -25,27 +25,26 @@ export type NativeFeeDisplayResult =
   | { ok: true; display: NativeFeeDisplay }
   | { ok: false; reason: string; failures: string[] };
 
-export interface NativeFeeSuggestionLike {
-  maxPriorityFeePerGas: string;
-  maxFeePerGas: string;
-  baseFeePerGas: string;
-  gasLimit: string | null;
-  structuredFee?: unknown;
-}
-
 export interface NativeFeeFromBaseAndPriorityInput {
-  executionUnitsHex: string | null | undefined;
-  fallbackExecutionUnitsHex?: string;
-  basePricePerExecutionUnitHex: string | null | undefined;
-  priorityPricePerExecutionUnitHex: string | null | undefined;
+  executionUnitLimitHex: string | null | undefined;
+  fallbackExecutionUnitLimitHex?: string;
+  basePricePerExecutionUnitLythoshiHex: string | null | undefined;
+  priorityPricePerExecutionUnitLythoshiHex: string | null | undefined;
   priorityMultiplierBps?: bigint;
   structuredFee?: unknown;
 }
 
 export interface NativeFeeFromPriceInput {
-  executionUnitsHex: string | null | undefined;
-  pricePerExecutionUnitHex: string | null | undefined;
+  executionUnitLimitHex: string | null | undefined;
+  pricePerExecutionUnitLythoshiHex: string | null | undefined;
   priceMultiplierBps?: bigint;
+  structuredFee?: unknown;
+}
+
+export interface NativeExecutionFeeSuggestion {
+  executionUnitLimitHex: string | null;
+  basePricePerExecutionUnitLythoshiHex: string;
+  priorityPricePerExecutionUnitLythoshiHex: string;
   structuredFee?: unknown;
 }
 
@@ -88,18 +87,19 @@ export function scaleByBps(value: bigint, multiplierBps: bigint): bigint {
   return (value * multiplierBps) / FEE_MULTIPLIER_BPS_BASE;
 }
 
-export function nativeFeeDisplayFromFeeSuggestion(
-  fee: NativeFeeSuggestionLike,
+export function nativeFeeDisplayFromExecutionFeeSuggestion(
+  fee: NativeExecutionFeeSuggestion,
   options: {
-    fallbackExecutionUnitsHex: string;
+    fallbackExecutionUnitLimitHex: string;
     priorityMultiplierBps?: bigint;
   },
 ): NativeFeeDisplayResult {
   return nativeFeeDisplayFromBaseAndPriority({
-    executionUnitsHex: fee.gasLimit,
-    fallbackExecutionUnitsHex: options.fallbackExecutionUnitsHex,
-    basePricePerExecutionUnitHex: fee.baseFeePerGas,
-    priorityPricePerExecutionUnitHex: fee.maxPriorityFeePerGas,
+    executionUnitLimitHex: fee.executionUnitLimitHex,
+    fallbackExecutionUnitLimitHex: options.fallbackExecutionUnitLimitHex,
+    basePricePerExecutionUnitLythoshiHex: fee.basePricePerExecutionUnitLythoshiHex,
+    priorityPricePerExecutionUnitLythoshiHex:
+      fee.priorityPricePerExecutionUnitLythoshiHex,
     ...(options.priorityMultiplierBps !== undefined
       ? { priorityMultiplierBps: options.priorityMultiplierBps }
       : {}),
@@ -115,12 +115,14 @@ export function nativeFeeDisplayFromBaseAndPriority(
   }
 
   const executionUnits = parseNativeHexQuantity(
-    input.executionUnitsHex ?? input.fallbackExecutionUnitsHex,
+    input.executionUnitLimitHex ?? input.fallbackExecutionUnitLimitHex,
   );
-  const basePrice = parseNativeHexQuantity(input.basePricePerExecutionUnitHex);
-  const priorityPrice = parseNativeHexQuantity(input.priorityPricePerExecutionUnitHex);
+  const basePrice = parseNativeHexQuantity(input.basePricePerExecutionUnitLythoshiHex);
+  const priorityPrice = parseNativeHexQuantity(
+    input.priorityPricePerExecutionUnitLythoshiHex,
+  );
   if (executionUnits === null || basePrice === null || priorityPrice === null) {
-    return invalidFeeResult("legacy compatibility fee fields are malformed");
+    return invalidFeeResult("native execution fee fields are malformed");
   }
 
   const multiplierBps = input.priorityMultiplierBps ?? FEE_MULTIPLIER_BPS_BASE;
@@ -139,10 +141,10 @@ export function nativeFeeDisplayFromPrice(
     return nativeFeeDisplayFromStructuredFee(input.structuredFee);
   }
 
-  const executionUnits = parseNativeHexQuantity(input.executionUnitsHex);
-  const price = parseNativeHexQuantity(input.pricePerExecutionUnitHex);
+  const executionUnits = parseNativeHexQuantity(input.executionUnitLimitHex);
+  const price = parseNativeHexQuantity(input.pricePerExecutionUnitLythoshiHex);
   if (executionUnits === null || price === null) {
-    return invalidFeeResult("legacy compatibility fee fields are malformed");
+    return invalidFeeResult("native execution fee fields are malformed");
   }
 
   const multiplierBps = input.priceMultiplierBps ?? FEE_MULTIPLIER_BPS_BASE;
