@@ -647,6 +647,9 @@ describe("indexed token balance display", () => {
   });
 
   it("formats native MRC holder summary rows without inventing totals", () => {
+    // §22.7 — shortAddr converts the wire-format 0x address to bech32m
+    // before truncating, so the rendered line carries the canonical
+    // `mono1…` form rather than the legacy hex slice.
     expect(
       formatMrcHolderDisplayLine({
         rank: 1,
@@ -654,7 +657,7 @@ describe("indexed token balance display", () => {
         balance: "42",
         updatedAtBlock: 12345,
       }),
-    ).toBe("#1 0x11111111…1111 · 42 · block 12,345");
+    ).toBe("#1 mono1zyg3z…f9at · 42 · block 12,345");
   });
 
   it("labels MRC-4626 holder summaries as vault share holders", () => {
