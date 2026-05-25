@@ -344,7 +344,7 @@ export async function bgKeystoreWipeUnauth(): Promise<
 
 /**
  * Real account state surfaced to the popup so Home can render the
- * unlocked v3 wallet's address instead of the demo `mono1:…` placeholder.
+ * unlocked v3 wallet's address instead of the static demo fixture.
  * Mirrors the shape the service worker returns from "wallet-active-account".
  */
 export interface ActiveAccount {
