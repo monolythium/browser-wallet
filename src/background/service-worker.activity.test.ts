@@ -290,7 +290,7 @@ vi.mock("./networks.js", () => ({
   chainRequiresMlDsa: vi.fn((chainIdHex: string) =>
     chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase(),
   ),
-  SPRINTNET_TRANSFER_GAS_LIMIT_HEX: "0x5208",
+  SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
   BUILTIN_CHAINS: [
     {
@@ -371,8 +371,8 @@ vi.mock("./connected-sites.js", () => ({
   clearAllConnectedSites: vi.fn(async () => undefined),
 }));
 
-vi.mock("@monolythium/core-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
+vi.mock("@monolythium/core-sdk/ethers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk/ethers")>();
   return {
     ...actual,
     MonolythiumProvider: class {
@@ -380,6 +380,13 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
         return [];
       }
     },
+  };
+});
+
+vi.mock("@monolythium/core-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
+  return {
+    ...actual,
     MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
     verifyNoEvmFinalityEvidenceThreshold:
       mockVerifyNoEvmFinalityEvidenceThreshold,
@@ -1716,11 +1723,12 @@ describe("wallet-send-tx pending-row prepend", () => {
 
 describe("wallet-mrv-submit-plan", () => {
   const CONTRACT = "0x2222222222222222222222222222222222222222";
+  const CONTRACT_TYPED = addressToTypedBech32("contract", CONTRACT);
 
   function buildSubmitPlan() {
     return buildWalletMrvCallNativePlan({
       fromAddress: DETERMINISTIC_ADDRESS,
-      contractAddress: CONTRACT,
+      contractAddress: CONTRACT_TYPED,
       chainIdHex: TESTNET_CHAIN_ID_HEX,
       nonceHex: "0x8",
       executionUnitLimitHex: "0x200000",
@@ -1815,8 +1823,8 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: "0x10f2c",
     });
     expect(approval?.view).toMatchObject({
-      estimatedGas: "0x200000",
-      gasPrice: "0x989680",
+      executionUnitLimitHex: "0x200000",
+      pricePerExecutionUnitLythoshiHex: "0x989680",
       nonce: "0x8",
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Sprintnet",
@@ -1847,7 +1855,7 @@ describe("wallet-mrv-submit-plan", () => {
     const r = await dispatchRpc(
       "monolythium_submitMrvNativeCall",
       [{
-        contractAddress: CONTRACT,
+        contractAddress: CONTRACT_TYPED,
         input: "0xaabbccdd",
         chainIdHex: TESTNET_CHAIN_ID_HEX,
         executionUnitLimitHex: "0x200000",
@@ -1881,6 +1889,13 @@ describe("wallet-mrv-submit-plan", () => {
       nonce: "0x8",
       chainId: "0x10f2c",
     });
+    expect(approval?.view).toMatchObject({
+      executionUnitLimitHex: "0x200000",
+      pricePerExecutionUnitLythoshiHex: "0x2540be401",
+      nonce: "0x8",
+      chainId: TESTNET_CHAIN_ID_HEX,
+      chainLabel: "Sprintnet",
+    });
     expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
@@ -1892,6 +1907,34 @@ describe("wallet-mrv-submit-plan", () => {
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
     });
+  });
+
+  it("rejects raw MRV native call contract addresses at the dapp boundary", async () => {
+    const origin = "https://mrv-provider-call.example";
+    await dispatchRpc("eth_requestAccounts", [], origin);
+    enqueuedApprovals.length = 0;
+
+    const r = await dispatchRpc(
+      "monolythium_submitMrvNativeCall",
+      [{
+        contractAddress: CONTRACT,
+        input: "0xaabbccdd",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        executionUnitLimitHex: "0x200000",
+        valueWeiHex: "0x2a",
+      }],
+      origin,
+    );
+
+    expect(r.result).toBeUndefined();
+    expect(r.error).toMatchObject({
+      code: -32602,
+      message:
+        "MRV native contractAddress raw 0x addresses are retired; use a typed monoc1 address",
+    });
+    expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
+    expect(enqueuedApprovals).toHaveLength(0);
+    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("rejects provider MRV submissions from unconnected origins", async () => {

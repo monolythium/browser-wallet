@@ -19,6 +19,7 @@ import {
   type ActivityCache,
   type PendingTxRow,
 } from "../../shared/activity.js";
+import { isDemoAddrSentinel } from "../../shared/demo-addr-sentinel.js";
 import { bgWalletActivityGet } from "../bg.js";
 
 export interface UseActivityResult {
@@ -66,6 +67,17 @@ export function useActivity(
   const refresh = useCallback(async () => {
     if (!addr || !chainIdHex) return;
     if (!addr.startsWith("0x")) return;
+    // Round 3.5 — skip the IPC + cache write when the address is one
+    // of the popup demo-data sentinels. The popup's initial state seeds
+    // `acc = ACCOUNTS[0]` whose addr is `0xa9f2…0001`; the
+    // `wallet-active-account` IPC then replaces it with the real
+    // unlocked vault address. Without this guard the brief demo-state
+    // window fires a real `wallet-activity-get` IPC, which writes
+    // `mono.activity.<demo-addr>.<chainId>` into chrome.storage —
+    // confirmed in the 2026-05-26 storage dump. Guarding here is the
+    // cheapest defense (no IPC, no cache); the SW boot also runs a
+    // one-shot migration to remove pre-existing sentinel cache keys.
+    if (isDemoAddrSentinel(addr)) return;
     const myToken = ++tokenRef.current;
     const r = await bgWalletActivityGet(addr, chainIdHex);
     if (myToken !== tokenRef.current) return;
@@ -80,7 +92,7 @@ export function useActivity(
   }, [addr, chainIdHex]);
 
   useEffect(() => {
-    if (!addr || !chainIdHex || !addr.startsWith("0x")) {
+    if (!addr || !chainIdHex || !addr.startsWith("0x") || isDemoAddrSentinel(addr)) {
       setCache(null);
       setPending([]);
       setLoading(false);

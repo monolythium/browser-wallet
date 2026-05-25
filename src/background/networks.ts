@@ -21,26 +21,24 @@ export const SPRINTNET_CHAIN_ID_HEX =
 export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 
 /**
- * Minimum intrinsic gas for a plain LYTH transfer on Sprintnet.
+ * Minimum execution-unit limit for a plain LYTH transfer on Sprintnet.
  * Empirically verified via admission rejection on a foundation operator: the chain
  * enforces a floor of 24309 (presumably ML-DSA-65 verify + envelope
  * decrypt + state proof overhead). 30000 = 0x7530 leaves headroom.
  * If the floor moves above this, the wallet needs a bump.
  *
  * Note: `eth_estimateGas` is NOT trustworthy for Sprintnet — it returns
- * the EVM execution gas only (~21000) and ignores the mempool intrinsic
- * floor. The Sprintnet code paths must hardcode this constant instead
- * of estimating.
+ * the compatibility execution estimate only (~21000) and ignores the
+ * mempool intrinsic floor. The Sprintnet code paths must hardcode this
+ * constant instead of estimating.
  */
-export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
+export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
 /**
  * Sprintnet operator RPC endpoints — sourced from the SDK-bundled chain
  * registry (`@monolythium/core-sdk` `getRpcEndpoints("testnet-69420")`).
  * Broadcast paths iterate this list and use the first responder. Registry
- * order is intentional (fsn1 hosts geographically closer to most EU/US
- * users; ash + sin are the long-haul fallbacks) and is refreshed by
- * bumping the SDK package.
+ * order is intentional and refreshed by bumping the SDK package.
  *
  * Phase 4.3 Change 2: this is the *defaults* list. Power users can
  * override via chrome.storage.local["mono.operators.override"]. RPC
@@ -48,11 +46,8 @@ export const SPRINTNET_TRANSFER_GAS_LIMIT_HEX = "0x7530"; // 30000
  * these defaults at lookup time.
  *
  * Naming: the registry-sourced endpoints are labelled `operator-N` (1-
- * indexed, matching the SDK snapshot's ordering). The 2026-05-11 regenesis
- * dropped the original operator-1 (its bls.key was destroyed during a
- * debugging triple-wipe → cluster dropped to 6/7, BFT floor 5/7). The SDK
- * registry already excludes that endpoint, so the wallet inherits the drop
- * automatically and no longer hardcodes the exclusion.
+ * indexed, matching the SDK snapshot's ordering). The SDK registry owns
+ * membership; the wallet mirrors it and no longer hardcodes exclusions.
  */
 export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
   getRpcEndpoints("testnet-69420").map((endpoint, i) => ({
@@ -115,6 +110,130 @@ export async function setOperatorOverride(
 /** Defaults snapshot for popup-side display. */
 export function getDefaultOperators(): ReadonlyArray<OperatorEntry> {
   return SPRINTNET_OPERATOR_RPCS_DEFAULTS;
+}
+
+/**
+ * Wallet-side fallback operator list — the six raw-IP Sprintnet
+ * operators verified live via PowerShell RPC probe on 2026-05-25.
+ *
+ * Why: the SDK chain registry was rewritten on `riscv` between
+ * `d0bfe4d` and `46c009a` to expose a single domain endpoint at
+ * `https://rpc.monolythium.com` and an empty `p2p` list — see
+ * `mono-core-sdk/packages/ts/src/registry.ts` `TESTNET_69420` lines
+ * 95-112. DNS for that hostname is not provisioned as of 2026-05-25
+ * (Round 2 abort condition during the chain-sync diagnostic), so the
+ * wallet's `SPRINTNET_OPERATOR_RPCS_DEFAULTS` collapses to a single
+ * unreachable entry. `applyFallbackOperatorsIfStranded()` patches this
+ * at SW boot by writing the list below into the `mono.operators.override`
+ * storage key so RPC dispatch reaches the live operator pool.
+ *
+ * REMOVE WHEN: either (a) the SDK registry is restored to enumerate
+ * multiple operator endpoints (the wallet falls back to the SDK list
+ * automatically once the fallback function's stranded-check returns
+ * false), OR (b) DNS for `rpc.monolythium.com` is provisioned and the
+ * wallet operator team confirms the single-endpoint posture is the
+ * intended permanent shape. Clean removal: delete
+ * `FALLBACK_OPERATORS_2026_05_25`, delete
+ * `applyFallbackOperatorsIfStranded()`, delete the SW-boot caller in
+ * `service-worker.ts`, AND ship a one-shot migration that clears
+ * `chrome.storage.local["mono.operators.override"]` if its value
+ * matches the fallback list verbatim (so users who never explicitly
+ * chose this override don't keep it after upgrade).
+ */
+export const FALLBACK_OPERATORS_2026_05_25: ReadonlyArray<OperatorEntry> = [
+  { name: "operator-1", region: "fsn1", rpc: "http://192.0.2.1:8545" },
+  { name: "operator-2", region: "nbg1", rpc: "http://192.0.2.2:8545" },
+  { name: "operator-3", region: "hel1", rpc: "http://192.0.2.3:8545" },
+  { name: "operator-4", region: "hel1", rpc: "http://192.0.2.4:8545" },
+  { name: "operator-5", region: "ash",  rpc: "http://192.0.2.5:8545"  },
+  { name: "operator-6", region: "sin",  rpc: "http://192.0.2.6:8545"   },
+];
+
+const RPC_MONOLYTHIUM_DOT_COM = "https://rpc.monolythium.com";
+const RPC_MONOLYTHIUM_DNS_PROBE_TIMEOUT_MS = 3_000;
+
+/** Probe DNS+connectivity for `rpc.monolythium.com` via a short-timeout
+ *  fetch. Returns true when the host resolves AND a TCP connection
+ *  succeeds (regardless of HTTP status — even a 404 means DNS works);
+ *  returns false on AbortError / TypeError ("Failed to fetch" / DNS
+ *  failure / connection refused). Used only for diagnostic logging by
+ *  `applyFallbackOperatorsIfStranded()`. */
+async function probeRpcMonolythiumDotComReachable(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    RPC_MONOLYTHIUM_DNS_PROBE_TIMEOUT_MS,
+  );
+  try {
+    const res = await fetch(RPC_MONOLYTHIUM_DOT_COM, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "net_version",
+        params: [],
+        id: 1,
+      }),
+      signal: controller.signal,
+    });
+    // Any response (incl. 4xx / 5xx) proves DNS resolved and TCP succeeded.
+    void res; // discard body
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Apply `FALLBACK_OPERATORS_2026_05_25` as the persisted operator
+ * override when the SDK chain registry has stranded the wallet with
+ * fewer than 2 Sprintnet endpoints AND the user has not already
+ * configured an explicit override.
+ *
+ * Safety rails:
+ * 1. SDK registry healthy (≥2 entries) → no-op. The fallback is
+ *    only for the collapsed-registry regression.
+ * 2. User override already present in `chrome.storage.local` → no-op
+ *    and log. Any non-empty stored override is treated as user-owned
+ *    and respected; the wallet never overwrites a user choice. This
+ *    also means once the fallback is applied, subsequent boots will
+ *    detect the stored override and become no-ops — the fallback is
+ *    sticky until the user clears it or the SDK registry recovers.
+ * 3. Otherwise → log DNS-probe result for `rpc.monolythium.com` (helps
+ *    distinguish "DNS still not provisioned" from "DNS resolves but
+ *    we still want multi-IP failover redundancy") and write the
+ *    six-IP override.
+ *
+ * Must be called AFTER `loadOperatorOverride()` at SW boot so the
+ * user-override check sees the persisted value, not stale defaults.
+ */
+export async function applyFallbackOperatorsIfStranded(): Promise<void> {
+  if (SPRINTNET_OPERATOR_RPCS_DEFAULTS.length >= 2) {
+    // SDK registry healthy — let it own the operator list.
+    return;
+  }
+
+  const existingOverride = await readOperatorOverride();
+  if (existingOverride !== null && existingOverride.length > 0) {
+    console.log(
+      "[wallet] SDK registry has <2 Sprintnet operators but a user override is active; not applying 6-IP fallback",
+    );
+    return;
+  }
+
+  const dnsReachable = await probeRpcMonolythiumDotComReachable();
+  if (dnsReachable) {
+    console.log(
+      `[wallet] SDK registry @ ${RPC_MONOLYTHIUM_DOT_COM} reachable but only 1 entry; applying 6-IP fallback override anyway for multi-operator failover redundancy (Round 3 workaround)`,
+    );
+  } else {
+    console.log(
+      `[wallet] ${RPC_MONOLYTHIUM_DOT_COM} DNS not provisioned; applying wallet-side 6-IP fallback override (Round 3 workaround for SDK registry collapse @ riscv 46c009a)`,
+    );
+  }
+  await setOperatorOverride([...FALLBACK_OPERATORS_2026_05_25]);
 }
 
 /** Read the persisted override directly (without merging). Returns null
@@ -323,8 +442,25 @@ async function probeOperatorGenesis(
     const body = (await res.json()) as {
       result?: { hash?: string } | null;
     };
+    // GAP #11 — operator binaries that don't expose block 0 via
+    // eth_getBlockByNumber("0x0", false) (verified empirically on
+    // protocore/v2/0.1.0 binary a27eec62, 2026-05-25: all 6
+    // foundation operators return {"result": null} for this call)
+    // are treated as "probe-not-supported, trust passes" rather than
+    // as orphan-fork evidence. The pin still binds for any operator
+    // that DOES return a block 0 hash — a mismatched hash remains
+    // rejected by the observed-vs-pin compare below. observed stays
+    // null so the About page can surface "block 0 unavailable" rather
+    // than a fake hash.
+    if (body?.result == null) {
+      console.info(
+        "[probe] block 0 unservable on operator (ok=true, pin skipped):",
+        rpc,
+      );
+      return { ok: true, observed: null, checkedAt: now };
+    }
     const observed =
-      typeof body?.result?.hash === "string" ? body.result.hash.toLowerCase() : null;
+      typeof body.result.hash === "string" ? body.result.hash.toLowerCase() : null;
     if (observed === null) {
       return { ok: false, observed: null, checkedAt: now };
     }
