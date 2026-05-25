@@ -1723,11 +1723,12 @@ describe("wallet-send-tx pending-row prepend", () => {
 
 describe("wallet-mrv-submit-plan", () => {
   const CONTRACT = "0x2222222222222222222222222222222222222222";
+  const CONTRACT_TYPED = addressToTypedBech32("contract", CONTRACT);
 
   function buildSubmitPlan() {
     return buildWalletMrvCallNativePlan({
       fromAddress: DETERMINISTIC_ADDRESS,
-      contractAddress: CONTRACT,
+      contractAddress: CONTRACT_TYPED,
       chainIdHex: TESTNET_CHAIN_ID_HEX,
       nonceHex: "0x8",
       executionUnitLimitHex: "0x200000",
@@ -1854,7 +1855,7 @@ describe("wallet-mrv-submit-plan", () => {
     const r = await dispatchRpc(
       "monolythium_submitMrvNativeCall",
       [{
-        contractAddress: CONTRACT,
+        contractAddress: CONTRACT_TYPED,
         input: "0xaabbccdd",
         chainIdHex: TESTNET_CHAIN_ID_HEX,
         executionUnitLimitHex: "0x200000",
@@ -1906,6 +1907,34 @@ describe("wallet-mrv-submit-plan", () => {
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
     });
+  });
+
+  it("rejects raw MRV native call contract addresses at the dapp boundary", async () => {
+    const origin = "https://mrv-provider-call.example";
+    await dispatchRpc("eth_requestAccounts", [], origin);
+    enqueuedApprovals.length = 0;
+
+    const r = await dispatchRpc(
+      "monolythium_submitMrvNativeCall",
+      [{
+        contractAddress: CONTRACT,
+        input: "0xaabbccdd",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        executionUnitLimitHex: "0x200000",
+        valueWeiHex: "0x2a",
+      }],
+      origin,
+    );
+
+    expect(r.result).toBeUndefined();
+    expect(r.error).toMatchObject({
+      code: -32602,
+      message:
+        "MRV native contractAddress raw 0x addresses are retired; use a typed monoc1 address",
+    });
+    expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
+    expect(enqueuedApprovals).toHaveLength(0);
+    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("rejects provider MRV submissions from unconnected origins", async () => {
