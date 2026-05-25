@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Local operator-overrides file for the browser-wallet's RPC fallback list. The wallet's primary RPC source is the SDK chain-registry; this file is the fallback the wallet falls back to if the registry is unreachable AND the user wants to override the bundled FALLBACK_OPERATORS_2026_05_25 (placeholder 192.0.2.X addresses in the public source). Operators populate this file locally; never commit real RPCs.",
+  "operators": [
+    {
+      "name": "operator-1",
+      "region": "fsn1",
+      "rpc": "http://192.0.2.1:8545",
+      "wsRpc": "ws://192.0.2.1:8546"
+    },
+    {
+      "name": "operator-2",
+      "region": "nbg1",
+      "rpc": "http://192.0.2.2:8545"
+    }
+  ]
+}
