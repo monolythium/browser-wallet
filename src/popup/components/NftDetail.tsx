@@ -76,7 +76,11 @@ export function NftDetail({
     );
   };
 
-  const standardLabel = nft.standard === "erc1155" ? "ERC-1155" : "ERC-721";
+  // Whitepaper §22.5 — display label uses the Mono-native MRC standard
+  // family (MRC-721 / MRC-1155). The wallet still reads ERC-shaped
+  // contracts via the EVM compat path until operators ship the native
+  // lyth_mrc* RPC, so the internal `standard` field name stays "erc*".
+  const standardLabel = nft.standard === "erc1155" ? "MRC-1155" : "MRC-721";
 
   return (
     <>
