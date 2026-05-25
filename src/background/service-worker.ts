@@ -4833,10 +4833,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "vault-add-fresh": {
       // Requires an unlocked container (MEK cached). Generates a fresh
-      // PQM-1 mnemonic and appends a new VaultRecordV4. Does NOT
-      // switch the active vault — caller invokes vault-select if
-      // desired (gives the popup room to show "Vault N added — switch
-      // to it now? [Yes / Keep current]").
+      // PQM-1 mnemonic and appends a new VaultRecordV4. Auto-switches
+      // the active vault to the newly-created one (Round 3.5 — the
+      // previous design left active unchanged and required a separate
+      // `vault-select`; the popup didn't, so users saw the old vault's
+      // address persist after creating a new one). `accountsChanged`
+      // broadcast below refreshes dApps + popup state.
       //
       // `label` is optional; the keystore helper validates 1-32 chars
       // when supplied and falls back to its own "Vault N" auto-label
@@ -4847,6 +4849,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await addVaultFreshV4(label);
         await resetAutoLock();
+        broadcastEvent("accountsChanged", [r.address]);
         return {
           ok: true,
           vaultId: r.vaultId,
@@ -4866,6 +4869,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await addVaultImportV4(p.mnemonic, label);
         await resetAutoLock();
+        broadcastEvent("accountsChanged", [r.address]);
         return { ok: true, vaultId: r.vaultId, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -4903,6 +4907,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(label !== undefined ? { label } : {}),
         });
         await resetAutoLock();
+        broadcastEvent("accountsChanged", [r.address]);
         return {
           ok: true,
           vaultId: r.vaultId,

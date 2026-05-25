@@ -413,9 +413,42 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
       expect(after.length).toBe(2);
       expect(after[1]!.label).toBe("Vault 2");
       expect(after[1]!.addr).toBe(added.address);
-      // Active should NOT have switched — add is non-destructive.
-      expect(after[0]!.isActive).toBe(true);
-      expect(after[1]!.isActive).toBe(false);
+      // Round 3.5 — addVaultFreshV4 now auto-switches the active vault
+      // to the newly-created record. The previous design left active
+      // unchanged but the popup never wired the follow-up vault-select
+      // call, so users saw the old address persist after creating a
+      // new vault.
+      expect(after[0]!.isActive).toBe(false);
+      expect(after[1]!.isActive).toBe(true);
+      expect(ks.getUnlockedAddressV4()).toBe(added.address);
+    },
+    90_000,
+  );
+
+  it(
+    "addVaultFreshV4 auto-switches active across multiple appends (Round 3.5)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "auto-switch-password";
+      const first = await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      // After the first vault is created, it is the active one.
+      expect(ks.getUnlockedAddressV4()).toBe(first.address);
+
+      const second = await ks.addVaultFreshV4();
+      expect(second.address).not.toBe(first.address);
+      // Active follows the most recent add.
+      expect(ks.getUnlockedAddressV4()).toBe(second.address);
+
+      const third = await ks.addVaultFreshV4();
+      expect(third.address).not.toBe(first.address);
+      expect(third.address).not.toBe(second.address);
+      expect(ks.getUnlockedAddressV4()).toBe(third.address);
+
+      const list = (await ks.listVaultsV4())!;
+      expect(list.length).toBe(3);
+      const activeRow = list.find((v) => v.isActive)!;
+      expect(activeRow.addr).toBe(third.address);
     },
     90_000,
   );
@@ -445,24 +478,32 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
     async () => {
       const ks = await import("./keystore-mldsa.js");
       const password = "select-password";
-      await ks.createVaultFromNewMnemonic(password);
+      const original = await ks.createVaultFromNewMnemonic(password);
       await ks.unlockContainerV4(password);
 
+      // addVaultFreshV4 now auto-switches active; capture both ids so
+      // we can drive selectActiveVaultV4 back to the original to test
+      // the switch path explicitly.
       const added = await ks.addVaultFreshV4();
-      const before = (await ks.listVaultsV4())!;
-      const firstId = before.find((v) => v.isActive)!.id;
+      const beforeSelect = (await ks.listVaultsV4())!;
+      const originalRow = beforeSelect.find((v) => v.addr === original.address)!;
+      const addedRow = beforeSelect.find((v) => v.id === added.vaultId)!;
+      expect(addedRow.isActive).toBe(true);
+      expect(originalRow.isActive).toBe(false);
 
-      const sel = await ks.selectActiveVaultV4(added.vaultId);
-      expect(sel.address).toBe(added.address);
-      expect(ks.getUnlockedAddressV4()).toBe(added.address);
+      const sel = await ks.selectActiveVaultV4(originalRow.id);
+      expect(sel.address).toBe(original.address);
+      expect(ks.getUnlockedAddressV4()).toBe(original.address);
 
       const after = (await ks.listVaultsV4())!;
-      expect(after.find((v) => v.id === added.vaultId)!.isActive).toBe(true);
-      expect(after.find((v) => v.id === firstId)!.isActive).toBe(false);
+      expect(after.find((v) => v.id === originalRow.id)!.isActive).toBe(true);
+      expect(after.find((v) => v.id === added.vaultId)!.isActive).toBe(false);
 
       // Lock clears the MEK cache; subsequent select MUST refuse.
       ks.lockV4();
-      await expect(ks.selectActiveVaultV4(firstId)).rejects.toThrow(/locked/i);
+      await expect(ks.selectActiveVaultV4(added.vaultId)).rejects.toThrow(
+        /locked/i,
+      );
       await expect(ks.addVaultFreshV4()).rejects.toThrow(/locked/i);
     },
     120_000,
