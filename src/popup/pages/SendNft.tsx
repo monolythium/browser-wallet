@@ -223,7 +223,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data,
-        gasLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+        executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);

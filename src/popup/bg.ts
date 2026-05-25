@@ -859,7 +859,7 @@ export async function bgWalletSendTx(args: {
    *  back to its native-transfer default (Sprintnet's intrinsic execution-unit
    *  floor). NFT calldata pushes that floor well past 21k, so the
    *  Send-NFT page passes a conservative overhead-aware estimate. */
-  gasLimitHex?: string;
+  executionUnitLimitHex?: string;
   /** Optional encrypted-mempool class override for SDK-built action plans. */
   mempoolClass?: number;
 }): Promise<
@@ -881,7 +881,11 @@ export async function bgWalletSendTx(args: {
         method?: string;
         via?: string;
       };
-  const r = await send<Reply>("wallet-send-tx", args);
+  const { executionUnitLimitHex, ...rest } = args;
+  const r = await send<Reply>("wallet-send-tx", {
+    ...rest,
+    ...(executionUnitLimitHex !== undefined ? { gasLimitHex: executionUnitLimitHex } : {}),
+  });
   if (!r.ok) return r;
   return { ok: true, result: { txHash: r.txHash, via: r.via } };
 }
