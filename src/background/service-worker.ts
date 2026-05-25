@@ -1653,12 +1653,20 @@ function buildMrvNativeSendTxApproval(
 
 /**
  * Sprintnet-specific minimum priority tip discovered empirically via
- * smoke-test admission rejection: 10_000_000_000 lythoshi per execution unit. The
- * chain doesn't expose this via RPC and `eth_maxPriorityFeePerGas`
+ * smoke-test admission rejection: 10_000_000_000 (= 0x2540be400) per
+ * execution unit on the wire. The constant name historically said
+ * "lythoshi" but the operators currently run V4-LIVE-0008 (commit
+ * `5aead0f0`) which serves wei-magnitude fee fields — so the value as
+ * stored here is the wei-on-wire magnitude. `suggestFee` compensates
+ * to lythoshi for the wallet-internal contract; `submitEncryptedMlDsaTx`
+ * (legacy-tx path) uses a fresh `eth_gasPrice` quote at wire build
+ * time and stays in wei.
+ *
+ * The chain doesn't expose this via RPC and `eth_maxPriorityFeePerGas`
  * is method-not-found, so it lives here as a chain constant. If the
  * chain operators ever change the floor, this is the one place to bump.
  */
-const SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX = "0x2540be400";
+const SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX = "0x2540be400";
 
 // ---- Operator liveness cache ----
 //
@@ -1731,16 +1739,24 @@ async function suggestFee(chainIdHex: string): Promise<{
     // Last entry is the next-block estimate when feeHistory returns the
     // pending base fee; with a single requested block we get two
     // entries (current + next).
+    //
+    // Magnitude contract: these fields are returned in CHAIN-WIRE WEI
+    // magnitude — V4-LIVE-0008 operators (`5aead0f0`) accept wei on the
+    // wire, and `wallet-send-tx` plumbs `fee.maxFeePerGas` /
+    // `fee.maxPriorityFeePerGas` straight into the encrypted-envelope
+    // submission. The popup-side display consumer is responsible for
+    // converting wei → lythoshi via `legacyChainFeeSuggestionWeiToLythoshi`
+    // before handing fields to `nativeFeeDisplayFromFeeSuggestion`.
     const baseHex = baseList[baseList.length - 1]!;
-    const baseLythoshiPerExecutionUnit = BigInt(baseHex);
-    const tipLythoshiPerExecutionUnit = BigInt(
-      SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX,
+    const baseChainWeiPerExecutionUnit = BigInt(baseHex);
+    const tipChainWeiPerExecutionUnit = BigInt(
+      SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX,
     );
     return {
       baseFeePerGas: baseHex,
-      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX,
+      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX,
       maxFeePerGas:
-        "0x" + (baseLythoshiPerExecutionUnit + tipLythoshiPerExecutionUnit).toString(16),
+        "0x" + (baseChainWeiPerExecutionUnit + tipChainWeiPerExecutionUnit).toString(16),
       gasLimit: SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
     };
   }
