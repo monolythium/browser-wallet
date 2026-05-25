@@ -68,7 +68,7 @@ function isBech32mValid(input: string): boolean {
  *    - "bech32m-typo"      → bech32m-shaped but failed checksum, with
  *                             a 1-edit candidate (when findable)
  *    - "bech32m-malformed" → bech32m-shaped but no 1-edit fix found
- *    - "hex"               → 0x... hex address, offer bech32m display
+ *    - "hex"               → retired raw 0x address; do not suggest typos
  *    - "empty"             → nothing typed yet
  *    - "unknown"           → not recognisable
  *
