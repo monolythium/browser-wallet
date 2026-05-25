@@ -20,10 +20,13 @@ import type {
   WalletMrvNoEvmReceiptProofVerification,
 } from "../bg.js";
 
+const CONTRACT_RAW = "0x2222222222222222222222222222222222222222";
+const CONTRACT_TYPED = "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd";
+
 const BASE_FORM: MrvNativeFormValues = {
   artifactBytes: "0x13000000",
   artifactHash: "",
-  contractAddress: "0x2222222222222222222222222222222222222222",
+  contractAddress: CONTRACT_TYPED,
   callInput: "0xaabbccdd",
   executionUnitLimit: "2097152",
   maxExecutionFeeLythoshi: "10000000",
@@ -269,7 +272,7 @@ describe("MrvNative", () => {
     expect(html).toContain("MRV native");
     expect(html).toContain("Native contract preview");
     expect(html).toContain("execution units");
-    expect(html).toContain("lythoshi");
+    expect(html).toContain("native fees");
     expect(html).toContain("typed addresses");
     expect(html).toContain("polls transaction receipt inclusion status");
     expect(html).toContain("does not prove live MRV execution");
@@ -412,7 +415,11 @@ describe("MrvNative", () => {
     expect(html).toContain("Native contract");
     expect(html).toContain("Typed user address");
     expect(html).toContain("2097152");
-    expect(html).toContain("10000000 lythoshi");
+    expect(html).toContain("0.1 LYTH");
+    expect(html).toContain("0.00000005 LYTH");
+    expect(html).toContain("209,715.20000042 LYTH");
+    expect(html).not.toContain("10000000 lythoshi");
+    expect(html).not.toContain("20971520000042 lythoshi");
     expect(html).toContain("JSON-safe plan");
     expect(html).toContain("monoc1yg3");
   });
@@ -971,20 +978,34 @@ describe("buildMrvNativeRequest", () => {
     });
   });
 
-  it("builds call payloads for native contract typed-address normalization in the background", () => {
+  it("builds call payloads with typed native contract addresses", () => {
     const req = buildMrvNativeRequest("call", BASE_FORM, "0x10F2C");
 
     expect(req).toEqual({
       ok: true,
       mode: "call",
       args: {
-        contractAddress: "0x2222222222222222222222222222222222222222",
+        contractAddress: CONTRACT_TYPED,
         input: "0xaabbccdd",
         chainIdHex: "0x10f2c",
         executionUnitLimitHex: "0x200000",
         maxExecutionFeeLythoshiHex: "0x989680",
         valueWeiHex: "0x2a",
       },
+    });
+  });
+
+  it("rejects raw native contract addresses before IPC", () => {
+    const req = buildMrvNativeRequest(
+      "call",
+      { ...BASE_FORM, contractAddress: CONTRACT_RAW },
+      "0x10F2C",
+    );
+
+    expect(req).toEqual({
+      ok: false,
+      reason:
+        "MRV native contractAddress raw 0x addresses are retired; use a typed monoc1 address",
     });
   });
 
@@ -1008,22 +1029,22 @@ describe("coerceHexQuantityInput", () => {
       }),
     ).toEqual({ ok: true, value: "0xf4240" });
     expect(
-      coerceHexQuantityInput("0x000F", "priority tip lythoshi", {
+      coerceHexQuantityInput("0x000F", "priority tip", {
         required: false,
         allowZero: true,
       }),
     ).toEqual({ ok: true, value: "0xf" });
   });
 
-  it("rejects fractional lythoshi values", () => {
+  it("rejects fractional raw quantity values", () => {
     expect(
-      coerceHexQuantityInput("1.5", "value lythoshi", {
+      coerceHexQuantityInput("1.5", "value", {
         required: false,
         allowZero: true,
       }),
     ).toEqual({
       ok: false,
-      reason: "value lythoshi must be a non-negative integer or 0x hex quantity",
+      reason: "value must be a non-negative integer or 0x hex quantity",
     });
   });
 });

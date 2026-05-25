@@ -46,6 +46,7 @@ import {
   formatNativeLythAmount,
   lythoshiToLythString,
   nativeFeeDisplayFromPrice,
+  type NativeFeeFromPriceInput,
 } from "../../shared/native-fee-display";
 
 export { lythoshiToLythString };
@@ -144,8 +145,9 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
       feeSuggestion === null
         ? null
         : nativeFeeDisplayFromPrice({
-            executionUnitsHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
-            pricePerExecutionUnitHex: feeSuggestion.maxFeePerGas,
+            executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+            pricePerExecutionUnitLythoshiHex:
+              feeSuggestion.maxPricePerExecutionUnitLythoshiHex,
             ...(feeSuggestion.structuredFee !== undefined
               ? { structuredFee: feeSuggestion.structuredFee }
               : {}),
@@ -221,7 +223,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data,
-        gasLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+        executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -350,7 +352,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
           type="text"
           value={recipient}
           onChange={(e) => setRecipient(e.target.value)}
-          placeholder="0x… or mono1…"
+          placeholder="mono1…"
           autoFocus
           spellCheck={false}
           autoCapitalize="none"
@@ -670,11 +672,15 @@ export function computeEstimatedNftFeeLythoshi(
   fee: FeeSuggestion | null,
 ): bigint | null {
   if (!fee) return null;
-  return computeNativeFeeFromPrice({
-    executionUnitsHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
-    pricePerExecutionUnitHex: fee.maxFeePerGas,
+  return computeNativeFeeFromPrice(feeSuggestionToNftPriceInput(fee));
+}
+
+function feeSuggestionToNftPriceInput(fee: FeeSuggestion): NativeFeeFromPriceInput {
+  return {
+    executionUnitLimitHex: SEND_NFT_EXECUTION_UNIT_LIMIT_HEX,
+    pricePerExecutionUnitLythoshiHex: fee.maxPricePerExecutionUnitLythoshiHex,
     ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
-  });
+  };
 }
 
 // ---------------------------------------------------------------------------

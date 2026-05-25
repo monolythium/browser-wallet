@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  nativeFeeDisplayFromExecutionFeeSuggestion,
   nativeFeeDisplayFromPrice,
   nativeFeeDisplayFromStructuredFee,
 } from "./native-fee-display.js";
 
 describe("native fee display conformance", () => {
-  it("formats legacy compatibility estimates through the shared LYTH display path", () => {
+  it("formats execution-unit estimates through the shared LYTH display path", () => {
     const result = nativeFeeDisplayFromPrice({
-      executionUnitsHex: "0x5208",
-      pricePerExecutionUnitHex: "0x64",
+      executionUnitLimitHex: "0x5208",
+      pricePerExecutionUnitLythoshiHex: "0x64",
     });
 
     expect(result.ok).toBe(true);
@@ -20,13 +21,29 @@ describe("native fee display conformance", () => {
 
   it("keeps fee math in bigint space for values above Number.MAX_SAFE_INTEGER", () => {
     const result = nativeFeeDisplayFromPrice({
-      executionUnitsHex: "0x20000000000000",
-      pricePerExecutionUnitHex: "0x2",
+      executionUnitLimitHex: "0x20000000000000",
+      pricePerExecutionUnitLythoshiHex: "0x2",
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.display.totalLythoshi).toBe(18_014_398_509_481_984n);
+  });
+
+  it("accepts native-named fee suggestions without gas aliases", () => {
+    const result = nativeFeeDisplayFromExecutionFeeSuggestion(
+      {
+        executionUnitLimitHex: null,
+        basePricePerExecutionUnitLythoshiHex: "0x2",
+        priorityPricePerExecutionUnitLythoshiHex: "0x3",
+      },
+      { fallbackExecutionUnitLimitHex: "0xa" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.display.totalLythoshi).toBe(50n);
+    expect(result.display.defaultText).toBe("0.0000005 LYTH");
   });
 
   it("accepts valid ADR-0039 structured fee objects", () => {

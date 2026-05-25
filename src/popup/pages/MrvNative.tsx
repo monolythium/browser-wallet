@@ -18,6 +18,8 @@ import {
   type WalletMrvNativeReceipt,
   type WalletMrvNativeSubmissionPlan,
 } from "../bg";
+import { formatNativeLythAmount } from "../../shared/native-fee-display";
+import { requireTypedMrvContractAddress } from "../../shared/mrv-native-plan.js";
 
 type DeployPlanArgs = Parameters<typeof bgWalletBuildMrvDeployPlan>[0];
 type CallPlanArgs = Parameters<typeof bgWalletBuildMrvCallPlan>[0];
@@ -100,6 +102,13 @@ const MRV_RECEIPT_POLL_MAX_MS = 5 * 60_000;
 const NATIVE_MARKET_REPLAY_LOOKBACK_BLOCKS = 128;
 const NATIVE_MARKET_REPLAY_LIMIT = 5;
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+const NATIVE_CONTRACT_PLACEHOLDER =
+  "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd";
+
+function formatMrvLythAmount(lythoshiDecimal: string): string {
+  if (!/^[0-9]+$/.test(lythoshiDecimal)) return "—";
+  return formatNativeLythAmount(BigInt(lythoshiDecimal));
+}
 
 export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
   const [mode, setMode] = useState<MrvNativeMode>("deploy");
@@ -362,7 +371,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           </div>
           <div style={bodyCopy}>
             Build a v4.1 MRV native contract deploy or call plan. This page
-            previews execution units, lythoshi fees, typed addresses, and the
+            previews execution units, native fees, typed addresses, and the
             JSON-safe transaction extension before signing. After submission,
             the wallet polls transaction receipt inclusion status when the RPC
             supports it; it does not prove live MRV execution.
@@ -436,7 +445,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
                 <input
                   value={form.contractAddress}
                   onChange={(e) => setField("contractAddress", e.target.value.trim())}
-                  placeholder="0x... or monoc1..."
+                  placeholder={NATIVE_CONTRACT_PLACEHOLDER}
                   spellCheck={false}
                   style={inputStyle}
                 />
@@ -465,7 +474,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           </Field>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <Field label="Max fee lythoshi">
+            <Field label="Max fee override">
               <input
                 value={form.maxExecutionFeeLythoshi}
                 onChange={(e) =>
@@ -491,7 +500,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
             </Field>
           </div>
 
-          <Field label="Value lythoshi">
+          <Field label="Value">
             <input
               value={form.valueLythoshi}
               onChange={(e) => setField("valueLythoshi", e.target.value.trim())}
@@ -670,19 +679,19 @@ export function buildMrvNativeRequest(
 
   const maxExecutionFeeLythoshiHex = coerceHexQuantityInput(
     form.maxExecutionFeeLythoshi,
-    "max execution fee lythoshi",
+    "max execution fee",
     { required: false, allowZero: true },
   );
   if (!maxExecutionFeeLythoshiHex.ok) return maxExecutionFeeLythoshiHex;
 
   const priorityTipLythoshiHex = coerceHexQuantityInput(
     form.priorityTipLythoshi,
-    "priority tip lythoshi",
+    "priority tip",
     { required: false, allowZero: true },
   );
   if (!priorityTipLythoshiHex.ok) return priorityTipLythoshiHex;
 
-  const valueWeiHex = coerceHexQuantityInput(form.valueLythoshi, "value lythoshi", {
+  const valueWeiHex = coerceHexQuantityInput(form.valueLythoshi, "value", {
     required: false,
     allowZero: true,
   });
@@ -739,12 +748,18 @@ export function buildMrvNativeRequest(
   if (contractAddress.length === 0) {
     return { ok: false, reason: "native contract address is required" };
   }
+  let typedContractAddress: string;
+  try {
+    typedContractAddress = requireTypedMrvContractAddress(contractAddress).typed;
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message };
+  }
   return {
     ok: true,
     mode,
     args: {
       ...base,
-      contractAddress,
+      contractAddress: typedContractAddress,
       input: input.value,
     },
   };
@@ -842,15 +857,15 @@ export function MrvNativePlanPreview({
         />
         <SummaryRow
           label="Max fee"
-          value={`${plan.nativeTx.maxExecutionFeeLythoshi} lythoshi`}
+          value={formatMrvLythAmount(plan.nativeTx.maxExecutionFeeLythoshi)}
         />
         <SummaryRow
           label="Priority tip"
-          value={`${plan.nativeTx.priorityTipLythoshi} lythoshi`}
+          value={formatMrvLythAmount(plan.nativeTx.priorityTipLythoshi)}
         />
         <SummaryRow
           label="Total preview"
-          value={`${plan.feePreview.totalLythoshi} lythoshi (${plan.feePreview.totalLyth} LYTH)`}
+          value={formatMrvLythAmount(plan.feePreview.totalLythoshi)}
         />
         <SummaryRow
           label="Extension"

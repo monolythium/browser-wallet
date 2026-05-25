@@ -11,7 +11,11 @@ import {
   bech32mDecode,
   bech32mEncode,
   bech32mToAddress,
+  decodeBech32mTyped,
+  hrpForKind,
+  kindForHrp,
   shortBech32m,
+  type AddressKind,
 } from "./bech32m.js";
 
 describe("bech32m codec", () => {
@@ -61,11 +65,13 @@ describe("bech32m codec", () => {
   });
 
   it("rejects wrong HRP", () => {
-    // Encode with HRP 'cosmos' and try to decode-as-mono.
+    // Encode with HRP 'cosmos' and try to decode-as-mono. The new
+    // typed-HRP layer rejects this as "unrecognized HRP" because
+    // 'cosmos' is not in the v4.1 chain-type table.
     const data5 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     const bech = bech32mEncode("cosmos", data5);
-    expect(() => bech32mToAddress(bech)).toThrow(/wrong HRP/);
+    expect(() => bech32mToAddress(bech)).toThrow(/HRP/);
   });
 
   it("rejects mid-string corruption (checksum mismatch)", () => {
@@ -104,5 +110,84 @@ describe("bech32m codec", () => {
     const ok = addressToBech32m("0x9ba4e5f6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e2f4");
     const mixed = ok.slice(0, 5) + ok.slice(5, 6).toUpperCase() + ok.slice(6);
     expect(bech32mDecode(mixed)).toBeNull();
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Whitepaper §22.7 typed-HRP coverage
+  // ────────────────────────────────────────────────────────────────────
+
+  it("hrpForKind / kindForHrp round-trip the v4.1 typed-HRP set", () => {
+    const pairs: [AddressKind, string][] = [
+      ["eoa", "mono"],
+      ["smartAccount", "monos"],
+      ["contract", "monoc"],
+      ["cluster", "monok"],
+      ["multisig", "monom"],
+      ["systemModule", "monox"],
+      ["reservedRecovery", "monor"],
+      ["reservedPrivacy", "monop"],
+      ["reservedIssuer", "monoi"],
+      ["reservedAgent", "monoa"],
+    ];
+    for (const [kind, hrp] of pairs) {
+      expect(hrpForKind(kind)).toBe(hrp);
+      expect(kindForHrp(hrp)).toBe(kind);
+    }
+    expect(kindForHrp("cosmos")).toBeNull();
+    expect(kindForHrp("monoz")).toBeNull();
+  });
+
+  it("encodes a cluster id with the 'monok' HRP", () => {
+    const addr = "0x9ba4e5f6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e2f4";
+    const bech = addressToBech32m(addr, "cluster");
+    expect(bech.startsWith("monok1")).toBe(true);
+    const back = bech32mToAddress(bech, "cluster");
+    expect(back.toLowerCase()).toBe(addr.toLowerCase());
+  });
+
+  it("encodes a multisig with the 'monom' HRP", () => {
+    const addr = "0xaaaa11112222333344445555666677778888aaaa";
+    const bech = addressToBech32m(addr, "multisig");
+    expect(bech.startsWith("monom1")).toBe(true);
+    const back = bech32mToAddress(bech, "multisig");
+    expect(back.toLowerCase()).toBe(addr.toLowerCase());
+  });
+
+  it("default kind is 'eoa' and produces 'mono1' (no breaking change)", () => {
+    const addr = "0x0d1c8d3e7c6c5b6e8d4f8a8c0b9d6e5f4a3b2c1d";
+    expect(addressToBech32m(addr).startsWith("mono1")).toBe(true);
+    // Implicit-default decode also accepts only EOA.
+    expect(() => bech32mToAddress(addressToBech32m(addr, "cluster"))).toThrow(
+      /wrong HRP/,
+    );
+  });
+
+  it("rejects a cluster-kind decode when an EOA is expected (paste-into-Send guard)", () => {
+    const addr = "0x9ba4e5f6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e2f4";
+    const clusterBech = addressToBech32m(addr, "cluster");
+    expect(() => bech32mToAddress(clusterBech, "eoa")).toThrow(/wrong HRP/);
+  });
+
+  it("decodeBech32mTyped(null) returns the discovered kind for routing", () => {
+    const addr = "0x9ba4e5f6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e2f4";
+    const bech = addressToBech32m(addr, "contract");
+    const typed = decodeBech32mTyped(bech, null);
+    expect(typed.kind).toBe("contract");
+    expect(typed.addr0x.toLowerCase()).toBe(addr.toLowerCase());
+  });
+
+  it("decodeBech32mTyped rejects unrecognized HRPs", () => {
+    const data5: number[] = new Array(32).fill(0);
+    const cosmosBech = bech32mEncode("cosmos", data5);
+    expect(() => decodeBech32mTyped(cosmosBech, null)).toThrow(
+      /unrecognized HRP/,
+    );
+  });
+
+  it("shortBech32m for cluster preserves the 'monok1' prefix", () => {
+    const addr = "0x9ba4e5f6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e2f4";
+    const short = shortBech32m(addr, 8, "cluster");
+    expect(short.startsWith("monok1")).toBe(true);
+    expect(short).toContain("…");
   });
 });

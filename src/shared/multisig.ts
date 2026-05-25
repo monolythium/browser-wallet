@@ -105,8 +105,9 @@ export interface MultisigSigner {
   /** User-facing label (1-32 chars after trim). Defaults to
    *  `"Signer N"` when the user does not supply one. */
   label: string;
-  /** EVM-style hex address (0x + 40 hex), derived from the pubkey via
-   *  keccak256(pubkey)[12..32] — same derivation a regular vault uses. */
+  /** 0x-prefixed native address bytes (20 bytes), derived from the
+   *  pubkey with the ADR-0038 BLAKE3 domain+algo rule — same
+   *  derivation a regular ML-DSA vault uses. */
   address: string;
   /** 0x-prefixed hex of the 1952-byte ML-DSA-65 public key. Required
    *  to verify approval signatures; cached here so the popup can

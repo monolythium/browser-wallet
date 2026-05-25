@@ -27,7 +27,7 @@ import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
-import { addressToBech32m, bech32mToAddress } from "../../shared/bech32m";
+import { bech32mToAddress } from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
 import { classifySendError } from "../../shared/send-error";
 import {
@@ -53,7 +53,7 @@ import {
   formatLythoshiPerExecutionUnit,
   formatNativeLythAmount,
   lythoshiToLythString,
-  nativeFeeDisplayFromFeeSuggestion,
+  nativeFeeDisplayFromExecutionFeeSuggestion,
   parseNativeHexQuantity,
   scaleByBps,
 } from "../../shared/native-fee-display";
@@ -106,8 +106,7 @@ const ADMISSION_REJECT_CODE_LO = -32049;
 const ADMISSION_REJECT_CODE_HI = -32020;
 
 // Fallback execution-unit limit for native LYTH transfer when the chain
-// doesn't supply one. The fee-suggestion IPC field is still named `gasLimit`
-// for compatibility with the background service worker.
+// doesn't supply one.
 const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
 export function Send({
@@ -184,8 +183,8 @@ export function Send({
     () =>
       feeSuggestion === null
         ? null
-        : nativeFeeDisplayFromFeeSuggestion(feeSuggestion, {
-            fallbackExecutionUnitsHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+        : nativeFeeDisplayFromExecutionFeeSuggestion(feeSuggestion, {
+            fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
             priorityMultiplierBps: tierMultiplierBps,
           }),
     [feeSuggestion, tierMultiplierBps],
@@ -494,7 +493,7 @@ export function Send({
               type="text"
               value={to}
               onChange={(e) => setTo(e.target.value.trim())}
-              placeholder="0x…, mono1…, or alice.mono"
+              placeholder="mono1… or alice.mono"
               spellCheck={false}
               autoComplete="off"
               style={{ ...addressInputStyle, flex: 1 }}
@@ -522,11 +521,6 @@ export function Send({
             hasParseError={!!parsedRecipient.error}
             onApply={(addr) => setTo(addr)}
           />
-          {parsedRecipient.inputForm === "0x" && parsedRecipient.bech && (
-            <div style={dualFormatHint}>
-              Mono form: {parsedRecipient.bech}
-            </div>
-          )}
           {parsedRecipient.inputForm === "mono1" && parsedRecipient.addr0x && (
             <div style={dualFormatHint}>
               Will send to: {middleTruncate(parsedRecipient.addr0x, 10, 8)}
@@ -703,10 +697,12 @@ export function Send({
                     <div style={{ marginTop: 6 }}>
                       Priority price:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
-                        {scaleLythoshiPerExecutionUnit(
-                          feeSuggestion.maxPriorityFeePerGas,
-                          tierMultiplierBps,
-                        )}{" "}
+                        {feeSuggestion === null
+                          ? "?"
+                          : scaleLythoshiPerExecutionUnit(
+                              feeSuggestion.priorityPricePerExecutionUnitLythoshiHex,
+                              tierMultiplierBps,
+                            )}{" "}
                         lythoshi / execution unit
                       </span>{" "}
                       <span style={{ color: "var(--fg-500)" }}>
@@ -716,7 +712,9 @@ export function Send({
                     <div>
                       Base price:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
-                        {formatLythoshiPerExecutionUnit(feeSuggestion.baseFeePerGas)}{" "}
+                        {formatLythoshiPerExecutionUnit(
+                          feeSuggestion?.basePricePerExecutionUnitLythoshiHex,
+                        )}{" "}
                         lythoshi / execution unit
                       </span>
                     </div>
@@ -724,7 +722,7 @@ export function Send({
                       Execution units:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
                         {formatExecutionUnits(
-                          feeSuggestion.gasLimit ??
+                          feeSuggestion?.executionUnitLimitHex ??
                             FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
                         )}
                       </span>
@@ -830,14 +828,14 @@ const fromHint: CSSProperties = {
 
 /**
  * Recipient input parser. Accepts:
- *   - 0x hex (whitepaper §22.7 wire form)
- *   - bech32m (mono1…, §22.7 display form)
+ *   - bech32m (mono1…, ADR-0038 user-address form)
  *   - §22.8 hierarchical names ending in `.mono` (forward-resolved
  *     against the local name cache; no `lyth_resolveName` RPC yet)
  *
- * The IPC contract stays 0x-only; the popup is the codec + name-
- * resolution boundary. Empty / partial input returns no error so the
- * form stays quiet while the user is still typing.
+ * The IPC contract stays 0x-only; the popup is the typed-address + name-
+ * resolution boundary and rejects raw 0x input at the public surface.
+ * Empty / partial typed-address input returns no error so the form stays
+ * quiet while the user is still typing.
  */
 export interface RecipientParse {
   /** Human-readable error to surface under the input. null = no error. */
@@ -857,7 +855,7 @@ export interface RecipientParse {
   /** Which input shape the user is in:
    *   - "empty": input is empty
    *   - "partial": prefix matches but length is short of canonical (still typing)
-   *   - "0x": complete 0x form (valid or invalid)
+   *   - "0x": raw 0x form (rejected at the public surface)
    *   - "mono1": complete bech32m form (valid or invalid)
    *   - "mono-name": complete §22.8 hierarchical name (e.g. alice.mono)
    *   - "unknown": prefix doesn't match either shape */
@@ -874,46 +872,11 @@ export function validateToAddress(s: string): RecipientParse {
       inputForm: "empty",
     };
   }
-  // 0x branch
   if (s.startsWith("0x") || s.startsWith("0X")) {
-    if (s.length < 42) {
-      return {
-        error: null,
-        addr0x: null,
-        bech: null,
-        monoName: null,
-        inputForm: "partial",
-      };
-    }
-    if (s.length !== 42) {
-      return {
-        error: `address must be 42 chars (got ${s.length})`,
-        addr0x: null,
-        bech: null,
-        monoName: null,
-        inputForm: "0x",
-      };
-    }
-    if (!/^0[xX][0-9a-fA-F]{40}$/.test(s)) {
-      return {
-        error: "address must be 0x + 40 hex chars",
-        addr0x: null,
-        bech: null,
-        monoName: null,
-        inputForm: "0x",
-      };
-    }
-    const addr0x = s.toLowerCase();
-    let bech: string | null;
-    try {
-      bech = addressToBech32m(addr0x);
-    } catch {
-      bech = null;
-    }
     return {
-      error: null,
-      addr0x,
-      bech,
+      error: "raw 0x addresses are retired; use a typed mono1 address or .mono name",
+      addr0x: null,
+      bech: null,
       monoName: null,
       inputForm: "0x",
     };
@@ -984,7 +947,7 @@ export function validateToAddress(s: string): RecipientParse {
     };
   }
   return {
-    error: "address must start with 0x, mono1, or end in .mono",
+    error: "address must start with mono1 or end in .mono",
     addr0x: null,
     bech: null,
     monoName: null,
@@ -995,7 +958,7 @@ export function validateToAddress(s: string): RecipientParse {
 /** Quiet-mode heuristic for the recipient field: if the input is plausibly
  *  a §22.8 name being typed (lowercase, label-friendly chars, short
  *  enough that ".mono" could still be appended), treat it as still-
- *  typing rather than surfacing the "doesn't start with 0x/mono1/.mono"
+ *  typing rather than surfacing the "doesn't start with mono1/.mono"
  *  error. The length cap keeps wrong-HRP bech32m strings (which are 43+
  *  chars without a dot) from being mis-classified as partial names. */
 const PARTIAL_NAME_MAX_LEN = 40;
@@ -1107,7 +1070,7 @@ function MonoNameResolveHint({ parsed, resolution }: MonoNameResolveHintProps) {
     return (
       <div style={inlineError}>
         Name not in your address book yet. On-chain name lookup ships with the
-        §22.8 registry — paste the 0x or mono1 address for now.
+        §22.8 registry — paste the typed mono1 address for now.
       </div>
     );
   }
@@ -1253,39 +1216,15 @@ function computeEstimatedFeeLythoshi(
 ): bigint | null {
   if (!fee) return null;
   return computeNativeFeeFromBaseAndPriority({
-    executionUnitsHex: fee.gasLimit,
-    fallbackExecutionUnitsHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
-    basePricePerExecutionUnitHex: fee.baseFeePerGas,
-    priorityPricePerExecutionUnitHex: fee.maxPriorityFeePerGas,
+    executionUnitLimitHex: fee.executionUnitLimitHex,
+    fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+    basePricePerExecutionUnitLythoshiHex: fee.basePricePerExecutionUnitLythoshiHex,
+    priorityPricePerExecutionUnitLythoshiHex:
+      fee.priorityPricePerExecutionUnitLythoshiHex,
     priorityMultiplierBps,
     ...(fee.structuredFee !== undefined ? { structuredFee: fee.structuredFee } : {}),
   });
 }
-
-/** @deprecated IPC compatibility name; use `lythToLythoshiHex`. */
-export function lythToWeiHex(amountStr: string): string {
-  return lythToLythoshiHex(amountStr);
-}
-
-/**
- * @deprecated Legacy helper kept only for the background pending-row golden
- * test until that shared reconciliation path moves to v4.1 lythoshi. The Send
- * page itself uses `lythoshiToLythString`.
- */
-function weiToLythString(compatWei: bigint): string {
-  if (compatWei < 0n) return "0";
-  const compatWeiPerLyth = 10n ** 18n;
-  const intPart = compatWei / compatWeiPerLyth;
-  const fracPart = compatWei % compatWeiPerLyth;
-  if (fracPart === 0n) return intPart.toString();
-  const fracStr = fracPart.toString().padStart(18, "0").replace(/0+$/, "");
-  return fracStr.length === 0
-    ? intPart.toString()
-    : `${intPart.toString()}.${fracStr}`;
-}
-
-/** @deprecated Compatibility export; use `computeEstimatedFeeLythoshi`. */
-const computeEstimatedFeeWei = computeEstimatedFeeLythoshi;
 
 // ---- preview / sending / success / error sub-state views ----
 
@@ -2239,8 +2178,6 @@ export {
   ADMISSION_REJECT_CODE_HI,
   TIER_LABELS,
   computeEstimatedFeeLythoshi,
-  computeEstimatedFeeWei,
   formatNativeLythAmount,
   lythoshiToLythString,
-  weiToLythString,
 };

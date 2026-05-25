@@ -6,13 +6,13 @@ import {
 
 describe("SendNft native fee display math", () => {
   const fee = {
-    maxPriorityFeePerGas: "0x5",
-    maxFeePerGas: "0x8",
-    baseFeePerGas: "0x3",
-    gasLimit: null,
+    priorityPricePerExecutionUnitLythoshiHex: "0x5",
+    maxPricePerExecutionUnitLythoshiHex: "0x8",
+    basePricePerExecutionUnitLythoshiHex: "0x3",
+    executionUnitLimitHex: null,
   };
 
-  it("computes the NFT estimate in lythoshi from compatibility fee fields", () => {
+  it("computes the NFT estimate in lythoshi from native fee fields", () => {
     expect(computeEstimatedNftFeeLythoshi(fee)).toBe(2_000_000n);
   });
 
@@ -35,7 +35,7 @@ describe("SendNft native fee display math", () => {
     expect(
       computeEstimatedNftFeeLythoshi({
         ...fee,
-        maxFeePerGas: "not-a-hex-quantity",
+        maxPricePerExecutionUnitLythoshiHex: "not-a-hex-quantity",
       }),
     ).toBeNull();
   });

@@ -2700,8 +2700,8 @@ export { ReqSheet };
 // These render the actual EIP-1193 request the dapp sent — no demo-data here.
 // The service worker pre-populates a `SendTxView` (execution-unit budget,
 // fee price, simulation, nonce) and an EIP-712 `digest` so the popup can
-// show real numbers without RPC access of its own. The view still carries
-// inherited `gas`/`gasPrice` field names at the EIP-1193 boundary.
+// show real numbers without RPC access of its own. The request `tx` still
+// carries inherited EIP-1193 field names at the dapp boundary.
 // ---------------------------------------------------------------------------
 
 // Hex / bytes helpers that don't drag a Buffer dep in.
@@ -2754,13 +2754,13 @@ export function applyFeeTier(
 }
 
 export function computeNativeFeeLythoshi(
-  executionUnitsHex: string | null | undefined,
-  pricePerExecutionUnitHex: string | null | undefined,
+  executionUnitLimitHex: string | null | undefined,
+  pricePerExecutionUnitLythoshiHex: string | null | undefined,
   tier: FeeTier,
 ): bigint | null {
   return computeNativeFeeFromPrice({
-    executionUnitsHex,
-    pricePerExecutionUnitHex,
+    executionUnitLimitHex,
+    pricePerExecutionUnitLythoshiHex,
     priceMultiplierBps: APPROVAL_FEE_TIER_BPS[tier],
   });
 }
@@ -3764,12 +3764,15 @@ export function ReqSendTx({
   const [tier, setTier] = useState<FeeTier>("medium");
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
+  const [showFeeDetails, setShowFeeDetails] = useState(false);
 
   const originWarnings = detectOriginWarnings(origin);
   const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
 
   const hasStructuredFee = view.structuredFee !== undefined;
-  const baseExecutionUnitPrice = hasStructuredFee ? null : parseHexQuantity(view.gasPrice);
+  const baseExecutionUnitPrice = hasStructuredFee
+    ? null
+    : parseHexQuantity(view.pricePerExecutionUnitLythoshiHex);
   const tieredExecutionUnitPrice =
     baseExecutionUnitPrice == null
       ? null
@@ -3778,8 +3781,8 @@ export function ReqSendTx({
     tieredExecutionUnitPrice == null ? null : "0x" + tieredExecutionUnitPrice.toString(16);
 
   const feeDisplayResult = nativeFeeDisplayFromPrice({
-    executionUnitsHex: view.estimatedGas,
-    pricePerExecutionUnitHex: view.gasPrice,
+    executionUnitLimitHex: view.executionUnitLimitHex,
+    pricePerExecutionUnitLythoshiHex: view.pricePerExecutionUnitLythoshiHex,
     priceMultiplierBps: APPROVAL_FEE_TIER_BPS[tier],
     ...(view.structuredFee !== undefined ? { structuredFee: view.structuredFee } : {}),
   });
@@ -3879,7 +3882,12 @@ export function ReqSendTx({
       )}
 
       <div className="req-section">
-        <div className="req-section__h">Network fee</div>
+        <div className="req-section__h">
+          <span>Network fee</span>
+          <button onClick={() => setShowFeeDetails((v) => !v)}>
+            {showFeeDetails ? "hide" : "details"} ↓
+          </button>
+        </div>
         {!hasStructuredFee && (
           <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
             {(["low", "medium", "high"] as FeeTier[]).map((t) => (
@@ -3911,14 +3919,15 @@ export function ReqSendTx({
               <span className="k">Max fee</span>
               <span className="v">{feeDisplay.defaultText}</span>
             </div>
-            {feeDisplay.detailTexts.map((detail, index) => (
-              <div className="req-kv" key={`${index}-${detail}`}>
-                <span className="k">Detail {index + 1}</span>
-                <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 10 }}>
-                  {detail}
-                </span>
-              </div>
-            ))}
+            {showFeeDetails &&
+              feeDisplay.detailTexts.map((detail, index) => (
+                <div className="req-kv" key={`${index}-${detail}`}>
+                  <span className="k">Detail {index + 1}</span>
+                  <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 10 }}>
+                    {detail}
+                  </span>
+                </div>
+              ))}
           </>
         ) : hasStructuredFee ? (
           <div className="req-kv">
@@ -3928,17 +3937,21 @@ export function ReqSendTx({
         ) : (
           <>
             <div className="req-kv">
-              <span className="k">Execution-unit limit</span>
-              <span className="v">{formatExecutionUnits(view.estimatedGas)}</span>
-            </div>
-            <div className="req-kv">
-              <span className="k">Price / execution unit</span>
-              <span className="v">{formatLythoshiPerExecutionUnit(tieredHex)} lythoshi</span>
-            </div>
-            <div className="req-kv">
               <span className="k">Max fee</span>
               <span className="v">{feeDisplay?.defaultText ?? "—"}</span>
             </div>
+            {showFeeDetails && (
+              <>
+                <div className="req-kv">
+                  <span className="k">Execution-unit limit</span>
+                  <span className="v">{formatExecutionUnits(view.executionUnitLimitHex)}</span>
+                </div>
+                <div className="req-kv">
+                  <span className="k">Price / execution unit</span>
+                  <span className="v">{formatLythoshiPerExecutionUnit(tieredHex)} lythoshi</span>
+                </div>
+              </>
+            )}
           </>
         )}
         {feeDisplayError !== null && (
