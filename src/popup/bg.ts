@@ -6,8 +6,10 @@ import type {
   WalletBridgeRouteReadiness,
   WalletTokenBalance,
 } from "../shared/token-balances.js";
+import { legacyChainFeeSuggestionWeiToLythoshi } from "../shared/chain-units.js";
 import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
+import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
@@ -72,13 +74,13 @@ export type ApprovalKind =
   | "add_chain";
 
 export interface SendTxView {
-  /** Compatibility field name; hex execution-unit limit. */
-  estimatedGas: string | null;
-  /** Compatibility field name; hex lythoshi per execution unit. */
-  gasPrice: string | null;
+  /** Hex execution-unit limit. */
+  executionUnitLimitHex: string | null;
+  /** Hex lythoshi per execution unit. */
+  pricePerExecutionUnitLythoshiHex: string | null;
   /** Optional ADR-0039 native structured fee object. When present, popup fee
    * display validates it strictly instead of falling back to compatibility
-   * `gas*` fields. */
+   * fee fields. */
   structuredFee?: unknown;
   nonce: string | null;
   simulation:
@@ -343,7 +345,7 @@ export async function bgKeystoreWipeUnauth(): Promise<
 
 /**
  * Real account state surfaced to the popup so Home can render the
- * unlocked v3 wallet's address instead of the demo `mono1:…` placeholder.
+ * unlocked v3 wallet's address instead of the static demo fixture.
  * Mirrors the shape the service worker returns from "wallet-active-account".
  */
 export interface ActiveAccount {
@@ -560,21 +562,19 @@ export async function bgWalletIndexerStatus(
   };
 }
 
-/** Fee strategy returned by `bgWalletFeeSuggestion`. */
-export interface FeeSuggestion {
-  /** Hex lythoshi per execution unit — sender's tip target (the only revenue path on Sprintnet). */
+/** Raw background-service-worker fee reply. Field names mirror EIP-1193/RPC. */
+interface FeeSuggestionWire {
   maxPriorityFeePerGas: string;
-  /** Hex lythoshi per execution unit — hard cap (priority + base). */
   maxFeePerGas: string;
-  /** Hex lythoshi per execution unit — current/next-block base fee. Surfaced for the UI fee preview. */
   baseFeePerGas: string;
-  /** Hex execution-unit limit recommendation. Non-null on Sprintnet (the chain has
-   * an intrinsic floor `eth_estimateGas` doesn't report); null on other
-   * chains where the popup should estimate itself if needed. */
   gasLimit: string | null;
-  /** Optional ADR-0039 native structured fee object. Existing IPCs still return
-   * compatibility fee fields; this is additive for native-aware providers. */
   structuredFee?: unknown;
+}
+
+/** Native fee strategy returned by `bgWalletFeeSuggestion`. */
+export interface FeeSuggestion extends NativeExecutionFeeSuggestion {
+  /** Hex lythoshi per execution unit — hard cap (priority + base). */
+  maxPricePerExecutionUnitLythoshiHex: string;
 }
 
 /** Tx hash + diagnostic operator id from `bgWalletSendTx`. */
@@ -588,17 +588,32 @@ export async function bgWalletFeeSuggestion(
 ): Promise<{ ok: true; suggestion: FeeSuggestion } | { ok: false; reason?: string }> {
   // The IPC handler returns the fee fields inline; reshape for callers.
   type Reply =
-    | ({ ok: true } & FeeSuggestion)
+    | ({ ok: true } & FeeSuggestionWire)
     | { ok: false; reason?: string };
   const r = await send<Reply>("wallet-fee-suggestion", { chainIdHex });
   if (!r.ok) return r;
+  // Magnitude contract: the SW handler returns wei-magnitude fee fields
+  // (V4-LIVE-0008 operators expect wei on the wire and `wallet-send-tx`
+  // forwards `fee.maxFeePerGas` straight through to
+  // `submitEncryptedMlDsaTx`). The popup `FeeSuggestion` is documented
+  // as lythoshi-per-execution-unit and every popup consumer
+  // (`nativeFeeDisplayFromFeeSuggestion`, balance comparisons, max-spend
+  // math) assumes lythoshi. Compensate at the IPC boundary so the
+  // documented contract holds. When operators flip to lythoshi-native
+  // (`CHAIN_RETURNS_LEGACY_WEI=false`) the helper short-circuits to
+  // identity and no caller changes.
+  const compensated = legacyChainFeeSuggestionWeiToLythoshi({
+    maxPriorityFeePerGas: r.maxPriorityFeePerGas,
+    maxFeePerGas: r.maxFeePerGas,
+    baseFeePerGas: r.baseFeePerGas,
+  });
   return {
     ok: true,
     suggestion: {
-      maxPriorityFeePerGas: r.maxPriorityFeePerGas,
-      maxFeePerGas: r.maxFeePerGas,
-      baseFeePerGas: r.baseFeePerGas,
-      gasLimit: r.gasLimit,
+      executionUnitLimitHex: r.gasLimit,
+      basePricePerExecutionUnitLythoshiHex: compensated.baseFeePerGas,
+      priorityPricePerExecutionUnitLythoshiHex: compensated.maxPriorityFeePerGas,
+      maxPricePerExecutionUnitLythoshiHex: compensated.maxFeePerGas,
       ...(r.structuredFee !== undefined ? { structuredFee: r.structuredFee } : {}),
     },
   };
@@ -860,7 +875,7 @@ export async function bgWalletSendTx(args: {
    *  back to its native-transfer default (Sprintnet's intrinsic execution-unit
    *  floor). NFT calldata pushes that floor well past 21k, so the
    *  Send-NFT page passes a conservative overhead-aware estimate. */
-  gasLimitHex?: string;
+  executionUnitLimitHex?: string;
   /** Optional encrypted-mempool class override for SDK-built action plans. */
   mempoolClass?: number;
 }): Promise<
@@ -882,7 +897,11 @@ export async function bgWalletSendTx(args: {
         method?: string;
         via?: string;
       };
-  const r = await send<Reply>("wallet-send-tx", args);
+  const { executionUnitLimitHex, ...rest } = args;
+  const r = await send<Reply>("wallet-send-tx", {
+    ...rest,
+    ...(executionUnitLimitHex !== undefined ? { gasLimitHex: executionUnitLimitHex } : {}),
+  });
   if (!r.ok) return r;
   return { ok: true, result: { txHash: r.txHash, via: r.via } };
 }

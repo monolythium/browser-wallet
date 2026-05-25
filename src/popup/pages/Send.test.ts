@@ -1,8 +1,8 @@
-// Coverage for the Send page's recipient parser. The parser is the codec
-// boundary: input may be 0x hex or bech32m (mono1...), but the IPC contract
-// stays 0x-only. These tests pin the conversion paths against BIP-350
-// canonical forms (lowercase + all-uppercase) and the rejection paths
-// for mixed-case, wrong-HRP, and malformed inputs.
+// Coverage for the Send page's recipient parser. The parser is the public
+// typed-address boundary: input must be mono1... or a .mono name, while the
+// IPC contract stays 0x-only internally. These tests pin the conversion paths
+// against BIP-350 canonical forms (lowercase + all-uppercase) and the
+// rejection paths for raw 0x, mixed-case, wrong-HRP, and malformed inputs.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -28,11 +28,11 @@ describe("validateToAddress — empty / partial", () => {
     expect(r.inputForm).toBe("empty");
   });
 
-  it("partial 0x (length < 42) returns no error and inputForm=partial", () => {
+  it("partial 0x is rejected at the public surface", () => {
     const r = validateToAddress("0x2aa6");
-    expect(r.error).toBeNull();
+    expect(r.error).toMatch(/raw 0x addresses are retired/);
     expect(r.addr0x).toBeNull();
-    expect(r.inputForm).toBe("partial");
+    expect(r.inputForm).toBe("0x");
   });
 
   it("partial mono1 (length < 44) returns no error and inputForm=partial", () => {
@@ -43,37 +43,37 @@ describe("validateToAddress — empty / partial", () => {
   });
 });
 
-describe("validateToAddress — complete 0x", () => {
-  it("lowercase 0x address parses, derives bech, no error", () => {
+describe("validateToAddress — raw 0x", () => {
+  it("lowercase 0x address is rejected", () => {
     const r = validateToAddress(ADDR0X_LOWER);
-    expect(r.error).toBeNull();
-    expect(r.addr0x).toBe(ADDR0X_LOWER);
-    expect(r.bech).toBe(addressToBech32m(ADDR0X_LOWER));
+    expect(r.error).toMatch(/raw 0x addresses are retired/);
+    expect(r.addr0x).toBeNull();
+    expect(r.bech).toBeNull();
     expect(r.inputForm).toBe("0x");
   });
 
-  it("mixed-case 0x address normalizes to lowercase", () => {
+  it("mixed-case 0x address is rejected", () => {
     const r = validateToAddress("0x2AA6a8C4e2f64c4d8b1c3e9b3E1f4d2A8c5E7d3f");
-    expect(r.error).toBeNull();
-    expect(r.addr0x).toBe(ADDR0X_LOWER);
-  });
-
-  it("0X-prefix uppercase variant is accepted", () => {
-    const r = validateToAddress("0X" + ADDR0X.slice(2));
-    expect(r.error).toBeNull();
-    expect(r.addr0x).toBe(ADDR0X_LOWER);
-  });
-
-  it("wrong-length (43 chars) reports an error", () => {
-    const r = validateToAddress(ADDR0X + "f");
-    expect(r.error).toMatch(/42 chars/);
+    expect(r.error).toMatch(/raw 0x addresses are retired/);
     expect(r.addr0x).toBeNull();
   });
 
-  it("non-hex char in 42-char form reports an error", () => {
+  it("0X-prefix uppercase variant is rejected", () => {
+    const r = validateToAddress("0X" + ADDR0X.slice(2));
+    expect(r.error).toMatch(/raw 0x addresses are retired/);
+    expect(r.addr0x).toBeNull();
+  });
+
+  it("wrong-length raw 0x still reports the retired raw-address boundary", () => {
+    const r = validateToAddress(ADDR0X + "f");
+    expect(r.error).toMatch(/raw 0x addresses are retired/);
+    expect(r.addr0x).toBeNull();
+  });
+
+  it("non-hex raw 0x still reports the retired raw-address boundary", () => {
     const garbage = "0x" + "z".repeat(40);
     const r = validateToAddress(garbage);
-    expect(r.error).toMatch(/40 hex chars/);
+    expect(r.error).toMatch(/raw 0x addresses are retired/);
     expect(r.addr0x).toBeNull();
   });
 });
@@ -133,7 +133,7 @@ describe("validateToAddress — complete mono1", () => {
 describe("validateToAddress — unknown / garbage", () => {
   it("non-0x non-mono1 non-.mono input reports a clear error", () => {
     const r = validateToAddress("hello world");
-    expect(r.error).toMatch(/0x.*mono1.*\.mono/);
+    expect(r.error).toMatch(/mono1.*\.mono/);
     expect(r.inputForm).toBe("unknown");
   });
 
@@ -181,10 +181,10 @@ describe("native LYTH amount conversion — lythoshi precision", () => {
 
 describe("native LYTH fee display math", () => {
   const fee = {
-    maxPriorityFeePerGas: "0x5",
-    maxFeePerGas: "0x8",
-    baseFeePerGas: "0x3",
-    gasLimit: "0xa",
+    priorityPricePerExecutionUnitLythoshiHex: "0x5",
+    maxPricePerExecutionUnitLythoshiHex: "0x8",
+    basePricePerExecutionUnitLythoshiHex: "0x3",
+    executionUnitLimitHex: "0xa",
   };
 
   it("computes estimated fees in lythoshi from price-per-execution-unit fields", () => {
@@ -197,10 +197,10 @@ describe("native LYTH fee display math", () => {
     expect(
       computeEstimatedFeeLythoshi(
         {
-          maxPriorityFeePerGas: "0x1",
-          maxFeePerGas: "0x3",
-          baseFeePerGas: "0x2",
-          gasLimit: null,
+          priorityPricePerExecutionUnitLythoshiHex: "0x1",
+          maxPricePerExecutionUnitLythoshiHex: "0x3",
+          basePricePerExecutionUnitLythoshiHex: "0x2",
+          executionUnitLimitHex: null,
         },
         10_000n,
       ),

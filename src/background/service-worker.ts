@@ -19,15 +19,15 @@
 //   - keystore.{status, unlock, lock, create-from-new, create-from-mnemonic}
 //
 // Chain reads/writes go through `MonolythiumProvider` from
-// `@monolythium/core-sdk` — the ethers v6 shim. The shim re-uses the SDK's
+// `@monolythium/core-sdk/ethers` — the ethers v6 shim. The shim re-uses the SDK's
 // JSON-RPC transport (no raw fetch in this file), so any future SDK transport
 // feature (auth headers, ws upgrade, registry-aware routing) lights up for the
 // wallet automatically.
 
+import { MonolythiumProvider } from "@monolythium/core-sdk/ethers";
 import {
   addressToTypedBech32,
   getNoEvmReceiptTrustPolicy,
-  MonolythiumProvider,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   ML_DSA_65_PUBLIC_KEY_LEN,
   typedBech32ToAddress,
@@ -41,6 +41,7 @@ import {
 import {
   buildWalletMrvCallNativePlan,
   buildWalletMrvDeployNativePlan,
+  requireTypedMrvContractAddress,
   walletMrvNativePlanToSubmitTx,
   type WalletMrvNativeSubmissionPlan,
   type WalletMrvCallNativePlanInput,
@@ -160,10 +161,11 @@ import {
 import { keccak_256, shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
-  SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
+  SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
+  applyFallbackOperatorsIfStranded,
   setOperatorOverride,
   readOperatorOverride,
   getDefaultOperators,
@@ -190,6 +192,10 @@ import {
   type RawDelegationHistory,
 } from "../shared/activity.js";
 import {
+  DEMO_ADDR_SENTINELS_LOWER,
+  isDemoAddrSentinel,
+} from "../shared/demo-addr-sentinel.js";
+import {
   STORAGE_KEY_NAME_CACHE,
   mergeNameCache,
   evictExpiredNames,
@@ -198,13 +204,19 @@ import {
   type NameLabel,
   type NameCache,
 } from "../shared/name-resolution.js";
+import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
-import { getWsClient, type WsStatus } from "./ws-client.js";
+import {
+  deriveWsUrl,
+  getWsClient,
+  markWsDown,
+  type WsStatus,
+} from "./ws-client.js";
 import {
   DEFAULT_ACTIVITY_KIND_ENVELOPE,
   normaliseActivityKind,
@@ -598,6 +610,46 @@ async function loadUserChains(): Promise<void> {
   });
 }
 
+/**
+ * Round 3.5 — one-shot SW-boot cleanup.
+ *
+ * Removes any `mono.activity.<sentinel>.*` and
+ * `mono.activity.pending.<sentinel>.*` storage keys that landed under
+ * a popup demo-data sentinel address during the boot race that
+ * existed before the activity hook guarded sentinel addrs at the
+ * write source. Scans `chrome.storage.local` once per cold start
+ * (cheap — the sentinel set is 3 entries, the storage object has
+ * dozens of keys at most). No-ops when no sentinel-keyed entries
+ * exist, which is the steady state after one cold start past this
+ * fix lands.
+ */
+async function purgeDemoAddrCacheKeys(): Promise<void> {
+  const all = await new Promise<Record<string, unknown>>((resolve) => {
+    chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+  });
+  const toRemove: string[] = [];
+  for (const key of Object.keys(all)) {
+    if (!key.startsWith("mono.activity.")) continue;
+    // Cache key shape: mono.activity.<addrLower>.<chainIdHex>
+    // Pending key shape: mono.activity.pending.<addrLower>.<chainIdHex>
+    // Both carry a 0x-shaped 20-byte addr in the second-to-last segment
+    // (cache) or last-before-chain segment (pending). Match either.
+    for (const sentinel of DEMO_ADDR_SENTINELS_LOWER) {
+      if (key.includes(`.${sentinel}.`)) {
+        toRemove.push(key);
+        break;
+      }
+    }
+  }
+  if (toRemove.length === 0) return;
+  await new Promise<void>((resolve) => {
+    chrome.storage.local.remove(toRemove, () => resolve());
+  });
+  console.log(
+    `[wallet] purged ${toRemove.length} demo-addr activity cache key(s) leaked during popup-boot race (Round 3.5 cleanup)`,
+  );
+}
+
 async function persistUserChains(): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.set({ [USER_CHAINS_STORAGE_KEY]: userChains }, () =>
@@ -665,7 +717,27 @@ void (async () => {
 
   await loadUserChains();
   await loadOperatorOverride();
+  // Round 3 — apply the 6-IP fallback override when the SDK chain
+  // registry has stranded the wallet with <2 Sprintnet operators (the
+  // `rpc.monolythium.com` single-endpoint regression introduced on
+  // mono-core-sdk@riscv `46c009a`). Runs after loadOperatorOverride so
+  // any pre-existing user override is detected and respected. See
+  // `networks.ts` `FALLBACK_OPERATORS_2026_05_25` comment for the
+  // REMOVE-WHEN conditions.
+  await applyFallbackOperatorsIfStranded();
+  // Round 3.5 — one-shot cleanup for any per-address cache rows that
+  // leaked under a demo-data sentinel address during the popup-boot
+  // race between `acc = ACCOUNTS[0]` initial state and the real
+  // `wallet-active-account` IPC resolving. The popup hook now guards
+  // sentinel addrs at the write source; this clears anything that
+  // already landed before the guard shipped. See
+  // `shared/demo-addr-sentinel.ts` for the sentinel list.
+  await purgeDemoAddrCacheKeys();
   session.chainId = await loadActiveChainId();
+
+  // Pre-mark WS down for operators with no explicit `ws_url`. See
+  // `prefillUnknownWsEndpointsDown` for the V4-LIVE-0008 rationale.
+  prefillUnknownWsEndpointsDown();
 
   // Restore origins the user has previously approved. Without this, every
   // SW hibernation (~30 s idle) drops connectedOrigins back to empty and
@@ -682,6 +754,40 @@ void (async () => {
   }
 })();
 
+/**
+ * Pre-populate the WS down-cache for any operator whose WS URL is
+ * derived via the legacy `:8545 → :8546` fallback (i.e. the SDK chain
+ * registry did not pin an explicit `ws_url`). Sprintnet operators on
+ * binary commit 5aead0f0 (V4-LIVE-0008, 2026-05-18) do not expose port
+ * 8546 — PowerShell TCP probe 2026-05-25 confirmed timeout on all six.
+ *
+ * Marking these URLs down before any `new WebSocket()` call suppresses
+ * the browser-level `WebSocket connection to '...' failed:
+ * ERR_CONNECTION_TIMED_OUT` line that would otherwise surface in the
+ * service-worker console once per page load. Polling fallback already
+ * covers the affected `ws-subscribe-new-heads` IPC, so the WS skip is
+ * functionally transparent.
+ *
+ * The 10-minute `WS_FAILURE_TTL_MS` means we re-attempt periodically:
+ * once operators expose 8546 the next ensureConnection() succeeds, the
+ * failure-cache entry is cleared on `onopen`, and the feature lights up
+ * with no code change.
+ *
+ * Operators whose SDK registry record carries an explicit `ws_url` are
+ * skipped — those endpoints are presumed to support WS.
+ */
+function prefillUnknownWsEndpointsDown(): void {
+  for (const op of getActiveOperators()) {
+    if (op.wsRpc !== undefined) continue;
+    try {
+      markWsDown(deriveWsUrl(op));
+    } catch {
+      // Malformed operator rpc — let the normal connection path surface
+      // the error rather than silently masking it.
+    }
+  }
+}
+
 // Hot-reload the operator override when storage changes. The popup's
 // sprintnet-operators-set IPC writes here and the in-memory activeOperators
 // list re-syncs; the `cachedOperator` answer used by the chain-status
@@ -690,7 +796,7 @@ void (async () => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
-  void loadOperatorOverride();
+  void loadOperatorOverride().then(prefillUnknownWsEndpointsDown);
   cachedOperator = null;
   // GAP #11: a fresh override list may add an operator that was never
   // probed for genesis; drop the cache so the next dispatch re-probes
@@ -976,9 +1082,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
       try {
         // v4-strict (Phase 3.5 + 4.0): the wallet's on-chain address is
-        // keccak(ml-dsa-65 pubkey). Routing personal_sign through the
-        // legacy keystore.ts secp256k1 path would produce a signature
-        // whose ecrecover'd address doesn't match `eth_accounts[0]` —
+        // derived from the ML-DSA-65 pubkey. Routing personal_sign
+        // through the legacy keystore.ts secp256k1 path would produce a
+        // signature whose ecrecover'd address doesn't match `eth_accounts[0]` —
         // and on top of that, the popup unlock flow only populates the
         // v4 backend, so the secp256k1 path throws "wallet is locked"
         // even when the v4 keystore is unlocked. Sign with ML-DSA-65.
@@ -1005,9 +1111,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
 
       // Build the approval view BEFORE opening the popup so the user sees
-      // real numbers (gas estimate, simulation outcome, nonce) instead of
-      // demo placeholders. RPC failures degrade gracefully — we still let
-      // the user approve, but the popup will surface the gap.
+      // real numbers (execution-unit estimate, simulation outcome, nonce)
+      // instead of demo placeholders. RPC failures degrade gracefully; the
+      // user can still approve, but the popup will surface the gap.
       const view = await buildSendTxView(txReq);
       const approvalTx = {
         ...(typeof txReq.from === "string" ? { from: txReq.from } : {}),
@@ -1054,8 +1160,8 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           const nonceHex =
             txReq.nonce ?? view.nonce ??
             (await sprintnetJsonRpc<string>("eth_getTransactionCount", [fromAddr, "pending"])).result;
-          const gasPriceHex =
-            txReq.gasPrice ?? view.gasPrice ??
+          const executionUnitPriceHex =
+            txReq.gasPrice ?? view.pricePerExecutionUnitLythoshiHex ??
             (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
           // Sprintnet's mempool intrinsic execution-unit floor is above what
           // `eth_estimateGas` reports (the latter only covers EVM
@@ -1063,8 +1169,10 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // a dapp may know better than us and we'd rather surface a
           // chain reject than silently override — otherwise default to
           // the wallet's audited Sprintnet floor with headroom.
-          const gasHex =
-            txReq.gas ?? view.estimatedGas ?? SPRINTNET_TRANSFER_GAS_LIMIT_HEX;
+          const executionUnitsHex =
+            txReq.gas ??
+            view.executionUnitLimitHex ??
+            SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
 
           // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
           // The chain rejects plaintext at admission (Law §4.5 / Q2), so
@@ -1075,8 +1183,8 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             ...(txReq.data !== undefined ? { data: txReq.data } : {}),
             ...(mempoolClass !== undefined ? { mempoolClass } : {}),
             nonce: nonceHex,
-            gas: gasHex,
-            gasPrice: gasPriceHex,
+            gas: executionUnitsHex,
+            gasPrice: executionUnitPriceHex,
             chainIdHex: session.chainId,
           });
           return ok(txHash);
@@ -1094,17 +1202,19 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         if (!net) throw new Error(`unknown chain ${session.chainId}`);
         const provider = providerFor(session.chainId);
 
-        // Re-resolve gas with the latest node values at sign time. The view
-        // we showed the user is the same shape (and usually identical
-        // numbers) but we don't trust stale views to be authoritative.
+        // Re-resolve execution units and fee with the latest node values at
+        // sign time. The view we showed the user is usually identical, but we
+        // don't trust stale views to be authoritative.
         const fromAddr = getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
         const nonceHex =
           txReq.nonce ?? view.nonce ??
           (await rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]));
         const gasPriceHex =
-          txReq.gasPrice ?? view.gasPrice ?? (await rpcSend<string>(provider, "eth_gasPrice", []));
+          txReq.gasPrice ??
+          view.pricePerExecutionUnitLythoshiHex ??
+          (await rpcSend<string>(provider, "eth_gasPrice", []));
         const gasHex =
-          txReq.gas ?? view.estimatedGas ??
+          txReq.gas ?? view.executionUnitLimitHex ??
           (await rpcSend<string>(provider, "eth_estimateGas", [
             {
               from: fromAddr,
@@ -1238,6 +1348,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!displayFromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no address");
       }
+      let contractAddress: string;
+      try {
+        contractAddress = requireTypedMrvContractAddress(p.contractAddress).typed;
+      } catch (e) {
+        return err(-32602, (e as Error).message);
+      }
 
       let plan: WalletMrvNativeSubmissionPlan;
       let txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>;
@@ -1264,7 +1380,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             typeof p.priorityTipLythoshiHex === "string"
               ? p.priorityTipLythoshiHex
               : fee?.maxPriorityFeePerGas ?? "0x0",
-          contractAddress: p.contractAddress,
+          contractAddress,
           input: p.input,
         };
         if (typeof p.valueWeiHex === "string") input.valueWeiHex = p.valueWeiHex;
@@ -1505,8 +1621,8 @@ async function buildSendTxView(
   const chainLabel = net?.name ?? chainId;
 
   const view: SendTxView = {
-    estimatedGas: txReq.gas ?? null,
-    gasPrice: txReq.gasPrice ?? null,
+    executionUnitLimitHex: txReq.gas ?? null,
+    pricePerExecutionUnitLythoshiHex: txReq.gasPrice ?? null,
     nonce: txReq.nonce ?? null,
     simulation: null,
     chainId,
@@ -1540,13 +1656,13 @@ async function buildSendTxView(
           )
       : Promise.resolve(null);
 
-  const [gasEst, gasPrice, nonce, sim] = await Promise.all([
-    view.estimatedGas != null
-      ? Promise.resolve(view.estimatedGas)
+  const [executionUnitLimitHex, pricePerExecutionUnitLythoshiHex, nonce, sim] = await Promise.all([
+    view.executionUnitLimitHex != null
+      ? Promise.resolve(view.executionUnitLimitHex)
       : rpcSend<string>(provider, "eth_estimateGas", [callShape])
           .catch(() => null as string | null),
-    view.gasPrice != null
-      ? Promise.resolve(view.gasPrice)
+    view.pricePerExecutionUnitLythoshiHex != null
+      ? Promise.resolve(view.pricePerExecutionUnitLythoshiHex)
       : rpcSend<string>(provider, "eth_gasPrice", [])
           .catch(() => null as string | null),
     view.nonce != null
@@ -1556,8 +1672,8 @@ async function buildSendTxView(
     simPromise,
   ]);
 
-  view.estimatedGas = gasEst;
-  view.gasPrice = gasPrice;
+  view.executionUnitLimitHex = executionUnitLimitHex;
+  view.pricePerExecutionUnitLythoshiHex = pricePerExecutionUnitLythoshiHex;
   view.nonce = nonce;
   view.simulation = sim;
   return view;
@@ -1584,8 +1700,8 @@ function buildMrvNativeSendTxApproval(
       chainId: txReq.chainIdHex,
     },
     view: {
-      estimatedGas: txReq.gas,
-      gasPrice: txReq.maxFeePerGas,
+      executionUnitLimitHex: txReq.gas,
+      pricePerExecutionUnitLythoshiHex: txReq.maxFeePerGas,
       nonce: txReq.nonce,
       simulation: null,
       chainId: chainIdHex,
@@ -1598,12 +1714,20 @@ function buildMrvNativeSendTxApproval(
 
 /**
  * Sprintnet-specific minimum priority tip discovered empirically via
- * smoke-test admission rejection: 10_000_000_000 lythoshi per execution unit. The
- * chain doesn't expose this via RPC and `eth_maxPriorityFeePerGas`
+ * smoke-test admission rejection: 10_000_000_000 (= 0x2540be400) per
+ * execution unit on the wire. The constant name historically said
+ * "lythoshi" but the operators currently run V4-LIVE-0008 (commit
+ * `5aead0f0`) which serves wei-magnitude fee fields — so the value as
+ * stored here is the wei-on-wire magnitude. `suggestFee` compensates
+ * to lythoshi for the wallet-internal contract; `submitEncryptedMlDsaTx`
+ * (legacy-tx path) uses a fresh `eth_gasPrice` quote at wire build
+ * time and stays in wei.
+ *
+ * The chain doesn't expose this via RPC and `eth_maxPriorityFeePerGas`
  * is method-not-found, so it lives here as a chain constant. If the
  * chain operators ever change the floor, this is the one place to bump.
  */
-const SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX = "0x2540be400";
+const SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX = "0x2540be400";
 
 // ---- Operator liveness cache ----
 //
@@ -1676,17 +1800,25 @@ async function suggestFee(chainIdHex: string): Promise<{
     // Last entry is the next-block estimate when feeHistory returns the
     // pending base fee; with a single requested block we get two
     // entries (current + next).
+    //
+    // Magnitude contract: these fields are returned in CHAIN-WIRE WEI
+    // magnitude — V4-LIVE-0008 operators (`5aead0f0`) accept wei on the
+    // wire, and `wallet-send-tx` plumbs `fee.maxFeePerGas` /
+    // `fee.maxPriorityFeePerGas` straight into the encrypted-envelope
+    // submission. The popup-side display consumer is responsible for
+    // converting wei → lythoshi via `legacyChainFeeSuggestionWeiToLythoshi`
+    // before handing fields to `nativeFeeDisplayFromFeeSuggestion`.
     const baseHex = baseList[baseList.length - 1]!;
-    const baseLythoshiPerExecutionUnit = BigInt(baseHex);
-    const tipLythoshiPerExecutionUnit = BigInt(
-      SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX,
+    const baseChainWeiPerExecutionUnit = BigInt(baseHex);
+    const tipChainWeiPerExecutionUnit = BigInt(
+      SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX,
     );
     return {
       baseFeePerGas: baseHex,
-      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX,
+      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX,
       maxFeePerGas:
-        "0x" + (baseLythoshiPerExecutionUnit + tipLythoshiPerExecutionUnit).toString(16),
-      gasLimit: SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
+        "0x" + (baseChainWeiPerExecutionUnit + tipChainWeiPerExecutionUnit).toString(16),
+      gasLimit: SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
     };
   }
   const provider = providerFor(chainIdHex);
@@ -4753,10 +4885,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "vault-add-fresh": {
       // Requires an unlocked container (MEK cached). Generates a fresh
-      // PQM-1 mnemonic and appends a new VaultRecordV4. Does NOT
-      // switch the active vault — caller invokes vault-select if
-      // desired (gives the popup room to show "Vault N added — switch
-      // to it now? [Yes / Keep current]").
+      // PQM-1 mnemonic and appends a new VaultRecordV4. Auto-switches
+      // the active vault to the newly-created one (Round 3.5 — the
+      // previous design left active unchanged and required a separate
+      // `vault-select`; the popup didn't, so users saw the old vault's
+      // address persist after creating a new one). `accountsChanged`
+      // broadcast below refreshes dApps + popup state.
       //
       // `label` is optional; the keystore helper validates 1-32 chars
       // when supplied and falls back to its own "Vault N" auto-label
@@ -4767,6 +4901,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await addVaultFreshV4(label);
         await resetAutoLock();
+        broadcastEvent("accountsChanged", [r.address]);
         return {
           ok: true,
           vaultId: r.vaultId,
@@ -4786,6 +4921,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await addVaultImportV4(p.mnemonic, label);
         await resetAutoLock();
+        broadcastEvent("accountsChanged", [r.address]);
         return { ok: true, vaultId: r.vaultId, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -4823,6 +4959,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(label !== undefined ? { label } : {}),
         });
         await resetAutoLock();
+        broadcastEvent("accountsChanged", [r.address]);
         return {
           ok: true,
           vaultId: r.vaultId,
@@ -6055,7 +6192,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-active-account": {
       // Surface the unlocked v3 keypair to the popup so Home can render
-      // the real ML-DSA-65 address instead of the demo `mono1:…` placeholder.
+      // the real ML-DSA-65 address instead of the static demo fixture.
       // Stays scoped to v3 — the legacy v2 keystore goes through the
       // existing demo-data path until the Networks list switch lands.
       //
@@ -6106,10 +6243,24 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   .map((f) => `${f.name}: ${f.reason}`)
                   .join(", ")})`
               : "";
+          // Sprintnet operators currently run V4-LIVE-0008 (commit 5aead0f0,
+          // 2026-05-18) which intentionally does NOT include the lythoshi-
+          // rescaling commits that landed on mono-core master after that
+          // date. They continue to report `eth_getBalance` in 18-decimal
+          // wei. The wallet's display path treats the bigint as lythoshi
+          // (8 decimals) per whitepaper §23.1, so an un-compensated
+          // 0.1 LYTH balance (10^17 wei) renders as 10^9 = 1,000,000,000.
+          // Convert at the IPC boundary so the popup sees lythoshi-magnitude
+          // without changing the lythoshi-pure semantic of the shared
+          // display helpers. See shared/chain-units.ts for the migration
+          // switch — when operators upgrade past `a2a9e1fc` and report
+          // lythoshi-native, flip `CHAIN_RETURNS_LEGACY_WEI` to false and
+          // the conversion below becomes identity.
+          const balanceHex = legacyChainBalanceHexToLythoshiHex(consensus.balanceHex);
           console.log(
-            `[wallet] balance consensus: max=${consensus.balanceHex} from ${consensus.contributing.length}/${total} operators${failSummary}`,
+            `[wallet] balance consensus: max=${consensus.balanceHex} (lythoshi=${balanceHex}) from ${consensus.contributing.length}/${total} operators${failSummary}`,
           );
-          return { ok: true, balanceHex: consensus.balanceHex };
+          return { ok: true, balanceHex };
         }
         const provider = providerFor(p.chainIdHex);
         const balanceHex = await rpcSend<string>(provider, "eth_getBalance", [
@@ -6217,6 +6368,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "activity-get is only wired for Sprintnet today" };
+      }
+      // Round 3.5 — defense in depth: refuse activity fetches for popup
+      // demo-data sentinel addresses so no cache row lands keyed by
+      // them even if a caller (legacy code path, dapp, future bug) tries
+      // to ask. Popup useActivity hook also guards at the call site.
+      if (isDemoAddrSentinel(p.address)) {
+        return { ok: false, reason: "demo placeholder address — no chain query" };
       }
       const addressLower = p.address.toLowerCase();
       const cacheKey = activityCacheKey(addressLower, p.chainIdHex);
@@ -6654,6 +6812,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
       try {
+        const contractAddress = requireTypedMrvContractAddress(p.contractAddress).typed;
         const nonceRes = await sprintnetJsonRpc<string>(
           "eth_getTransactionCount",
           [fromAddress, "latest"],
@@ -6670,7 +6829,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           executionUnitLimitHex: p.executionUnitLimitHex,
           maxExecutionFeeLythoshiHex:
             p.maxExecutionFeeLythoshiHex ?? fee?.maxFeePerGas ?? "0x0",
-          contractAddress: p.contractAddress,
+          contractAddress,
           input: p.input,
         };
         if (p.priorityTipLythoshiHex !== undefined) {

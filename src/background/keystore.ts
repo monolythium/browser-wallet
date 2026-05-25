@@ -1,4 +1,8 @@
-// Monolythium Wallet — encrypted keystore.
+// Monolythium Wallet — legacy v2 encrypted keystore.
+//
+// This module is the pre-PQM secp256k1/EIP-1193 compatibility vault. Current
+// ML-DSA-65/PQM-1 vaults live in keystore-mldsa.ts and derive Mono address
+// payloads through the SDK's ADR-0038 BLAKE3 rule.
 //
 // Vault layout (stored under chrome.storage.local["mono.vault"]):
 //
@@ -14,8 +18,8 @@
 //     aead: "xchacha20-poly1305",
 //     nonce: "<base64 24B>",               // XChaCha20 nonce (random, AEAD-safe)
 //     ciphertext: "<base64 priv||tag>",    // XChaCha20-Poly1305 ciphertext + auth tag
-//     addr: "0x...",                       // derived 20-byte address (cached so popup
-//                                          // can show it locked)
+//     addr: "0x...",                       // legacy EIP-1193 address cache
+//                                          // shown only through typed display helpers
 //   }
 //
 // Only the encrypted ciphertext + a bit of envelope metadata ever touches disk.
@@ -193,7 +197,8 @@ function privKeyToAddress(priv: Uint8Array): string {
   const pub = getPublicKey(priv, false);
   const xy = pub.slice(1);
   const hash = keccak_256(xy);
-  // Address = last 20 bytes of keccak256(pubkey) - matches Ethereum.
+  // Legacy v2/EIP-1193 address cache. Not used for Mono ADR-0038 public
+  // address derivation; current PQM vaults derive in keystore-mldsa.ts.
   const addrBytes = hash.slice(-20);
   return "0x" + bytesToHex(addrBytes);
 }
