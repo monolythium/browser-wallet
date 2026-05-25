@@ -352,7 +352,7 @@ export function SendNft({ fromAddress, chainId, nft, onBack }: SendNftProps) {
           type="text"
           value={recipient}
           onChange={(e) => setRecipient(e.target.value)}
-          placeholder="0x… or mono1…"
+          placeholder="mono1…"
           autoFocus
           spellCheck={false}
           autoCapitalize="none"
