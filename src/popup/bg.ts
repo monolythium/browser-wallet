@@ -73,13 +73,13 @@ export type ApprovalKind =
   | "add_chain";
 
 export interface SendTxView {
-  /** Compatibility field name; hex execution-unit limit. */
-  estimatedGas: string | null;
-  /** Compatibility field name; hex lythoshi per execution unit. */
-  gasPrice: string | null;
+  /** Hex execution-unit limit. */
+  executionUnitLimitHex: string | null;
+  /** Hex lythoshi per execution unit. */
+  pricePerExecutionUnitLythoshiHex: string | null;
   /** Optional ADR-0039 native structured fee object. When present, popup fee
    * display validates it strictly instead of falling back to compatibility
-   * `gas*` fields. */
+   * fee fields. */
   structuredFee?: unknown;
   nonce: string | null;
   simulation:
