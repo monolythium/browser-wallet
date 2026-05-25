@@ -29,7 +29,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
-import { keccak_256 } from "@noble/hashes/sha3.js";
+import {
+  hexToBytes,
+  mlDsa65AddressFromPublicKey,
+} from "@monolythium/core-sdk/crypto";
 
 import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
@@ -1234,8 +1237,8 @@ export type { DraftSigner };
 /** Convert a list of in-flight DraftSigner entries to the canonical
  *  MultisigSigner shape the IPC contract expects. Each draft gets a
  *  fresh crypto.randomUUID() id; addresses for external signers are
- *  derived from the pasted pubkey via keccak256(pubkey)[12..32].
- *  Throws if a self-signer's local fields are missing. */
+ *  derived from the pasted pubkey via ADR-0038 BLAKE3 domain+algo
+ *  derivation. Throws if a self-signer's local fields are missing. */
 export function draftsToSigners(drafts: DraftSigner[]): MultisigSigner[] {
   return drafts.map((d) => {
     if (d.source === "self") {
@@ -1262,10 +1265,9 @@ export function draftsToSigners(drafts: DraftSigner[]): MultisigSigner[] {
   });
 }
 
-/** Derive a 20-byte EVM address from a 0x-prefixed ML-DSA-65 pubkey
- *  hex string. Uses the same keccak256(pubkey)[12..32] derivation
- *  the keystore + SDK use. Returns "" when the input is not a
- *  well-formed pubkey (caller renders a blank address). */
+/** Derive ADR-0038 address bytes from a 0x-prefixed ML-DSA-65 pubkey
+ *  hex string. Returns "" when the input is not a well-formed pubkey
+ *  (caller renders a blank address). */
 export function pubkeyToAddress(pubkeyHex: string): string {
   if (
     pubkeyHex.length !== ML_DSA_65_PUBKEY_HEX_LEN ||
@@ -1273,17 +1275,11 @@ export function pubkeyToAddress(pubkeyHex: string): string {
   ) {
     return "";
   }
-  const bytes = new Uint8Array(1952);
-  for (let i = 0; i < 1952; i++) {
-    bytes[i] = parseInt(pubkeyHex.slice(2 + i * 2, 4 + i * 2), 16);
+  try {
+    return mlDsa65AddressFromPublicKey(hexToBytes(pubkeyHex, "ML-DSA-65 public key"));
+  } catch {
+    return "";
   }
-  return "0x" + bytesToHex(keccak_256(bytes).slice(12));
-}
-
-function bytesToHex(b: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
-  return s;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

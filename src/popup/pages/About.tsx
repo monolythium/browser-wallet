@@ -584,6 +584,23 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 v: <Mono>{shortHex(SPRINTNET_GENESIS_HASH, 10, 8)}</Mono>,
                 title: SPRINTNET_GENESIS_HASH,
               },
+              { k: "Execution", v: "Rust/RISC-V native (§22.9)" },
+              { k: "Whitepaper", v: "v4.1-DRAFT · 2026-05-17" },
+              { k: "Signing", v: "ML-DSA-65 (FIPS-204) per §15" },
+              { k: "Address format", v: "bech32m per §22.7" },
+              { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH) per §23.1" },
+              {
+                k: "Chain decimal mode",
+                v: "v4.0 compat (wei wire) · wallet compensates",
+                title:
+                  "V4-LIVE-0008 operators (commit 5aead0f0) still report wei on the wire; wallet converts to lythoshi at IPC boundaries. Flip CHAIN_RETURNS_LEGACY_WEI=false when operators upgrade past a2a9e1fc.",
+              },
+              {
+                k: "EVM compat",
+                v: "Bridge active · §22.9 removal pending",
+                title:
+                  "Dapp-facing eth_sendTransaction / personal_sign / eth_signTypedData still bridge through the wallet's ML-DSA-65 backend. §22.9 removal is queued for a focused follow-up commit; tracked in dev notes NAYIEM-PING.",
+              },
             ]}
           />
           <div

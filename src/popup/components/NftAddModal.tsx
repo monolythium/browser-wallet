@@ -21,6 +21,7 @@
 
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
+import { typedBech32ToAddress } from "@monolythium/core-sdk";
 
 import { Icon } from "../Icon";
 import { Modal } from "./Modal";
@@ -36,6 +37,33 @@ import {
 } from "../../lib/nft-client";
 
 type Standard = "erc721" | "erc1155";
+
+export const NFT_CONTRACT_ADDRESS_PLACEHOLDER =
+  "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd";
+
+export type ParsedNftContractAddress =
+  | { ok: true; typed: string; hex: string }
+  | { ok: false; reason: string };
+
+export function parseNftContractAddressInput(input: string): ParsedNftContractAddress {
+  const value = input.trim();
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    return {
+      ok: false,
+      reason: "NFT contract address raw 0x addresses are retired; use a typed monoc1 address",
+    };
+  }
+  try {
+    const parsed = typedBech32ToAddress(value, "contract");
+    return { ok: true, typed: parsed.address, hex: parsed.hex.toLowerCase() };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      reason: `NFT contract address must be a typed monoc1 address: ${message}`,
+    };
+  }
+}
 
 interface PreviewState {
   standard: Standard;
@@ -115,7 +143,9 @@ function NftAddBody({
 
   const trimmedContract = contractInput.trim();
   const trimmedTokenId = tokenIdInput.trim().replace(/^#/, "");
-  const validContractShape = /^0x[0-9a-fA-F]{40}$/.test(trimmedContract);
+  const parsedContract = parseNftContractAddressInput(trimmedContract);
+  const contractInputError =
+    trimmedContract.length > 0 && !parsedContract.ok ? parsedContract.reason : null;
   let parsedTokenId: bigint | null = null;
   if (trimmedTokenId.length > 0) {
     try {
@@ -125,7 +155,7 @@ function NftAddBody({
     }
   }
   const inputsValid =
-    validContractShape && parsedTokenId !== null && parsedTokenId >= 0n;
+    parsedContract.ok && parsedTokenId !== null && parsedTokenId >= 0n;
 
   const ownsOk =
     preview === null
@@ -137,12 +167,17 @@ function NftAddBody({
         : preview.balance !== undefined && preview.balance > 0n;
 
   const handleVerify = async () => {
+    const contractForVerify = parsedContract;
     if (verifying || !inputsValid || parsedTokenId === null) return;
+    if (!contractForVerify.ok) {
+      setError(contractForVerify.reason);
+      return;
+    }
     setVerifying(true);
     setError(null);
     setPreview(null);
     try {
-      const addr = trimmedContract;
+      const addr = contractForVerify.hex;
       // Detect standard. Run both probes in parallel; if both report
       // false, fall back to ERC-721 since most metadata-bearing
       // contracts implement it as the default.
@@ -179,7 +214,7 @@ function NftAddBody({
         } catch {
           setError(
             !contractResponds
-              ? "This address doesn't look like an ERC-721 contract on the active chain."
+              ? "This address doesn't look like an MRC-721 contract on the active chain."
               : `Token #${parsedTokenId.toString()} doesn't exist on ${collectionName}.`,
           );
           setVerifying(false);
@@ -232,11 +267,16 @@ function NftAddBody({
   };
 
   const handlePin = async () => {
+    const contractForPin = parseNftContractAddressInput(contractInput);
     if (pinning || !preview || parsedTokenId === null) return;
+    if (!contractForPin.ok) {
+      setError(contractForPin.reason);
+      return;
+    }
     setPinning(true);
     setError(null);
     try {
-      const addrLc = trimmedContract.toLowerCase();
+      const addrLc = contractForPin.hex;
       const tokenIdStr = parsedTokenId.toString();
       await pinNft({ chainId, address: addrLc, tokenId: tokenIdStr });
       onAdded(addrLc, tokenIdStr);
@@ -250,9 +290,11 @@ function NftAddBody({
   return (
     <div style={colStyle}>
       <div style={hintStyle}>
-        Pin any ERC-721 or ERC-1155 token by its contract address and
+        Pin any MRC-721 or MRC-1155 token by its contract address and
         token id. Sprintnet&apos;s indexer is currently disabled cluster-
         wide, so discovery isn&apos;t automatic — pinning is the way in.
+        (ERC-shaped contracts are read via the EVM compat path until
+        operators ship the native lyth_mrc* RPC; whitepaper §22.5.)
       </div>
 
       <div style={fieldGroupStyle}>
@@ -261,7 +303,7 @@ function NftAddBody({
           type="text"
           value={contractInput}
           onChange={(e) => setContractInput(e.target.value)}
-          placeholder="0x…"
+          placeholder={NFT_CONTRACT_ADDRESS_PLACEHOLDER}
           disabled={verifying || pinning}
           spellCheck={false}
           autoCapitalize="none"
@@ -269,6 +311,7 @@ function NftAddBody({
           style={inputStyle}
         />
       </div>
+      {contractInputError && <ErrorLine>{contractInputError}</ErrorLine>}
 
       <div style={fieldGroupStyle}>
         <FieldLabel>Token ID</FieldLabel>
@@ -304,7 +347,7 @@ function NftAddBody({
           <PreviewRow label="Symbol" value={preview.collectionSymbol} />
           <PreviewRow
             label="Standard"
-            value={preview.standard === "erc1155" ? "ERC-1155" : "ERC-721"}
+            value={preview.standard === "erc1155" ? "MRC-1155" : "MRC-721"}
           />
           <PreviewRow
             label="Token ID"

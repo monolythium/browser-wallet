@@ -132,6 +132,7 @@ export function buildWalletMrvDeployNativePlan(
 export function buildWalletMrvCallNativePlan(
   input: WalletMrvCallNativePlanInput,
 ): WalletMrvNativeSubmissionPlan {
+  const contractAddress = requireTypedMrvContractAddress(input.contractAddress);
   const options = {
     from: normalizeUserAddress(input.fromAddress),
     chainId: hexQuantityToBigint(input.chainIdHex, "chainIdHex"),
@@ -156,7 +157,7 @@ export function buildWalletMrvCallNativePlan(
   };
   return serializeSdkPlan(
     "mrv_call",
-    buildMrvCallNativeTxPlan(normalizeContractAddress(input.contractAddress).typed, input.input, options),
+    buildMrvCallNativeTxPlan(contractAddress.typed, input.input, options),
   );
 }
 
@@ -366,15 +367,18 @@ function normalizeUserAddress(address: string): string {
   return typedBech32ToAddress(address, "user").address;
 }
 
-function normalizeContractAddress(address: string): { typed: string; hex: string } {
-  if (address.startsWith("0x") || address.startsWith("0X")) {
-    return {
-      typed: addressToTypedBech32("contract", address),
-      hex: normalizeAddressHex(address),
-    };
+export function requireTypedMrvContractAddress(address: string): { typed: string; hex: string } {
+  const value = address.trim();
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    throw new Error("MRV native contractAddress raw 0x addresses are retired; use a typed monoc1 address");
   }
-  const parsed = typedBech32ToAddress(address, "contract");
-  return { typed: parsed.address, hex: parsed.hex };
+  try {
+    const parsed = typedBech32ToAddress(value, "contract");
+    return { typed: parsed.address, hex: parsed.hex };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`MRV native contractAddress must be a typed monoc1 address: ${message}`);
+  }
 }
 
 function serializeExtension(extension: { kind: number; bodyHex?: string; body?: unknown }): WalletMrvTransactionExtension {

@@ -55,10 +55,10 @@ describe("wallet MRV native tx plans", () => {
     expect(JSON.parse(JSON.stringify(plan))).toEqual(plan);
   });
 
-  it("builds a JSON-safe validated contract call plan from mixed address inputs", () => {
+  it("builds a JSON-safe validated contract call plan from typed contract inputs", () => {
     const plan = buildWalletMrvCallNativePlan({
       fromAddress: USER_BECH32,
-      contractAddress: CONTRACT,
+      contractAddress: CONTRACT_BECH32,
       chainIdHex: "0x10f2c",
       nonceHex: "0x8",
       executionUnitLimitHex: "0x200000",
@@ -92,7 +92,7 @@ describe("wallet MRV native tx plans", () => {
   it("converts a previewed MRV call plan into an extension-carrying submit tx", () => {
     const plan = buildWalletMrvCallNativePlan({
       fromAddress: USER,
-      contractAddress: CONTRACT,
+      contractAddress: CONTRACT_BECH32,
       chainIdHex: "0x10f2c",
       nonceHex: "0x8",
       executionUnitLimitHex: "0x200000",
@@ -149,5 +149,19 @@ describe("wallet MRV native tx plans", () => {
         artifactBytes: "0x13",
       }),
     ).toThrow(/chainIdHex/);
+  });
+
+  it("rejects raw contract addresses before building MRV call plans", () => {
+    expect(() =>
+      buildWalletMrvCallNativePlan({
+        fromAddress: USER_BECH32,
+        contractAddress: CONTRACT,
+        chainIdHex: "0x10f2c",
+        nonceHex: "0x8",
+        executionUnitLimitHex: "0x200000",
+        maxExecutionFeeLythoshiHex: "0x1312d00",
+        input: "0xaabbccdd",
+      }),
+    ).toThrow(/raw 0x addresses are retired/);
   });
 });

@@ -9,7 +9,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
-import { keccak_256 } from "@noble/hashes/sha3.js";
+import {
+  hexToBytes,
+  mlDsa65AddressFromPublicKey,
+} from "@monolythium/core-sdk/crypto";
 
 import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
@@ -719,7 +722,7 @@ export function describeAction(
 // Local helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Derive a 20-byte address from a 0x-prefixed ML-DSA-65 pubkey hex.
+/** Derive ADR-0038 address bytes from a 0x-prefixed ML-DSA-65 pubkey hex.
  *  Mirrors the helper in MultisigCreateModal; duplicated here so the
  *  governance component is self-contained. Exported for tests. */
 export function pubkeyToAddress(pubkeyHex: string): string {
@@ -729,17 +732,11 @@ export function pubkeyToAddress(pubkeyHex: string): string {
   ) {
     return "";
   }
-  const bytes = new Uint8Array(1952);
-  for (let i = 0; i < 1952; i++) {
-    bytes[i] = parseInt(pubkeyHex.slice(2 + i * 2, 4 + i * 2), 16);
+  try {
+    return mlDsa65AddressFromPublicKey(hexToBytes(pubkeyHex, "ML-DSA-65 public key"));
+  } catch {
+    return "";
   }
-  return "0x" + bytesToHex(keccak_256(bytes).slice(12));
-}
-
-function bytesToHex(b: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
-  return s;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
