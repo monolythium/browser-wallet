@@ -165,6 +165,7 @@ import {
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
+  applyFallbackOperatorsIfStranded,
   setOperatorOverride,
   readOperatorOverride,
   getDefaultOperators,
@@ -672,6 +673,14 @@ void (async () => {
 
   await loadUserChains();
   await loadOperatorOverride();
+  // Round 3 — apply the 6-IP fallback override when the SDK chain
+  // registry has stranded the wallet with <2 Sprintnet operators (the
+  // `rpc.monolythium.com` single-endpoint regression introduced on
+  // mono-core-sdk@riscv `46c009a`). Runs after loadOperatorOverride so
+  // any pre-existing user override is detected and respected. See
+  // `networks.ts` `FALLBACK_OPERATORS_2026_05_25` comment for the
+  // REMOVE-WHEN conditions.
+  await applyFallbackOperatorsIfStranded();
   session.chainId = await loadActiveChainId();
 
   // Pre-mark WS down for operators with no explicit `ws_url`. See
