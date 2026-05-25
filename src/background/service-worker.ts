@@ -192,6 +192,10 @@ import {
   type RawDelegationHistory,
 } from "../shared/activity.js";
 import {
+  DEMO_ADDR_SENTINELS_LOWER,
+  isDemoAddrSentinel,
+} from "../shared/demo-addr-sentinel.js";
+import {
   STORAGE_KEY_NAME_CACHE,
   mergeNameCache,
   evictExpiredNames,
@@ -606,6 +610,46 @@ async function loadUserChains(): Promise<void> {
   });
 }
 
+/**
+ * Round 3.5 — one-shot SW-boot cleanup.
+ *
+ * Removes any `mono.activity.<sentinel>.*` and
+ * `mono.activity.pending.<sentinel>.*` storage keys that landed under
+ * a popup demo-data sentinel address during the boot race that
+ * existed before the activity hook guarded sentinel addrs at the
+ * write source. Scans `chrome.storage.local` once per cold start
+ * (cheap — the sentinel set is 3 entries, the storage object has
+ * dozens of keys at most). No-ops when no sentinel-keyed entries
+ * exist, which is the steady state after one cold start past this
+ * fix lands.
+ */
+async function purgeDemoAddrCacheKeys(): Promise<void> {
+  const all = await new Promise<Record<string, unknown>>((resolve) => {
+    chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+  });
+  const toRemove: string[] = [];
+  for (const key of Object.keys(all)) {
+    if (!key.startsWith("mono.activity.")) continue;
+    // Cache key shape: mono.activity.<addrLower>.<chainIdHex>
+    // Pending key shape: mono.activity.pending.<addrLower>.<chainIdHex>
+    // Both carry a 0x-shaped 20-byte addr in the second-to-last segment
+    // (cache) or last-before-chain segment (pending). Match either.
+    for (const sentinel of DEMO_ADDR_SENTINELS_LOWER) {
+      if (key.includes(`.${sentinel}.`)) {
+        toRemove.push(key);
+        break;
+      }
+    }
+  }
+  if (toRemove.length === 0) return;
+  await new Promise<void>((resolve) => {
+    chrome.storage.local.remove(toRemove, () => resolve());
+  });
+  console.log(
+    `[wallet] purged ${toRemove.length} demo-addr activity cache key(s) leaked during popup-boot race (Round 3.5 cleanup)`,
+  );
+}
+
 async function persistUserChains(): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.set({ [USER_CHAINS_STORAGE_KEY]: userChains }, () =>
@@ -681,6 +725,14 @@ void (async () => {
   // `networks.ts` `FALLBACK_OPERATORS_2026_05_25` comment for the
   // REMOVE-WHEN conditions.
   await applyFallbackOperatorsIfStranded();
+  // Round 3.5 — one-shot cleanup for any per-address cache rows that
+  // leaked under a demo-data sentinel address during the popup-boot
+  // race between `acc = ACCOUNTS[0]` initial state and the real
+  // `wallet-active-account` IPC resolving. The popup hook now guards
+  // sentinel addrs at the write source; this clears anything that
+  // already landed before the guard shipped. See
+  // `shared/demo-addr-sentinel.ts` for the sentinel list.
+  await purgeDemoAddrCacheKeys();
   session.chainId = await loadActiveChainId();
 
   // Pre-mark WS down for operators with no explicit `ws_url`. See
@@ -6316,6 +6368,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "activity-get is only wired for Sprintnet today" };
+      }
+      // Round 3.5 — defense in depth: refuse activity fetches for popup
+      // demo-data sentinel addresses so no cache row lands keyed by
+      // them even if a caller (legacy code path, dapp, future bug) tries
+      // to ask. Popup useActivity hook also guards at the call site.
+      if (isDemoAddrSentinel(p.address)) {
+        return { ok: false, reason: "demo placeholder address — no chain query" };
       }
       const addressLower = p.address.toLowerCase();
       const cacheKey = activityCacheKey(addressLower, p.chainIdHex);
