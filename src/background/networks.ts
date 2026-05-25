@@ -38,9 +38,7 @@ export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
  * Sprintnet operator RPC endpoints — sourced from the SDK-bundled chain
  * registry (`@monolythium/core-sdk` `getRpcEndpoints("testnet-69420")`).
  * Broadcast paths iterate this list and use the first responder. Registry
- * order is intentional (fsn1 hosts geographically closer to most EU/US
- * users; ash + sin are the long-haul fallbacks) and is refreshed by
- * bumping the SDK package.
+ * order is intentional and refreshed by bumping the SDK package.
  *
  * Phase 4.3 Change 2: this is the *defaults* list. Power users can
  * override via chrome.storage.local["mono.operators.override"]. RPC
@@ -48,11 +46,8 @@ export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
  * these defaults at lookup time.
  *
  * Naming: the registry-sourced endpoints are labelled `operator-N` (1-
- * indexed, matching the SDK snapshot's ordering). The 2026-05-11 regenesis
- * dropped the original operator-1 (its bls.key was destroyed during a
- * debugging triple-wipe → cluster dropped to 6/7, BFT floor 5/7). The SDK
- * registry already excludes that endpoint, so the wallet inherits the drop
- * automatically and no longer hardcodes the exclusion.
+ * indexed, matching the SDK snapshot's ordering). The SDK registry owns
+ * membership; the wallet mirrors it and no longer hardcodes exclusions.
  */
 export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
   getRpcEndpoints("testnet-69420").map((endpoint, i) => ({

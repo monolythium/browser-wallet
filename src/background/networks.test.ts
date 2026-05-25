@@ -1,11 +1,8 @@
 // Regression-catchers for the Sprintnet operator defaults shape.
 //
-// These pin the *post-regenesis-2026-05-11* state of
-// `SPRINTNET_OPERATOR_RPCS_DEFAULTS`, which is now sourced from the
-// SDK-bundled chain registry (chain-registry commit 834a876 dropped
-// the original operator-1 after its bls.key was destroyed during a
-// debugging triple-wipe; the SDK registry snapshot inherits that
-// exclusion).
+// `SPRINTNET_OPERATOR_RPCS_DEFAULTS` is sourced from the SDK-bundled
+// chain registry. The wallet should mirror whatever the SDK ships
+// instead of pinning a stale endpoint count locally.
 //
 // Labels follow the `operator-N` convention (1-indexed off the SDK
 // list). The SDK registry doesn't carry a stable per-endpoint id, so the
@@ -26,9 +23,12 @@ import {
 } from "./networks.js";
 import { SPRINTNET_GENESIS_HASH } from "../shared/build-info.js";
 
-describe("SPRINTNET_OPERATOR_RPCS_DEFAULTS (post-regenesis 2026-05-11)", () => {
-  it("has 6 entries (the SDK registry excludes the dropped original operator)", () => {
-    expect(SPRINTNET_OPERATOR_RPCS_DEFAULTS.length).toBe(6);
+describe("SPRINTNET_OPERATOR_RPCS_DEFAULTS", () => {
+  it("has at least one SDK-sourced endpoint", () => {
+    expect(SPRINTNET_OPERATOR_RPCS_DEFAULTS.length).toBeGreaterThanOrEqual(1);
+    for (const entry of SPRINTNET_OPERATOR_RPCS_DEFAULTS) {
+      expect(entry.rpc).toMatch(/^https?:\/\//);
+    }
   });
 
   it("places operator-1 at position 0 (1-indexed off the SDK registry)", () => {

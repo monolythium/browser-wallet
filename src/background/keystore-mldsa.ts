@@ -12,7 +12,7 @@
 //     ciphertext: "<base64 seed32 || tag>",        // 32-byte ML-DSA-65 seed
 //     mnemonicCiphertext: "<base64 utf8(mnemonic) || tag>",
 //     mnemonicNonce: "<base64 24B>",
-//     addr: "0x...",                               // keccak256(mldsa_pk)[12..32]
+//     addr: "0x...",                               // ADR-0038 BLAKE3 address bytes
 //   }
 //
 // v4 strict (Phase 3.5): mnemonic fields are MANDATORY, not optional.
@@ -2010,11 +2010,11 @@ export function personalSignV4(message: Uint8Array | string): Uint8Array {
 
 /**
  * EIP-712 v4 typed-data sign with the v4 ML-DSA-65 backend. Mirrors
- * `personalSignV4` rationale: address is keccak(ml-dsa pubkey), so
- * routing through keystore.ts secp256k1 would produce signatures
- * that don't recover to the wallet's claimed address. We compute the
- * EIP-712 v4 digest (pure helper from keystore.ts — no module state
- * needed) and sign with ML-DSA-65.
+ * `personalSignV4` rationale: the wallet address is derived from the
+ * ML-DSA pubkey, so routing through keystore.ts secp256k1 would produce
+ * signatures that don't recover to the wallet's claimed address. We
+ * compute the EIP-712 v4 digest (pure helper from keystore.ts — no
+ * module state needed) and sign with ML-DSA-65.
  *
  * Throws `"v4 wallet is locked"` if the keystore isn't unlocked.
  */
