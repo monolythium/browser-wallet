@@ -69,12 +69,12 @@ export interface TypedDataEnvelope {
  */
 export interface SendTxView {
   /** Estimated execution units as a hex quantity, populated from `eth_estimateGas`. */
-  estimatedGas: string | null;
+  executionUnitLimitHex: string | null;
   /** Node minimum lythoshi-per-execution-unit price, hex quantity, from `eth_gasPrice`. */
-  gasPrice: string | null;
+  pricePerExecutionUnitLythoshiHex: string | null;
   /** Optional ADR-0039 native structured fee object. When present, popup fee
    * display validates it strictly instead of falling back to compatibility
-   * `gas*` fields. */
+   * fee fields. */
   structuredFee?: unknown;
   /** Sender's pending nonce, hex quantity. */
   nonce: string | null;
