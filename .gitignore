@@ -84,3 +84,6 @@ pnpm-workspace.yaml
 
 # Local IDE session artifacts
 .local-notes/
+
+# Operator-overrides local file — never committed. See examples/operators.json.example.
+examples/operators.json
