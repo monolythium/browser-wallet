@@ -20,10 +20,13 @@ import type {
   WalletMrvNoEvmReceiptProofVerification,
 } from "../bg.js";
 
+const CONTRACT_RAW = "0x2222222222222222222222222222222222222222";
+const CONTRACT_TYPED = "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd";
+
 const BASE_FORM: MrvNativeFormValues = {
   artifactBytes: "0x13000000",
   artifactHash: "",
-  contractAddress: "0x2222222222222222222222222222222222222222",
+  contractAddress: CONTRACT_TYPED,
   callInput: "0xaabbccdd",
   executionUnitLimit: "2097152",
   maxExecutionFeeLythoshi: "10000000",
@@ -975,20 +978,34 @@ describe("buildMrvNativeRequest", () => {
     });
   });
 
-  it("builds call payloads for native contract typed-address normalization in the background", () => {
+  it("builds call payloads with typed native contract addresses", () => {
     const req = buildMrvNativeRequest("call", BASE_FORM, "0x10F2C");
 
     expect(req).toEqual({
       ok: true,
       mode: "call",
       args: {
-        contractAddress: "0x2222222222222222222222222222222222222222",
+        contractAddress: CONTRACT_TYPED,
         input: "0xaabbccdd",
         chainIdHex: "0x10f2c",
         executionUnitLimitHex: "0x200000",
         maxExecutionFeeLythoshiHex: "0x989680",
         valueWeiHex: "0x2a",
       },
+    });
+  });
+
+  it("rejects raw native contract addresses before IPC", () => {
+    const req = buildMrvNativeRequest(
+      "call",
+      { ...BASE_FORM, contractAddress: CONTRACT_RAW },
+      "0x10F2C",
+    );
+
+    expect(req).toEqual({
+      ok: false,
+      reason:
+        "MRV native contractAddress raw 0x addresses are retired; use a typed monoc1 address",
     });
   });
 
