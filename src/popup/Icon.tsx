@@ -1,5 +1,7 @@
 // Inline SVG icon set ported from designs/src/ext-popup.jsx (EIco).
 
+import { addressToBech32m } from "../shared/bech32m.js";
+
 export type IconName =
   | "send" | "qr" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "close" | "back" | "settings" | "lock" | "eye" | "search"
@@ -234,6 +236,18 @@ export function shortAddr(addr: string | undefined, n = 8): string {
   if (t.length >= 3) {
     const last = t[t.length - 1] ?? "";
     return `${t[0]}:${t[1]}…${last}`;
+  }
+  // Whitepaper §22.7 — hex `0x…` is not a valid display format. Convert
+  // raw 20-byte EVM-shaped addresses to bech32m before truncating so any
+  // caller that hands us a wire-format address gets the canonical
+  // user-facing form. Non-0x inputs (already-bech32m, demo strings, tx
+  // hashes) pass through untouched and slice as before.
+  if (/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    try {
+      addr = addressToBech32m(addr);
+    } catch {
+      // fall through — surface the original string rather than swallow.
+    }
   }
   return addr.slice(0, n) + "…" + addr.slice(-4);
 }
