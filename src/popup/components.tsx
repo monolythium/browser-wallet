@@ -3764,6 +3764,7 @@ export function ReqSendTx({
   const [tier, setTier] = useState<FeeTier>("medium");
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
+  const [showFeeDetails, setShowFeeDetails] = useState(false);
 
   const originWarnings = detectOriginWarnings(origin);
   const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
@@ -3881,7 +3882,12 @@ export function ReqSendTx({
       )}
 
       <div className="req-section">
-        <div className="req-section__h">Network fee</div>
+        <div className="req-section__h">
+          <span>Network fee</span>
+          <button onClick={() => setShowFeeDetails((v) => !v)}>
+            {showFeeDetails ? "hide" : "details"} ↓
+          </button>
+        </div>
         {!hasStructuredFee && (
           <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
             {(["low", "medium", "high"] as FeeTier[]).map((t) => (
@@ -3913,14 +3919,15 @@ export function ReqSendTx({
               <span className="k">Max fee</span>
               <span className="v">{feeDisplay.defaultText}</span>
             </div>
-            {feeDisplay.detailTexts.map((detail, index) => (
-              <div className="req-kv" key={`${index}-${detail}`}>
-                <span className="k">Detail {index + 1}</span>
-                <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 10 }}>
-                  {detail}
-                </span>
-              </div>
-            ))}
+            {showFeeDetails &&
+              feeDisplay.detailTexts.map((detail, index) => (
+                <div className="req-kv" key={`${index}-${detail}`}>
+                  <span className="k">Detail {index + 1}</span>
+                  <span className="v" style={{ fontFamily: "var(--f-mono)", fontSize: 10 }}>
+                    {detail}
+                  </span>
+                </div>
+              ))}
           </>
         ) : hasStructuredFee ? (
           <div className="req-kv">
@@ -3930,17 +3937,21 @@ export function ReqSendTx({
         ) : (
           <>
             <div className="req-kv">
-              <span className="k">Execution-unit limit</span>
-              <span className="v">{formatExecutionUnits(view.executionUnitLimitHex)}</span>
-            </div>
-            <div className="req-kv">
-              <span className="k">Price / execution unit</span>
-              <span className="v">{formatLythoshiPerExecutionUnit(tieredHex)} lythoshi</span>
-            </div>
-            <div className="req-kv">
               <span className="k">Max fee</span>
               <span className="v">{feeDisplay?.defaultText ?? "—"}</span>
             </div>
+            {showFeeDetails && (
+              <>
+                <div className="req-kv">
+                  <span className="k">Execution-unit limit</span>
+                  <span className="v">{formatExecutionUnits(view.executionUnitLimitHex)}</span>
+                </div>
+                <div className="req-kv">
+                  <span className="k">Price / execution unit</span>
+                  <span className="v">{formatLythoshiPerExecutionUnit(tieredHex)} lythoshi</span>
+                </div>
+              </>
+            )}
           </>
         )}
         {feeDisplayError !== null && (

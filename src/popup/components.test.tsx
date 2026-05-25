@@ -31,6 +31,7 @@ import {
   lythoshiToLythString,
   MrcAccountSummary,
   NativeAgentStateSummary,
+  ReqSendTx,
 } from "./components.js";
 import type {
   ChainEntry,
@@ -102,6 +103,48 @@ describe("ReqSendTx native fee helpers", () => {
     expect(computeNativeFeeLythoshi(null, "0x64", "medium")).toBeNull();
     expect(computeNativeFeeLythoshi("0x5208", "not-hex", "medium")).toBeNull();
     expect(formatLythoshiAmountHex("not-hex")).toBe("—");
+  });
+
+  it("renders the default approval fee as one LYTH amount", () => {
+    const chain = {
+      chainId: "0x10f2c",
+      name: "Sprintnet",
+      rpc: "http://localhost:8545",
+      chainIdNum: 69420,
+      builtin: true,
+      active: true,
+    } satisfies ChainEntry;
+    const html = renderToStaticMarkup(
+      <ReqSendTx
+        request={{
+          kind: "send_tx",
+          origin: "https://dapp.example",
+          tx: {
+            to: "0x2222222222222222222222222222222222222222",
+            value: "0x0",
+          },
+          view: {
+            executionUnitLimitHex: "0x5208",
+            pricePerExecutionUnitLythoshiHex: "0x64",
+            nonce: "0x1",
+            simulation: null,
+            chainId: "0x10f2c",
+            chainLabel: "Sprintnet",
+          },
+        }}
+        custody="sw"
+        signerAddress="0x1111111111111111111111111111111111111111"
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        chain={chain}
+      />,
+    );
+
+    expect(html).toContain("Network fee");
+    expect(html).toContain("0.021 LYTH");
+    expect(html).not.toContain("Execution-unit limit");
+    expect(html).not.toContain("Price / execution unit");
+    expect(html).not.toContain("lythoshi");
   });
 });
 
