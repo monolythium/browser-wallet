@@ -6,6 +6,7 @@ import type {
   WalletBridgeRouteReadiness,
   WalletTokenBalance,
 } from "../shared/token-balances.js";
+import { legacyChainFeeSuggestionWeiToLythoshi } from "../shared/chain-units.js";
 import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
@@ -591,13 +592,28 @@ export async function bgWalletFeeSuggestion(
     | { ok: false; reason?: string };
   const r = await send<Reply>("wallet-fee-suggestion", { chainIdHex });
   if (!r.ok) return r;
+  // Magnitude contract: the SW handler returns wei-magnitude fee fields
+  // (V4-LIVE-0008 operators expect wei on the wire and `wallet-send-tx`
+  // forwards `fee.maxFeePerGas` straight through to
+  // `submitEncryptedMlDsaTx`). The popup `FeeSuggestion` is documented
+  // as lythoshi-per-execution-unit and every popup consumer
+  // (`nativeFeeDisplayFromFeeSuggestion`, balance comparisons, max-spend
+  // math) assumes lythoshi. Compensate at the IPC boundary so the
+  // documented contract holds. When operators flip to lythoshi-native
+  // (`CHAIN_RETURNS_LEGACY_WEI=false`) the helper short-circuits to
+  // identity and no caller changes.
+  const compensated = legacyChainFeeSuggestionWeiToLythoshi({
+    maxPriorityFeePerGas: r.maxPriorityFeePerGas,
+    maxFeePerGas: r.maxFeePerGas,
+    baseFeePerGas: r.baseFeePerGas,
+  });
   return {
     ok: true,
     suggestion: {
       executionUnitLimitHex: r.gasLimit,
-      basePricePerExecutionUnitLythoshiHex: r.baseFeePerGas,
-      priorityPricePerExecutionUnitLythoshiHex: r.maxPriorityFeePerGas,
-      maxPricePerExecutionUnitLythoshiHex: r.maxFeePerGas,
+      basePricePerExecutionUnitLythoshiHex: compensated.baseFeePerGas,
+      priorityPricePerExecutionUnitLythoshiHex: compensated.maxPriorityFeePerGas,
+      maxPricePerExecutionUnitLythoshiHex: compensated.maxFeePerGas,
       ...(r.structuredFee !== undefined ? { structuredFee: r.structuredFee } : {}),
     },
   };
