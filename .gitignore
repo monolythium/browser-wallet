@@ -84,3 +84,6 @@ pnpm-workspace.yaml
 
 # Claude Code IDE session artifacts
 .claude/
+
+# Operator-overrides local file — never committed. See examples/operators.json.example.
+examples/operators.json
