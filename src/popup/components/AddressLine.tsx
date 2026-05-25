@@ -1,24 +1,27 @@
-// Compact dual-format address line. Renders one truncated address with a
-// per-line copy icon at the end; clicking the address text toggles
-// expanded/full form, clicking the icon copies the full (untruncated)
-// string. Two of these stacked produce the bech32m + 0x display the
-// brief asks for on Home / Receive / Settings.
+// Compact address line — renders a bech32m address with per-line copy
+// icon. Tapping the address text toggles truncated/expanded form, tapping
+// the icon copies the full bech32m string.
 //
-// Wire format stays 0x — `addr0x` is the EVM-style raw address. The
-// component derives the bech32m form via `bech32mDisplay` so demo
-// strings (pre-keystore-patch) and malformed input don't throw.
+// Per whitepaper §22.7 the hex `0x…` form is not a valid display format
+// at any chain-facing wallet surface, so this component renders only
+// bech32m. Wire storage stays 0x — `addr0x` is the EVM-shaped raw bytes
+// — and the component derives the bech32m form via `bech32mDisplay` so
+// demo strings (pre-keystore-patch) and malformed input don't throw.
 
 import { useState } from "react";
 import type { CSSProperties, MouseEvent } from "react";
 
-import { bech32mDisplay } from "../../shared/bech32m";
+import { bech32mDisplay, type AddressKind } from "../../shared/bech32m";
 
 export interface AddressLineProps {
   /** Raw 0x-shaped wire address. May briefly be a demo non-0x string
    *  before the keystore patch fires; the component handles both. */
   addr0x: string;
-  /** Which form to render in this line. */
-  format: "bech32m" | "hex";
+  /** §22.7 address kind for the HRP discriminator. Defaults to "eoa"
+   *  (HRP `mono`) which is correct for user-account display. Use
+   *  `"multisig"`, `"cluster"`, `"contract"`, etc. when the call site
+   *  knows the address is non-EOA. */
+  kind?: AddressKind;
   /** When false, render the full address (no first-N + … + last-N collapse).
    *  Tap-to-expand still works either way. Default true. */
   truncate?: boolean;
@@ -34,7 +37,7 @@ export interface AddressLineProps {
 
 export function AddressLine({
   addr0x,
-  format,
+  kind = "eoa",
   truncate = true,
   truncatePrefix = 6,
   truncateSuffix = 4,
@@ -44,7 +47,7 @@ export function AddressLine({
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const fullText = format === "bech32m" ? bech32mDisplay(addr0x) : addr0x;
+  const fullText = bech32mDisplay(addr0x, kind);
   const display =
     !truncate || expanded || fullText.length <= truncatePrefix + truncateSuffix + 1
       ? fullText
@@ -95,7 +98,7 @@ export function AddressLine({
       {inlineCopy && (
         <button
           onClick={handleCopy}
-          aria-label={`Copy ${format === "bech32m" ? "mono1" : "0x"} address`}
+          aria-label="Copy bech32m address"
           style={{
             display: "inline-flex",
             alignItems: "center",
