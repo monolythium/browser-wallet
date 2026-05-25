@@ -350,7 +350,7 @@ export function Stake({
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data,
-        gasLimitHex: executionUnitLimitHex,
+        executionUnitLimitHex,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -392,7 +392,7 @@ export function Stake({
         valueWeiHex: "0x0",
         chainIdHex: chainId,
         data: encodeClaimRewards(),
-        gasLimitHex: "0x14820", // 84000 — selector-only allowance
+        executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
