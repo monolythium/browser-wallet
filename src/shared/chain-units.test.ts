@@ -4,6 +4,7 @@ import {
   WEI_PER_LYTHOSHI,
   chainAmountToLythoshi,
   legacyChainBalanceHexToLythoshiHex,
+  legacyChainFeeSuggestionWeiToLythoshi,
 } from "./chain-units.js";
 
 describe("chain-units (V4-LIVE-0008 wei-on-wire compatibility)", () => {
@@ -56,5 +57,46 @@ describe("chain-units (V4-LIVE-0008 wei-on-wire compatibility)", () => {
     expect(
       legacyChainBalanceHexToLythoshiHex("0x" + 10_000_000_000n.toString(16)),
     ).toBe("0x1");
+  });
+
+  it("legacyChainFeeSuggestionWeiToLythoshi compensates the three fee fields", () => {
+    // Real-world Sprintnet shape: base ≈ next-block base wei (small),
+    // priority floor = 10^10 wei (constant), maxFee = base + priority.
+    const input = {
+      maxPriorityFeePerGas: "0x2540be400", // 10^10 wei -> 1 lythoshi
+      maxFeePerGas: "0x4a817c800", // 2 * 10^10 wei -> 2 lythoshi
+      baseFeePerGas: "0x2540be400", // 10^10 wei -> 1 lythoshi
+    };
+    const out = legacyChainFeeSuggestionWeiToLythoshi(input);
+    expect(out.maxPriorityFeePerGas).toBe("0x1");
+    expect(out.maxFeePerGas).toBe("0x2");
+    expect(out.baseFeePerGas).toBe("0x1");
+  });
+
+  it("legacyChainFeeSuggestionWeiToLythoshi preserves extra fields", () => {
+    const input = {
+      maxPriorityFeePerGas: "0x2540be400",
+      maxFeePerGas: "0x2540be400",
+      baseFeePerGas: "0x2540be400",
+      gasLimit: "0x7530",
+      structuredFee: { kind: "native" } as unknown,
+    };
+    const out = legacyChainFeeSuggestionWeiToLythoshi(input);
+    expect(out.gasLimit).toBe("0x7530");
+    expect(out.structuredFee).toEqual({ kind: "native" });
+  });
+
+  it("legacyChainFeeSuggestionWeiToLythoshi truncates sub-lythoshi base fee", () => {
+    // Test-fixture pattern from service-worker.activity.test.ts: feeHistory
+    // base of 0x1 wei is below 1 lythoshi and truncates to 0; the popup
+    // sees `baseFeePerGas: 0x0` for display while the SW path keeps wei.
+    const out = legacyChainFeeSuggestionWeiToLythoshi({
+      maxPriorityFeePerGas: "0x2540be400",
+      maxFeePerGas: "0x2540be401",
+      baseFeePerGas: "0x1",
+    });
+    expect(out.baseFeePerGas).toBe("0x0");
+    expect(out.maxPriorityFeePerGas).toBe("0x1");
+    expect(out.maxFeePerGas).toBe("0x1"); // sub-lythoshi remainder truncated
   });
 });
