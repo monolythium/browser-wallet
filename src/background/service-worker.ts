@@ -19,15 +19,15 @@
 //   - keystore.{status, unlock, lock, create-from-new, create-from-mnemonic}
 //
 // Chain reads/writes go through `MonolythiumProvider` from
-// `@monolythium/core-sdk` — the ethers v6 shim. The shim re-uses the SDK's
+// `@monolythium/core-sdk/ethers` — the ethers v6 shim. The shim re-uses the SDK's
 // JSON-RPC transport (no raw fetch in this file), so any future SDK transport
 // feature (auth headers, ws upgrade, registry-aware routing) lights up for the
 // wallet automatically.
 
+import { MonolythiumProvider } from "@monolythium/core-sdk/ethers";
 import {
   addressToTypedBech32,
   getNoEvmReceiptTrustPolicy,
-  MonolythiumProvider,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   ML_DSA_65_PUBLIC_KEY_LEN,
   typedBech32ToAddress,
@@ -976,9 +976,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
       try {
         // v4-strict (Phase 3.5 + 4.0): the wallet's on-chain address is
-        // keccak(ml-dsa-65 pubkey). Routing personal_sign through the
-        // legacy keystore.ts secp256k1 path would produce a signature
-        // whose ecrecover'd address doesn't match `eth_accounts[0]` —
+        // derived from the ML-DSA-65 pubkey. Routing personal_sign
+        // through the legacy keystore.ts secp256k1 path would produce a
+        // signature whose ecrecover'd address doesn't match `eth_accounts[0]` —
         // and on top of that, the popup unlock flow only populates the
         // v4 backend, so the secp256k1 path throws "wallet is locked"
         // even when the v4 keystore is unlocked. Sign with ML-DSA-65.

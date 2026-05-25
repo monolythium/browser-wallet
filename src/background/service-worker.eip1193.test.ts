@@ -2,7 +2,7 @@
 //
 // The wallet's request-router lives in `service-worker.ts:handleRpc` and is
 // the integration seam between the in-page `window.ethereum` provider and the
-// `MonolythiumProvider` ethers v6 shim from `@monolythium/core-sdk`. This
+// `MonolythiumProvider` ethers v6 shim from `@monolythium/core-sdk/ethers`. This
 // suite is a hard test gate against drift in that router — Wave 5 work.
 //
 // Strategy:
@@ -11,7 +11,7 @@
 //     `chrome.runtime.onMessage` listener at import time; we capture it and
 //     drive it directly with synthetic `{ kind: "rpc", id, args, origin }`
 //     envelopes — this is the same shape the content-script bridge sends.
-//   - Mock `@monolythium/core-sdk` so `MonolythiumProvider._send` returns
+//   - Mock `@monolythium/core-sdk/ethers` so `MonolythiumProvider._send` returns
 //     deterministic responses without any network round-trip. The dispatcher
 //     calls `_send` with a JSON-RPC request envelope; we capture every call
 //     for assertions.
@@ -42,8 +42,8 @@ interface CapturedRpcCall {
 const rpcCalls: CapturedRpcCall[] = [];
 let rpcResponses: Record<string, unknown> = {};
 
-vi.mock("@monolythium/core-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
+vi.mock("@monolythium/core-sdk/ethers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk/ethers")>();
   class FakeMonolythiumProvider {
     constructor(public rpc: string, public opts?: unknown) {}
     async _send(payload: { id: number; jsonrpc: string; method: string; params: unknown[] }) {
@@ -58,17 +58,18 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
   return {
     ...actual,
     MonolythiumProvider: FakeMonolythiumProvider,
+  };
+});
+
+vi.mock("@monolythium/core-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
+  return {
+    ...actual,
     MONOLYTHIUM_TESTNET_CHAIN_ID: TESTNET_CHAIN_ID_BIGINT,
-    // 6 endpoints — matches SDK chain-registry snapshot post-regenesis
-    // 2026-05-11 (original operator dropped). Tests pin defaults.length === 6
-    // so the mock must mirror the registry cardinality, not stub a single entry.
+    // Mirror the SDK registry contract: at least one complete endpoint,
+    // with membership owned by the SDK snapshot rather than the wallet.
     getRpcEndpoints: () => [
-      { url: "http://test.invalid:8545", provider: "test", region: "fsn1", tier: "official" },
-      { url: "http://test.invalid:8546", provider: "test", region: "nbg1", tier: "official" },
-      { url: "http://test.invalid:8547", provider: "test", region: "hel1", tier: "official" },
-      { url: "http://test.invalid:8548", provider: "test", region: "hel1", tier: "official" },
-      { url: "http://test.invalid:8549", provider: "test", region: "ash",  tier: "official" },
-      { url: "http://test.invalid:8550", provider: "test", region: "sin",  tier: "official" },
+      { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
     ],
     // GAP #11: shared/build-info.ts pulls TESTNET_69420 from the SDK to
     // surface the registry's genesis on the About page; stub just the
@@ -705,7 +706,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       }>("sprintnet-operators-get");
       expect(r.ok).toBe(true);
       expect(r.override).toBeNull();
-      expect(r.defaults.length).toBe(6); // 6 active operators; original operator-1 dropped per regenesis 2026-05-11
+      expect(r.defaults.length).toBeGreaterThanOrEqual(1);
       expect(r.effective).toEqual(r.defaults);
     });
 
