@@ -160,7 +160,7 @@ import {
 import { keccak_256, shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
-  SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
+  SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
@@ -1054,7 +1054,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           const nonceHex =
             txReq.nonce ?? view.nonce ??
             (await sprintnetJsonRpc<string>("eth_getTransactionCount", [fromAddr, "pending"])).result;
-          const gasPriceHex =
+          const executionUnitPriceHex =
             txReq.gasPrice ?? view.gasPrice ??
             (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
           // Sprintnet's mempool intrinsic execution-unit floor is above what
@@ -1063,8 +1063,8 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // a dapp may know better than us and we'd rather surface a
           // chain reject than silently override — otherwise default to
           // the wallet's audited Sprintnet floor with headroom.
-          const gasHex =
-            txReq.gas ?? view.estimatedGas ?? SPRINTNET_TRANSFER_GAS_LIMIT_HEX;
+          const executionUnitsHex =
+            txReq.gas ?? view.estimatedGas ?? SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
 
           // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
           // The chain rejects plaintext at admission (Law §4.5 / Q2), so
@@ -1075,8 +1075,8 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             ...(txReq.data !== undefined ? { data: txReq.data } : {}),
             ...(mempoolClass !== undefined ? { mempoolClass } : {}),
             nonce: nonceHex,
-            gas: gasHex,
-            gasPrice: gasPriceHex,
+            gas: executionUnitsHex,
+            gasPrice: executionUnitPriceHex,
             chainIdHex: session.chainId,
           });
           return ok(txHash);
@@ -1686,7 +1686,7 @@ async function suggestFee(chainIdHex: string): Promise<{
       maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_LYTHOSHI_PER_EXECUTION_UNIT_HEX,
       maxFeePerGas:
         "0x" + (baseLythoshiPerExecutionUnit + tipLythoshiPerExecutionUnit).toString(16),
-      gasLimit: SPRINTNET_TRANSFER_GAS_LIMIT_HEX,
+      gasLimit: SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
     };
   }
   const provider = providerFor(chainIdHex);

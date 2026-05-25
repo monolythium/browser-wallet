@@ -290,7 +290,7 @@ vi.mock("./networks.js", () => ({
   chainRequiresMlDsa: vi.fn((chainIdHex: string) =>
     chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase(),
   ),
-  SPRINTNET_TRANSFER_GAS_LIMIT_HEX: "0x5208",
+  SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
   BUILTIN_CHAINS: [
     {
