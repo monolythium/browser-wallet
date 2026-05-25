@@ -206,7 +206,12 @@ import {
   sprintnetMaxBalanceConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
-import { getWsClient, type WsStatus } from "./ws-client.js";
+import {
+  deriveWsUrl,
+  getWsClient,
+  markWsDown,
+  type WsStatus,
+} from "./ws-client.js";
 import {
   DEFAULT_ACTIVITY_KIND_ENVELOPE,
   normaliseActivityKind,
@@ -669,6 +674,10 @@ void (async () => {
   await loadOperatorOverride();
   session.chainId = await loadActiveChainId();
 
+  // Pre-mark WS down for operators with no explicit `ws_url`. See
+  // `prefillUnknownWsEndpointsDown` for the V4-LIVE-0008 rationale.
+  prefillUnknownWsEndpointsDown();
+
   // Restore origins the user has previously approved. Without this, every
   // SW hibernation (~30 s idle) drops connectedOrigins back to empty and
   // dapps see eth_accounts → [] until the user re-approves.
@@ -684,6 +693,40 @@ void (async () => {
   }
 })();
 
+/**
+ * Pre-populate the WS down-cache for any operator whose WS URL is
+ * derived via the legacy `:8545 → :8546` fallback (i.e. the SDK chain
+ * registry did not pin an explicit `ws_url`). Sprintnet operators on
+ * binary commit 5aead0f0 (V4-LIVE-0008, 2026-05-18) do not expose port
+ * 8546 — PowerShell TCP probe 2026-05-25 confirmed timeout on all six.
+ *
+ * Marking these URLs down before any `new WebSocket()` call suppresses
+ * the browser-level `WebSocket connection to '...' failed:
+ * ERR_CONNECTION_TIMED_OUT` line that would otherwise surface in the
+ * service-worker console once per page load. Polling fallback already
+ * covers the affected `ws-subscribe-new-heads` IPC, so the WS skip is
+ * functionally transparent.
+ *
+ * The 10-minute `WS_FAILURE_TTL_MS` means we re-attempt periodically:
+ * once operators expose 8546 the next ensureConnection() succeeds, the
+ * failure-cache entry is cleared on `onopen`, and the feature lights up
+ * with no code change.
+ *
+ * Operators whose SDK registry record carries an explicit `ws_url` are
+ * skipped — those endpoints are presumed to support WS.
+ */
+function prefillUnknownWsEndpointsDown(): void {
+  for (const op of getActiveOperators()) {
+    if (op.wsRpc !== undefined) continue;
+    try {
+      markWsDown(deriveWsUrl(op));
+    } catch {
+      // Malformed operator rpc — let the normal connection path surface
+      // the error rather than silently masking it.
+    }
+  }
+}
+
 // Hot-reload the operator override when storage changes. The popup's
 // sprintnet-operators-set IPC writes here and the in-memory activeOperators
 // list re-syncs; the `cachedOperator` answer used by the chain-status
@@ -692,7 +735,7 @@ void (async () => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
-  void loadOperatorOverride();
+  void loadOperatorOverride().then(prefillUnknownWsEndpointsDown);
   cachedOperator = null;
   // GAP #11: a fresh override list may add an operator that was never
   // probed for genesis; drop the cache so the next dispatch re-probes
