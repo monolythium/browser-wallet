@@ -19,6 +19,7 @@ import {
   type WalletMrvNativeSubmissionPlan,
 } from "../bg";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
+import { requireTypedMrvContractAddress } from "../../shared/mrv-native-plan.js";
 
 type DeployPlanArgs = Parameters<typeof bgWalletBuildMrvDeployPlan>[0];
 type CallPlanArgs = Parameters<typeof bgWalletBuildMrvCallPlan>[0];
@@ -101,6 +102,8 @@ const MRV_RECEIPT_POLL_MAX_MS = 5 * 60_000;
 const NATIVE_MARKET_REPLAY_LOOKBACK_BLOCKS = 128;
 const NATIVE_MARKET_REPLAY_LIMIT = 5;
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+const NATIVE_CONTRACT_PLACEHOLDER =
+  "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd";
 
 function formatMrvLythAmount(lythoshiDecimal: string): string {
   if (!/^[0-9]+$/.test(lythoshiDecimal)) return "—";
@@ -442,7 +445,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
                 <input
                   value={form.contractAddress}
                   onChange={(e) => setField("contractAddress", e.target.value.trim())}
-                  placeholder="0x... or monoc1..."
+                  placeholder={NATIVE_CONTRACT_PLACEHOLDER}
                   spellCheck={false}
                   style={inputStyle}
                 />
@@ -745,12 +748,18 @@ export function buildMrvNativeRequest(
   if (contractAddress.length === 0) {
     return { ok: false, reason: "native contract address is required" };
   }
+  let typedContractAddress: string;
+  try {
+    typedContractAddress = requireTypedMrvContractAddress(contractAddress).typed;
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message };
+  }
   return {
     ok: true,
     mode,
     args: {
       ...base,
-      contractAddress,
+      contractAddress: typedContractAddress,
       input: input.value,
     },
   };

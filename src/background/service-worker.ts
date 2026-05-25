@@ -41,6 +41,7 @@ import {
 import {
   buildWalletMrvCallNativePlan,
   buildWalletMrvDeployNativePlan,
+  requireTypedMrvContractAddress,
   walletMrvNativePlanToSubmitTx,
   type WalletMrvNativeSubmissionPlan,
   type WalletMrvCallNativePlanInput,
@@ -1242,6 +1243,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!displayFromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no address");
       }
+      let contractAddress: string;
+      try {
+        contractAddress = requireTypedMrvContractAddress(p.contractAddress).typed;
+      } catch (e) {
+        return err(-32602, (e as Error).message);
+      }
 
       let plan: WalletMrvNativeSubmissionPlan;
       let txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>;
@@ -1268,7 +1275,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             typeof p.priorityTipLythoshiHex === "string"
               ? p.priorityTipLythoshiHex
               : fee?.maxPriorityFeePerGas ?? "0x0",
-          contractAddress: p.contractAddress,
+          contractAddress,
           input: p.input,
         };
         if (typeof p.valueWeiHex === "string") input.valueWeiHex = p.valueWeiHex;
@@ -6658,6 +6665,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
       try {
+        const contractAddress = requireTypedMrvContractAddress(p.contractAddress).typed;
         const nonceRes = await sprintnetJsonRpc<string>(
           "eth_getTransactionCount",
           [fromAddress, "latest"],
@@ -6674,7 +6682,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           executionUnitLimitHex: p.executionUnitLimitHex,
           maxExecutionFeeLythoshiHex:
             p.maxExecutionFeeLythoshiHex ?? fee?.maxFeePerGas ?? "0x0",
-          contractAddress: p.contractAddress,
+          contractAddress,
           input: p.input,
         };
         if (p.priorityTipLythoshiHex !== undefined) {
