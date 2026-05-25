@@ -318,8 +318,25 @@ async function probeOperatorGenesis(
     const body = (await res.json()) as {
       result?: { hash?: string } | null;
     };
+    // GAP #11 — operator binaries that don't expose block 0 via
+    // eth_getBlockByNumber("0x0", false) (verified empirically on
+    // protocore/v2/0.1.0 binary a27eec62, 2026-05-25: all 6
+    // foundation operators return {"result": null} for this call)
+    // are treated as "probe-not-supported, trust passes" rather than
+    // as orphan-fork evidence. The pin still binds for any operator
+    // that DOES return a block 0 hash — a mismatched hash remains
+    // rejected by the observed-vs-pin compare below. observed stays
+    // null so the About page can surface "block 0 unavailable" rather
+    // than a fake hash.
+    if (body?.result == null) {
+      console.info(
+        "[probe] block 0 unservable on operator (ok=true, pin skipped):",
+        rpc,
+      );
+      return { ok: true, observed: null, checkedAt: now };
+    }
     const observed =
-      typeof body?.result?.hash === "string" ? body.result.hash.toLowerCase() : null;
+      typeof body.result.hash === "string" ? body.result.hash.toLowerCase() : null;
     if (observed === null) {
       return { ok: false, observed: null, checkedAt: now };
     }

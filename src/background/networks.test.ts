@@ -97,8 +97,15 @@ describe("verifyOperatorGenesis (GAP #11 — orphan-fork defense)", () => {
     expect(snapshotGenesisCache().get(RPC)?.observed).toBe(forked);
   });
 
-  it("returns false on a malformed response (no result.hash)", async () => {
+  it("returns true (probe-not-supported) when result is null (operator binary doesn't serve block 0)", async () => {
     installFetch(async () => ({ jsonrpc: "2.0", id: 1, result: null }));
+    expect(await verifyOperatorGenesis(RPC)).toBe(true);
+    expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
+    expect(snapshotGenesisCache().get(RPC)?.ok).toBe(true);
+  });
+
+  it("returns false on a genuinely malformed response (result exists but no hash field)", async () => {
+    installFetch(async () => ({ jsonrpc: "2.0", id: 1, result: {} }));
     expect(await verifyOperatorGenesis(RPC)).toBe(false);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
   });
