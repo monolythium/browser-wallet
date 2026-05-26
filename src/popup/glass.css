@@ -23,18 +23,27 @@
    same attribute (see ext.css) to drop its fixed 380×620 frame in
    sidepanel mode. */
 html[data-mode="popup"],
-html[data-mode="popup"] body {
+html[data-mode="popup"] body,
+html[data-mode="popup"] #root {
   width: 380px;
   height: 620px;
+  overflow: hidden;
 }
-
-html[data-mode="popup"] #root { width: 380px; height: 620px; }
 
 html[data-mode="sidepanel"],
 html[data-mode="sidepanel"] body,
 html[data-mode="sidepanel"] #root {
   width: 100%;
   height: 100vh;
+  overflow: hidden;
 }
 
-.ext { border-radius: 0; box-shadow: none; }
+/* Round 5 TASK 2 — restore rounded corners on .ext in popup mode.
+   Round 4 forced border-radius:0 / box-shadow:none unconditionally
+   (carry-over from an old popup-frame approach). Chrome's outer popup
+   frame is rectangular and can't be rounded, but the inner .ext card
+   IS rounded — and with the body bg matching the gradient endpoints
+   (set in ext.css), the corner gap blends visually instead of
+   reading as a hard black rectangle. Sidepanel mode keeps the
+   straight edges (.ext fills the full panel chrome there). */
+html[data-mode="sidepanel"] .ext { border-radius: 0; box-shadow: none; }
