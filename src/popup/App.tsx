@@ -682,7 +682,13 @@ export default function App() {
       {showBannerStrip && (
         <ChainStatusBanner
           network={activeChain}
-          onOpenNetworks={() => setScreen("networks")}
+          // Round 12 TASK 7 — top-bar Networks entry pushes onto the
+          // screen stack so back from Networks correctly returns to
+          // home. Without this, the hamburger-menu Networks path also
+          // landed on home (since the hardcoded "home" fallback
+          // matched), masking the bug — the actual fix is using the
+          // stack at both entry pushers (top-bar + MainMenu).
+          onOpenNetworks={() => navigateTo("networks")}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),
@@ -841,11 +847,17 @@ export default function App() {
         />
       )}
 
+      {/* Round 12 TASK 7 — back from Networks now respects screenStack
+         so all entry pushers (top-bar pushes "home", hamburger menu
+         pushes "main-menu") return to their pusher. The hardcoded
+         "home" worked for the top-bar path but broke the hamburger
+         path (same pattern as Round 9 About + Round 11 Connected
+         Sites). */}
       {screen === "networks" && (
         <Networks
           current={activeChain}
           chains={chainList}
-          onBack={() => setScreen("home")}
+          onBack={navigateBack}
           onOpenDetail={(chainId) => {
             setSelectedChainId(chainId);
             setScreen("network-detail");
