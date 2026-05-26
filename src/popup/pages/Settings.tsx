@@ -287,6 +287,122 @@ export function Settings({
           </div>
         </div>
 
+        {/* Round 6 TASK 7 — section order: Account, Multisig (conditional),
+           Staking, Security, Developer tools, Network operators, About.
+           Multisig kept in slot 2 (account-adjacent) since the spec didn't
+           mention it but its content is logically about access control on
+           the active vault. */}
+        {multisig && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Multisig</h3>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginBottom: 10,
+              }}
+            >
+              <div
+                style={{
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(124,127,255,0.4)",
+                  background: "rgba(124,127,255,0.08)",
+                  color: "var(--fg-100)",
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 11,
+                }}
+              >
+                {multisig.threshold} of {multisig.signerCount}
+              </div>
+              {multisig.pendingCount > 0 && (
+                <div
+                  style={{
+                    padding: "3px 8px",
+                    borderRadius: 6,
+                    border: "1px solid rgba(242,180,65,0.4)",
+                    background: "rgba(242,180,65,0.08)",
+                    color: "var(--fg-100)",
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 11,
+                  }}
+                >
+                  {multisig.pendingCount} pending
+                </div>
+              )}
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                marginBottom: 10,
+              }}
+            >
+              This vault is a multisig — sends create proposals that
+              the signer committee approves before execution.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                onClick={multisig.onOpenPending}
+                style={multisigBtnStyle}
+              >
+                <span>Pending proposals</span>
+                <Icon name="chev" size={12} />
+              </button>
+              <button
+                onClick={multisig.onOpenGovernance}
+                style={multisigBtnStyle}
+              >
+                <span>Signers + governance</span>
+                <Icon name="chev" size={12} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Staking</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            View active delegations, pending rewards, and manage existing
+            positions across clusters.
+          </div>
+          <button
+            onClick={onOpenDelegations}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>Delegations dashboard</span>
+            <Icon name="chev" size={12} />
+          </button>
+        </div>
+
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Security</h3>
@@ -546,81 +662,9 @@ export function Settings({
           </div>
         </div>
 
-        {multisig && (
-          <div className="ext-card">
-            <div className="ext-card__head">
-              <h3>Multisig</h3>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-                marginBottom: 10,
-              }}
-            >
-              <div
-                style={{
-                  padding: "3px 8px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(124,127,255,0.4)",
-                  background: "rgba(124,127,255,0.08)",
-                  color: "var(--fg-100)",
-                  fontFamily: "var(--f-mono)",
-                  fontSize: 11,
-                }}
-              >
-                {multisig.threshold} of {multisig.signerCount}
-              </div>
-              {multisig.pendingCount > 0 && (
-                <div
-                  style={{
-                    padding: "3px 8px",
-                    borderRadius: 6,
-                    border: "1px solid rgba(242,180,65,0.4)",
-                    background: "rgba(242,180,65,0.08)",
-                    color: "var(--fg-100)",
-                    fontFamily: "var(--f-mono)",
-                    fontSize: 11,
-                  }}
-                >
-                  {multisig.pendingCount} pending
-                </div>
-              )}
-            </div>
-            <div
-              style={{
-                fontSize: 11.5,
-                color: "var(--fg-300)",
-                lineHeight: 1.5,
-                marginBottom: 10,
-              }}
-            >
-              This vault is a multisig — sends create proposals that
-              the signer committee approves before execution.
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <button
-                onClick={multisig.onOpenPending}
-                style={multisigBtnStyle}
-              >
-                <span>Pending proposals</span>
-                <Icon name="chev" size={12} />
-              </button>
-              <button
-                onClick={multisig.onOpenGovernance}
-                style={multisigBtnStyle}
-              >
-                <span>Signers + governance</span>
-                <Icon name="chev" size={12} />
-              </button>
-            </div>
-          </div>
-        )}
-
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Staking</h3>
+            <h3>Developer tools</h3>
           </div>
           <div
             style={{
@@ -630,11 +674,11 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            View active delegations, pending rewards, and manage existing
-            positions across clusters.
+            Preview MRV native contract deploy and call transaction plans with
+            v4.1 execution-unit and lythoshi fee fields.
           </div>
           <button
-            onClick={onOpenDelegations}
+            onClick={onOpenMrvNative}
             style={{
               width: "100%",
               padding: "10px 12px",
@@ -652,7 +696,10 @@ export function Settings({
               gap: 8,
             }}
           >
-            <span>Delegations dashboard</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon name="contract" size={13} />
+              MRV native plan preview
+            </span>
             <Icon name="chev" size={12} />
           </button>
         </div>
@@ -692,48 +739,6 @@ export function Settings({
             }}
           >
             <span>Manage operators</span>
-            <Icon name="chev" size={12} />
-          </button>
-        </div>
-
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Developer tools</h3>
-          </div>
-          <div
-            style={{
-              fontSize: 11.5,
-              color: "var(--fg-300)",
-              lineHeight: 1.5,
-              marginBottom: 10,
-            }}
-          >
-            Preview MRV native contract deploy and call transaction plans with
-            v4.1 execution-unit and lythoshi fee fields.
-          </div>
-          <button
-            onClick={onOpenMrvNative}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid var(--fg-700)",
-              background: "rgba(255,255,255,0.04)",
-              color: "var(--fg-100)",
-              fontFamily: "var(--f-sans)",
-              fontSize: 12.5,
-              fontWeight: 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Icon name="contract" size={13} />
-              MRV native plan preview
-            </span>
             <Icon name="chev" size={12} />
           </button>
         </div>
