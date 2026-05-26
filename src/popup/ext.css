@@ -3,6 +3,46 @@
    ambient bloom, glass cards, gold accent bar, diamond brand,
    gold-gradient primary, gold underline tabs. */
 
+/* ============================================================
+   ROUND 8 TASK 1 — DIAGNOSTIC CSS (5th attempt at corner gaps)
+   ------------------------------------------------------------
+   Rounds 4-7 all "matched backgrounds" and the user reports the
+   dark gap at popup corners STILL VISIBLE. Stop guessing. This
+   block forces each candidate DOM layer to render a UNIQUE bright
+   color in popup mode so the user can identify the actual offender.
+   To be REMOVED in Round 8 TASK 1 Phase C once the culprit is known.
+
+   Expected appearance (popup mode only):
+     RED    visible    →  html is the offender
+     ORANGE visible    →  body is the offender
+     YELLOW visible    →  #root is the offender
+     GREEN  visible    →  .ext IS rendering at corner (no gap; or the
+                          dark area was Chrome's outer frame, which we
+                          cannot recolor)
+
+   The diagnostic also flattens any background-image (gradients) so
+   each layer shows a pure solid color — gradient stops can't confuse
+   the report. Sidepanel mode is intentionally untouched.
+   ============================================================ */
+html[data-mode="popup"] {
+  background: #ff0000 !important;
+  background-image: none !important;
+}
+html[data-mode="popup"] body {
+  background: #ff8800 !important;
+  background-image: none !important;
+}
+html[data-mode="popup"] body > #root {
+  background: #ffff00 !important;
+  background-image: none !important;
+}
+html[data-mode="popup"] .ext {
+  background: #00ff00 !important;
+  background-image: none !important;
+}
+/* END DIAGNOSTIC BLOCK */
+
+
 *, *::before, *::after { box-sizing: border-box; }
 /* Round 6 TASK 1 — popup edge polish, take three. Round 4 set body
    bg to var(--ink-000) (a solid color) but .ext applies a linear
