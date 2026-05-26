@@ -115,6 +115,8 @@ import {
   recoverSlhDsaMnemonicV4,
   confirmSlhDsaColdStorageV4,
   setSlhDsaRegistrationStatusV4,
+  // Round 4 TASK 2 — session-rehydrate across MV3 SW hibernation.
+  tryRestoreFromSessionV4,
 } from "./keystore-mldsa.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
@@ -509,6 +511,7 @@ import {
   AUTO_LOCK_OPTIONS,
   LOCKOUT_THRESHOLDS,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
+  SESSION_KEY_MEK_V4,
   SESSION_KEY_UNLOCK_FAIL_COUNT,
   SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
   SESSION_KEY_WALLET_LOCKED,
@@ -702,15 +705,54 @@ console.log("[Monolythium Wallet] service worker boot");
 // boot. The active-chain hydration runs after user-chains so a stored id
 // pointing at a user-added chain resolves cleanly via lookupChain.
 void (async () => {
-  // Force-lock first — before any hydration await that could fail. SW
-  // restart always drops the in-memory ML-DSA backend held by
-  // keystore-mldsa.ts, so persistent state must say walletLocked=true to
-  // match. Hoisted ahead of the hydration awaits so a throw in
-  // loadConnectedSites / loadUserChains / etc. (cf. 5316b25) can't leave
-  // the flag stale at false. Popup's onChanged listener (a1068b6) picks
-  // up the write and routes to UnlockScreen if open.
-  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
-  await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+  // Round 4 TASK 2 — try session-rehydrate first. MV3 SW hibernates
+  // after ~30 s idle and drops the in-memory ML-DSA backend held by
+  // keystore-mldsa.ts. Pre-rehydrate, every SW restart force-locked
+  // the user; post-rehydrate, we read the MEK from chrome.storage.session
+  // (which survives SW restart but not browser restart), re-unwrap the
+  // active vault's VEK, and rebuild the backend.
+  //
+  // The auto-lock deadline persists alongside the MEK. On boot we
+  // honour it: if the alarm should have fired during hibernation
+  // (deadline < now), clear the MEK + force-lock. Otherwise restore
+  // unlocked + leave SESSION_KEY_WALLET_LOCKED = false. A fresh
+  // chrome.alarms.create then re-arms the alarm for the remainder of
+  // the deadline so the auto-lock contract still bites.
+  let restored = false;
+  try {
+    const ses = await chrome.storage.session.get(SESSION_KEY_AUTO_LOCK_DEADLINE);
+    const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
+    if (typeof deadline === "number" && Date.now() < deadline) {
+      const r = await tryRestoreFromSessionV4();
+      if (r.ok) {
+        restored = true;
+        // Re-arm the alarm for the remaining slice. delayInMinutes
+        // has a 0.5 floor in MV3; below that we just trip the alarm
+        // immediately, which collapses to triggerAutoLock via the
+        // existing onAlarm guard.
+        const remainingMs = Math.max(0, deadline - Date.now());
+        await chrome.alarms.clear(ALARM_AUTO_LOCK);
+        await chrome.alarms.create(ALARM_AUTO_LOCK, {
+          delayInMinutes: Math.max(remainingMs / 60_000, 1 / 60),
+        });
+        await chrome.storage.session.set({
+          [SESSION_KEY_WALLET_LOCKED]: false,
+        });
+      }
+    }
+  } catch {
+    // Defensive — any rehydrate failure falls through to the force-lock
+    // below. We deliberately never throw at boot.
+  }
+  if (!restored) {
+    // No valid session-cached MEK (or rehydrate failed) — fall back to
+    // the pre-Round-4 behaviour: clear the deadline, force-lock so the
+    // popup routes to UnlockScreen. Hoisted ahead of remaining hydration
+    // awaits so a throw in loadConnectedSites / loadUserChains / etc.
+    // (cf. 5316b25) can't leave the flag stale at false.
+    await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+    await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+  }
 
   await loadUserChains();
   await loadOperatorOverride();
@@ -818,10 +860,20 @@ async function resetAutoLock(): Promise<void> {
 }
 
 async function triggerAutoLock(): Promise<void> {
-  lockV4();
-  await chrome.alarms.clear(ALARM_AUTO_LOCK);
-  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+  // Round 4 TASK 2 — clear the session-cached MEK + deadline FIRST,
+  // before lockV4()'s fire-and-forget clearMekFromSessionV4 runs, so a
+  // crash mid-sequence can't leave a usable MEK + valid deadline in
+  // chrome.storage.session that the next SW boot would rehydrate from.
+  // The boot rehydrate gates on the deadline existing, so clearing
+  // that first is sufficient — the explicit MEK_V4 remove is
+  // belt-and-braces.
+  await chrome.storage.session.remove([
+    SESSION_KEY_AUTO_LOCK_DEADLINE,
+    SESSION_KEY_MEK_V4,
+  ]);
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
+  await chrome.alarms.clear(ALARM_AUTO_LOCK);
+  lockV4();
 }
 
 // Suspend the auto-lock alarm while a separate-window approval is open.
