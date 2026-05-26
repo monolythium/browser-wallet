@@ -13,7 +13,10 @@
 // boolean/address state through `popup` IPC messages.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SESSION_KEY_WALLET_LOCKED } from "../shared/constants";
+import {
+  SESSION_KEY_WALLET_LOCKED,
+  STORAGE_KEY_VAULTS_CONTAINER_V4,
+} from "../shared/constants";
 import { hexLythoshiToLythNumber } from "../shared/native-amount";
 import "./tokens.css";
 import "./glass.css";
@@ -384,21 +387,38 @@ export default function App() {
       changes,
       areaName,
     ) => {
-      if (areaName !== "session") return;
-      const change = changes[SESSION_KEY_WALLET_LOCKED];
-      if (!change) return;
-      if (change.newValue === true) {
-        void (async () => {
-          await refreshKeystoreStatus();
-          setScreen((prev) =>
-            LOCK_SIGNAL_EXEMPT.has(prev) ? prev : "locked",
-          );
-        })();
-      } else if (change.newValue === false) {
-        void (async () => {
-          await refreshKeystoreStatus();
-          setScreen((prev) => (prev === "locked" ? "home" : prev));
-        })();
+      if (areaName === "session") {
+        const change = changes[SESSION_KEY_WALLET_LOCKED];
+        if (!change) return;
+        if (change.newValue === true) {
+          void (async () => {
+            await refreshKeystoreStatus();
+            setScreen((prev) =>
+              LOCK_SIGNAL_EXEMPT.has(prev) ? prev : "locked",
+            );
+          })();
+        } else if (change.newValue === false) {
+          void (async () => {
+            await refreshKeystoreStatus();
+            setScreen((prev) => (prev === "locked" ? "home" : prev));
+          })();
+        }
+        return;
+      }
+      if (areaName === "local") {
+        // Round 4 TASK 1 — vault container changes (create / import /
+        // select / rename) update `activeVaultId` and / or the vault
+        // list in chrome.storage.local. The SW broadcasts
+        // `accountsChanged` to tabs via chrome.tabs.sendMessage, but
+        // the popup is not a tab and never sees that event. Mirror the
+        // change here so `acc.addr` + `activeVaultSummary` refresh
+        // immediately after a vault flow lands. refreshKeystoreStatus
+        // re-fetches the active account + vault summary; the chip and
+        // VaultPicker dropdown re-render off that state.
+        if (STORAGE_KEY_VAULTS_CONTAINER_V4 in changes) {
+          void refreshKeystoreStatus();
+        }
+        return;
       }
     };
     chrome.storage.onChanged.addListener(listener);
