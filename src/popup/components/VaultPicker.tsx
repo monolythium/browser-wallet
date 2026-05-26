@@ -40,12 +40,11 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 
 import { Icon, shortAddr } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { Modal } from "./Modal";
-import { RevealableAddressBlock } from "./RevealableAddressBlock";
 import { VaultAddModal, type VaultAddMode } from "./VaultAddModal";
 import { MultisigCreateModal } from "./MultisigCreateModal";
 import {
@@ -231,6 +230,36 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
       ? vaults.find((v) => v.id === renameId) ?? null
       : null;
 
+  // Round 4 TASK 3 — top-bar redesign. Address is now the primary
+  // visual element; vault label drops to a secondary row with a
+  // pencil affordance that opens the existing rename modal. Pull the
+  // label / kind from the live `vaults` list (the active vault is the
+  // source of truth for the chip's name) and fall back to the parent's
+  // `activeAccount.label` only during the brief pre-fetch tick before
+  // bgVaultsList resolves.
+  const activeVault = ready ? vaults!.find((v) => v.isActive) ?? null : null;
+  const displayLabel = activeVault?.label ?? activeAccount.label;
+  const displayKind = activeVault?.kind ?? "single";
+  const displayAddr = shortAddr(bech32mDisplay(activeAccount.addr), 12);
+  const fullAddr = bech32mDisplay(activeAccount.addr);
+  const [addrCopied, setAddrCopied] = useState(false);
+  const handleAddrCopy = (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    void navigator.clipboard.writeText(fullAddr).then(
+      () => {
+        setAddrCopied(true);
+        setTimeout(() => setAddrCopied(false), 1500);
+      },
+      () => {},
+    );
+  };
+  const handleTopBarRename = (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    if (!activeVault) return;
+    setOpen(false);
+    setRenameId(activeVault.id);
+  };
+
   return (
     <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <div
@@ -242,6 +271,7 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
         style={chipDisabledStyle}
       >
         <div className="ext-acc__lbl">
+          {/* Row 1 — address (primary, mono, click to copy) + chevron. */}
           <div
             className="n"
             style={{
@@ -252,16 +282,23 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
             }}
           >
             <span
+              onClick={handleAddrCopy}
+              title={addrCopied ? "Copied" : fullAddr}
               style={{
                 flex: 1,
                 minWidth: 0,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
+                fontFamily: "var(--f-mono)",
+                fontSize: 14,
+                fontWeight: 500,
+                color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
+                letterSpacing: "0.02em",
+                cursor: "copy",
               }}
-              title={activeAccount.label}
             >
-              {activeAccount.label}
+              {displayAddr}
             </span>
             <span
               style={{
@@ -275,11 +312,89 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
               <Icon name="chev-d" size={12} />
             </span>
           </div>
+          {/* Row 2 — vault label (secondary) + algo badge + edit pencil. */}
           <div
             className="a"
-            style={{ display: "flex", flexDirection: "column", gap: 2 }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginTop: 2,
+            }}
           >
-            <RevealableAddressBlock addr0x={activeAccount.addr} />
+            <span
+              title={displayLabel}
+              style={{
+                fontFamily: "var(--f-sans)",
+                fontSize: 10.5,
+                fontWeight: 600,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: "var(--fg-300)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+                flexShrink: 1,
+              }}
+            >
+              {displayLabel}
+            </span>
+            {displayKind === "multisig" && activeVault?.kind === "multisig" && (
+              <span
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 9,
+                  padding: "1px 4px",
+                  borderRadius: 3,
+                  border: "1px solid rgba(124,127,255,0.4)",
+                  background: "rgba(124,127,255,0.08)",
+                  color: "var(--fg-200)",
+                  letterSpacing: "0.05em",
+                  flexShrink: 0,
+                }}
+                title={`${activeVault.threshold} of ${activeVault.signerCount} multisig`}
+              >
+                {activeVault.threshold}/{activeVault.signerCount}
+              </span>
+            )}
+            <span
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 9,
+                color: "var(--fg-400)",
+                letterSpacing: "0.05em",
+                flexShrink: 0,
+                opacity: 0.7,
+              }}
+              title="ML-DSA-65 post-quantum signing"
+            >
+              ML-DSA-65
+            </span>
+            <span style={{ flex: 1 }} />
+            {activeVault && (
+              <button
+                type="button"
+                onClick={handleTopBarRename}
+                aria-label="Rename vault"
+                title="Rename vault"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 22,
+                  height: 22,
+                  padding: 0,
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--fg-400)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                <Icon name="pen" size={12} />
+              </button>
+            )}
           </div>
         </div>
       </div>
