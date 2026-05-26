@@ -1,38 +1,31 @@
-// Bech32m address codec per BIP-350 + whitepaper §22.7.
+// Bech32m address codec — thin shim over @monolythium/core-sdk.
 //
-// Wire format on Monolythium chains stays the 20-byte EVM-style address —
-// the SDK signs and the chain stores `0x...`. But the user-facing display
-// MUST be bech32m with a per-type HRP discriminator so users can't be
-// tricked by lookalikes AND can't accidentally paste a cluster ID into
-// an EOA recipient field (the HRP mismatch surfaces as a checksum
-// rejection). This module is the single source of truth for that
-// conversion.
+// The SDK (mono-core-sdk) owns the bech32m polymod implementation and the
+// canonical HRP table per whitepaper §22.7. This module is a wallet-side
+// compatibility surface: existing call sites import bech32m helpers and an
+// `AddressKind` union with `"eoa"` for the user-account case (the SDK uses
+// `"user"`). Keeping the wallet's shape stable while the crypto delegates
+// to the SDK is the trade — no duplicated polymod, no diverging HRP table.
 //
-// HRP table (whitepaper §22.7):
-//   mono   — user EOA (the default)
-//   monos  — smart account / policy account
-//   monoc  — Rust/RISC-V contract account
-//   monok  — DVT cluster identity
-//   monom  — n-of-m multisig
-//   monox  — system module / native-module address
-//
-// Reserved (decode succeeds for `kind`, but the wallet doesn't currently
-// originate these): monor (recovery/SLH-DSA), monop (privacy-side),
-// monoi (issuer), monoa (agent).
-//
-// We deliberately don't pull in a third-party bech32 library: the algorithm
-// fits in ~150 lines, and the polymod constant (0x2BC830A3, distinct from
-// BIP-173's 1) is the kind of detail that's safer to own outright than to
-// trust an upstream's "v1 vs v0 segwit" dispatch with.
+// Reserved HRPs (monor / monop / monoi / monoa) are not exposed here. The
+// wallet never originates them and the SDK rejects them in decode; if a
+// user pastes one, `decodeBech32mTyped` surfaces an error rather than
+// silently classifying it.
+
+import {
+  ADDRESS_KIND_HRPS,
+  AddressError,
+  addressToTypedBech32,
+  typedBech32ToAddress,
+  type AddressKind as SdkAddressKind,
+} from "@monolythium/core-sdk";
 
 const DEFAULT_HRP = "mono";
-const CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-const BECH32M_CONST = 0x2bc830a3;
 
 /**
- * Whitepaper §22.7 typed-HRP enumeration. The string value is the HRP
- * literal used in the bech32m encoding ("mono", "monok", etc.). Keep
- * the enum closed so a misspelled kind is a TypeScript error.
+ * Whitepaper §22.7 typed-HRP enumeration. The wallet keeps `"eoa"` for the
+ * user-account case; the SDK calls the same kind `"user"`. The remaining
+ * names match the SDK directly.
  */
 export type AddressKind =
   | "eoa"
@@ -40,23 +33,33 @@ export type AddressKind =
   | "contract"
   | "cluster"
   | "multisig"
-  | "systemModule"
-  | "reservedRecovery"
-  | "reservedPrivacy"
-  | "reservedIssuer"
-  | "reservedAgent";
+  | "systemModule";
+
+const WALLET_TO_SDK_KIND: Record<AddressKind, SdkAddressKind> = {
+  eoa: "user",
+  smartAccount: "smartAccount",
+  contract: "contract",
+  cluster: "cluster",
+  multisig: "multisig",
+  systemModule: "systemModule",
+};
+
+const SDK_TO_WALLET_KIND: Record<SdkAddressKind, AddressKind> = {
+  user: "eoa",
+  smartAccount: "smartAccount",
+  contract: "contract",
+  cluster: "cluster",
+  multisig: "multisig",
+  systemModule: "systemModule",
+};
 
 const HRP_BY_KIND: Record<AddressKind, string> = {
-  eoa: "mono",
-  smartAccount: "monos",
-  contract: "monoc",
-  cluster: "monok",
-  multisig: "monom",
-  systemModule: "monox",
-  reservedRecovery: "monor",
-  reservedPrivacy: "monop",
-  reservedIssuer: "monoi",
-  reservedAgent: "monoa",
+  eoa: ADDRESS_KIND_HRPS.user,
+  smartAccount: ADDRESS_KIND_HRPS.smartAccount,
+  contract: ADDRESS_KIND_HRPS.contract,
+  cluster: ADDRESS_KIND_HRPS.cluster,
+  multisig: ADDRESS_KIND_HRPS.multisig,
+  systemModule: ADDRESS_KIND_HRPS.systemModule,
 };
 
 const KIND_BY_HRP: Record<string, AddressKind> = (() => {
@@ -73,157 +76,33 @@ export function hrpForKind(kind: AddressKind): string {
 }
 
 /** Return the `AddressKind` for a bech32m HRP, or null if the HRP is
- *  not one of the v4.1 chain-types. */
+ *  not one of the v4.1 chain-types the wallet originates. */
 export function kindForHrp(hrp: string): AddressKind | null {
   return KIND_BY_HRP[hrp] ?? null;
 }
 
-// Generator polynomial coefficients shared with BIP-173.
-const GEN: readonly number[] = [
-  0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3,
-];
-
-function polymod(values: readonly number[]): number {
-  let chk = 1;
-  for (const v of values) {
-    const b = chk >>> 25;
-    chk = ((chk & 0x1ffffff) << 5) ^ v;
-    for (let i = 0; i < 5; i++) {
-      if ((b >> i) & 1) chk ^= GEN[i]!;
-    }
-  }
-  return chk >>> 0;
-}
-
-function hrpExpand(hrp: string): number[] {
-  const high: number[] = [];
-  const low: number[] = [];
-  for (let i = 0; i < hrp.length; i++) {
-    const c = hrp.charCodeAt(i);
-    high.push(c >> 5);
-    low.push(c & 31);
-  }
-  return [...high, 0, ...low];
-}
-
-function createChecksum(hrp: string, data: readonly number[]): number[] {
-  const values = [...hrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0];
-  const mod = polymod(values) ^ BECH32M_CONST;
-  const out: number[] = [];
-  for (let i = 0; i < 6; i++) {
-    out.push((mod >> (5 * (5 - i))) & 31);
-  }
-  return out;
-}
-
-function verifyChecksum(hrp: string, data: readonly number[]): boolean {
-  return polymod([...hrpExpand(hrp), ...data]) === BECH32M_CONST;
-}
-
-// Re-pack a stream of `fromBits`-bit groups into `toBits`-bit groups.
-// `pad` controls whether trailing partial groups become a final group
-// (encode direction) or signal an error (decode direction).
-function convertBits(
-  data: readonly number[],
-  fromBits: number,
-  toBits: number,
-  pad: boolean,
-): number[] | null {
-  let acc = 0;
-  let bits = 0;
-  const out: number[] = [];
-  const maxv = (1 << toBits) - 1;
-  const maxAcc = (1 << (fromBits + toBits - 1)) - 1;
-  for (const v of data) {
-    if (v < 0 || v >>> fromBits !== 0) return null;
-    acc = ((acc << fromBits) | v) & maxAcc;
-    bits += fromBits;
-    while (bits >= toBits) {
-      bits -= toBits;
-      out.push((acc >> bits) & maxv);
-    }
-  }
-  if (pad) {
-    if (bits > 0) out.push((acc << (toBits - bits)) & maxv);
-  } else if (bits >= fromBits || ((acc << (toBits - bits)) & maxv) !== 0) {
-    return null;
-  }
-  return out;
-}
-
-// Generic encode/decode at the bech32m layer — exported so tests can pin
-// the polymod constant against a known external vector (BIP-350 "a1lqfn3a").
-export function bech32mEncode(hrp: string, data5bit: readonly number[]): string {
-  const combined = [...data5bit, ...createChecksum(hrp, data5bit)];
-  let s = hrp + "1";
-  for (const d of combined) {
-    if (d < 0 || d >= 32) {
-      throw new Error(`bech32mEncode: invalid 5-bit group ${d}`);
-    }
-    s += CHARSET[d];
-  }
-  return s;
-}
-
-export function bech32mDecode(
-  bech: string,
-): { hrp: string; data: number[] } | null {
-  if (bech.length < 8 || bech.length > 1023) return null;
-  // Spec disallows mixed case. Lowercase form is canonical.
-  const lower = bech.toLowerCase();
-  const upper = bech.toUpperCase();
-  if (bech !== lower && bech !== upper) return null;
-  const norm = lower;
-  const pos = norm.lastIndexOf("1");
-  if (pos < 1 || pos + 7 > norm.length) return null;
-  const hrp = norm.slice(0, pos);
-  for (let i = 0; i < hrp.length; i++) {
-    const c = hrp.charCodeAt(i);
-    if (c < 33 || c > 126) return null;
-  }
-  const data: number[] = [];
-  for (let i = pos + 1; i < norm.length; i++) {
-    const idx = CHARSET.indexOf(norm[i]!);
-    if (idx === -1) return null;
-    data.push(idx);
-  }
-  if (!verifyChecksum(hrp, data)) return null;
-  return { hrp, data: data.slice(0, data.length - 6) };
-}
-
-// Public address codec — what render sites actually call.
-
 /**
  * Encode a 20-byte `0x`-hex address as bech32m with the HRP for the
- * given `AddressKind`. Default kind is `"eoa"` for the user-account
- * case, which is by far the most common render site.
+ * given `AddressKind`. Default kind is `"eoa"` — the user-account case.
+ * Accepts both `0x` and `0X` prefixes (some upstreams send the latter).
  */
 export function addressToBech32m(addr0x: string, kind: AddressKind = "eoa"): string {
-  const hex = addr0x.startsWith("0x") || addr0x.startsWith("0X")
-    ? addr0x.slice(2)
-    : addr0x;
-  if (!/^[0-9a-fA-F]{40}$/.test(hex)) {
-    throw new Error(
-      `addressToBech32m: expected 20-byte hex address, got "${addr0x}"`,
-    );
+  try {
+    return addressToTypedBech32(WALLET_TO_SDK_KIND[kind], normalizeHexPrefix(addr0x));
+  } catch (err) {
+    throw normalizeError(err, "addressToBech32m");
   }
-  const bytes: number[] = [];
-  for (let i = 0; i < 40; i += 2) {
-    bytes.push(parseInt(hex.slice(i, i + 2), 16));
-  }
-  const data5 = convertBits(bytes, 8, 5, true);
-  if (!data5) {
-    throw new Error("addressToBech32m: convertBits 8→5 failed");
-  }
-  return bech32mEncode(HRP_BY_KIND[kind], data5);
+}
+
+function normalizeHexPrefix(addr: string): string {
+  return addr.startsWith("0X") ? `0x${addr.slice(2)}` : addr;
 }
 
 /**
- * Decode a bech32m string into a `0x`-hex address. The `expectedKind`
- * parameter (default: `"eoa"`) restricts the accepted HRP so a paste
- * of a cluster ID into an EOA recipient field fails at the address
- * layer with a typed error rather than silently routing funds to the
- * wrong account kind.
+ * Decode a bech32m string into a `0x`-hex address. `expectedKind`
+ * (default: `"eoa"`) restricts the accepted HRP so a paste of a cluster
+ * ID into an EOA recipient field fails at the address layer with a
+ * typed error rather than silently routing to the wrong account kind.
  *
  * Pass `expectedKind = null` to accept any v4.1 chain-type HRP and
  * surface the decoded `kind` via `decodeBech32mTyped`.
@@ -245,30 +124,34 @@ export function decodeBech32mTyped(
   bech: string,
   expectedKind: AddressKind | null = null,
 ): { addr0x: string; kind: AddressKind } {
-  const decoded = bech32mDecode(bech);
-  if (!decoded) {
-    throw new Error(`bech32mToAddress: invalid bech32m string "${bech}"`);
+  const sdkExpected =
+    expectedKind === null ? undefined : WALLET_TO_SDK_KIND[expectedKind];
+  try {
+    const typed = typedBech32ToAddress(bech, sdkExpected);
+    return { addr0x: typed.hex, kind: SDK_TO_WALLET_KIND[typed.kind] };
+  } catch (err) {
+    throw normalizeError(err, "decodeBech32mTyped", bech);
   }
-  const kind = kindForHrp(decoded.hrp);
-  if (kind === null) {
-    throw new Error(
-      `bech32mToAddress: unrecognized HRP "${decoded.hrp}"`,
-    );
+}
+
+/**
+ * Returns true if the input passes bech32m decode against a v4.1
+ * chain-type HRP. Used by `bech32m-typo-detect.ts` to scan candidate
+ * substitutions for the one that flips the checksum back to valid.
+ */
+export function tryDecodeBech32m(
+  bech: string,
+): { hrp: string; addr0x: string; kind: AddressKind } | null {
+  try {
+    const typed = typedBech32ToAddress(bech);
+    return {
+      hrp: HRP_BY_KIND[SDK_TO_WALLET_KIND[typed.kind]],
+      addr0x: typed.hex,
+      kind: SDK_TO_WALLET_KIND[typed.kind],
+    };
+  } catch {
+    return null;
   }
-  if (expectedKind !== null && kind !== expectedKind) {
-    throw new Error(
-      `bech32mToAddress: wrong HRP "${decoded.hrp}", expected "${HRP_BY_KIND[expectedKind]}"`,
-    );
-  }
-  const bytes = convertBits(decoded.data, 5, 8, false);
-  if (!bytes || bytes.length !== 20) {
-    throw new Error(
-      `bech32mToAddress: decoded ${bytes?.length ?? 0} bytes, expected 20`,
-    );
-  }
-  let hex = "0x";
-  for (const b of bytes) hex += b.toString(16).padStart(2, "0");
-  return { addr0x: hex, kind };
 }
 
 // Truncated form for compact display. Keeps the HRP+`1` prefix visible
@@ -304,8 +187,16 @@ export function bech32mDisplay(
   }
 }
 
-/**
- * Render-time helper that suppresses the `DEFAULT_HRP` token from
- * unused. Re-exporting for clarity in test fixtures.
- */
 export { DEFAULT_HRP };
+
+// SDK's AddressError is the typed envelope; wallet callers historically
+// catch a plain Error with a string message. Re-throw as Error so the
+// shim doesn't surface SDK-specific types at the API boundary.
+function normalizeError(err: unknown, fn: string, input?: string): Error {
+  if (err instanceof AddressError) {
+    const where = input !== undefined ? ` "${input}"` : "";
+    return new Error(`${fn}: ${err.message}${where}`);
+  }
+  if (err instanceof Error) return err;
+  return new Error(`${fn}: ${String(err)}`);
+}
