@@ -464,6 +464,10 @@ interface TopProps {
   account: Account;
   onOpenAccounts: () => void;
   onSettings: () => void;
+  /** Round 13 TASK 1 — VaultPicker's "New wallet" dropdown entry
+   *  dispatches here instead of opening the legacy single-page modal.
+   *  Threaded through Home for App-level routing to NewWalletFlow. */
+  onNewWalletFlow?: () => void;
 }
 
 // Phase 5 Commit 3: chip replaced with <VaultPicker /> (multi-vault
@@ -483,7 +487,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (Round 4 design).
-export function Top({ account }: TopProps) {
+export function Top({ account, onNewWalletFlow }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       <div
@@ -500,7 +504,10 @@ export function Top({ account }: TopProps) {
       >
         ML-DSA-65
       </div>
-      <VaultPicker activeAccount={account} />
+      <VaultPicker
+        activeAccount={account}
+        {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
+      />
     </div>
   );
 }
@@ -1565,9 +1572,13 @@ interface HomeProps {
    *  so test harnesses + callers without the route wired still
    *  render. */
   topSlot?: ReactNode;
+  /** Round 13 TASK 1 — threaded to VaultPicker so the "New wallet"
+   *  dropdown entry routes to App's NewWalletFlow screen instead of
+   *  opening the legacy single-page VaultAddModal fresh mode. */
+  onNewWalletFlow?: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, topSlot }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, topSlot, onNewWalletFlow }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -1593,6 +1604,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         account={account}
         onOpenAccounts={onOpenAccounts}
         onSettings={onSettings}
+        {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
       />
       <div className="ext-body">
         {topSlot}

@@ -64,9 +64,19 @@ export interface VaultPickerProps {
    *  state (so the pre-migration disabled chip still shows the user's
    *  current address line). */
   activeAccount: Account;
+  /** Round 13 TASK 1 — when provided, the dropdown's "New wallet"
+   *  CTA dispatches to this callback (typically App-level
+   *  navigateTo("new-wallet-flow")) instead of opening the legacy
+   *  single-page VaultAddModal fresh mode. Import + multisig
+   *  modes still go through VaultAddModal so the in-app flow
+   *  changes only affect the fresh-mnemonic path. */
+  onNewWalletFlow?: () => void;
 }
 
-export function VaultPicker({ activeAccount }: VaultPickerProps) {
+export function VaultPicker({
+  activeAccount,
+  onNewWalletFlow,
+}: VaultPickerProps) {
   // undefined = pre-fetch tick; null = bgVaultsList resolved with no
   // container (still legacy single-vault); array = container ready.
   const [vaults, setVaults] = useState<VaultSummary[] | null | undefined>(
@@ -201,6 +211,14 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
 
   const handleAddFresh = () => {
     setOpen(false);
+    // Round 13 TASK 1 — when the parent wired the new multi-step
+    // flow, dispatch there instead of opening the legacy modal.
+    // Falls back to the modal when no callback is provided (e.g.
+    // test harnesses without the routing wired).
+    if (onNewWalletFlow) {
+      onNewWalletFlow();
+      return;
+    }
     setAddMode("fresh");
   };
   const handleAddImport = () => {
