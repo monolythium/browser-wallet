@@ -936,6 +936,22 @@ export default function App() {
         <MainMenu
           uiMode={uiMode}
           onBack={navigateBack}
+          onOpenFullscreen={() => {
+            // Round 8 TASK 3 — open the wallet in a regular Chrome tab.
+            // The detectMode in main.tsx branches on ?mode=fullscreen
+            // and the data-mode CSS centers the wallet in a 480 px
+            // column. Close the current popup/sidepanel surface after
+            // the tab is created.
+            void chrome.tabs
+              .create({
+                url: chrome.runtime.getURL(
+                  "src/popup/index.html?mode=fullscreen",
+                ),
+              })
+              .then(() => {
+                window.close();
+              });
+          }}
           onSwitchMode={() => {
             // Round 8 TASK 2 — INSTANT switch (no manual icon click).
             // The chrome.sidePanel.open / chrome.action.openPopup
