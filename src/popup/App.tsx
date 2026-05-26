@@ -710,13 +710,21 @@ export default function App() {
             setPendingMnemonic(null);
             setScreen("import");
           }}
-          onForgotPassword={() => setScreen("forgot-password")}
+          // Round 11 TASK 6 — Welcome → ForgotPassword via navigateTo
+          // so back returns to Welcome. The same ForgotPassword screen
+          // is also reached from UnlockScreen's Forgot modal (which
+          // pushes "locked"); navigateBack handles both pushers.
+          onForgotPassword={() => navigateTo("forgot-password")}
         />
       )}
 
+      {/* Round 11 TASK 6 — ForgotPassword's onBack flipped to
+         navigateBack so it pops the stack instead of hardcoding
+         "welcome". Both entry paths (Welcome and the new UnlockScreen
+         Forgot modal) now return to their pusher. */}
       {screen === "forgot-password" && (
         <ForgotPassword
-          onBack={() => setScreen("welcome")}
+          onBack={navigateBack}
           onWipedThenImport={() => {
             setImportError(null);
             setPendingMnemonic(null);
@@ -775,8 +783,21 @@ export default function App() {
         />
       )}
 
+      {/* Round 11 TASK 6 + 7 — UnlockScreen now hosts the Forgot
+         password? entry point. The two callbacks route through the
+         normal screen-stack: Import sends the user to the existing
+         ForgotPassword screen (wipe + Reset & Import flow) via
+         navigateTo so its back returns here; Reset lands on Welcome
+         after the wipe completes inside UnlockScreen itself. */}
       {screen === "locked" && (
-        <UnlockScreen address={keystore?.address ?? null} />
+        <UnlockScreen
+          address={keystore?.address ?? null}
+          onForgotImport={() => navigateTo("forgot-password")}
+          onForgotReset={() => {
+            void refreshKeystoreStatus();
+            setScreen("welcome");
+          }}
+        />
       )}
 
       {screen === "home" && (
