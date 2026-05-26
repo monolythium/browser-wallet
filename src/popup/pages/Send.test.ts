@@ -235,12 +235,8 @@ describe("native LYTH fee display math", () => {
   });
 });
 
-// Phase 4.3.1 — method-aware error rendering. The smoke testing on
-// Phase 4.3 revealed "Chain rejected:" was being prefixed to every
-// admission-reject code in [-32049, -32020] regardless of which RPC
-// method actually threw, conflating pre-submit lookup failures with
-// real lyth_submitEncrypted rejects. These cases pin the per-method
-// copy produced by formatSendError.
+// Method-aware error rendering keeps pre-submit lookup failures distinct
+// from real lyth_submitEncrypted rejects.
 describe("formatSendError — method-aware copy", () => {
   const ADMISSION = -32030; // anywhere in [-32049, -32020]
   const NON_ADMISSION = -32600;
@@ -293,6 +289,30 @@ describe("formatSendError — method-aware copy", () => {
     expect(s).toContain("via operator-4");
   });
 
+  it("lyth_executionUnitPrice → 'Execution fee quote failed'", () => {
+    const s = formatSendError({
+      message: "fee unavailable",
+      code: ADMISSION,
+      method: "lyth_executionUnitPrice",
+      via: "operator-4",
+    });
+    expect(s).toContain("Execution fee quote failed");
+    expect(s).toContain("lyth_executionUnitPrice");
+    expect(s).toContain("via operator-4");
+  });
+
+  it("lyth_getTransactionCount → 'Couldn't fetch account nonce'", () => {
+    const s = formatSendError({
+      message: "internal",
+      code: ADMISSION,
+      method: "lyth_getTransactionCount",
+      via: "operator-5",
+    });
+    expect(s).toContain("Couldn't fetch account nonce");
+    expect(s).toContain("lyth_getTransactionCount");
+    expect(s).toContain("via operator-5");
+  });
+
   it("eth_getTransactionCount → 'Couldn't fetch account nonce'", () => {
     const s = formatSendError({
       message: "internal",
@@ -317,14 +337,13 @@ describe("formatSendError — method-aware copy", () => {
     expect(s).toContain("via operator-2");
   });
 
-  it("method missing + admission code → legacy verbatim 'Chain rejected: ${message}'", () => {
+  it("method missing + admission code → generic 'Chain rejected: ${message}'", () => {
     const s = formatSendError({
       message: "decryption failed",
       code: ADMISSION,
       method: null,
       via: null,
     });
-    // Exact match — back-compat with SWs that lag the popup version.
     expect(s).toBe("Chain rejected: decryption failed");
   });
 

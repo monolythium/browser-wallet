@@ -68,11 +68,11 @@ export interface TypedDataEnvelope {
  * without making its own RPC calls (the popup has no RpcClient).
  */
 export interface SendTxView {
-  /** Estimated execution units as a hex quantity, populated from `eth_estimateGas`. */
+  /** Estimated execution units as a hex quantity. */
   executionUnitLimitHex: string | null;
-  /** Node minimum lythoshi-per-execution-unit price, hex quantity, from `eth_gasPrice`. */
+  /** Node minimum lythoshi-per-execution-unit price as a hex quantity. */
   pricePerExecutionUnitLythoshiHex: string | null;
-  /** Optional ADR-0039 native structured fee object. When present, popup fee
+  /** Optional native structured fee object. When present, popup fee
    * display validates it strictly instead of falling back to compatibility
    * fee fields. */
   structuredFee?: unknown;
