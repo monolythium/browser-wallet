@@ -118,9 +118,14 @@ interface ChainStatusBannerProps {
    *  renders as a non-clickable pill without the caret, matching the
    *  visual weight of the interactive version. */
   onOpenNetworks?: () => void;
+  /** Round 5 TASK 3 — the settings cog migrated from the .ext-top
+   *  row into the status banner so the wallet chip below it can
+   *  claim the full popup width for the renamed-from-top-bar wallet
+   *  label + full-line bech32m address. Omit in approval contexts. */
+  onSettings?: () => void;
 }
 
-export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBannerProps) {
+export function ChainStatusBanner({ network, onOpenNetworks, onSettings }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
   const [operator, setOperator] = useState<string | null>(null);
 
@@ -346,6 +351,32 @@ export function ChainStatusBanner({ network, onOpenNetworks }: ChainStatusBanner
         }}
       />
       {body}
+      {onSettings && (
+        <>
+          <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={onSettings}
+            aria-label="Settings"
+            title="Settings"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 22,
+              height: 22,
+              padding: 0,
+              background: "transparent",
+              border: "none",
+              color: "var(--fg-300)",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Icon name="settings" size={13} />
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -366,13 +397,37 @@ interface TopProps {
 // dropdown). `onOpenAccounts` is preserved on TopProps for caller
 // compatibility but no longer consumed here — the legacy Accounts
 // screen navigation is vestigial since BIP-32/44 HD derivation was
-// removed (whitepaper §21.2.1). Full deletion of the prop chain
-// (HomeProps + App.tsx) is a Phase 8 cleanup.
-export function Top({ account, onSettings }: TopProps) {
+// removed. Full deletion of the prop chain (HomeProps + App.tsx)
+// is a Phase 8 cleanup.
+//
+// Round 5 TASK 3 — `onSettings` is also no longer consumed: the cog
+// migrated to ChainStatusBanner above this row so the VaultPicker
+// chip can claim the full popup width for the wallet name + full
+// bech32m address. Prop kept for caller-compat shim; the routing
+// edge that previously fired through this button now fires through
+// ChainStatusBanner.onSettings (wired in App.tsx).
+//
+// The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
+// label the user requested instead of the algo badge that used to
+// live inside the chip itself (Round 4 design).
+export function Top({ account }: TopProps) {
   return (
-    <div className="ext-top">
+    <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          fontWeight: 600,
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+          opacity: 0.75,
+          paddingLeft: 4,
+        }}
+      >
+        ML-DSA-65
+      </div>
       <VaultPicker activeAccount={account} />
-      <button className="ext-iconbtn" onClick={onSettings}><Icon name="settings" size={16} /></button>
     </div>
   );
 }
