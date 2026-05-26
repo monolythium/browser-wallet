@@ -1,20 +1,37 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 
-// Round 4 TASK 4 — runtime mode discriminator. Chrome popups have
-// fixed dimensions matching the body width/height we declare; the
-// side-panel viewport is whatever Chrome's panel chrome assigns
-// (typically ~360-500 wide, full vertical height of the browser
-// window). We sample the viewport once at boot and stamp <html
-// data-mode="…"> so CSS can branch:
+// Round 5 TASK 1 — runtime mode discriminator. Round 4's heuristic
+// (h > 700 || w > 460) failed on shorter browser windows: a 720-pixel
+// browser opens the side panel at ~700 px tall, falling under the
+// height threshold AND under the width threshold, so detection
+// returned "popup" and CSS pinned the wallet to a 380 px column with
+// black space filling the remainder of the panel.
+//
+// The authoritative signal is the URL: manifest.json gives the side
+// panel a `?surface=sidepanel` query so any code loading that path
+// knows for certain it's rendering inside the panel. The action
+// popup loads the bare path without the query. Viewport heuristics
+// remain as a defensive fallback (e.g. dev-reload scenarios where the
+// query string is stripped manually).
+//
+// CSS branches on the stamped attribute:
 //   html[data-mode="popup"]     → fixed 380×620 frame
-//   html[data-mode="sidepanel"] → 100% width / 100vh
-// A small hysteresis on width keeps the popup case stable even when
-// the user resizes a side-panel slightly below 460 px.
+//   html[data-mode="sidepanel"] → 100% width / 100vh, fills the panel
 function detectMode(): "popup" | "sidepanel" {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  if (h > 700 || w > 460) return "sidepanel";
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("surface") === "sidepanel") return "sidepanel";
+    if (params.get("surface") === "popup") return "popup";
+  } catch {
+    // URLSearchParams should never throw, but be defensive against
+    // future URL handling edge cases — fall back to the viewport
+    // heuristic below.
+  }
+  // Fallback: anything taller than the popup's 620 px ceiling is the
+  // side panel. Tighter than the Round 4 threshold so shorter
+  // browsers (~720 px tall) still get the right mode.
+  if (window.innerHeight > 640) return "sidepanel";
   return "popup";
 }
 document.documentElement.dataset.mode = detectMode();
