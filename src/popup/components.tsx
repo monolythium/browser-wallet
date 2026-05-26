@@ -257,7 +257,11 @@ export function ChainStatusBanner({
     fontSize: 9.5,
     letterSpacing: "0.16em",
     textTransform: "uppercase",
-    padding: "5px 14px",
+    // Round 7 TASK 3 — bump vertical padding 5 → 10 so the status
+    // banner reads as a proper 44 px-ish bar with comfortable tap
+    // targets for the 3 right-aligned action buttons. The buttons
+    // themselves keep their 22 px size; only the row padding grows.
+    padding: "10px 14px",
     borderBottom: "1px solid var(--fg-700)",
     display: "flex",
     alignItems: "center",
