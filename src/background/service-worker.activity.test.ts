@@ -1,8 +1,8 @@
-// Integration coverage for the Phase 4.4 SW handlers:
-//   - wallet-activity-get      (commit 5)
-//   - wallet-resolve-names     (commit 6)
-//   - wallet-indexer-status    (commit 7)
-//   - persistPendingRowBackground side-effect of wallet-send-tx (commit 8)
+// Integration coverage for service-worker handlers:
+//   - wallet-activity-get
+//   - wallet-resolve-names
+//   - wallet-indexer-status
+//   - persistPendingRowBackground side-effect of wallet-send-tx
 //
 // Strategy mirrors service-worker.eip1193.test.ts:
 //   1. Stub the chrome.* surface (storage.local + storage.session +
@@ -321,7 +321,6 @@ vi.mock("./keystore.js", () => ({
   }),
   unlock: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
   personalSign: vi.fn(() => new Uint8Array(65)),
-  signLegacyTx: vi.fn(() => "0x"),
   signTypedDataV4: vi.fn(() => new Uint8Array(65)),
   computeTypedDataDigest: vi.fn(() => new Uint8Array(32)),
 }));
@@ -1546,12 +1545,18 @@ describe("wallet-indexer-status", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("wallet-send-tx pending-row prepend", () => {
-  it("successful broadcast writes a pending row", async () => {
-    rpcResponses["eth_getTransactionCount"] = "0x0";
-    rpcResponses["eth_feeHistory"] = {
-      baseFeePerGas: ["0x1"],
-      reward: [["0x1"]],
+  function seedSprintnetNonceAndFee(nonce: number | string = "0x0") {
+    rpcResponses["lyth_getTransactionCount"] = nonce;
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
     };
+  }
+
+  it("successful broadcast writes a pending row", async () => {
+    seedSprintnetNonceAndFee();
     rpcResponses["eth_blockNumber"] = "0x64"; // 100
     const r = (await dispatchPopup({
       kind: "popup",
@@ -1589,11 +1594,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("FAILED broadcast does NOT write a pending row", async () => {
-    rpcResponses["eth_getTransactionCount"] = "0x0";
-    rpcResponses["eth_feeHistory"] = {
-      baseFeePerGas: ["0x1"],
-      reward: [["0x1"]],
-    };
+    seedSprintnetNonceAndFee();
     submitFailure = new Error("broadcast rejected") as Error & { code: number };
     submitFailure.code = -32003;
     const r = (await dispatchPopup({
@@ -1617,11 +1618,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("passes SDK market plans through with the CLOB mempool class", async () => {
-    rpcResponses["eth_getTransactionCount"] = "0x0";
-    rpcResponses["eth_feeHistory"] = {
-      baseFeePerGas: ["0x1"],
-      reward: [["0x1"]],
-    };
+    seedSprintnetNonceAndFee();
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-send-tx",
@@ -1649,11 +1646,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("fire-and-forget timing: send-tx reply resolves BEFORE pending storage write completes", async () => {
-    rpcResponses["eth_getTransactionCount"] = "0x0";
-    rpcResponses["eth_feeHistory"] = {
-      baseFeePerGas: ["0x1"],
-      reward: [["0x1"]],
-    };
+    seedSprintnetNonceAndFee();
     // Make eth_blockNumber slow so the pending writer is provably still
     // running when the send-tx reply has already resolved. Resolve order
     // of two promises is the explicit assertion — no setTimeout polling.
@@ -1691,11 +1684,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("eth_blockNumber failure → broadcastBlockHeight is null (TTL-only eviction path)", async () => {
-    rpcResponses["eth_getTransactionCount"] = "0x0";
-    rpcResponses["eth_feeHistory"] = {
-      baseFeePerGas: ["0x1"],
-      reward: [["0x1"]],
-    };
+    seedSprintnetNonceAndFee();
     rpcErrors["eth_blockNumber"] = { code: -32603, message: "down" };
     await dispatchPopup({
       kind: "popup",
@@ -1847,9 +1836,11 @@ describe("wallet-mrv-submit-plan", () => {
     await dispatchRpc("eth_requestAccounts", [], origin);
     enqueuedApprovals.length = 0;
     rpcResponses["lyth_getTransactionCount"] = 8;
-    rpcResponses["eth_feeHistory"] = {
-      baseFeePerGas: ["0x1"],
-      reward: [["0x1"]],
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
     };
 
     const r = await dispatchRpc(

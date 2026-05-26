@@ -324,8 +324,6 @@ function readBridgeRouteCatalogueMetadata(
     bridgeId: readNullableStringAlias(disclosure, [
       "bridgeId",
       "bridge_id",
-      "trustedBridgeId",
-      "trusted_bridge_id",
       "bridgeConfigId",
       "bridge_config_id",
     ]),
@@ -441,8 +439,15 @@ function readSdkBridgeRouteDisclosure(
   if (routeId === null) return invalid("routeId");
   const bridge = readString(disclosure, "bridge");
   if (bridge === null) return invalid("bridge");
+  const protocol = readNullableStringAlias(disclosure, [
+    "protocol",
+    "routeProtocol",
+    "route_protocol",
+  ]);
   const asset = readString(disclosure, "asset");
   if (asset === null) return invalid("asset");
+  const feeToken = readStringAlias(disclosure, ["feeToken", "fee_token"]);
+  if (feeToken === null) return invalid("feeToken");
   const sourceChain = readString(disclosure, "sourceChain");
   if (sourceChain === null) return invalid("sourceChain");
   const destinationChain = readString(disclosure, "destinationChain");
@@ -467,7 +472,9 @@ function readSdkBridgeRouteDisclosure(
   const route: SdkBridgeRouteDisclosure = {
     routeId,
     bridge,
+    protocol,
     asset,
+    feeToken,
     sourceChain,
     destinationChain,
     verifier,
@@ -505,6 +512,17 @@ function readString(
 ): string | null {
   const value = disclosure[key];
   return typeof value === "string" ? value : null;
+}
+
+function readStringAlias(
+  disclosure: WalletBridgeRouteDisclosure,
+  aliases: readonly string[],
+): string | null {
+  for (const alias of aliases) {
+    const value = readString(disclosure, alias);
+    if (value !== null) return value;
+  }
+  return null;
 }
 
 function readNonNegativeInteger(

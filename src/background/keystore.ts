@@ -38,7 +38,6 @@ import { generateMnemonic, mnemonicToSeed, validateMnemonic } from "@scure/bip39
 import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 import { HDKey } from "@scure/bip32";
 import { getPublicKey, signAsync } from "@noble/secp256k1";
-import { buildAndSignLegacyTx, type LegacyTxRequest } from "./tx.js";
 
 const VAULT_KEY = "mono.vault";
 
@@ -437,17 +436,6 @@ export function hexOrUtf8ToBytes(s: string): Uint8Array {
     return out;
   }
   return new TextEncoder().encode(s);
-}
-
-/**
- * Build + sign a legacy EIP-155 transaction with the unlocked key.
- * The private key never leaves this module.
- */
-export async function signLegacyTx(
-  req: LegacyTxRequest,
-): Promise<{ rawTx: string; txHash: string }> {
-  if (!unlocked) throw new Error("wallet is locked");
-  return buildAndSignLegacyTx(req, unlocked.privKey);
 }
 
 /**

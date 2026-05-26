@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@monolythium/core-sdk':
-        specifier: 0.2.0
-        version: 0.2.0(ethers@6.16.0)
+        specifier: https://github.com/monolythium/mono-core-sdk/archive/06760a857adb3643db6613f294de002a63557b04.tar.gz
+        version: https://github.com/monolythium/mono-core-sdk/archive/06760a857adb3643db6613f294de002a63557b04.tar.gz(ethers@6.16.0)
       '@noble/ciphers':
         specifier: ^2.2.0
         version: 2.2.0
@@ -491,8 +491,9 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@monolythium/core-sdk@0.2.0':
-    resolution: {integrity: sha512-wlVhViF5yiANO5cGHBmkP0EcAa2eU6lYnVDnSfclc41XOarlC/4cad9DRMxcQ33tcr0lEbeiOyRKWcTYCzya2g==}
+  '@monolythium/core-sdk@https://github.com/monolythium/mono-core-sdk/archive/06760a857adb3643db6613f294de002a63557b04.tar.gz':
+    resolution: {integrity: sha512-KT6eMw4VSVOytJWalh2IcxmqzX4hVEF3dQmJzPofZ4d04jkPhzTUSHnNOkVn78DXRh1sZGFgWD+zJ+Oz3cqXiA==, tarball: https://github.com/monolythium/mono-core-sdk/archive/06760a857adb3643db6613f294de002a63557b04.tar.gz}
+    version: 0.2.2
     engines: {node: '>=22'}
     peerDependencies:
       ethers: ^6.16.0
@@ -1573,7 +1574,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@monolythium/core-sdk@0.2.0(ethers@6.16.0)':
+  '@monolythium/core-sdk@https://github.com/monolythium/mono-core-sdk/archive/06760a857adb3643db6613f294de002a63557b04.tar.gz(ethers@6.16.0)':
     dependencies:
       '@noble/ciphers': 2.2.0
       '@noble/curves': 2.2.0
