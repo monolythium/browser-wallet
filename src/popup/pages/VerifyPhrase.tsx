@@ -95,9 +95,20 @@ export function VerifyPhrase({
   onBack,
 }: VerifyPhraseProps) {
   const words = useMemo(() => mnemonic.trim().split(/\s+/), [mnemonic]);
-  const [challenge] = useState<Challenge>(() => buildChallenge(words));
+  // Round 12 TASK 3 — challenge held in state (no longer once-only)
+  // because Try Again rebuilds it with a fresh set of hidden positions
+  // + fresh distractors.
+  const [challenge, setChallenge] = useState<Challenge>(() =>
+    buildChallenge(words),
+  );
   const [slots, setSlots] = useState<Slot[]>(challenge.slots);
   const [bank, setBank] = useState<string[]>(challenge.bank);
+  // Round 12 TASK 3 — validation is deferred to the Continue click.
+  // While `attempted` is false, no per-slot error styling appears
+  // (slots show only neutral filled/empty states). On Continue with
+  // a wrong arrangement, attempted flips true and the "Not quite
+  // right" screen replaces the grid; Try Again resets it.
+  const [attempted, setAttempted] = useState(false);
 
   const handlePickFromBank = (word: string) => {
     const firstEmpty = slots.findIndex(
@@ -129,6 +140,27 @@ export function VerifyPhrase({
   const allCorrect =
     allFilled && slots.every((s) => s.filled === words[s.index]);
 
+  const handleContinue = () => {
+    if (!allFilled) return;
+    if (allCorrect) {
+      onVerified();
+      return;
+    }
+    setAttempted(true);
+  };
+
+  const handleTryAgain = () => {
+    // Re-randomize which 6 positions are hidden + redraw distractors.
+    // Without this, a user who memorised the position pattern from
+    // the failed attempt could brute-force position-by-position even
+    // without knowing the phrase.
+    const fresh = buildChallenge(words);
+    setChallenge(fresh);
+    setSlots(fresh.slots);
+    setBank(fresh.bank);
+    setAttempted(false);
+  };
+
   return (
     <>
       <div className="ext-top">
@@ -152,192 +184,256 @@ export function VerifyPhrase({
         <div style={{ width: 36 }} />
       </div>
 
-      <div
-        style={{
-          padding: "16px 18px 12px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-          overflowY: "auto",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "var(--fs-12)",
-            color: "var(--fg-300)",
-            lineHeight: 1.5,
-          }}
-        >
-          Select the missing words in the correct order. Pre-filled words
-          are shown to anchor your place in the phrase — tap a filled slot
-          to return its word to the bank.
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: 6,
-          }}
-        >
-          {slots.map((slot, slotIdx) => {
-            const isHidden = challenge.hiddenIdxSet.has(slot.index);
-            const isEmpty = slot.filled === null;
-            const isWrong =
-              !isEmpty && slot.filled !== words[slot.index];
-            const isRightAndHidden =
-              !isEmpty && !isWrong && isHidden;
-
-            // Pre-filled (correct, non-hidden) slots: muted/static.
-            // Hidden + empty: dashed accent border, awaiting fill.
-            // Hidden + filled correct: solid accent border.
-            // Hidden + filled wrong: red border so user sees the error
-            //   before they finish; tapping returns word to bank.
-            const borderColor = isEmpty && isHidden
-              ? "var(--gold)"
-              : isRightAndHidden
-                ? "var(--ok)"
-                : isWrong
-                  ? "var(--err)"
-                  : "var(--fg-700)";
-            const background = isEmpty && isHidden
-              ? "rgba(242,180,65,0.04)"
-              : isWrong
-                ? "rgba(240,112,112,0.08)"
-                : isHidden && !isEmpty
-                  ? "rgba(88,200,140,0.08)"
-                  : "rgba(0,0,0,0.20)";
-
-            return (
-              <button
-                key={slot.index}
-                type="button"
-                disabled={!isHidden || isEmpty}
-                onClick={() => handleResetSlot(slotIdx)}
-                aria-label={
-                  isHidden && isEmpty
-                    ? `Word ${slot.index + 1}, empty`
-                    : isHidden
-                      ? `Word ${slot.index + 1}, ${slot.filled} (tap to remove)`
-                      : `Word ${slot.index + 1}, ${slot.filled}`
-                }
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "9px 10px",
-                  borderRadius: 8,
-                  fontFamily: "var(--f-mono)",
-                  fontSize: 12,
-                  border: `1px ${isEmpty && isHidden ? "dashed" : "solid"} ${borderColor}`,
-                  background,
-                  color: isEmpty
-                    ? "var(--fg-500)"
-                    : isHidden
-                      ? "var(--fg-100)"
-                      : "var(--fg-300)",
-                  textAlign: "left",
-                  cursor:
-                    isHidden && !isEmpty ? "pointer" : "default",
-                  minHeight: 36,
-                  transition: "all 150ms var(--e-out)",
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 10,
-                    color: "var(--fg-500)",
-                    minWidth: 18,
-                  }}
-                >
-                  {slot.index + 1}.
-                </span>
-                <span style={{ flex: 1 }}>
-                  {slot.filled ?? " "}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 6,
-            padding: 12,
-            background: "rgba(0,0,0,0.25)",
-            border: "1px solid var(--fg-700)",
-            borderRadius: 12,
-            justifyContent: "center",
-          }}
-        >
-          {bank.length === 0 ? (
-            <div
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 11,
-                color: "var(--fg-500)",
-                padding: "4px 0",
-              }}
-            >
-              All words placed
-            </div>
-          ) : (
-            bank.map((word) => (
-              <button
-                key={word}
-                type="button"
-                onClick={() => handlePickFromBank(word)}
-                style={{
-                  padding: "7px 12px",
-                  borderRadius: 8,
-                  border: "1px solid rgba(242,180,65,0.4)",
-                  background: "rgba(242,180,65,0.08)",
-                  color: "var(--gold)",
-                  fontFamily: "var(--f-mono)",
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                  transition: "all 150ms var(--e-out)",
-                }}
-              >
-                {word}
-              </button>
-            ))
-          )}
-        </div>
-
-        {allFilled && !allCorrect && (
+      {attempted && !allCorrect ? (
+        // Round 12 TASK 3 — "Not quite right" full-screen error state.
+        // Replaces the previous inline per-slot red styling so the
+        // user gets one clear failure surface (matches MetaMask's
+        // verify flow). Try Again regenerates the challenge with a
+        // new set of hidden positions, preventing position memorisation.
+        <>
           <div
+            className="ext-body"
             style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 11,
-              color: "var(--err)",
-              lineHeight: 1.4,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center",
+              gap: 16,
+              padding: "32px 28px",
             }}
           >
-            Some words are in the wrong position. Tap any red slot to
-            return its word to the bank, then try again.
+            <div
+              style={{
+                fontSize: 44,
+                lineHeight: 1,
+              }}
+              aria-hidden="true"
+            >
+              ⚠️
+            </div>
+            <h2
+              style={{
+                margin: 0,
+                fontSize: 18,
+                fontWeight: 600,
+                color: "var(--fg-100)",
+              }}
+            >
+              Not quite right
+            </h2>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+                maxWidth: 280,
+              }}
+            >
+              Double-check your 24-word PQM-1 recovery phrase and try
+              again. We&apos;ll show you a fresh set of positions so the
+              attempt is fair.
+            </p>
           </div>
-        )}
-      </div>
 
-      <div
-        className="req-foot"
-        style={{ marginTop: "auto", gridTemplateColumns: "1fr" }}
-      >
-        <button
-          className="prim"
-          disabled={!allCorrect}
-          onClick={onVerified}
-          style={
-            allCorrect ? undefined : { opacity: 0.45, cursor: "not-allowed" }
-          }
-        >
-          Continue
-        </button>
-      </div>
+          <div
+            className="req-foot"
+            style={{ marginTop: "auto", gridTemplateColumns: "1fr" }}
+          >
+            <button
+              className="prim"
+              onClick={handleTryAgain}
+              style={{ minWidth: 200 }}
+            >
+              Try again
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div
+            className="ext-body"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                fontSize: "var(--fs-12)",
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+              }}
+            >
+              Select the missing words in the correct order. Blurred slots
+              are already filled — tap a placed word to return it to the
+              bank.
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr 1fr",
+                gap: 6,
+              }}
+            >
+              {slots.map((slot, slotIdx) => {
+                const isHidden = challenge.hiddenIdxSet.has(slot.index);
+                const isEmpty = slot.filled === null;
+
+                // Round 12 TASK 3 — no per-slot wrong styling during
+                // placement. Slots show only neutral states:
+                // - pre-filled (non-hidden): static, word blurred
+                // - hidden + empty: dashed accent border, awaiting fill
+                // - hidden + filled: solid accent border, tappable to
+                //   return the word to the bank.
+                const borderColor =
+                  isHidden ? "var(--gold)" : "var(--fg-700)";
+                const background = isEmpty && isHidden
+                  ? "rgba(242,180,65,0.04)"
+                  : isHidden
+                    ? "rgba(242,180,65,0.10)"
+                    : "rgba(0,0,0,0.20)";
+
+                return (
+                  <button
+                    key={slot.index}
+                    type="button"
+                    disabled={!isHidden || isEmpty}
+                    onClick={() => handleResetSlot(slotIdx)}
+                    aria-label={
+                      isHidden && isEmpty
+                        ? `Word ${slot.index + 1}, empty`
+                        : isHidden
+                          ? `Word ${slot.index + 1}, ${slot.filled} (tap to remove)`
+                          : `Word ${slot.index + 1}, pre-filled (hidden)`
+                    }
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "9px 10px",
+                      borderRadius: 8,
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 12,
+                      border: `1px ${isEmpty && isHidden ? "dashed" : "solid"} ${borderColor}`,
+                      background,
+                      color: isEmpty
+                        ? "var(--fg-500)"
+                        : isHidden
+                          ? "var(--fg-100)"
+                          : "var(--fg-300)",
+                      textAlign: "left",
+                      cursor:
+                        isHidden && !isEmpty ? "pointer" : "default",
+                      minHeight: 36,
+                      transition: "all 150ms var(--e-out)",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 10,
+                        color: "var(--fg-500)",
+                        minWidth: 18,
+                      }}
+                    >
+                      {slot.index + 1}.
+                    </span>
+                    <span
+                      style={{
+                        flex: 1,
+                        // Round 12 TASK 3 — blur the pre-filled words
+                        // (5 px is enough to make them unreadable
+                        // while keeping the slot visually "filled"
+                        // — same pattern MetaMask uses). user-select
+                        // stops double-tap-select from revealing the
+                        // text. The actual word stays in the DOM for
+                        // screen readers via aria-label above.
+                        ...(!isHidden && !isEmpty
+                          ? {
+                              filter: "blur(5px)",
+                              userSelect: "none" as const,
+                            }
+                          : {}),
+                      }}
+                    >
+                      {slot.filled ?? " "}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                padding: 12,
+                background: "rgba(0,0,0,0.25)",
+                border: "1px solid var(--fg-700)",
+                borderRadius: 12,
+                justifyContent: "center",
+              }}
+            >
+              {bank.length === 0 ? (
+                <div
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 11,
+                    color: "var(--fg-500)",
+                    padding: "4px 0",
+                  }}
+                >
+                  All words placed
+                </div>
+              ) : (
+                bank.map((word) => (
+                  <button
+                    key={word}
+                    type="button"
+                    onClick={() => handlePickFromBank(word)}
+                    style={{
+                      padding: "7px 12px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(242,180,65,0.4)",
+                      background: "rgba(242,180,65,0.08)",
+                      color: "var(--gold)",
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 12.5,
+                      fontWeight: 500,
+                      cursor: "pointer",
+                      transition: "all 150ms var(--e-out)",
+                    }}
+                  >
+                    {word}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div
+            className="req-foot"
+            style={{ marginTop: "auto", gridTemplateColumns: "1fr" }}
+          >
+            <button
+              className="prim"
+              disabled={!allFilled}
+              onClick={handleContinue}
+              style={
+                allFilled
+                  ? undefined
+                  : { opacity: 0.45, cursor: "not-allowed" }
+              }
+            >
+              Continue
+            </button>
+          </div>
+        </>
+      )}
     </>
   );
 }
