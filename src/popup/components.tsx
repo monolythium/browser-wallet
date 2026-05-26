@@ -1553,7 +1553,6 @@ interface HomeProps {
   /** Phase 5 Commit 7 — fired by NftDetail's Send CTA. App.tsx
    *  stashes the target NFT and routes to the SendNft screen. */
   onOpenSendNft?: (target: SendNftTarget) => void;
-  onOpenOnboard: () => void;
   /** Phase 9 Commit 7 — slot rendered at the top of the Home body
    *  for the post-onboarding hint bar (OnboardingHintBar). Optional
    *  so test harnesses + callers without the route wired still
@@ -1561,7 +1560,7 @@ interface HomeProps {
   topSlot?: ReactNode;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, onOpenOnboard, topSlot }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, topSlot }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -1802,26 +1801,12 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
           )}
         </div>
 
-        {/* First-run onboarding link */}
-        <button
-          onClick={onOpenOnboard}
-          style={{
-            width: "100%",
-            padding: "10px 12px",
-            marginTop: 4,
-            background: "transparent",
-            border: "1px dashed var(--fg-700)",
-            borderRadius: 10,
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            color: "var(--fg-500)",
-            cursor: "pointer",
-          }}
-        >
-          view first-run onboarding
-        </button>
+        {/* Round 8 TASK 4 — "view first-run onboarding" debug button
+           removed. The unified onboarding hint bar at the top of Home
+           already nudges users into onboarding tasks (passkey, SLH-DSA
+           backup, feature discovery) when relevant; a manual re-entry
+           button was clutter on a finished wallet. onOpenOnboard prop
+           stays for now in case a future surface needs it. */}
       </div>
       <div className="ext-hintbar">
         <span>v0.0.1 · {NODE.talos}</span>
