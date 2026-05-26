@@ -10,16 +10,31 @@
 // chrome.action popup vs side panel vs full-screen tab). Direct API
 // call routes through Chrome's tab manager in every surface.
 //
-// Round 10 TASK 2 — pinned variant. Round 9 used position:sticky inside
-// the ext-body scroll container which rendered the footer huge in the
-// middle of the home content when scroll was short (sticky needs an
-// overflowing parent to anchor properly). Switched to position:fixed
-// so the footer is viewport-pinned regardless of scroll state. The
-// footer now lives OUTSIDE ext-body in the Home tree and home content
-// gets a bottom spacer so the last card isn't covered by the footer.
-// Font + padding reduced so the footer is an unobtrusive strip, not a
-// floating card. Backdrop blur gives separation from scrolling content
-// without an opaque bar.
+// Round 12 TASK 6 — definitive placement (4th attempt across rounds 8,
+// 9, 10, 11, 12). The previous three attempts each tried a different
+// CSS positioning strategy:
+//   Round 8/9: position:sticky inside .ext-body — broke when home
+//     content didn't overflow (sticky's natural-flow position was
+//     mid-card and nothing pushed it down).
+//   Round 10:  position:fixed bottom:0 outside .ext-body + 32 px
+//     spacer at end of body to clear the overlay — overlay style
+//     left a visible gap between the last card and the footer
+//     because the footer covered the viewport, not the content.
+//
+// The fundamental insight we kept missing: the parent .ext is already
+// a flex column with .ext-body { flex: 1 }. That layout naturally
+// puts the LAST child at the bottom of .ext without any positioning
+// CSS. The footer just needs to be a normal-flow flex sibling of
+// .ext-body. When content is short, .ext-body still fills the
+// remaining height (flex:1) and the footer sits at the bottom of
+// .ext (= bottom of the popup viewport, sidebar panel, or fullscreen
+// card). When content is long, .ext-body scrolls internally and the
+// footer stays put at the bottom of .ext (still visible — same
+// position as the short-content case).
+//
+// No position:fixed, no position:sticky, no spacer needed.
+// Old `sticky` prop is retained as a no-op so existing call sites
+// don't break.
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 
@@ -27,14 +42,15 @@ const MONO_LABS_URL = "https://mono-labs.org/";
 const WALLET_VERSION = "v0.0.1";
 
 interface FooterProps {
-  /** When true, the footer pins to the popup viewport bottom via
-   *  position:fixed. Defaults to false for legacy callers (none
-   *  remain in the wallet — every caller now sets sticky). The prop
-   *  name is kept for stability; semantically it's "pinned." */
+  /** Round 12 TASK 6 — legacy from Round 10's position:fixed era.
+   *  Now a no-op: Footer is always in normal flow because the
+   *  parent .ext's flex-column layout places the last child at the
+   *  bottom automatically. Prop retained so existing call sites
+   *  don't break; can be removed once all callers drop it. */
   sticky?: boolean;
 }
 
-export function Footer({ sticky = false }: FooterProps = {}) {
+export function Footer(_props: FooterProps = {}) {
   const openMonoLabs = (e: ReactMouseEvent) => {
     e.preventDefault();
     // chrome.tabs is available in both popup + side panel + extension
@@ -48,33 +64,23 @@ export function Footer({ sticky = false }: FooterProps = {}) {
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    padding: "6px 12px",
+    padding: "8px 12px",
     fontSize: 9,
     color: "var(--fg-400)",
     letterSpacing: "0.02em",
-    borderTop: "1px solid rgba(255,255,255,0.06)",
-    marginTop: "auto",
+    borderTop: "1px solid rgba(255,255,255,0.08)",
+    // Solid surface keeps the strip visually distinct from any
+    // content the scrollbar reveals just above it; no backdrop-blur
+    // needed since we're not overlapping anything any more.
+    background: "rgba(10, 10, 20, 0.65)",
+    // flex:none so a parent flex:1 sibling (.ext-body) gets all the
+    // expansion budget and the footer keeps its intrinsic height.
+    flex: "none",
   };
-  const stickyStyle: CSSProperties = sticky
-    ? {
-        position: "fixed",
-        bottom: 0,
-        left: 0,
-        right: 0,
-        zIndex: 50,
-        // Translucent backdrop + blur so scrolled content beneath
-        // diffuses behind the footer instead of cleanly disappearing.
-        // Reads as a glass strip — visually consistent with the rest
-        // of the wallet's chrome (banner, hint bars).
-        background: "rgba(10, 10, 20, 0.78)",
-        backdropFilter: "blur(8px) saturate(160%)",
-        WebkitBackdropFilter: "blur(8px) saturate(160%)",
-      }
-    : {};
 
   return (
     <footer
-      style={{ ...baseStyle, ...stickyStyle }}
+      style={baseStyle}
     >
       <a
         href={MONO_LABS_URL}
