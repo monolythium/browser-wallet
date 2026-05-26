@@ -19,6 +19,13 @@ export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
 export const SESSION_KEY_WALLET_LOCKED = "walletLocked";
 export const SESSION_KEY_UNLOCK_FAIL_COUNT = "unlockFailCount";
 export const SESSION_KEY_UNLOCK_LOCKOUT_UNTIL = "unlockLockoutUntil";
+// Round 4 TASK 2 — MEK (master encryption key) cache for cross-SW-
+// hibernation rehydrate. chrome.storage.session is in-memory only and
+// cleared on browser restart, so this never persists to disk. On SW
+// reboot, keystore-mldsa.ts reads this back and unwraps the active
+// vault without prompting for the password. Cleared on lock /
+// auto-lock fire / wipe.
+export const SESSION_KEY_MEK_V4 = "mono.session.mek.v4";
 
 // Highest threshold first so lockoutMsFor() returns the longest matching window.
 export const LOCKOUT_THRESHOLDS = [
