@@ -893,7 +893,11 @@ export default function App() {
           address={keystore?.address ?? ""}
           algo={keystore?.algo ?? "secp256k1"}
           onShowPhrase={() => setScreen("reveal-phrase")}
-          onShowConnectedSites={() => setScreen("connected-sites")}
+          // Round 11 TASK 1 — Settings → Connected Sites pushes onto
+          // the screen stack via navigateTo so back from Connected
+          // Sites correctly returns to Settings (same fix-pattern as
+          // Round 9 TASK 2's Settings → About).
+          onShowConnectedSites={() => navigateTo("connected-sites")}
           onResetWallet={() => setScreen("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
           onOpenMrvNative={() => setScreen("mrv-native")}
@@ -1127,8 +1131,14 @@ export default function App() {
         <RevealPhrase onBack={() => setScreen("settings")} />
       )}
 
+      {/* Round 11 TASK 1 — back from Connected Sites was hardcoded to
+         "settings", which broke the top-bar entry path (home → top-bar
+         Connected Sites → back should return to home, not Settings).
+         navigateBack pops the screen-stack so both entry paths work:
+         top-bar (push "home") and hamburger-menu (push "main-menu")
+         each return to their pusher. */}
       {screen === "connected-sites" && (
-        <ConnectedSites onBack={() => setScreen("settings")} />
+        <ConnectedSites onBack={navigateBack} />
       )}
 
       {screen === "reset-wallet" && (
