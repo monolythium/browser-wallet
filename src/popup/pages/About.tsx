@@ -201,7 +201,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
         {/* Identity card */}
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Monolythium Wallet</h3>
+            <h3>Monolythium Browser Wallet</h3>
           </div>
           <div
             style={{
