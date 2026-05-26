@@ -18,9 +18,14 @@ import App from "./App";
 // CSS branches on the stamped attribute:
 //   html[data-mode="popup"]     → fixed 380×620 frame
 //   html[data-mode="sidepanel"] → 100% width / 100vh, fills the panel
-function detectMode(): "popup" | "sidepanel" {
+// Round 8 TASK 3 — adds "fullscreen" as a third surface. Opened via
+// chrome.tabs.create with ?mode=fullscreen so the same React app
+// runs in a regular Chrome tab. CSS branches on data-mode the same
+// way as popup / sidepanel.
+function detectMode(): "popup" | "sidepanel" | "fullscreen" {
   try {
     const params = new URLSearchParams(window.location.search);
+    if (params.get("mode") === "fullscreen") return "fullscreen";
     if (params.get("surface") === "sidepanel") return "sidepanel";
     if (params.get("surface") === "popup") return "popup";
   } catch {
