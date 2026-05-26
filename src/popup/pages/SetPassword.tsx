@@ -21,10 +21,20 @@ export function SetPassword({
 }: SetPasswordProps) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  // Round 11 TASK 8 — required acknowledgement before the wallet
+  // password can be created. Mirrors MetaMask's pattern: an explicit
+  // tick that the user understands the wallet is non-custodial and a
+  // forgotten password can NOT be recovered by Monolythium. Continue
+  // is disabled until the box is ticked even when the password meets
+  // strength + match requirements.
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const strength = getPasswordStrength(password);
   const canSubmit =
-    isPasswordValid(password) && strength !== "weak" && password === confirm;
+    isPasswordValid(password) &&
+    strength !== "weak" &&
+    password === confirm &&
+    acknowledged;
 
   return (
     <>
@@ -80,6 +90,45 @@ export function SetPassword({
           password={password}
           confirmPassword={confirm}
         />
+
+        {/* Round 11 TASK 8 — acknowledgement gate. The entire row is a
+           label so a tap anywhere on the box toggles the checkbox. */}
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            padding: 12,
+            borderRadius: 10,
+            background: "rgba(124,127,255,0.06)",
+            border: "1px solid var(--fg-700)",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={acknowledged}
+            onChange={(e) => setAcknowledged(e.target.checked)}
+            style={{
+              flexShrink: 0,
+              width: 16,
+              height: 16,
+              marginTop: 1,
+              cursor: "pointer",
+              accentColor: "var(--gold)",
+            }}
+          />
+          <span
+            style={{
+              fontSize: 12,
+              color: "var(--fg-200)",
+              lineHeight: 1.45,
+            }}
+          >
+            If I lose this password, Monolythium can&apos;t reset it.
+          </span>
+        </label>
 
         {error && (
           <div
