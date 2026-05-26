@@ -1886,11 +1886,9 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
 
 /**
  * Format the user-facing error string for a Send failure. Method-aware
- * so pre-submit RPC failures (lyth_getEncryptionKey, eth_feeHistory,
- * eth_getTransactionCount) read distinctly from real submission rejects
- * (lyth_submitEncrypted). When method is missing, falls back to the legacy
- * verbatim shape so the popup never breaks. Exported for unit testing in
- * Send.test.ts.
+ * so pre-submit RPC failures read distinctly from real submission rejects.
+ * When method is missing, keep a generic shape so older service workers do
+ * not break the popup. Exported for unit testing in Send.test.ts.
  */
 export function formatSendError(args: {
   message: string;
@@ -1912,18 +1910,20 @@ export function formatSendError(args: {
         : `Submission failed: ${message}${viaParen}`;
     case "lyth_getEncryptionKey":
       return `Couldn't fetch encryption key. The cluster may be unavailable. (lyth_getEncryptionKey${viaSuffix})`;
+    case "lyth_executionUnitPrice":
+      return `Execution fee quote failed (lyth_executionUnitPrice${viaSuffix})`;
+    case "lyth_getTransactionCount":
+      return `Couldn't fetch account nonce (lyth_getTransactionCount${viaSuffix})`;
     case "eth_feeHistory":
       return `Fee history fetch failed (eth_feeHistory${viaSuffix})`;
     case "eth_getTransactionCount":
       return `Couldn't fetch account nonce (eth_getTransactionCount${viaSuffix})`;
     case null:
-      // Back-compat: SW lags popup and didn't stamp method. Use the
-      // legacy verbatim shape so the popup never breaks for older SWs.
+      // Older service workers may not stamp method metadata.
       return isAdmissionReject ? `Chain rejected: ${message}` : message;
     default: {
-      // Unknown method (e.g. lyth_estimateGas if ever added): retain the
-      // legacy "Chain rejected" prefix for admission codes but append an
-      // attribution suffix so the operator + method are visible.
+      // Unknown method: retain the admission prefix but include method
+      // attribution so the operator and RPC surface are visible.
       const suffix = `(${method}${viaSuffix})`;
       return isAdmissionReject
         ? `Chain rejected: ${message} ${suffix}`
@@ -1941,10 +1941,8 @@ interface ErrorViewProps {
   onCancel: () => void;
 }
 
-/** Phase 11 Commit 7 — colour palette per severity. Severity comes from
- *  classifySendError; "info" (user cancelled) gets a blue treatment so
- *  the error screen doesn't shout at the user about a cancel they
- *  intentionally chose. */
+/** Colour palette per severity. User-cancelled prompts use the neutral
+ *  treatment so the error screen does not overstate an intentional cancel. */
 function severityColours(severity: "err" | "warn" | "info"): {
   fg: string;
   iconBg: string;
@@ -1978,10 +1976,8 @@ function severityColours(severity: "err" | "warn" | "info"): {
 
 function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewProps) {
   const display = formatSendError({ message, code, method, via });
-  // Phase 11 Commit 7 — typed classification on top of the formatted
-  // message. headline + body replace the previous single-line render
-  // for kinds the classifier recognises; unknown kinds preserve the
-  // verbatim `display` string in the body.
+  // Typed classification on top of the formatted message. Unknown kinds
+  // preserve the formatted display string in the body.
   const classified = classifySendError(display);
   const colours = severityColours(classified.severity);
   return (
