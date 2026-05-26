@@ -7,7 +7,8 @@ export type IconName =
   | "check" | "close" | "back" | "settings" | "lock" | "eye" | "search"
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
-  | "menu" | "book" | "info" | "multisig" | "display";
+  | "menu" | "book" | "info" | "multisig" | "display"
+  | "expand";
 
 interface IconProps {
   name: IconName;
@@ -258,6 +259,16 @@ export function Icon({ name, size = 16 }: IconProps) {
           <rect x="3" y="4" width="18" height="13" rx="2" />
           <line x1="8" y1="21" x2="16" y2="21" />
           <line x1="12" y1="17" x2="12" y2="21" />
+        </svg>
+      );
+    case "expand":
+      // Round 8 TASK 3 — open-in-new-tab / fullscreen glyph
+      // (Feather-style external-link with arrow + frame).
+      return (
+        <svg {...props}>
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          <polyline points="15 3 21 3 21 9" />
+          <line x1="10" y1="14" x2="21" y2="3" />
         </svg>
       );
     default:
