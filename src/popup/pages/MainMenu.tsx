@@ -34,6 +34,10 @@ interface MainMenuProps {
   onSettings: () => void;
   onAbout: () => void;
   onLockWallet: () => void;
+  /** Round 11 TASK 3 — destructive reset entry at the very bottom of
+   *  the menu. Reuses the existing ResetWallet screen (password reauth
+   *  + DELETE confirm); the hamburger surface only navigates there. */
+  onResetWallet: () => void;
 }
 
 export function MainMenu({
@@ -48,6 +52,7 @@ export function MainMenu({
   onSettings,
   onAbout,
   onLockWallet,
+  onResetWallet,
 }: MainMenuProps) {
   const switchLabel =
     uiMode === null
@@ -130,6 +135,19 @@ export function MainMenu({
             label="Lock wallet"
             onClick={onLockWallet}
             danger
+          />
+          {/* Round 11 TASK 3 — destructive reset. Routes to the
+             existing ResetWallet screen which already requires
+             password reauth + a typed "DELETE" confirm before the
+             wipe runs. The hamburger entry just navigates there; no
+             extra modal needed since the existing screen has a
+             stronger gate than a checkbox ack would. */}
+          <MenuItem
+            icon="trash"
+            label="Reset wallet"
+            onClick={onResetWallet}
+            danger
+            hasChevron
           />
         </MenuSection>
       </div>
