@@ -749,11 +749,17 @@ export default function App() {
         />
       )}
 
+      {/* Round 12 TASK 1 — onboarding security: ShowPhrase + VerifyPhrase
+         no longer receive an onBack callback during first-setup. Without
+         the prop, both components hide their back chevron (replaced by
+         a 36 px spacer to keep the title centered). User has to advance
+         forward through the flow — write down the phrase, confirm, then
+         verify — before reaching home. Previously back from ShowPhrase
+         jumped straight to home, bypassing verification entirely. */}
       {screen === "show-phrase" && generated && (
         <ShowPhrase
           mnemonic={generated.mnemonic}
           onConfirmed={() => setScreen("verify-phrase")}
-          onBack={() => setScreen("home")}
         />
       )}
 
@@ -764,7 +770,6 @@ export default function App() {
             setGenerated(null);
             setScreen("home");
           }}
-          onBack={() => setScreen("show-phrase")}
         />
       )}
 

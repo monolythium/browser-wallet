@@ -4,7 +4,12 @@ import { MnemonicGrid } from "../components/MnemonicGrid";
 interface ShowPhraseProps {
   mnemonic: string;
   onConfirmed: () => void;
-  onBack: () => void;
+  /** Round 12 TASK 1 — back button is optional. During first-setup
+   *  onboarding the parent intentionally omits onBack so the user
+   *  can't bypass the verify-phrase step by tapping back into home.
+   *  When omitted, the back chevron is hidden and a spacer keeps the
+   *  title centered. */
+  onBack?: () => void;
 }
 
 export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
@@ -13,9 +18,13 @@ export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
   return (
     <>
       <div className="ext-top">
-        <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
-          <Icon name="back" size={15} />
-        </button>
+        {onBack ? (
+          <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+            <Icon name="back" size={15} />
+          </button>
+        ) : (
+          <div style={{ width: 36 }} />
+        )}
         <div
           style={{
             flex: 1,
