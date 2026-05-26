@@ -9,7 +9,13 @@
    is the same color the wallet ends on; eliminates the visible black
    rectangles at the top/bottom edges. overflow:hidden (both axes) on
    html and body keeps the browser-default outer scrollbar from
-   appearing — internal scroll lives on .ext-body and modals. */
+   appearing — internal scroll lives on .ext-body and modals.
+   Round 5 TASK 2 — also nuke any scrollbar that webkit might still
+   try to render on these containers (e.g. when an inner element
+   transiently overflows during layout). Only .ext-body renders a
+   visible scrollbar; everything else above it in the tree is
+   scrollbar-suppressed both via overflow:hidden AND ::-webkit-
+   scrollbar { display: none }. */
 html, body {
   margin: 0;
   padding: 0;
@@ -18,8 +24,13 @@ html, body {
   font-family: var(--f-sans);
   overflow: hidden;
 }
-/* Themed scrollbar for every scrollable surface (sidebar mode falls
-   back to this when .ext-body isn't the outermost scroller). */
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar,
+.ext::-webkit-scrollbar { display: none; }
+/* Themed scrollbar for every other scrollable surface (modals,
+   inline body content). Targeted rules on .ext-body and other
+   specific scroll surfaces override these for finer styling. */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: 3px; }
@@ -174,8 +185,12 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-iconbtn { color:#404348; background:#fff; border:1px solid #e0e0e7; }
 .ext.light .ext-iconbtn:hover { background:#f4f4f7; }
 
-/* Scroll body */
-.ext-body { flex:1; overflow-y:auto; padding: 10px 14px 14px; }
+/* Scroll body — the ONLY scrollable surface in popup mode. Round 5
+   TASK 2 adds explicit overflow-x:hidden so a wide modal or long
+   inline string can't trigger a horizontal scrollbar that would
+   render alongside the vertical one and look like two scrollbars
+   on the right edge. */
+.ext-body { flex:1; overflow-y:auto; overflow-x:hidden; padding: 10px 14px 14px; }
 .ext-body::-webkit-scrollbar { width:6px; } .ext-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius:3px; }
 
 /* --- Denom toggle (mono-caps, gold indicator glow) --- */
