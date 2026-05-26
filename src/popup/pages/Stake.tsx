@@ -901,8 +901,8 @@ function PreviewView({
           k={action === "redelegate" ? "Cluster swap" : "Unbonding"}
           v={
             action === "redelegate"
-              ? "Instant (§23.2)"
-              : "Instant (§23.2 zero-unbond)"
+              ? "Instant"
+              : "Instant (zero-unbond)"
           }
           tone="var(--ok)"
         />
@@ -932,7 +932,7 @@ function PreviewView({
           {action === "delegate" &&
             "Submits `delegate(clusterId, weightBps)` to the delegation precompile via the encrypted-mempool path."}
           {action === "undelegate" &&
-            "Submits `undelegate(clusterId, weightBps)` — instant release (§23.2 zero-unbond)."}
+            "Submits `undelegate(clusterId, weightBps)` — instant release (zero-unbond)."}
           {action === "redelegate" &&
             "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
           Sprintnet may reject the call until the gate is activated.
@@ -1217,7 +1217,7 @@ function ExistingDelegations({
           justifyContent: "space-between",
         }}
       >
-        <span>Active delegations · §23</span>
+        <span>Active delegations</span>
         <span
           style={{
             fontSize: 9,
@@ -1456,7 +1456,7 @@ function AutovotePlanCard({
         >
           Pick clusters manually below, then enter per-cluster amounts on the
           form. The wallet enforces the {capBps === null ? "unlimited" : `${(capBps / 100).toFixed(0)}%`}{" "}
-          per-cluster cap (§23.6) at submission time and warns before any
+          per-cluster cap at submission time and warns before any
           out-of-policy distribution is signed.
         </div>
       </div>
@@ -1479,7 +1479,7 @@ function AutovotePlanCard({
             lineHeight: 1.5,
           }}
         >
-          Unlock the wallet to load the §23.9 per-user entropy seed.
+          Unlock the wallet to load the per-user entropy seed.
         </div>
       )}
 

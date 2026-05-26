@@ -337,7 +337,7 @@ function ClusterRow({
           <KV k="Health" v={cluster.health} />
           <KV
             k="Quorum"
-            v={`${cluster.threshold}-of-${cluster.size} (BFT 7-of-10 § 28)`}
+            v={`${cluster.threshold}-of-${cluster.size} (BFT 7-of-10)`}
           />
           <KV
             k="Regions"
@@ -346,7 +346,7 @@ function ClusterRow({
           <KV
             k="Entity"
             v={
-              cluster.entity ?? "unknown · per § 30.5 ratchet"
+              cluster.entity ?? "unknown"
             }
           />
           <KV
@@ -354,7 +354,7 @@ function ClusterRow({
             v={
               reputation === null
                 ? "not yet computed"
-                : `${(reputation * 100).toFixed(1)}% · § 14 + § 28.3 aggregate`
+                : `${(reputation * 100).toFixed(1)}% aggregate`
             }
           />
           <div
@@ -365,7 +365,7 @@ function ClusterRow({
               lineHeight: 1.5,
             }}
           >
-            §28.3 — operator-level service tiers (RPC, prover, oracle,
+            Operator-level service tiers (RPC, prover, oracle,
             archive) are surfaced from `lyth_operatorInfo` and not yet
             aggregated per cluster. Surfacing here in a future commit.
           </div>
@@ -445,7 +445,7 @@ function FoundationBadge() {
         letterSpacing: "0.08em",
         textTransform: "uppercase",
       }}
-      title="Foundation cluster — §30.5 sunset trajectory; rewards burnt per §30.3."
+      title="Foundation cluster — sunset trajectory; rewards burnt."
     >
       foundation
     </span>

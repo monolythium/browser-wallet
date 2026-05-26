@@ -165,7 +165,7 @@ export function SlhDsaBackupCard({
   return (
     <div className="ext-card">
       <div className="ext-card__head">
-        <h3>Emergency recovery (§30.1)</h3>
+        <h3>Emergency recovery</h3>
       </div>
       <div
         style={{

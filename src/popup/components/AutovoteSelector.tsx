@@ -84,7 +84,7 @@ export function AutovoteSelector({
           justifyContent: "space-between",
         }}
       >
-        <span>Autovote · §23.9</span>
+        <span>Autovote</span>
         <span
           style={{
             fontSize: 9,

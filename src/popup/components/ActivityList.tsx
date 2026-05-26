@@ -158,7 +158,7 @@ function emptyState(envelope: WalletActivityKindEnvelope | null) {
         <div style={{ marginBottom: 8 }}>Private activity placeholder.</div>
         <div style={{ fontSize: 11, color: "var(--fg-600)" }}>
           Viewing your private transfers requires the meta-address surface
-          shipping in Phase 12 (§13 / §25).
+          shipping in Phase 12.
         </div>
       </div>
     );
