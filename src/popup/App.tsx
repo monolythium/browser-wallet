@@ -883,7 +883,12 @@ export default function App() {
           onResetWallet={() => setScreen("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
           onOpenMrvNative={() => setScreen("mrv-native")}
-          onOpenAbout={() => setScreen("about")}
+          // Round 9 TASK 2 — Settings → About now pushes onto the
+          // screen stack via navigateTo so About's onBack (which
+          // uses navigateBack) returns to Settings. Without
+          // navigateTo, the click would not push a stack entry and
+          // navigateBack would fall back to home, skipping Settings.
+          onOpenAbout={() => navigateTo("about")}
           onOpenDelegations={() => setScreen("delegations")}
           {...(activeVaultSummary
             ? {
@@ -1076,7 +1081,7 @@ export default function App() {
 
       {screen === "about" && (
         <About
-          onBack={() => setScreen("settings")}
+          onBack={navigateBack}
           {...(activeVaultSummary?.kind === "multisig"
             ? {
                 multisig: {
