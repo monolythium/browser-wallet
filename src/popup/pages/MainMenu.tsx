@@ -21,6 +21,9 @@ interface MainMenuProps {
   uiMode: UiOpenMode | null;
   onBack: () => void;
   onSwitchMode: () => void;
+  /** Round 8 TASK 3 — open the wallet in a regular Chrome tab via
+   *  chrome.tabs.create with ?mode=fullscreen. Always available. */
+  onOpenFullscreen: () => void;
   onContacts: () => void;
   onConnectedSites: () => void;
   onNetworks: () => void;
@@ -37,6 +40,7 @@ export function MainMenu({
   uiMode,
   onBack,
   onSwitchMode,
+  onOpenFullscreen,
   onContacts,
   onConnectedSites,
   onNetworks,
@@ -73,6 +77,11 @@ export function MainMenu({
 
       <div className="ext-body" style={{ paddingTop: 4 }}>
         <MenuSection>
+          <MenuItem
+            icon="expand"
+            label="Open full screen"
+            onClick={onOpenFullscreen}
+          />
           <MenuItem icon="display" label={switchLabel} onClick={onSwitchMode} />
         </MenuSection>
 
