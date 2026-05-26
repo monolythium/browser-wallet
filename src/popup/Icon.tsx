@@ -6,7 +6,7 @@ export type IconName =
   | "send" | "qr" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "close" | "back" | "settings" | "lock" | "eye" | "search"
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
-  | "contract" | "plus" | "more" | "pen";
+  | "contract" | "plus" | "more" | "pen" | "globe";
 
 interface IconProps {
   name: IconName;
@@ -200,6 +200,14 @@ export function Icon({ name, size = 16 }: IconProps) {
         <svg {...props}>
           <path d="M14.5 4.5l5 5L8 21H3v-5L14.5 4.5z" />
           <path d="M12.5 6.5l5 5" />
+        </svg>
+      );
+    case "globe":
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18" />
+          <path d="M12 3a13 13 0 0 1 0 18M12 3a13 13 0 0 0 0 18" />
         </svg>
       );
     default:
