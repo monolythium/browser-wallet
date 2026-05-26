@@ -92,6 +92,7 @@ import {
   renameVaultV4,
   addVaultFreshV4,
   addVaultImportV4,
+  generateFreshMnemonicV4,
   wipeContainerV4,
   // Phase 8 multisig surface (Commit 1).
   addVaultMultisigV4,
@@ -4981,6 +4982,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           mnemonic: r.mnemonic,
           address: r.address,
         };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-generate-fresh-mnemonic": {
+      // Round 13 TASK 1 — ephemeral mnemonic generation for the in-app
+      // multi-step new-wallet flow. Returns the mnemonic WITHOUT
+      // persisting any vault; the popup holds it in React state for
+      // the show-phrase + verify-phrase steps and commits via
+      // `vault-add-import` only after the user verifies the phrase.
+      // Cancellation in the popup discards the mnemonic with no
+      // chain-storage side-effects.
+      try {
+        const mnemonic = generateFreshMnemonicV4();
+        return { ok: true, mnemonic };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
