@@ -58,6 +58,7 @@ import { MrvNative } from "./pages/MrvNative";
 import { Pending as MultisigPending } from "./pages/Pending";
 import { MultisigGovernance } from "./components/MultisigGovernance";
 import { MainMenu } from "./pages/MainMenu";
+import { NewWalletFlow } from "./pages/NewWalletFlow";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { ACCOUNTS, type Account } from "./demo-data";
@@ -129,7 +130,8 @@ type Screen =
   | "security"
   | "features"
   | "main-menu"
-  | "contacts";
+  | "contacts"
+  | "new-wallet-flow";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -826,6 +828,14 @@ export default function App() {
             setPendingSendNft(target);
             setScreen("send-nft");
           }}
+          // Round 13 TASK 1 — "New wallet" from the VaultPicker
+          // dropdown routes through navigateTo so the screen stack
+          // pushes "home" and NewWalletFlow's onCancel returns the
+          // user back to home cleanly. The legacy single-page modal
+          // is bypassed entirely for the fresh-mnemonic path; the
+          // Import + Multisig dropdown entries still open
+          // VaultAddModal as before.
+          onNewWalletFlow={() => navigateTo("new-wallet-flow")}
           topSlot={
             activeVaultSummary ? (
               <>
@@ -1129,6 +1139,30 @@ export default function App() {
       {/* Round 7 TASK 5 — Contacts page. Reached from MainMenu;
          onBack via navigateBack to return to the menu. */}
       {screen === "contacts" && <Contacts onBack={navigateBack} />}
+
+      {/* Round 13 TASK 1 — in-app new wallet flow. Reached from the
+         VaultPicker dropdown's "New wallet" entry (push "home" onto
+         the screen stack). Onboarding's first-setup flow does NOT
+         route here — it continues to use the App-level show-phrase
+         + verify-phrase screens directly (with their Round 12
+         back-protection intact). The two flows share the inner
+         ShowPhrase + VerifyPhrase components but compose them in
+         separate navigation contexts. */}
+      {screen === "new-wallet-flow" && (
+        <NewWalletFlow
+          onCancel={navigateBack}
+          onComplete={() => {
+            // The newly-created vault is now active. Refresh the
+            // active-vault summary so home's chip + setup hints
+            // reflect the new state, then route back. Clear the
+            // screen stack so back doesn't bring the user back into
+            // the just-completed flow.
+            void loadActiveVaultSummary();
+            void refreshKeystoreStatus();
+            setScreen("home");
+          }}
+        />
+      )}
 
       {/* Round 7 TASK 7 — Multisig wallets top-level list. Reached
          from MainMenu. Tapping a row switches the active vault to

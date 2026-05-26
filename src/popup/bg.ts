@@ -1564,6 +1564,22 @@ export async function bgVaultAddFresh(
 }
 
 /**
+ * Round 13 TASK 1 — generate a fresh PQM-1 mnemonic for the in-app
+ * multi-step new-wallet flow. The SW returns the mnemonic without
+ * persisting any vault; the popup holds it in React state through
+ * the show-phrase + verify-phrase steps and commits via
+ * `bgVaultAddImport(mnemonic)` only after the user verifies the
+ * phrase. Cancellation discards the mnemonic with no chain-storage
+ * side-effects. Requires the container to be unlocked.
+ */
+export async function bgVaultGenerateFreshMnemonic(): Promise<
+  | { ok: true; mnemonic: string }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-generate-fresh-mnemonic", {});
+}
+
+/**
  * Import a user-supplied PQM-1 mnemonic. Rejects duplicate-address
  * imports (the importing mnemonic would derive the same address as
  * an existing vault) with `reason: "vault with this address already
