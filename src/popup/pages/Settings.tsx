@@ -756,7 +756,7 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            Monolythium Wallet v{version} · sovereign post-quantum browser
+            Monolythium Browser Wallet v{version} · sovereign post-quantum browser
             wallet.
           </div>
           <button
