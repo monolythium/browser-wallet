@@ -1,8 +1,10 @@
+import { useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Icon } from "../Icon";
 import type { Account } from "../demo-data";
 import { bech32mDisplay } from "../../shared/bech32m";
-import { RevealableAddressBlock } from "../components/RevealableAddressBlock";
+import { CheckIcon, ClipboardIcon } from "../components/AddressLine";
 
 interface ReceiveProps {
   account: Account;
@@ -11,9 +13,21 @@ interface ReceiveProps {
 
 export function Receive({ account, onBack }: ReceiveProps) {
   // Whitepaper §22.7 mandates bech32m display. The QR encodes the bech32m
-  // form (canonical Monolythium). The two AddressLines below show both
-  // mono1 and 0x with per-line copy icons — internal storage stays 0x.
+  // form (canonical Monolythium); the address row below renders the
+  // same string at 14 px mono so it (not the QR) is the screen's
+  // primary visual element — see Round 5 TASK 6.
   const qrPayload = bech32mDisplay(account.addr);
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    void navigator.clipboard.writeText(qrPayload).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {},
+    );
+  };
 
   return (
     <>
@@ -43,38 +57,86 @@ export function Receive({ account, onBack }: ReceiveProps) {
               color: "var(--fg-400)",
               letterSpacing: "0.14em",
               textTransform: "uppercase",
-              marginBottom: 12,
+              marginBottom: 10,
               textAlign: "center",
             }}
           >
             Your address
           </div>
+          {/* Round 5 TASK 6 — QR dropped from 224 to 176 px so the
+              address row below it has visual prominence. Address card
+              padding and font size grow accordingly so the actual
+              text (not the pixel grid) is the takeaway. */}
           <div
             style={{
               display: "flex",
               justifyContent: "center",
-              padding: "12px",
+              padding: "10px",
               background: "white",
               borderRadius: 12,
               marginBottom: 12,
+              maxWidth: 200,
+              marginLeft: "auto",
+              marginRight: "auto",
             }}
           >
             <QRCodeSVG
               value={qrPayload}
-              size={224}
+              size={176}
               level="M"
               marginSize={2}
             />
           </div>
           <div
+            onClick={handleCopy}
+            title={copied ? "Copied" : "Click to copy"}
             style={{
-              padding: "10px 12px",
+              padding: "14px 12px",
               borderRadius: 10,
               background: "rgba(0,0,0,0.3)",
               border: "1px solid var(--fg-700)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              cursor: "copy",
             }}
           >
-            <RevealableAddressBlock addr0x={account.addr} />
+            <span
+              style={{
+                flex: 1,
+                fontFamily: "var(--f-mono)",
+                fontSize: 14,
+                fontWeight: 500,
+                color: copied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
+                letterSpacing: "-0.01em",
+                wordBreak: "break-all",
+                userSelect: "all",
+                lineHeight: 1.45,
+              }}
+            >
+              {qrPayload}
+            </span>
+            <button
+              type="button"
+              onClick={handleCopy}
+              aria-label="Copy address"
+              title={copied ? "Copied" : "Copy address"}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 28,
+                height: 28,
+                padding: 0,
+                background: "transparent",
+                border: "none",
+                color: copied ? "var(--ok, #5fc97a)" : "var(--fg-300)",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              {copied ? <CheckIcon /> : <ClipboardIcon />}
+            </button>
           </div>
         </div>
 
