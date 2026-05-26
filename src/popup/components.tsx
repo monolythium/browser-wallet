@@ -1711,28 +1711,6 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         {/* Pending requests shelf */}
         <PendingShelf />
 
-        {/* Recent dApps */}
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Recent dApps</h3>
-            <div className="spacer" />
-            <button className="more" onClick={onSettings}>Manage →</button>
-          </div>
-          <div className="ext-dapp-row">
-            {DAPPS.slice(0, 4).map((d) => (
-              <div
-                key={d.id}
-                className="ext-dapp"
-                style={{ opacity: 0.6, cursor: "default" }}
-              >
-                <div className={`glyph ${d.icon}`}>{d.glyph ?? d.icon}</div>
-                <div className="nm">{d.name}</div>
-                <div className="last">{d.lastUsed}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
         {/* Tabs */}
         {/* Phase 11 Commit 10 — ARIA tablist + tab + tabpanel pattern.
             Screen readers announce "Tab Assets, 1 of 3, selected" when
@@ -1806,6 +1784,32 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               />
             </div>
           )}
+        </div>
+
+        {/* Round 10 TASK 4 — Recent dApps moved below the Assets /
+           Activity / NFTs tabs (was directly above them). Activity is
+           the higher-signal section for an active user, so it now
+           sits closer to the balance hero. Recent dApps stays on
+           home but as a secondary section near the bottom. */}
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Recent dApps</h3>
+            <div className="spacer" />
+            <button className="more" onClick={onSettings}>Manage →</button>
+          </div>
+          <div className="ext-dapp-row">
+            {DAPPS.slice(0, 4).map((d) => (
+              <div
+                key={d.id}
+                className="ext-dapp"
+                style={{ opacity: 0.6, cursor: "default" }}
+              >
+                <div className={`glyph ${d.icon}`}>{d.glyph ?? d.icon}</div>
+                <div className="nm">{d.name}</div>
+                <div className="last">{d.lastUsed}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Round 8 TASK 4 — "view first-run onboarding" debug button
