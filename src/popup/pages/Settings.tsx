@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { Icon } from "../Icon";
+import { bech32mDisplay } from "../../shared/bech32m";
 import {
   bgGetAutoLockMinutes,
   bgGetUiOpenMode,
@@ -10,7 +11,7 @@ import {
   type SignAlgo,
   type UiOpenMode,
 } from "../bg";
-import { RevealableAddressBlock } from "../components/RevealableAddressBlock";
+import { CheckIcon, ClipboardIcon } from "../components/AddressLine";
 
 interface SettingsProps {
   onBack: () => void;
@@ -95,6 +96,20 @@ export function Settings({
   const [savingUiMode, setSavingUiMode] = useState(false);
   const [uiModePending, setUiModePending] = useState(false);
 
+  // Round 6 TASK 6 — Account section inline copy state.
+  const [addrCopied, setAddrCopied] = useState(false);
+  const handleAddrCopy = (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    if (!address) return;
+    void navigator.clipboard.writeText(bech32mDisplay(address)).then(
+      () => {
+        setAddrCopied(true);
+        setTimeout(() => setAddrCopied(false), 1500);
+      },
+      () => {},
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -160,6 +175,12 @@ export function Settings({
       </div>
 
       <div className="ext-body">
+        {/* Round 6 TASK 6 — Account section compacted. Row gap was 8 px
+            with the address+copy on two stacked rows (RevealableAddressBlock
+            renders the AddressLine + a separate copy button below). Now
+            the address sits inline with a copy button (single row),
+            row gap drops to 6 px, and the section claims roughly half
+            the vertical space it did before. */}
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Account</h3>
@@ -168,11 +189,59 @@ export function Settings({
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: 8,
+              gap: 6,
             }}
           >
             {address ? (
-              <RevealableAddressBlock addr0x={address} />
+              <div
+                onClick={handleAddrCopy}
+                title={addrCopied ? "Copied" : "Click to copy"}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  cursor: "copy",
+                }}
+              >
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
+                    letterSpacing: "-0.04em",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "clip",
+                    userSelect: "all",
+                  }}
+                >
+                  {bech32mDisplay(address)}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleAddrCopy}
+                  aria-label="Copy address"
+                  title={addrCopied ? "Copied" : "Copy address"}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 22,
+                    height: 22,
+                    padding: 0,
+                    background: "transparent",
+                    border: "none",
+                    color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  {addrCopied ? <CheckIcon /> : <ClipboardIcon />}
+                </button>
+              </div>
             ) : (
               <div
                 style={{
@@ -189,7 +258,6 @@ export function Settings({
                 fontFamily: "var(--f-mono)",
                 fontSize: 10,
                 color: "var(--fg-400)",
-                marginTop: 4,
                 letterSpacing: "0.05em",
               }}
             >
@@ -198,7 +266,7 @@ export function Settings({
             <button
               onClick={onShowPhrase}
               style={{
-                marginTop: 6,
+                marginTop: 4,
                 alignSelf: "flex-start",
                 padding: "8px 12px",
                 borderRadius: 8,
