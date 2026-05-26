@@ -4,22 +4,28 @@
    gold-gradient primary, gold underline tabs. */
 
 *, *::before, *::after { box-sizing: border-box; }
-/* Round 4 TASK 5 + 6 — popup body matches the .ext gradient's deepest
-   tone (--ink-000) so the strip Chrome paints behind a fixed-size body
-   is the same color the wallet ends on; eliminates the visible black
-   rectangles at the top/bottom edges. overflow:hidden (both axes) on
-   html and body keeps the browser-default outer scrollbar from
-   appearing — internal scroll lives on .ext-body and modals.
-   Round 5 TASK 2 — also nuke any scrollbar that webkit might still
-   try to render on these containers (e.g. when an inner element
-   transiently overflows during layout). Only .ext-body renders a
-   visible scrollbar; everything else above it in the tree is
-   scrollbar-suppressed both via overflow:hidden AND ::-webkit-
-   scrollbar { display: none }. */
+/* Round 6 TASK 1 — popup edge polish, take three. Round 4 set body
+   bg to var(--ink-000) (a solid color) but .ext applies a linear
+   gradient that ends at var(--ink-050) at the bottom. The 3-unit
+   brightness mismatch was invisible at the top rounded corners but
+   surfaced as a visible "black gap" at the bottom-left + bottom-
+   right corners where the .ext's rounded edge bled into a slightly-
+   darker body strip.
+   Fix: mirror the EXACT same linear-gradient stops on body. The body
+   gradient continues smoothly into the .ext gradient at every
+   y-coordinate, so the corner negative space (the L-shape outside
+   the rounded .ext edge) renders the same color as the .ext pixels
+   it abuts. No more visible seam.
+   The .ext ALSO has radial-gradient ambient bloom layered on top —
+   we don't mirror those onto body because they'd push the bloom
+   beyond the .ext's rounded clip and look messy. The linear
+   gradient is the dominant tone; radial blooms are a 14-18% glow
+   layer that's hard to perceive at the corner pixels anyway. */
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--ink-000);
+  background:
+    linear-gradient(180deg, var(--ink-000) 0%, var(--ink-100) 50%, var(--ink-050) 100%);
   color: var(--fg-100);
   font-family: var(--f-sans);
   overflow: hidden;
