@@ -87,31 +87,41 @@ export function Receive({ account, onBack }: ReceiveProps) {
               marginSize={2}
             />
           </div>
+          {/* Round 6 TASK 4 — address now strictly single-line. Round 5
+              used wordBreak:break-all which wrapped a 43-char bech32m
+              onto two lines in popup mode. Now nowrap + tighter
+              padding + 24 px copy button gives the address ~274 px of
+              clear width, which fits a 12.5 px JBM string at -0.04 em
+              letter-spacing (~273 px measured). Inline copy stays
+              right next to the address with a 6 px gap — not pushed
+              to the far right via margin-auto. */}
           <div
             onClick={handleCopy}
             title={copied ? "Copied" : "Click to copy"}
             style={{
-              padding: "14px 12px",
+              padding: "10px",
               borderRadius: 10,
               background: "rgba(0,0,0,0.3)",
               border: "1px solid var(--fg-700)",
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 6,
               cursor: "copy",
             }}
           >
             <span
               style={{
                 flex: 1,
+                minWidth: 0,
                 fontFamily: "var(--f-mono)",
-                fontSize: 14,
+                fontSize: 12.5,
                 fontWeight: 500,
                 color: copied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
-                letterSpacing: "-0.01em",
-                wordBreak: "break-all",
+                letterSpacing: "-0.04em",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "clip",
                 userSelect: "all",
-                lineHeight: 1.45,
               }}
             >
               {qrPayload}
@@ -125,8 +135,8 @@ export function Receive({ account, onBack }: ReceiveProps) {
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
-                width: 28,
-                height: 28,
+                width: 24,
+                height: 24,
                 padding: 0,
                 background: "transparent",
                 border: "none",
