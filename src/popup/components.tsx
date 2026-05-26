@@ -1818,27 +1818,18 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
            backup, feature discovery) when relevant; a manual re-entry
            button was clutter on a finished wallet. */}
 
-        {/* Round 10 TASK 2 — bottom spacer reserves clearance below the
-           last card so the position:fixed Footer (rendered as a
-           sibling below ext-body) never visually covers home content
-           when scrolled to the end. Height matches Footer's natural
-           strip height (~28 px) + a couple of pixels of breathing room. */}
-        <div style={{ height: 32 }} aria-hidden="true" />
       </div>
-      {/* Round 10 TASK 2 — Footer now lives OUTSIDE ext-body and uses
-         position:fixed (was Round 9's position:sticky inside the scroll
-         container — that rendered the footer huge in the middle of
-         content when scroll height didn't exceed the viewport, defeating
-         the "always-visible at bottom" intent). With position:fixed the
-         footer is pinned to the popup viewport bottom regardless of
-         scroll state. */}
-      {/* Round 10 TASK 3 — `.ext-hintbar` removed. Previously rendered
-         "v0.0.1 · v1.9.4" and a "⌘⇧M open" kbd shortcut hint at the
-         very bottom. v1.9.4 was the SDK/Talos version (internal),
-         ⌘⇧M was a Chrome shortcut hint with no corresponding manifest
-         `commands` binding (purely cosmetic). Wallet build version
-         folded into Footer. */}
-      <Footer sticky />
+      {/* Round 12 TASK 6 — Footer is a normal-flow sibling of .ext-body.
+         .ext is a flex column with .ext-body { flex: 1 }, so the
+         layout naturally pushes the footer to the bottom of .ext
+         (= the popup/sidebar/fullscreen viewport) without any
+         position:sticky or position:fixed gymnastics. Previous
+         rounds (8/9 sticky-inside, 10/11 fixed-overlay-with-spacer)
+         each tried clever positioning and missed that the existing
+         flex layout already places the last child at the bottom.
+         The 32 px clearance spacer that paired with position:fixed
+         is also gone — no overlay means no clearance needed. */}
+      <Footer />
     </>
   );
 }
