@@ -103,6 +103,7 @@ import {
   prepareSlhDsaBackup,
   recoverBackupMnemonic,
 } from "./slh-dsa-keygen.js";
+import { SESSION_KEY_MEK_V4 } from "../shared/constants.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -171,9 +172,120 @@ let unlocked: UnlockedState | null = null;
 // Cached after a successful unlockContainerV4(). Used by
 // selectActiveVaultV4 / addVaultFreshV4 / addVaultImportV4 so vault
 // switches and additions don't pay the ~1 second Argon2id-MEK cost
-// per operation. Cleared by lockV4(). Never leaves this module.
+// per operation. Cleared by lockV4(). Mirrored into chrome.storage.session
+// under SESSION_KEY_MEK_V4 so MV3 service-worker hibernation doesn't
+// force a re-unlock — tryRestoreFromSessionV4() re-derives the active
+// backend on SW boot.
 let mekCache: Uint8Array | null = null;
 let activeContainerVaultId: string | null = null;
+
+// ---- Session-rehydrate (Round 4 TASK 2) ----
+//
+// MV3 service workers hibernate after ~30 s of inactivity. Without
+// a cross-hibernation mechanism, the in-memory `unlocked` and
+// `mekCache` are lost every restart and the user lands back on the
+// Unlock screen — repeatedly, within minutes of "active" use, because
+// any popup-close + reopen gap >30 s triggers a restart.
+//
+// We mirror the MEK into chrome.storage.session (in-memory only;
+// cleared on browser restart; isolated to this extension's SW) for
+// the lifetime of the unlocked session. On boot, `tryRestoreFromSessionV4`
+// reads it back and rebuilds the backend by unwrapping the active
+// vault's VEK + opening its envelope. The MEK is cleared on every
+// lock (manual + auto-lock + wipe), so a fired auto-lock alarm leaves
+// the SW fully relocked even if the user only reopens the popup
+// afterwards.
+//
+// Trust boundary: the MEK in chrome.storage.session is no more
+// accessible than the MEK in module memory — both are SW-scope only.
+// The new exposure is "across SW restarts within the same browser
+// session." That is the security tradeoff the user accepted in
+// exchange for not retyping their password every popup-reopen.
+
+// chrome.storage.session is callback-API in MV3 like its .local sibling.
+// We wrap in new Promise to stay symmetric with loadRawV4 / saveRawV4,
+// and to keep the test stubs (callback-shape) compatible. The session
+// area is absent in non-extension contexts (some unit tests stub only
+// local) — guard so a missing `.session` doesn't throw and just behaves
+// as "no rehydrate available."
+function sessionAreaAvailable(): boolean {
+  const s = (chrome as { storage?: { session?: unknown } }).storage;
+  return !!(s && s.session);
+}
+
+async function persistMekToSessionV4(mek: Uint8Array): Promise<void> {
+  if (!sessionAreaAvailable()) return;
+  const b64 = bytesToBase64(mek);
+  return new Promise((resolve) => {
+    chrome.storage.session.set({ [SESSION_KEY_MEK_V4]: b64 }, () => resolve());
+  });
+}
+
+async function clearMekFromSessionV4(): Promise<void> {
+  if (!sessionAreaAvailable()) return;
+  return new Promise((resolve) => {
+    chrome.storage.session.remove(SESSION_KEY_MEK_V4, () => resolve());
+  });
+}
+
+async function loadMekFromSessionV4(): Promise<Uint8Array | null> {
+  if (!sessionAreaAvailable()) return null;
+  const b64 = await new Promise<unknown>((resolve) => {
+    chrome.storage.session.get([SESSION_KEY_MEK_V4], (res) => {
+      resolve(res?.[SESSION_KEY_MEK_V4] ?? null);
+    });
+  });
+  if (typeof b64 !== "string") return null;
+  try {
+    const bytes = base64ToBytes(b64);
+    if (bytes.length !== MEK_LEN) return null;
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/** Attempt to rebuild the unlocked state from the session-cached MEK.
+ *  Returns `{ ok: true, address }` on success and leaves the module
+ *  state populated as if `unlockContainerV4` had just succeeded.
+ *  Returns `{ ok: false }` if no MEK is cached, the container is
+ *  missing, or the AEAD unwrap fails (which should be impossible
+ *  given the MEK is the one that wrapped it — defensive only).
+ *  Idempotent: if already unlocked, returns the live address. */
+export async function tryRestoreFromSessionV4(): Promise<
+  { ok: true; address: string; vaultId: string } | { ok: false }
+> {
+  if (unlocked && activeContainerVaultId) {
+    return { ok: true, address: unlocked.address, vaultId: activeContainerVaultId };
+  }
+  const mek = await loadMekFromSessionV4();
+  if (!mek) return { ok: false };
+  const container = await loadVaultsContainerV4();
+  if (!container) {
+    mek.fill(0);
+    await clearMekFromSessionV4();
+    return { ok: false };
+  }
+  const active = container.vaults.find((v) => v.id === container.activeVaultId);
+  if (!active) {
+    mek.fill(0);
+    await clearMekFromSessionV4();
+    return { ok: false };
+  }
+  let state: UnlockedState;
+  try {
+    state = await loadVaultBackend(mek, active);
+  } catch {
+    mek.fill(0);
+    await clearMekFromSessionV4();
+    return { ok: false };
+  }
+  if (mekCache) mekCache.fill(0);
+  mekCache = mek;
+  unlocked = state;
+  activeContainerVaultId = active.id;
+  return { ok: true, address: state.address, vaultId: active.id };
+}
 
 // ---- v4-multi container types (Phase 5) ----
 
@@ -802,6 +914,13 @@ export async function unlockContainerV4(
   mekCache = mek;
   unlocked = state;
   activeContainerVaultId = active.id;
+  // Mirror MEK to chrome.storage.session so MV3 SW hibernation doesn't
+  // force a re-unlock. See `tryRestoreFromSessionV4` for the boot-side
+  // read path. SW awaits this before the rate-limit counters get
+  // cleared so a crash mid-set still leaves us in a coherent state
+  // (cached MEK + zero fail count, or no cached MEK + the previous
+  // fail count — never the mismatched in-between).
+  await persistMekToSessionV4(mek);
   return { address: state.address, vaultId: active.id };
 }
 
@@ -1702,6 +1821,13 @@ export function lockV4(): void {
     mekCache = null;
   }
   activeContainerVaultId = null;
+  // Fire-and-forget the session-MEK clear — lockV4 is sync to preserve
+  // call-site shape (used by triggerAutoLock, wipeVaultV4, and the
+  // keystore-lock IPC). The session.remove is fast (single key); SW
+  // boot's rehydrate path tolerates an absent key the same as a
+  // present-but-invalid one, so a partial-clear can't unlock a
+  // post-lock SW.
+  void clearMekFromSessionV4();
 }
 
 /**
