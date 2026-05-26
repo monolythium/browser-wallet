@@ -60,9 +60,23 @@ html[data-mode="popup"] #root {
   background:
     linear-gradient(180deg, var(--ink-000) 0%, var(--ink-100) 50%, var(--ink-050) 100%);
 }
+/* Round 10 TASK 1 — popup corners go SQUARE. After 6+ rounds of trying
+   to keep rounded corners while eliminating the persistent dark gap
+   along the rounded edge (Rounds 4–9 each found a new contributing
+   factor and patched it), user opted to drop the rounded corners in
+   popup mode entirely. Square corners = no clip triangles = no
+   ancestor-bleed possible at the rounded edge. We also drop the
+   border + drop-shadow since they wrapped the rounded card; in popup
+   mode the wallet now fills the Chrome popup edge-to-edge as a flat
+   rectangle. Sidebar + fullscreen modes keep their rounded styling
+   (they have no Chrome outer popup frame so the gap issue doesn't
+   apply there). */
 html[data-mode="popup"] .ext {
   width: 100%;
   height: 100%;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
 }
 
 html[data-mode="sidepanel"],
