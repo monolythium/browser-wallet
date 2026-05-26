@@ -59,6 +59,7 @@ import { Pending as MultisigPending } from "./pages/Pending";
 import { MultisigGovernance } from "./components/MultisigGovernance";
 import { MainMenu } from "./pages/MainMenu";
 import { Contacts } from "./pages/Contacts";
+import { MultisigList } from "./pages/MultisigList";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
@@ -654,11 +655,12 @@ export default function App() {
     screen === "send" ||
     screen === "reveal-phrase" ||
     screen === "reset-wallet" ||
-    // Round 7 TASK 4 / 5 — banner shows on the new menu + contacts
-    // screens so the chain-status indicator stays continuous when
-    // the user navigates between menu sub-pages.
+    // Round 7 TASK 4 / 5 / 7 — banner shows on the new menu + contacts
+    // + multisig-list screens so the chain-status indicator stays
+    // continuous when the user navigates between menu sub-pages.
     screen === "main-menu" ||
-    screen === "contacts";
+    screen === "contacts" ||
+    screen === "multisig-list";
 
   return (
     <ErrorBoundary>
@@ -944,6 +946,7 @@ export default function App() {
           onContacts={() => navigateTo("contacts")}
           onConnectedSites={() => navigateTo("connected-sites")}
           onNetworks={() => navigateTo("networks")}
+          onMultisig={() => navigateTo("multisig-list")}
           onSettings={() => navigateTo("settings")}
           onAbout={() => navigateTo("about")}
           onLockWallet={() => {
@@ -960,6 +963,21 @@ export default function App() {
       {/* Round 7 TASK 5 — Contacts page. Reached from MainMenu;
          onBack via navigateBack to return to the menu. */}
       {screen === "contacts" && <Contacts onBack={navigateBack} />}
+
+      {/* Round 7 TASK 7 — Multisig wallets top-level list. Reached
+         from MainMenu. Tapping a row switches the active vault to
+         that multisig and opens the existing Pending dashboard. */}
+      {screen === "multisig-list" && (
+        <MultisigList
+          onBack={navigateBack}
+          onOpenPending={() => {
+            // Route into the existing Phase 8 multisig-pending screen;
+            // the active-vault switch already happened inside the row
+            // click handler before this fires.
+            setScreen("multisig-pending");
+          }}
+        />
+      )}
 
       {screen === "about" && (
         <About
