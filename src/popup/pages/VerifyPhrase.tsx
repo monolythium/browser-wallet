@@ -12,16 +12,21 @@ interface VerifyPhraseProps {
   onBack?: () => void;
 }
 
-// Round 11 TASK 5 — number of slots to hide. The original 3-word
-// picker proved too easy (any 6 distractors, 1/6 random guess hits a
-// position). 6 hidden positions × ~10 candidate bank = ~10^6 random-
-// guess hit rate when the user has no real memory, while staying
-// fast enough that someone who actually wrote down 24 words finishes
-// in under a minute.
-const HIDDEN_COUNT = 6;
+// Round 13.5 — number of slots to hide. Round 11 originally set this
+// to 6 (vs Round 10's 3-word picker) for a stronger random-guess
+// rejection. Round 13.5 reduces it back to 3 at user request: 6 felt
+// like friction during onboarding when most users will actually write
+// down the phrase, and the guarantee survives at 3 because the bank
+// still draws from BIP-39 distractors not just the 6 hidden words.
+// With 3 hidden + 3 distractors (bank size 6), random-guess odds
+// across 3 ordered fills land at 6P3 = 1/120 — better than Round 10's
+// 1/6^3 (= 1/216 only because that picker re-used the same 6 options
+// per position; this verify lets the user re-arrange freely).
+const HIDDEN_COUNT = 3;
 // How many BIP-39 distractors to mix into the word bank in addition
-// to the 6 hidden correct words. Total bank size = 6 + DISTRACTOR_COUNT.
-const DISTRACTOR_COUNT = 5;
+// to the HIDDEN_COUNT correct words. Total bank size =
+// HIDDEN_COUNT + DISTRACTOR_COUNT.
+const DISTRACTOR_COUNT = 3;
 
 function shuffle<T>(arr: readonly T[]): T[] {
   const out = arr.slice();
