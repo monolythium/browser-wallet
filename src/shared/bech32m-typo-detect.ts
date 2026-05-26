@@ -15,7 +15,7 @@
 // the false-positive rate would surface incorrect addresses to users,
 // which is far more dangerous than no suggestion at all.
 
-import { bech32mDecode } from "./bech32m.js";
+import { tryDecodeBech32m } from "./bech32m.js";
 
 const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const MONO_HRP = "mono1";
@@ -58,7 +58,7 @@ export function suggestBech32mCorrection(input: string): string | null {
 
 /** Return true when the input passes bech32m decode with hrp `mono`. */
 function isBech32mValid(input: string): boolean {
-  const decoded = bech32mDecode(input);
+  const decoded = tryDecodeBech32m(input);
   return decoded !== null && decoded.hrp === "mono";
 }
 
