@@ -47,3 +47,35 @@ html[data-mode="sidepanel"] #root {
    reading as a hard black rectangle. Sidepanel mode keeps the
    straight edges (.ext fills the full panel chrome there). */
 html[data-mode="sidepanel"] .ext { border-radius: 0; box-shadow: none; }
+
+/* Round 8 TASK 3 — fullscreen mode (wallet in a regular Chrome tab,
+   opened via chrome.tabs.create with ?mode=fullscreen). The wallet
+   centers itself in a max-480 px column on the larger viewport so
+   line-lengths stay readable; outside the column, body bg fills the
+   surrounding tab space. */
+html[data-mode="fullscreen"],
+html[data-mode="fullscreen"] body {
+  width: 100%;
+  min-height: 100vh;
+  overflow: auto;
+  background: var(--ink-000);
+}
+html[data-mode="fullscreen"] body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 24px 0;
+}
+html[data-mode="fullscreen"] #root {
+  width: 100%;
+  max-width: 480px;
+}
+html[data-mode="fullscreen"] .ext {
+  width: 100%;
+  height: auto;
+  min-height: calc(100vh - 48px);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 30px 80px -10px rgba(0, 0, 0, 0.7);
+}
