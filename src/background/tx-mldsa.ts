@@ -72,12 +72,26 @@ export async function sprintnetJsonRpc<T>(
   params: unknown[],
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
+  // Round 13 TASK 3 — track genesis-pin failures separately so the
+  // aggregate error message is informative when ALL operators are
+  // rejected for untrusted genesis. Previously the user saw the
+  // last-tried operator's error ("operator-1: untrusted genesis"),
+  // which read as a single-operator transient failure even though
+  // every operator in the list was being skipped. The clearer
+  // aggregate "chain genesis mismatch (all N operators)" tells the
+  // user this is a chain-side issue (operator binaries stale, or
+  // a regenesis the wallet pin hasn't been bumped for) rather than
+  // a wallet bug.
+  let untrustedCount = 0;
+  let totalOperators = 0;
   for (const v of getActiveOperators()) {
+    totalOperators++;
     // GAP #11: genesis-hash pin. Operators whose block 0 doesn't match
     // SPRINTNET_GENESIS_HASH are skipped — they're either on a fork or
     // a different chain entirely, and routing any request to them
     // leaks reads / writes onto an untrusted ledger.
     if (!(await verifyOperatorGenesis(v.rpc))) {
+      untrustedCount++;
       lastTransportErr = new Error(`${v.name}: untrusted genesis`);
       continue;
     }
@@ -116,6 +130,15 @@ export async function sprintnetJsonRpc<T>(
       continue;
     }
     return { result: body.result, via: v.name };
+  }
+  // Round 13 TASK 3 — if EVERY operator failed the genesis pin check,
+  // surface a clearer aggregate error instead of the last-operator's
+  // raw "name: untrusted genesis" message. See About → Operators for
+  // per-operator status the user can act on.
+  if (untrustedCount > 0 && untrustedCount === totalOperators) {
+    throw new Error(
+      `Chain genesis mismatch — all ${totalOperators} operators reported untrusted block 0. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See About → Operators.`,
+    );
   }
   throw lastTransportErr ?? new Error("no Sprintnet operator reachable");
 }
