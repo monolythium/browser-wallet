@@ -52,11 +52,11 @@ export function SlhDsaRotationRehearsal() {
             }}
           >
             If a future cryptographic break invalidates ML-DSA, Mono Labs
-            declares a <strong>G3 algorithm freeze</strong> (whitepaper
-            §30.2). The chain refuses transactions signed with the broken
-            algorithm at a specified block height. Users with a registered
-            SLH-DSA backup rotate to it; users without one are frozen at
-            the chain layer (recoverable, but with significant friction).
+            declares a <strong>G3 algorithm freeze</strong>. The chain
+            refuses transactions signed with the broken algorithm at a
+            specified block height. Users with a registered SLH-DSA
+            backup rotate to it; users without one are frozen at the
+            chain layer (recoverable, but with significant friction).
           </div>
 
           <div

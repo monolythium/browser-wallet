@@ -93,7 +93,7 @@ export function RewardCard({
           justifyContent: "space-between",
         }}
       >
-        <div style={cardLabel}>Pending rewards · §23.4</div>
+        <div style={cardLabel}>Pending rewards</div>
         {isMock && (
           <span style={mockBadgeStyle} title="Live pending-rewards read is unavailable from this operator; figures are derived locally from active delegations × cluster APR.">
             illustrative
