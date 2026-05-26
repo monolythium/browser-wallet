@@ -937,10 +937,49 @@ export default function App() {
           uiMode={uiMode}
           onBack={navigateBack}
           onSwitchMode={() => {
+            // Round 8 TASK 2 — INSTANT switch (no manual icon click).
+            // The chrome.sidePanel.open / chrome.action.openPopup
+            // calls require user-gesture context, so they fire
+            // SYNCHRONOUSLY inside the click handler before any
+            // await. The bgSetUiOpenMode persistence + the
+            // window.close cleanup fire-and-forget afterwards.
             const next: UiOpenMode = uiMode === "popup" ? "sidepanel" : "popup";
-            void bgSetUiOpenMode(next).then((r) => {
-              if (r.ok) setUiMode(r.mode);
-            });
+            if (next === "sidepanel") {
+              // popup → sidepanel: open the side panel on the active
+              // tab right now (gesture-eligible), then persist mode
+              // + close the popup. The side panel's data-mode is
+              // re-detected on its own page load from the
+              // ?surface=sidepanel query in manifest.json.
+              void chrome.tabs
+                .query({ active: true, currentWindow: true })
+                .then((tabs) => {
+                  const tabId = tabs[0]?.id;
+                  if (tabId !== undefined && chrome.sidePanel?.open) {
+                    void chrome.sidePanel.open({ tabId });
+                  }
+                });
+              void bgSetUiOpenMode("sidepanel").then((r) => {
+                if (r.ok) setUiMode(r.mode);
+                // Close the popup once the persistence write lands
+                // so the storage.onChanged listener on the side
+                // panel doesn't catch a stale active surface.
+                window.close();
+              });
+            } else {
+              // sidepanel → popup: try chrome.action.openPopup
+              // (Chrome 127+). If unsupported, just close the
+              // sidepanel — the user's next icon click will land on
+              // the popup once SW re-binds the action.
+              if (chrome.action?.openPopup) {
+                void chrome.action
+                  .openPopup()
+                  .catch(() => {/* unavailable, fall through */});
+              }
+              void bgSetUiOpenMode("popup").then((r) => {
+                if (r.ok) setUiMode(r.mode);
+                window.close();
+              });
+            }
           }}
           onContacts={() => navigateTo("contacts")}
           onConnectedSites={() => navigateTo("connected-sites")}
