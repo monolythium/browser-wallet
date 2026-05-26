@@ -1421,6 +1421,60 @@ export async function bgSetUiOpenMode(
   return send("set-ui-open-mode", { mode });
 }
 
+// ---- Round 7 TASK 5 — Contacts (address book) ----
+//
+// SW persists the map under STORAGE_KEY_CONTACTS; useContacts subscribes
+// to chrome.storage.onChanged for live updates. Keys are lowercase 0x
+// addresses; the bech32m display is cached on the value so the popup
+// doesn't re-encode every list refresh.
+
+export interface ContactRecord {
+  address: string;
+  bech32m: string;
+  name: string;
+  addedAt: number;
+  lastUsedAt?: number;
+  notes?: string;
+}
+
+export type ContactsMap = Record<string, ContactRecord>;
+
+export async function bgContactsList(): Promise<
+  | { ok: true; contacts: ContactsMap }
+  | { ok: false; reason?: string }
+> {
+  return send("contacts-list");
+}
+
+export async function bgContactsAdd(input: {
+  address: string;
+  bech32m?: string;
+  name: string;
+  notes?: string;
+}): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("contacts-add", input);
+}
+
+export async function bgContactsRemove(
+  address: string,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("contacts-remove", { address });
+}
+
+export async function bgContactsRename(
+  address: string,
+  name: string,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("contacts-rename", { address, name });
+}
+
+export async function bgContactsCheck(address: string): Promise<boolean> {
+  const r = await send<
+    { ok: true; known: boolean } | { ok: false; reason?: string }
+  >("contacts-check", { address });
+  return r.ok && r.known;
+}
+
 // ---- Phase 5 multi-vault container surface ----
 //
 // The popup vault picker (VaultPicker component, Commit 3) reads these
