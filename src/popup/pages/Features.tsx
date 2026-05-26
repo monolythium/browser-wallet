@@ -153,12 +153,12 @@ export function Features({ onBack }: FeaturesProps) {
           <div
             style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}
           >
-            §28.5 Q29 commits the wallet to a single binary with optional
-            advanced surfaces — not a separate "AI-enhanced wallet" SKU. The
+            The wallet ships as a single binary with optional advanced
+            surfaces — not a separate "AI-enhanced wallet" SKU. The
             default surface stays minimal so non-technical users aren't
-            overwhelmed; power users opt in to what they want. New features in
-            future phases land here as additional toggles, not as separate
-            wallet builds.
+            overwhelmed; power users opt in to what they want. New
+            features in future phases land here as additional toggles,
+            not as separate wallet builds.
           </div>
         </div>
       </div>

@@ -212,7 +212,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
             }}
           >
             Sovereign post-quantum browser wallet for the Monolythium chain.
-            Reference implementation of the §28.5 wallet contract.
+            Reference implementation of the wallet contract.
           </div>
           <KvList
             rows={[
@@ -240,8 +240,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               }}
             >
               Active vault &ldquo;{multisig.label}&rdquo; is an N-of-M
-              multisig per whitepaper §28.5. Every send becomes a proposal
-              that the signer committee approves before execution.
+              multisig. Every send becomes a proposal that the signer
+              committee approves before execution.
             </div>
             <KvList
               rows={[
@@ -311,9 +311,9 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 marginBottom: 10,
               }}
             >
-              §28.5 Q29+Q30+Q31 — wallet-side passkey policy + two-tier
-              UX. Passkey enforcement is wallet-only today; chain
-              precompile is a future phase.
+              Wallet-side passkey policy + two-tier UX. Passkey
+              enforcement is wallet-only today; chain precompile is a
+              future phase.
             </div>
 
             <div
@@ -442,7 +442,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
         {phase10 && (
           <div className="ext-card">
             <div className="ext-card__head">
-              <h3>Emergency recovery (§30.1)</h3>
+              <h3>Emergency recovery</h3>
             </div>
             <div
               style={{
@@ -584,11 +584,11 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 v: <Mono>{shortHex(SPRINTNET_GENESIS_HASH, 10, 8)}</Mono>,
                 title: SPRINTNET_GENESIS_HASH,
               },
-              { k: "Execution", v: "Rust/RISC-V native (§22.9)" },
+              { k: "Execution", v: "Rust/RISC-V native" },
               { k: "Whitepaper", v: "v4.1-DRAFT · 2026-05-17" },
-              { k: "Signing", v: "ML-DSA-65 (FIPS-204) per §15" },
-              { k: "Address format", v: "bech32m per §22.7" },
-              { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH) per §23.1" },
+              { k: "Signing", v: "ML-DSA-65 (FIPS-204)" },
+              { k: "Address format", v: "bech32m" },
+              { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH)" },
               {
                 k: "Chain decimal mode",
                 v: "v4.0 compat (wei wire) · wallet compensates",
@@ -597,9 +597,9 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               },
               {
                 k: "EVM compat",
-                v: "Bridge active · §22.9 removal pending",
+                v: "Bridge active · native removal pending",
                 title:
-                  "Dapp-facing eth_sendTransaction / personal_sign / eth_signTypedData still bridge through the wallet's ML-DSA-65 backend. §22.9 removal is queued for a focused follow-up commit; tracked in dev notes NAYIEM-PING.",
+                  "Dapp-facing eth_sendTransaction / personal_sign / eth_signTypedData still bridge through the wallet's ML-DSA-65 backend. Native-only removal is queued for a focused follow-up commit; tracked in dev notes NAYIEM-PING.",
               },
             ]}
           />

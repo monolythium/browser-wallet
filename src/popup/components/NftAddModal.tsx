@@ -294,7 +294,7 @@ function NftAddBody({
         token id. Sprintnet&apos;s indexer is currently disabled cluster-
         wide, so discovery isn&apos;t automatic — pinning is the way in.
         (ERC-shaped contracts are read via the EVM compat path until
-        operators ship the native lyth_mrc* RPC; whitepaper §22.5.)
+        operators ship the native lyth_mrc* RPC.)
       </div>
 
       <div style={fieldGroupStyle}>
