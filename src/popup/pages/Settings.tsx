@@ -3,9 +3,12 @@ import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
 import {
   bgGetAutoLockMinutes,
+  bgGetUiOpenMode,
   bgKeystoreLock,
   bgSetAutoLockMinutes,
+  bgSetUiOpenMode,
   type SignAlgo,
+  type UiOpenMode,
 } from "../bg";
 import { RevealableAddressBlock } from "../components/RevealableAddressBlock";
 
@@ -87,6 +90,11 @@ export function Settings({
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
   const [savingAutoLock, setSavingAutoLock] = useState(false);
 
+  // Round 4 TASK 4 — UI open mode preference.
+  const [uiMode, setUiMode] = useState<UiOpenMode | null>(null);
+  const [savingUiMode, setSavingUiMode] = useState(false);
+  const [uiModePending, setUiModePending] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -94,6 +102,11 @@ export function Settings({
       if (cancelled) return;
       setAutoLock(r.autoLockMinutes);
       setOptions(r.options);
+    })();
+    void (async () => {
+      const r = await bgGetUiOpenMode();
+      if (cancelled) return;
+      if (r.ok) setUiMode(r.mode);
     })();
     return () => {
       cancelled = true;
@@ -106,6 +119,21 @@ export function Settings({
     const r = await bgSetAutoLockMinutes(minutes);
     if (r.ok) setAutoLock(r.autoLockMinutes);
     setSavingAutoLock(false);
+  };
+
+  const handlePickUiMode = async (mode: UiOpenMode) => {
+    if (savingUiMode || mode === uiMode) return;
+    setSavingUiMode(true);
+    const r = await bgSetUiOpenMode(mode);
+    if (r.ok) {
+      setUiMode(r.mode);
+      // The chrome.action / chrome.sidePanel binding is live immediately,
+      // but the CURRENTLY-OPEN surface keeps its mode (popup stays popup,
+      // sidepanel stays sidepanel) until next icon click. Surface a one-
+      // shot hint so users don't think the toggle silently failed.
+      setUiModePending(true);
+    }
+    setSavingUiMode(false);
   };
 
   const handleLockNow = async () => {
@@ -244,6 +272,74 @@ export function Settings({
               );
             })}
           </div>
+
+          {/* Round 4 TASK 4 — Window mode toggle. Persists via
+             bgSetUiOpenMode; SW re-binds chrome.action / chrome.sidePanel
+             immediately. The hint below appears after a successful switch
+             since the current surface keeps its open mode until next
+             icon click. */}
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              marginBottom: 6,
+            }}
+          >
+            Window mode
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 6,
+              marginBottom: uiModePending ? 6 : 14,
+            }}
+          >
+            {(["sidepanel", "popup"] as const).map((mode) => {
+              const active = mode === uiMode;
+              return (
+                <button
+                  key={mode}
+                  onClick={() => void handlePickUiMode(mode)}
+                  disabled={savingUiMode || uiMode === null}
+                  style={{
+                    padding: "8px 4px",
+                    borderRadius: 8,
+                    border: active
+                      ? "1px solid var(--gold)"
+                      : "1px solid var(--fg-700)",
+                    background: active
+                      ? "var(--gold-bg)"
+                      : "rgba(255,255,255,0.04)",
+                    color: active ? "var(--gold)" : "var(--fg-100)",
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 12,
+                    fontWeight: active ? 600 : 500,
+                    cursor: "pointer",
+                    transition: "all 150ms var(--e-out)",
+                  }}
+                >
+                  {mode === "sidepanel" ? "Sidebar" : "Popup"}
+                </button>
+              );
+            })}
+          </div>
+          {uiModePending && (
+            <div
+              style={{
+                fontSize: 10.5,
+                color: "var(--fg-300)",
+                marginBottom: 14,
+                lineHeight: 1.4,
+              }}
+            >
+              Close this window and click the wallet icon again to open
+              in the new mode.
+            </div>
+          )}
 
           <button
             onClick={() => void handleLockNow()}

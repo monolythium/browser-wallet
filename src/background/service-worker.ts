@@ -516,6 +516,10 @@ import {
   SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
   SESSION_KEY_WALLET_LOCKED,
   STORAGE_KEY_AUTO_LOCK_MINUTES,
+  STORAGE_KEY_UI_OPEN_MODE,
+  UI_OPEN_MODE_DEFAULT,
+  UI_OPEN_MODE_VALUES,
+  type UiOpenMode,
 } from "../shared/constants.js";
 
 /** Internal session key — last keystore-wipe-unauth timestamp (ms epoch).
@@ -783,7 +787,78 @@ void (async () => {
   if (typeof m === "number" && (AUTO_LOCK_OPTIONS as readonly number[]).includes(m)) {
     session.autoLockMinutes = m;
   }
+
+  // Round 4 TASK 4 — bind the action-icon click to side-panel or popup
+  // per the user's stored preference. Re-applies on every SW boot
+  // because chrome.sidePanel.setPanelBehavior + chrome.action.setPopup
+  // are session-scoped: SW hibernation drops them and a fresh boot
+  // needs to re-arm. Storage listener below re-applies when the user
+  // toggles the setting at runtime.
+  await applyUiOpenMode(await readStoredUiOpenMode());
 })();
+
+/** Round 4 TASK 4 — read the persisted UI open mode, falling back to
+ *  the default when no preference is stored or the stored value is
+ *  malformed (defensive against forward-incompatible writes). */
+async function readStoredUiOpenMode(): Promise<UiOpenMode> {
+  const r = await chrome.storage.local.get(STORAGE_KEY_UI_OPEN_MODE);
+  const v = r[STORAGE_KEY_UI_OPEN_MODE];
+  if (
+    typeof v === "string" &&
+    (UI_OPEN_MODE_VALUES as readonly string[]).includes(v)
+  ) {
+    return v as UiOpenMode;
+  }
+  return UI_OPEN_MODE_DEFAULT;
+}
+
+/** Round 4 TASK 4 — set Chrome to open either the side-panel or the
+ *  popup when the user clicks the extension icon. Side-panel mode
+ *  sets `openPanelOnActionClick: true` AND clears the action popup so
+ *  the side-panel actually wins the click (Chrome falls back to the
+ *  popup if it's still set). Popup mode reverses both. Calls are
+ *  idempotent — safe to invoke on every boot. */
+async function applyUiOpenMode(mode: UiOpenMode): Promise<void> {
+  try {
+    if (mode === "sidepanel") {
+      if (chrome.sidePanel?.setPanelBehavior) {
+        await chrome.sidePanel.setPanelBehavior({
+          openPanelOnActionClick: true,
+        });
+      }
+      if (chrome.action?.setPopup) {
+        await chrome.action.setPopup({ popup: "" });
+      }
+    } else {
+      if (chrome.sidePanel?.setPanelBehavior) {
+        await chrome.sidePanel.setPanelBehavior({
+          openPanelOnActionClick: false,
+        });
+      }
+      if (chrome.action?.setPopup) {
+        await chrome.action.setPopup({ popup: "src/popup/index.html" });
+      }
+    }
+  } catch {
+    // applyUiOpenMode is best-effort — if chrome.sidePanel / chrome.action
+    // are unavailable (older Chromium, test env), fall back to whatever
+    // the manifest declared. Don't propagate so the boot IIFE doesn't
+    // bail out and skip the remaining hydration steps.
+  }
+}
+
+// Storage listener re-applies UI open mode when the user toggles it
+// from Settings on any extension surface. Without this, the toggle
+// would only bind on next SW restart.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  const change = changes[STORAGE_KEY_UI_OPEN_MODE];
+  if (!change) return;
+  const next = typeof change.newValue === "string" ? change.newValue : null;
+  if (next && (UI_OPEN_MODE_VALUES as readonly string[]).includes(next)) {
+    void applyUiOpenMode(next as UiOpenMode);
+  }
+});
 
 /**
  * Pre-populate the WS down-cache for any operator whose WS URL is
@@ -6081,6 +6156,28 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         autoLockMinutes: session.autoLockMinutes,
         options: AUTO_LOCK_OPTIONS,
       };
+    }
+    case "get-ui-open-mode": {
+      const mode = await readStoredUiOpenMode();
+      return { ok: true, mode, options: UI_OPEN_MODE_VALUES };
+    }
+    case "set-ui-open-mode": {
+      const p = (message.payload ?? {}) as { mode?: unknown };
+      if (
+        typeof p.mode !== "string" ||
+        !(UI_OPEN_MODE_VALUES as readonly string[]).includes(p.mode)
+      ) {
+        return { ok: false, reason: "invalid ui open mode" };
+      }
+      await chrome.storage.local.set({
+        [STORAGE_KEY_UI_OPEN_MODE]: p.mode,
+      });
+      // applyUiOpenMode also runs from the storage.onChanged listener
+      // below, but we call it directly so the IPC reply can wait for
+      // the chrome.sidePanel / chrome.action calls to settle before
+      // the popup tells the user "restart the wallet."
+      await applyUiOpenMode(p.mode as UiOpenMode);
+      return { ok: true, mode: p.mode };
     }
     case "wallet-operator-status": {
       // Liveness probe for the popup's chain-status banner. We iterate
