@@ -86,7 +86,7 @@ export function VaultAddModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={initialMode === "fresh" ? "New vault" : "Import existing"}
+      title={initialMode === "fresh" ? "New wallet" : "Import existing"}
     >
       <VaultAddBody
         mode={initialMode}
@@ -121,7 +121,10 @@ function VaultAddBody({
   onClose,
   onComplete,
 }: VaultAddBodyProps) {
-  const defaultLabel = `Vault ${vaultsCount + 1}`;
+  // Round 5 TASK 4 — the default label uses the user-facing "Wallet"
+  // terminology; the keystore container still keeps the "vault" lexicon
+  // internally (storage keys, function names, types).
+  const defaultLabel = `Wallet ${vaultsCount + 1}`;
 
   // Whether the unlock-status probe has resolved. Until it does we
   // render a small "Checking…" placeholder rather than flashing a
@@ -235,9 +238,9 @@ function FreshFlow({
         setStep("reveal");
         return;
       }
-      setError(r.reason ?? "Could not create vault.");
+      setError(r.reason ?? "Could not create wallet.");
     } catch (e) {
-      setError((e as Error).message ?? "Could not create vault.");
+      setError((e as Error).message ?? "Could not create wallet.");
     } finally {
       setSubmitting(false);
     }
@@ -336,7 +339,7 @@ function FreshFlow({
         them down on paper. Don&apos;t screenshot, don&apos;t paste
         into chat.
       </div>
-      <AddressBlock label="New vault address" addr={address} />
+      <AddressBlock label="New wallet address" addr={address} />
       <label
         style={{
           display: "flex",
@@ -413,7 +416,7 @@ function ImportFlow({
         onComplete();
         return;
       }
-      const reason = r.reason ?? "Could not import vault.";
+      const reason = r.reason ?? "Could not import wallet.";
       // Backend duplicate-address rejection — surfaced inline so the
       // user can edit the phrase and retry without losing modal state.
       if (/already exists/i.test(reason)) {

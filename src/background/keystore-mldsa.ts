@@ -776,7 +776,9 @@ async function migrateLegacyToContainerV4(
 
   const record: VaultRecordV4 = {
     id: crypto.randomUUID(),
-    label: "Vault 1",
+    // Round 5 TASK 4 — see note on appendVaultRecord. UI surface
+    // calls this "Wallet 1"; internal terminology stays "vault".
+    label: "Wallet 1",
     createdAt: Date.now(),
     wrappedKey,
     envelope,
@@ -1671,9 +1673,11 @@ function passkeyStateForStorage(s: VaultPasskeyState): StoredPasskeyState {
  *  mnemonic, wraps the VEK with the cached MEK, rejects duplicate
  *  addresses, appends, saves. Validates the optional caller-supplied
  *  label with the same rules as {@link renameVaultV4}; falls back to
- *  `"Vault N"` (where N is the post-append vault count) when the
- *  caller passes no label. Optional `extra` block attaches multisig
- *  metadata for the multisig path. */
+ *  `"Wallet N"` (where N is the post-append vault count) when the
+ *  caller passes no label. (Round 5 TASK 4 — the UI surface uses
+ *  "Wallet" everywhere; the data-structure name stays "vault" for
+ *  diff continuity with storage keys, IPC ops, and types.) Optional
+ *  `extra` block attaches multisig metadata for the multisig path. */
 async function appendVaultRecord(
   mek: Uint8Array,
   seed: Uint8Array,
@@ -1695,7 +1699,11 @@ async function appendVaultRecord(
     if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
     label = trimmed;
   } else {
-    label = `Vault ${container.vaults.length + 1}`;
+    // Round 5 TASK 4 — default label uses the user-facing "Wallet"
+    // terminology. Existing records named "Vault N" by the previous
+    // generator keep their stored labels (rename is the only way to
+    // change them); only the default for new records changes.
+    label = `Wallet ${container.vaults.length + 1}`;
   }
   const vek = generateVekV4();
   let wrappedKey: WrappedVekV4;
