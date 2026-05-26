@@ -6,7 +6,8 @@ export type IconName =
   | "send" | "qr" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "close" | "back" | "settings" | "lock" | "eye" | "search"
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
-  | "contract" | "plus" | "more" | "pen" | "globe";
+  | "contract" | "plus" | "more" | "pen" | "globe"
+  | "menu" | "book" | "info" | "multisig" | "display";
 
 interface IconProps {
   name: IconName;
@@ -211,6 +212,52 @@ export function Icon({ name, size = 16 }: IconProps) {
           <circle cx="12" cy="12" r="9" />
           <path d="M3 12h18" />
           <path d="M12 3a13 13 0 0 1 0 18M12 3a13 13 0 0 0 0 18" />
+        </svg>
+      );
+    case "menu":
+      // Round 7 TASK 4 — hamburger (3 horizontal lines) for the top-bar
+      // menu trigger that replaces the previous lock button.
+      return (
+        <svg {...props}>
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      );
+    case "book":
+      // Round 7 TASK 5/4 — address book (Contacts menu item).
+      return (
+        <svg {...props}>
+          <path d="M4 4h14a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V4z" />
+          <path d="M4 18a2 2 0 0 1 2-2h14" />
+        </svg>
+      );
+    case "info":
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="16" x2="12" y2="12" />
+          <line x1="12" y1="8" x2="12.01" y2="8" />
+        </svg>
+      );
+    case "multisig":
+      // Round 7 TASK 7 — three overlapping circles for the multi-signer
+      // / multisig wallet menu item. Reads as "group of signers."
+      return (
+        <svg {...props}>
+          <circle cx="9" cy="10" r="3.2" />
+          <circle cx="15" cy="10" r="3.2" />
+          <circle cx="12" cy="15.5" r="3.2" />
+        </svg>
+      );
+    case "display":
+      // Round 7 TASK 4 — display / window-mode toggle icon. Renders
+      // as a monitor outline.
+      return (
+        <svg {...props}>
+          <rect x="3" y="4" width="18" height="13" rx="2" />
+          <line x1="8" y1="21" x2="16" y2="21" />
+          <line x1="12" y1="17" x2="12" y2="21" />
         </svg>
       );
     default:

@@ -57,6 +57,8 @@ import { ForgotPassword } from "./pages/ForgotPassword";
 import { MrvNative } from "./pages/MrvNative";
 import { Pending as MultisigPending } from "./pages/Pending";
 import { MultisigGovernance } from "./components/MultisigGovernance";
+import { MainMenu } from "./pages/MainMenu";
+import { Contacts } from "./pages/Contacts";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
@@ -74,6 +76,9 @@ import {
   bgWalletActiveChain,
   bgWalletSetActiveChain,
   bgChainList,
+  bgGetUiOpenMode,
+  bgSetUiOpenMode,
+  type UiOpenMode,
   type VaultSummary,
   type PendingApproval,
   type KeystoreStatus,
@@ -119,8 +124,11 @@ type Screen =
   | "connected-sites"
   | "multisig-pending"
   | "multisig-governance"
+  | "multisig-list"
   | "security"
-  | "features";
+  | "features"
+  | "main-menu"
+  | "contacts";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -171,6 +179,46 @@ const SPRINTNET_FALLBACK: ChainEntry = {
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
+  // Round 7 TASK 4 — current UI open mode (popup vs sidepanel). The
+  // MainMenu's "Switch to ..." item reads this to label the toggle as
+  // the OPPOSITE option. null while the SW IPC is in flight; modes
+  // settle after the first bgGetUiOpenMode resolves.
+  const [uiMode, setUiMode] = useState<UiOpenMode | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void bgGetUiOpenMode().then((r) => {
+      if (cancelled) return;
+      if (r.ok) setUiMode(r.mode);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  // Round 7 TASK 4 — back-navigation stack. When user navigates via the
+  // hamburger menu (main-menu → contacts), back from contacts should
+  // return to main-menu, not home. Sub-screens entered from the home
+  // top-bar or home tiles push their own predecessor (usually "home")
+  // before changing screen, then read+pop on back. Stack is bounded
+  // to ~8 entries; deeper navigation drops the oldest entry. Read-side
+  // of the state isn't referenced directly (peek happens inside the
+  // setStack callback in navigateBack); useRef would also work but
+  // useState keeps the same hook shape for future inspection.
+  const [, setScreenStack] = useState<Screen[]>([]);
+  const navigateTo = useCallback((target: Screen) => {
+    setScreenStack((prev) => {
+      const next = [...prev, screen];
+      return next.length > 8 ? next.slice(-8) : next;
+    });
+    setScreen(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+  const navigateBack = useCallback(() => {
+    setScreenStack((prev) => {
+      const last = prev[prev.length - 1] ?? "home";
+      setScreen(last);
+      return prev.slice(0, -1);
+    });
+  }, []);
   const [keystore, setKeystore] = useState<KeystoreStatus | null>(null);
   const [activeApproval, setActiveApproval] = useState<UiApproval | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -605,7 +653,12 @@ export default function App() {
     screen === "receive" ||
     screen === "send" ||
     screen === "reveal-phrase" ||
-    screen === "reset-wallet";
+    screen === "reset-wallet" ||
+    // Round 7 TASK 4 / 5 — banner shows on the new menu + contacts
+    // screens so the chain-status indicator stays continuous when
+    // the user navigates between menu sub-pages.
+    screen === "main-menu" ||
+    screen === "contacts";
 
   return (
     <ErrorBoundary>
@@ -616,17 +669,12 @@ export default function App() {
           onOpenNetworks={() => setScreen("networks")}
           {...(screen === "home"
             ? {
-                onSettings: () => setScreen("settings"),
-                onConnectedSites: () => setScreen("connected-sites"),
-                onLock: async () => {
-                  await bgKeystoreLock();
-                  // The SW writes walletLocked=true and the
-                  // chrome.storage.onChanged listener (App.tsx
-                  // mount-effect) flips screen → "locked" on its
-                  // own. We still set it locally for the case
-                  // where the SW response races the listener.
-                  setScreen("locked");
-                },
+                onSettings: () => navigateTo("settings"),
+                onConnectedSites: () => navigateTo("connected-sites"),
+                // Round 7 TASK 4 — top-bar lock-button replaced with the
+                // hamburger menu trigger. Lock moves into the MainMenu's
+                // bottom (danger) section.
+                onMenu: () => navigateTo("main-menu"),
               }
             : {})}
         />
@@ -826,7 +874,7 @@ export default function App() {
 
       {screen === "settings" && (
         <Settings
-          onBack={() => setScreen("home")}
+          onBack={navigateBack}
           address={keystore?.address ?? ""}
           algo={keystore?.algo ?? "secp256k1"}
           onShowPhrase={() => setScreen("reveal-phrase")}
@@ -879,6 +927,39 @@ export default function App() {
           onBack={() => setScreen("settings")}
         />
       )}
+
+      {/* Round 7 TASK 4 — MainMenu (hamburger). Reached from the top-
+         bar menu button on home. Each menu item uses navigateTo so
+         the destination's onBack pops back here. */}
+      {screen === "main-menu" && (
+        <MainMenu
+          uiMode={uiMode}
+          onBack={navigateBack}
+          onSwitchMode={() => {
+            const next: UiOpenMode = uiMode === "popup" ? "sidepanel" : "popup";
+            void bgSetUiOpenMode(next).then((r) => {
+              if (r.ok) setUiMode(r.mode);
+            });
+          }}
+          onContacts={() => navigateTo("contacts")}
+          onConnectedSites={() => navigateTo("connected-sites")}
+          onNetworks={() => navigateTo("networks")}
+          onSettings={() => navigateTo("settings")}
+          onAbout={() => navigateTo("about")}
+          onLockWallet={() => {
+            void bgKeystoreLock();
+            // The SW writes walletLocked=true and the
+            // chrome.storage.onChanged listener (App.tsx mount-
+            // effect) flips screen → "locked" on its own. Local
+            // setScreen is belt-and-braces against IPC race.
+            setScreen("locked");
+          }}
+        />
+      )}
+
+      {/* Round 7 TASK 5 — Contacts page. Reached from MainMenu;
+         onBack via navigateBack to return to the menu. */}
+      {screen === "contacts" && <Contacts onBack={navigateBack} />}
 
       {screen === "about" && (
         <About
