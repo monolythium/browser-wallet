@@ -21,6 +21,7 @@ import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
+import { Footer } from "./components/Footer";
 import {
   ACCOUNTS, DAPPS, NODE,
 } from "./demo-data";
@@ -1805,9 +1806,13 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
            removed. The unified onboarding hint bar at the top of Home
            already nudges users into onboarding tasks (passkey, SLH-DSA
            backup, feature discovery) when relevant; a manual re-entry
-           button was clutter on a finished wallet. onOpenOnboard prop
-           stays for now in case a future surface needs it. */}
+           button was clutter on a finished wallet. */}
       </div>
+      {/* Round 8 TASK 5 — Mono Labs branding footer. The existing
+         ext-hintbar (version + cmd shortcut) sits below for
+         developer-flavored info; Footer is the user-facing
+         "Product of Mono Labs · © 2026" strip. */}
+      <Footer />
       <div className="ext-hintbar">
         <span>v0.0.1 · {NODE.talos}</span>
         <span><kbd>⌘⇧M</kbd> open</span>
