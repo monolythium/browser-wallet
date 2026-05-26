@@ -116,12 +116,16 @@ html[data-mode="fullscreen"] body {
   overflow: auto;
   background: var(--ink-000);
 }
+/* Round 12 TASK 6 — bottom padding reduced 96 → 24 px now that the
+   footer is in normal flow inside .ext (no longer position:fixed
+   overlay). Extra 72 px of empty space below the card was a
+   leftover from clearing the fixed footer. */
 html[data-mode="fullscreen"] body {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding: 24px 0 96px;
+  padding: 24px 0;
 }
 html[data-mode="fullscreen"] #root {
   width: 100%;
