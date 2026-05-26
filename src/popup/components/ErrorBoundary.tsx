@@ -88,9 +88,9 @@ function DefaultFallback({
           marginBottom: 10,
         }}
       >
-        The wallet caught an unexpected error. Your funds and vault are
-        safe — only the current screen was affected. Try again, or
-        reload the popup.
+        The wallet caught an unexpected error. Your funds and recovery
+        phrase are safe — only the current screen was affected. Try
+        again, or reload the popup.
       </div>
       <details
         style={{

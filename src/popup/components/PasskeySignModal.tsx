@@ -114,7 +114,7 @@ export function PasskeySignModal({
     if (credentials.length === 0) {
       setScreen({
         kind: "error",
-        message: "No passkeys registered for this vault",
+        message: "No passkeys registered for this wallet",
       });
       return;
     }

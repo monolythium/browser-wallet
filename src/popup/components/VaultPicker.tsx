@@ -440,11 +440,11 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
                 margin: "4px 0",
               }}
             />
-            <FooterButton onClick={handleAddFresh} label="New vault" />
+            <FooterButton onClick={handleAddFresh} label="New wallet" />
             <FooterButton onClick={handleAddImport} label="Import existing" />
             <FooterButton
               onClick={handleAddMultisig}
-              label="New multisig vault"
+              label="New multisig wallet"
             />
           </div>,
           document.body,
@@ -453,7 +453,7 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
       <Modal
         open={renameId !== null}
         onClose={handleCancelRename}
-        title="Rename vault"
+        title="Rename wallet"
       >
         {renameTarget && (
           <RenameForm

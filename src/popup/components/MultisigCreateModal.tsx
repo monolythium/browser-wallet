@@ -74,7 +74,7 @@ export function MultisigCreateModal({
 }: MultisigCreateModalProps) {
   if (!open) return null;
   return (
-    <Modal open={open} onClose={onClose} title="New multisig vault">
+    <Modal open={open} onClose={onClose} title="New multisig wallet">
       <MultisigBody
         vaultsCount={vaultsCount}
         onClose={onClose}
@@ -268,9 +268,9 @@ function MultisigBody({ vaultsCount, onClose, onComplete }: BodyProps) {
               setStep("reveal");
               return;
             }
-            setError(r.reason ?? "Could not create multisig vault.");
+            setError(r.reason ?? "Could not create multisig wallet.");
           } catch (e) {
-            setError((e as Error).message ?? "Could not create multisig vault.");
+            setError((e as Error).message ?? "Could not create multisig wallet.");
           } finally {
             setSubmitting(false);
           }
@@ -829,7 +829,7 @@ function ThresholdStep({
           }}
         >
           Requiring all {n} signers means losing any one signer locks
-          the vault until governance restores quorum.
+          the wallet until governance restores quorum.
         </div>
       )}
       <FooterButtons>
@@ -880,7 +880,7 @@ function ReviewStep({
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <div style={labelHintStyle}>Vault label</div>
+        <div style={labelHintStyle}>Wallet label</div>
         <input
           type="text"
           value={label}
@@ -982,7 +982,7 @@ function ReviewStep({
         }}
       >
         The wallet will generate a fresh ML-DSA-65 keypair for the
-        multisig vault. You&apos;ll see the executor mnemonic on the
+        multisig wallet. You&apos;ll see the executor mnemonic on the
         next screen — write it down before continuing.
       </div>
 
@@ -1058,13 +1058,13 @@ function RevealStep({
           lineHeight: 1.5,
         }}
       >
-        This 24-word phrase recovers the multisig vault&apos;s own
+        This 24-word phrase recovers the multisig wallet&apos;s own
         keypair. Approvals still require the configured threshold,
         so losing it doesn&apos;t let an attacker spend — but it
-        does brick the vault until governance restores access.
+        does brick the wallet until governance restores access.
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <div style={labelHintStyle}>Vault address</div>
+        <div style={labelHintStyle}>Wallet address</div>
         <div
           style={{
             padding: "8px 10px",
