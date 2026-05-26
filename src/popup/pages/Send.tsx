@@ -12,6 +12,7 @@ import type { ReactNode, CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../Icon";
 import {
+  bgContactsCheck,
   bgMultisigPropose,
   bgPasskeyEvaluate,
   bgPasskeyRecordUsage,
@@ -23,6 +24,8 @@ import {
   type FeeSuggestion,
   type PreviewTransactionHooksOutcome,
 } from "../bg";
+import { AddContactModal } from "./Contacts";
+import { useContacts } from "../hooks/useContacts";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
@@ -131,9 +134,22 @@ export function Send({
   const [feeError, setFeeError] = useState<string | null>(null);
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
 
+  // Round 7 TASK 6 — pre-load contacts so the post-send save-recipient
+  // prompt can hand the AddContactModal an `existing` map for
+  // duplicate-detection without an extra IPC round-trip.
+  const { contacts: contactsMap } = useContacts();
   // Result state — written by handleConfirm.
   const [txHash, setTxHash] = useState<string | null>(null);
   const [hashCopied, setHashCopied] = useState(false);
+  // Round 7 TASK 6 — when a send to a non-contact recipient succeeds,
+  // capture the recipient 0x address here so the success view can
+  // render an "Add to contacts" prompt with the address pre-seeded.
+  // null in three cases: send not yet finished, recipient already in
+  // contacts, or recipient is the active wallet's own send (multisig
+  // proposals don't trigger the prompt).
+  const [pendingContactAddr, setPendingContactAddr] = useState<string | null>(
+    null,
+  );
   const [submitError, setSubmitError] = useState<{
     message: string;
     code: number | null;
@@ -336,6 +352,19 @@ export function Send({
           });
         }
         setStep("success");
+        // Round 7 TASK 6 — after a successful send, fire-and-forget
+        // check whether the recipient is already a saved contact. If
+        // not, surface the "Save recipient" prompt on the success
+        // screen with the address pre-filled. Multisig propose
+        // (branch above) deliberately skips this — the proposal is
+        // pending until co-signers approve, so it's not the right
+        // moment to label the counterparty.
+        const sentTo = effectiveAddr0x;
+        if (sentTo) {
+          void bgContactsCheck(sentTo).then((known) => {
+            if (!known) setPendingContactAddr(sentTo);
+          });
+        }
       } else {
         setSubmitError({
           message: r.reason ?? "send failed",
@@ -431,12 +460,26 @@ export function Send({
 
   if (step === "success" && txHash !== null) {
     return (
-      <SuccessView
-        txHash={txHash}
-        copied={hashCopied}
-        onCopy={() => void handleCopyHash()}
-        onDone={onBack}
-      />
+      <>
+        <SuccessView
+          txHash={txHash}
+          copied={hashCopied}
+          onCopy={() => void handleCopyHash()}
+          onDone={onBack}
+        />
+        {/* Round 7 TASK 6 — post-send "save recipient" prompt. Fires
+            after a non-multisig send when the recipient isn't already
+            in the user's contacts. Friendly tone, not a warning;
+            dismiss-skip is one tap. */}
+        {pendingContactAddr && (
+          <AddContactModal
+            open={true}
+            existing={contactsMap}
+            seedAddress={pendingContactAddr}
+            onClose={() => setPendingContactAddr(null)}
+          />
+        )}
+      </>
     );
   }
 
