@@ -675,7 +675,7 @@ export default function App() {
     <ErrorBoundary>
     {isFullscreen && (
       <div className="ext-fullscreen-brand">
-        <span className="accent">◇</span>Monolythium Wallet
+        <span className="accent">◇</span>Monolythium Browser Wallet
       </div>
     )}
     <div className="ext" data-denom={acc.denom}>

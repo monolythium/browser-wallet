@@ -1,11 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Monolythium Wallet",
-  "version": "0.0.1",
-  "description": "Monolythium v4.0 browser wallet",
+  "name": "Monolythium Browser Wallet",
+  "short_name": "Monolythium",
+  "version": "0.1.0",
+  "description": "Self-custodial wallet for Monolythium. Post-quantum ML-DSA-65 signing, encrypted mempool, native Rust/RISC-V contract calls.",
+  "homepage_url": "https://monolythium.com",
   "action": {
     "default_popup": "src/popup/index.html",
-    "default_title": "Monolythium Wallet"
+    "default_title": "Monolythium Browser Wallet"
   },
   "side_panel": {
     "default_path": "src/popup/index.html?surface=sidepanel"
