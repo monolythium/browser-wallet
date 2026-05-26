@@ -41,24 +41,4 @@ function detectMode(): "popup" | "sidepanel" | "fullscreen" {
 }
 document.documentElement.dataset.mode = detectMode();
 
-// Round 8 TASK 1 — DIAGNOSTIC console log of the actual computed
-// background-color on each layer so the user can corroborate the
-// visible diagnostic colors with what the browser actually rendered.
-// Remove together with the diagnostic CSS in Phase C.
-if (document.documentElement.dataset.mode === "popup") {
-  // Defer to next tick so styles have applied.
-  queueMicrotask(() => {
-    const rootEl = document.getElementById("root");
-    console.log("[ROUND-8-DIAGNOSTIC] Popup DOM layer bg colors:", {
-      mode: document.documentElement.dataset.mode,
-      html: getComputedStyle(document.documentElement).backgroundColor,
-      body: getComputedStyle(document.body).backgroundColor,
-      root: rootEl ? getComputedStyle(rootEl).backgroundColor : "no #root",
-      htmlSize: `${document.documentElement.clientWidth}×${document.documentElement.clientHeight}`,
-      bodySize: `${document.body.clientWidth}×${document.body.clientHeight}`,
-      windowSize: `${window.innerWidth}×${window.innerHeight}`,
-    });
-  });
-}
-
 createRoot(document.getElementById("root")!).render(<App />);
