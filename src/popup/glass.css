@@ -22,12 +22,43 @@
    fill whatever Chrome assigned the panel. .ext itself reads the
    same attribute (see ext.css) to drop its fixed 380×620 frame in
    sidepanel mode. */
+/* Round 8 TASK 1 Phase C — ROOT CAUSE of the 5-round popup corner
+   gap mystery. Diagnostic CSS (commit 3abe0da) painted each DOM
+   layer a unique color in popup mode; user reported YELLOW visible
+   at corners, which identified #root as the offender. Console
+   readout also revealed html=380×600 but body=380×620 (Chrome's
+   popup viewport is 600px tall, our hardcoded body declared 620px
+   and overflowed by 20 px).
+
+   Two changes resolve both:
+   1. Switch the popup sizing from hardcoded 620 px → 100 vh. Chrome
+      allocates whatever the popup gets (≈600 px); body, #root, and
+      .ext all match the viewport exactly, no 20 px overflow.
+   2. Explicitly paint #root with the SAME linear-gradient body
+      uses. Round 6 set body bg; #root was implicitly transparent
+      and should have shown body underneath, but at the .ext's
+      rounded corners SOMETHING was painting differently (border
+      anti-aliasing, sub-pixel rendering, the 1 px white .ext
+      border interacting with body underneath). Painting #root with
+      the explicit gradient eliminates the ambiguity — at every
+      y-coordinate inside the popup, html / body / #root all paint
+      the exact same color from the same gradient computed over the
+      same 100 vh height, and the .ext gradient on top picks up the
+      identical stops over its 100 % height. */
 html[data-mode="popup"],
 html[data-mode="popup"] body,
 html[data-mode="popup"] #root {
   width: 380px;
-  height: 620px;
+  height: 100vh;
   overflow: hidden;
+}
+html[data-mode="popup"] #root {
+  background:
+    linear-gradient(180deg, var(--ink-000) 0%, var(--ink-100) 50%, var(--ink-050) 100%);
+}
+html[data-mode="popup"] .ext {
+  width: 100%;
+  height: 100%;
 }
 
 html[data-mode="sidepanel"],
