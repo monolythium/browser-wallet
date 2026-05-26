@@ -168,8 +168,8 @@ export function SlhDsaBackupHintBar({
             lineHeight: 1.4,
           }}
         >
-          A post-quantum backup key (§30.1) protects your account if
-          quantum computing ever breaks current crypto. One-time setup,
+          A post-quantum backup key protects your account if quantum
+          computing ever breaks current crypto. One-time setup,
           one-time on-chain registration.
         </div>
       </div>

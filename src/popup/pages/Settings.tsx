@@ -563,7 +563,7 @@ export function Settings({
             }}
           >
             View active delegations, pending rewards, and manage existing
-            positions across clusters per §23.
+            positions across clusters.
           </div>
           <button
             onClick={onOpenDelegations}

@@ -309,7 +309,7 @@ export function RedelegateForm({
           </div>
         )}
         <div style={fromHint}>
-          Instant cluster swap — §23.2 zero-unbond, no cooldown between source
+          Instant cluster swap — zero-unbond, no cooldown between source
           and destination.
         </div>
       </div>

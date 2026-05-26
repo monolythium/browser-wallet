@@ -204,7 +204,7 @@ export function UnstakeForm({
           </div>
         )}
         <div style={fromHint}>
-          Available immediately — §23.2 zero-unbond for delegators.
+          Available immediately — zero-unbond for delegators.
           {amountLythoshi !== null &&
             amountLythoshi > 0n &&
             !exceedsDelegation && (

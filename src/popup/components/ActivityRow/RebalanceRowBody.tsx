@@ -17,7 +17,7 @@ export function RebalanceRowBody({ row }: RebalanceRowBodyProps) {
         <Icon name="swap" size={13} />
       </div>
       <div className="ext-act-row__main">
-        <div className="ext-act-row__who">Auto-rebalanced (cap tightening §23.7)</div>
+        <div className="ext-act-row__who">Auto-rebalanced (cap tightening)</div>
         <div className="ext-act-row__meta">
           <span>block {row.blockHeight.toLocaleString("en-US")}</span>
           <span>·</span>
