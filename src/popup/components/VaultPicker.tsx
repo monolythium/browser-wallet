@@ -272,100 +272,127 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
         style={chipDisabledStyle}
       >
         <div className="ext-acc__lbl">
-          {/* Round 6 TASK 3 — row 1 now puts the pencil DIRECTLY next
-             to the wallet label, with the multisig pill (when
-             applicable) and the dropdown chevron on the far right.
-             Wallet name shrinks to 12.5 px so the address below it
-             reads as the primary visual element. */}
+          {/* Round 7 TASK 2 — row 1 uses a 3-column grid so the name +
+             pencil cluster sits VISUALLY CENTERED in the row regardless
+             of the right-side cluster (multisig pill + chevron).
+             Round 6's flex layout left-aligned the name and just
+             spacer-pushed the chevron, making the row read as
+             left-weighted. */}
           <div
             className="n"
             style={{
-              display: "flex",
+              display: "grid",
+              gridTemplateColumns: "1fr auto 1fr",
               alignItems: "center",
               gap: 6,
             }}
           >
+            {/* Col 1 — empty spacer for centering. */}
+            <span />
+            {/* Col 2 — name + pencil cluster (centered). */}
             <span
-              title={displayLabel}
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
                 minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                fontFamily: "var(--f-sans)",
-                fontSize: 12.5,
-                fontWeight: 500,
-                color: "var(--fg-100)",
-                letterSpacing: "-0.01em",
               }}
             >
-              {displayLabel}
-            </span>
-            {activeVault && (
-              <button
-                type="button"
-                onClick={handleTopBarRename}
-                aria-label="Rename wallet"
-                title="Rename wallet"
+              <span
+                title={displayLabel}
                 style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 20,
-                  height: 20,
-                  padding: 0,
-                  background: "transparent",
-                  border: "none",
-                  color: "var(--fg-400)",
-                  cursor: "pointer",
-                  flexShrink: 0,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontFamily: "var(--f-sans)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  color: "var(--fg-100)",
+                  letterSpacing: "-0.01em",
                 }}
               >
-                <Icon name="pen" size={11} />
-              </button>
-            )}
-            <span style={{ flex: 1 }} />
-            {activeVault?.kind === "multisig" && (
+                {displayLabel}
+              </span>
+              {activeVault && (
+                <button
+                  type="button"
+                  onClick={handleTopBarRename}
+                  aria-label="Rename wallet"
+                  title="Rename wallet"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 20,
+                    height: 20,
+                    padding: 0,
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--fg-400)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Icon name="pen" size={11} />
+                </button>
+              )}
+            </span>
+            {/* Col 3 — right-aligned cluster (multisig pill + chevron). */}
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                justifySelf: "end",
+              }}
+            >
+              {activeVault?.kind === "multisig" && (
+                <span
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 9,
+                    padding: "1px 4px",
+                    borderRadius: 3,
+                    border: "1px solid rgba(124,127,255,0.4)",
+                    background: "rgba(124,127,255,0.08)",
+                    color: "var(--fg-200)",
+                    letterSpacing: "0.05em",
+                    flexShrink: 0,
+                  }}
+                  title={`${activeVault.threshold} of ${activeVault.signerCount} multisig`}
+                >
+                  {activeVault.threshold}/{activeVault.signerCount}
+                </span>
+              )}
               <span
                 style={{
-                  fontFamily: "var(--f-mono)",
-                  fontSize: 9,
-                  padding: "1px 4px",
-                  borderRadius: 3,
-                  border: "1px solid rgba(124,127,255,0.4)",
-                  background: "rgba(124,127,255,0.08)",
-                  color: "var(--fg-200)",
-                  letterSpacing: "0.05em",
+                  color: "var(--fg-300)",
                   flexShrink: 0,
+                  display: "inline-flex",
+                  transform: open ? "rotate(180deg)" : "none",
+                  transition: "transform 120ms ease",
                 }}
-                title={`${activeVault.threshold} of ${activeVault.signerCount} multisig`}
               >
-                {activeVault.threshold}/{activeVault.signerCount}
+                <Icon name="chev-d" size={12} />
               </span>
-            )}
-            <span
-              style={{
-                color: "var(--fg-300)",
-                flexShrink: 0,
-                display: "inline-flex",
-                transform: open ? "rotate(180deg)" : "none",
-                transition: "transform 120ms ease",
-              }}
-            >
-              <Icon name="chev-d" size={12} />
             </span>
           </div>
           {/* Row 2 — FULL bech32m address (single line, prominent) + copy.
-             Round 6 TASK 3 — bumped from 12 → 13.5 px / fg-100 with
-             tighter letter-spacing so the 43-char string still fits
-             in the popup's chip width (~317 px after subtracting the
-             copy button + gap). At 13.5 px JBM with -0.04 em the
-             string measures ~308 px — fits with headroom. */}
+             Round 7 TASK 2 — bump 13.5 → 14 px, tighten letter-spacing
+             to -0.06 em so 43 chars still fit in ~317 px of chip
+             content width (43 × 7.18 ≈ 309 px + 4 px gap + 20 px copy
+             button = 333 px against 341 px available). Drop flex:1 from
+             the address span so the copy button hugs the END of the
+             text instead of the end of the span — Round 6's flex:1
+             span left ~9 px of empty span past the text end that read
+             as extra gap. Cluster centers via justify-content. */}
           <div
             className="a"
             style={{
               display: "flex",
               alignItems: "center",
+              justifyContent: "center",
               gap: 4,
               marginTop: 3,
             }}
@@ -374,16 +401,15 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
               onClick={handleAddrCopy}
               title={addrCopied ? "Copied" : fullAddr}
               style={{
-                flex: 1,
                 minWidth: 0,
                 overflow: "hidden",
                 textOverflow: "clip",
                 whiteSpace: "nowrap",
                 fontFamily: "var(--f-mono)",
-                fontSize: 13.5,
+                fontSize: 14,
                 fontWeight: 500,
                 color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
-                letterSpacing: "-0.04em",
+                letterSpacing: "-0.06em",
                 cursor: "copy",
               }}
             >
