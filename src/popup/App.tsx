@@ -61,6 +61,7 @@ import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
   bgKeystoreStatus,
+  bgKeystoreLock,
   bgPing,
   bgKeystoreCreateNew,
   bgKeystoreCreateFromMnemonic,
@@ -613,7 +614,21 @@ export default function App() {
         <ChainStatusBanner
           network={activeChain}
           onOpenNetworks={() => setScreen("networks")}
-          {...(screen === "home" ? { onSettings: () => setScreen("settings") } : {})}
+          {...(screen === "home"
+            ? {
+                onSettings: () => setScreen("settings"),
+                onConnectedSites: () => setScreen("connected-sites"),
+                onLock: async () => {
+                  await bgKeystoreLock();
+                  // The SW writes walletLocked=true and the
+                  // chrome.storage.onChanged listener (App.tsx
+                  // mount-effect) flips screen → "locked" on its
+                  // own. We still set it locally for the case
+                  // where the SW response races the listener.
+                  setScreen("locked");
+                },
+              }
+            : {})}
         />
       )}
 
