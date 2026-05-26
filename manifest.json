@@ -8,7 +8,7 @@
     "default_title": "Monolythium Wallet"
   },
   "side_panel": {
-    "default_path": "src/popup/index.html"
+    "default_path": "src/popup/index.html?surface=sidepanel"
   },
   "background": {
     "service_worker": "src/background/service-worker.ts",
