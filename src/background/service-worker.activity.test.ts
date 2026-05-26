@@ -306,6 +306,7 @@ vi.mock("./networks.js", () => ({
   readOperatorOverride: vi.fn(async () => null),
   getDefaultOperators: vi.fn(() => []),
   getActiveOperators: vi.fn(() => []),
+  applyFallbackOperatorsIfStranded: vi.fn(async () => undefined),
 }));
 
 // Keystore (v2 + v4) — fixed unlocked address, never actually signs.
