@@ -613,6 +613,7 @@ export default function App() {
         <ChainStatusBanner
           network={activeChain}
           onOpenNetworks={() => setScreen("networks")}
+          {...(screen === "home" ? { onSettings: () => setScreen("settings") } : {})}
         />
       )}
 
