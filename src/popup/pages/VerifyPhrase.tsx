@@ -5,7 +5,11 @@ import { Icon } from "../Icon";
 interface VerifyPhraseProps {
   mnemonic: string;
   onVerified: () => void;
-  onBack: () => void;
+  /** Round 12 TASK 1 — back button is optional. During first-setup
+   *  onboarding the parent intentionally omits onBack so the user
+   *  can't bypass verification by tapping back into the show-phrase
+   *  step (which itself has no back to home anymore). */
+  onBack?: () => void;
 }
 
 // Round 11 TASK 5 — number of slots to hide. The original 3-word
@@ -128,9 +132,13 @@ export function VerifyPhrase({
   return (
     <>
       <div className="ext-top">
-        <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
-          <Icon name="back" size={15} />
-        </button>
+        {onBack ? (
+          <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+            <Icon name="back" size={15} />
+          </button>
+        ) : (
+          <div style={{ width: 36 }} />
+        )}
         <div
           style={{
             flex: 1,
