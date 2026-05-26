@@ -898,7 +898,12 @@ export default function App() {
           // Sites correctly returns to Settings (same fix-pattern as
           // Round 9 TASK 2's Settings → About).
           onShowConnectedSites={() => navigateTo("connected-sites")}
-          onResetWallet={() => setScreen("reset-wallet")}
+          // Round 11 TASK 3 — Settings → Reset wallet now pushes the
+          // stack so back from ResetWallet returns to Settings. The
+          // same ResetWallet screen is reached from the hamburger's
+          // "Reset wallet" entry (which pushes "main-menu");
+          // navigateBack handles both pushers.
+          onResetWallet={() => navigateTo("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
           onOpenMrvNative={() => setScreen("mrv-native")}
           // Round 9 TASK 2 — Settings → About now pushes onto the
@@ -1075,6 +1080,11 @@ export default function App() {
             // setScreen is belt-and-braces against IPC race.
             setScreen("locked");
           }}
+          // Round 11 TASK 3 — destructive reset reached from the
+          // hamburger menu. navigateTo pushes "main-menu" so back from
+          // ResetWallet (via navigateBack) returns to the menu instead
+          // of skipping to home.
+          onResetWallet={() => navigateTo("reset-wallet")}
         />
       )}
 
@@ -1141,9 +1151,14 @@ export default function App() {
         <ConnectedSites onBack={navigateBack} />
       )}
 
+      {/* Round 11 TASK 3 — ResetWallet's onBack was hardcoded to
+         "settings", which routed wrong when entered via the new
+         hamburger-menu Reset wallet entry. navigateBack pops the
+         screen stack so both entry paths (Settings → Reset and
+         hamburger → Reset) return to their pusher. */}
       {screen === "reset-wallet" && (
         <ResetWallet
-          onBack={() => setScreen("settings")}
+          onBack={navigateBack}
           onSuccess={() => {
             // SW already wiped + locked; refresh so keystore.hasVault
             // reflects the empty state, then route to Welcome — same
