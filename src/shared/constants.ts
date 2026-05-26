@@ -13,6 +13,10 @@ export const STORAGE_KEY_CONNECTED_SITES = "mono.connected-sites";
 // chrome.storage.onChanged listener so vault-create / vault-import /
 // vault-select propagate to the UI without IPC plumbing.
 export const STORAGE_KEY_VAULTS_CONTAINER_V4 = "mono.vaults.v4";
+// Round 7 TASK 5 — Contacts (address book). Keyed by lowercase 0x
+// address; value is a ContactRecord (see src/background/contacts.ts).
+// Mirrored to the popup via chrome.storage.onChanged.
+export const STORAGE_KEY_CONTACTS = "mono.contacts.v1";
 // Round 4 TASK 4 — UI open mode. The SW reads this on boot + on every
 // chrome.storage.onChanged event to bind action-icon click to either
 // the side-panel or the popup. Default "sidepanel" matches modern
@@ -71,6 +75,15 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "list-connected-sites",
   "revoke-origin",
   "revoke-all-origins",
+  // Round 7 TASK 5 — Contacts management ops are passive surface reads
+  // (list + check) and labelling operations (add/rename/remove). User
+  // activity that should bump the auto-lock deadline lives on the
+  // send / approval / unlock paths, not here.
+  "contacts-list",
+  "contacts-add",
+  "contacts-remove",
+  "contacts-rename",
+  "contacts-check",
   "keystore-unlock",
   "keystore-lock",
   "keystore-create-new",

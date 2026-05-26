@@ -505,6 +505,14 @@ import {
   clearAllConnectedSites,
 } from "./connected-sites.js";
 import {
+  loadContacts,
+  addContact,
+  removeContact,
+  renameContact,
+  isContactKnown,
+} from "./contacts.js";
+import { addressToBech32m } from "../shared/bech32m.js";
+import {
   ALARM_AUTO_LOCK,
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
@@ -6178,6 +6186,80 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // the popup tells the user "restart the wallet."
       await applyUiOpenMode(p.mode as UiOpenMode);
       return { ok: true, mode: p.mode };
+    }
+    // Round 7 TASK 5 — Contacts CRUD. All 5 ops are in
+    // AUTO_LOCK_EXEMPT_OPS so management activity doesn't bump the
+    // user-active deadline; the user "did something" signal comes
+    // from the send / sign / unlock paths, not from labelling.
+    case "contacts-list": {
+      const contacts = await loadContacts();
+      return { ok: true, contacts };
+    }
+    case "contacts-add": {
+      const p = (message.payload ?? {}) as {
+        address?: unknown;
+        bech32m?: unknown;
+        name?: unknown;
+        notes?: unknown;
+      };
+      if (typeof p.address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(p.address)) {
+        return { ok: false, reason: "invalid address" };
+      }
+      if (typeof p.name !== "string") {
+        return { ok: false, reason: "missing name" };
+      }
+      const nameTrimmed = p.name.trim();
+      if (nameTrimmed.length === 0) {
+        return { ok: false, reason: "name is empty" };
+      }
+      if (nameTrimmed.length > 64) {
+        return { ok: false, reason: "name too long" };
+      }
+      const bech32m =
+        typeof p.bech32m === "string" && p.bech32m.length > 0
+          ? p.bech32m
+          : addressToBech32m(p.address);
+      const notesTrimmed =
+        typeof p.notes === "string" ? p.notes.trim().slice(0, 256) : undefined;
+      await addContact({
+        address: p.address.toLowerCase(),
+        bech32m,
+        name: nameTrimmed,
+        addedAt: Date.now(),
+        ...(notesTrimmed ? { notes: notesTrimmed } : {}),
+      });
+      return { ok: true };
+    }
+    case "contacts-remove": {
+      const p = (message.payload ?? {}) as { address?: unknown };
+      if (typeof p.address !== "string") {
+        return { ok: false, reason: "missing address" };
+      }
+      await removeContact(p.address);
+      return { ok: true };
+    }
+    case "contacts-rename": {
+      const p = (message.payload ?? {}) as {
+        address?: unknown;
+        name?: unknown;
+      };
+      if (typeof p.address !== "string" || typeof p.name !== "string") {
+        return { ok: false, reason: "invalid input" };
+      }
+      const nameTrimmed = p.name.trim();
+      if (nameTrimmed.length === 0 || nameTrimmed.length > 64) {
+        return { ok: false, reason: "invalid name" };
+      }
+      await renameContact(p.address, nameTrimmed);
+      return { ok: true };
+    }
+    case "contacts-check": {
+      const p = (message.payload ?? {}) as { address?: unknown };
+      if (typeof p.address !== "string") {
+        return { ok: false, reason: "missing address" };
+      }
+      const known = await isContactKnown(p.address);
+      return { ok: true, known };
     }
     case "wallet-operator-status": {
       // Liveness probe for the popup's chain-status banner. We iterate
