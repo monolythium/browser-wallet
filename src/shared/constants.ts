@@ -8,6 +8,11 @@ export const ALARM_AUTO_LOCK = "monolythium.autolock";
 export const STORAGE_KEY_AUTO_LOCK_MINUTES = "mono.autoLockMinutes";
 export const STORAGE_KEY_PENDING_APPROVALS = "mono.pending-approvals";
 export const STORAGE_KEY_CONNECTED_SITES = "mono.connected-sites";
+// Multi-vault container. Keep in sync with VAULTS_CONTAINER_KEY_V4 in
+// src/background/keystore-mldsa.ts; the popup mirrors this key in its
+// chrome.storage.onChanged listener so vault-create / vault-import /
+// vault-select propagate to the UI without IPC plumbing.
+export const STORAGE_KEY_VAULTS_CONTAINER_V4 = "mono.vaults.v4";
 
 // chrome.storage.session
 export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
