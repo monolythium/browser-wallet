@@ -96,19 +96,26 @@ body::-webkit-scrollbar,
     0 30px 80px -10px rgba(0,0,0,0.7);
   position:relative; overflow:hidden; isolation:isolate;
   display:flex; flex-direction:column;
-  /* Ambient bloom — matches mobile wallet, driven by theme tokens so the
-     popup re-tints when data-theme changes on <html>. */
+  /* Round 7 TASK 1 — ROOT CAUSE for the persistent "dark gap" at the
+     rounded corners (Rounds 4, 5, 6 all attempted to fix but missed
+     the actual cause). The body bg was mirrored onto the .ext linear-
+     gradient in Round 6 so corner negative space matches at every
+     y-coordinate; the seam still appeared because .ext layered three
+     radial gold-glow blooms (top-right, bottom-left, bottom-center)
+     ON TOP of that linear-gradient. Body has no blooms. At the 20 px
+     rounded corners, body's plain gradient peeks through visibly
+     darker than the adjacent .ext interior which is brightened by the
+     gold-glow bloom at exactly those corner regions — read as a
+     "dark gap" along the rounded edge.
+     Fix: drop the radial blooms from .ext entirely. Linear-gradient
+     is identical on body + .ext; no corner contrast survives. The
+     wallet visual loses the subtle gold warmth but gains a clean
+     edge. Same fix for the private-denom variant. */
   background:
-    radial-gradient(ellipse 120% 80% at 50% 120%, rgba(var(--gold-glow), 0.14), transparent 60%),
-    radial-gradient(90% 60% at -10% 100%,  rgba(var(--gold-glow), 0.18) 0%, transparent 55%),
-    radial-gradient(85% 55% at 110% -10%,  rgba(var(--gold-glow), 0.14) 0%, transparent 55%),
     linear-gradient(180deg, var(--ink-000) 0%, var(--ink-100) 50%, var(--ink-050) 100%);
 }
 .ext[data-denom="private"] {
   background:
-    radial-gradient(ellipse 120% 80% at 50% 120%, oklch(0.22 0.06 250 / 0.6), transparent 60%),
-    radial-gradient(90% 60% at -10% 100%, oklch(0.62 0.18 230 / 0.24) 0%, transparent 55%),
-    radial-gradient(85% 55% at 110% -10%, oklch(0.58 0.20 260 / 0.24) 0%, transparent 55%),
     linear-gradient(180deg, var(--ink-000) 0%, var(--ink-100) 50%, var(--ink-050) 100%);
 }
 /* Round 4 TASK 4 — sidepanel mode stretches the .ext frame to the
