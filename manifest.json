@@ -7,6 +7,9 @@
     "default_popup": "src/popup/index.html",
     "default_title": "Monolythium Wallet"
   },
+  "side_panel": {
+    "default_path": "src/popup/index.html"
+  },
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"
@@ -24,7 +27,7 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["alarms", "storage"],
+  "permissions": ["alarms", "storage", "sidePanel"],
   "icons": {
     "16": "icon-16.png",
     "48": "icon-48.png",

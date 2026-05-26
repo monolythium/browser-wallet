@@ -1399,6 +1399,28 @@ export async function bgSetAutoLockMinutes(
   return send("set-auto-lock-minutes", { minutes });
 }
 
+// Round 4 TASK 4 — UI open mode (side-panel vs popup). The SW reads
+// the persisted choice on boot and binds the action-icon click via
+// chrome.sidePanel.setPanelBehavior + chrome.action.setPopup.
+
+export type UiOpenMode = "sidepanel" | "popup";
+
+export async function bgGetUiOpenMode(): Promise<
+  | { ok: true; mode: UiOpenMode; options: readonly UiOpenMode[] }
+  | { ok: false; reason?: string }
+> {
+  return send("get-ui-open-mode");
+}
+
+export async function bgSetUiOpenMode(
+  mode: UiOpenMode,
+): Promise<
+  | { ok: true; mode: UiOpenMode }
+  | { ok: false; reason?: string }
+> {
+  return send("set-ui-open-mode", { mode });
+}
+
 // ---- Phase 5 multi-vault container surface ----
 //
 // The popup vault picker (VaultPicker component, Commit 3) reads these

@@ -12,15 +12,29 @@
   --glass:             var(--glass-fill);
 }
 
-/* Popup window — fixed 380x620 in popup mode. Background, overflow,
-   and scrollbar styling now live in ext.css (single source of truth).
-   This rule keeps the sizing piece so the Chrome popup auto-measures
-   to the wallet's natural dimensions. */
-html, body {
+/* Popup-mode sizing — fixed 380x620 so Chrome auto-measures the
+   action popup to the wallet's natural dimensions. Background,
+   overflow, and scrollbar styling live in ext.css (single source of
+   truth).
+
+   Round 4 TASK 4 — main.tsx stamps data-mode on <html> at boot.
+   Popup keeps the historical fixed frame; sidepanel stretches to
+   fill whatever Chrome assigned the panel. .ext itself reads the
+   same attribute (see ext.css) to drop its fixed 380×620 frame in
+   sidepanel mode. */
+html[data-mode="popup"],
+html[data-mode="popup"] body {
   width: 380px;
   height: 620px;
 }
 
-#root { width: 380px; height: 620px; }
+html[data-mode="popup"] #root { width: 380px; height: 620px; }
+
+html[data-mode="sidepanel"],
+html[data-mode="sidepanel"] body,
+html[data-mode="sidepanel"] #root {
+  width: 100%;
+  height: 100vh;
+}
 
 .ext { border-radius: 0; box-shadow: none; }
