@@ -662,8 +662,22 @@ export default function App() {
     screen === "contacts" ||
     screen === "multisig-list";
 
+  // Round 10 TASK 6 — fullscreen brand wordmark. Read once at render
+  // time; main.tsx stamps data-mode on <html> before createRoot.render
+  // runs, so the attribute is guaranteed to be present here. The
+  // wordmark renders as a sibling above .ext only in fullscreen so
+  // the centered card has a MetaMask-style brand header. Popup and
+  // sidebar modes keep their bare layout (no wordmark).
+  const isFullscreen =
+    document.documentElement.dataset["mode"] === "fullscreen";
+
   return (
     <ErrorBoundary>
+    {isFullscreen && (
+      <div className="ext-fullscreen-brand">
+        <span className="accent">◇</span>Monolythium Wallet
+      </div>
+    )}
     <div className="ext" data-denom={acc.denom}>
       {showBannerStrip && (
         <ChainStatusBanner
