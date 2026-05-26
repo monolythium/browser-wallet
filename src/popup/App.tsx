@@ -982,19 +982,60 @@ export default function App() {
                 window.close();
               });
             } else {
-              // sidepanel → popup: try chrome.action.openPopup
-              // (Chrome 127+). If unsupported, just close the
-              // sidepanel — the user's next icon click will land on
-              // the popup once SW re-binds the action.
-              if (chrome.action?.openPopup) {
-                void chrome.action
-                  .openPopup()
-                  .catch(() => {/* unavailable, fall through */});
+              // sidepanel → popup. Round 9 TASK 1 fix: the Round 8
+              // version voided chrome.action.openPopup but openPopup
+              // was REJECTING silently because while the wallet is in
+              // sidepanel mode the SW has set chrome.action.setPopup
+              // to "" (empty — clicks-to-icon open the side panel,
+              // not a popup). openPopup with no configured popup URL
+              // rejects "No active popup."
+              //
+              // Fix: synchronously call chrome.action.setPopup to
+              // bind the popup URL FIRST (gesture-eligible), then
+              // immediately call chrome.action.openPopup (still
+              // gesture-eligible), THEN persist mode async +
+              // close window. The SW's onChanged listener will
+              // re-apply the same setPopup on its own a moment
+              // later — idempotent.
+              let openPopupPromise: Promise<void> | undefined;
+              try {
+                if (chrome.action?.setPopup) {
+                  // Promise-returning but fire-and-forget; the
+                  // popup URL is applied effectively immediately
+                  // for the openPopup call right below.
+                  void chrome.action.setPopup({
+                    popup: "src/popup/index.html",
+                  });
+                }
+                if (chrome.action?.openPopup) {
+                  openPopupPromise = chrome.action.openPopup();
+                }
+              } catch (err) {
+                // Chrome < 127 or other API gap. Fall through —
+                // sidepanel will close; user clicks the icon
+                // manually to open the popup.
+                console.warn("[mode-switch] openPopup unavailable:", err);
               }
               void bgSetUiOpenMode("popup").then((r) => {
                 if (r.ok) setUiMode(r.mode);
-                window.close();
               });
+              // Wait for the popup to actually open before closing
+              // the sidepanel — closing first would leave the user
+              // with no UI on screen if openPopup fails mid-flight.
+              if (openPopupPromise) {
+                void openPopupPromise
+                  .catch((err) => {
+                    console.warn(
+                      "[mode-switch] openPopup rejected:",
+                      err,
+                    );
+                  })
+                  .finally(() => {
+                    window.close();
+                  });
+              } else {
+                window.close();
+              }
             }
           }}
           onContacts={() => navigateTo("contacts")}
