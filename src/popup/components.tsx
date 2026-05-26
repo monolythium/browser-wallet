@@ -1813,12 +1813,16 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
            already nudges users into onboarding tasks (passkey, SLH-DSA
            backup, feature discovery) when relevant; a manual re-entry
            button was clutter on a finished wallet. */}
+
+        {/* Round 9 TASK 4 — Mono Labs footer moved INSIDE .ext-body so
+           position:sticky has a scroll container to anchor against.
+           When content fits, Footer renders at the natural bottom of
+           the scroll area; when content overflows and the user
+           scrolls, Footer sticks to the bottom of the visible
+           viewport so "Product of Mono Labs" is always on screen
+           without manual scrolling. */}
+        <Footer sticky />
       </div>
-      {/* Round 8 TASK 5 — Mono Labs branding footer. The existing
-         ext-hintbar (version + cmd shortcut) sits below for
-         developer-flavored info; Footer is the user-facing
-         "Product of Mono Labs · © 2026" strip. */}
-      <Footer />
       <div className="ext-hintbar">
         <span>v0.0.1 · {NODE.talos}</span>
         <span><kbd>⌘⇧M</kbd> open</span>
