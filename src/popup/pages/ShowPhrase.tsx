@@ -38,9 +38,14 @@ export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
         <div style={{ width: 36 }} />
       </div>
 
+      {/* Round 12 TASK 2 — content moved into .ext-body so the screen
+         scrolls when the 15 px-mono grid + copy button + warning
+         exceed the popup viewport. Without scroll, the Round 11
+         font-size bump pushed the Continue button (in .req-foot)
+         below the visible area and the user couldn't reach it. */}
       <div
+        className="ext-body"
         style={{
-          padding: "16px 18px 12px",
           display: "flex",
           flexDirection: "column",
           gap: 14,
