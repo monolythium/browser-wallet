@@ -780,7 +780,6 @@ export default function App() {
             setPendingSendNft(target);
             setScreen("send-nft");
           }}
-          onOpenOnboard={() => setScreen("welcome")}
           topSlot={
             activeVaultSummary ? (
               <>
