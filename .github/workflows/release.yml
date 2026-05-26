@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build:
@@ -52,10 +53,24 @@ jobs:
           cd dist
           zip -r ../browser-wallet-${{ steps.version.outputs.version }}.zip .
 
+      - name: SHA-256 checksum
+        run: sha256sum browser-wallet-*.zip > SHA256SUMS
+
+      - name: SPDX SBOM (syft)
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: browser-wallet-${{ steps.version.outputs.version }}.spdx.json
+          upload-artifact: false
+
       - uses: actions/upload-artifact@v4
         with:
           name: browser-wallet-zip
-          path: browser-wallet-*.zip
+          path: |
+            browser-wallet-*.zip
+            SHA256SUMS
+            browser-wallet-*.spdx.json
 
   publish-chrome:
     needs: build
@@ -143,8 +158,37 @@ jobs:
           name: firefox-signed-xpi
           path: signed/*.xpi
 
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: browser-wallet-zip
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Cosign keyless sign (zip + SBOM)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          ZIP=$(ls browser-wallet-*.zip | head -1)
+          SBOM=$(ls browser-wallet-*.spdx.json | head -1)
+          cosign sign-blob --yes "$ZIP" \
+            --bundle "${ZIP}.cosign.bundle"
+          cosign sign-blob --yes "$SBOM" \
+            --bundle "${SBOM}.cosign.bundle"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cosign-bundles
+          path: "*.cosign.bundle"
+
   release:
-    needs: [build, publish-firefox]
+    needs: [build, sign, publish-firefox]
     if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
     runs-on: ubuntu-latest
     steps:
