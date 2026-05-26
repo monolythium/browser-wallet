@@ -123,9 +123,23 @@ interface ChainStatusBannerProps {
    *  claim the full popup width for the renamed-from-top-bar wallet
    *  label + full-line bech32m address. Omit in approval contexts. */
   onSettings?: () => void;
+  /** Round 6 TASK 2 — connected-sites shortcut. Renders a globe
+   *  button to the right of `onSettings` when provided. Omit in
+   *  approval contexts. */
+  onConnectedSites?: () => void;
+  /** Round 6 TASK 2 — lock-wallet shortcut. Renders a lock button
+   *  on the far right when provided. Caller is responsible for
+   *  triggering bgKeystoreLock + any local navigation. */
+  onLock?: () => void;
 }
 
-export function ChainStatusBanner({ network, onOpenNetworks, onSettings }: ChainStatusBannerProps) {
+export function ChainStatusBanner({
+  network,
+  onOpenNetworks,
+  onSettings,
+  onConnectedSites,
+  onLock,
+}: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
   const [operator, setOperator] = useState<string | null>(null);
 
@@ -281,6 +295,13 @@ export function ChainStatusBanner({ network, onOpenNetworks, onSettings }: Chain
     <span style={chipStyle}>{network.name.toUpperCase()}</span>
   );
 
+  // Round 6 TASK 2 — operator name (live/stalled) and offline reason
+  // text dropped from the banner. They were noisy filler that
+  // competed with the new action-button cluster on the right.
+  // `operator` is still polled (the variable is read elsewhere for
+  // a future surface — kept rather than ripped out so we don't
+  // churn the visibility-gated effect just to delete a setState).
+  void operator;
   let dotColor: string;
   let body: ReactNode;
   switch (health.kind) {
@@ -289,14 +310,7 @@ export function ChainStatusBanner({ network, onOpenNetworks, onSettings }: Chain
       body = (
         <>
           <span style={{ color: "var(--ok)", fontWeight: 500 }}>LIVE</span>
-          <span style={{ color: "var(--fg-600)" }}>·</span>
           {networkChip}
-          {operator !== null && (
-            <>
-              <span style={{ color: "var(--fg-600)" }}>·</span>
-              <span style={{ color: "var(--ok)" }}>{operator.toUpperCase()}</span>
-            </>
-          )}
         </>
       );
       break;
@@ -305,14 +319,7 @@ export function ChainStatusBanner({ network, onOpenNetworks, onSettings }: Chain
       body = (
         <>
           <span style={{ color: "var(--warn)", fontWeight: 500 }}>STALLED</span>
-          <span style={{ color: "var(--fg-600)" }}>·</span>
           {networkChip}
-          {operator !== null && (
-            <>
-              <span style={{ color: "var(--fg-600)" }}>·</span>
-              <span>{operator.toUpperCase()}</span>
-            </>
-          )}
         </>
       );
       break;
@@ -321,10 +328,7 @@ export function ChainStatusBanner({ network, onOpenNetworks, onSettings }: Chain
       body = (
         <>
           <span style={{ color: "var(--err)", fontWeight: 500 }}>OFFLINE</span>
-          <span style={{ color: "var(--fg-600)" }}>·</span>
           {networkChip}
-          <span style={{ color: "var(--fg-600)" }}>·</span>
-          <span style={{ textTransform: "none", letterSpacing: 0 }}>{health.reason}</span>
         </>
       );
       break;
@@ -351,33 +355,90 @@ export function ChainStatusBanner({ network, onOpenNetworks, onSettings }: Chain
         }}
       />
       {body}
-      {onSettings && (
+      {(onSettings || onConnectedSites || onLock) && (
         <>
           <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={onSettings}
-            aria-label="Settings"
-            title="Settings"
+          <div
             style={{
               display: "inline-flex",
               alignItems: "center",
-              justifyContent: "center",
-              width: 22,
-              height: 22,
-              padding: 0,
-              background: "transparent",
-              border: "none",
-              color: "var(--fg-300)",
-              cursor: "pointer",
+              gap: 2,
               flexShrink: 0,
             }}
           >
-            <Icon name="settings" size={13} />
-          </button>
+            {onSettings && (
+              <BannerActionButton
+                onClick={onSettings}
+                ariaLabel="Settings"
+                icon="settings"
+              />
+            )}
+            {onConnectedSites && (
+              <BannerActionButton
+                onClick={onConnectedSites}
+                ariaLabel="Connected sites"
+                icon="globe"
+              />
+            )}
+            {onLock && (
+              <BannerActionButton
+                onClick={onLock}
+                ariaLabel="Lock wallet"
+                icon="lock"
+              />
+            )}
+          </div>
         </>
       )}
     </div>
+  );
+}
+
+// Round 6 TASK 2 — small icon-button used inside ChainStatusBanner's
+// right-aligned action cluster. Sized to fit the 5 px / 14 px banner
+// padding without growing the banner height. The hover bg lift is
+// the only affordance — chips below this row supply explicit borders.
+function BannerActionButton({
+  onClick,
+  ariaLabel,
+  icon,
+}: {
+  onClick: () => void;
+  ariaLabel: string;
+  icon: import("./Icon").IconName;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 24,
+        height: 22,
+        padding: 0,
+        background: "transparent",
+        border: "none",
+        borderRadius: 5,
+        color: "var(--fg-300)",
+        cursor: "pointer",
+        flexShrink: 0,
+        transition: "background 120ms, color 120ms",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+        e.currentTarget.style.color = "var(--fg-100)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.color = "var(--fg-300)";
+      }}
+    >
+      <Icon name={icon} size={13} />
+    </button>
   );
 }
 
