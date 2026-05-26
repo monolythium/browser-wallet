@@ -256,14 +256,15 @@ export function ChainStatusBanner({
 
   const containerStyle: CSSProperties = {
     fontFamily: "var(--f-mono)",
-    fontSize: 9.5,
-    letterSpacing: "0.16em",
+    // Round 9 TASK 3 — bump text + button sizing so the contents fit
+    // the allocated bar height (Round 7 made the bar 44 px-ish but
+    // buttons/text stayed at the original 9.5 px / 22 px sizes that
+    // looked undersized in the taller bar). Text 9.5 → 10.5; button
+    // bump happens at BannerActionButton (see below).
+    fontSize: 10.5,
+    letterSpacing: "0.14em",
     textTransform: "uppercase",
-    // Round 7 TASK 3 — bump vertical padding 5 → 10 so the status
-    // banner reads as a proper 44 px-ish bar with comfortable tap
-    // targets for the 3 right-aligned action buttons. The buttons
-    // themselves keep their 22 px size; only the row padding grows.
-    padding: "10px 14px",
+    padding: "8px 12px",
     borderBottom: "1px solid var(--fg-700)",
     display: "flex",
     alignItems: "center",
@@ -274,8 +275,10 @@ export function ChainStatusBanner({
   // Pill chip styling shared between the interactive (with caret) and
   // read-only (no caret) variants. Read-only is used inside the approval
   // window, where switching chains mid-approval would be unsafe.
+  // Round 9 TASK 3 — slightly larger padding + subtle bg lift so the
+  // network selector reads as a clearly tappable pill.
   const chipStyle: CSSProperties = {
-    padding: "2px 8px",
+    padding: "4px 10px",
     border: "1px solid var(--fg-700)",
     borderRadius: 999,
     background: "rgba(255,255,255,0.04)",
@@ -423,12 +426,15 @@ function BannerActionButton({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        width: 24,
-        height: 22,
+        // Round 9 TASK 3 — bump 24×22 → 32×30 to match the taller
+        // banner row from Round 7. Round corners also grow to 7 to
+        // match the new chunk. The glyph inside grows 13 → 16 too.
+        width: 32,
+        height: 30,
         padding: 0,
         background: "transparent",
         border: "none",
-        borderRadius: 5,
+        borderRadius: 7,
         color: "var(--fg-300)",
         cursor: "pointer",
         flexShrink: 0,
@@ -443,7 +449,7 @@ function BannerActionButton({
         e.currentTarget.style.color = "var(--fg-300)";
       }}
     >
-      <Icon name={icon} size={13} />
+      <Icon name={icon} size={16} />
     </button>
   );
 }
