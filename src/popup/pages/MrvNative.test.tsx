@@ -189,7 +189,7 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmCompactReceipt
   missingProofMaterial: [],
   rootAlgorithm:
     "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
-  receiptCodec: "bincode(protocore_evm::Receipt)",
+  receiptCodec: "bincode(protocore_execution_types::Receipt)",
   blockHash: `0x${"2".repeat(64)}`,
   txHash: SUBMITTED_TX_HASH,
   receiptsRoot: `0x${"7".repeat(64)}`,

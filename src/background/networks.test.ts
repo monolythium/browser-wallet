@@ -16,15 +16,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  FALLBACK_OPERATORS_2026_05_25,
   SPRINTNET_OPERATOR_RPCS_DEFAULTS,
-  applyFallbackOperatorsIfStranded,
   clearGenesisCache,
   snapshotGenesisCache,
   verifyOperatorGenesis,
 } from "./networks.js";
 import { SPRINTNET_GENESIS_HASH } from "../shared/build-info.js";
-import { STORAGE_KEY_OPERATOR_OVERRIDE } from "../shared/operators.js";
 
 describe("SPRINTNET_OPERATOR_RPCS_DEFAULTS", () => {
   it("has at least one SDK-sourced endpoint", () => {
@@ -45,136 +42,7 @@ describe("SPRINTNET_OPERATOR_RPCS_DEFAULTS", () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Round 3 — FALLBACK_OPERATORS_2026_05_25 + applyFallbackOperatorsIfStranded
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("FALLBACK_OPERATORS_2026_05_25", () => {
-  it("contains the six raw-IP Sprintnet operators verified on 2026-05-25", () => {
-    expect(FALLBACK_OPERATORS_2026_05_25).toHaveLength(6);
-    const rpcs = FALLBACK_OPERATORS_2026_05_25.map((o) => o.rpc);
-    expect(rpcs).toContain("http://192.0.2.1:8545");
-    expect(rpcs).toContain("http://192.0.2.2:8545");
-    expect(rpcs).toContain("http://192.0.2.3:8545");
-    expect(rpcs).toContain("http://192.0.2.4:8545");
-    expect(rpcs).toContain("http://192.0.2.5:8545");
-    expect(rpcs).toContain("http://192.0.2.6:8545");
-  });
-
-  it("labels entries operator-1 through operator-6", () => {
-    for (let i = 0; i < FALLBACK_OPERATORS_2026_05_25.length; i++) {
-      expect(FALLBACK_OPERATORS_2026_05_25[i]!.name).toBe(`operator-${i + 1}`);
-    }
-  });
-});
-
-describe("applyFallbackOperatorsIfStranded", () => {
-  let storageLocal: Record<string, unknown> = {};
-  const originalChrome = (globalThis as { chrome?: unknown }).chrome;
-  const originalFetch = globalThis.fetch;
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    storageLocal = {};
-    (globalThis as { chrome?: unknown }).chrome = {
-      storage: {
-        local: {
-          get: (
-            keys: string | string[] | null,
-            cb?: (res: Record<string, unknown>) => void,
-          ) => {
-            const list = keys === null ? null : Array.isArray(keys) ? keys : [keys];
-            const out: Record<string, unknown> = {};
-            if (list === null) Object.assign(out, storageLocal);
-            else for (const k of list) if (k in storageLocal) out[k] = storageLocal[k];
-            if (cb) queueMicrotask(() => cb(out));
-            return Promise.resolve(out);
-          },
-          set: (entries: Record<string, unknown>, cb?: () => void) => {
-            for (const [k, v] of Object.entries(entries)) storageLocal[k] = v;
-            if (cb) queueMicrotask(() => cb());
-            return Promise.resolve();
-          },
-          remove: (keys: string | string[], cb?: () => void) => {
-            const list = Array.isArray(keys) ? keys : [keys];
-            for (const k of list) delete storageLocal[k];
-            if (cb) queueMicrotask(() => cb());
-            return Promise.resolve();
-          },
-        },
-      },
-    };
-    consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    (globalThis as { chrome?: unknown }).chrome = originalChrome;
-    globalThis.fetch = originalFetch;
-    consoleLogSpy.mockRestore();
-  });
-
-  // Note: SDK registry currently exposes 1 Sprintnet RPC entry. These
-  // tests cover the stranded path (real production state). When the SDK
-  // registry recovers to ≥2 entries, the helper short-circuits and the
-  // stranded-path tests stop exercising the override write — that's the
-  // intended behaviour and the no-op assertion below catches it.
-
-  it("respects an existing user override and does not overwrite it", async () => {
-    storageLocal[STORAGE_KEY_OPERATOR_OVERRIDE] = [
-      { name: "custom", region: "diy", rpc: "http://1.2.3.4:8545" },
-    ];
-    globalThis.fetch = vi.fn() as typeof fetch;
-    await applyFallbackOperatorsIfStranded();
-    // Storage unchanged.
-    const stored = storageLocal[STORAGE_KEY_OPERATOR_OVERRIDE] as Array<{
-      rpc: string;
-    }>;
-    expect(stored).toHaveLength(1);
-    expect(stored[0]!.rpc).toBe("http://1.2.3.4:8545");
-    // Fetch never called (skipped before DNS probe).
-    expect(globalThis.fetch).not.toHaveBeenCalled();
-  });
-
-  it("applies the 6-IP override when SDK is stranded and DNS does NOT resolve", async () => {
-    if (SPRINTNET_OPERATOR_RPCS_DEFAULTS.length >= 2) return; // SDK healthy — skip
-    globalThis.fetch = vi.fn(() =>
-      Promise.reject(new TypeError("Failed to fetch")),
-    ) as unknown as typeof fetch;
-    await applyFallbackOperatorsIfStranded();
-    const stored = storageLocal[STORAGE_KEY_OPERATOR_OVERRIDE] as Array<{ rpc: string }>;
-    expect(stored).toHaveLength(6);
-    expect(stored.map((o) => o.rpc)).toEqual(
-      FALLBACK_OPERATORS_2026_05_25.map((o) => o.rpc),
-    );
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining("DNS not provisioned"),
-    );
-  });
-
-  it("applies the 6-IP override when SDK is stranded and DNS DOES resolve", async () => {
-    if (SPRINTNET_OPERATOR_RPCS_DEFAULTS.length >= 2) return; // SDK healthy — skip
-    globalThis.fetch = vi.fn(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "69420" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    ) as unknown as typeof fetch;
-    await applyFallbackOperatorsIfStranded();
-    const stored = storageLocal[STORAGE_KEY_OPERATOR_OVERRIDE] as Array<{ rpc: string }>;
-    expect(stored).toHaveLength(6);
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining("reachable but only 1 entry"),
-    );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Phase 6 GAP #11 — genesis-hash pin
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("verifyOperatorGenesis (GAP #11 — orphan-fork defense)", () => {
+describe("verifyOperatorGenesis", () => {
   const originalFetch = globalThis.fetch;
   const RPC = "http://test-operator.invalid:8545";
 
