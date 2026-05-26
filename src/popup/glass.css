@@ -99,9 +99,16 @@ html[data-mode="sidepanel"] .ext { border-radius: 0; box-shadow: none; }
 
 /* Round 8 TASK 3 — fullscreen mode (wallet in a regular Chrome tab,
    opened via chrome.tabs.create with ?mode=fullscreen). The wallet
-   centers itself in a max-480 px column on the larger viewport so
+   centers itself in a centered column on the larger viewport so
    line-lengths stay readable; outside the column, body bg fills the
-   surrounding tab space. */
+   surrounding tab space.
+
+   Round 10 TASK 6 — MetaMask-style fullscreen layout. Max-width bumped
+   480 → 720 px so the wallet card has the desktop comfort MetaMask's
+   fullscreen mode reads as. #root becomes a flex column so the brand
+   wordmark (rendered by App.tsx only in fullscreen) sits centered
+   above the card. Extra bottom padding clears the position:fixed
+   Footer (96 px = 32 px spacer + 28 px footer + 36 px breathing). */
 html[data-mode="fullscreen"],
 html[data-mode="fullscreen"] body {
   width: 100%;
@@ -114,17 +121,44 @@ html[data-mode="fullscreen"] body {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding: 24px 0;
+  padding: 24px 0 96px;
 }
 html[data-mode="fullscreen"] #root {
   width: 100%;
-  max-width: 480px;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0 16px;
+}
+/* Round 10 TASK 6 — brand wordmark above the wallet card. Rendered
+   conditionally by App.tsx when data-mode="fullscreen". Subtle, no
+   logo SVG yet — plain text wordmark with letter-spacing tuned to
+   match the wallet's title chrome. */
+html[data-mode="fullscreen"] .ext-fullscreen-brand {
+  font-family: var(--f-sans);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-align: center;
+  color: var(--fg-100);
+  margin: 0 0 20px;
+}
+html[data-mode="fullscreen"] .ext-fullscreen-brand .accent {
+  color: var(--gold);
+  margin-right: 6px;
 }
 html[data-mode="fullscreen"] .ext {
   width: 100%;
   height: auto;
-  min-height: calc(100vh - 48px);
+  min-height: calc(100vh - 180px);
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 30px 80px -10px rgba(0, 0, 0, 0.7);
+}
+/* Round 10 TASK 6 — wider scroll body in fullscreen with more
+   breathing room between sections. Padding bumped 14 → 20 so cards
+   don't crowd the wider 720 px column. */
+html[data-mode="fullscreen"] .ext-body {
+  padding: 14px 20px 20px;
 }
