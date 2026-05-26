@@ -127,10 +127,11 @@ interface ChainStatusBannerProps {
    *  button to the right of `onSettings` when provided. Omit in
    *  approval contexts. */
   onConnectedSites?: () => void;
-  /** Round 6 TASK 2 — lock-wallet shortcut. Renders a lock button
-   *  on the far right when provided. Caller is responsible for
-   *  triggering bgKeystoreLock + any local navigation. */
-  onLock?: () => void;
+  /** Round 7 TASK 4 — hamburger menu shortcut (was Round 6's lock
+   *  button before the MainMenu screen took over the lock surface).
+   *  Renders a 3-line hamburger icon on the far right when provided;
+   *  caller routes to the MainMenu screen. */
+  onMenu?: () => void;
 }
 
 export function ChainStatusBanner({
@@ -138,7 +139,7 @@ export function ChainStatusBanner({
   onOpenNetworks,
   onSettings,
   onConnectedSites,
-  onLock,
+  onMenu,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
   const [operator, setOperator] = useState<string | null>(null);
@@ -359,7 +360,7 @@ export function ChainStatusBanner({
         }}
       />
       {body}
-      {(onSettings || onConnectedSites || onLock) && (
+      {(onSettings || onConnectedSites || onMenu) && (
         <>
           <span style={{ flex: 1 }} />
           <div
@@ -384,11 +385,11 @@ export function ChainStatusBanner({
                 icon="globe"
               />
             )}
-            {onLock && (
+            {onMenu && (
               <BannerActionButton
-                onClick={onLock}
-                ariaLabel="Lock wallet"
-                icon="lock"
+                onClick={onMenu}
+                ariaLabel="Menu"
+                icon="menu"
               />
             )}
           </div>
