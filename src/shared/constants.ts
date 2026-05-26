@@ -13,6 +13,14 @@ export const STORAGE_KEY_CONNECTED_SITES = "mono.connected-sites";
 // chrome.storage.onChanged listener so vault-create / vault-import /
 // vault-select propagate to the UI without IPC plumbing.
 export const STORAGE_KEY_VAULTS_CONTAINER_V4 = "mono.vaults.v4";
+// Round 4 TASK 4 — UI open mode. The SW reads this on boot + on every
+// chrome.storage.onChanged event to bind action-icon click to either
+// the side-panel or the popup. Default "sidepanel" matches modern
+// wallet UX (MetaMask Flask, Phantom, Rabby).
+export const STORAGE_KEY_UI_OPEN_MODE = "mono.ui.open-mode";
+export const UI_OPEN_MODE_VALUES = ["sidepanel", "popup"] as const;
+export type UiOpenMode = (typeof UI_OPEN_MODE_VALUES)[number];
+export const UI_OPEN_MODE_DEFAULT: UiOpenMode = "sidepanel";
 
 // chrome.storage.session
 export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
