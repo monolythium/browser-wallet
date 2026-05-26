@@ -378,9 +378,12 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         <div style={{ width: 36 }} />
       </div>
 
+      {/* Round 12 TASK 4 — wrap reveal contents in .ext-body so the
+         screen scrolls when MnemonicGrid's 15 px-mono words + copy
+         button + the auto-hide chip overflow the popup viewport. */}
       <div
+        className="ext-body"
         style={{
-          padding: "16px 18px 12px",
           display: "flex",
           flexDirection: "column",
           gap: 12,
@@ -419,6 +422,41 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           </div>
         </div>
 
+        {/* Round 12 TASK 4 — Copy button moved ABOVE the reveal-toggle
+           wrapper. Previously RevealPhrase rendered TWO copy buttons:
+           one inside MnemonicGrid (default-on, embedded under the
+           grid words) and one below MnemonicGrid (RevealPhrase's own
+           inline `handleCopy`). The MnemonicGrid one was unreachable
+           because its container had pointerEvents:none (clicks bubbled
+           to the reveal-toggle wrapper, only triggering reveal/hide
+           instead of copying) — that was the "broken top copy
+           button" the user reported. Hiding it via showCopyButton=false
+           and lifting RevealPhrase's own button to the top fixes both
+           the duplicate and the position. */}
+        <button
+          onClick={() => void handleCopy()}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "1px solid var(--fg-700)",
+            background: "rgba(255,255,255,0.04)",
+            color: copied ? "var(--ok)" : "var(--fg-100)",
+            fontFamily: "var(--f-sans)",
+            fontSize: 12.5,
+            fontWeight: 500,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          <Icon name={copied ? "check" : "copy"} size={13} />
+          {copied
+            ? "Copied — clears in 30 s"
+            : "Copy to clipboard"}
+        </button>
+
         {/* Tap-to-reveal click target. The grid is blurred (~12 px) by
             default; tapping anywhere on the area toggles `revealed`.
             When revealed, an unintrusive "Tap to hide" hint nudges the
@@ -454,7 +492,13 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
               }}
               aria-hidden={!revealed}
             >
-              <MnemonicGrid mnemonic={mnemonic} />
+              {/* Round 12 TASK 4 — disable MnemonicGrid's built-in
+                 copy button. It sat inside this pointerEvents:none
+                 wrapper so clicks bubbled to toggleReveal() instead
+                 of copying — the user reported it as "broken".
+                 RevealPhrase's own copy button above is the working
+                 one. */}
+              <MnemonicGrid mnemonic={mnemonic} showCopyButton={false} />
             </div>
             {!revealed && (
               <div
@@ -510,22 +554,6 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
             Tap the words to hide them.
           </div>
         )}
-
-        <button
-          onClick={() => void handleCopy()}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid var(--fg-700)",
-            background: "rgba(255,255,255,0.04)",
-            color: copied ? "var(--ok)" : "var(--fg-100)",
-            fontFamily: "var(--f-sans)",
-            fontSize: 12,
-            cursor: "pointer",
-          }}
-        >
-          {copied ? "Copied. Clipboard will clear in 30s" : "Copy phrase"}
-        </button>
       </div>
 
       <div
