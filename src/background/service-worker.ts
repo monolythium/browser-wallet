@@ -4,10 +4,9 @@
 //   - eth_accounts
 //   - eth_requestAccounts        (real popup approval)
 //   - eth_chainId / net_version
-//   - eth_sendTransaction        (real RLP build + secp256k1 sign + raw broadcast)
-//   - eth_sign / personal_sign   (real secp256k1 sign over the EIP-191 prefix)
+//   - eth_sendTransaction        (native ML-DSA encrypted submission)
+//   - eth_sign / personal_sign   (native wallet signing)
 //   - eth_signTypedData_v4       (EIP-712 typed-data signing)
-//   - eth_sendRawTransaction     (proxy through MonolythiumProvider)
 //   - wallet_switchEthereumChain
 //   - wallet_addEthereumChain    (real approval UI; persists to chrome.storage)
 //   - monolythium_submitMrvNativePlan (custom MRV native tx submission)
@@ -69,7 +68,6 @@ import {
   lock as lockKeystore,
   unlock as unlockKeystore,
   personalSign as keystorePersonalSign,
-  signLegacyTx,
   signTypedDataV4,
   computeTypedDataDigest,
 } from "./keystore.js";
@@ -971,23 +969,48 @@ async function rpcSend<T>(
 }
 
 async function sprintnetTransactionCountHex(address: string): Promise<string> {
-  try {
-    const { result } = await sprintnetJsonRpc<number | string>(
-      "lyth_getTransactionCount",
-      [address],
-    );
-    return rpcQuantityToHex(result, "lyth_getTransactionCount");
-  } catch (e) {
-    const err = e as Error & { code?: number };
-    if (err.code !== -32601 && !/method not found/i.test(err.message)) {
-      throw err;
-    }
-    const { result } = await sprintnetJsonRpc<string>(
-      "eth_getTransactionCount",
-      [address, "pending"],
-    );
-    return rpcQuantityToHex(result, "eth_getTransactionCount");
-  }
+  const { result } = await sprintnetJsonRpc<number | string>(
+    "lyth_getTransactionCount",
+    [userAddressForNativeRpc(address)],
+  );
+  return rpcQuantityToHex(result, "lyth_getTransactionCount");
+}
+
+interface ExecutionUnitPriceQuoteHex {
+  executionUnitPriceHex: string;
+  basePriceHex: string;
+  priorityTipHex: string;
+}
+
+async function sprintnetExecutionUnitPriceQuoteHex(): Promise<ExecutionUnitPriceQuoteHex> {
+  const { result } = await sprintnetJsonRpc<Record<string, unknown>>(
+    "lyth_executionUnitPrice",
+    [],
+  );
+  return {
+    executionUnitPriceHex: rpcQuantityToHex(
+      (result.executionUnitPriceLythoshi ?? result.execution_unit_price_lythoshi) as number | string | bigint,
+      "lyth_executionUnitPrice.executionUnitPriceLythoshi",
+    ),
+    basePriceHex: rpcQuantityToHex(
+      (result.basePricePerExecutionUnitLythoshi ?? result.base_price_per_execution_unit_lythoshi) as number | string | bigint,
+      "lyth_executionUnitPrice.basePricePerExecutionUnitLythoshi",
+    ),
+    priorityTipHex: rpcQuantityToHex(
+      (result.priorityTipLythoshi ?? result.priority_tip_lythoshi) as number | string | bigint,
+      "lyth_executionUnitPrice.priorityTipLythoshi",
+    ),
+  };
+}
+
+async function sprintnetExecutionUnitPriceHex(): Promise<string> {
+  return (await sprintnetExecutionUnitPriceQuoteHex()).executionUnitPriceHex;
+}
+
+function userAddressForNativeRpc(address: string): string {
+  return address.startsWith("0x") || address.startsWith("0X")
+    ? addressToTypedBech32("user", address)
+    : address;
 }
 
 function rpcQuantityToHex(value: number | string | bigint, field: string): string {
@@ -1112,13 +1135,8 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
       }
       try {
-        // v4-strict (Phase 3.5 + 4.0): the wallet's on-chain address is
-        // derived from the ML-DSA-65 pubkey. Routing personal_sign
-        // through the legacy keystore.ts secp256k1 path would produce a
-        // signature whose ecrecover'd address doesn't match `eth_accounts[0]` —
-        // and on top of that, the popup unlock flow only populates the
-        // v4 backend, so the secp256k1 path throws "wallet is locked"
-        // even when the v4 keystore is unlocked. Sign with ML-DSA-65.
+        // The wallet's on-chain address is derived from the ML-DSA-65
+        // pubkey, and the popup unlock flow populates the v4 backend.
         const sig = isUnlockedV4()
           ? personalSignV4(messageParam)
           : await keystorePersonalSign(messageParam);
@@ -1139,6 +1157,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         mempoolClass = mempoolClassOverride(txReq);
       } catch (e) {
         return err(-32602, (e as Error).message);
+      }
+      if (!chainRequiresMlDsa(session.chainId)) {
+        return err(4200, "eth_sendTransaction only supports native encrypted Sprintnet sends");
       }
 
       // Build the approval view BEFORE opening the popup so the user sees
@@ -1172,11 +1193,10 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the transaction");
       }
 
-      // Monolythium-protocol chains reject the legacy RLP+secp256k1
-      // envelope at the decoder layer (Law §2.1) — route to the SDK's
-      // ML-DSA-65 bincode wire format instead. The v3 keystore holds
-      // the unlocked backend; reads/writes funnel through the published
-      // Sprintnet operators since the canonical alias is NXDOMAIN.
+      // Monolythium-protocol chains require the SDK's ML-DSA-65 bincode
+      // wire format. The v3 keystore holds the unlocked backend; reads and
+      // writes use the published Sprintnet operators while the canonical
+      // alias is unavailable.
       if (chainRequiresMlDsa(session.chainId)) {
         if (!isUnlockedV4()) {
           return err(ERR_UNAUTHORIZED, "wallet is locked");
@@ -1193,21 +1213,18 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             await sprintnetTransactionCountHex(fromAddr);
           const executionUnitPriceHex =
             txReq.gasPrice ?? view.pricePerExecutionUnitLythoshiHex ??
-            (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
+            await sprintnetExecutionUnitPriceHex();
           // Sprintnet's mempool intrinsic execution-unit floor is above what
-          // `eth_estimateGas` reports (the latter only covers EVM
-          // execution). Honour an explicit dapp execution-unit hint if provided —
-          // a dapp may know better than us and we'd rather surface a
-          // chain reject than silently override — otherwise default to
-          // the wallet's audited Sprintnet floor with headroom.
+          // the compatibility estimate reports. Honour an explicit dapp
+          // execution-unit hint if provided; otherwise use the wallet's
+          // Sprintnet floor with headroom.
           const executionUnitsHex =
             txReq.gas ??
             view.executionUnitLimitHex ??
             SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
 
           // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
-          // The chain rejects plaintext at admission (Law §4.5 / Q2), so
-          // there is no eth_sendRawTransaction fallback path on Sprintnet.
+          // Sprintnet does not use an eth_sendRawTransaction fallback path.
           const { txHash } = await submitEncryptedMlDsaTx({
             ...(txReq.to !== undefined ? { to: txReq.to } : {}),
             ...(txReq.value !== undefined ? { value: txReq.value } : {}),
@@ -1224,59 +1241,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      if (!isUnlockedV4()) {
-        return err(ERR_UNAUTHORIZED, "wallet is locked");
-      }
-
-      try {
-        const net = lookupChain(session.chainId);
-        if (!net) throw new Error(`unknown chain ${session.chainId}`);
-        const provider = providerFor(session.chainId);
-
-        // Re-resolve execution units and fee with the latest node values at
-        // sign time. The view we showed the user is usually identical, but we
-        // don't trust stale views to be authoritative.
-        const fromAddr = getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
-        const nonceHex =
-          txReq.nonce ?? view.nonce ??
-          (await rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]));
-        const gasPriceHex =
-          txReq.gasPrice ??
-          view.pricePerExecutionUnitLythoshiHex ??
-          (await rpcSend<string>(provider, "eth_gasPrice", []));
-        const gasHex =
-          txReq.gas ?? view.executionUnitLimitHex ??
-          (await rpcSend<string>(provider, "eth_estimateGas", [
-            {
-              from: fromAddr,
-              ...(txReq.to !== undefined ? { to: txReq.to } : {}),
-              ...(txReq.value !== undefined ? { value: txReq.value } : {}),
-              ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-            },
-          ]));
-
-        const { rawTx, txHash } = await signLegacyTx({
-          ...(txReq.to !== undefined ? { to: txReq.to } : {}),
-          ...(txReq.value !== undefined ? { value: txReq.value } : {}),
-          ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-          nonce: nonceHex,
-          gas: gasHex,
-          gasPrice: gasPriceHex,
-          chainId: net.chainIdNum,
-        });
-
-        // Best-effort broadcast. If the RPC rejects, surface the message but
-        // also return the locally-computed hash so the caller can poll. We
-        // strongly prefer a successful broadcast though.
-        try {
-          const accepted = await rpcSend<string>(provider, "eth_sendRawTransaction", [rawTx]);
-          return ok(accepted || txHash);
-        } catch (e) {
-          return err(ERR_INTERNAL, `broadcast failed: ${(e as Error).message}`);
-        }
-      } catch (e) {
-        return err(ERR_INTERNAL, `tx build failed: ${(e as Error).message}`);
-      }
+      return err(4200, "eth_sendTransaction only supports native encrypted Sprintnet sends");
     }
 
     case "monolythium_submitMrvNativePlan": {
@@ -1512,18 +1477,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
     }
 
     case "eth_sendRawTransaction": {
-      const arr = Array.isArray(params) ? params : [];
-      const raw = arr[0];
-      if (typeof raw !== "string") {
-        return err(-32602, "eth_sendRawTransaction expects a hex string");
-      }
-      try {
-        const provider = providerFor(session.chainId);
-        const hash = await rpcSend<string>(provider, "eth_sendRawTransaction", [raw]);
-        return ok(hash);
-      } catch (e) {
-        return err(ERR_INTERNAL, `broadcast failed: ${(e as Error).message}`);
-      }
+      return err(4200, "eth_sendRawTransaction is not supported by this wallet");
     }
 
     case "wallet_switchEthereumChain": {
@@ -1691,7 +1645,9 @@ async function buildSendTxView(
           .catch(() => null as string | null),
     view.pricePerExecutionUnitLythoshiHex != null
       ? Promise.resolve(view.pricePerExecutionUnitLythoshiHex)
-      : rpcSend<string>(provider, "eth_gasPrice", [])
+      : (chainRequiresMlDsa(chainId)
+          ? sprintnetExecutionUnitPriceHex()
+          : rpcSend<string>(provider, "eth_gasPrice", []))
           .catch(() => null as string | null),
     view.nonce != null
       ? Promise.resolve(view.nonce)
@@ -1740,25 +1696,6 @@ function buildMrvNativeSendTxApproval(
   };
 }
 
-// ---- fee suggestion ----
-
-/**
- * Sprintnet-specific minimum priority tip discovered empirically via
- * smoke-test admission rejection: 10_000_000_000 (= 0x2540be400) per
- * execution unit on the wire. The constant name historically said
- * "lythoshi" but the operators currently run V4-LIVE-0008 (commit
- * `5aead0f0`) which serves wei-magnitude fee fields — so the value as
- * stored here is the wei-on-wire magnitude. `suggestFee` compensates
- * to lythoshi for the wallet-internal contract; `submitEncryptedMlDsaTx`
- * (legacy-tx path) uses a fresh `eth_gasPrice` quote at wire build
- * time and stays in wei.
- *
- * The chain doesn't expose this via RPC and `eth_maxPriorityFeePerGas`
- * is method-not-found, so it lives here as a chain constant. If the
- * chain operators ever change the floor, this is the one place to bump.
- */
-const SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX = "0x2540be400";
-
 // ---- Operator liveness cache ----
 //
 // Backs the popup's chain-status banner. We probe the published Sprintnet
@@ -1782,7 +1719,7 @@ let cachedOperator: {
   checkedAt: number;
 } | null = null;
 
-// ---- Phase 9 — in-memory passkey usage ledger ----
+// ---- In-memory passkey usage ledger ----
 //
 // Per-vault list of compatibility-shaped `{ at, valueWei }` entries
 // containing lythoshi for txs signed under the passkey-unlock path.
@@ -1797,14 +1734,11 @@ const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
 
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
- * given chain. On Sprintnet we ignore `eth_gasPrice` (returns `0x0`)
- * and `eth_maxPriorityFeePerGas` (method-not-found) and instead read
- * the next-block base fee via `eth_feeHistory(1, "latest", [])` and
- * stack the hardcoded lythoshi-per-execution-unit tip floor on top.
+ * given chain. On Sprintnet the values come from the native
+ * `lyth_executionUnitPrice` RPC.
  *
- * For non-Sprintnet chains we fall back to `eth_gasPrice` for now —
- * close enough for the legacy path that the popup may eventually use,
- * and the existing `eth_sendTransaction` handler does the same.
+ * For non-Sprintnet chains we keep the compatibility read used by the
+ * external-chain signing path.
  */
 async function suggestFee(chainIdHex: string): Promise<{
   maxPriorityFeePerGas: string;
@@ -1817,37 +1751,11 @@ async function suggestFee(chainIdHex: string): Promise<{
   gasLimit: string | null;
 }> {
   if (chainRequiresMlDsa(chainIdHex)) {
-    const { result } = await sprintnetJsonRpc<{
-      baseFeePerGas?: string[];
-      gasUsedRatio?: number[];
-      oldestBlock?: string;
-      reward?: unknown[];
-    }>("eth_feeHistory", ["0x1", "latest", []]);
-    const baseList = Array.isArray(result?.baseFeePerGas) ? result.baseFeePerGas : [];
-    if (baseList.length === 0) {
-      throw new Error("eth_feeHistory returned no baseFeePerGas entries");
-    }
-    // Last entry is the next-block estimate when feeHistory returns the
-    // pending base fee; with a single requested block we get two
-    // entries (current + next).
-    //
-    // Magnitude contract: these fields are returned in CHAIN-WIRE WEI
-    // magnitude — V4-LIVE-0008 operators (`5aead0f0`) accept wei on the
-    // wire, and `wallet-send-tx` plumbs `fee.maxFeePerGas` /
-    // `fee.maxPriorityFeePerGas` straight into the encrypted-envelope
-    // submission. The popup-side display consumer is responsible for
-    // converting wei → lythoshi via `legacyChainFeeSuggestionWeiToLythoshi`
-    // before handing fields to `nativeFeeDisplayFromFeeSuggestion`.
-    const baseHex = baseList[baseList.length - 1]!;
-    const baseChainWeiPerExecutionUnit = BigInt(baseHex);
-    const tipChainWeiPerExecutionUnit = BigInt(
-      SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX,
-    );
+    const quote = await sprintnetExecutionUnitPriceQuoteHex();
     return {
-      baseFeePerGas: baseHex,
-      maxPriorityFeePerGas: SPRINTNET_MIN_PRIORITY_FEE_CHAIN_WEI_PER_EXECUTION_UNIT_HEX,
-      maxFeePerGas:
-        "0x" + (baseChainWeiPerExecutionUnit + tipChainWeiPerExecutionUnit).toString(16),
+      baseFeePerGas: quote.basePriceHex,
+      maxPriorityFeePerGas: quote.priorityTipHex,
+      maxFeePerGas: quote.executionUnitPriceHex,
       gasLimit: SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
     };
   }
@@ -1861,7 +1769,7 @@ async function suggestFee(chainIdHex: string): Promise<{
   };
 }
 
-// ---- Phase 9 passkey IPC marshalling ----
+// ---- Passkey IPC marshalling ----
 //
 // `bigint` does not survive `chrome.runtime.sendMessage` — the
 // structured-clone algorithm preserves it in DOM contexts but the
@@ -7382,10 +7290,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
-        // Real-send through the legacy secp256k1 path is not in scope yet —
-        // the popup only wires Sprintnet for now. When non-Sprintnet send
-        // lands it'll route through providerFor + signLegacyTx like the
-        // existing `eth_sendTransaction` handler does.
         return { ok: false, reason: "send is only wired for Sprintnet today" };
       }
       if (!isUnlockedV4()) {
@@ -7398,14 +7302,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const nonceHex = await sprintnetTransactionCountHex(fromAddr);
         const fee = await suggestFee(p.chainIdHex);
-        // Sprintnet's mempool enforces an intrinsic execution-unit floor (~24309 as
-        // of audit) that `eth_estimateGas` doesn't reflect — it returns
-        // EVM execution units only and ignores ML-DSA verify + envelope
-        // decrypt + state proof overhead. Native transfers use the
-        // pre-resolved hex from suggestFee. Contract calls (NFT
-        // safeTransferFrom from the SendNft screen) carry their own
-        // caller-supplied estimate because the suggestFee execution-unit hint is
-        // sized for native transfers only.
+        // Sprintnet's mempool enforces an intrinsic execution-unit floor
+        // that the compatibility estimate does not reflect. Native transfers
+        // use the pre-resolved hex from suggestFee; contract calls carry
+        // their caller-supplied estimate because the hint is sized for native
+        // transfers only.
         const gasHex = p.gasLimitHex ?? fee.gasLimit ?? "0x5208";
         const { txHash, via } = await submitEncryptedMlDsaTx({
           to: p.to,

@@ -12,12 +12,14 @@ function route(
 ): WalletBridgeRouteDisclosure {
   return {
     routeId,
-    bridge: "CCIP",
+    bridge: "Chainlink CCIP",
+    protocol: "chainlink-ccip",
     asset: "USDC",
+    feeToken: "LINK",
     sourceChain: "Ethereum",
     destinationChain: "Mono",
     verifier: {
-      model: "DON",
+      model: "CCIP DON",
       participantCount: 7,
       threshold: 5,
     },
@@ -189,7 +191,7 @@ describe("buildBridgeRouteChoiceState", () => {
     ]);
   });
 
-  it("keeps legacy disclosure records display-only instead of defaulting SDK fields", () => {
+  it("keeps older disclosure records display-only instead of defaulting SDK fields", () => {
     const state = buildBridgeRouteChoiceState([
       {
         trustModel: "committee",

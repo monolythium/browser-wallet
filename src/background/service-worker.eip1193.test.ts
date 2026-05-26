@@ -3,7 +3,7 @@
 // The wallet's request-router lives in `service-worker.ts:handleRpc` and is
 // the integration seam between the in-page `window.ethereum` provider and the
 // `MonolythiumProvider` ethers v6 shim from `@monolythium/core-sdk/ethers`. This
-// suite is a hard test gate against drift in that router — Wave 5 work.
+// suite is a hard test gate against drift in that router.
 //
 // Strategy:
 //   - Stub the chrome.* surface the worker imports at module scope (storage,
@@ -16,7 +16,7 @@
 //     calls `_send` with a JSON-RPC request envelope; we capture every call
 //     for assertions.
 //   - Mock `./keystore.js` and `./approvals.js` so we never touch argon2,
-//     secp256k1, or chrome.windows — both modules expose deterministic stubs.
+//     or chrome.windows; both modules expose deterministic stubs.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,8 +27,6 @@ const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
 const DETERMINISTIC_SIG_BYTES = new Uint8Array(65).fill(0xab);
 DETERMINISTIC_SIG_BYTES[64] = 27; // valid recovery id
 const DETERMINISTIC_SIG_HEX = "0x" + Array.from(DETERMINISTIC_SIG_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
-const DETERMINISTIC_TX_HASH = "0x" + "f".repeat(64);
-const DETERMINISTIC_RAW_TX = "0x02" + "ee".repeat(40);
 const DETERMINISTIC_BLOCK_NUMBER = "0xdeadbeef";
 
 // ---- Mocks installed before the SUT module is imported ----
@@ -100,10 +98,9 @@ vi.mock("./approvals.js", () => ({
 
 // Keystore mock — deterministic signing, always unlocked unless a test flips it.
 // The dApp request path (handleRpc / buildSendTxView) consults the v4 keystore
-// after Phase 4.0 commit 3; the legacy v2 helpers stay imported only for the
-// popup-IPC keystore-status migration-display branch. The two mocks share the
-// same `unlocked` / `vaultExists` flags so a test that flips either reflects
-// in both code paths.
+// through the v4 keystore; the v2 helpers stay imported only for the
+// popup-IPC keystore-status migration-display branch. The two mocks share
+// `unlocked` / `vaultExists` flags so tests can flip both code paths.
 let unlocked = true;
 let vaultExists = true;
 
@@ -123,7 +120,6 @@ vi.mock("./keystore.js", () => ({
   })),
   createVaultFromMnemonic: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
   personalSign: vi.fn(async () => DETERMINISTIC_SIG_BYTES),
-  signLegacyTx: vi.fn(async () => ({ rawTx: DETERMINISTIC_RAW_TX, txHash: DETERMINISTIC_TX_HASH })),
   signTypedDataV4: vi.fn(async () => DETERMINISTIC_SIG_BYTES),
   computeTypedDataDigest: vi.fn(() => new Uint8Array(32).fill(0x42)),
 }));
@@ -371,15 +367,9 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   it.todo("eth_call routes through to network with {to,data,from,gas,value} payload (TODO(monolythium-vision): wire eth_call passthrough)");
 
   // ---- 5. eth_sendTransaction ----
-  it("eth_sendTransaction returns the broadcast tx hash after auto-approval", async () => {
+  it("eth_sendTransaction rejects non-native raw transaction chains", async () => {
     const origin = "https://tx-test.example";
     await connectOrigin(origin);
-    // Register + switch to a non-Sprintnet chain before sending — this
-    // test covers the legacy secp256k1 + RLP + eth_sendRawTransaction
-    // path, which is active only for chains that don't require ML-DSA.
-    // Sprintnet is the only built-in chain now, so the test adds a
-    // user-defined devnet via `wallet_addEthereumChain` (auto-approved
-    // by the approvals mock) and switches to it.
     await dispatch("wallet_addEthereumChain", [{
       chainId: "0x7A69",
       chainName: "Local devnet",
@@ -387,33 +377,27 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
     }], origin);
     await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
-    rpcResponses["eth_getTransactionCount"] = "0x5";
-    rpcResponses["eth_gasPrice"] = "0x3b9aca00";
-    rpcResponses["eth_estimateGas"] = "0x5208";
-    rpcResponses["eth_sendRawTransaction"] = DETERMINISTIC_TX_HASH;
 
     const r = await dispatch("eth_sendTransaction", [{
       to: "0x0000000000000000000000000000000000000001",
       value: "0xde0b6b3a7640000", // 1 LYTH
     }], origin);
 
-    expect(r.error).toBeUndefined();
-    expect(r.result).toBe(DETERMINISTIC_TX_HASH);
-    // Approval queue must have seen a `send_tx` request (auto-approved here).
-    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
-    // The dispatcher must have asked the node for nonce, execution-unit
-    // limit, execution-unit price and then broadcast the raw tx — this is
-    // the contract surface area we gate.
+    expect(r.result).toBeUndefined();
+    expect(r.error?.code).toBe(4200);
+    expect(r.error?.message).toMatch(/native encrypted Sprintnet sends/);
+    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
     const methods = rpcCalls.map((c) => c.method);
-    expect(methods).toContain("eth_getTransactionCount");
-    expect(methods).toContain("eth_gasPrice");
-    expect(methods).toContain("eth_estimateGas");
-    expect(methods).toContain("eth_sendRawTransaction");
+    expect(methods).not.toContain("eth_getTransactionCount");
+    expect(methods).not.toContain("eth_gasPrice");
+    expect(methods).not.toContain("eth_estimateGas");
+    expect(methods).not.toContain("eth_sendRawTransaction");
   });
 
   it("eth_sendTransaction surfaces user-rejected errors with code 4001", async () => {
     const origin = "https://rejecting.example";
     await connectOrigin(origin);
+    await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }]);
     approvalDecision = { ok: false, reason: "user rejected the transaction" };
     const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
     expect(r.result).toBeUndefined();
@@ -497,13 +481,9 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   });
 
   // ---- Bonus: provider construction sanity ----
-  it("eth_sendTransaction round trip uses MonolythiumProvider with the testnet chain id", async () => {
+  it("eth_sendTransaction does not construct a raw provider transaction for non-native chains", async () => {
     const origin = "https://provider-sanity.example";
     await connectOrigin(origin);
-    // Same rationale as the auto-approval test above — register +
-    // switch to a non-Sprintnet chain so we exercise the legacy
-    // MonolythiumProvider call shape rather than the encrypted-mempool
-    // envelope.
     await dispatch("wallet_addEthereumChain", [{
       chainId: "0x7A69",
       chainName: "Local devnet",
@@ -511,18 +491,10 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
     }], origin);
     await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
-    rpcResponses["eth_getTransactionCount"] = "0x0";
-    rpcResponses["eth_gasPrice"] = "0x1";
-    rpcResponses["eth_estimateGas"] = "0x5208";
-    rpcResponses["eth_sendRawTransaction"] = DETERMINISTIC_TX_HASH;
-    await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000002" }], origin);
-    // Every call must have flowed through the same JSON-RPC method names —
-    // capture call shapes so future refactors can't silently change them.
-    const estimate = rpcCalls.find((c) => c.method === "eth_estimateGas");
-    expect(estimate).toBeDefined();
-    const callShape = (estimate!.params[0] as Record<string, string>);
-    expect(callShape).toHaveProperty("from");
-    expect(callShape).toHaveProperty("to", "0x0000000000000000000000000000000000000002");
+    const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000002" }], origin);
+    expect(r.result).toBeUndefined();
+    expect(r.error?.code).toBe(4200);
+    expect(rpcCalls.map((c) => c.method)).not.toContain("eth_estimateGas");
   });
 
   // ---- Phase 4.3 — popup-IPC chain management ops ----
