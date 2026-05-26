@@ -1643,7 +1643,7 @@ function PreviewView({
         >
           <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg-100)" }}>
             {isMultisig
-              ? "This creates a proposal in the multisig vault. Other signers will see it on the Pending tab and approve or reject. Execution only happens once the configured threshold is met."
+              ? "This creates a proposal in the multisig wallet. Other signers will see it on the Pending tab and approve or reject. Execution only happens once the configured threshold is met."
               : "Transactions are irreversible. Confirm the recipient and amount carefully."}
           </div>
         </div>
