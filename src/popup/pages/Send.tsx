@@ -10,7 +10,7 @@
 
 import type { ReactNode, CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { Icon, shortAddr } from "../Icon";
+import { Icon } from "../Icon";
 import {
   bgMultisigPropose,
   bgPasskeyEvaluate,
@@ -27,7 +27,7 @@ import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
-import { bech32mToAddress } from "../../shared/bech32m";
+import { bech32mDisplay, bech32mToAddress } from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
 import { classifySendError } from "../../shared/send-error";
 import {
@@ -523,7 +523,7 @@ export function Send({
           />
           {parsedRecipient.inputForm === "mono1" && parsedRecipient.addr0x && (
             <div style={dualFormatHint}>
-              Will send to: {middleTruncate(parsedRecipient.addr0x, 10, 8)}
+              Will send to: {bech32mDisplay(parsedRecipient.addr0x)}
             </div>
           )}
           {parsedRecipient.inputForm === "mono-name" &&
@@ -597,7 +597,7 @@ export function Send({
             </div>
           )}
           <div style={fromHint}>
-            from: {shortAddr(account.addr, 18)}
+            from: {bech32mDisplay(account.addr)}
             {balanceLythoshi !== null && (
               <>
                 {" · balance: "}
@@ -822,6 +822,11 @@ const fromHint: CSSProperties = {
   fontSize: 10,
   color: "var(--fg-500)",
   marginTop: 8,
+  // Round 6 TASK 5 — bech32m address is now rendered full (no
+  // shortAddr truncation). Allow wrap if it doesn't fit on one
+  // line at the current popup width; truncation would violate the
+  // "no ellipsis" rule.
+  wordBreak: "break-all",
 };
 
 // ---- validation ----
@@ -1587,8 +1592,8 @@ function PreviewView({
 
       <div className="ext-body">
         <div className="ext-card" style={{ padding: 14 }}>
-          <SummaryRow label="From" value={shortAddr(fromAddr, 18)} mono />
-          <SummaryRow label="To" value={shortAddr(to, 18)} mono />
+          <SummaryRow label="From" value={bech32mDisplay(fromAddr)} mono />
+          <SummaryRow label="To" value={bech32mDisplay(to)} mono />
           <SummaryRow
             label="Amount"
             value={
