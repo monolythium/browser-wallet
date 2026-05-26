@@ -48,7 +48,7 @@ export function CrossingToPrivateRowBody({ row }: CrossingToPrivateRowBodyProps)
           <span>·</span>
           <span>tx {row.txIndex}</span>
           <span>·</span>
-          <span>§25.4 crossing</span>
+          <span>crossing</span>
         </div>
       </div>
       <div className="ext-act-row__right">

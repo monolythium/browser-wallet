@@ -166,7 +166,7 @@ export function ClusterDetail({
                   ? "—"
                   : `${(aprBps / 100).toFixed(2)}%`
               }
-              tooltip="Per §23.5 quadratic reward curve. APR is a mock — chain has no lyth_clusterApr reader yet."
+              tooltip="Per quadratic reward curve. APR is a mock — chain has no lyth_clusterApr reader yet."
             />
             <KeyValue
               label="Reputation (mock)"
@@ -233,7 +233,7 @@ function ClusterIdentityCard({
         {...(cluster.name === null
           ? {
               tooltip:
-                "Naming registry §22.8 has no SDK reader yet — wallet renders the fallback id.",
+                "Naming registry has no SDK reader yet — wallet renders the fallback id.",
             }
           : {})}
       />
@@ -250,7 +250,7 @@ function ClusterIdentityCard({
       <KeyValueRow
         label="Regions"
         value={cluster.regions.length === 0 ? "—" : cluster.regions.join(", ")}
-        tooltip="Geographic diversity per §28.3.1 — operator-declared regions cross-checked against IP geolocation chain-side."
+        tooltip="Geographic diversity — operator-declared regions cross-checked against IP geolocation chain-side."
       />
       <KeyValueRow label="Active set" value={cluster.active ? "yes" : "no"} />
       {reputation !== null && (

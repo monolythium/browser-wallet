@@ -1070,7 +1070,7 @@ function MonoNameResolveHint({ parsed, resolution }: MonoNameResolveHintProps) {
     return (
       <div style={inlineError}>
         Name not in your address book yet. On-chain name lookup ships with the
-        §22.8 registry — paste the typed mono1 address for now.
+        naming registry — paste the typed mono1 address for now.
       </div>
     );
   }
@@ -1428,7 +1428,7 @@ function HookPreviewCard({ preview }: { preview: TransactionHookPreview }) {
             color: "var(--fg-400)",
           }}
         >
-          Hooks that will run · §15
+          Hooks that will run
         </div>
         {preview.wouldReject && (
           <span
