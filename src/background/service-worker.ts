@@ -165,7 +165,6 @@ import {
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
-  applyFallbackOperatorsIfStranded,
   setOperatorOverride,
   readOperatorOverride,
   getDefaultOperators,
@@ -717,15 +716,7 @@ void (async () => {
 
   await loadUserChains();
   await loadOperatorOverride();
-  // Round 3 — apply the 6-IP fallback override when the SDK chain
-  // registry has stranded the wallet with <2 Sprintnet operators (the
-  // `rpc.monolythium.com` single-endpoint regression introduced on
-  // mono-core-sdk@riscv `46c009a`). Runs after loadOperatorOverride so
-  // any pre-existing user override is detected and respected. See
-  // `networks.ts` `FALLBACK_OPERATORS_2026_05_25` comment for the
-  // REMOVE-WHEN conditions.
-  await applyFallbackOperatorsIfStranded();
-  // Round 3.5 — one-shot cleanup for any per-address cache rows that
+  // One-shot cleanup for any per-address cache rows that
   // leaked under a demo-data sentinel address during the popup-boot
   // race between `acc = ACCOUNTS[0]` initial state and the real
   // `wallet-active-account` IPC resolving. The popup hook now guards
@@ -979,6 +970,46 @@ async function rpcSend<T>(
   return (response as { result: T }).result;
 }
 
+async function sprintnetTransactionCountHex(address: string): Promise<string> {
+  try {
+    const { result } = await sprintnetJsonRpc<number | string>(
+      "lyth_getTransactionCount",
+      [address],
+    );
+    return rpcQuantityToHex(result, "lyth_getTransactionCount");
+  } catch (e) {
+    const err = e as Error & { code?: number };
+    if (err.code !== -32601 && !/method not found/i.test(err.message)) {
+      throw err;
+    }
+    const { result } = await sprintnetJsonRpc<string>(
+      "eth_getTransactionCount",
+      [address, "pending"],
+    );
+    return rpcQuantityToHex(result, "eth_getTransactionCount");
+  }
+}
+
+function rpcQuantityToHex(value: number | string | bigint, field: string): string {
+  let parsed: bigint;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`${field} returned an invalid quantity`);
+    }
+    parsed = BigInt(value);
+  } else if (typeof value === "bigint") {
+    if (value < 0n) throw new Error(`${field} returned an invalid quantity`);
+    parsed = value;
+  } else if (/^0x[0-9a-fA-F]+$/.test(value)) {
+    parsed = BigInt(value);
+  } else if (/^[0-9]+$/.test(value)) {
+    parsed = BigInt(value);
+  } else {
+    throw new Error(`${field} returned an invalid quantity`);
+  }
+  return `0x${parsed.toString(16)}`;
+}
+
 function broadcastEvent(event: string, payload: unknown): void {
   chrome.tabs.query({}, (tabs) => {
     for (const t of tabs) {
@@ -1159,7 +1190,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // its fields are usually null on Sprintnet.
           const nonceHex =
             txReq.nonce ?? view.nonce ??
-            (await sprintnetJsonRpc<string>("eth_getTransactionCount", [fromAddr, "pending"])).result;
+            await sprintnetTransactionCountHex(fromAddr);
           const executionUnitPriceHex =
             txReq.gasPrice ?? view.pricePerExecutionUnitLythoshiHex ??
             (await sprintnetJsonRpc<string>("eth_gasPrice", [])).result;
@@ -1358,10 +1389,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       let plan: WalletMrvNativeSubmissionPlan;
       let txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>;
       try {
-        const nonceRes = await sprintnetJsonRpc<string>(
-          "eth_getTransactionCount",
-          [displayFromAddr, "latest"],
-        );
+        const nonceHex = await sprintnetTransactionCountHex(displayFromAddr);
         const fee =
           typeof p.maxExecutionFeeLythoshiHex !== "string" ||
           typeof p.priorityTipLythoshiHex !== "string"
@@ -1370,7 +1398,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         const input: WalletMrvCallNativePlanInput = {
           fromAddress: displayFromAddr,
           chainIdHex,
-          nonceHex: nonceRes.result,
+          nonceHex,
           executionUnitLimitHex: p.executionUnitLimitHex,
           maxExecutionFeeLythoshiHex:
             typeof p.maxExecutionFeeLythoshiHex === "string"
@@ -1667,7 +1695,9 @@ async function buildSendTxView(
           .catch(() => null as string | null),
     view.nonce != null
       ? Promise.resolve(view.nonce)
-      : rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"])
+      : (chainRequiresMlDsa(chainId)
+          ? sprintnetTransactionCountHex(fromAddr)
+          : rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]))
           .catch(() => null as string | null),
     simPromise,
   ]);
@@ -4004,14 +4034,14 @@ function validateRawNameLabel(input: unknown): NameLabelRecord | null {
   };
 }
 
-// Indexer-staleness threshold for the §28.2.1 banner. The indexer is
+// Indexer-staleness threshold for the popup banner. The indexer is
 // considered "stale" when latestHeight - currentHeight exceeds this
-// many blocks. At Sprintnet's 3-second cadence (ADR-0031), 10 blocks
-// is ~30 s of indexer lag — wider than normal ingestion variance,
+// many blocks. At Sprintnet's 3-second cadence, 10 blocks
+// is about 30 s of indexer lag: wider than normal ingestion variance,
 // narrow enough to flag a real backlog before it becomes user-visible.
 const INDEXER_LAG_STALE_THRESHOLD = 10;
 
-// Phase 11 Commit 4 — IndexerStatus validator + WALLET_KNOWN_INDEXER_SCHEMA_VERSION
+// IndexerStatus validator + WALLET_KNOWN_INDEXER_SCHEMA_VERSION
 // moved to shared/indexer-status.ts so both the SW (this file) and any
 // future popup-side direct consumer share one wire-shape contract.
 // `validateIndexerStatus` is now a re-export alias for backward
@@ -5259,10 +5289,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         let txHash: string | null = null;
         let broadcastError: string | null = null;
         try {
-          const nonceRes = await sprintnetJsonRpc<string>(
-            "eth_getTransactionCount",
-            [fromAddr, "latest"],
-          );
+          const nonceHex = await sprintnetTransactionCountHex(fromAddr);
           const fee = await suggestFee(action.chainIdHex);
           const gasHex =
             action.gasLimitHex ?? fee.gasLimit ?? "0x5208";
@@ -5276,7 +5303,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             value: valueWeiHex,
             ...(data !== undefined ? { data } : {}),
             gas: gasHex,
-            nonce: nonceRes.result,
+            nonce: nonceHex,
             maxFeePerGas: fee.maxFeePerGas,
             maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
             chainIdHex: action.chainIdHex,
@@ -6248,7 +6275,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // rescaling commits that landed on mono-core master after that
           // date. They continue to report `eth_getBalance` in 18-decimal
           // wei. The wallet's display path treats the bigint as lythoshi
-          // (8 decimals) per whitepaper §23.1, so an un-compensated
+          // (8 decimals), so an uncompensated
           // 0.1 LYTH balance (10^17 wei) renders as 10^9 = 1,000,000,000.
           // Convert at the IPC boundary so the popup sees lythoshi-magnitude
           // without changing the lythoshi-pure semantic of the shared
@@ -6751,10 +6778,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
       try {
-        const nonceRes = await sprintnetJsonRpc<string>(
-          "eth_getTransactionCount",
-          [fromAddress, "latest"],
-        );
+        const nonceHex = await sprintnetTransactionCountHex(fromAddress);
         const fee =
           p.maxExecutionFeeLythoshiHex === undefined ||
           p.priorityTipLythoshiHex === undefined
@@ -6763,7 +6787,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const input: WalletMrvDeployNativePlanInput = {
           fromAddress,
           chainIdHex,
-          nonceHex: nonceRes.result,
+          nonceHex,
           executionUnitLimitHex: p.executionUnitLimitHex,
           maxExecutionFeeLythoshiHex:
             p.maxExecutionFeeLythoshiHex ?? fee?.maxFeePerGas ?? "0x0",
@@ -6813,10 +6837,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const contractAddress = requireTypedMrvContractAddress(p.contractAddress).typed;
-        const nonceRes = await sprintnetJsonRpc<string>(
-          "eth_getTransactionCount",
-          [fromAddress, "latest"],
-        );
+        const nonceHex = await sprintnetTransactionCountHex(fromAddress);
         const fee =
           p.maxExecutionFeeLythoshiHex === undefined ||
           p.priorityTipLythoshiHex === undefined
@@ -6825,7 +6846,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const input: WalletMrvCallNativePlanInput = {
           fromAddress,
           chainIdHex,
-          nonceHex: nonceRes.result,
+          nonceHex,
           executionUnitLimitHex: p.executionUnitLimitHex,
           maxExecutionFeeLythoshiHex:
             p.maxExecutionFeeLythoshiHex ?? fee?.maxFeePerGas ?? "0x0",
@@ -7171,9 +7192,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const outcome = await readUpcomingDuties(args);
       return { ok: true, outcome };
     }
-    // ─────────────────────────────────────────────────────────────────
-    // Phase 7 — staking + delegation reads (§23 whitepaper)
-    // ─────────────────────────────────────────────────────────────────
+    // Staking + delegation reads.
     case "staking-cluster-directory": {
       const p = message.payload as { page?: number; limit?: number } | undefined;
       const page = typeof p?.page === "number" ? p.page : 0;
@@ -7225,7 +7244,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readRedemptionQueue(p.wallet);
     }
     case "staking-delegation-history": {
-      // Phase 7.1 — per-wallet delegation event timeline. Distinct from
+      // Per-wallet delegation event timeline. Distinct from
       // the wallet-wide activity feed: the activity feed merges every
       // event kind for the user's address; this reader is delegation-
       // only for the Delegations page's "Recent activity" surface.
@@ -7241,7 +7260,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readDelegationHistory(p.wallet, limit, p.cursor);
     }
     case "staking-cluster-delegators": {
-      // Phase 7.1 — co-delegator surface for a single cluster. Used by
+      // Co-delegator surface for a single cluster. Used by
       // the cluster-detail expand panel to render "n wallets delegate
       // here" without inferring from indirect signals.
       const p = message.payload as { clusterId?: number } | undefined;
@@ -7251,14 +7270,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readClusterDelegators(p.clusterId);
     }
     case "staking-autovote-seed": {
-      // Per-user §23.9 entropy: derive a 32-byte seed from the unlocked
+      // Per-user entropy: derive a 32-byte seed from the unlocked
       // ML-DSA-65 public key + a domain tag. The public key is already
-      // public state (`register-pubkey` precompile §22.4), so this leaks
-      // no secret material; the uniqueness property the whitepaper
-      // requires ("two delegators picking Max Yield don't end up at the
-      // same cluster set") rides on different users having different
-      // pubkeys. Locked wallets get a typed error and the popup falls
-      // back to a "please unlock to use autovote" branch.
+      // public state, so this leaks no secret material; different users
+      // produce different seed material from different pubkeys. Locked
+      // wallets get a typed error and the popup falls back to a "please
+      // unlock to use autovote" branch.
       const pubkey = getUnlockedPublicKeyV4();
       if (pubkey === null) {
         return { ok: false, reason: "wallet locked" };
@@ -7379,10 +7396,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
       try {
-        const nonceRes = await sprintnetJsonRpc<string>(
-          "eth_getTransactionCount",
-          [fromAddr, "latest"],
-        );
+        const nonceHex = await sprintnetTransactionCountHex(fromAddr);
         const fee = await suggestFee(p.chainIdHex);
         // Sprintnet's mempool enforces an intrinsic execution-unit floor (~24309 as
         // of audit) that `eth_estimateGas` doesn't reflect — it returns
@@ -7399,7 +7413,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(p.data !== undefined ? { data: p.data } : {}),
           ...(mempoolClass !== undefined ? { mempoolClass } : {}),
           gas: gasHex,
-          nonce: nonceRes.result,
+          nonce: nonceHex,
           maxFeePerGas: fee.maxFeePerGas,
           maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
