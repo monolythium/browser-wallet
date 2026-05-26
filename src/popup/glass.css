@@ -12,16 +12,13 @@
   --glass:             var(--glass-fill);
 }
 
-/* Popup window — fixed 380x620 per ext.css, no rounded corners (browser draws those). */
+/* Popup window — fixed 380x620 in popup mode. Background, overflow,
+   and scrollbar styling now live in ext.css (single source of truth).
+   This rule keeps the sizing piece so the Chrome popup auto-measures
+   to the wallet's natural dimensions. */
 html, body {
-  margin: 0;
-  padding: 0;
-  background: #0a0815;
-  color: #ecedf3;
-  font-family: var(--f-sans);
   width: 380px;
   height: 620px;
-  overflow: hidden;
 }
 
 #root { width: 380px; height: 620px; }
