@@ -13,8 +13,7 @@ Functional Manifest V3 extension with substantive crypto + EIP-1193 implementati
 - **Chain target is testnet.** Monolythium mainnet has not launched. Anything you connect to here runs against the public testnet today; mainnet activation is gated on separate protocol milestones.
 - **Not yet on a browser extension store.** No Chrome Web Store listing, no Firefox AMO listing. Until a signed release ships, the only install path is "build from source, load `dist/` as unpacked extension."
 - **Fallback operator RPCs are placeholders** (`192.0.2.0/24` — IETF TEST-NET-1). The wallet's primary chain-config source is the SDK chain-registry; the bundled `FALLBACK_OPERATORS_2026_05_25` array in `src/background/networks.ts` only kicks in when the registry is unreachable. To override with real RPCs, copy [`examples/operators.json.example`](./examples/operators.json.example) to `examples/operators.json` (gitignored).
-- **External builds need a sibling SDK checkout for now.** `package.json` consumes `@monolythium/core-sdk` from `file:../mono-core-sdk/packages/ts`. The SDK is public ([`monolythium/mono-core-sdk`](https://github.com/monolythium/mono-core-sdk), `@monolythium/core-sdk@0.1.0` on npm) — but master here uses SDK exports that haven't been cut into an npm release yet. Until the next SDK release, `pnpm install` requires cloning `monolythium/mono-core-sdk` as a sibling directory.
-- **Three branches go public together.** `master` (stable-ish), `dev` (active integration), `backup/finished-v4.0-evm-supported` (archive of pre-v4.1 EVM-supported state). The same sanitization pass covered all three.
+- **SDK comes from npm.** `package.json` pins `@monolythium/core-sdk@^0.2.0`, the public release on the npm registry. No sibling checkout is needed — `pnpm install` resolves the SDK like any other dep.
 
 Watch this repo for the first non-preview tag before treating any build as production-grade.
 
@@ -42,14 +41,6 @@ To inspect, audit, or develop:
 - **Node** 22+
 - **pnpm** 10+ (`corepack enable && corepack prepare pnpm@10 --activate`)
 - A Chromium-based browser (Chrome, Brave, Edge, Arc) or Firefox 109+
-
-To complete `pnpm install` you currently also need:
-
-- A sibling **[`mono-core-sdk`](https://github.com/monolythium/mono-core-sdk) checkout** at `../mono-core-sdk`. The SDK is public — `@monolythium/core-sdk@0.1.0` is on npm — but master here uses exports ahead of the published `0.1.0`. Until the next SDK release, the `file:` path in `package.json` requires the sibling. Clone with:
-
-  ```bash
-  git clone https://github.com/monolythium/mono-core-sdk.git ../mono-core-sdk
-  ```
 
 ## Quick start
 
