@@ -126,7 +126,7 @@ export function MultisigGovernance({ vaultId, onBack }: MultisigGovernanceProps)
       </div>
       <div className="ext-body">
         {!loaded && <Hint>Loading…</Hint>}
-        {loaded && meta === null && <Hint>This vault is not a multisig vault.</Hint>}
+        {loaded && meta === null && <Hint>This wallet is not a multisig wallet.</Hint>}
         {loaded && meta !== null && (
           <>
             <CurrentRoster meta={meta} />
