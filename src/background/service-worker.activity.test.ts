@@ -208,7 +208,7 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF = {
   missingProofMaterial: [],
   rootAlgorithm:
     "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
-  receiptCodec: "bincode(protocore_evm::Receipt)",
+  receiptCodec: "bincode(protocore_execution_types::Receipt)",
   blockHash: "0x" + "2".repeat(64),
   txHash: SUBMITTED_TX_HASH,
   receiptsRoot: COMPACT_RECEIPT_LEAF_HASH,
@@ -306,7 +306,6 @@ vi.mock("./networks.js", () => ({
   readOperatorOverride: vi.fn(async () => null),
   getDefaultOperators: vi.fn(() => []),
   getActiveOperators: vi.fn(() => []),
-  applyFallbackOperatorsIfStranded: vi.fn(async () => undefined),
 }));
 
 // Keystore (v2 + v4) — fixed unlocked address, never actually signs.
@@ -1847,7 +1846,7 @@ describe("wallet-mrv-submit-plan", () => {
     const origin = "https://mrv-provider-call.example";
     await dispatchRpc("eth_requestAccounts", [], origin);
     enqueuedApprovals.length = 0;
-    rpcResponses["eth_getTransactionCount"] = "0x8";
+    rpcResponses["lyth_getTransactionCount"] = 8;
     rpcResponses["eth_feeHistory"] = {
       baseFeePerGas: ["0x1"],
       reward: [["0x1"]],
@@ -1908,6 +1907,7 @@ describe("wallet-mrv-submit-plan", () => {
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
     });
+    expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
   });
 
   it("rejects raw MRV native call contract addresses at the dapp boundary", async () => {

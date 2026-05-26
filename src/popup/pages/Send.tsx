@@ -828,8 +828,8 @@ const fromHint: CSSProperties = {
 
 /**
  * Recipient input parser. Accepts:
- *   - bech32m (mono1…, ADR-0038 user-address form)
- *   - §22.8 hierarchical names ending in `.mono` (forward-resolved
+ *   - bech32m typed user addresses
+ *   - hierarchical names ending in `.mono` (forward-resolved
  *     against the local name cache; no `lyth_resolveName` RPC yet)
  *
  * The IPC contract stays 0x-only; the popup is the typed-address + name-
@@ -1888,10 +1888,9 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
  * Format the user-facing error string for a Send failure. Method-aware
  * so pre-submit RPC failures (lyth_getEncryptionKey, eth_feeHistory,
  * eth_getTransactionCount) read distinctly from real submission rejects
- * (lyth_submitEncrypted) — Phase 4.3 smoke testing showed "Chain rejected:"
- * was the misleading prefix that conflated these. When method is missing
- * (SW lags popup), falls back to the legacy verbatim shape so the popup
- * never breaks. Exported for unit testing in Send.test.ts.
+ * (lyth_submitEncrypted). When method is missing, falls back to the legacy
+ * verbatim shape so the popup never breaks. Exported for unit testing in
+ * Send.test.ts.
  */
 export function formatSendError(args: {
   message: string;
