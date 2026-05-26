@@ -388,7 +388,7 @@ export function SlhDsaBackupCard({
                       Once you've registered on chain (or even attempted to),
                       generating a new backup will leave the prior chain
                       registration permanently in place — the new key will
-                      not be registerable for this vault. Continue only if
+                      not be registerable for this wallet. Continue only if
                       you've lost the cold-storage copy.
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>

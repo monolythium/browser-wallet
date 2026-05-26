@@ -395,7 +395,7 @@ function describeWebAuthnError(e: DOMException | Error): string {
       case "NotSupportedError":
         return "No compatible authenticator found on this device";
       case "InvalidStateError":
-        return "This authenticator is already registered for this vault";
+        return "This authenticator is already registered for this wallet";
       case "SecurityError":
         return "The page origin does not satisfy WebAuthn requirements";
       case "AbortError":

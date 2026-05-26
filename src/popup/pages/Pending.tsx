@@ -158,7 +158,7 @@ export function Pending({ vaultId, onBack }: PendingProps) {
           </div>
         )}
         {loaded && meta === null && (
-          <div style={hintStyle}>This vault is not a multisig vault.</div>
+          <div style={hintStyle}>This wallet is not a multisig wallet.</div>
         )}
         {loaded && meta !== null && meta.proposals.length === 0 && (
           <div style={hintStyle}>No proposals yet.</div>

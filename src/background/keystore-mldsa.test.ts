@@ -178,7 +178,7 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
       const c = container!;
       expect(c.vaults.length).toBe(1);
       expect(c.activeVaultId).toBe(c.vaults[0]!.id);
-      expect(c.vaults[0]!.label).toBe("Vault 1");
+      expect(c.vaults[0]!.label).toBe("Wallet 1");
       expect(c.vaults[0]!.addr).toBe(legacyAddress);
       // Legacy entry preserved (rollback safety).
       expect(storage["mono.vault.v4"]).toBeDefined();
@@ -387,7 +387,7 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
       expect(list).not.toBeNull();
       expect(list!.length).toBe(1);
       expect(list![0]!.addr).toBe(address);
-      expect(list![0]!.label).toBe("Vault 1");
+      expect(list![0]!.label).toBe("Wallet 1");
       expect(list![0]!.isActive).toBe(true);
     },
     60_000,
@@ -411,7 +411,7 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
 
       const after = (await ks.listVaultsV4())!;
       expect(after.length).toBe(2);
-      expect(after[1]!.label).toBe("Vault 2");
+      expect(after[1]!.label).toBe("Wallet 2");
       expect(after[1]!.addr).toBe(added.address);
       // Round 3.5 — addVaultFreshV4 now auto-switches the active vault
       // to the newly-created record. The previous design left active

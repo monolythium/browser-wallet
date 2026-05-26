@@ -229,7 +229,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
         {multisig && (
           <div className="ext-card">
             <div className="ext-card__head">
-              <h3>Multisig vault</h3>
+              <h3>Multisig wallet</h3>
             </div>
             <div
               style={{
