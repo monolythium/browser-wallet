@@ -96,13 +96,28 @@ html, body {
 }
 /* Round 4 TASK 4 — sidepanel mode stretches the .ext frame to the
    panel viewport, drops the rounded card border (the panel chrome
-   has its own edge) and the drop-shadow (no longer floating). */
+   has its own edge) and the drop-shadow (no longer floating).
+   Round 5 TASK 1 — also cap inner content blocks at ~520 px and
+   center them so a 600-800 px wide panel doesn't stretch a single
+   wallet chip into an ugly horizontal banner. The .ext background
+   gradient continues to fill the full panel width either side of
+   the capped content; the panel chrome supplies the outer edge so
+   no visible "centered card" margin is needed. */
 html[data-mode="sidepanel"] .ext {
   width: 100%;
   height: 100%;
   border-radius: 0;
   border: none;
   box-shadow: none;
+}
+html[data-mode="sidepanel"] .ext > .ext-att,
+html[data-mode="sidepanel"] .ext > .ext-top,
+html[data-mode="sidepanel"] .ext > .ext-body,
+html[data-mode="sidepanel"] .ext > .ext-demo-banner {
+  max-width: 520px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
 }
 /* Fine grid overlay, masked — matches mobile */
 .ext::before {
