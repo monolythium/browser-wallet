@@ -313,7 +313,11 @@ export function SlhDsaBackupRevealModal({
             </button>
           ) : (
             <>
-              <MnemonicGrid mnemonic={screen.mnemonic} />
+              {/* Round 11 TASK 4 — this modal has its own 60 s ghost
+                 copy button below. Hide MnemonicGrid's default 30 s
+                 copy to avoid two copy buttons with different timer
+                 semantics. */}
+              <MnemonicGrid mnemonic={screen.mnemonic} showCopyButton={false} />
               <div
                 style={{ display: "flex", gap: 8, marginTop: 10 }}
               >
