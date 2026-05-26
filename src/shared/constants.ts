@@ -46,9 +46,35 @@ export const LOCKOUT_THRESHOLDS = [
   { fails: 5, ms: 30_000 },
 ] as const;
 
-// Broad exempt set — passive polls don't bump the timer; keystore handlers
-// self-manage the deadline via resetAutoLock(), so the post-dispatch hook
-// doesn't need to fire for them too.
+// Exempt set — ops that do NOT bump the auto-lock deadline.
+//
+// The rule: an op belongs in this set only if it represents PASSIVE
+// activity (background polling, read-only surface mounts, infra
+// keepalives) OR if the handler itself calls resetAutoLock()
+// explicitly (keystore-* ops self-manage).
+//
+// Round 12 TASK 5 — the regression the user reported as "autolock
+// broken again": Round 7 + Round 11 added revoke-* and contacts-add/
+// remove/rename to this set with the rationale "labelling shouldn't
+// bump." That rationale was wrong from a user-perspective POV: when
+// the user is actively clicking Revoke on Connected Sites or editing
+// contacts in the address book, they ARE using the wallet, and the
+// auto-lock deadline must extend. Without the bump, the wallet
+// locked at the configured time despite the user being mid-task —
+// which read as "premature lock".
+//
+// browser-wallet-old (reference repo) has just 5 exempt ops, all
+// strictly read-only polls (KEYRING_GET_STATE, GET_AUTO_LOCK,
+// GET_PENDING_APPROVAL, GET_CONNECTED_SITES, MONITOR_INCOMING_
+// TRANSFERS). Our larger set is mostly polling-equivalent (chain
+// reads, indexer reads, WS infra, approval-queue reads); the
+// user-action ops that crept in are the bug fixed here.
+//
+// To debug a future regression: an op is wrongly EXEMPT if a user-
+// initiated action triggers it (any click in the popup that mutates
+// chrome.storage.local outside the keystore container). An op is
+// wrongly NON-EXEMPT if it's polled at a fixed interval by
+// useEffect without user input.
 export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "keystore-status",
   "get-auto-lock-minutes",
@@ -72,17 +98,15 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "list-pending",
   "get-pending",
   "focus-approval",
+  // ConnectedSites: list is the passive surface mount; revoke ops
+  // are USER ACTIONS — Round 12 moved them OUT of exempt.
   "list-connected-sites",
-  "revoke-origin",
-  "revoke-all-origins",
-  // Round 7 TASK 5 — Contacts management ops are passive surface reads
-  // (list + check) and labelling operations (add/rename/remove). User
-  // activity that should bump the auto-lock deadline lives on the
-  // send / approval / unlock paths, not here.
+  // Round 12 TASK 5 — contacts-list + contacts-check stay exempt
+  // (read-only surface mounts: contact list rendering, address-book
+  // lookup during send-tx address resolution). contacts-add /
+  // contacts-rename / contacts-remove are USER ACTIONS — Round 12
+  // moved them OUT of exempt.
   "contacts-list",
-  "contacts-add",
-  "contacts-remove",
-  "contacts-rename",
   "contacts-check",
   "keystore-unlock",
   "keystore-lock",
