@@ -272,7 +272,11 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
         style={chipDisabledStyle}
       >
         <div className="ext-acc__lbl">
-          {/* Row 1 — wallet label (primary) + multisig badge + chevron + edit pencil. */}
+          {/* Round 6 TASK 3 — row 1 now puts the pencil DIRECTLY next
+             to the wallet label, with the multisig pill (when
+             applicable) and the dropdown chevron on the far right.
+             Wallet name shrinks to 12.5 px so the address below it
+             reads as the primary visual element. */}
           <div
             className="n"
             style={{
@@ -284,20 +288,43 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
             <span
               title={displayLabel}
               style={{
-                flex: 1,
                 minWidth: 0,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
                 fontFamily: "var(--f-sans)",
-                fontSize: 13,
-                fontWeight: 600,
+                fontSize: 12.5,
+                fontWeight: 500,
                 color: "var(--fg-100)",
                 letterSpacing: "-0.01em",
               }}
             >
               {displayLabel}
             </span>
+            {activeVault && (
+              <button
+                type="button"
+                onClick={handleTopBarRename}
+                aria-label="Rename wallet"
+                title="Rename wallet"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 20,
+                  height: 20,
+                  padding: 0,
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--fg-400)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                <Icon name="pen" size={11} />
+              </button>
+            )}
+            <span style={{ flex: 1 }} />
             {activeVault?.kind === "multisig" && (
               <span
                 style={{
@@ -327,38 +354,20 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
             >
               <Icon name="chev-d" size={12} />
             </span>
-            {activeVault && (
-              <button
-                type="button"
-                onClick={handleTopBarRename}
-                aria-label="Rename wallet"
-                title="Rename wallet"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 20,
-                  height: 20,
-                  padding: 0,
-                  background: "transparent",
-                  border: "none",
-                  color: "var(--fg-400)",
-                  cursor: "pointer",
-                  flexShrink: 0,
-                }}
-              >
-                <Icon name="pen" size={11} />
-              </button>
-            )}
           </div>
-          {/* Row 2 — FULL bech32m address (single line) + copy. */}
+          {/* Row 2 — FULL bech32m address (single line, prominent) + copy.
+             Round 6 TASK 3 — bumped from 12 → 13.5 px / fg-100 with
+             tighter letter-spacing so the 43-char string still fits
+             in the popup's chip width (~317 px after subtracting the
+             copy button + gap). At 13.5 px JBM with -0.04 em the
+             string measures ~308 px — fits with headroom. */}
           <div
             className="a"
             style={{
               display: "flex",
               alignItems: "center",
               gap: 4,
-              marginTop: 2,
+              marginTop: 3,
             }}
           >
             <span
@@ -368,13 +377,13 @@ export function VaultPicker({ activeAccount }: VaultPickerProps) {
                 flex: 1,
                 minWidth: 0,
                 overflow: "hidden",
-                textOverflow: "ellipsis",
+                textOverflow: "clip",
                 whiteSpace: "nowrap",
                 fontFamily: "var(--f-mono)",
-                fontSize: 12,
-                fontWeight: 400,
-                color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-200)",
-                letterSpacing: "-0.02em",
+                fontSize: 13.5,
+                fontWeight: 500,
+                color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
+                letterSpacing: "-0.04em",
                 cursor: "copy",
               }}
             >
