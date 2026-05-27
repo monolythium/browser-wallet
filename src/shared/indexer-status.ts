@@ -32,8 +32,17 @@ export interface IndexerStatusValidated {
 }
 
 /** The schema version this wallet build was tested against. Bump when
- *  shipping parsers for a newer chain schema. */
-export const WALLET_KNOWN_INDEXER_SCHEMA_VERSION = 1;
+ *  shipping parsers for a newer chain schema.
+ *
+ *  R17 — bumped from 1 -> 6. Live probe against mono-core HEAD
+ *  `2705ce0f` (operator 178.105.15.216:8545) returned
+ *  `lyth_indexerStatus.schemaVersion = 6`. The wallet's activity-feed
+ *  parsers are additive (unknown fields silently dropped — see the
+ *  docstring above on `isSchemaDrift`), so forward-compat with
+ *  versions 2..6 is the design promise; bumping the gate from 1 to 6
+ *  honours that promise and clears the false-positive
+ *  IndexerStaleBanner that fired on every Activity-tab open. */
+export const WALLET_KNOWN_INDEXER_SCHEMA_VERSION = 6;
 
 /** Returns true when the chain reports a schema newer than the wallet
  *  knows. The activity-feed parsers are additive (unknown fields are
