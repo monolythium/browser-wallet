@@ -33,9 +33,12 @@ export interface ClusterDirectoryEntry {
   /** Numeric cluster id used by every chain-side delegation precompile. */
   clusterId: number;
   /** §22.4 cluster-name-registry display name (e.g. `halcyon.cluster.mono`).
-   *  TODO: chain GAP — the cluster-name registry is not yet emitted by
-   *  any SDK read; the wallet displays `cluster-<id>` until Nayiem wires
-   *  the name resolver. */
+   *  chain GAP — see `_dev-notes/browser-wallet/active-nayiem-pings.md`
+   *  PING #8 (cluster name registry). No `lyth_resolveName` /
+   *  `lyth_clusterName` reader exists in mono-core protocore.rs as of
+   *  HEAD f7236197 (2026-05-27). Wallet displays mock names from
+   *  `MOCK_CLUSTERS[*].name` below; replace with a real lookup when the
+   *  chain ships the primitive. */
   name: string | null;
   /** Member count (`ClusterDirectoryEntryResponse.size`). Whitepaper §14
    *  fixes this at 10 for v1; surfaced from the chain so future
@@ -376,17 +379,12 @@ export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
  *  marginally above Foundation clusters since the Foundation burns its
  *  rewards per §30.5).
  *
- *  TODO: chain GAP — needs Nayiem
- *  ────────────────────────────────
- *  As of mono-core-sdk @0fd8a79 there is NO chain-side read for per-
- *  cluster APR. The Phase 7.1 brief expected `lyth_clusterApr` (or a
- *  REST equivalent at `/api/v1/staking/apr`) to land via mono-core
- *  commit 964b0a3 "Expose advanced read API routes" — that commit
- *  exposed certificates, registry, and DAG routes but no staking APR.
- *  This table remains the wallet's authoritative APR source until the
- *  chain side ships a reader; the §23.5 quadratic reward curve is
- *  deterministic, so a future activation just swaps the table for a
- *  per-cluster call. */
+ *  chain GAP — see `_dev-notes/browser-wallet/active-nayiem-pings.md`
+ *  PING #7 (APR / reward-rate chain primitive). No `lyth_clusterApr`,
+ *  `lyth_rewardRate`, or `lyth_clusterRewardShare` reader exists in
+ *  mono-core protocore.rs as of HEAD f7236197 (2026-05-27). The §23.5
+ *  quadratic reward curve is deterministic by design, so a future
+ *  activation just swaps the table for a per-cluster call. */
 export const MOCK_CLUSTER_APR_BPS: Readonly<Record<number, number>> = {
   1: 820, // 8.20% — Foundation, mid-saturation
   2: 805, // 8.05% — Foundation
