@@ -35,7 +35,7 @@ import { Features } from "./pages/Features";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { Stake } from "./pages/Stake";
+import { Stake, clearStakeState } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { ClusterDetail } from "./pages/ClusterDetail";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -1389,6 +1389,10 @@ export default function App() {
           onBack={() => {
             const wasDeepLinked = stakeDeepLink !== null;
             setStakeDeepLink(null);
+            // R18 — user is explicitly leaving Stake; clear the
+            // persisted form / selection state so the next mount
+            // starts fresh.
+            clearStakeState();
             setScreen(wasDeepLinked ? "delegations" : "home");
           }}
         />
