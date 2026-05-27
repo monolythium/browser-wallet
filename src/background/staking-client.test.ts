@@ -296,6 +296,36 @@ describe("readClusterStatus", () => {
     expect(r.ok).toBe(false);
   });
 
+  // R18 — chain returns null for both scores until aggregation lands.
+  // Wallet must thread null straight through so the popup hides the
+  // rows entirely (per no-mock-fallback principle).
+  it("preserves null reputationScore + livenessScore from chain", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-3",
+      result: {
+        clusterId: 0,
+        threshold: 5,
+        size: 7,
+        live: 5,
+        lagging: 0,
+        offline: 0,
+        maintenance: 2,
+        members: [],
+        epoch: null,
+        round: null,
+        quorum: "ok",
+        reputationScore: null,
+        livenessScore: null,
+        lastUpdateHeight: 136812n,
+      },
+    });
+    const r = await readClusterStatus(0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.reputationScore).toBeNull();
+    expect(r.data.livenessScore).toBeNull();
+  });
+
   // Phase 7.1 — wire-contract anchor for cluster status. Same rationale
   // as the directory anchor above: constructs the strict SDK shape with
   // bigints for epoch / round / lastUpdateHeight and verifies the
