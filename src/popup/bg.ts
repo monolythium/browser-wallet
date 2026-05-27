@@ -1873,6 +1873,7 @@ export type {
   RedemptionQueueRow,
   RedemptionQueueView,
   StakingResult,
+  WalletOperatorInfo,
 } from "../shared/staking.js";
 
 import type {
@@ -1886,6 +1887,7 @@ import type {
   PendingRewardsView,
   RedemptionQueueView,
   StakingResult,
+  WalletOperatorInfo,
 } from "../shared/staking.js";
 
 /** Read the paginated cluster directory (§14 Avengers Assembly). */
@@ -1902,6 +1904,17 @@ export async function bgStakingClusterStatus(
   clusterId: number,
 ): Promise<StakingResult<ClusterStatus>> {
   return send("staking-cluster-status", { clusterId });
+}
+
+/** Read per-operator info via `lyth_operatorInfo` — R16 Task A.
+ *  Used by ClusterDetail to render per-operator self-bond next to each
+ *  member in the operator slate. The return shape is per-operator
+ *  unique and not mock-fallbacked; callers render a placeholder when
+ *  `ok: false`. */
+export async function bgStakingOperatorInfo(
+  operatorId: string,
+): Promise<StakingResult<WalletOperatorInfo>> {
+  return send("staking-operator-info", { operatorId });
 }
 
 /** Read active delegations for a wallet. Empty rows is a legitimate
