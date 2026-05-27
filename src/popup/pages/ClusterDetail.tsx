@@ -311,10 +311,13 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
           populates non-null. Per no-mock-fallback principle, no
           synthesized placeholder. */}
       {status.reputationScore !== null && (
+        // Whitepaper §14 + §28.3 govern the score derivation; the
+        // tooltip text stays plain-English so the §-cite doesn't leak
+        // into user-facing UI strings.
         <KeyValueRow
           label="Reputation"
           value={status.reputationScore.toFixed(3)}
-          tooltip="Cluster reputation score from lyth_clusterStatus.reputationScore (§14 + §28.3). Float in [0,1]."
+          tooltip="Cluster reputation score from lyth_clusterStatus.reputationScore. Float in [0,1]."
         />
       )}
       {status.livenessScore !== null && (
