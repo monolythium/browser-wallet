@@ -44,6 +44,7 @@ import {
 } from "./staking-client.js";
 import { MOCK_CLUSTERS, MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
 
 const mockedRpc = sprintnetJsonRpc as unknown as ReturnType<typeof vi.fn>;
 
@@ -710,7 +711,10 @@ describe("readPendingRewards", () => {
     });
 
     const r = await readPendingRewards(wallet, [{ cluster: 999, weightBps: 1000 }]);
-    expect(mockedRpc).toHaveBeenCalledWith("lyth_pendingRewards", [wallet]);
+    // R17 — chain validates wallet param as bech32m; wallet converts before send.
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_pendingRewards", [
+      userAddressForNativeRpc(wallet),
+    ]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.via).toBe("operator-7");
@@ -904,7 +908,10 @@ describe("readRedemptionQueue", () => {
     });
 
     const r = await readRedemptionQueue(wallet);
-    expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [wallet]);
+    // R17 — chain validates wallet param as bech32m; wallet converts before send.
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [
+      userAddressForNativeRpc(wallet),
+    ]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.via).toBe("operator-9");
@@ -1049,7 +1056,12 @@ describe("readDelegationHistory", () => {
       return { via: "operator-1", result: [] };
     });
     await readDelegationHistory(wallet, 25, "cursor-page-2");
-    expect(receivedParams).toEqual([wallet, 25, "cursor-page-2"]);
+    // R17 — bech32m conversion applied before RPC send.
+    expect(receivedParams).toEqual([
+      userAddressForNativeRpc(wallet),
+      25,
+      "cursor-page-2",
+    ]);
   });
 
   it("omits cursor on first-page calls", async () => {
@@ -1059,7 +1071,7 @@ describe("readDelegationHistory", () => {
       return { via: "operator-1", result: [] };
     });
     await readDelegationHistory(wallet, 10);
-    expect(receivedParams).toEqual([wallet, 10]);
+    expect(receivedParams).toEqual([userAddressForNativeRpc(wallet), 10]);
   });
 
   it("falls back to an empty timeline when chain is offline", async () => {
@@ -1095,5 +1107,99 @@ describe("readDelegationHistory", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toMatch(/malformed/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R17 — bech32m wallet-param conversion regression
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Chain validates `wallet` strictly as bech32m on every wallet-keyed
+// lyth_* read (verified live: lyth_pendingRewards("0x...") returns
+// -32602 "wallet must be mono bech32m"). The reads listed below
+// receive an account address (typically 0x hex from the popup's
+// account list) and must convert via userAddressForNativeRpc() before
+// passing to sprintnetJsonRpc. This block pins the conversion at each
+// site so any future regression surfaces as a test failure.
+
+describe("R17 bech32m wallet-param conversion (regression)", () => {
+  // SDK's addressToTypedBech32("user", 0xhex) emits a "mono1..." prefix.
+  // We don't pin the full bech32m string (the SDK's helper is the
+  // canonical encoder) — just that the param passed to the RPC layer
+  // is NOT the raw 0x form and starts with "mono1".
+  const hexWallet = "0x" + "ab".repeat(20);
+  function captureRpcWalletParam(method: string): string | null {
+    const calls = mockedRpc.mock.calls.filter(
+      ([m]) => m === method,
+    );
+    if (calls.length === 0) return null;
+    const params = calls[0]?.[1];
+    if (!Array.isArray(params) || params.length === 0) return null;
+    const first = params[0];
+    return typeof first === "string" ? first : null;
+  }
+
+  it("readDelegations converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { wallet: hexWallet, rows: [], totalBps: 0 },
+    });
+    await readDelegations(hexWallet);
+    const sent = captureRpcWalletParam("lyth_getDelegations");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("readDelegationHistory converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: [] });
+    await readDelegationHistory(hexWallet);
+    const sent = captureRpcWalletParam("lyth_getDelegationHistory");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("readPendingRewards converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        wallet: hexWallet,
+        totalAmountLythoshi: "0",
+        settledPendingLythoshi: "0",
+        unsettledAmountLythoshi: "0",
+        autoCompound: false,
+        rows: [],
+        block: "latest",
+      },
+    });
+    await readPendingRewards(hexWallet, []);
+    const sent = captureRpcWalletParam("lyth_pendingRewards");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("readRedemptionQueue converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { wallet: hexWallet, tickets: [], count: 0, returned: 0 },
+    });
+    await readRedemptionQueue(hexWallet);
+    const sent = captureRpcWalletParam("lyth_redemptionQueue");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("passes already-bech32m wallet through unchanged", async () => {
+    const bech = "mono1qy7fyqqqqqqqqqqqqqqqqqqqqqqqqqqqq6kzzqx";
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { wallet: bech, rows: [], totalBps: 0 },
+    });
+    await readDelegations(bech);
+    const sent = captureRpcWalletParam("lyth_getDelegations");
+    expect(sent).toBe(bech);
   });
 });
