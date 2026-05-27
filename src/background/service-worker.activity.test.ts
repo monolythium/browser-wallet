@@ -370,22 +370,16 @@ vi.mock("./connected-sites.js", () => ({
   clearAllConnectedSites: vi.fn(async () => undefined),
 }));
 
-vi.mock("@monolythium/core-sdk/ethers", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk/ethers")>();
-  return {
-    ...actual,
-    MonolythiumProvider: class {
-      async _send() {
-        return [];
-      }
-    },
-  };
-});
-
 vi.mock("@monolythium/core-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
   return {
     ...actual,
+    RpcClient: class {
+      constructor(public readonly endpoint: string) {}
+      async call() {
+        return null;
+      }
+    },
     MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
     verifyNoEvmFinalityEvidenceThreshold:
       mockVerifyNoEvmFinalityEvidenceThreshold,
