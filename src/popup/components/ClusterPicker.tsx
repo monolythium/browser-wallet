@@ -365,9 +365,10 @@ function ClusterRow({
               lineHeight: 1.5,
             }}
           >
-            Operator-level service tiers (RPC, prover, oracle,
-            archive) are surfaced from `lyth_operatorInfo` and not yet
-            aggregated per cluster. Surfacing here in a future commit.
+            Per-operator self-bond and cluster-level service-tier
+            badges (RPC, Indexer, Archive, Oracle, Bridge) are
+            rendered on the dedicated cluster-detail page — open via
+            "View details" below.
           </div>
           {/* Phase 11 Commit 6 — link to dedicated cluster-detail page
               for the full operator slate, delegator demand, and your
