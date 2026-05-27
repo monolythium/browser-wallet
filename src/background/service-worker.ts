@@ -207,6 +207,7 @@ import {
   type NameCache,
 } from "../shared/name-resolution.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
@@ -1126,12 +1127,6 @@ async function sprintnetExecutionUnitPriceQuoteHex(): Promise<ExecutionUnitPrice
 
 async function sprintnetExecutionUnitPriceHex(): Promise<string> {
   return (await sprintnetExecutionUnitPriceQuoteHex()).executionUnitPriceHex;
-}
-
-function userAddressForNativeRpc(address: string): string {
-  return address.startsWith("0x") || address.startsWith("0X")
-    ? addressToTypedBech32("user", address)
-    : address;
 }
 
 function rpcQuantityToHex(value: number | string | bigint, field: string): string {
