@@ -139,7 +139,6 @@ export function Stake({
 
   // Cluster directory state.
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
-  const [clustersMock, setClustersMock] = useState(false);
   const [clustersError, setClustersError] = useState<string | null>(null);
 
   // Delegation context state.
@@ -192,7 +191,6 @@ export function Stake({
           return;
         }
         setClusters(r.data.clusters.slice());
-        setClustersMock(r.via === "mock");
       } catch (e) {
         if (cancelled) return;
         setClustersError((e as Error).message ?? "directory fetch failed");
@@ -585,7 +583,6 @@ export function Stake({
                   <ClusterPicker
                     clusters={clusters}
                     selectedClusterId={selectedClusterId}
-                    isMock={clustersMock}
                     {...(onShowClusterDetail
                       ? { onShowDetails: onShowClusterDetail }
                       : {})}
@@ -655,7 +652,6 @@ export function Stake({
                 (c) => c.clusterId !== selectedClusterId,
               )}
               selectedClusterId={redelegateDstClusterId}
-              isMock={clustersMock}
               {...(onShowClusterDetail
                 ? { onShowDetails: onShowClusterDetail }
                 : {})}
