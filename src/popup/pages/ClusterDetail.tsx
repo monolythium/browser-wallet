@@ -306,6 +306,24 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
         label="Last update height"
         value={status.lastUpdateHeight}
       />
+      {/* R18 — chain-real reputation + liveness scores (§14 + §28.3).
+          Currently null on Sprintnet testnet; rows hidden until chain
+          populates non-null. Per no-mock-fallback principle, no
+          synthesized placeholder. */}
+      {status.reputationScore !== null && (
+        <KeyValueRow
+          label="Reputation"
+          value={status.reputationScore.toFixed(3)}
+          tooltip="Cluster reputation score from lyth_clusterStatus.reputationScore (§14 + §28.3). Float in [0,1]."
+        />
+      )}
+      {status.livenessScore !== null && (
+        <KeyValueRow
+          label="Liveness"
+          value={status.livenessScore.toFixed(3)}
+          tooltip="Cluster liveness score from lyth_clusterStatus.livenessScore. Float in [0,1]."
+        />
+      )}
       {serviceTiers && serviceTiers.anyReachable && (
         <ServiceTierBadgeRow tiers={serviceTiers} />
       )}
