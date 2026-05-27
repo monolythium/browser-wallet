@@ -1610,7 +1610,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
     case "eth_getFilterLogs": {
       return err(
         4200,
-        `${method} is unavailable on Monolythium — chain retired EVM simulation/polling-filters per v4.1 §22.9`,
+        `${method} is unavailable on Monolythium — the chain retired EVM simulation and polling-filter methods. Use native reads or submit via the wallet UI.`,
       );
     }
 
