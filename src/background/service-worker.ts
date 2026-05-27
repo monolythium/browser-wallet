@@ -3702,6 +3702,14 @@ async function fetchIndexerSnapshot(
   _chainIdHex: string,
   options: FetchIndexerSnapshotOptions,
 ): Promise<IndexerSnapshotRaw> {
+  // R17 — chain validates wallet/address params strictly as bech32m
+  // on every user-keyed lyth_* read (verified live:
+  // lyth_getAddressActivity("0x...") -> -32602 wallet must be mono
+  // bech32m). Convert once at the top of the snapshot fetch and reuse
+  // for the 4 direct chain calls below. The helper calls
+  // (readMrcAccountLookup / readNativeAgentStateLookup) do their own
+  // address normalisation internally.
+  const addressForChain = userAddressForNativeRpc(address);
   const [
     tokenBalances,
     bridgeRoutes,
@@ -3711,7 +3719,7 @@ async function fetchIndexerSnapshot(
     delegationHistory,
     addressActivity,
   ] = await Promise.all([
-    settleSprintnetRpc<unknown>("lyth_getTokenBalances", [address]),
+    settleSprintnetRpc<unknown>("lyth_getTokenBalances", [addressForChain]),
     readBridgeRoutes(),
     options.includeMrcAccount
       ? readMrcAccountLookup(address)
@@ -3719,9 +3727,9 @@ async function fetchIndexerSnapshot(
           value: null,
         }),
     readNativeAgentStateLookup(address),
-    settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
-    settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
-    settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
+    settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
+    settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [addressForChain, 20]),
+    settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [addressForChain, 30]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
