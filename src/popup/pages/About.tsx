@@ -37,6 +37,7 @@ import {
   SPRINTNET_GENESIS_HASH,
   WALLET_PITCH,
 } from "../../shared/build-info";
+import { fetchLiveTestnetRegistry } from "../../shared/live-registry";
 import {
   OPERATOR_RISK_LEGEND,
   classifyOperatorRisk,
@@ -98,7 +99,25 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
     complete: number;
     missing: { id: string; label: string }[];
   } | null>(null);
+  /** Live GitHub chain-registry snapshot for testnet-69420. Populates
+   *  on mount via fetchLiveTestnetRegistry; falls back to the
+   *  SDK-bundled value if the GitHub raw URL is unreachable. */
+  const [liveRegistryGenesis, setLiveRegistryGenesis] = useState<string | null>(null);
+  const [liveRegistryBinarySha, setLiveRegistryBinarySha] = useState<string | null>(null);
   const walletVersion = readWalletVersion();
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const info = await fetchLiveTestnetRegistry();
+      if (cancelled || info === null) return;
+      setLiveRegistryGenesis(info.genesis_hash);
+      setLiveRegistryBinarySha(info.binary_sha);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,8 +198,14 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
     operators === null
       ? null
       : summariseOperatorCapabilities(operators);
+  // The displayed registry genesis hash is the live GitHub value when
+  // the fetch succeeded, the SDK-bundled snapshot otherwise. The
+  // build-time `SPRINTNET_GENESIS_HASH` pin still gates GAP #11 in
+  // networks.ts — this is purely display + drift detection.
+  const displayedRegistryGenesis =
+    liveRegistryGenesis ?? SDK_REGISTRY_GENESIS_HASH;
   const sdkRegistryMismatch =
-    SDK_REGISTRY_GENESIS_HASH.toLowerCase() !==
+    displayedRegistryGenesis.toLowerCase() !==
     SPRINTNET_GENESIS_HASH.toLowerCase();
 
   return (
@@ -632,14 +657,25 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 borderRadius: 8,
                 border: "1px solid rgba(244,201,122,0.4)",
               }}
-              title={SDK_REGISTRY_GENESIS_HASH}
+              title={displayedRegistryGenesis}
             >
-              SDK registry snapshot reports{" "}
+              {liveRegistryGenesis !== null ? "GitHub" : "SDK bundled"} registry
+              reports{" "}
               <span style={{ color: "var(--fg-200)" }}>
-                {shortHex(SDK_REGISTRY_GENESIS_HASH, 10, 8)}
+                {shortHex(displayedRegistryGenesis, 10, 8)}
               </span>{" "}
-              — wallet's pinned genesis takes precedence until the registry
-              resyncs.
+              — wallet&apos;s pinned genesis takes precedence until the
+              registry resyncs.
+              {liveRegistryBinarySha && (
+                <>
+                  {" "}
+                  Live binary sha:{" "}
+                  <span style={{ color: "var(--fg-200)" }}>
+                    {liveRegistryBinarySha}
+                  </span>
+                  .
+                </>
+              )}
             </div>
           )}
         </div>
