@@ -591,7 +591,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH)" },
               {
                 k: "Chain decimal mode",
-                v: "v4.0 compat (wei wire) · wallet compensates",
+                v: "legacy compat (wei wire) · wallet compensates",
                 title:
                   "V4-LIVE-0008 operators (commit 5aead0f0) still report wei on the wire; wallet converts to lythoshi at IPC boundaries. Flip CHAIN_RETURNS_LEGACY_WEI=false when operators upgrade past a2a9e1fc.",
               },

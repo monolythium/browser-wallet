@@ -363,7 +363,7 @@ interface VaultRecordV4 {
    *  `shared/slh-dsa-backup.ts` for the rationale + chain-GAP
    *  analysis + parameter-set choice (`slh_dsa_sha2_128s` algo id
    *  `1101`, the only currently-chain-eligible backup variant per
-   *  Law §2.9). */
+   *  Whitepaper §2.9). */
   slhDsaBackup?: SlhDsaBackup;
 }
 
@@ -1071,8 +1071,8 @@ export async function addVaultImportV4(
  *  executed proposals on-chain) and attaches the supplied signer
  *  roster + threshold as the M-of-N policy.
  *
- *  Whitepaper §28.5 Q70 — N up to {@link MAX_SIGNERS} (16); threshold
- *  in [1, N]. The wallet enforces the policy at the IPC boundary;
+ *  Whitepaper §28.5 (wallet portfolio / multisig policy) — N up to
+ *  {@link MAX_SIGNERS} (16); threshold in [1, N]. The wallet enforces the policy at the IPC boundary;
  *  chain enforcement is a GAP (`TODO: chain GAP — needs Nayiem`),
  *  see shared/multisig.ts module doc-block for the off-chain story.
  *
