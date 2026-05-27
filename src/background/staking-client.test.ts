@@ -5,10 +5,15 @@
 //      typed StakingResult envelope (cluster-directory row count
 //      preserved, regions array passed through, entity stitched in
 //      via the second `lyth_getClusterEntity` lookup).
-//   2. Sprintnet-offline fallback: when `sprintnetJsonRpc` throws,
-//      readClusterDirectory + readDelegations + readDelegationCap
-//      all serve the MOCK fixtures rather than failing the popup
-//      render (`via: "mock"`).
+//   2. Sprintnet-offline behaviour:
+//      - readClusterDirectory propagates `ok: false` (no MOCK_CLUSTERS
+//        fallback — per `_dev-notes/_principles/no-mock-fallbacks.md`,
+//        R18);
+//      - readDelegations / readDelegationHistory / readClusterDelegators
+//        still return `ok: true, data: { rows: [] }` because empty is
+//        a legitimate chain response;
+//      - readDelegationCap retains its synthetic §23.6 fallback (tracked
+//        for follow-up review under the no-mock principle).
 //   3. Malformed-response handling: a well-formed-transport but
 //      missing-required-fields response yields `ok: false, reason`.
 //
@@ -42,7 +47,7 @@ import {
   readPendingRewards,
   readRedemptionQueue,
 } from "./staking-client.js";
-import { MOCK_CLUSTERS, MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
+import { MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 
@@ -134,19 +139,12 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[0]?.name).toBeNull();
   });
 
-  it("falls back to MOCK_CLUSTERS when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
+  it("propagates ok:false when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
     mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
     const r = await readClusterDirectory(0, 25);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.via).toBe("mock");
-    expect(r.data.clusters.length).toBe(MOCK_CLUSTERS.length);
-    // The mock fixtures preserve the §14 architecture shape (10 ops per
-    // cluster, 7-of-10 threshold).
-    for (const c of r.data.clusters) {
-      expect(c.size).toBe(10);
-      expect(c.threshold).toBe(7);
-    }
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("no Sprintnet operator reachable");
   });
 
   it("rejects a malformed response (missing clusters[] array)", async () => {
