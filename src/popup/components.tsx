@@ -59,8 +59,6 @@ import {
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
-import { NftTab } from "./components/NftTab";
-import type { SendNftTarget } from "./pages/SendNft";
 import {
   useBridgeRouteSelection,
   type BridgeRouteChoiceCandidate,
@@ -1564,9 +1562,6 @@ interface HomeProps {
   onOpenSend?: () => void;
   onOpenStake?: () => void;
   onOpenBridge?: () => void;
-  /** Phase 5 Commit 7 — fired by NftDetail's Send CTA. App.tsx
-   *  stashes the target NFT and routes to the SendNft screen. */
-  onOpenSendNft?: (target: SendNftTarget) => void;
   /** Phase 9 Commit 7 — slot rendered at the top of the Home body
    *  for the post-onboarding hint bar (OnboardingHintBar). Optional
    *  so test harnesses + callers without the route wired still
@@ -1578,8 +1573,8 @@ interface HomeProps {
   onNewWalletFlow?: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, topSlot, onNewWalletFlow }: HomeProps) {
-  const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow }: HomeProps) {
+  const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
@@ -1750,16 +1745,6 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
             >
               Activity
             </button>
-            <button
-              role="tab"
-              aria-selected={tab === "nfts"}
-              aria-controls="ext-tabpanel-nfts"
-              id="ext-tab-nfts"
-              className={tab === "nfts" ? "on" : ""}
-              onClick={() => setTab("nfts")}
-            >
-              NFTs
-            </button>
           </div>
           {tab === "assets" && (
             <div
@@ -1782,24 +1767,10 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               />
             </div>
           )}
-          {tab === "nfts" && (
-            <div
-              role="tabpanel"
-              id="ext-tabpanel-nfts"
-              aria-labelledby="ext-tab-nfts"
-            >
-              <NftTab
-                ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
-                chainId={network.chainIdNum}
-                chainIdHex={network.chainId}
-                {...(onOpenSendNft ? { onOpenSendNft } : {})}
-              />
-            </div>
-          )}
         </div>
 
         {/* Round 10 TASK 4 — Recent dApps moved below the Assets /
-           Activity / NFTs tabs (was directly above them). Activity is
+           Activity tabs (was directly above them). Activity is
            the higher-signal section for an active user, so it now
            sits closer to the balance hero. Recent dApps stays on
            home but as a secondary section near the bottom. */}
