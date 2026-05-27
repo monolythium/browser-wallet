@@ -40,29 +40,25 @@ interface CapturedRpcCall {
 const rpcCalls: CapturedRpcCall[] = [];
 let rpcResponses: Record<string, unknown> = {};
 
-vi.mock("@monolythium/core-sdk/ethers", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk/ethers")>();
-  class FakeMonolythiumProvider {
-    constructor(public rpc: string, public opts?: unknown) {}
-    async _send(payload: { id: number; jsonrpc: string; method: string; params: unknown[] }) {
-      rpcCalls.push({ method: payload.method, params: payload.params });
-      const result = rpcResponses[payload.method];
+vi.mock("@monolythium/core-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
+  class FakeRpcClient {
+    constructor(public readonly endpoint: string) {}
+    async call<T>(method: string, params: unknown): Promise<T> {
+      const paramArray = Array.isArray(params) ? params : params == null ? [] : [params];
+      rpcCalls.push({ method, params: paramArray });
+      const result = rpcResponses[method];
       if (result === undefined) {
-        return [{ id: payload.id, jsonrpc: "2.0", error: { code: -32601, message: `mock: no seeded response for ${payload.method}` } }];
+        const e = new Error(`mock: no seeded response for ${method}`) as Error & { code?: number };
+        e.code = -32601;
+        throw e;
       }
-      return [{ id: payload.id, jsonrpc: "2.0", result }];
+      return result as T;
     }
   }
   return {
     ...actual,
-    MonolythiumProvider: FakeMonolythiumProvider,
-  };
-});
-
-vi.mock("@monolythium/core-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
-  return {
-    ...actual,
+    RpcClient: FakeRpcClient,
     MONOLYTHIUM_TESTNET_CHAIN_ID: TESTNET_CHAIN_ID_BIGINT,
     // Mirror the SDK registry contract: at least one complete endpoint,
     // with membership owned by the SDK snapshot rather than the wallet.
