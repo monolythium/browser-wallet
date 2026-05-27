@@ -8,14 +8,14 @@ import { TESTNET_69420 } from "@monolythium/core-sdk";
 
 /** SDK package version. Mirrors mono-core-sdk/packages/ts/package.json
  *  `version`. Bump alongside any SDK sync that bumps the package
- *  version field — Phase 6 ships against 0.1.0. */
-export const SDK_PACKAGE_VERSION = "0.1.0";
+ *  version field. */
+export const SDK_PACKAGE_VERSION = "0.3.1";
 
 /** SDK commit short SHA. Mirrors `git -C mono-core-sdk rev-parse --short
  *  HEAD` at the time of the last upstream sync. The wallet's
  *  pnpm-lock.yaml resolves the SDK from the workspace path, so this
  *  constant exists purely for the About-page version readout. */
-export const SDK_COMMIT_SHORT = "0fd8a79";
+export const SDK_COMMIT_SHORT = "1d19d40";
 
 /** Expected Sprintnet genesis hash — the wallet's authoritative pin for
  *  GAP #11 (orphan-fork defense). Operator probes that return a
@@ -26,9 +26,14 @@ export const SDK_COMMIT_SHORT = "0fd8a79";
  *  SDK_REGISTRY_GENESIS_HASH below). The two are duplicated so the
  *  About page can surface a warning if a future SDK sync drifts the
  *  registry's value out from under the wallet — in that case the pin
- *  takes precedence and the human reviewer decides whether to bump it. */
+ *  takes precedence and the human reviewer decides whether to bump it.
+ *
+ *  Current value tracks mono-core commit `f7236197` (2026-05-27 fresh
+ *  genesis cut, v0.0.6-testnet rollout). SDK 0.3.1 still bundles the
+ *  pre-regenesis hash; the About-page drift banner will surface that
+ *  mismatch until Nayiem republishes the SDK chain-registry. */
 export const SPRINTNET_GENESIS_HASH =
-  "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075";
+  "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from SPRINTNET_GENESIS_HASH so the
