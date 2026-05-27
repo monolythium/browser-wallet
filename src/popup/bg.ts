@@ -1583,7 +1583,7 @@ export async function bgVaultAddImport(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 8 — multisig vault surface (§28.5 Q70+Q75)
+// multisig vault surface (§28.5 wallet portfolio)
 // ─────────────────────────────────────────────────────────────────────
 //
 // `bgVaultAddMultisig` creates a new multisig vault inside the
@@ -1731,7 +1731,7 @@ export async function bgMultisigExecute(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 8 Commit 5 — signer governance (§28.5 Q75)
+// signer governance (§28.5 wallet portfolio)
 // ─────────────────────────────────────────────────────────────────────
 
 import type { GovernanceAction } from "../shared/multisig.js";

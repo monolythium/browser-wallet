@@ -62,7 +62,7 @@ class MonolythiumProvider {
 
   // Locally cached state — updated by the bridge when the user picks a
   // different account or network in the popup. The default reflects the
-  // LythiumDAG-BFT testnet chain id from Law §13.1; the bridge will overwrite
+  // LythiumDAG-BFT testnet chain id from Whitepaper §13; the bridge will overwrite
   // this on `chainChanged` if the user is on a different chain.
   private cachedAccounts: string[] = [];
   private cachedChainId: string = "0x10F2C"; // LythiumDAG-BFT testnet (69420)
