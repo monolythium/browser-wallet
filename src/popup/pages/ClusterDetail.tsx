@@ -29,17 +29,22 @@ import { useEffect, useState } from "react";
 import {
   bgStakingClusterStatus,
   bgStakingClusterDelegators,
+  bgStakingClusterServiceTiers,
   bgStakingDelegationHistory,
+  bgStakingOperatorInfo,
 } from "../bg";
 import type {
   ClusterDirectoryEntry,
+  ClusterServiceTiers,
   ClusterStatus,
   DelegationHistoryRow,
+  WalletOperatorInfo,
 } from "../../shared/staking";
 import {
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
 } from "../../shared/staking";
+import { LYTHOSHI_PER_LYTH } from "../../shared/native-amount";
 
 export interface ClusterDetailProps {
   /** Cluster directory row passed in by parent. Carries the entity flag,
@@ -264,6 +269,50 @@ function ClusterIdentityCard({
 }
 
 function ClusterStatusCard({ status }: { status: ClusterStatus }) {
+  // R16 Task A — per-operator info (self-bond + lifecycle) fetched
+  // lazily after the cluster's member list arrives. Cache is
+  // component-local; remounting the panel re-fetches. Per-operator
+  // bond is unique and not mock-fallbacked — failed fetches render
+  // "—" rather than crashing.
+  const [operatorInfo, setOperatorInfo] = useState<Map<string, WalletOperatorInfo>>(
+    () => new Map(),
+  );
+
+  // R16 Task B — cluster-level service-tier aggregation across member
+  // operators (any-true semantics per
+  // _dev-notes/browser-wallet/active-nayiem-pings.md PING #11). If
+  // chain ships ClusterDirectoryEntry.serviceTiers as an aggregate
+  // field, this whole probe fan-out drops to a single directory read.
+  const [serviceTiers, setServiceTiers] = useState<ClusterServiceTiers | null>(
+    null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const operatorIds = status.members.map((m) => m.operatorId);
+    void (async () => {
+      const [tiersRes, ...infoResults] = await Promise.all([
+        bgStakingClusterServiceTiers(operatorIds),
+        ...operatorIds.map((opId) => bgStakingOperatorInfo(opId)),
+      ]);
+      if (cancelled) return;
+      if (tiersRes.ok) {
+        setServiceTiers(tiersRes.data);
+      }
+      const next = new Map<string, WalletOperatorInfo>();
+      for (let i = 0; i < operatorIds.length; i++) {
+        const res = infoResults[i];
+        if (res && res.ok) {
+          next.set(operatorIds[i]!, res.data);
+        }
+      }
+      setOperatorInfo(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status.clusterId, status.members]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -286,6 +335,9 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
         label="Last update height"
         value={status.lastUpdateHeight}
       />
+      {serviceTiers && serviceTiers.anyReachable && (
+        <ServiceTierBadgeRow tiers={serviceTiers} />
+      )}
       <div style={{ marginTop: 8 }}>
         <div
           style={{
@@ -325,10 +377,82 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
               >
                 {m.operatorId}
               </span>
+              <span
+                style={{
+                  color: "var(--fg-400)",
+                  fontSize: 10,
+                  flexShrink: 0,
+                }}
+                title="Operator self-bond (V4.1-BOND-0001 5,000 LYTH floor)"
+              >
+                {formatBondLyth(operatorInfo.get(m.operatorId))}
+              </span>
             </div>
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Render a bonded-amount as a compact "5,000 L" cell. Returns "—"
+ *  when the operator's info fetch failed or hasn't completed yet. */
+function formatBondLyth(info: WalletOperatorInfo | undefined): string {
+  if (!info) return "—";
+  let lythoshi: bigint;
+  try {
+    lythoshi = BigInt(info.bondedAmount);
+  } catch {
+    return "—";
+  }
+  // Round-down LYTH for the slate cell. The expanded mock/real
+  // formatting goes through formatLyth elsewhere; here we want a
+  // glanceable integer with no decimal noise.
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  return `${whole.toLocaleString()} L`;
+}
+
+/** R16 Task B — small horizontal badge row for cluster-level service
+ *  tier aggregates. Active tiers light up; inactive tiers render as
+ *  muted dots so the row's width stays stable across clusters. */
+function ServiceTierBadgeRow({ tiers }: { tiers: ClusterServiceTiers }) {
+  const entries: ReadonlyArray<{ label: string; on: boolean }> = [
+    { label: "RPC", on: tiers.rpc },
+    { label: "Indexer", on: tiers.indexer },
+    { label: "Archive", on: tiers.archive },
+    { label: "Oracle", on: tiers.oracle },
+    { label: "Bridge", on: tiers.bridgeRelay },
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 4,
+        flexWrap: "wrap",
+        marginTop: 4,
+      }}
+      title={`Service-tier reachability aggregated across ${tiers.probedOperators} member operators (any-true). PING #11: long-term move to a ClusterDirectoryEntry.serviceTiers aggregate field.`}
+    >
+      {entries.map((e) => (
+        <span
+          key={e.label}
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 9,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            padding: "2px 6px",
+            borderRadius: 4,
+            border: e.on
+              ? "1px solid var(--ok)"
+              : "1px solid var(--fg-700)",
+            color: e.on ? "var(--ok)" : "var(--fg-500)",
+            background: e.on ? "rgba(46,160,67,0.08)" : "transparent",
+          }}
+        >
+          {e.label}
+        </span>
+      ))}
     </div>
   );
 }
