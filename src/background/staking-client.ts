@@ -193,8 +193,13 @@ export async function readClusterDirectory(
       },
     };
   } catch (e) {
-    // Sprintnet-offline fallback. Pre-mainnet posture: the UI renders
-    // the realistic architecture rather than empty state.
+    // Sprintnet-unreachable fallback — see canon-hierarchy doc at
+    // _dev-notes/_principles/canon-hierarchy.md. Chain code (mono-core
+    // HEAD 2705ce0f) is authoritative; this block fires only when
+    // every Sprintnet operator is unreachable (transport failure), NOT
+    // when the chain returns an empty cluster list (a valid response).
+    // The MOCK_CLUSTERS fixture preserves the architectural shape so
+    // the UI renders something realistic rather than an empty state.
     const _reason = (e as Error)?.message ?? "lyth_clusterDirectory unreachable";
     void _reason;
     return {

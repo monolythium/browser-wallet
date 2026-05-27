@@ -122,8 +122,8 @@ export function ClusterPicker({
             lineHeight: 1.5,
           }}
         >
-          Cluster directory is mocked while Sprintnet operators are offline.
-          APR / reputation figures are illustrative.
+          Sprintnet unreachable — cluster directory shown from cached
+          fixtures. APR / reputation figures are illustrative.
         </div>
       )}
 
