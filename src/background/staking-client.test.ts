@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ClusterDirectoryPageResponse,
   ClusterStatusResponse,
+  OperatorInfoResponse,
 } from "@monolythium/core-sdk";
 
 // Stub the tx-mldsa dispatch surface; every staking read goes through
@@ -36,6 +37,7 @@ import {
   readDelegationCap,
   readDelegationHistory,
   readDelegations,
+  readOperatorInfo,
   readPendingRewards,
   readRedemptionQueue,
 } from "./staking-client.js";
@@ -294,6 +296,91 @@ describe("readClusterStatus", () => {
     expect(r.data.lastUpdateHeight).toBe("524288");
     expect(r.data.members).toHaveLength(1);
     expect(r.data.quorum).toBe("7-of-10");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readOperatorInfo (R16 Task A)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readOperatorInfo", () => {
+  it("normalises a well-formed lyth_operatorInfo response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        operatorId: "op-7",
+        moniker: "halcyon-alpha",
+        alias: null,
+        chainAddress: "0x" + "ab".repeat(20),
+        bonded: true,
+        commissionBps: 500,
+        delegationCount: 12,
+        bondedAmount: "500000000000",
+        activeClusterIds: [1, 3],
+        operatorKeyFingerprint: "fp-1",
+        blsKeyFingerprint: "fp-bls",
+        lifecycleState: "active",
+        capability: {},
+      },
+    });
+    const r = await readOperatorInfo("op-7");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.operatorId).toBe("op-7");
+    expect(r.data.moniker).toBe("halcyon-alpha");
+    expect(r.data.bonded).toBe(true);
+    expect(r.data.bondedAmount).toBe("500000000000");
+    expect(r.data.commissionBps).toBe(500);
+    expect(r.data.delegationCount).toBe(12);
+    expect(r.data.lifecycleState).toBe("active");
+    expect(r.via).toBe("operator-1");
+  });
+
+  it("propagates RPC failure as ok:false (per-operator bond is unique, not mocked)", async () => {
+    mockedRpc.mockRejectedValue(new Error("timeout"));
+    const r = await readOperatorInfo("op-1");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/timeout/);
+  });
+
+  it("rejects a malformed response (missing operatorId)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { bonded: true, bondedAmount: "0" },
+    });
+    const r = await readOperatorInfo("op-x");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
+  });
+
+  // Wire-contract anchor: a strict SDK OperatorInfoResponse must parse
+  // without losing fields the wallet cares about.
+  it("parses a strict SDK OperatorInfoResponse", async () => {
+    const sdkShape: OperatorInfoResponse = {
+      operatorId: "op-strict",
+      moniker: "strict-moniker",
+      alias: "alias-1",
+      chainAddress: "0x" + "cc".repeat(20),
+      bonded: true,
+      commissionBps: 250,
+      delegationCount: 4,
+      bondedAmount: "5000" + "0".repeat(8), // 5,000 LYTH in lythoshi
+      activeClusterIds: [2],
+      operatorKeyFingerprint: null,
+      blsKeyFingerprint: null,
+      lifecycleState: "active",
+      capability: { region: "eu-west" },
+    };
+    mockedRpc.mockResolvedValue({ via: "operator-2", result: sdkShape });
+    const r = await readOperatorInfo("op-strict");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.operatorId).toBe("op-strict");
+    expect(r.data.bondedAmount).toBe("500000000000");
+    expect(r.data.commissionBps).toBe(250);
+    expect(r.data.alias).toBe("alias-1");
   });
 });
 

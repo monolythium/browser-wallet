@@ -82,6 +82,29 @@ export interface ClusterMember {
   state: string;
 }
 
+/** Per-operator metadata from `lyth_operatorInfo`. Mirrors the
+ *  user-facing subset of SDK `OperatorInfoResponse`; SDK-internal
+ *  fields (operatorKeyFingerprint, blsKeyFingerprint, capability,
+ *  activeClusterIds) are deliberately not surfaced — add them when a
+ *  UI consumer needs them. `bondedAmount` is the operator's self-bond
+ *  in lythoshi (V4.1-BOND-0001 = 5,000 LYTH chain-enforced floor). */
+export interface WalletOperatorInfo {
+  operatorId: string;
+  moniker: string | null;
+  alias: string | null;
+  bonded: boolean;
+  /** Self-bond in lythoshi. Stringified bigint for IPC transparency
+   *  (popup never sees a `bigint`); the popup parses for display. */
+  bondedAmount: string;
+  commissionBps: number | null;
+  delegationCount: number | null;
+  /** Operator-level lifecycle string from the chain. Free-form; the
+   *  wallet renders it pass-through. Separate concept from
+   *  `ClusterMember.state` (which is membership state inside one
+   *  specific cluster). */
+  lifecycleState: string;
+}
+
 /** Full cluster status. Mirrors SDK `ClusterStatusResponse`. */
 export interface ClusterStatus {
   clusterId: number;
