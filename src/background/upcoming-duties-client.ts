@@ -29,21 +29,6 @@ export const DEFAULT_UPCOMING_DUTIES_AUTHORITY = 0;
  *  when it's far. */
 export const DEFAULT_UPCOMING_DUTIES_HORIZON_ROUNDS = 1000;
 
-const MOCK_DUTIES: UpcomingDuties = {
-  schemaVersion: 1,
-  authorityIndex: DEFAULT_UPCOMING_DUTIES_AUTHORITY,
-  currentRound: 0,
-  horizonRounds: DEFAULT_UPCOMING_DUTIES_HORIZON_ROUNDS,
-  duties: {
-    attestation: { startRound: 0, endRound: 0, kind: "mock" },
-    blockProduction: { reason: "mock" },
-    sync: { reason: "mock" },
-    keyRotation: { reason: "mock" },
-  },
-};
-
-export const UPCOMING_DUTIES_PLACEHOLDER: Readonly<UpcomingDuties> = MOCK_DUTIES;
-
 export interface ReadUpcomingDutiesArgs {
   authorityIndex?: number;
   horizonRounds?: number;
@@ -60,6 +45,24 @@ export async function readUpcomingDuties(
     typeof args.horizonRounds === "number" && args.horizonRounds > 0
       ? Math.floor(args.horizonRounds)
       : DEFAULT_UPCOMING_DUTIES_HORIZON_ROUNDS;
+  // Empty sentinel for `withChainFallback`'s required `mockValue` slot.
+  // UpcomingDutiesCard (Operators.tsx) hides itself on any non-`live`
+  // outcome so this never reaches the UI. Per
+  // `_dev-notes/_principles/no-mock-fallbacks.md` no synthesized duty
+  // entries are exposed. All four duty kinds use the chain's typed-null
+  // shape (`reason: "unavailable"`) rather than fabricated rounds.
+  const noDataSentinel: UpcomingDuties = {
+    schemaVersion: 1,
+    authorityIndex,
+    currentRound: 0,
+    horizonRounds,
+    duties: {
+      attestation: { startRound: 0, endRound: 0, kind: "unavailable" },
+      blockProduction: { reason: "unavailable" },
+      sync: { reason: "unavailable" },
+      keyRotation: { reason: "unavailable" },
+    },
+  };
   return withChainFallback<UpcomingDuties>(
     async () => {
       const { result } = await sprintnetJsonRpc<UpcomingDuties>(
@@ -69,7 +72,7 @@ export async function readUpcomingDuties(
       return result;
     },
     {
-      mockValue: { ...MOCK_DUTIES, authorityIndex, horizonRounds },
+      mockValue: noDataSentinel,
       notLiveAs: "not-deployed",
       label: "lyth_upcomingDuties",
       timeoutMs: 5000,

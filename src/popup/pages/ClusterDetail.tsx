@@ -5,16 +5,18 @@
 // inline expand-row). This page assembles all of the data on a single
 // dedicated screen:
 //
-//   - `lyth_clusters` directory row (passed in as `cluster` prop)
+//   - `lyth_clusterDirectory` directory row (passed in as `cluster` prop)
 //   - `lyth_clusterStatus` operator slate + epoch/round
 //   - `lyth_getClusterDelegators` aggregate delegator count
 //   - `lyth_indexerStatus` chain-side staleness signal (shared banner)
 //   - `lyth_getDelegationHistory` cluster-relevant rows from the
 //      user's perspective (filtered by cluster id)
 //
-// Cluster-name registry (§22.8) and per-cluster APR are still mocked —
-// no SDK reader has shipped. The page renders `cluster-<id>` and the
-// MOCK_CLUSTER_APR_BPS value with a small "MOCK" affordance.
+// Cluster-name registry (§22.8) and per-cluster APR have no SDK reader
+// yet. The page renders `cluster-<id>` as the honest id-derived
+// fallback for name; APR is omitted entirely per
+// `_dev-notes/_principles/no-mock-fallbacks.md` (chain silence ↦ field
+// absent — no placeholder).
 //
 // Whitepaper alignment:
 //   §14    — cluster marketplace (this page IS the marketplace surface)
@@ -26,20 +28,22 @@
 //   §30.5  — Foundation-cluster sunset (entity flag badge)
 
 import { useEffect, useState } from "react";
+import { Icon } from "../Icon";
 import {
   bgStakingClusterStatus,
   bgStakingClusterDelegators,
+  bgStakingClusterServiceTiers,
   bgStakingDelegationHistory,
+  bgStakingOperatorInfo,
 } from "../bg";
 import type {
   ClusterDirectoryEntry,
+  ClusterServiceTiers,
   ClusterStatus,
   DelegationHistoryRow,
+  WalletOperatorInfo,
 } from "../../shared/staking";
-import {
-  MOCK_CLUSTER_APR_BPS,
-  MOCK_CLUSTER_REPUTATION,
-} from "../../shared/staking";
+import { LYTHOSHI_PER_LYTH } from "../../shared/native-amount";
 
 export interface ClusterDetailProps {
   /** Cluster directory row passed in by parent. Carries the entity flag,
@@ -102,28 +106,22 @@ export function ClusterDetail({
     };
   }, [cluster.clusterId, walletAddress]);
 
-  const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
-  const reputation = MOCK_CLUSTER_REPUTATION[cluster.clusterId] ?? null;
-
   return (
-    <div className="ext-app">
-      <div className="ext-app__top">
-        <button
-          type="button"
-          className="ext-btn ext-btn--ghost"
-          onClick={onBack}
-          aria-label="Back"
-        >
-          ← Back
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+          <Icon name="back" size={15} />
         </button>
-        <div className="ext-app__title">
+        <div
+          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+        >
           {cluster.name ?? `cluster-${cluster.clusterId}`}
         </div>
-        <div />
+        <div style={{ width: 28 }} />
       </div>
 
       <div
-        className="ext-app__body"
+        className="ext-body"
         style={{ display: "flex", flexDirection: "column", gap: 10 }}
       >
         {/* Identity + flags */}
@@ -131,7 +129,7 @@ export function ClusterDetail({
           <div className="ext-card__head">
             <h3>Identity</h3>
           </div>
-          <ClusterIdentityCard cluster={cluster} reputation={reputation} />
+          <ClusterIdentityCard cluster={cluster} />
         </div>
 
         {/* Live status (operators, epoch/round) */}
@@ -158,22 +156,6 @@ export function ClusterDetail({
               label="Delegators"
               value={delegatorCount === null ? "—" : String(delegatorCount)}
               tooltip="Distinct wallet addresses currently delegating to this cluster."
-            />
-            <KeyValue
-              label="APR (mock)"
-              value={
-                aprBps === null
-                  ? "—"
-                  : `${(aprBps / 100).toFixed(2)}%`
-              }
-              tooltip="Per quadratic reward curve. APR is a mock — chain has no lyth_clusterApr reader yet."
-            />
-            <KeyValue
-              label="Reputation (mock)"
-              value={
-                reputation === null ? "—" : `${(reputation * 100).toFixed(0)}/100`
-              }
-              tooltip="Cluster reputation aggregate. Indexer-side aggregation is forthcoming; current value is illustrative."
             />
           </div>
         </div>
@@ -205,7 +187,7 @@ export function ClusterDetail({
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -215,10 +197,8 @@ export function ClusterDetail({
 
 function ClusterIdentityCard({
   cluster,
-  reputation,
 }: {
   cluster: ClusterDirectoryEntry;
-  reputation: number | null;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -247,23 +227,63 @@ function ClusterIdentityCard({
         label="Threshold"
         value={`${cluster.threshold} of ${cluster.size}`}
       />
-      <KeyValueRow
-        label="Regions"
-        value={cluster.regions.length === 0 ? "—" : cluster.regions.join(", ")}
-        tooltip="Geographic diversity — operator-declared regions cross-checked against IP geolocation chain-side."
-      />
-      <KeyValueRow label="Active set" value={cluster.active ? "yes" : "no"} />
-      {reputation !== null && (
+      {cluster.regions.length > 0 && (
         <KeyValueRow
-          label="Reputation"
-          value={`${(reputation * 100).toFixed(0)}/100 (mock)`}
+          label="Regions"
+          value={cluster.regions.join(", ")}
+          tooltip="Geographic diversity — operator-declared regions cross-checked against IP geolocation chain-side."
         />
       )}
+      <KeyValueRow label="Active set" value={cluster.active ? "yes" : "no"} />
     </div>
   );
 }
 
 function ClusterStatusCard({ status }: { status: ClusterStatus }) {
+  // R16 Task A — per-operator info (self-bond + lifecycle) fetched
+  // lazily after the cluster's member list arrives. Cache is
+  // component-local; remounting the panel re-fetches. Per-operator
+  // bond is unique and not mock-fallbacked — failed fetches render
+  // "—" rather than crashing.
+  const [operatorInfo, setOperatorInfo] = useState<Map<string, WalletOperatorInfo>>(
+    () => new Map(),
+  );
+
+  // R16 Task B — cluster-level service-tier aggregation across member
+  // operators (any-true semantics per
+  // _dev-notes/browser-wallet/active-nayiem-pings.md PING #11). If
+  // chain ships ClusterDirectoryEntry.serviceTiers as an aggregate
+  // field, this whole probe fan-out drops to a single directory read.
+  const [serviceTiers, setServiceTiers] = useState<ClusterServiceTiers | null>(
+    null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const operatorIds = status.members.map((m) => m.operatorId);
+    void (async () => {
+      const [tiersRes, ...infoResults] = await Promise.all([
+        bgStakingClusterServiceTiers(operatorIds),
+        ...operatorIds.map((opId) => bgStakingOperatorInfo(opId)),
+      ]);
+      if (cancelled) return;
+      if (tiersRes.ok) {
+        setServiceTiers(tiersRes.data);
+      }
+      const next = new Map<string, WalletOperatorInfo>();
+      for (let i = 0; i < operatorIds.length; i++) {
+        const res = infoResults[i];
+        if (res && res.ok) {
+          next.set(operatorIds[i]!, res.data);
+        }
+      }
+      setOperatorInfo(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status.clusterId, status.members]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -286,6 +306,27 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
         label="Last update height"
         value={status.lastUpdateHeight}
       />
+      {/* R18 — chain-real reputation + liveness scores (§14 + §28.3).
+          Currently null on Sprintnet testnet; rows hidden until chain
+          populates non-null. Per no-mock-fallback principle, no
+          synthesized placeholder. */}
+      {status.reputationScore !== null && (
+        <KeyValueRow
+          label="Reputation"
+          value={status.reputationScore.toFixed(3)}
+          tooltip="Cluster reputation score from lyth_clusterStatus.reputationScore (§14 + §28.3). Float in [0,1]."
+        />
+      )}
+      {status.livenessScore !== null && (
+        <KeyValueRow
+          label="Liveness"
+          value={status.livenessScore.toFixed(3)}
+          tooltip="Cluster liveness score from lyth_clusterStatus.livenessScore. Float in [0,1]."
+        />
+      )}
+      {serviceTiers && serviceTiers.anyReachable && (
+        <ServiceTierBadgeRow tiers={serviceTiers} />
+      )}
       <div style={{ marginTop: 8 }}>
         <div
           style={{
@@ -325,6 +366,16 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
               >
                 {m.operatorId}
               </span>
+              <span
+                style={{
+                  color: "var(--fg-400)",
+                  fontSize: 10,
+                  flexShrink: 0,
+                }}
+                title="Operator self-bond (V4.1-BOND-0001 5,000 LYTH floor)"
+              >
+                {formatBondLyth(operatorInfo.get(m.operatorId))}
+              </span>
             </div>
           ))}
         </div>
@@ -333,13 +384,86 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
   );
 }
 
+/** Render a bonded-amount as a compact "5,000 L" cell. Returns "—"
+ *  when the operator's info fetch failed or hasn't completed yet. */
+function formatBondLyth(info: WalletOperatorInfo | undefined): string {
+  if (!info) return "—";
+  let lythoshi: bigint;
+  try {
+    lythoshi = BigInt(info.bondedAmount);
+  } catch {
+    return "—";
+  }
+  // Round-down LYTH for the slate cell. The expanded mock/real
+  // formatting goes through formatLyth elsewhere; here we want a
+  // glanceable integer with no decimal noise.
+  const whole = lythoshi / LYTHOSHI_PER_LYTH;
+  return `${whole.toLocaleString()} L`;
+}
+
+/** R16 Task B — small horizontal badge row for cluster-level service
+ *  tier aggregates. Active tiers light up; inactive tiers render as
+ *  muted dots so the row's width stays stable across clusters. */
+function ServiceTierBadgeRow({ tiers }: { tiers: ClusterServiceTiers }) {
+  const entries: ReadonlyArray<{ label: string; on: boolean }> = [
+    { label: "RPC", on: tiers.rpc },
+    { label: "Indexer", on: tiers.indexer },
+    { label: "Archive", on: tiers.archive },
+    { label: "Oracle", on: tiers.oracle },
+    { label: "Bridge", on: tiers.bridgeRelay },
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 4,
+        flexWrap: "wrap",
+        marginTop: 4,
+      }}
+      title={`Service-tier reachability aggregated across ${tiers.probedOperators} member operators (any-true). PING #11: long-term move to a ClusterDirectoryEntry.serviceTiers aggregate field.`}
+    >
+      {entries.map((e) => (
+        <span
+          key={e.label}
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 9,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            padding: "2px 6px",
+            borderRadius: 4,
+            border: e.on
+              ? "1px solid var(--ok)"
+              : "1px solid var(--fg-700)",
+            color: e.on ? "var(--ok)" : "var(--fg-500)",
+            background: e.on ? "rgba(46,160,67,0.08)" : "transparent",
+          }}
+        >
+          {e.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Per-operator status dot. Token vocabulary verified 2026-05-27 against
+ *  mono-core `crates/core/runtime/src/providers.rs:6195-6205`
+ *  (`bootstrap_cluster_members`): chain emits exactly three values —
+ *  `"active"`, `"jailed"`, `"offline"`. The previous mapping
+ *  (`"live"` / `"lagging"` / `"maintenance"`) used wallet-internal
+ *  vocabulary that never matched chain output, so every active
+ *  operator rendered as the red default. Anything chain might add
+ *  later (R15 audit PING #11 — formal enum) falls through to the
+ *  muted-fg dot rather than the alarming red. */
 function StateChip({ state }: { state: string }) {
   const colour =
-    state === "live"
+    state === "active"
       ? "var(--ok)"
-      : state === "lagging" || state === "maintenance"
-        ? "var(--warn)"
-        : "var(--err)";
+      : state === "jailed"
+        ? "var(--err)"
+        : state === "offline"
+          ? "var(--warn)"
+          : "var(--fg-500)";
   return (
     <span
       style={{
@@ -349,6 +473,7 @@ function StateChip({ state }: { state: string }) {
         background: colour,
         flexShrink: 0,
       }}
+      title={`operator state: ${state}`}
     />
   );
 }

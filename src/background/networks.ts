@@ -137,10 +137,10 @@ export interface BuiltinChain {
   chainId: string;
   chainIdNum: number;
   name: string;
-  /** Single RPC URL for legacy `MonolythiumProvider` consumers. Sprintnet
-   * reads/writes funnel through `sprintnetJsonRpc` (operator iteration),
-   * not through this URL — it's here only to satisfy callers that still
-   * ask for one. */
+  /** Single RPC URL for `RpcClient` consumers (user-added chains via
+   * wallet_addEthereumChain). Sprintnet reads/writes funnel through
+   * `sprintnetJsonRpc` (operator iteration), not through this URL — it's
+   * here only to satisfy callers that still ask for one. */
   rpc: string;
   blockExplorer?: string;
   nativeCurrency?: { name: string; symbol: string; decimals: number };
@@ -149,15 +149,16 @@ export interface BuiltinChain {
 }
 
 /**
- * Built-in chains shipped with the wallet. v4.0 ships exactly one —
+ * Built-in chains shipped with the wallet. v4.1 ships exactly one —
  * Sprintnet (chain_id 69420). All other chains are user-added at
  * runtime via `wallet_addEthereumChain`.
  *
  * Note: the legacy "Local devnet" (0x7A69) and old DNS alias have been
  * removed. Sprintnet IS the testnet, and the canonical RPC list comes from
  * the SDK-bundled chain registry (`SPRINTNET_OPERATOR_RPCS`) — the `rpc`
- * field below is the first operator, kept for legacy `MonolythiumProvider`
- * consumers; the read/write hot path goes through `sprintnetJsonRpc`.
+ * field below is the first operator, kept for `RpcClient` consumers
+ * (user-added chains); the read/write hot path goes through
+ * `sprintnetJsonRpc`.
  */
 export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
   {

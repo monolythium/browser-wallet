@@ -29,14 +29,13 @@ import {
 } from "./components";
 import { Receive } from "./pages/Receive";
 import { Send } from "./pages/Send";
-import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { Stake } from "./pages/Stake";
+import { Stake, clearStakeState } from "./pages/Stake";
 import { Delegations } from "./pages/Delegations";
 import { ClusterDetail } from "./pages/ClusterDetail";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -58,6 +57,8 @@ import { MrvNative } from "./pages/MrvNative";
 import { Pending as MultisigPending } from "./pages/Pending";
 import { MultisigGovernance } from "./components/MultisigGovernance";
 import { MainMenu } from "./pages/MainMenu";
+import { NewWalletFlow } from "./pages/NewWalletFlow";
+import { generateOnboardingMnemonic } from "./lib/onboarding-mnemonic";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { ACCOUNTS, type Account } from "./demo-data";
@@ -66,7 +67,6 @@ import {
   bgKeystoreStatus,
   bgKeystoreLock,
   bgPing,
-  bgKeystoreCreateNew,
   bgKeystoreCreateFromMnemonic,
   bgResolveApproval,
   bgVaultsList,
@@ -115,7 +115,6 @@ type Screen =
   | "reset-wallet"
   | "receive"
   | "send"
-  | "send-nft"
   | "stake"
   | "delegations"
   | "cluster-detail"
@@ -129,7 +128,8 @@ type Screen =
   | "security"
   | "features"
   | "main-menu"
-  | "contacts";
+  | "contacts"
+  | "new-wallet-flow";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -224,7 +224,27 @@ export default function App() {
   const [activeApproval, setActiveApproval] = useState<UiApproval | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  const [generated, setGenerated] = useState<{ mnemonic: string; address: string } | null>(null);
+  // Round 13 SECURITY — `generated` holds the in-flight first-setup
+  // mnemonic ONLY in popup React memory until verify-phrase succeeds.
+  // Previously the vault container was persisted at the Set Password
+  // step (via bgKeystoreCreateNew), so closing the popup between
+  // Show Phrase and Verify Phrase bypassed verification entirely —
+  // next open landed on home with an unverified wallet. Now nothing
+  // touches chrome.storage until `handleVerifyComplete` commits, so
+  // popup-close at any pre-verify step leaves storage empty and the
+  // next open routes back to Welcome. `address` is no longer carried
+  // here because it's derived only at commit time. The state is
+  // bound to the popup process lifetime; an SW restart can't corrupt
+  // it (the SW has no copy until commit).
+  const [generated, setGenerated] = useState<{ mnemonic: string } | null>(null);
+  // Round 13 SECURITY — first-setup password held in React state from
+  // Set Password submit through Verify Phrase success. Cleared on
+  // commit, on Welcome bounce-out, and on any abort path. NEVER
+  // written to chrome.storage; the password hash + MEK derivation
+  // happens server-side inside bgKeystoreCreateFromMnemonic at the
+  // atomic commit step.
+  const [pendingFirstSetupPassword, setPendingFirstSetupPassword] =
+    useState<string | null>(null);
   // Captured by ImportWallet's onSubmit, consumed by SetPassword (import branch).
   // Cleared after successful vault creation or when the user backs out.
   const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
@@ -245,11 +265,6 @@ export default function App() {
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
   // taps a row on the Networks list; cleared when they back out.
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
-  // Phase 5 Commit 7 — selected NFT for the SendNft route. Set when
-  // NftDetail's Send CTA fires; cleared when SendNft routes back to
-  // Home or the user navigates away. Lives at App-level because
-  // NftTab → NftDetail → SendNft spans the Home/page boundary.
-  const [pendingSendNft, setPendingSendNft] = useState<SendNftTarget | null>(null);
   // Phase 7 — Delegations → Stake deeplink. When a Delegations-page
   // "Unstake" / "Redelegate" CTA fires, App stores the action + the
   // source cluster so the Stake page can land directly on the form.
@@ -266,6 +281,11 @@ export default function App() {
   const [selectedCluster, setSelectedCluster] = useState<
     import("../shared/staking").ClusterDirectoryEntry | null
   >(null);
+  // R18 — track which screen opened ClusterDetail so the back button
+  // returns the user to the originating page (Stake or Delegations),
+  // not a hardcoded default. Cleared on unmount of cluster-detail.
+  const [clusterDetailEntrySource, setClusterDetailEntrySource] =
+    useState<"stake" | "delegations" | null>(null);
   const selectedChain: ChainEntry | null =
     selectedChainId !== null
       ? (chainList.find((c) => c.chainId === selectedChainId) ?? null)
@@ -599,16 +619,80 @@ export default function App() {
     setScreen("home");
   };
 
-  const handleCreateNew = async (password: string) => {
+  // Round 13 SECURITY — DEFERRED PERSISTENCE.
+  //
+  // Previously this called bgKeystoreCreateNew which generated the
+  // mnemonic AND persisted the vault server-side, returning the
+  // mnemonic for display. Closing the popup between Show Phrase and
+  // Verify Phrase left a fully-persisted unverified wallet in
+  // storage that the next open would route the user straight into,
+  // defeating the verify-phrase guarantee.
+  //
+  // New flow (no chrome.storage write until verify success):
+  //   1. Generate the mnemonic on the popup side using the SDK's
+  //      generatePqm1Mnemonic + crypto.getRandomValues (same
+  //      primitive + same CSPRNG-quality entropy the SW would use).
+  //   2. Hold password + mnemonic in popup React state through the
+  //      Show Phrase + Verify Phrase steps.
+  //   3. On Verify success (handleVerifyComplete below), call
+  //      bgKeystoreCreateFromMnemonic — the same atomic-persist path
+  //      the Import flow uses — to commit the password + mnemonic
+  //      together in a single chrome.storage.local.set.
+  //
+  // Closing the popup at any pre-commit step discards the React
+  // state with zero chrome.storage side-effects. Next open lands
+  // on Welcome.
+  const handleCreateNew = (password: string) => {
     setCreateError(null);
-    const r = await bgKeystoreCreateNew(password);
-    if (!r.ok) {
-      setCreateError(r.reason ?? "failed to create vault");
+    let mnemonic: string;
+    try {
+      mnemonic = generateOnboardingMnemonic();
+    } catch (e) {
+      setCreateError(
+        `Could not generate recovery phrase: ${(e as Error).message}`,
+      );
       return;
     }
-    setGenerated({ mnemonic: r.mnemonic, address: r.address });
-    await refreshKeystoreStatus();
+    setPendingFirstSetupPassword(password);
+    setGenerated({ mnemonic });
     setScreen("show-phrase");
+  };
+
+  // Round 13 SECURITY — atomic commit on Verify Phrase success.
+  // Runs at the END of first-setup: the only place where the new
+  // wallet container is written to chrome.storage. On success we
+  // immediately clear the held password + mnemonic so the React
+  // state slot can't outlive its purpose.
+  const handleVerifyComplete = async () => {
+    if (pendingFirstSetupPassword === null || generated === null) {
+      // Defensive — state got cleared mid-flow (e.g. user navigated
+      // back to Welcome which clears state, then a stale callback
+      // fired). Bounce back to Welcome and let the user restart.
+      setPendingFirstSetupPassword(null);
+      setGenerated(null);
+      setCreateError(null);
+      setScreen("welcome");
+      return;
+    }
+    const password = pendingFirstSetupPassword;
+    const mnemonic = generated.mnemonic;
+    const r = await bgKeystoreCreateFromMnemonic(password, mnemonic);
+    if (!r.ok) {
+      // Commit failed (rare — invalid mnemonic shouldn't be possible
+      // since we generated it ourselves; password length is validated
+      // at Set Password step). Stay on Verify Phrase so the user can
+      // retry; surface the error in the create-error slot which
+      // Welcome shows on the next bounce.
+      setCreateError(r.reason ?? "Could not finalize wallet setup.");
+      return;
+    }
+    // Persisted successfully. Drop the held secrets, refresh state,
+    // route home.
+    setPendingFirstSetupPassword(null);
+    setGenerated(null);
+    setCreateError(null);
+    await refreshKeystoreStatus();
+    setScreen("home");
   };
 
   const handleImport = (mnemonic: string) => {
@@ -708,12 +792,19 @@ export default function App() {
         <Welcome
           onCreateNew={() => {
             setCreateError(null);
+            // Round 13 SECURITY — defensive clear of any in-flight
+            // first-setup state from a previous abandoned attempt.
             setGenerated(null);
+            setPendingFirstSetupPassword(null);
             setScreen("set-password-create");
           }}
           onImport={() => {
             setImportError(null);
             setPendingMnemonic(null);
+            // Round 13 SECURITY — same defensive clear when switching
+            // from a create attempt to import.
+            setGenerated(null);
+            setPendingFirstSetupPassword(null);
             setScreen("import");
           }}
           // Round 11 TASK 6 — Welcome → ForgotPassword via navigateTo
@@ -763,13 +854,18 @@ export default function App() {
         />
       )}
 
+      {/* Round 13 SECURITY — Verify success triggers the atomic
+         commit (bgKeystoreCreateFromMnemonic) and only THEN routes
+         home. Previously this just cleared state because the vault
+         was already persisted at the Set Password step — now the
+         persistence happens RIGHT HERE, after the user has proven
+         they wrote down the phrase. handleVerifyComplete clears the
+         held password + mnemonic on success and bounces back to
+         Welcome if the state got cleared mid-flow. */}
       {screen === "verify-phrase" && generated && (
         <VerifyPhrase
           mnemonic={generated.mnemonic}
-          onVerified={() => {
-            setGenerated(null);
-            setScreen("home");
-          }}
+          onVerified={() => void handleVerifyComplete()}
         />
       )}
 
@@ -822,10 +918,14 @@ export default function App() {
           onOpenSend={() => setScreen("send")}
           onOpenStake={() => setScreen("stake")}
           onOpenBridge={() => setScreen("bridge")}
-          onOpenSendNft={(target) => {
-            setPendingSendNft(target);
-            setScreen("send-nft");
-          }}
+          // Round 13 TASK 1 — "New wallet" from the VaultPicker
+          // dropdown routes through navigateTo so the screen stack
+          // pushes "home" and NewWalletFlow's onCancel returns the
+          // user back to home cleanly. The legacy single-page modal
+          // is bypassed entirely for the fresh-mnemonic path; the
+          // Import + Multisig dropdown entries still open
+          // VaultAddModal as before.
+          onNewWalletFlow={() => navigateTo("new-wallet-flow")}
           topSlot={
             activeVaultSummary ? (
               <>
@@ -1130,6 +1230,30 @@ export default function App() {
          onBack via navigateBack to return to the menu. */}
       {screen === "contacts" && <Contacts onBack={navigateBack} />}
 
+      {/* Round 13 TASK 1 — in-app new wallet flow. Reached from the
+         VaultPicker dropdown's "New wallet" entry (push "home" onto
+         the screen stack). Onboarding's first-setup flow does NOT
+         route here — it continues to use the App-level show-phrase
+         + verify-phrase screens directly (with their Round 12
+         back-protection intact). The two flows share the inner
+         ShowPhrase + VerifyPhrase components but compose them in
+         separate navigation contexts. */}
+      {screen === "new-wallet-flow" && (
+        <NewWalletFlow
+          onCancel={navigateBack}
+          onComplete={() => {
+            // The newly-created vault is now active. Refresh the
+            // active-vault summary so home's chip + setup hints
+            // reflect the new state, then route back. Clear the
+            // screen stack so back doesn't bring the user back into
+            // the just-completed flow.
+            void loadActiveVaultSummary();
+            void refreshKeystoreStatus();
+            setScreen("home");
+          }}
+        />
+      )}
+
       {/* Round 7 TASK 7 — Multisig wallets top-level list. Reached
          from MainMenu. Tapping a row switches the active vault to
          that multisig and opens the existing Pending dashboard. */}
@@ -1206,6 +1330,11 @@ export default function App() {
             setImportError(null);
             setGenerated(null);
             setPendingMnemonic(null);
+            // Round 13 SECURITY — clear any in-flight first-setup
+            // state on reset (defensive — reset-wallet from an
+            // existing setup shouldn't have first-setup state, but
+            // belt-and-braces against future flows).
+            setPendingFirstSetupPassword(null);
             setScreen("welcome");
           }}
         />
@@ -1242,18 +1371,6 @@ export default function App() {
         />
       )}
 
-      {screen === "send-nft" && pendingSendNft && (
-        <SendNft
-          fromAddress={acc.addr.startsWith("0x") ? acc.addr : null}
-          chainId={activeChain.chainId}
-          nft={pendingSendNft}
-          onBack={() => {
-            setPendingSendNft(null);
-            setScreen("home");
-          }}
-        />
-      )}
-
       {screen === "stake" && (
         <Stake
           account={acc}
@@ -1266,11 +1383,16 @@ export default function App() {
             : {})}
           onShowClusterDetail={(cluster) => {
             setSelectedCluster(cluster);
+            setClusterDetailEntrySource("stake");
             setScreen("cluster-detail");
           }}
           onBack={() => {
             const wasDeepLinked = stakeDeepLink !== null;
             setStakeDeepLink(null);
+            // R18 — user is explicitly leaving Stake; clear the
+            // persisted form / selection state so the next mount
+            // starts fresh.
+            clearStakeState();
             setScreen(wasDeepLinked ? "delegations" : "home");
           }}
         />
@@ -1295,6 +1417,7 @@ export default function App() {
           }}
           onShowClusterDetail={(cluster) => {
             setSelectedCluster(cluster);
+            setClusterDetailEntrySource("delegations");
             setScreen("cluster-detail");
           }}
         />
@@ -1305,10 +1428,10 @@ export default function App() {
           cluster={selectedCluster}
           walletAddress={acc.addr.startsWith("0x") ? acc.addr : null}
           onBack={() => {
+            const target = clusterDetailEntrySource ?? "delegations";
             setSelectedCluster(null);
-            // Most cluster-detail entry points come from Stake or
-            // Delegations; default back-target is delegations.
-            setScreen("delegations");
+            setClusterDetailEntrySource(null);
+            setScreen(target);
           }}
         />
       )}

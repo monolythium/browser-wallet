@@ -25,6 +25,8 @@ import {
   type PreviewTransactionHooksOutcome,
 } from "../bg";
 import { AddContactModal } from "./Contacts";
+import { ContactsPickerModal } from "../components/ContactsPickerModal";
+import type { ContactRecord } from "../bg";
 import { useContacts } from "../hooks/useContacts";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
@@ -60,6 +62,7 @@ import {
   parseNativeHexQuantity,
   scaleByBps,
 } from "../../shared/native-fee-display";
+import { lythoshiToLythDecimal } from "../../shared/native-amount";
 
 interface SendProps {
   account: Account;
@@ -128,6 +131,14 @@ export function Send({
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
+  // Round 13 TASK 2 — Contacts picker. pickerOpen drives the modal;
+  // selectedContact holds the chosen contact so the preview screen can
+  // render its name above the address. selectedContact clears when
+  // the user manually edits `to` (so a pasted-then-edited address
+  // doesn't keep showing the stale contact name).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedContact, setSelectedContact] =
+    useState<ContactRecord | null>(null);
 
   // External data the form depends on.
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
@@ -251,10 +262,41 @@ export function Send({
     try {
       const text = await navigator.clipboard.readText();
       setTo(text.trim());
+      // Round 13 TASK 2 — pasting a different address clears the
+      // previously-picked contact so its name doesn't carry over.
+      setSelectedContact(null);
     } catch {
       // Clipboard read can fail without permission; stay quiet.
     }
   };
+
+  // Round 13 TASK 2 — Contacts picker selection. Setting `to` triggers
+  // recipient re-parse via the existing useMemo at line ~216.
+  const handleContactPicked = (contact: ContactRecord) => {
+    setTo(contact.bech32m);
+    setSelectedContact(contact);
+  };
+
+  // Round 13 TASK 2 — clear selectedContact when user manually edits
+  // the address field after picking from contacts. Without this, the
+  // preview screen would render the stale contact name next to a
+  // different address.
+  useEffect(() => {
+    if (selectedContact && to !== selectedContact.bech32m) {
+      setSelectedContact(null);
+    }
+  }, [to, selectedContact]);
+
+  // Round 13 TASK 2 — derive a "displayed contact" from selectedContact
+  // OR from a known-address lookup against the contacts map. Covers
+  // both flows: user picked from the modal AND user typed/pasted an
+  // address that happens to be saved.
+  const recipientContact: ContactRecord | null = useMemo(() => {
+    if (selectedContact) return selectedContact;
+    if (effectiveAddr0x === null) return null;
+    const key = effectiveAddr0x.toLowerCase();
+    return contactsMap[key] ?? null;
+  }, [selectedContact, effectiveAddr0x, contactsMap]);
 
   const handleMax = () => {
     if (balanceLythoshi === null || estimatedFeeLythoshi === null) return;
@@ -436,6 +478,7 @@ export function Send({
           onBack={() => setStep("form")}
           isMultisig={multisigVaultId !== undefined}
           passkeyDecision={passkeyDecision}
+          recipientContact={recipientContact}
         />
         {needsPasskey && passkeyDecision?.kind === "passkey-ok" && (
           <PasskeySignModal
@@ -548,6 +591,25 @@ export function Send({
             >
               Paste
             </button>
+            {/* Round 13 TASK 2 — Contacts picker entry. Square icon
+               button to keep the row compact; the address-book glyph
+               (Icon name="book") matches the hamburger-menu Contacts
+               entry so the affordance is recognisable. */}
+            <button
+              onClick={() => setPickerOpen(true)}
+              type="button"
+              aria-label="Choose from contacts"
+              title="Choose from contacts"
+              style={{
+                ...inlineButton,
+                padding: "8px 10px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon name="book" size={13} />
+            </button>
           </div>
           {parsedRecipient.error && (
             <div style={inlineError}>{parsedRecipient.error}</div>
@@ -645,7 +707,7 @@ export function Send({
               <>
                 {" · balance: "}
                 <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {formatNativeLythAmount(balanceLythoshi)}
+                  {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH
                 </span>
               </>
             )}
@@ -793,6 +855,15 @@ export function Send({
           Continue
         </button>
       </div>
+
+      {/* Round 13 TASK 2 — Contacts picker modal. Renders into a portal
+         (Modal primitive) so its overlay covers the full popup
+         viewport regardless of the Send form's scroll state. */}
+      <ContactsPickerModal
+        open={pickerOpen}
+        onSelect={handleContactPicked}
+        onClose={() => setPickerOpen(false)}
+      />
     </>
   );
 }
@@ -1293,6 +1364,12 @@ interface PreviewViewProps {
    *  unlock" badge above the warning card so the user knows which
    *  unlock path the Confirm CTA will trigger. */
   passkeyDecision?: BgPasskeyDecision | null;
+  /** Round 13 TASK 2 — recipient's matching contact entry (if any).
+   *  Set either because the user explicitly picked from the contacts
+   *  modal, OR because the typed/pasted address happens to match a
+   *  saved contact. The "To" summary row renders the contact name
+   *  above the bech32m address when present. */
+  recipientContact?: ContactRecord | null;
 }
 
 /** Phase 9 — preview-screen badge that tells the user which unlock
@@ -1615,6 +1692,7 @@ function PreviewView({
   onBack,
   isMultisig,
   passkeyDecision,
+  recipientContact,
 }: PreviewViewProps) {
   const total = amountLythoshi !== null && estimatedFeeLythoshi !== null
     ? amountLythoshi + estimatedFeeLythoshi
@@ -1636,7 +1714,48 @@ function PreviewView({
       <div className="ext-body">
         <div className="ext-card" style={{ padding: 14 }}>
           <SummaryRow label="From" value={bech32mDisplay(fromAddr)} mono />
-          <SummaryRow label="To" value={bech32mDisplay(to)} mono />
+          {/* Round 13 TASK 2 — when the recipient maps to a saved
+             contact (either via the picker or because the typed
+             address is known), show the contact name above the
+             bech32m. Otherwise fall back to the bare address row. */}
+          {recipientContact ? (
+            <SummaryRow
+              label="To"
+              value={
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-end",
+                    gap: 2,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "var(--f-sans)",
+                      fontWeight: 600,
+                      fontSize: 12.5,
+                      color: "var(--fg-100)",
+                    }}
+                    title={recipientContact.name}
+                  >
+                    {recipientContact.name}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 11,
+                      color: "var(--fg-400)",
+                    }}
+                  >
+                    {bech32mDisplay(to)}
+                  </span>
+                </div>
+              }
+            />
+          ) : (
+            <SummaryRow label="To" value={bech32mDisplay(to)} mono />
+          )}
           <SummaryRow
             label="Amount"
             value={
@@ -1733,7 +1852,11 @@ function PreviewView({
 
 interface SummaryRowProps {
   label: string;
-  value: string;
+  /** Round 13 TASK 2 — accept ReactNode (was `string`) so the "To"
+   *  row can render a contact name above its bech32m address when
+   *  the recipient is a saved contact. String callers continue to
+   *  work unchanged. */
+  value: ReactNode;
   mono?: boolean;
   emphasis?: boolean;
 }
