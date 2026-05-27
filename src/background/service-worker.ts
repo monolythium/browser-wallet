@@ -246,6 +246,7 @@ import {
   readClusterDelegators,
   readClusterDirectory,
   readClusterStatus,
+  readOperatorInfo,
   readDelegationHistory,
   readDelegations,
   readDelegationCap,
@@ -7294,6 +7295,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing clusterId" };
       }
       return readClusterStatus(p.clusterId);
+    }
+    case "staking-operator-info": {
+      const p = message.payload as { operatorId?: string } | undefined;
+      if (typeof p?.operatorId !== "string") {
+        return { ok: false, reason: "missing operatorId" };
+      }
+      return readOperatorInfo(p.operatorId);
     }
     case "staking-delegations": {
       const p = message.payload as { wallet?: string } | undefined;
