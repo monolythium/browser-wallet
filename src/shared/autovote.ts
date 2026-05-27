@@ -67,7 +67,7 @@ export interface AutovoteResult {
 /** Input bundle for `pickMaxYield` / `pickMaxDiversity` /
  *  `pickMaxDecentralization`. */
 export interface AutovoteInput {
-  /** All active clusters from `lyth_clusters`. */
+  /** All active clusters from `lyth_clusterDirectory`. */
   clusters: ReadonlyArray<ClusterDirectoryEntry>;
   /** Total weight the user wants to delegate, in bps. */
   targetTotalBps: number;
