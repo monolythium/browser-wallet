@@ -105,6 +105,33 @@ export interface WalletOperatorInfo {
   lifecycleState: string;
 }
 
+/** Cluster-level service-tier offerings derived from per-operator
+ *  `lyth_getServiceProbe` results (R16 Task B). The cluster is treated
+ *  as offering a tier when at least one member operator probes
+ *  reachable for that tier ("any-true" aggregation).
+ *
+ *  Surfaced for the five user-facing tiers; SDK exposes nine bits in
+ *  `NODE_REGISTRY_CAPABILITIES` but Broadcaster, WebSocket, LightClient,
+ *  and PublicAPI are operator-internal and skipped here.
+ *
+ *  PING #11 — the long-term fix is a `ClusterDirectoryEntry.serviceTiers:
+ *  string[]` aggregate field on the chain side; once shipped, the wallet
+ *  can drop per-operator probing for this surface entirely. */
+export interface ClusterServiceTiers {
+  rpc: boolean;
+  indexer: boolean;
+  archive: boolean;
+  oracle: boolean;
+  bridgeRelay: boolean;
+  /** Whether ANY probe completed (vs. all timed out or returned null).
+   *  Popup uses this to suppress the badge row entirely when chain data
+   *  is fully unavailable (silent fallback). */
+  anyReachable: boolean;
+  /** Number of operators successfully probed (denominator for the UI
+   *  "1/10 archive" sort of phrasing if we ever surface it). */
+  probedOperators: number;
+}
+
 /** Full cluster status. Mirrors SDK `ClusterStatusResponse`. */
 export interface ClusterStatus {
   clusterId: number;

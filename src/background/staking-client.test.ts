@@ -33,6 +33,7 @@ import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import {
   readClusterDelegators,
   readClusterDirectory,
+  readClusterServiceTiers,
   readClusterStatus,
   readDelegationCap,
   readDelegationHistory,
@@ -381,6 +382,79 @@ describe("readOperatorInfo", () => {
     expect(r.data.bondedAmount).toBe("500000000000");
     expect(r.data.commissionBps).toBe(250);
     expect(r.data.alias).toBe("alias-1");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterServiceTiers (R16 Task B)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterServiceTiers", () => {
+  it("returns all-false + anyReachable:false for an empty operator list", async () => {
+    const r = await readClusterServiceTiers([]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.anyReachable).toBe(false);
+    expect(r.data.probedOperators).toBe(0);
+    expect(r.data.rpc).toBe(false);
+    expect(r.data.archive).toBe(false);
+    // Should NOT have called the RPC at all.
+    expect(mockedRpc).not.toHaveBeenCalled();
+  });
+
+  it("any-true aggregation: cluster offers tier when ≥1 operator reachable for that bit", async () => {
+    // op-1 reachable for RPC (mask 1) + Archive (mask 8); op-2 reachable
+    // for Indexer (mask 2). No operator reachable for Oracle (64) or
+    // BridgeRelay (128). The wallet sends one probe per (operator, tier).
+    mockedRpc.mockImplementation(
+      async (method: string, params: unknown[]) => {
+        if (method !== "lyth_getServiceProbe") {
+          throw new Error(`unexpected method ${method}`);
+        }
+        const [operatorId, mask] = params as [string, number];
+        if (operatorId === "op-1" && (mask === 1 || mask === 8)) {
+          return { via: "op-1", result: { serviceMask: mask, status: "reachable" } };
+        }
+        if (operatorId === "op-2" && mask === 2) {
+          return { via: "op-2", result: { serviceMask: mask, status: "reachable" } };
+        }
+        return { via: "op-x", result: { serviceMask: mask, status: "unreachable" } };
+      },
+    );
+    const r = await readClusterServiceTiers(["op-1", "op-2"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rpc).toBe(true);
+    expect(r.data.indexer).toBe(true);
+    expect(r.data.archive).toBe(true);
+    expect(r.data.oracle).toBe(false);
+    expect(r.data.bridgeRelay).toBe(false);
+    expect(r.data.anyReachable).toBe(true);
+    expect(r.data.probedOperators).toBe(2);
+  });
+
+  it("treats non-'reachable' statuses (degraded / unreachable / unknown) as false", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "op-x",
+      result: { serviceMask: 1, status: "degraded" },
+    });
+    const r = await readClusterServiceTiers(["op-1"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rpc).toBe(false);
+    expect(r.data.anyReachable).toBe(false);
+    // probedOperators is still set because the probes resolved
+    // (just not as "reachable").
+    expect(r.data.probedOperators).toBe(1);
+  });
+
+  it("all probes failing leaves probedOperators=0 and anyReachable=false", async () => {
+    mockedRpc.mockRejectedValue(new Error("operator unreachable"));
+    const r = await readClusterServiceTiers(["op-1", "op-2"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.anyReachable).toBe(false);
+    expect(r.data.probedOperators).toBe(0);
   });
 });
 
