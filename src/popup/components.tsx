@@ -23,7 +23,7 @@ import { bech32mDisplay } from "../shared/bech32m";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import {
-  ACCOUNTS, DAPPS,
+  ACCOUNTS,
 } from "./demo-data";
 import type {
   Account, Custody,
@@ -87,7 +87,7 @@ import {
 // "MOCK · NO REAL VALUE · DESIGN-ONLY" copy. The wallet now holds real
 // ML-DSA-65 keys, reads live Sprintnet state, and submits real
 // encrypted-envelope txs — that's worth surfacing. Other parts of the
-// UI (Top status bar, account list, activity log, recent dApps) ARE
+// UI (Top status bar, account list, activity log) ARE
 // still demo data and live below the AttStrip; we'll address those in
 // follow-up cleanups.
 
@@ -1767,32 +1767,6 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               />
             </div>
           )}
-        </div>
-
-        {/* Round 10 TASK 4 — Recent dApps moved below the Assets /
-           Activity tabs (was directly above them). Activity is
-           the higher-signal section for an active user, so it now
-           sits closer to the balance hero. Recent dApps stays on
-           home but as a secondary section near the bottom. */}
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Recent dApps</h3>
-            <div className="spacer" />
-            <button className="more" onClick={onSettings}>Manage →</button>
-          </div>
-          <div className="ext-dapp-row">
-            {DAPPS.slice(0, 4).map((d) => (
-              <div
-                key={d.id}
-                className="ext-dapp"
-                style={{ opacity: 0.6, cursor: "default" }}
-              >
-                <div className={`glyph ${d.icon}`}>{d.glyph ?? d.icon}</div>
-                <div className="nm">{d.name}</div>
-                <div className="last">{d.lastUsed}</div>
-              </div>
-            ))}
-          </div>
         </div>
 
         {/* Round 8 TASK 4 — "view first-run onboarding" debug button
