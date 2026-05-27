@@ -481,7 +481,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     const r = await dispatch(method, []);
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4200);
-    expect(r.error?.message).toMatch(/v4\.1 §22\.9/);
+    expect(r.error?.message).toMatch(/retired EVM simulation and polling-filter/);
     // No JSON-RPC traffic should have left the wallet boundary.
     expect(rpcCalls.map((c) => c.method)).not.toContain(method);
   });

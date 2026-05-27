@@ -93,7 +93,7 @@ class MonolythiumProvider {
     if (RETIRED_METHODS.has(args.method)) {
       throw this.rpcError(
         4200,
-        `${args.method} is unavailable on Monolythium — chain retired EVM simulation/polling-filters per v4.1 §22.9`,
+        `${args.method} is unavailable on Monolythium — the chain retired EVM simulation and polling-filter methods. Use native reads or submit via the wallet UI.`,
       );
     }
 
