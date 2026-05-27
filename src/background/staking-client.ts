@@ -4,13 +4,15 @@
 // staking read against orphan-fork operators.
 //
 // Each read returns a `StakingResult<T>` envelope:
-//   - on transport / RPC error, falls back to MOCK_* fixtures with
-//     `ok: true, data, via: "mock"` so the popup renders the realistic
-//     architecture shape while Sprintnet is offline (Phase 7 phase-
-//     start posture);
-//   - on the few remaining chain GAPs, returns a typed mock with
-//     `via: "mock"` and a clear `// TODO: chain GAP` comment at the
-//     call site;
+//   - on transport / RPC error, returns `ok: false, reason` so the
+//     popup can render an honest "unavailable" state — per the
+//     no-mock-fallback principle
+//     (`_dev-notes/_principles/no-mock-fallbacks.md`);
+//   - a few legacy reads (delegations, delegation-history, cluster-
+//     delegators) still return `ok: true, data: { rows: [] }` on
+//     transport failure because empty-list is a legitimate chain
+//     response and the consumer can't easily distinguish "no rows
+//     exist" from "chain unreachable"; tracked for follow-up cleanup;
 //   - on protocol-shape mismatch (the chain returned something we
 //     don't recognise), returns `ok: false, reason`.
 //
@@ -30,7 +32,6 @@ import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
-  MOCK_CLUSTERS,
   type ClusterDelegatorsView,
   type ClusterDirectoryEntry,
   type ClusterDirectoryPage,
@@ -137,8 +138,8 @@ function normaliseDirectoryEntry(
   };
 }
 
-/** Read the chain's cluster directory. Falls back to MOCK_CLUSTERS on any
- *  transport or shape error. */
+/** Read the chain's cluster directory. Propagates `ok: false` on transport
+ *  failure — see `_dev-notes/_principles/no-mock-fallbacks.md`. */
 export async function readClusterDirectory(
   page: number,
   limit: number,
@@ -193,24 +194,9 @@ export async function readClusterDirectory(
       },
     };
   } catch (e) {
-    // Sprintnet-unreachable fallback — see canon-hierarchy doc at
-    // _dev-notes/_principles/canon-hierarchy.md. Chain code (mono-core
-    // HEAD 2705ce0f) is authoritative; this block fires only when
-    // every Sprintnet operator is unreachable (transport failure), NOT
-    // when the chain returns an empty cluster list (a valid response).
-    // The MOCK_CLUSTERS fixture preserves the architectural shape so
-    // the UI renders something realistic rather than an empty state.
-    const _reason = (e as Error)?.message ?? "lyth_clusterDirectory unreachable";
-    void _reason;
     return {
-      ok: true,
-      via: "mock",
-      data: {
-        page,
-        limit,
-        totalClusters: MOCK_CLUSTERS.length,
-        clusters: MOCK_CLUSTERS.slice(),
-      },
+      ok: false,
+      reason: (e as Error)?.message ?? "lyth_clusterDirectory unreachable",
     };
   }
 }
