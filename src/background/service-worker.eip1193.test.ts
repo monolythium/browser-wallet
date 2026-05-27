@@ -2,8 +2,9 @@
 //
 // The wallet's request-router lives in `service-worker.ts:handleRpc` and is
 // the integration seam between the in-page `window.ethereum` provider and the
-// `MonolythiumProvider` ethers v6 shim from `@monolythium/core-sdk/ethers`. This
-// suite is a hard test gate against drift in that router.
+// SDK's `RpcClient` (from `@monolythium/core-sdk` root export, replacing the
+// retired `MonolythiumProvider` ethers shim in R14). This suite is a hard
+// test gate against drift in that router.
 //
 // Strategy:
 //   - Stub the chrome.* surface the worker imports at module scope (storage,
@@ -11,10 +12,10 @@
 //     `chrome.runtime.onMessage` listener at import time; we capture it and
 //     drive it directly with synthetic `{ kind: "rpc", id, args, origin }`
 //     envelopes — this is the same shape the content-script bridge sends.
-//   - Mock `@monolythium/core-sdk/ethers` so `MonolythiumProvider._send` returns
+//   - Mock `@monolythium/core-sdk` so `RpcClient.call(method, params)` returns
 //     deterministic responses without any network round-trip. The dispatcher
-//     calls `_send` with a JSON-RPC request envelope; we capture every call
-//     for assertions.
+//     calls `client.call(method, params)` for the generic JSON-RPC escape
+//     hatch; we capture every call for assertions.
 //   - Mock `./keystore.js` and `./approvals.js` so we never touch argon2,
 //     or chrome.windows; both modules expose deterministic stubs.
 
@@ -31,7 +32,7 @@ const DETERMINISTIC_BLOCK_NUMBER = "0xdeadbeef";
 
 // ---- Mocks installed before the SUT module is imported ----
 
-// `MonolythiumProvider._send` capture — every test seeds responses keyed by
+// `RpcClient.call` capture — every test seeds responses keyed by
 // JSON-RPC method, and asserts on the recorded request payloads.
 interface CapturedRpcCall {
   method: string;
@@ -345,7 +346,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   });
 
   // ---- 3. eth_blockNumber ----
-  it("eth_blockNumber routes through MonolythiumProvider with no params and returns hex", async () => {
+  it("eth_blockNumber routes through RpcClient with no params and returns hex", async () => {
     // The dispatcher does not have a hard-coded eth_blockNumber path, so it
     // falls through to the default "method not supported" branch. Future
     // Stage work is expected to add a passthrough — until then, mark as todo.
