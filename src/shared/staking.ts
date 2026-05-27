@@ -19,10 +19,13 @@
 // Cluster directory + status
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Aggregate-health enum from `lyth_clusters` (SDK
- *  `ClusterDirectoryEntryResponse.aggregateHealth`). The chain reports this
- *  as a free-form string today; the wallet treats unknowns as `"unknown"`
- *  rather than crashing. */
+/** Aggregate-health enum from `lyth_clusterDirectory` (SDK
+ *  `ClusterDirectoryEntryResponse.aggregateHealth`). Chain emits a
+ *  free-form string with three known values today — `"ok"`,
+ *  `"degraded"`, `"halted"` per mono-core
+ *  `crates/core/runtime/src/providers.rs:6848-6854` — which the wallet
+ *  normalises to this enum via `normaliseHealth` in `staking-client.ts`.
+ *  Unknown values fall through to `"unknown"` rather than crashing. */
 export type ClusterHealth = "healthy" | "degraded" | "offline" | "unknown";
 
 /** Cluster directory row. Mirrors SDK `ClusterDirectoryEntryResponse` + the

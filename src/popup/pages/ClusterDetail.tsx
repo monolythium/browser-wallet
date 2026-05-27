@@ -5,7 +5,7 @@
 // inline expand-row). This page assembles all of the data on a single
 // dedicated screen:
 //
-//   - `lyth_clusters` directory row (passed in as `cluster` prop)
+//   - `lyth_clusterDirectory` directory row (passed in as `cluster` prop)
 //   - `lyth_clusterStatus` operator slate + epoch/round
 //   - `lyth_getClusterDelegators` aggregate delegator count
 //   - `lyth_indexerStatus` chain-side staleness signal (shared banner)

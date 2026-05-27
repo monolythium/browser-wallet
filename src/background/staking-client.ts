@@ -93,8 +93,25 @@ interface RawClusterEntity {
   entity?: string;
 }
 
+/** Map chain's `aggregateHealth` token vocabulary onto the wallet's
+ *  `ClusterHealth` enum. Verified 2026-05-27 against mono-core
+ *  `crates/core/runtime/src/providers.rs:6848-6854, 6905-6911` —
+ *  the chain emits exactly three values:
+ *
+ *  - `"ok"`        — live operators ≥ threshold (cluster signing normally).
+ *                    Maps to `"healthy"` for wallet UI.
+ *  - `"degraded"`  — some live operators, but below threshold.
+ *                    Maps to `"degraded"` (identity).
+ *  - `"halted"`    — zero live operators (cluster cannot reach quorum).
+ *                    Maps to `"offline"` (the closest wallet enum value).
+ *
+ *  Anything else (including the wallet's own legacy `"healthy"` /
+ *  `"offline"` tokens left over from pre-R17 code) falls through to
+ *  `"unknown"` rather than mis-rendering. */
 function normaliseHealth(raw: unknown): ClusterHealth {
-  if (raw === "healthy" || raw === "degraded" || raw === "offline") return raw;
+  if (raw === "ok" || raw === "healthy") return "healthy";
+  if (raw === "degraded") return "degraded";
+  if (raw === "halted" || raw === "offline") return "offline";
   return "unknown";
 }
 
@@ -127,7 +144,7 @@ export async function readClusterDirectory(
 ): Promise<StakingResult<ClusterDirectoryPage>> {
   try {
     const { result, via } = await sprintnetJsonRpc<RawClusterDirectoryPage>(
-      "lyth_clusters",
+      "lyth_clusterDirectory",
       [page, limit],
     );
     if (
@@ -135,7 +152,7 @@ export async function readClusterDirectory(
       typeof result !== "object" ||
       !Array.isArray(result.clusters)
     ) {
-      return { ok: false, reason: "malformed lyth_clusters response" };
+      return { ok: false, reason: "malformed lyth_clusterDirectory response" };
     }
     // Best-effort: fan out per-cluster `lyth_getClusterEntity` so each row
     // carries its Foundation / community badge. Failures are silent —
@@ -177,7 +194,7 @@ export async function readClusterDirectory(
   } catch (e) {
     // Sprintnet-offline fallback. Pre-mainnet posture: the UI renders
     // the realistic architecture rather than empty state.
-    const _reason = (e as Error)?.message ?? "lyth_clusters unreachable";
+    const _reason = (e as Error)?.message ?? "lyth_clusterDirectory unreachable";
     void _reason;
     return {
       ok: true,
