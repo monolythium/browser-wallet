@@ -1870,6 +1870,7 @@ export type {
   DelegationsView,
   PendingRewardsRow,
   PendingRewardsView,
+  ClusterServiceTiers,
   RedemptionQueueRow,
   RedemptionQueueView,
   StakingResult,
@@ -1879,6 +1880,7 @@ export type {
 import type {
   ClusterDelegatorsView,
   ClusterDirectoryPage,
+  ClusterServiceTiers,
   ClusterStatus,
   DelegationCap,
   DelegationHistoryView,
@@ -1915,6 +1917,18 @@ export async function bgStakingOperatorInfo(
   operatorId: string,
 ): Promise<StakingResult<WalletOperatorInfo>> {
   return send("staking-operator-info", { operatorId });
+}
+
+/** Read cluster-level service-tier offerings — R16 Task B. Aggregates
+ *  per-operator `lyth_getServiceProbe` results across the cluster's
+ *  member operators. Caller passes the member operatorId list (typically
+ *  `clusterStatus.members.map(m => m.operatorId)`). Returns `anyReachable:
+ *  false` when chain data is fully unavailable — popup silently
+ *  suppresses the badge row in that case. */
+export async function bgStakingClusterServiceTiers(
+  operatorIds: ReadonlyArray<string>,
+): Promise<StakingResult<ClusterServiceTiers>> {
+  return send("staking-cluster-service-tiers", { operatorIds });
 }
 
 /** Read active delegations for a wallet. Empty rows is a legitimate

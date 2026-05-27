@@ -245,6 +245,7 @@ import {
 import {
   readClusterDelegators,
   readClusterDirectory,
+  readClusterServiceTiers,
   readClusterStatus,
   readOperatorInfo,
   readDelegationHistory,
@@ -7302,6 +7303,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing operatorId" };
       }
       return readOperatorInfo(p.operatorId);
+    }
+    case "staking-cluster-service-tiers": {
+      const p = message.payload as { operatorIds?: ReadonlyArray<string> } | undefined;
+      if (!Array.isArray(p?.operatorIds)) {
+        return { ok: false, reason: "missing operatorIds" };
+      }
+      const valid = p.operatorIds.filter((id): id is string => typeof id === "string");
+      return readClusterServiceTiers(valid);
     }
     case "staking-delegations": {
       const p = message.payload as { wallet?: string } | undefined;
