@@ -28,6 +28,7 @@
 //   §30.5  — Foundation-cluster sunset (entity flag badge)
 
 import { useEffect, useState } from "react";
+import { Icon } from "../Icon";
 import {
   bgStakingClusterStatus,
   bgStakingClusterDelegators,
@@ -106,24 +107,21 @@ export function ClusterDetail({
   }, [cluster.clusterId, walletAddress]);
 
   return (
-    <div className="ext-app">
-      <div className="ext-app__top">
-        <button
-          type="button"
-          className="ext-btn ext-btn--ghost"
-          onClick={onBack}
-          aria-label="Back"
-        >
-          ← Back
+    <>
+      <div className="ext-top">
+        <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+          <Icon name="back" size={15} />
         </button>
-        <div className="ext-app__title">
+        <div
+          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+        >
           {cluster.name ?? `cluster-${cluster.clusterId}`}
         </div>
-        <div />
+        <div style={{ width: 28 }} />
       </div>
 
       <div
-        className="ext-app__body"
+        className="ext-body"
         style={{ display: "flex", flexDirection: "column", gap: 10 }}
       >
         {/* Identity + flags */}
@@ -189,7 +187,7 @@ export function ClusterDetail({
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }
 
