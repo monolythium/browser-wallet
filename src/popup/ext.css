@@ -312,21 +312,6 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-badge-att { font-family: var(--f-mono); font-size:8px; letter-spacing:0.1em; padding: 1px 5px; border-radius:3px; background: rgba(88,200,140,0.12); color: var(--ok); text-transform:uppercase; border:1px solid rgba(88,200,140,0.3); display:inline-flex; align-items:center; gap:3px; }
 .ext.light .ext-badge-att { background:#e8f5ec; color:#2a7a3f; border-color:#a8d9b8; }
 
-/* dApps row inside card */
-.ext-dapp-row { display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; }
-.ext-dapp { padding: 10px 4px 8px; border-radius:10px; background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer; transition: all 160ms var(--e-out); }
-.ext-dapp:hover { background: rgba(255,255,255,0.08); border-color: var(--fg-500); }
-.ext.light .ext-dapp { background:#fff; border-color:#e3e3ea; }
-.ext-dapp .glyph { width:30px; height:30px; border-radius:8px; display:grid; place-items:center; font-family: var(--f-mono); font-weight:700; font-size:13px; color:#fff; }
-.ext-dapp .glyph.M { background: linear-gradient(135deg, #2a1a0f, #060410); color: var(--gold); border:1px solid rgba(242,180,65,0.4); }
-.ext-dapp .glyph.S { background: linear-gradient(135deg, #3a8f5a, #164a2d); }
-.ext-dapp .glyph.C { background: linear-gradient(135deg, #8a3fa5, #4a1f5a); }
-.ext-dapp .glyph.G { background: linear-gradient(135deg, #3a6fa5, #1c3a5a); }
-.ext-dapp .nm { font-size:10.5px; text-align:center; letter-spacing:-0.01em; overflow:hidden; text-overflow:ellipsis; max-width:72px; white-space:nowrap; color: var(--fg-100); font-weight:500; }
-.ext.light .ext-dapp .nm { color:#1a1a24; }
-.ext-dapp .last { font-family: var(--f-mono); font-size:8.5px; color: var(--fg-400); letter-spacing:0.04em; }
-.ext.light .ext-dapp .last { color:#606369; }
-
 /* Activity row */
 .ext-act-row { display:grid; grid-template-columns: 28px 1fr auto; gap:12px; padding: 11px 0; align-items:center; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); }
 .ext-act-row:last-child { border-bottom:none; }

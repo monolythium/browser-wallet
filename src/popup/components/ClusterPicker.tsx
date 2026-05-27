@@ -43,11 +43,6 @@ interface ClusterPickerProps {
    *  page. Optional so consumers that don't have a navigation surface
    *  (e.g. autovote picker, multisig flows) opt out cleanly. */
   onShowDetails?: (cluster: ClusterDirectoryEntry) => void;
-  /** Optional indicator: rendered when the list is sourced from the
-   *  Sprintnet-offline fallback fixtures (`via: "mock"` from the SW).
-   *  The component shows a banner so the user knows the figures are
-   *  illustrative. */
-  isMock?: boolean;
 }
 
 /** Compute a coarse decentralization score for sort-by-decentralization.
@@ -69,7 +64,6 @@ export function ClusterPicker({
   selectedClusterId,
   onSelect,
   onShowDetails,
-  isMock,
 }: ClusterPickerProps) {
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("apr");
@@ -109,24 +103,6 @@ export function ClusterPicker({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {isMock === true && (
-        <div
-          style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            padding: "6px 10px",
-            borderRadius: 8,
-            background: "rgba(244,201,122,0.08)",
-            border: "1px solid rgba(244,201,122,0.4)",
-            color: "var(--warn)",
-            lineHeight: 1.5,
-          }}
-        >
-          Cluster directory is mocked while Sprintnet operators are offline.
-          APR / reputation figures are illustrative.
-        </div>
-      )}
-
       {/* Search + sort */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <div style={{ flex: 1, position: "relative" }}>
@@ -365,9 +341,10 @@ function ClusterRow({
               lineHeight: 1.5,
             }}
           >
-            Operator-level service tiers (RPC, prover, oracle,
-            archive) are surfaced from `lyth_operatorInfo` and not yet
-            aggregated per cluster. Surfacing here in a future commit.
+            Per-operator self-bond and cluster-level service-tier
+            badges (RPC, Indexer, Archive, Oracle, Bridge) are
+            rendered on the dedicated cluster-detail page — open via
+            "View details" below.
           </div>
           {/* Phase 11 Commit 6 — link to dedicated cluster-detail page
               for the full operator slate, delegator demand, and your

@@ -34,6 +34,22 @@ interface InboundEvent {
   payload: unknown;
 }
 
+// Methods the chain retired in mono-core b2f0c498 (EVM mutation,
+// simulation, and the six polling-filter methods). Note that
+// eth_sendRawTransaction is also retired by the chain but kept in
+// the service-worker dispatcher as a wallet-policy rejection — the
+// provider lets it through and the SW returns the historical 4200.
+const RETIRED_METHODS: ReadonlySet<string> = new Set([
+  "eth_call",
+  "eth_estimateGas",
+  "eth_newFilter",
+  "eth_newBlockFilter",
+  "eth_newPendingTransactionFilter",
+  "eth_uninstallFilter",
+  "eth_getFilterChanges",
+  "eth_getFilterLogs",
+]);
+
 class MonolythiumProvider {
   // ---- EIP-1193 identity hints (also used by EIP-6963 below) ----
   readonly isMonolythium = true;
@@ -46,7 +62,7 @@ class MonolythiumProvider {
 
   // Locally cached state — updated by the bridge when the user picks a
   // different account or network in the popup. The default reflects the
-  // LythiumDAG-BFT testnet chain id from Law §13.1; the bridge will overwrite
+  // LythiumDAG-BFT testnet chain id from Whitepaper §13; the bridge will overwrite
   // this on `chainChanged` if the user is on a different chain.
   private cachedAccounts: string[] = [];
   private cachedChainId: string = "0x10F2C"; // LythiumDAG-BFT testnet (69420)
@@ -67,6 +83,19 @@ class MonolythiumProvider {
     if (args.method === "eth_chainId") return this.cachedChainId;
     if (args.method === "eth_accounts") return this.cachedAccounts;
     if (args.method === "net_version") return String(parseInt(this.cachedChainId, 16));
+
+    // Methods retired by mono-core b2f0c498 (v4.1 §22.9 — no EVM
+    // simulation / polling-filters on Monolythium). Reject at the
+    // provider boundary with EIP-1193 code 4200 so dapps get a clear,
+    // synchronous answer without a chain round-trip. The service
+    // worker carries the same rejection arms as a defense-in-depth
+    // backstop for callers that bypass this provider.
+    if (RETIRED_METHODS.has(args.method)) {
+      throw this.rpcError(
+        4200,
+        `${args.method} is unavailable on Monolythium — chain retired EVM simulation/polling-filters per v4.1 §22.9`,
+      );
+    }
 
     return this.send(args);
   }

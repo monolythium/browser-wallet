@@ -378,21 +378,6 @@ export async function bgWalletBalance(
   return send("wallet-balance", { address, chainIdHex });
 }
 
-/**
- * Read-only `eth_call` proxy. The popup has no RpcClient instance of
- * its own — every chain query goes through the SW's existing operator-
- * failover routing (Sprintnet) or `providerFor` (everything else).
- * The NFT tab uses this for ERC-721 / ERC-1155 ownership and metadata
- * lookups via the `IpcEthCaller` adapter in `nftEthCaller.ts`.
- */
-export async function bgEthCall(
-  to: string,
-  data: string,
-  chainIdHex: string,
-): Promise<{ ok: true; result: string } | { ok: false; reason?: string }> {
-  return send("wallet-eth-call", { to, data, chainIdHex });
-}
-
 export interface WalletAddressLabel {
   address: string;
   category: string;
@@ -865,16 +850,14 @@ export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
   chainIdHex: string;
-  /** Optional EVM calldata. Required for contract calls (NFT
-   *  safeTransferFrom, ERC-20 transfer, etc.); omit for native LYTH
+  /** Optional EVM calldata for contract calls; omit for native LYTH
    *  transfers. The SW forwards the bytes verbatim into the
-   *  ML-DSA-65 envelope path; signing semantics are unchanged.
-   *  Phase 5 Commit 7 added this field for the SendNft screen. */
+   *  ML-DSA-65 envelope path; signing semantics are unchanged. */
   data?: string;
   /** Optional execution-unit limit override (hex). When omitted the SW falls
    *  back to its native-transfer default (Sprintnet's intrinsic execution-unit
-   *  floor). NFT calldata pushes that floor well past 21k, so the
-   *  Send-NFT page passes a conservative overhead-aware estimate. */
+   *  floor). Callers passing non-trivial calldata should supply a conservative
+   *  overhead-aware estimate. */
   executionUnitLimitHex?: string;
   /** Optional encrypted-mempool class override for SDK-built action plans. */
   mempoolClass?: number;
@@ -1564,6 +1547,22 @@ export async function bgVaultAddFresh(
 }
 
 /**
+ * Round 13 TASK 1 — generate a fresh PQM-1 mnemonic for the in-app
+ * multi-step new-wallet flow. The SW returns the mnemonic without
+ * persisting any vault; the popup holds it in React state through
+ * the show-phrase + verify-phrase steps and commits via
+ * `bgVaultAddImport(mnemonic)` only after the user verifies the
+ * phrase. Cancellation discards the mnemonic with no chain-storage
+ * side-effects. Requires the container to be unlocked.
+ */
+export async function bgVaultGenerateFreshMnemonic(): Promise<
+  | { ok: true; mnemonic: string }
+  | { ok: false; reason?: string }
+> {
+  return send("vault-generate-fresh-mnemonic", {});
+}
+
+/**
  * Import a user-supplied PQM-1 mnemonic. Rejects duplicate-address
  * imports (the importing mnemonic would derive the same address as
  * an existing vault) with `reason: "vault with this address already
@@ -1584,7 +1583,7 @@ export async function bgVaultAddImport(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 8 — multisig vault surface (§28.5 Q70+Q75)
+// multisig vault surface (§28.5 wallet portfolio)
 // ─────────────────────────────────────────────────────────────────────
 //
 // `bgVaultAddMultisig` creates a new multisig vault inside the
@@ -1732,7 +1731,7 @@ export async function bgMultisigExecute(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 8 Commit 5 — signer governance (§28.5 Q75)
+// signer governance (§28.5 wallet portfolio)
 // ─────────────────────────────────────────────────────────────────────
 
 import type { GovernanceAction } from "../shared/multisig.js";
@@ -1871,14 +1870,17 @@ export type {
   DelegationsView,
   PendingRewardsRow,
   PendingRewardsView,
+  ClusterServiceTiers,
   RedemptionQueueRow,
   RedemptionQueueView,
   StakingResult,
+  WalletOperatorInfo,
 } from "../shared/staking.js";
 
 import type {
   ClusterDelegatorsView,
   ClusterDirectoryPage,
+  ClusterServiceTiers,
   ClusterStatus,
   DelegationCap,
   DelegationHistoryView,
@@ -1887,6 +1889,7 @@ import type {
   PendingRewardsView,
   RedemptionQueueView,
   StakingResult,
+  WalletOperatorInfo,
 } from "../shared/staking.js";
 
 /** Read the paginated cluster directory (§14 Avengers Assembly). */
@@ -1903,6 +1906,29 @@ export async function bgStakingClusterStatus(
   clusterId: number,
 ): Promise<StakingResult<ClusterStatus>> {
   return send("staking-cluster-status", { clusterId });
+}
+
+/** Read per-operator info via `lyth_operatorInfo` — R16 Task A.
+ *  Used by ClusterDetail to render per-operator self-bond next to each
+ *  member in the operator slate. The return shape is per-operator
+ *  unique and not mock-fallbacked; callers render a placeholder when
+ *  `ok: false`. */
+export async function bgStakingOperatorInfo(
+  operatorId: string,
+): Promise<StakingResult<WalletOperatorInfo>> {
+  return send("staking-operator-info", { operatorId });
+}
+
+/** Read cluster-level service-tier offerings — R16 Task B. Aggregates
+ *  per-operator `lyth_getServiceProbe` results across the cluster's
+ *  member operators. Caller passes the member operatorId list (typically
+ *  `clusterStatus.members.map(m => m.operatorId)`). Returns `anyReachable:
+ *  false` when chain data is fully unavailable — popup silently
+ *  suppresses the badge row in that case. */
+export async function bgStakingClusterServiceTiers(
+  operatorIds: ReadonlyArray<string>,
+): Promise<StakingResult<ClusterServiceTiers>> {
+  return send("staking-cluster-service-tiers", { operatorIds });
 }
 
 /** Read active delegations for a wallet. Empty rows is a legitimate
