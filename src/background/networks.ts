@@ -149,7 +149,7 @@ export interface BuiltinChain {
 }
 
 /**
- * Built-in chains shipped with the wallet. v4.0 ships exactly one —
+ * Built-in chains shipped with the wallet. v4.1 ships exactly one —
  * Sprintnet (chain_id 69420). All other chains are user-added at
  * runtime via `wallet_addEthereumChain`.
  *
