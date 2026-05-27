@@ -25,7 +25,7 @@
 // chain rejects it at the precompile-gate; the wallet surfaces
 // the typed error verbatim.
 
-/** Delegation precompile address — Law §5.4 / §7.6. */
+/** Delegation precompile address — Whitepaper §5.4 / §7.6. */
 export const DELEGATION_PRECOMPILE =
   "0x000000000000000000000000000000000000100A" as const;
 

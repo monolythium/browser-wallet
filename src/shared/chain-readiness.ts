@@ -18,8 +18,8 @@
 // and by anything else that wants the same fallback discipline.
 //
 // Whitepaper alignment: not a §-feature in itself — this is the wiring
-// pattern that the v4.0 reframe (Part 1 §10) requires when the wallet
-// has to ship UI surfaces ahead of every chain primitive being deployed.
+// pattern v4.1 inherits from the original §10 reframe: the wallet has
+// to ship UI surfaces ahead of every chain primitive being deployed.
 
 /** Outcome of a chain call that has a coded mock fallback. The `kind`
  *  discriminator lets callers (typically the SW IPC dispatchers) decide

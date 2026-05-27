@@ -23,7 +23,7 @@ import { bech32mDisplay } from "../shared/bech32m";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import {
-  ACCOUNTS, DAPPS,
+  ACCOUNTS,
 } from "./demo-data";
 import type {
   Account, Custody,
@@ -59,8 +59,6 @@ import {
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
-import { NftTab } from "./components/NftTab";
-import type { SendNftTarget } from "./pages/SendNft";
 import {
   useBridgeRouteSelection,
   type BridgeRouteChoiceCandidate,
@@ -89,7 +87,7 @@ import {
 // "MOCK · NO REAL VALUE · DESIGN-ONLY" copy. The wallet now holds real
 // ML-DSA-65 keys, reads live Sprintnet state, and submits real
 // encrypted-envelope txs — that's worth surfacing. Other parts of the
-// UI (Top status bar, account list, activity log, recent dApps) ARE
+// UI (Top status bar, account list, activity log) ARE
 // still demo data and live below the AttStrip; we'll address those in
 // follow-up cleanups.
 
@@ -464,6 +462,10 @@ interface TopProps {
   account: Account;
   onOpenAccounts: () => void;
   onSettings: () => void;
+  /** Round 13 TASK 1 — VaultPicker's "New wallet" dropdown entry
+   *  dispatches here instead of opening the legacy single-page modal.
+   *  Threaded through Home for App-level routing to NewWalletFlow. */
+  onNewWalletFlow?: () => void;
 }
 
 // Phase 5 Commit 3: chip replaced with <VaultPicker /> (multi-vault
@@ -483,7 +485,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (Round 4 design).
-export function Top({ account }: TopProps) {
+export function Top({ account, onNewWalletFlow }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       <div
@@ -500,7 +502,10 @@ export function Top({ account }: TopProps) {
       >
         ML-DSA-65
       </div>
-      <VaultPicker activeAccount={account} />
+      <VaultPicker
+        activeAccount={account}
+        {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
+      />
     </div>
   );
 }
@@ -1557,18 +1562,19 @@ interface HomeProps {
   onOpenSend?: () => void;
   onOpenStake?: () => void;
   onOpenBridge?: () => void;
-  /** Phase 5 Commit 7 — fired by NftDetail's Send CTA. App.tsx
-   *  stashes the target NFT and routes to the SendNft screen. */
-  onOpenSendNft?: (target: SendNftTarget) => void;
   /** Phase 9 Commit 7 — slot rendered at the top of the Home body
    *  for the post-onboarding hint bar (OnboardingHintBar). Optional
    *  so test harnesses + callers without the route wired still
    *  render. */
   topSlot?: ReactNode;
+  /** Round 13 TASK 1 — threaded to VaultPicker so the "New wallet"
+   *  dropdown entry routes to App's NewWalletFlow screen instead of
+   *  opening the legacy single-page VaultAddModal fresh mode. */
+  onNewWalletFlow?: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, onOpenSendNft, topSlot }: HomeProps) {
-  const [tab, setTab] = useState<"assets" | "activity" | "nfts">("assets");
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow }: HomeProps) {
+  const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
@@ -1593,6 +1599,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         account={account}
         onOpenAccounts={onOpenAccounts}
         onSettings={onSettings}
+        {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
       />
       <div className="ext-body">
         {topSlot}
@@ -1738,16 +1745,6 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
             >
               Activity
             </button>
-            <button
-              role="tab"
-              aria-selected={tab === "nfts"}
-              aria-controls="ext-tabpanel-nfts"
-              id="ext-tab-nfts"
-              className={tab === "nfts" ? "on" : ""}
-              onClick={() => setTab("nfts")}
-            >
-              NFTs
-            </button>
           </div>
           {tab === "assets" && (
             <div
@@ -1770,46 +1767,6 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               />
             </div>
           )}
-          {tab === "nfts" && (
-            <div
-              role="tabpanel"
-              id="ext-tabpanel-nfts"
-              aria-labelledby="ext-tab-nfts"
-            >
-              <NftTab
-                ownerAddress={account.addr.startsWith("0x") ? account.addr : null}
-                chainId={network.chainIdNum}
-                chainIdHex={network.chainId}
-                {...(onOpenSendNft ? { onOpenSendNft } : {})}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Round 10 TASK 4 — Recent dApps moved below the Assets /
-           Activity / NFTs tabs (was directly above them). Activity is
-           the higher-signal section for an active user, so it now
-           sits closer to the balance hero. Recent dApps stays on
-           home but as a secondary section near the bottom. */}
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Recent dApps</h3>
-            <div className="spacer" />
-            <button className="more" onClick={onSettings}>Manage →</button>
-          </div>
-          <div className="ext-dapp-row">
-            {DAPPS.slice(0, 4).map((d) => (
-              <div
-                key={d.id}
-                className="ext-dapp"
-                style={{ opacity: 0.6, cursor: "default" }}
-              >
-                <div className={`glyph ${d.icon}`}>{d.glyph ?? d.icon}</div>
-                <div className="nm">{d.name}</div>
-                <div className="last">{d.lastUsed}</div>
-              </div>
-            ))}
-          </div>
         </div>
 
         {/* Round 8 TASK 4 — "view first-run onboarding" debug button

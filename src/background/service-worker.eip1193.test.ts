@@ -2,8 +2,9 @@
 //
 // The wallet's request-router lives in `service-worker.ts:handleRpc` and is
 // the integration seam between the in-page `window.ethereum` provider and the
-// `MonolythiumProvider` ethers v6 shim from `@monolythium/core-sdk/ethers`. This
-// suite is a hard test gate against drift in that router.
+// SDK's `RpcClient` (from `@monolythium/core-sdk` root export, replacing the
+// retired `MonolythiumProvider` ethers shim in R14). This suite is a hard
+// test gate against drift in that router.
 //
 // Strategy:
 //   - Stub the chrome.* surface the worker imports at module scope (storage,
@@ -11,10 +12,10 @@
 //     `chrome.runtime.onMessage` listener at import time; we capture it and
 //     drive it directly with synthetic `{ kind: "rpc", id, args, origin }`
 //     envelopes — this is the same shape the content-script bridge sends.
-//   - Mock `@monolythium/core-sdk/ethers` so `MonolythiumProvider._send` returns
+//   - Mock `@monolythium/core-sdk` so `RpcClient.call(method, params)` returns
 //     deterministic responses without any network round-trip. The dispatcher
-//     calls `_send` with a JSON-RPC request envelope; we capture every call
-//     for assertions.
+//     calls `client.call(method, params)` for the generic JSON-RPC escape
+//     hatch; we capture every call for assertions.
 //   - Mock `./keystore.js` and `./approvals.js` so we never touch argon2,
 //     or chrome.windows; both modules expose deterministic stubs.
 
@@ -31,7 +32,7 @@ const DETERMINISTIC_BLOCK_NUMBER = "0xdeadbeef";
 
 // ---- Mocks installed before the SUT module is imported ----
 
-// `MonolythiumProvider._send` capture — every test seeds responses keyed by
+// `RpcClient.call` capture — every test seeds responses keyed by
 // JSON-RPC method, and asserts on the recorded request payloads.
 interface CapturedRpcCall {
   method: string;
@@ -40,29 +41,25 @@ interface CapturedRpcCall {
 const rpcCalls: CapturedRpcCall[] = [];
 let rpcResponses: Record<string, unknown> = {};
 
-vi.mock("@monolythium/core-sdk/ethers", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk/ethers")>();
-  class FakeMonolythiumProvider {
-    constructor(public rpc: string, public opts?: unknown) {}
-    async _send(payload: { id: number; jsonrpc: string; method: string; params: unknown[] }) {
-      rpcCalls.push({ method: payload.method, params: payload.params });
-      const result = rpcResponses[payload.method];
+vi.mock("@monolythium/core-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
+  class FakeRpcClient {
+    constructor(public readonly endpoint: string) {}
+    async call<T>(method: string, params: unknown): Promise<T> {
+      const paramArray = Array.isArray(params) ? params : params == null ? [] : [params];
+      rpcCalls.push({ method, params: paramArray });
+      const result = rpcResponses[method];
       if (result === undefined) {
-        return [{ id: payload.id, jsonrpc: "2.0", error: { code: -32601, message: `mock: no seeded response for ${payload.method}` } }];
+        const e = new Error(`mock: no seeded response for ${method}`) as Error & { code?: number };
+        e.code = -32601;
+        throw e;
       }
-      return [{ id: payload.id, jsonrpc: "2.0", result }];
+      return result as T;
     }
   }
   return {
     ...actual,
-    MonolythiumProvider: FakeMonolythiumProvider,
-  };
-});
-
-vi.mock("@monolythium/core-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
-  return {
-    ...actual,
+    RpcClient: FakeRpcClient,
     MONOLYTHIUM_TESTNET_CHAIN_ID: TESTNET_CHAIN_ID_BIGINT,
     // Mirror the SDK registry contract: at least one complete endpoint,
     // with membership owned by the SDK snapshot rather than the wallet.
@@ -75,7 +72,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     TESTNET_69420: {
       chain_id: 69420,
       genesis_hash:
-        "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
+        "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c",
     },
   };
 });
@@ -349,7 +346,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   });
 
   // ---- 3. eth_blockNumber ----
-  it("eth_blockNumber routes through MonolythiumProvider with no params and returns hex", async () => {
+  it("eth_blockNumber routes through RpcClient with no params and returns hex", async () => {
     // The dispatcher does not have a hard-coded eth_blockNumber path, so it
     // falls through to the default "method not supported" branch. Future
     // Stage work is expected to add a passthrough — until then, mark as todo.
@@ -466,6 +463,28 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   });
 
   it.todo("eth_subscribe('newHeads') yields a subscription id when polling lands (TODO(monolythium-vision): add polling subscription manager)");
+
+  // ---- 8b. Retired methods rejected at the boundary ----
+  // mono-core b2f0c498 retired the EVM simulation + polling-filter
+  // methods. The wallet rejects them with 4200 at the dispatcher rather
+  // than letting them hit the chain just to receive MethodNotFound.
+  it.each([
+    "eth_call",
+    "eth_estimateGas",
+    "eth_newFilter",
+    "eth_newBlockFilter",
+    "eth_newPendingTransactionFilter",
+    "eth_uninstallFilter",
+    "eth_getFilterChanges",
+    "eth_getFilterLogs",
+  ])("%s is rejected at the dispatcher with 4200 and does not hit the chain", async (method) => {
+    const r = await dispatch(method, []);
+    expect(r.result).toBeUndefined();
+    expect(r.error?.code).toBe(4200);
+    expect(r.error?.message).toMatch(/v4\.1 §22\.9/);
+    // No JSON-RPC traffic should have left the wallet boundary.
+    expect(rpcCalls.map((c) => c.method)).not.toContain(method);
+  });
 
   // ---- 9. Negative path — unknown method ----
   it("an unknown method returns error code 4200 (EIP-1193 method-not-supported)", async () => {

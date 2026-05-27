@@ -19,7 +19,6 @@ export default defineConfig({
         manualChunks: {
           "vendor-react": ["react", "react-dom"],
           "vendor-sdk": ["@monolythium/core-sdk"],
-          "vendor-ethers": ["ethers"],
           // @noble/* deliberately NOT split — rollup tree-shakes them
           // into the SW (which is the only consumer of keystore-mldsa.ts
           // and the actual user of post-quantum/ciphers/hashes) and a
@@ -31,9 +30,9 @@ export default defineConfig({
     // Extension bundles routinely exceed the web-default 500 kB, and
     // the manualChunks split above brings the popup chunk under
     // 500 kB on its own. 1000 kB sets a reasonable ceiling for the
-    // remaining vendor groups (the SDK chunk is ~215 kB; nobles
-    // and ethers each smaller) without silencing warnings for any
-    // realistic accidental bloat.
+    // remaining vendor groups (the SDK chunk is ~215 kB; nobles are
+    // smaller still) without silencing warnings for any realistic
+    // accidental bloat.
     chunkSizeWarningLimit: 1000,
   },
   server: {

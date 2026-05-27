@@ -19,10 +19,13 @@
 // Cluster directory + status
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Aggregate-health enum from `lyth_clusters` (SDK
- *  `ClusterDirectoryEntryResponse.aggregateHealth`). The chain reports this
- *  as a free-form string today; the wallet treats unknowns as `"unknown"`
- *  rather than crashing. */
+/** Aggregate-health enum from `lyth_clusterDirectory` (SDK
+ *  `ClusterDirectoryEntryResponse.aggregateHealth`). Chain emits a
+ *  free-form string with three known values today — `"ok"`,
+ *  `"degraded"`, `"halted"` per mono-core
+ *  `crates/core/runtime/src/providers.rs:6848-6854` — which the wallet
+ *  normalises to this enum via `normaliseHealth` in `staking-client.ts`.
+ *  Unknown values fall through to `"unknown"` rather than crashing. */
 export type ClusterHealth = "healthy" | "degraded" | "offline" | "unknown";
 
 /** Cluster directory row. Mirrors SDK `ClusterDirectoryEntryResponse` + the
@@ -33,9 +36,12 @@ export interface ClusterDirectoryEntry {
   /** Numeric cluster id used by every chain-side delegation precompile. */
   clusterId: number;
   /** §22.4 cluster-name-registry display name (e.g. `halcyon.cluster.mono`).
-   *  TODO: chain GAP — the cluster-name registry is not yet emitted by
-   *  any SDK read; the wallet displays `cluster-<id>` until Nayiem wires
-   *  the name resolver. */
+   *  chain GAP — see `_dev-notes/browser-wallet/active-nayiem-pings.md`
+   *  PING #8 (cluster name registry). No `lyth_resolveName` /
+   *  `lyth_clusterName` reader exists in mono-core protocore.rs as of
+   *  HEAD f7236197 (2026-05-27). Wallet displays mock names from
+   *  `MOCK_CLUSTERS[*].name` below; replace with a real lookup when the
+   *  chain ships the primitive. */
   name: string | null;
   /** Member count (`ClusterDirectoryEntryResponse.size`). Whitepaper §14
    *  fixes this at 10 for v1; surfaced from the chain so future
@@ -72,11 +78,76 @@ export interface ClusterDirectoryPage {
 export interface ClusterMember {
   operatorId: string;
   blsPubkey: string;
-  /** Operator lifecycle state — `"active"`, `"standby"`, `"jailed"`, etc.
-   *  The chain emits this as a free-form string; the wallet renders it
-   *  pass-through and only branches on `"active"` for the consensus-
-   *  participant count. */
+  /** Operator lifecycle state — verified 2026-05-27 against mono-core
+   *  `crates/core/runtime/src/providers.rs:6195-6205`, the chain emits
+   *  exactly three tokens:
+   *
+   *  - `"active"` — currently signing (or jailed-but-expired, the
+   *     timeout-restoration path).
+   *  - `"jailed"` — in an active jail period (`Jailed { until_height }`
+   *     with `height < until_height`).
+   *  - `"offline"` — `Slashed { .. }` or `Ejected`.
+   *
+   *  No `"standby"` token exists on the chain side today (the chain's
+   *  internal `ClusterMember` is just `bls_pubkey + active: bool` —
+   *  there's no standby roster in the Rust data model). PING #11
+   *  tracks the long-term ask for a formal enum + an explicit
+   *  `standbyCount` field on `ClusterStatusResponse`.
+   *
+   *  The wallet renders the token pass-through; consumers that need
+   *  a specific colour code should map all three tokens explicitly
+   *  rather than rely on a default branch. */
   state: string;
+}
+
+/** Per-operator metadata from `lyth_operatorInfo`. Mirrors the
+ *  user-facing subset of SDK `OperatorInfoResponse`; SDK-internal
+ *  fields (operatorKeyFingerprint, blsKeyFingerprint, capability,
+ *  activeClusterIds) are deliberately not surfaced — add them when a
+ *  UI consumer needs them. `bondedAmount` is the operator's self-bond
+ *  in lythoshi (V4.1-BOND-0001 = 5,000 LYTH chain-enforced floor). */
+export interface WalletOperatorInfo {
+  operatorId: string;
+  moniker: string | null;
+  alias: string | null;
+  bonded: boolean;
+  /** Self-bond in lythoshi. Stringified bigint for IPC transparency
+   *  (popup never sees a `bigint`); the popup parses for display. */
+  bondedAmount: string;
+  commissionBps: number | null;
+  delegationCount: number | null;
+  /** Operator-level lifecycle string from the chain. Free-form; the
+   *  wallet renders it pass-through. Separate concept from
+   *  `ClusterMember.state` (which is membership state inside one
+   *  specific cluster). */
+  lifecycleState: string;
+}
+
+/** Cluster-level service-tier offerings derived from per-operator
+ *  `lyth_getServiceProbe` results (R16 Task B). The cluster is treated
+ *  as offering a tier when at least one member operator probes
+ *  reachable for that tier ("any-true" aggregation).
+ *
+ *  Surfaced for the five user-facing tiers; SDK exposes nine bits in
+ *  `NODE_REGISTRY_CAPABILITIES` but Broadcaster, WebSocket, LightClient,
+ *  and PublicAPI are operator-internal and skipped here.
+ *
+ *  PING #11 — the long-term fix is a `ClusterDirectoryEntry.serviceTiers:
+ *  string[]` aggregate field on the chain side; once shipped, the wallet
+ *  can drop per-operator probing for this surface entirely. */
+export interface ClusterServiceTiers {
+  rpc: boolean;
+  indexer: boolean;
+  archive: boolean;
+  oracle: boolean;
+  bridgeRelay: boolean;
+  /** Whether ANY probe completed (vs. all timed out or returned null).
+   *  Popup uses this to suppress the badge row entirely when chain data
+   *  is fully unavailable (silent fallback). */
+  anyReachable: boolean;
+  /** Number of operators successfully probed (denominator for the UI
+   *  "1/10 archive" sort of phrasing if we ever surface it). */
+  probedOperators: number;
 }
 
 /** Full cluster status. Mirrors SDK `ClusterStatusResponse`. */
@@ -376,17 +447,12 @@ export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
  *  marginally above Foundation clusters since the Foundation burns its
  *  rewards per §30.5).
  *
- *  TODO: chain GAP — needs Nayiem
- *  ────────────────────────────────
- *  As of mono-core-sdk @0fd8a79 there is NO chain-side read for per-
- *  cluster APR. The Phase 7.1 brief expected `lyth_clusterApr` (or a
- *  REST equivalent at `/api/v1/staking/apr`) to land via mono-core
- *  commit 964b0a3 "Expose advanced read API routes" — that commit
- *  exposed certificates, registry, and DAG routes but no staking APR.
- *  This table remains the wallet's authoritative APR source until the
- *  chain side ships a reader; the §23.5 quadratic reward curve is
- *  deterministic, so a future activation just swaps the table for a
- *  per-cluster call. */
+ *  chain GAP — see `_dev-notes/browser-wallet/active-nayiem-pings.md`
+ *  PING #7 (APR / reward-rate chain primitive). No `lyth_clusterApr`,
+ *  `lyth_rewardRate`, or `lyth_clusterRewardShare` reader exists in
+ *  mono-core protocore.rs as of HEAD f7236197 (2026-05-27). The §23.5
+ *  quadratic reward curve is deterministic by design, so a future
+ *  activation just swaps the table for a per-cluster call. */
 export const MOCK_CLUSTER_APR_BPS: Readonly<Record<number, number>> = {
   1: 820, // 8.20% — Foundation, mid-saturation
   2: 805, // 8.05% — Foundation
