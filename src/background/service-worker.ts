@@ -1598,6 +1598,24 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return err(4200, "eth_sendRawTransaction is not supported by this wallet");
     }
 
+    // Chain retired EVM simulation + polling filters per mono-core
+    // b2f0c498 (v4.1 §22.9). Reject at the wallet boundary with 4200
+    // instead of letting the call hit the chain just to get
+    // MethodNotFound — friendlier error message, faster round-trip.
+    case "eth_call":
+    case "eth_estimateGas":
+    case "eth_newFilter":
+    case "eth_newBlockFilter":
+    case "eth_newPendingTransactionFilter":
+    case "eth_uninstallFilter":
+    case "eth_getFilterChanges":
+    case "eth_getFilterLogs": {
+      return err(
+        4200,
+        `${method} is unavailable on Monolythium — chain retired EVM simulation/polling-filters per v4.1 §22.9`,
+      );
+    }
+
     case "wallet_switchEthereumChain": {
       const p = Array.isArray(params) ? (params[0] as { chainId?: string } | undefined) : undefined;
       const requested = p?.chainId;
