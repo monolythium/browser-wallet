@@ -54,22 +54,6 @@ export const DEFAULT_OPERATOR_RISK_AUTHORITY = 0;
  *  reflect current state, long enough to dampen single-round noise. */
 export const DEFAULT_OPERATOR_RISK_WINDOW_ROUNDS = 200;
 
-const MOCK_RISK: OperatorRiskWire = {
-  schemaVersion: 1,
-  authorityIndex: DEFAULT_OPERATOR_RISK_AUTHORITY,
-  dataHeight: 0,
-  windowRounds: DEFAULT_OPERATOR_RISK_WINDOW_ROUNDS,
-  missedRounds: 0,
-  observedRounds: 0,
-  missRateBps: 0,
-  thresholdBps: 5_000,
-  remainingHeadroomBps: 5_000,
-  jailStatus: { reason: "mock" },
-  reasons: [],
-};
-
-export const OPERATOR_RISK_PLACEHOLDER: Readonly<OperatorRiskWire> = MOCK_RISK;
-
 export interface ReadOperatorRiskArgs {
   authorityIndex?: number;
   windowRounds?: number;
@@ -86,6 +70,25 @@ export async function readOperatorRisk(
     typeof args.windowRounds === "number" && args.windowRounds > 0
       ? Math.floor(args.windowRounds)
       : DEFAULT_OPERATOR_RISK_WINDOW_ROUNDS;
+  // Empty sentinel for `withChainFallback`'s required `mockValue` slot.
+  // The popup hides the AuthorityRisk card on any non-`live` outcome
+  // (Operators.tsx) so this value never reaches the UI — kept only to
+  // satisfy the `T` constraint. Per
+  // `_dev-notes/_principles/no-mock-fallbacks.md` no synthesized risk
+  // figures are exposed to consumers.
+  const noDataSentinel: OperatorRiskWire = {
+    schemaVersion: 1,
+    authorityIndex,
+    dataHeight: 0,
+    windowRounds,
+    missedRounds: 0,
+    observedRounds: 0,
+    missRateBps: 0,
+    thresholdBps: 0,
+    remainingHeadroomBps: 0,
+    jailStatus: { reason: "unavailable" },
+    reasons: [],
+  };
   return withChainFallback<OperatorRiskWire>(
     async () => {
       const { result } = await sprintnetJsonRpc<OperatorRiskWire>(
@@ -95,7 +98,7 @@ export async function readOperatorRisk(
       return result;
     },
     {
-      mockValue: { ...MOCK_RISK, authorityIndex, windowRounds },
+      mockValue: noDataSentinel,
       notLiveAs: "not-deployed",
       label: "lyth_operatorRisk",
       timeoutMs: 5000,
