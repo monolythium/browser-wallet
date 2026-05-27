@@ -80,9 +80,9 @@ afterEach(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("readClusterDirectory", () => {
-  it("normalises a well-formed lyth_clusters page + stitches entity flags", async () => {
+  it("normalises a well-formed lyth_clusterDirectory page + stitches entity flags", async () => {
     mockedRpc.mockImplementation(async (method: string, params: unknown[]) => {
-      if (method === "lyth_clusters") {
+      if (method === "lyth_clusterDirectory") {
         return {
           via: "operator-2",
           result: {
@@ -156,9 +156,41 @@ describe("readClusterDirectory", () => {
     expect(r.reason).toMatch(/malformed/);
   });
 
+  // R17 — chain vocabulary for `aggregateHealth` is `"ok" | "degraded" |
+  // "halted"` (verified against mono-core
+  // `crates/core/runtime/src/providers.rs:6848-6854`). Pin the mapping
+  // so a future stale-wallet vs current-chain drift surfaces as a test
+  // failure rather than a render bug.
+  it("maps chain's aggregateHealth tokens (ok/degraded/halted) onto wallet enum", async () => {
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusterDirectory") {
+        return {
+          via: "operator-1",
+          result: {
+            page: 0,
+            limit: 25,
+            totalClusters: 3,
+            clusters: [
+              { clusterId: 1, size: 7, threshold: 5, aggregateHealth: "ok", regionDiversity: null, active: true },
+              { clusterId: 2, size: 7, threshold: 5, aggregateHealth: "degraded", regionDiversity: null, active: true },
+              { clusterId: 3, size: 7, threshold: 5, aggregateHealth: "halted", regionDiversity: null, active: false },
+            ],
+          },
+        };
+      }
+      return { via: "operator-1", result: { cluster: 1, entity: "independent" } };
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.clusters[0]?.health).toBe("healthy");
+    expect(r.data.clusters[1]?.health).toBe("degraded");
+    expect(r.data.clusters[2]?.health).toBe("offline");
+  });
+
   it("normalises an unknown health string to 'unknown'", async () => {
     mockedRpc.mockImplementation(async (method: string) => {
-      if (method === "lyth_clusters") {
+      if (method === "lyth_clusterDirectory") {
         return {
           via: "operator-1",
           result: {
@@ -210,7 +242,7 @@ describe("readClusterDirectory", () => {
       ],
     };
     mockedRpc.mockImplementation(async (method: string) => {
-      if (method === "lyth_clusters") return { via: "operator-3", result: sdkShape };
+      if (method === "lyth_clusterDirectory") return { via: "operator-3", result: sdkShape };
       return { via: "operator-3", result: { cluster: 42, entity: "independent" } };
     });
     const r = await readClusterDirectory(0, 25);
