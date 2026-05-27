@@ -392,7 +392,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     TESTNET_69420: {
       chain_id: 69420,
       genesis_hash:
-        "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
+        "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c",
     },
   };
 });
