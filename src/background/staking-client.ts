@@ -4,13 +4,15 @@
 // staking read against orphan-fork operators.
 //
 // Each read returns a `StakingResult<T>` envelope:
-//   - on transport / RPC error, falls back to MOCK_* fixtures with
-//     `ok: true, data, via: "mock"` so the popup renders the realistic
-//     architecture shape while Sprintnet is offline (Phase 7 phase-
-//     start posture);
-//   - on the few remaining chain GAPs, returns a typed mock with
-//     `via: "mock"` and a clear `// TODO: chain GAP` comment at the
-//     call site;
+//   - on transport / RPC error, returns `ok: false, reason` so the
+//     popup can render an honest "unavailable" state — per the
+//     no-mock-fallback principle
+//     (`_dev-notes/_principles/no-mock-fallbacks.md`);
+//   - a few legacy reads (delegations, delegation-history, cluster-
+//     delegators) still return `ok: true, data: { rows: [] }` on
+//     transport failure because empty-list is a legitimate chain
+//     response and the consumer can't easily distinguish "no rows
+//     exist" from "chain unreachable"; tracked for follow-up cleanup;
 //   - on protocol-shape mismatch (the chain returned something we
 //     don't recognise), returns `ok: false, reason`.
 //
@@ -25,10 +27,11 @@
 // wallet typecheck the next time the SDK rebuilds.
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { NODE_REGISTRY_CAPABILITIES } from "@monolythium/core-sdk";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
-  MOCK_CLUSTERS,
   type ClusterDelegatorsView,
   type ClusterDirectoryEntry,
   type ClusterDirectoryPage,
@@ -42,9 +45,11 @@ import {
   type DelegationsView,
   type PendingRewardsRow,
   type PendingRewardsView,
+  type ClusterServiceTiers,
   type RedemptionQueueRow,
   type RedemptionQueueView,
   type StakingResult,
+  type WalletOperatorInfo,
 } from "../shared/staking.js";
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
 
@@ -90,8 +95,25 @@ interface RawClusterEntity {
   entity?: string;
 }
 
+/** Map chain's `aggregateHealth` token vocabulary onto the wallet's
+ *  `ClusterHealth` enum. Verified 2026-05-27 against mono-core
+ *  `crates/core/runtime/src/providers.rs:6848-6854, 6905-6911` —
+ *  the chain emits exactly three values:
+ *
+ *  - `"ok"`        — live operators ≥ threshold (cluster signing normally).
+ *                    Maps to `"healthy"` for wallet UI.
+ *  - `"degraded"`  — some live operators, but below threshold.
+ *                    Maps to `"degraded"` (identity).
+ *  - `"halted"`    — zero live operators (cluster cannot reach quorum).
+ *                    Maps to `"offline"` (the closest wallet enum value).
+ *
+ *  Anything else (including the wallet's own legacy `"healthy"` /
+ *  `"offline"` tokens left over from pre-R17 code) falls through to
+ *  `"unknown"` rather than mis-rendering. */
 function normaliseHealth(raw: unknown): ClusterHealth {
-  if (raw === "healthy" || raw === "degraded" || raw === "offline") return raw;
+  if (raw === "ok" || raw === "healthy") return "healthy";
+  if (raw === "degraded") return "degraded";
+  if (raw === "halted" || raw === "offline") return "offline";
   return "unknown";
 }
 
@@ -116,15 +138,15 @@ function normaliseDirectoryEntry(
   };
 }
 
-/** Read the chain's cluster directory. Falls back to MOCK_CLUSTERS on any
- *  transport or shape error. */
+/** Read the chain's cluster directory. Propagates `ok: false` on transport
+ *  failure — see `_dev-notes/_principles/no-mock-fallbacks.md`. */
 export async function readClusterDirectory(
   page: number,
   limit: number,
 ): Promise<StakingResult<ClusterDirectoryPage>> {
   try {
     const { result, via } = await sprintnetJsonRpc<RawClusterDirectoryPage>(
-      "lyth_clusters",
+      "lyth_clusterDirectory",
       [page, limit],
     );
     if (
@@ -132,7 +154,7 @@ export async function readClusterDirectory(
       typeof result !== "object" ||
       !Array.isArray(result.clusters)
     ) {
-      return { ok: false, reason: "malformed lyth_clusters response" };
+      return { ok: false, reason: "malformed lyth_clusterDirectory response" };
     }
     // Best-effort: fan out per-cluster `lyth_getClusterEntity` so each row
     // carries its Foundation / community badge. Failures are silent —
@@ -172,19 +194,9 @@ export async function readClusterDirectory(
       },
     };
   } catch (e) {
-    // Sprintnet-offline fallback. Pre-mainnet posture: the UI renders
-    // the realistic architecture rather than empty state.
-    const _reason = (e as Error)?.message ?? "lyth_clusters unreachable";
-    void _reason;
     return {
-      ok: true,
-      via: "mock",
-      data: {
-        page,
-        limit,
-        totalClusters: MOCK_CLUSTERS.length,
-        clusters: MOCK_CLUSTERS.slice(),
-      },
+      ok: false,
+      reason: (e as Error)?.message ?? "lyth_clusterDirectory unreachable",
     };
   }
 }
@@ -288,6 +300,175 @@ export async function readClusterStatus(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Operator info — per-operator self-bond + lifecycle (R16 Task A)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SDK contract: OperatorInfoResponse from `lyth_operatorInfo`. Wire form
+// loosens every field to optional + admits string/number/bigint for the
+// bond amount (chain may emit any of those). The wallet stringifies the
+// bigint for IPC transparency.
+interface RawOperatorInfo {
+  operatorId?: string;
+  moniker?: string | null;
+  alias?: string | null;
+  bonded?: boolean;
+  bondedAmount?: string | number | bigint;
+  commissionBps?: number | null;
+  delegationCount?: number | null;
+  lifecycleState?: string;
+}
+
+/** Read per-operator info (self-bond, commission, lifecycle) via
+ *  `lyth_operatorInfo`. Wired in R16 Task A for the ClusterDetail
+ *  per-operator self-bond display (v4.1 §23.3 V4.1-BOND-0001 5,000 LYTH
+ *  chain-enforced floor). Returns `ok: false` on RPC error — per-operator
+ *  bond is unique and not mockable; the popup renders `bonded: —` for
+ *  any failed fetch. */
+export async function readOperatorInfo(
+  operatorId: string,
+): Promise<StakingResult<WalletOperatorInfo>> {
+  try {
+    const { result, via } = await sprintnetJsonRpc<RawOperatorInfo>(
+      "lyth_operatorInfo",
+      [operatorId],
+    );
+    if (
+      !result ||
+      typeof result !== "object" ||
+      typeof result.operatorId !== "string"
+    ) {
+      return { ok: false, reason: "malformed lyth_operatorInfo response" };
+    }
+    return {
+      ok: true,
+      via,
+      data: {
+        operatorId: result.operatorId,
+        moniker: typeof result.moniker === "string" ? result.moniker : null,
+        alias: typeof result.alias === "string" ? result.alias : null,
+        bonded: result.bonded === true,
+        bondedAmount: String(result.bondedAmount ?? 0),
+        commissionBps:
+          typeof result.commissionBps === "number" ? result.commissionBps : null,
+        delegationCount:
+          typeof result.delegationCount === "number"
+            ? result.delegationCount
+            : null,
+        lifecycleState:
+          typeof result.lifecycleState === "string" ? result.lifecycleState : "",
+      },
+    };
+  } catch (e) {
+    const reason = (e as Error)?.message ?? "lyth_operatorInfo unreachable";
+    return { ok: false, reason };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cluster service tiers — per-operator probe aggregation (R16 Task B)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SDK contract: ServiceProbeResponse from `lyth_getServiceProbe(peerId,
+// serviceMask)`. Probes are per-single-bit (SDK exposes
+// `isSinglePublicServiceProbeMask`); we send one probe per operator per
+// tier-bit and aggregate "any-true" across the cluster's members.
+//
+// User-facing tier subset (5 of the 9 SDK capability bits in
+// NODE_REGISTRY_CAPABILITIES). Operator-internal bits — Broadcaster,
+// WebSocket, LightClient, PublicAPI — skipped for v1.
+//
+// PING #11: long-term fix is a `ClusterDirectoryEntry.serviceTiers:
+// string[]` aggregate field on the chain side; once shipped, this whole
+// per-operator-fan-out loop drops to a single directory read.
+interface UserFacingTier {
+  readonly key: keyof Omit<ClusterServiceTiers, "anyReachable" | "probedOperators">;
+  readonly mask: number;
+}
+
+const USER_FACING_TIERS: ReadonlyArray<UserFacingTier> = [
+  { key: "rpc", mask: NODE_REGISTRY_CAPABILITIES.SERVES_RPC },
+  { key: "indexer", mask: NODE_REGISTRY_CAPABILITIES.SERVES_INDEXER },
+  { key: "archive", mask: NODE_REGISTRY_CAPABILITIES.SERVES_ARCHIVE },
+  { key: "oracle", mask: NODE_REGISTRY_CAPABILITIES.SERVES_ORACLE_WRITER },
+  { key: "bridgeRelay", mask: NODE_REGISTRY_CAPABILITIES.SERVES_BRIDGE_RELAY },
+];
+
+interface RawServiceProbe {
+  serviceMask?: number;
+  status?: string;
+}
+
+/** Probe a single operator for a single tier-bit. Returns true when the
+ *  chain reports reachable; false for any other completed status
+ *  (degraded / unreachable / unknown / null). Throws on RPC error — the
+ *  caller's `Promise.allSettled` distinguishes "probe ran and answered
+ *  non-reachable" (fulfilled false) from "probe never reached the chain"
+ *  (rejected), which the aggregator needs to compute `probedOperators`
+ *  honestly. */
+async function probeTier(
+  operatorId: string,
+  mask: number,
+): Promise<boolean> {
+  const { result } = await sprintnetJsonRpc<RawServiceProbe | null>(
+    "lyth_getServiceProbe",
+    [operatorId, mask],
+  );
+  if (!result || typeof result !== "object") return false;
+  return result.status === "reachable";
+}
+
+/** Aggregate per-operator service-tier probes into a cluster-level
+ *  ClusterServiceTiers shape via "any-true" semantics — the cluster
+ *  offers a tier if ≥1 member operator probes reachable for it.
+ *
+ *  Empty `operatorIds` returns an all-false set with `anyReachable: false`
+ *  so the popup suppresses the badge row entirely. Fan-out is
+ *  `Promise.allSettled` so one slow operator can't block aggregation. */
+export async function readClusterServiceTiers(
+  operatorIds: ReadonlyArray<string>,
+): Promise<StakingResult<ClusterServiceTiers>> {
+  const tiers: ClusterServiceTiers = {
+    rpc: false,
+    indexer: false,
+    archive: false,
+    oracle: false,
+    bridgeRelay: false,
+    anyReachable: false,
+    probedOperators: 0,
+  };
+  if (operatorIds.length === 0) {
+    return { ok: true, data: tiers };
+  }
+
+  const tasks: Promise<{ opId: string; key: UserFacingTier["key"]; reachable: boolean }>[] = [];
+  for (const opId of operatorIds) {
+    for (const tier of USER_FACING_TIERS) {
+      tasks.push(
+        probeTier(opId, tier.mask).then((reachable) => ({
+          opId,
+          key: tier.key,
+          reachable,
+        })),
+      );
+    }
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const operatorsAnswered = new Set<string>();
+  for (const s of settled) {
+    if (s.status !== "fulfilled") continue;
+    operatorsAnswered.add(s.value.opId);
+    if (s.value.reachable) {
+      tiers[s.value.key] = true;
+      tiers.anyReachable = true;
+    }
+  }
+  tiers.probedOperators = operatorsAnswered.size;
+
+  return { ok: true, data: tiers };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Delegations + cap
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -311,9 +492,13 @@ export async function readDelegations(
   wallet: string,
 ): Promise<StakingResult<DelegationsView>> {
   try {
+    // Chain validates `wallet` strictly as bech32m on every wallet-keyed
+    // lyth_* read (R17 — verified live: lyth_getDelegations("0x...")
+    // returns -32602 "wallet must be mono bech32m").
+    const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawDelegationsResponse>(
       "lyth_getDelegations",
-      [wallet],
+      [walletForChain],
     );
     if (!result || typeof result !== "object") {
       return { ok: false, reason: "malformed lyth_getDelegations response" };
@@ -461,8 +646,12 @@ export async function readDelegationHistory(
   cursor?: string,
 ): Promise<StakingResult<DelegationHistoryView>> {
   try {
+    // R17 — bech32m for wallet param (chain rejects 0x).
+    const walletForChain = userAddressForNativeRpc(wallet);
     const params: unknown[] =
-      cursor === undefined ? [wallet, limit] : [wallet, limit, cursor];
+      cursor === undefined
+        ? [walletForChain, limit]
+        : [walletForChain, limit, cursor];
     const { result, via } = await sprintnetJsonRpc<
       ReadonlyArray<RawDelegationHistoryRow>
     >("lyth_getDelegationHistory", params);
@@ -796,9 +985,11 @@ export async function readPendingRewards(
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
   try {
+    // R17 — bech32m for wallet param (chain rejects 0x).
+    const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawPendingRewardsResponse>(
       "lyth_pendingRewards",
-      [wallet],
+      [walletForChain],
     );
     if (!result || typeof result !== "object") {
       return { ok: false, reason: "malformed lyth_pendingRewards response" };
@@ -868,9 +1059,13 @@ export async function readRedemptionQueue(
   wallet: string,
 ): Promise<StakingResult<RedemptionQueueView>> {
   try {
+    // R17 — bech32m for wallet param (chain rejects 0x; this was the
+    // user-reported "wallet must be mono bech32m" error on the
+    // redemption-queue surface).
+    const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawRedemptionQueueResponse>(
       "lyth_redemptionQueue",
-      [wallet],
+      [walletForChain],
     );
     if (!result || typeof result !== "object") {
       return { ok: false, reason: "malformed lyth_redemptionQueue response" };

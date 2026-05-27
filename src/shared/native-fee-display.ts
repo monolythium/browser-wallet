@@ -7,6 +7,11 @@ import {
 } from "@monolythium/core-sdk";
 
 export const NATIVE_LYTH_DECIMALS = 8;
+// Verified 2026-05-27 against SDK 0.3.1: matches
+// @monolythium/core-sdk/dist/index.d.ts:1389 (LYTHOSHI_PER_LYTH = 100000000n)
+// + :1387-1388 (LYTH_DECIMALS / NATIVE_LYTH_DECIMALS both = 8). The v1 wire
+// format is 10^8 lythoshi per LYTH; the whitepaper §23.1 reading of 10^-18
+// is interpretive only — chain code wins per canon-hierarchy principle.
 export const LYTHOSHI_PER_LYTH = 100_000_000n;
 export const FEE_MULTIPLIER_BPS_BASE = 10_000n;
 
