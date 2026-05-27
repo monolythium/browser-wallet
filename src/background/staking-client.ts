@@ -26,6 +26,7 @@
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import { NODE_REGISTRY_CAPABILITIES } from "@monolythium/core-sdk";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
@@ -500,9 +501,13 @@ export async function readDelegations(
   wallet: string,
 ): Promise<StakingResult<DelegationsView>> {
   try {
+    // Chain validates `wallet` strictly as bech32m on every wallet-keyed
+    // lyth_* read (R17 — verified live: lyth_getDelegations("0x...")
+    // returns -32602 "wallet must be mono bech32m").
+    const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawDelegationsResponse>(
       "lyth_getDelegations",
-      [wallet],
+      [walletForChain],
     );
     if (!result || typeof result !== "object") {
       return { ok: false, reason: "malformed lyth_getDelegations response" };
@@ -650,8 +655,12 @@ export async function readDelegationHistory(
   cursor?: string,
 ): Promise<StakingResult<DelegationHistoryView>> {
   try {
+    // R17 — bech32m for wallet param (chain rejects 0x).
+    const walletForChain = userAddressForNativeRpc(wallet);
     const params: unknown[] =
-      cursor === undefined ? [wallet, limit] : [wallet, limit, cursor];
+      cursor === undefined
+        ? [walletForChain, limit]
+        : [walletForChain, limit, cursor];
     const { result, via } = await sprintnetJsonRpc<
       ReadonlyArray<RawDelegationHistoryRow>
     >("lyth_getDelegationHistory", params);
@@ -985,9 +994,11 @@ export async function readPendingRewards(
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
   try {
+    // R17 — bech32m for wallet param (chain rejects 0x).
+    const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawPendingRewardsResponse>(
       "lyth_pendingRewards",
-      [wallet],
+      [walletForChain],
     );
     if (!result || typeof result !== "object") {
       return { ok: false, reason: "malformed lyth_pendingRewards response" };
@@ -1057,9 +1068,13 @@ export async function readRedemptionQueue(
   wallet: string,
 ): Promise<StakingResult<RedemptionQueueView>> {
   try {
+    // R17 — bech32m for wallet param (chain rejects 0x; this was the
+    // user-reported "wallet must be mono bech32m" error on the
+    // redemption-queue surface).
+    const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawRedemptionQueueResponse>(
       "lyth_redemptionQueue",
-      [wallet],
+      [walletForChain],
     );
     if (!result || typeof result !== "object") {
       return { ok: false, reason: "malformed lyth_redemptionQueue response" };
