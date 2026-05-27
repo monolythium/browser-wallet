@@ -370,22 +370,16 @@ vi.mock("./connected-sites.js", () => ({
   clearAllConnectedSites: vi.fn(async () => undefined),
 }));
 
-vi.mock("@monolythium/core-sdk/ethers", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@monolythium/core-sdk/ethers")>();
-  return {
-    ...actual,
-    MonolythiumProvider: class {
-      async _send() {
-        return [];
-      }
-    },
-  };
-});
-
 vi.mock("@monolythium/core-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@monolythium/core-sdk")>();
   return {
     ...actual,
+    RpcClient: class {
+      constructor(public readonly endpoint: string) {}
+      async call() {
+        return null;
+      }
+    },
     MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
     verifyNoEvmFinalityEvidenceThreshold:
       mockVerifyNoEvmFinalityEvidenceThreshold,
@@ -398,7 +392,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     TESTNET_69420: {
       chain_id: 69420,
       genesis_hash:
-        "0x325057e476b7be3730a22c92b9289f4a14a3414a2a081bd279b43eeba36b0075",
+        "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c",
     },
   };
 });

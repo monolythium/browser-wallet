@@ -84,6 +84,89 @@ type Action = "delegate" | "undelegate" | "redelegate" | "claim";
  *  allocation submits (full batch lands as a follow-up). */
 type EntryMode = "manual" | AutovoteMode;
 
+// R18 — sessionStorage persistence so a round-trip through ClusterDetail
+// restores the user's prior selection + step (App.tsx routes Stake and
+// ClusterDetail as sibling screens, so Stake unmounts on navigation).
+// Cleared by App.tsx when the user explicitly leaves Stake via onBack.
+const STAKE_STATE_KEY = "monowallet_stake_state";
+
+interface PersistedStakeState {
+  step: Step;
+  selectedClusterId: number | null;
+  redelegateDstClusterId: number | null;
+  amountStr: string;
+  action: Action;
+  entryMode: EntryMode;
+  autovoteTargetBps: number;
+}
+
+/** Steps that are safe to restore from sessionStorage. Terminal /
+ *  in-flight steps (submitting, success, error) reset to "pick" so the
+ *  user doesn't land on a stale terminal screen after navigation. */
+const RESTORABLE_STEPS: ReadonlySet<Step> = new Set<Step>([
+  "pick",
+  "form",
+  "unstake-form",
+  "redelegate-form",
+  "redelegate-dst-pick",
+  "preview",
+]);
+
+function loadStakeState(): PersistedStakeState | null {
+  try {
+    const raw = sessionStorage.getItem(STAKE_STATE_KEY);
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedStakeState>;
+    if (
+      typeof parsed.step !== "string" ||
+      typeof parsed.amountStr !== "string"
+    ) {
+      return null;
+    }
+    const step = RESTORABLE_STEPS.has(parsed.step as Step)
+      ? (parsed.step as Step)
+      : "pick";
+    return {
+      step,
+      selectedClusterId:
+        typeof parsed.selectedClusterId === "number"
+          ? parsed.selectedClusterId
+          : null,
+      redelegateDstClusterId:
+        typeof parsed.redelegateDstClusterId === "number"
+          ? parsed.redelegateDstClusterId
+          : null,
+      amountStr: parsed.amountStr,
+      action: (parsed.action as Action) ?? "delegate",
+      entryMode: (parsed.entryMode as EntryMode) ?? "manual",
+      autovoteTargetBps:
+        typeof parsed.autovoteTargetBps === "number"
+          ? parsed.autovoteTargetBps
+          : 5000,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveStakeState(state: PersistedStakeState): void {
+  try {
+    sessionStorage.setItem(STAKE_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // sessionStorage may be unavailable in some environments (private
+    // mode quota, etc.); silent fail is fine — state-loss across nav is
+    // a UX regression, not a correctness issue.
+  }
+}
+
+export function clearStakeState(): void {
+  try {
+    sessionStorage.removeItem(STAKE_STATE_KEY);
+  } catch {
+    // see saveStakeState — silent fail is fine.
+  }
+}
+
 /** Parse an `0x...` hex string into 32 bytes for the autovote seed. */
 function hexToBytes(hex: string): Uint8Array | null {
   const stripped = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
@@ -126,6 +209,11 @@ export function Stake({
   onShowClusterDetail,
   onBack,
 }: StakeProps) {
+  // R18 — restore prior Stake state when the user returns from a sibling
+  // screen (ClusterDetail). Deep-link props always win over the restored
+  // value so Delegations → "Unstake" still pre-positions correctly.
+  const savedState = loadStakeState();
+
   // Initial step depends on whether the parent has deep-linked us into
   // a specific action. Delegations → "Unstake" on cluster N opens us
   // at `unstake-form` with the cluster pre-selected.
@@ -134,12 +222,11 @@ export function Stake({
       ? "unstake-form"
       : initialAction === "redelegate"
         ? "redelegate-form"
-        : "pick";
+        : (savedState?.step ?? "pick");
   const [step, setStep] = useState<Step>(initialStep);
 
   // Cluster directory state.
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
-  const [clustersMock, setClustersMock] = useState(false);
   const [clustersError, setClustersError] = useState<string | null>(null);
 
   // Delegation context state.
@@ -160,14 +247,22 @@ export function Stake({
   const tradingInterfaceOn = useFeature("TRADING_INTERFACE");
 
   // Selection + form state.
-  const [entryMode, setEntryMode] = useState<EntryMode>("manual");
-  const [selectedClusterId, setSelectedClusterId] = useState<number | null>(
-    initialClusterId ?? null,
+  const [entryMode, setEntryMode] = useState<EntryMode>(
+    savedState?.entryMode ?? "manual",
   );
-  const [redelegateDstClusterId, setRedelegateDstClusterId] = useState<number | null>(null);
-  const [amountStr, setAmountStr] = useState("");
-  const [action, setAction] = useState<Action>(initialAction ?? "delegate");
-  const [autovoteTargetBps, setAutovoteTargetBps] = useState<number>(5000);
+  const [selectedClusterId, setSelectedClusterId] = useState<number | null>(
+    initialClusterId ?? savedState?.selectedClusterId ?? null,
+  );
+  const [redelegateDstClusterId, setRedelegateDstClusterId] = useState<number | null>(
+    savedState?.redelegateDstClusterId ?? null,
+  );
+  const [amountStr, setAmountStr] = useState(savedState?.amountStr ?? "");
+  const [action, setAction] = useState<Action>(
+    initialAction ?? savedState?.action ?? "delegate",
+  );
+  const [autovoteTargetBps, setAutovoteTargetBps] = useState<number>(
+    savedState?.autovoteTargetBps ?? 5000,
+  );
   const [autovoteSeed, setAutovoteSeed] = useState<Uint8Array | null>(null);
   const [autovotePlan, setAutovotePlan] = useState<AutovoteResult | null>(null);
 
@@ -181,6 +276,29 @@ export function Stake({
     via: string | null;
   } | null>(null);
 
+  // R18 — persist key form / selection state on every change so a
+  // round-trip through ClusterDetail returns the user to the same
+  // place. App.tsx clears the key on explicit Stake exit.
+  useEffect(() => {
+    saveStakeState({
+      step,
+      selectedClusterId,
+      redelegateDstClusterId,
+      amountStr,
+      action,
+      entryMode,
+      autovoteTargetBps,
+    });
+  }, [
+    step,
+    selectedClusterId,
+    redelegateDstClusterId,
+    amountStr,
+    action,
+    entryMode,
+    autovoteTargetBps,
+  ]);
+
   // Load the cluster directory on mount.
   useEffect(() => {
     let cancelled = false;
@@ -192,7 +310,6 @@ export function Stake({
           return;
         }
         setClusters(r.data.clusters.slice());
-        setClustersMock(r.via === "mock");
       } catch (e) {
         if (cancelled) return;
         setClustersError((e as Error).message ?? "directory fetch failed");
@@ -585,7 +702,6 @@ export function Stake({
                   <ClusterPicker
                     clusters={clusters}
                     selectedClusterId={selectedClusterId}
-                    isMock={clustersMock}
                     {...(onShowClusterDetail
                       ? { onShowDetails: onShowClusterDetail }
                       : {})}
@@ -655,7 +771,6 @@ export function Stake({
                 (c) => c.clusterId !== selectedClusterId,
               )}
               selectedClusterId={redelegateDstClusterId}
-              isMock={clustersMock}
               {...(onShowClusterDetail
                 ? { onShowDetails: onShowClusterDetail }
                 : {})}

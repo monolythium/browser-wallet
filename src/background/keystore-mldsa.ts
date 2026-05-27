@@ -363,7 +363,7 @@ interface VaultRecordV4 {
    *  `shared/slh-dsa-backup.ts` for the rationale + chain-GAP
    *  analysis + parameter-set choice (`slh_dsa_sha2_128s` algo id
    *  `1101`, the only currently-chain-eligible backup variant per
-   *  Law §2.9). */
+   *  Whitepaper §2.9). */
   slhDsaBackup?: SlhDsaBackup;
 }
 
@@ -1031,6 +1031,23 @@ export async function addVaultFreshV4(label?: string): Promise<{
   }
 }
 
+/** Round 13 TASK 1 — generate a fresh PQM-1 mnemonic WITHOUT
+ *  persisting any vault. The popup uses this for the in-app multi-
+ *  step new-wallet flow (show phrase → verify phrase → commit). The
+ *  returned mnemonic lives in popup-side React state until the user
+ *  verifies it, at which point the existing addVaultImportV4 path
+ *  takes over for the actual commit. Requires the container to be
+ *  unlocked so the SW context has the keystore available for the
+ *  follow-up commit — generating while locked would let a stale
+ *  mnemonic leak into a state where it could be committed against
+ *  the wrong container after an unlock. */
+export function generateFreshMnemonicV4(): string {
+  if (!mekCache) throw new Error("container is locked");
+  return generatePqm1Mnemonic((out) => {
+    out.set(randomBytes(out.length));
+  });
+}
+
 /** Import a user-supplied PQM-1 mnemonic and add it to the container.
  *  Requires the container to be unlocked. Rejects if the derived
  *  address already matches a vault in the container (duplicate seed).
@@ -1054,8 +1071,8 @@ export async function addVaultImportV4(
  *  executed proposals on-chain) and attaches the supplied signer
  *  roster + threshold as the M-of-N policy.
  *
- *  Whitepaper §28.5 Q70 — N up to {@link MAX_SIGNERS} (16); threshold
- *  in [1, N]. The wallet enforces the policy at the IPC boundary;
+ *  Whitepaper §28.5 (wallet portfolio / multisig policy) — N up to
+ *  {@link MAX_SIGNERS} (16); threshold in [1, N]. The wallet enforces the policy at the IPC boundary;
  *  chain enforcement is a GAP (`TODO: chain GAP — needs Nayiem`),
  *  see shared/multisig.ts module doc-block for the off-chain story.
  *

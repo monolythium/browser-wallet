@@ -43,18 +43,6 @@ export const DEFAULT_SIGNING_ACTIVITY_AUTHORITY = 0;
  *  large enough to render a meaningful "latest entry" view. */
 export const DEFAULT_SIGNING_ACTIVITY_LIMIT = 20;
 
-const MOCK_ACTIVITY: OperatorSigningActivity = {
-  schemaVersion: 1,
-  authorityIndex: DEFAULT_SIGNING_ACTIVITY_AUTHORITY,
-  currentRound: 0,
-  limit: DEFAULT_SIGNING_ACTIVITY_LIMIT,
-  supportedStatuses: [],
-  reservedStatuses: [],
-  entries: [],
-};
-
-export const SIGNING_ACTIVITY_PLACEHOLDER: Readonly<OperatorSigningActivity> = MOCK_ACTIVITY;
-
 export interface ReadSigningActivityArgs {
   authorityIndex?: number;
   limit?: number;
@@ -72,6 +60,21 @@ export async function readSigningActivity(
       ? Math.floor(args.limit)
       : DEFAULT_SIGNING_ACTIVITY_LIMIT;
 
+  // Empty sentinel for `withChainFallback`'s required `mockValue` slot.
+  // ChainSigningHealthCard (Operators.tsx) hides itself on any non-`live`
+  // outcome so this never reaches the UI. Per
+  // `_dev-notes/_principles/no-mock-fallbacks.md` no synthesized activity
+  // entries are exposed.
+  const noDataSentinel: OperatorSigningActivity = {
+    schemaVersion: 1,
+    authorityIndex,
+    currentRound: 0,
+    limit,
+    supportedStatuses: [],
+    reservedStatuses: [],
+    entries: [],
+  };
+
   return withChainFallback<OperatorSigningActivity>(
     async () => {
       const { result } = await sprintnetJsonRpc<OperatorSigningActivity>(
@@ -81,7 +84,7 @@ export async function readSigningActivity(
       return result;
     },
     {
-      mockValue: { ...MOCK_ACTIVITY, authorityIndex, limit },
+      mockValue: noDataSentinel,
       notLiveAs: "not-deployed",
       label: "lyth_signingActivity",
       timeoutMs: 5000,

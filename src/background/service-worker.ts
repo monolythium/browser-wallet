@@ -17,13 +17,15 @@
 //   - resolve-approval
 //   - keystore.{status, unlock, lock, create-from-new, create-from-mnemonic}
 //
-// Chain reads/writes go through `MonolythiumProvider` from
-// `@monolythium/core-sdk/ethers` — the ethers v6 shim. The shim re-uses the SDK's
-// JSON-RPC transport (no raw fetch in this file), so any future SDK transport
-// feature (auth headers, ws upgrade, registry-aware routing) lights up for the
-// wallet automatically.
+// Chain reads use `RpcClient` from `@monolythium/core-sdk` (root export).
+// Sprintnet flows route through `sprintnetJsonRpc()` against the native
+// `lyth_*` namespace directly. User-added chains use the same `RpcClient`
+// transport keyed on their declared RPC URL. Per mono-core `b2f0c498`,
+// the chain no longer serves `eth_call`, `eth_estimateGas`,
+// `eth_sendRawTransaction`, or the six polling-filter methods; the wallet
+// dispatcher rejects those at the boundary with EIP-1193 code 4200.
 
-import { MonolythiumProvider } from "@monolythium/core-sdk/ethers";
+import { RpcClient } from "@monolythium/core-sdk";
 import {
   addressToTypedBech32,
   getNoEvmReceiptTrustPolicy,
@@ -92,6 +94,7 @@ import {
   renameVaultV4,
   addVaultFreshV4,
   addVaultImportV4,
+  generateFreshMnemonicV4,
   wipeContainerV4,
   // Phase 8 multisig surface (Commit 1).
   addVaultMultisigV4,
@@ -204,6 +207,7 @@ import {
   type NameCache,
 } from "../shared/name-resolution.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   submitEncryptedMlDsaTx,
   sprintnetJsonRpc,
@@ -242,7 +246,9 @@ import {
 import {
   readClusterDelegators,
   readClusterDirectory,
+  readClusterServiceTiers,
   readClusterStatus,
+  readOperatorInfo,
   readDelegationHistory,
   readDelegations,
   readDelegationCap,
@@ -568,13 +574,14 @@ interface NetInfo {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-// Canonical chain id for the LythiumDAG-BFT testnet (Law §13.1, mirrored by
-// the SDK's `MONOLYTHIUM_TESTNET_CHAIN_ID`). Stored as the upper-cased hex
-// quantity so chain-registry lookups don't drift on casing.
+// Canonical chain id for the LythiumDAG-BFT testnet (Whitepaper §13,
+// mirrored by the SDK's `MONOLYTHIUM_TESTNET_CHAIN_ID`). Stored as the
+// upper-cased hex quantity so chain-registry lookups don't drift on
+// casing.
 const TESTNET_CHAIN_ID_HEX =
   "0x" + MONOLYTHIUM_TESTNET_CHAIN_ID.toString(16).toUpperCase(); // 0x10F2C
 
-// Built-in chains derived from networks.ts. v4.0 ships Sprintnet only;
+// Built-in chains derived from networks.ts. v4.1 ships Sprintnet only;
 // user-added chains via `wallet_addEthereumChain` live in `userChains`
 // (loaded from chrome.storage at boot) and are merged at lookup time.
 const BUILTIN_CHAINS: Record<string, NetInfo> = Object.fromEntries(
@@ -1050,57 +1057,37 @@ const ERR_CHAIN_NOT_ADDED = 4902;
 const ERR_INTERNAL = -32603;
 
 /**
- * Build a `MonolythiumProvider` for the given chain. The provider is the
- * ethers v6 shim from `@monolythium/core-sdk` and re-uses the SDK's transport,
- * so every JSON-RPC call benefits from the SDK's error envelope handling.
- *
- * We keep an in-memory cache keyed by `<chainId, rpcUrl>` so each chain reuses
- * a single transport across calls — the service worker rebuilds the cache on
- * cold start, which is fine because the underlying transport holds no state
- * beyond the endpoint URL.
+ * Build an `RpcClient` for the given chain. We keep an in-memory cache keyed
+ * by `<chainId, rpcUrl>` so each chain reuses a single transport across
+ * calls — the service worker rebuilds the cache on cold start, which is
+ * fine because the underlying transport holds no state beyond the endpoint
+ * URL.
  */
-const providerCache = new Map<string, MonolythiumProvider>();
+const rpcClientCache = new Map<string, RpcClient>();
 
-function providerFor(chainId: string): MonolythiumProvider {
+function rpcClientFor(chainId: string): RpcClient {
   const net = lookupChain(chainId);
   if (!net) throw new Error(`unknown chain ${chainId}`);
   const key = `${chainId}|${net.rpc}`;
-  let provider = providerCache.get(key);
-  if (!provider) {
-    provider = new MonolythiumProvider(net.rpc, {
-      network: { chainId: BigInt(net.chainIdNum), name: net.name },
-    });
-    providerCache.set(key, provider);
+  let client = rpcClientCache.get(key);
+  if (!client) {
+    client = new RpcClient(net.rpc);
+    rpcClientCache.set(key, client);
   }
-  return provider;
+  return client;
 }
 
 /**
- * Send a single JSON-RPC method through the SDK transport that the
- * `MonolythiumProvider` uses. Surfaces `{ result }` / `{ error }` from the
- * provider's `_send` exactly as a JSON-RPC server would, then unwraps to a
- * native value or throws.
+ * Send a single JSON-RPC method via `RpcClient.call`. Thin wrapper that
+ * exists so call sites read uniformly across the file; for typed reads the
+ * `RpcClient` ethX/lythX/netX helpers are preferred over this escape hatch.
  */
-async function rpcSend<T>(
-  provider: MonolythiumProvider,
+function rpcSend<T>(
+  client: RpcClient,
   method: string,
   params: unknown[],
 ): Promise<T> {
-  const [response] = await provider._send({
-    id: 1,
-    jsonrpc: "2.0",
-    method,
-    params,
-  });
-  if (!response) {
-    throw new Error(`provider returned no response for ${method}`);
-  }
-  if ("error" in response && response.error) {
-    const e = new Error(response.error.message ?? `rpc error ${method}`) as Error & { code?: number };
-    e.code = response.error.code;
-    throw e;
-  }
-  return (response as { result: T }).result;
+  return client.call<T>(method, params);
 }
 
 async function sprintnetTransactionCountHex(address: string): Promise<string> {
@@ -1140,12 +1127,6 @@ async function sprintnetExecutionUnitPriceQuoteHex(): Promise<ExecutionUnitPrice
 
 async function sprintnetExecutionUnitPriceHex(): Promise<string> {
   return (await sprintnetExecutionUnitPriceQuoteHex()).executionUnitPriceHex;
-}
-
-function userAddressForNativeRpc(address: string): string {
-  return address.startsWith("0x") || address.startsWith("0X")
-    ? addressToTypedBech32("user", address)
-    : address;
 }
 
 function rpcQuantityToHex(value: number | string | bigint, field: string): string {
@@ -1615,6 +1596,24 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return err(4200, "eth_sendRawTransaction is not supported by this wallet");
     }
 
+    // Chain retired EVM simulation + polling filters per mono-core
+    // b2f0c498 (v4.1 §22.9). Reject at the wallet boundary with 4200
+    // instead of letting the call hit the chain just to get
+    // MethodNotFound — friendlier error message, faster round-trip.
+    case "eth_call":
+    case "eth_estimateGas":
+    case "eth_newFilter":
+    case "eth_newBlockFilter":
+    case "eth_newPendingTransactionFilter":
+    case "eth_uninstallFilter":
+    case "eth_getFilterChanges":
+    case "eth_getFilterLogs": {
+      return err(
+        4200,
+        `${method} is unavailable on Monolythium — chain retired EVM simulation/polling-filters per v4.1 §22.9`,
+      );
+    }
+
     case "wallet_switchEthereumChain": {
       const p = Array.isArray(params) ? (params[0] as { chainId?: string } | undefined) : undefined;
       const requested = p?.chainId;
@@ -1726,9 +1725,13 @@ function parseTypedData(raw: string): TypedDataEnvelope | null {
 }
 
 /**
- * Pre-populate the `SendTxView` shown on the approval popup. We attempt every
- * RPC in parallel so the popup opens fast; an individual failure leaves that
- * field `null` and the UI surfaces the gap rather than blocking approval.
+ * Pre-populate the `SendTxView` shown on the approval popup. Per mono-core
+ * `b2f0c498` + v4.1 §22.9, no on-chain simulation is available — the chain
+ * retired `eth_call` and `eth_estimateGas`. The approval view shows declared
+ * intent (recipient, value, calldata, fee) without a simulated outcome.
+ * Fee and nonce reads still go through the chain's curated passive surface
+ * (`eth_gasPrice` / `eth_getTransactionCount`) or the Sprintnet native
+ * helpers when running against a Sprintnet operator.
  */
 async function buildSendTxView(
   txReq: EthSendTransactionRequest,
@@ -1747,56 +1750,27 @@ async function buildSendTxView(
   };
   if (!net) return view;
 
-  const provider = providerFor(chainId);
+  const client = rpcClientFor(chainId);
   const fromAddr =
     txReq.from ?? getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "0x0000000000000000000000000000000000000000";
 
-  const callShape = {
-    from: fromAddr,
-    ...(txReq.to !== undefined ? { to: txReq.to } : {}),
-    ...(txReq.value !== undefined ? { value: txReq.value } : {}),
-    ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-  };
-
-  type SimResult = SendTxView["simulation"];
-  const simPromise: Promise<SimResult> =
-    txReq.data && txReq.data !== "0x" && txReq.data.length > 2
-      ? rpcSend<string>(provider, "eth_call", [callShape, "latest"])
-          .then(
-            (r): SimResult => ({ success: true, returnData: r ?? "0x" }),
-          )
-          .catch(
-            (e: Error): SimResult => ({
-              success: false,
-              error: e.message ?? "revert",
-            }),
-          )
-      : Promise.resolve(null);
-
-  const [executionUnitLimitHex, pricePerExecutionUnitLythoshiHex, nonce, sim] = await Promise.all([
-    view.executionUnitLimitHex != null
-      ? Promise.resolve(view.executionUnitLimitHex)
-      : rpcSend<string>(provider, "eth_estimateGas", [callShape])
-          .catch(() => null as string | null),
+  const [pricePerExecutionUnitLythoshiHex, nonce] = await Promise.all([
     view.pricePerExecutionUnitLythoshiHex != null
       ? Promise.resolve(view.pricePerExecutionUnitLythoshiHex)
       : (chainRequiresMlDsa(chainId)
           ? sprintnetExecutionUnitPriceHex()
-          : rpcSend<string>(provider, "eth_gasPrice", []))
+          : rpcSend<string>(client, "eth_gasPrice", []))
           .catch(() => null as string | null),
     view.nonce != null
       ? Promise.resolve(view.nonce)
       : (chainRequiresMlDsa(chainId)
           ? sprintnetTransactionCountHex(fromAddr)
-          : rpcSend<string>(provider, "eth_getTransactionCount", [fromAddr, "pending"]))
+          : rpcSend<string>(client, "eth_getTransactionCount", [fromAddr, "pending"]))
           .catch(() => null as string | null),
-    simPromise,
   ]);
 
-  view.executionUnitLimitHex = executionUnitLimitHex;
   view.pricePerExecutionUnitLythoshiHex = pricePerExecutionUnitLythoshiHex;
   view.nonce = nonce;
-  view.simulation = sim;
   return view;
 }
 
@@ -1894,8 +1868,8 @@ async function suggestFee(chainIdHex: string): Promise<{
       gasLimit: SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
     };
   }
-  const provider = providerFor(chainIdHex);
-  const gasPriceHex = await rpcSend<string>(provider, "eth_gasPrice", []);
+  const client = rpcClientFor(chainIdHex);
+  const gasPriceHex = await rpcSend<string>(client, "eth_gasPrice", []);
   return {
     baseFeePerGas: gasPriceHex,
     maxPriorityFeePerGas: gasPriceHex,
@@ -3728,6 +3702,14 @@ async function fetchIndexerSnapshot(
   _chainIdHex: string,
   options: FetchIndexerSnapshotOptions,
 ): Promise<IndexerSnapshotRaw> {
+  // R17 — chain validates wallet/address params strictly as bech32m
+  // on every user-keyed lyth_* read (verified live:
+  // lyth_getAddressActivity("0x...") -> -32602 wallet must be mono
+  // bech32m). Convert once at the top of the snapshot fetch and reuse
+  // for the 4 direct chain calls below. The helper calls
+  // (readMrcAccountLookup / readNativeAgentStateLookup) do their own
+  // address normalisation internally.
+  const addressForChain = userAddressForNativeRpc(address);
   const [
     tokenBalances,
     bridgeRoutes,
@@ -3737,7 +3719,7 @@ async function fetchIndexerSnapshot(
     delegationHistory,
     addressActivity,
   ] = await Promise.all([
-    settleSprintnetRpc<unknown>("lyth_getTokenBalances", [address]),
+    settleSprintnetRpc<unknown>("lyth_getTokenBalances", [addressForChain]),
     readBridgeRoutes(),
     options.includeMrcAccount
       ? readMrcAccountLookup(address)
@@ -3745,9 +3727,9 @@ async function fetchIndexerSnapshot(
           value: null,
         }),
     readNativeAgentStateLookup(address),
-    settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [address]),
-    settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [address, 20]),
-    settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [address, 30]),
+    settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
+    settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [addressForChain, 20]),
+    settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [addressForChain, 30]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
@@ -4981,6 +4963,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           mnemonic: r.mnemonic,
           address: r.address,
         };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "vault-generate-fresh-mnemonic": {
+      // Round 13 TASK 1 — ephemeral mnemonic generation for the in-app
+      // multi-step new-wallet flow. Returns the mnemonic WITHOUT
+      // persisting any vault; the popup holds it in React state for
+      // the show-phrase + verify-phrase steps and commits via
+      // `vault-add-import` only after the user verifies the phrase.
+      // Cancellation in the popup discards the mnemonic with no
+      // chain-storage side-effects.
+      try {
+        const mnemonic = generateFreshMnemonicV4();
+        return { ok: true, mnemonic };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
@@ -6392,7 +6389,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // operator-with-failover path in `sprintnetJsonRpc`, where max()
       // would not be meaningful.
       //
-      // Every other chain id flows through `providerFor` so user-added
+      // Every other chain id flows through `rpcClientFor` so user-added
       // chains via wallet_addEthereumChain just work; those use the
       // standard `eth_getBalance` hex-string return.
       const p = message.payload as { address?: string; chainIdHex?: string };
@@ -6428,54 +6425,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           );
           return { ok: true, balanceHex };
         }
-        const provider = providerFor(p.chainIdHex);
-        const balanceHex = await rpcSend<string>(provider, "eth_getBalance", [
+        const client = rpcClientFor(p.chainIdHex);
+        const balanceHex = await rpcSend<string>(client, "eth_getBalance", [
           p.address,
           "latest",
         ]);
         return { ok: true, balanceHex };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
-    }
-    case "wallet-eth-call": {
-      // Phase 5 Commit 6: read-only `eth_call` proxy for popup consumers
-      // that need to query EVM contracts without instantiating their own
-      // RPC client. Today's consumer is the NFT tab — `nft-client.ts`
-      // helpers (ownerOf, balanceOf, supportsInterface, tokenURI) all
-      // route through the popup's `IpcEthCaller` which lands here.
-      // Same Sprintnet operator-failover routing as `wallet-balance`;
-      // other chains flow through `providerFor` so user-added EVM chains
-      // (`wallet_addEthereumChain`) still work uniformly.
-      const p = message.payload as {
-        to?: string;
-        data?: string;
-        chainIdHex?: string;
-      };
-      if (
-        typeof p?.to !== "string" ||
-        typeof p?.data !== "string" ||
-        typeof p?.chainIdHex !== "string"
-      ) {
-        return { ok: false, reason: "missing to, data, or chainIdHex" };
-      }
-      try {
-        if (chainRequiresMlDsa(p.chainIdHex)) {
-          const { result } = await sprintnetJsonRpc<string>("eth_call", [
-            { to: p.to, data: p.data },
-            "latest",
-          ]);
-          if (typeof result !== "string") {
-            return { ok: false, reason: "unexpected eth_call result shape" };
-          }
-          return { ok: true, result };
-        }
-        const provider = providerFor(p.chainIdHex);
-        const result = await rpcSend<string>(provider, "eth_call", [
-          { to: p.to, data: p.data },
-          "latest",
-        ]);
-        return { ok: true, result };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
@@ -7344,6 +7299,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing clusterId" };
       }
       return readClusterStatus(p.clusterId);
+    }
+    case "staking-operator-info": {
+      const p = message.payload as { operatorId?: string } | undefined;
+      if (typeof p?.operatorId !== "string") {
+        return { ok: false, reason: "missing operatorId" };
+      }
+      return readOperatorInfo(p.operatorId);
+    }
+    case "staking-cluster-service-tiers": {
+      const p = message.payload as { operatorIds?: ReadonlyArray<string> } | undefined;
+      if (!Array.isArray(p?.operatorIds)) {
+        return { ok: false, reason: "missing operatorIds" };
+      }
+      const valid = p.operatorIds.filter((id): id is string => typeof id === "string");
+      return readClusterServiceTiers(valid);
     }
     case "staking-delegations": {
       const p = message.payload as { wallet?: string } | undefined;

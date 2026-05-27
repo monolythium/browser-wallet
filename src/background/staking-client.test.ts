@@ -5,10 +5,15 @@
 //      typed StakingResult envelope (cluster-directory row count
 //      preserved, regions array passed through, entity stitched in
 //      via the second `lyth_getClusterEntity` lookup).
-//   2. Sprintnet-offline fallback: when `sprintnetJsonRpc` throws,
-//      readClusterDirectory + readDelegations + readDelegationCap
-//      all serve the MOCK fixtures rather than failing the popup
-//      render (`via: "mock"`).
+//   2. Sprintnet-offline behaviour:
+//      - readClusterDirectory propagates `ok: false` (no MOCK_CLUSTERS
+//        fallback — per `_dev-notes/_principles/no-mock-fallbacks.md`,
+//        R18);
+//      - readDelegations / readDelegationHistory / readClusterDelegators
+//        still return `ok: true, data: { rows: [] }` because empty is
+//        a legitimate chain response;
+//      - readDelegationCap retains its synthetic §23.6 fallback (tracked
+//        for follow-up review under the no-mock principle).
 //   3. Malformed-response handling: a well-formed-transport but
 //      missing-required-fields response yields `ok: false, reason`.
 //
@@ -20,6 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ClusterDirectoryPageResponse,
   ClusterStatusResponse,
+  OperatorInfoResponse,
 } from "@monolythium/core-sdk";
 
 // Stub the tx-mldsa dispatch surface; every staking read goes through
@@ -32,15 +38,18 @@ import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import {
   readClusterDelegators,
   readClusterDirectory,
+  readClusterServiceTiers,
   readClusterStatus,
   readDelegationCap,
   readDelegationHistory,
   readDelegations,
+  readOperatorInfo,
   readPendingRewards,
   readRedemptionQueue,
 } from "./staking-client.js";
-import { MOCK_CLUSTERS, MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
+import { MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
 
 const mockedRpc = sprintnetJsonRpc as unknown as ReturnType<typeof vi.fn>;
 
@@ -77,9 +86,9 @@ afterEach(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("readClusterDirectory", () => {
-  it("normalises a well-formed lyth_clusters page + stitches entity flags", async () => {
+  it("normalises a well-formed lyth_clusterDirectory page + stitches entity flags", async () => {
     mockedRpc.mockImplementation(async (method: string, params: unknown[]) => {
-      if (method === "lyth_clusters") {
+      if (method === "lyth_clusterDirectory") {
         return {
           via: "operator-2",
           result: {
@@ -130,19 +139,12 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[0]?.name).toBeNull();
   });
 
-  it("falls back to MOCK_CLUSTERS when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
+  it("propagates ok:false when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
     mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
     const r = await readClusterDirectory(0, 25);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.via).toBe("mock");
-    expect(r.data.clusters.length).toBe(MOCK_CLUSTERS.length);
-    // The mock fixtures preserve the §14 architecture shape (10 ops per
-    // cluster, 7-of-10 threshold).
-    for (const c of r.data.clusters) {
-      expect(c.size).toBe(10);
-      expect(c.threshold).toBe(7);
-    }
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("no Sprintnet operator reachable");
   });
 
   it("rejects a malformed response (missing clusters[] array)", async () => {
@@ -153,9 +155,41 @@ describe("readClusterDirectory", () => {
     expect(r.reason).toMatch(/malformed/);
   });
 
+  // R17 — chain vocabulary for `aggregateHealth` is `"ok" | "degraded" |
+  // "halted"` (verified against mono-core
+  // `crates/core/runtime/src/providers.rs:6848-6854`). Pin the mapping
+  // so a future stale-wallet vs current-chain drift surfaces as a test
+  // failure rather than a render bug.
+  it("maps chain's aggregateHealth tokens (ok/degraded/halted) onto wallet enum", async () => {
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusterDirectory") {
+        return {
+          via: "operator-1",
+          result: {
+            page: 0,
+            limit: 25,
+            totalClusters: 3,
+            clusters: [
+              { clusterId: 1, size: 7, threshold: 5, aggregateHealth: "ok", regionDiversity: null, active: true },
+              { clusterId: 2, size: 7, threshold: 5, aggregateHealth: "degraded", regionDiversity: null, active: true },
+              { clusterId: 3, size: 7, threshold: 5, aggregateHealth: "halted", regionDiversity: null, active: false },
+            ],
+          },
+        };
+      }
+      return { via: "operator-1", result: { cluster: 1, entity: "independent" } };
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.clusters[0]?.health).toBe("healthy");
+    expect(r.data.clusters[1]?.health).toBe("degraded");
+    expect(r.data.clusters[2]?.health).toBe("offline");
+  });
+
   it("normalises an unknown health string to 'unknown'", async () => {
     mockedRpc.mockImplementation(async (method: string) => {
-      if (method === "lyth_clusters") {
+      if (method === "lyth_clusterDirectory") {
         return {
           via: "operator-1",
           result: {
@@ -207,7 +241,7 @@ describe("readClusterDirectory", () => {
       ],
     };
     mockedRpc.mockImplementation(async (method: string) => {
-      if (method === "lyth_clusters") return { via: "operator-3", result: sdkShape };
+      if (method === "lyth_clusterDirectory") return { via: "operator-3", result: sdkShape };
       return { via: "operator-3", result: { cluster: 42, entity: "independent" } };
     });
     const r = await readClusterDirectory(0, 25);
@@ -262,6 +296,36 @@ describe("readClusterStatus", () => {
     expect(r.ok).toBe(false);
   });
 
+  // R18 — chain returns null for both scores until aggregation lands.
+  // Wallet must thread null straight through so the popup hides the
+  // rows entirely (per no-mock-fallback principle).
+  it("preserves null reputationScore + livenessScore from chain", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-3",
+      result: {
+        clusterId: 0,
+        threshold: 5,
+        size: 7,
+        live: 5,
+        lagging: 0,
+        offline: 0,
+        maintenance: 2,
+        members: [],
+        epoch: null,
+        round: null,
+        quorum: "ok",
+        reputationScore: null,
+        livenessScore: null,
+        lastUpdateHeight: 136812n,
+      },
+    });
+    const r = await readClusterStatus(0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.reputationScore).toBeNull();
+    expect(r.data.livenessScore).toBeNull();
+  });
+
   // Phase 7.1 — wire-contract anchor for cluster status. Same rationale
   // as the directory anchor above: constructs the strict SDK shape with
   // bigints for epoch / round / lastUpdateHeight and verifies the
@@ -294,6 +358,164 @@ describe("readClusterStatus", () => {
     expect(r.data.lastUpdateHeight).toBe("524288");
     expect(r.data.members).toHaveLength(1);
     expect(r.data.quorum).toBe("7-of-10");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readOperatorInfo (R16 Task A)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readOperatorInfo", () => {
+  it("normalises a well-formed lyth_operatorInfo response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        operatorId: "op-7",
+        moniker: "halcyon-alpha",
+        alias: null,
+        chainAddress: "0x" + "ab".repeat(20),
+        bonded: true,
+        commissionBps: 500,
+        delegationCount: 12,
+        bondedAmount: "500000000000",
+        activeClusterIds: [1, 3],
+        operatorKeyFingerprint: "fp-1",
+        blsKeyFingerprint: "fp-bls",
+        lifecycleState: "active",
+        capability: {},
+      },
+    });
+    const r = await readOperatorInfo("op-7");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.operatorId).toBe("op-7");
+    expect(r.data.moniker).toBe("halcyon-alpha");
+    expect(r.data.bonded).toBe(true);
+    expect(r.data.bondedAmount).toBe("500000000000");
+    expect(r.data.commissionBps).toBe(500);
+    expect(r.data.delegationCount).toBe(12);
+    expect(r.data.lifecycleState).toBe("active");
+    expect(r.via).toBe("operator-1");
+  });
+
+  it("propagates RPC failure as ok:false (per-operator bond is unique, not mocked)", async () => {
+    mockedRpc.mockRejectedValue(new Error("timeout"));
+    const r = await readOperatorInfo("op-1");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/timeout/);
+  });
+
+  it("rejects a malformed response (missing operatorId)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { bonded: true, bondedAmount: "0" },
+    });
+    const r = await readOperatorInfo("op-x");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
+  });
+
+  // Wire-contract anchor: a strict SDK OperatorInfoResponse must parse
+  // without losing fields the wallet cares about.
+  it("parses a strict SDK OperatorInfoResponse", async () => {
+    const sdkShape: OperatorInfoResponse = {
+      operatorId: "op-strict",
+      moniker: "strict-moniker",
+      alias: "alias-1",
+      chainAddress: "0x" + "cc".repeat(20),
+      bonded: true,
+      commissionBps: 250,
+      delegationCount: 4,
+      bondedAmount: "5000" + "0".repeat(8), // 5,000 LYTH in lythoshi
+      activeClusterIds: [2],
+      operatorKeyFingerprint: null,
+      blsKeyFingerprint: null,
+      lifecycleState: "active",
+      capability: { region: "eu-west" },
+    };
+    mockedRpc.mockResolvedValue({ via: "operator-2", result: sdkShape });
+    const r = await readOperatorInfo("op-strict");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.operatorId).toBe("op-strict");
+    expect(r.data.bondedAmount).toBe("500000000000");
+    expect(r.data.commissionBps).toBe(250);
+    expect(r.data.alias).toBe("alias-1");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterServiceTiers (R16 Task B)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterServiceTiers", () => {
+  it("returns all-false + anyReachable:false for an empty operator list", async () => {
+    const r = await readClusterServiceTiers([]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.anyReachable).toBe(false);
+    expect(r.data.probedOperators).toBe(0);
+    expect(r.data.rpc).toBe(false);
+    expect(r.data.archive).toBe(false);
+    // Should NOT have called the RPC at all.
+    expect(mockedRpc).not.toHaveBeenCalled();
+  });
+
+  it("any-true aggregation: cluster offers tier when ≥1 operator reachable for that bit", async () => {
+    // op-1 reachable for RPC (mask 1) + Archive (mask 8); op-2 reachable
+    // for Indexer (mask 2). No operator reachable for Oracle (64) or
+    // BridgeRelay (128). The wallet sends one probe per (operator, tier).
+    mockedRpc.mockImplementation(
+      async (method: string, params: unknown[]) => {
+        if (method !== "lyth_getServiceProbe") {
+          throw new Error(`unexpected method ${method}`);
+        }
+        const [operatorId, mask] = params as [string, number];
+        if (operatorId === "op-1" && (mask === 1 || mask === 8)) {
+          return { via: "op-1", result: { serviceMask: mask, status: "reachable" } };
+        }
+        if (operatorId === "op-2" && mask === 2) {
+          return { via: "op-2", result: { serviceMask: mask, status: "reachable" } };
+        }
+        return { via: "op-x", result: { serviceMask: mask, status: "unreachable" } };
+      },
+    );
+    const r = await readClusterServiceTiers(["op-1", "op-2"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rpc).toBe(true);
+    expect(r.data.indexer).toBe(true);
+    expect(r.data.archive).toBe(true);
+    expect(r.data.oracle).toBe(false);
+    expect(r.data.bridgeRelay).toBe(false);
+    expect(r.data.anyReachable).toBe(true);
+    expect(r.data.probedOperators).toBe(2);
+  });
+
+  it("treats non-'reachable' statuses (degraded / unreachable / unknown) as false", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "op-x",
+      result: { serviceMask: 1, status: "degraded" },
+    });
+    const r = await readClusterServiceTiers(["op-1"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rpc).toBe(false);
+    expect(r.data.anyReachable).toBe(false);
+    // probedOperators is still set because the probes resolved
+    // (just not as "reachable").
+    expect(r.data.probedOperators).toBe(1);
+  });
+
+  it("all probes failing leaves probedOperators=0 and anyReachable=false", async () => {
+    mockedRpc.mockRejectedValue(new Error("operator unreachable"));
+    const r = await readClusterServiceTiers(["op-1", "op-2"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.anyReachable).toBe(false);
+    expect(r.data.probedOperators).toBe(0);
   });
 });
 
@@ -517,7 +739,10 @@ describe("readPendingRewards", () => {
     });
 
     const r = await readPendingRewards(wallet, [{ cluster: 999, weightBps: 1000 }]);
-    expect(mockedRpc).toHaveBeenCalledWith("lyth_pendingRewards", [wallet]);
+    // R17 — chain validates wallet param as bech32m; wallet converts before send.
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_pendingRewards", [
+      userAddressForNativeRpc(wallet),
+    ]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.via).toBe("operator-7");
@@ -711,7 +936,10 @@ describe("readRedemptionQueue", () => {
     });
 
     const r = await readRedemptionQueue(wallet);
-    expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [wallet]);
+    // R17 — chain validates wallet param as bech32m; wallet converts before send.
+    expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [
+      userAddressForNativeRpc(wallet),
+    ]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.via).toBe("operator-9");
@@ -856,7 +1084,12 @@ describe("readDelegationHistory", () => {
       return { via: "operator-1", result: [] };
     });
     await readDelegationHistory(wallet, 25, "cursor-page-2");
-    expect(receivedParams).toEqual([wallet, 25, "cursor-page-2"]);
+    // R17 — bech32m conversion applied before RPC send.
+    expect(receivedParams).toEqual([
+      userAddressForNativeRpc(wallet),
+      25,
+      "cursor-page-2",
+    ]);
   });
 
   it("omits cursor on first-page calls", async () => {
@@ -866,7 +1099,7 @@ describe("readDelegationHistory", () => {
       return { via: "operator-1", result: [] };
     });
     await readDelegationHistory(wallet, 10);
-    expect(receivedParams).toEqual([wallet, 10]);
+    expect(receivedParams).toEqual([userAddressForNativeRpc(wallet), 10]);
   });
 
   it("falls back to an empty timeline when chain is offline", async () => {
@@ -902,5 +1135,99 @@ describe("readDelegationHistory", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toMatch(/malformed/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R17 — bech32m wallet-param conversion regression
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Chain validates `wallet` strictly as bech32m on every wallet-keyed
+// lyth_* read (verified live: lyth_pendingRewards("0x...") returns
+// -32602 "wallet must be mono bech32m"). The reads listed below
+// receive an account address (typically 0x hex from the popup's
+// account list) and must convert via userAddressForNativeRpc() before
+// passing to sprintnetJsonRpc. This block pins the conversion at each
+// site so any future regression surfaces as a test failure.
+
+describe("R17 bech32m wallet-param conversion (regression)", () => {
+  // SDK's addressToTypedBech32("user", 0xhex) emits a "mono1..." prefix.
+  // We don't pin the full bech32m string (the SDK's helper is the
+  // canonical encoder) — just that the param passed to the RPC layer
+  // is NOT the raw 0x form and starts with "mono1".
+  const hexWallet = "0x" + "ab".repeat(20);
+  function captureRpcWalletParam(method: string): string | null {
+    const calls = mockedRpc.mock.calls.filter(
+      ([m]) => m === method,
+    );
+    if (calls.length === 0) return null;
+    const params = calls[0]?.[1];
+    if (!Array.isArray(params) || params.length === 0) return null;
+    const first = params[0];
+    return typeof first === "string" ? first : null;
+  }
+
+  it("readDelegations converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { wallet: hexWallet, rows: [], totalBps: 0 },
+    });
+    await readDelegations(hexWallet);
+    const sent = captureRpcWalletParam("lyth_getDelegations");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("readDelegationHistory converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: [] });
+    await readDelegationHistory(hexWallet);
+    const sent = captureRpcWalletParam("lyth_getDelegationHistory");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("readPendingRewards converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        wallet: hexWallet,
+        totalAmountLythoshi: "0",
+        settledPendingLythoshi: "0",
+        unsettledAmountLythoshi: "0",
+        autoCompound: false,
+        rows: [],
+        block: "latest",
+      },
+    });
+    await readPendingRewards(hexWallet, []);
+    const sent = captureRpcWalletParam("lyth_pendingRewards");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("readRedemptionQueue converts 0x wallet to mono1 bech32m", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { wallet: hexWallet, tickets: [], count: 0, returned: 0 },
+    });
+    await readRedemptionQueue(hexWallet);
+    const sent = captureRpcWalletParam("lyth_redemptionQueue");
+    expect(sent).not.toBeNull();
+    expect(sent).not.toBe(hexWallet);
+    expect(sent?.startsWith("mono1")).toBe(true);
+  });
+
+  it("passes already-bech32m wallet through unchanged", async () => {
+    const bech = "mono1qy7fyqqqqqqqqqqqqqqqqqqqqqqqqqqqq6kzzqx";
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { wallet: bech, rows: [], totalBps: 0 },
+    });
+    await readDelegations(bech);
+    const sent = captureRpcWalletParam("lyth_getDelegations");
+    expect(sent).toBe(bech);
   });
 });
