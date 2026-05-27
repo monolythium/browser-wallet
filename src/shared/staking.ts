@@ -75,10 +75,25 @@ export interface ClusterDirectoryPage {
 export interface ClusterMember {
   operatorId: string;
   blsPubkey: string;
-  /** Operator lifecycle state — `"active"`, `"standby"`, `"jailed"`, etc.
-   *  The chain emits this as a free-form string; the wallet renders it
-   *  pass-through and only branches on `"active"` for the consensus-
-   *  participant count. */
+  /** Operator lifecycle state — verified 2026-05-27 against mono-core
+   *  `crates/core/runtime/src/providers.rs:6195-6205`, the chain emits
+   *  exactly three tokens:
+   *
+   *  - `"active"` — currently signing (or jailed-but-expired, the
+   *     timeout-restoration path).
+   *  - `"jailed"` — in an active jail period (`Jailed { until_height }`
+   *     with `height < until_height`).
+   *  - `"offline"` — `Slashed { .. }` or `Ejected`.
+   *
+   *  No `"standby"` token exists on the chain side today (the chain's
+   *  internal `ClusterMember` is just `bls_pubkey + active: bool` —
+   *  there's no standby roster in the Rust data model). PING #11
+   *  tracks the long-term ask for a formal enum + an explicit
+   *  `standbyCount` field on `ClusterStatusResponse`.
+   *
+   *  The wallet renders the token pass-through; consumers that need
+   *  a specific colour code should map all three tokens explicitly
+   *  rather than rely on a default branch. */
   state: string;
 }
 
