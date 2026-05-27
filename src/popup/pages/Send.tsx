@@ -62,6 +62,7 @@ import {
   parseNativeHexQuantity,
   scaleByBps,
 } from "../../shared/native-fee-display";
+import { lythoshiToLythDecimal } from "../../shared/native-amount";
 
 interface SendProps {
   account: Account;
@@ -706,7 +707,7 @@ export function Send({
               <>
                 {" · balance: "}
                 <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {formatNativeLythAmount(balanceLythoshi)}
+                  {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH
                 </span>
               </>
             )}
