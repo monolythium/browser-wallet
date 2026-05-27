@@ -51,7 +51,7 @@
 //    address). `lookup(address) -> (uint16, bytes, uint64)` and
 //    `hasEmergencyKey(address) -> bool` are the view paths.
 //
-//  - Family eligibility (Law §2.9): only `HashOnly` family algos
+//  - Family eligibility (Whitepaper §2.9): only `HashOnly` family algos
 //    are accepted as backups; lattice algos (ML-DSA, Falcon, Hybrid)
 //    are rejected with `AlgoSameFamily`. Classical algos (secp256k1,
 //    Ed25519, BLS, WebAuthn) are rejected with `UnsupportedAlgo`.

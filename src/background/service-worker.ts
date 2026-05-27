@@ -571,13 +571,14 @@ interface NetInfo {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-// Canonical chain id for the LythiumDAG-BFT testnet (Law §13.1, mirrored by
-// the SDK's `MONOLYTHIUM_TESTNET_CHAIN_ID`). Stored as the upper-cased hex
-// quantity so chain-registry lookups don't drift on casing.
+// Canonical chain id for the LythiumDAG-BFT testnet (Whitepaper §13,
+// mirrored by the SDK's `MONOLYTHIUM_TESTNET_CHAIN_ID`). Stored as the
+// upper-cased hex quantity so chain-registry lookups don't drift on
+// casing.
 const TESTNET_CHAIN_ID_HEX =
   "0x" + MONOLYTHIUM_TESTNET_CHAIN_ID.toString(16).toUpperCase(); // 0x10F2C
 
-// Built-in chains derived from networks.ts. v4.0 ships Sprintnet only;
+// Built-in chains derived from networks.ts. v4.1 ships Sprintnet only;
 // user-added chains via `wallet_addEthereumChain` live in `userChains`
 // (loaded from chrome.storage at boot) and are merged at lookup time.
 const BUILTIN_CHAINS: Record<string, NetInfo> = Object.fromEntries(
