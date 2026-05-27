@@ -29,7 +29,6 @@ import {
 } from "./components";
 import { Receive } from "./pages/Receive";
 import { Send } from "./pages/Send";
-import { SendNft, type SendNftTarget } from "./pages/SendNft";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
@@ -116,7 +115,6 @@ type Screen =
   | "reset-wallet"
   | "receive"
   | "send"
-  | "send-nft"
   | "stake"
   | "delegations"
   | "cluster-detail"
@@ -267,11 +265,6 @@ export default function App() {
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
   // taps a row on the Networks list; cleared when they back out.
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
-  // Phase 5 Commit 7 — selected NFT for the SendNft route. Set when
-  // NftDetail's Send CTA fires; cleared when SendNft routes back to
-  // Home or the user navigates away. Lives at App-level because
-  // NftTab → NftDetail → SendNft spans the Home/page boundary.
-  const [pendingSendNft, setPendingSendNft] = useState<SendNftTarget | null>(null);
   // Phase 7 — Delegations → Stake deeplink. When a Delegations-page
   // "Unstake" / "Redelegate" CTA fires, App stores the action + the
   // source cluster so the Stake page can land directly on the form.
@@ -920,10 +913,6 @@ export default function App() {
           onOpenSend={() => setScreen("send")}
           onOpenStake={() => setScreen("stake")}
           onOpenBridge={() => setScreen("bridge")}
-          onOpenSendNft={(target) => {
-            setPendingSendNft(target);
-            setScreen("send-nft");
-          }}
           // Round 13 TASK 1 — "New wallet" from the VaultPicker
           // dropdown routes through navigateTo so the screen stack
           // pushes "home" and NewWalletFlow's onCancel returns the
@@ -1374,18 +1363,6 @@ export default function App() {
         <MultisigGovernance
           vaultId={activeVaultSummary.id}
           onBack={() => setScreen("settings")}
-        />
-      )}
-
-      {screen === "send-nft" && pendingSendNft && (
-        <SendNft
-          fromAddress={acc.addr.startsWith("0x") ? acc.addr : null}
-          chainId={activeChain.chainId}
-          nft={pendingSendNft}
-          onBack={() => {
-            setPendingSendNft(null);
-            setScreen("home");
-          }}
         />
       )}
 

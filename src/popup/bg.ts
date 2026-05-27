@@ -378,21 +378,6 @@ export async function bgWalletBalance(
   return send("wallet-balance", { address, chainIdHex });
 }
 
-/**
- * Read-only `eth_call` proxy. The popup has no RpcClient instance of
- * its own — every chain query goes through the SW's existing operator-
- * failover routing (Sprintnet) or `providerFor` (everything else).
- * The NFT tab uses this for ERC-721 / ERC-1155 ownership and metadata
- * lookups via the `IpcEthCaller` adapter in `nftEthCaller.ts`.
- */
-export async function bgEthCall(
-  to: string,
-  data: string,
-  chainIdHex: string,
-): Promise<{ ok: true; result: string } | { ok: false; reason?: string }> {
-  return send("wallet-eth-call", { to, data, chainIdHex });
-}
-
 export interface WalletAddressLabel {
   address: string;
   category: string;
@@ -865,16 +850,14 @@ export async function bgWalletSendTx(args: {
   to: string;
   valueWeiHex: string;
   chainIdHex: string;
-  /** Optional EVM calldata. Required for contract calls (NFT
-   *  safeTransferFrom, ERC-20 transfer, etc.); omit for native LYTH
+  /** Optional EVM calldata for contract calls; omit for native LYTH
    *  transfers. The SW forwards the bytes verbatim into the
-   *  ML-DSA-65 envelope path; signing semantics are unchanged.
-   *  Phase 5 Commit 7 added this field for the SendNft screen. */
+   *  ML-DSA-65 envelope path; signing semantics are unchanged. */
   data?: string;
   /** Optional execution-unit limit override (hex). When omitted the SW falls
    *  back to its native-transfer default (Sprintnet's intrinsic execution-unit
-   *  floor). NFT calldata pushes that floor well past 21k, so the
-   *  Send-NFT page passes a conservative overhead-aware estimate. */
+   *  floor). Callers passing non-trivial calldata should supply a conservative
+   *  overhead-aware estimate. */
   executionUnitLimitHex?: string;
   /** Optional encrypted-mempool class override for SDK-built action plans. */
   mempoolClass?: number;
