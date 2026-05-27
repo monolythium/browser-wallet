@@ -281,6 +281,11 @@ export default function App() {
   const [selectedCluster, setSelectedCluster] = useState<
     import("../shared/staking").ClusterDirectoryEntry | null
   >(null);
+  // R18 — track which screen opened ClusterDetail so the back button
+  // returns the user to the originating page (Stake or Delegations),
+  // not a hardcoded default. Cleared on unmount of cluster-detail.
+  const [clusterDetailEntrySource, setClusterDetailEntrySource] =
+    useState<"stake" | "delegations" | null>(null);
   const selectedChain: ChainEntry | null =
     selectedChainId !== null
       ? (chainList.find((c) => c.chainId === selectedChainId) ?? null)
@@ -1378,6 +1383,7 @@ export default function App() {
             : {})}
           onShowClusterDetail={(cluster) => {
             setSelectedCluster(cluster);
+            setClusterDetailEntrySource("stake");
             setScreen("cluster-detail");
           }}
           onBack={() => {
@@ -1407,6 +1413,7 @@ export default function App() {
           }}
           onShowClusterDetail={(cluster) => {
             setSelectedCluster(cluster);
+            setClusterDetailEntrySource("delegations");
             setScreen("cluster-detail");
           }}
         />
@@ -1417,10 +1424,10 @@ export default function App() {
           cluster={selectedCluster}
           walletAddress={acc.addr.startsWith("0x") ? acc.addr : null}
           onBack={() => {
+            const target = clusterDetailEntrySource ?? "delegations";
             setSelectedCluster(null);
-            // Most cluster-detail entry points come from Stake or
-            // Delegations; default back-target is delegations.
-            setScreen("delegations");
+            setClusterDetailEntrySource(null);
+            setScreen(target);
           }}
         />
       )}
