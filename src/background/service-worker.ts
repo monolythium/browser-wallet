@@ -6429,48 +6429,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
-    case "wallet-eth-call": {
-      // Phase 5 Commit 6: read-only `eth_call` proxy for popup consumers
-      // that need to query EVM contracts without instantiating their own
-      // RPC client. Today's consumer is the NFT tab — `nft-client.ts`
-      // helpers (ownerOf, balanceOf, supportsInterface, tokenURI) all
-      // route through the popup's `IpcEthCaller` which lands here.
-      // Same Sprintnet operator-failover routing as `wallet-balance`;
-      // other chains flow through `providerFor` so user-added EVM chains
-      // (`wallet_addEthereumChain`) still work uniformly.
-      const p = message.payload as {
-        to?: string;
-        data?: string;
-        chainIdHex?: string;
-      };
-      if (
-        typeof p?.to !== "string" ||
-        typeof p?.data !== "string" ||
-        typeof p?.chainIdHex !== "string"
-      ) {
-        return { ok: false, reason: "missing to, data, or chainIdHex" };
-      }
-      try {
-        if (chainRequiresMlDsa(p.chainIdHex)) {
-          const { result } = await sprintnetJsonRpc<string>("eth_call", [
-            { to: p.to, data: p.data },
-            "latest",
-          ]);
-          if (typeof result !== "string") {
-            return { ok: false, reason: "unexpected eth_call result shape" };
-          }
-          return { ok: true, result };
-        }
-        const client = rpcClientFor(p.chainIdHex);
-        const result = await rpcSend<string>(client, "eth_call", [
-          { to: p.to, data: p.data },
-          "latest",
-        ]);
-        return { ok: true, result };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
-    }
     case "wallet-indexer-snapshot": {
       // Existing consumer (popup Home) shape: passes `unknown[]` through
       // verbatim, no caching. Phase 4.4 added `wallet-activity-get` which
