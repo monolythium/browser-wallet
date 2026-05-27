@@ -25,6 +25,7 @@
 // wallet typecheck the next time the SDK rebuilds.
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { NODE_REGISTRY_CAPABILITIES } from "@monolythium/core-sdk";
 import {
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
@@ -42,6 +43,7 @@ import {
   type DelegationsView,
   type PendingRewardsRow,
   type PendingRewardsView,
+  type ClusterServiceTiers,
   type RedemptionQueueRow,
   type RedemptionQueueView,
   type StakingResult,
@@ -351,6 +353,110 @@ export async function readOperatorInfo(
     const reason = (e as Error)?.message ?? "lyth_operatorInfo unreachable";
     return { ok: false, reason };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cluster service tiers — per-operator probe aggregation (R16 Task B)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SDK contract: ServiceProbeResponse from `lyth_getServiceProbe(peerId,
+// serviceMask)`. Probes are per-single-bit (SDK exposes
+// `isSinglePublicServiceProbeMask`); we send one probe per operator per
+// tier-bit and aggregate "any-true" across the cluster's members.
+//
+// User-facing tier subset (5 of the 9 SDK capability bits in
+// NODE_REGISTRY_CAPABILITIES). Operator-internal bits — Broadcaster,
+// WebSocket, LightClient, PublicAPI — skipped for v1.
+//
+// PING #11: long-term fix is a `ClusterDirectoryEntry.serviceTiers:
+// string[]` aggregate field on the chain side; once shipped, this whole
+// per-operator-fan-out loop drops to a single directory read.
+interface UserFacingTier {
+  readonly key: keyof Omit<ClusterServiceTiers, "anyReachable" | "probedOperators">;
+  readonly mask: number;
+}
+
+const USER_FACING_TIERS: ReadonlyArray<UserFacingTier> = [
+  { key: "rpc", mask: NODE_REGISTRY_CAPABILITIES.SERVES_RPC },
+  { key: "indexer", mask: NODE_REGISTRY_CAPABILITIES.SERVES_INDEXER },
+  { key: "archive", mask: NODE_REGISTRY_CAPABILITIES.SERVES_ARCHIVE },
+  { key: "oracle", mask: NODE_REGISTRY_CAPABILITIES.SERVES_ORACLE_WRITER },
+  { key: "bridgeRelay", mask: NODE_REGISTRY_CAPABILITIES.SERVES_BRIDGE_RELAY },
+];
+
+interface RawServiceProbe {
+  serviceMask?: number;
+  status?: string;
+}
+
+/** Probe a single operator for a single tier-bit. Returns true when the
+ *  chain reports reachable; false for any other completed status
+ *  (degraded / unreachable / unknown / null). Throws on RPC error — the
+ *  caller's `Promise.allSettled` distinguishes "probe ran and answered
+ *  non-reachable" (fulfilled false) from "probe never reached the chain"
+ *  (rejected), which the aggregator needs to compute `probedOperators`
+ *  honestly. */
+async function probeTier(
+  operatorId: string,
+  mask: number,
+): Promise<boolean> {
+  const { result } = await sprintnetJsonRpc<RawServiceProbe | null>(
+    "lyth_getServiceProbe",
+    [operatorId, mask],
+  );
+  if (!result || typeof result !== "object") return false;
+  return result.status === "reachable";
+}
+
+/** Aggregate per-operator service-tier probes into a cluster-level
+ *  ClusterServiceTiers shape via "any-true" semantics — the cluster
+ *  offers a tier if ≥1 member operator probes reachable for it.
+ *
+ *  Empty `operatorIds` returns an all-false set with `anyReachable: false`
+ *  so the popup suppresses the badge row entirely. Fan-out is
+ *  `Promise.allSettled` so one slow operator can't block aggregation. */
+export async function readClusterServiceTiers(
+  operatorIds: ReadonlyArray<string>,
+): Promise<StakingResult<ClusterServiceTiers>> {
+  const tiers: ClusterServiceTiers = {
+    rpc: false,
+    indexer: false,
+    archive: false,
+    oracle: false,
+    bridgeRelay: false,
+    anyReachable: false,
+    probedOperators: 0,
+  };
+  if (operatorIds.length === 0) {
+    return { ok: true, data: tiers };
+  }
+
+  const tasks: Promise<{ opId: string; key: UserFacingTier["key"]; reachable: boolean }>[] = [];
+  for (const opId of operatorIds) {
+    for (const tier of USER_FACING_TIERS) {
+      tasks.push(
+        probeTier(opId, tier.mask).then((reachable) => ({
+          opId,
+          key: tier.key,
+          reachable,
+        })),
+      );
+    }
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const operatorsAnswered = new Set<string>();
+  for (const s of settled) {
+    if (s.status !== "fulfilled") continue;
+    operatorsAnswered.add(s.value.opId);
+    if (s.value.reachable) {
+      tiers[s.value.key] = true;
+      tiers.anyReachable = true;
+    }
+  }
+  tiers.probedOperators = operatorsAnswered.size;
+
+  return { ok: true, data: tiers };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
