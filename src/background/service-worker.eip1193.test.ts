@@ -463,6 +463,28 @@ describe("EIP-1193 conformance — service-worker request router", () => {
 
   it.todo("eth_subscribe('newHeads') yields a subscription id when polling lands (TODO(monolythium-vision): add polling subscription manager)");
 
+  // ---- 8b. Retired methods rejected at the boundary ----
+  // mono-core b2f0c498 retired the EVM simulation + polling-filter
+  // methods. The wallet rejects them with 4200 at the dispatcher rather
+  // than letting them hit the chain just to receive MethodNotFound.
+  it.each([
+    "eth_call",
+    "eth_estimateGas",
+    "eth_newFilter",
+    "eth_newBlockFilter",
+    "eth_newPendingTransactionFilter",
+    "eth_uninstallFilter",
+    "eth_getFilterChanges",
+    "eth_getFilterLogs",
+  ])("%s is rejected at the dispatcher with 4200 and does not hit the chain", async (method) => {
+    const r = await dispatch(method, []);
+    expect(r.result).toBeUndefined();
+    expect(r.error?.code).toBe(4200);
+    expect(r.error?.message).toMatch(/v4\.1 §22\.9/);
+    // No JSON-RPC traffic should have left the wallet boundary.
+    expect(rpcCalls.map((c) => c.method)).not.toContain(method);
+  });
+
   // ---- 9. Negative path — unknown method ----
   it("an unknown method returns error code 4200 (EIP-1193 method-not-supported)", async () => {
     const r = await dispatch("eth_foobar_notreal");
