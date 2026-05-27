@@ -45,6 +45,7 @@ import {
   type RedemptionQueueRow,
   type RedemptionQueueView,
   type StakingResult,
+  type WalletOperatorInfo,
 } from "../shared/staking.js";
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
 
@@ -283,6 +284,71 @@ export async function readClusterStatus(
     };
   } catch (e) {
     const reason = (e as Error)?.message ?? "lyth_clusterStatus unreachable";
+    return { ok: false, reason };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Operator info — per-operator self-bond + lifecycle (R16 Task A)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SDK contract: OperatorInfoResponse from `lyth_operatorInfo`. Wire form
+// loosens every field to optional + admits string/number/bigint for the
+// bond amount (chain may emit any of those). The wallet stringifies the
+// bigint for IPC transparency.
+interface RawOperatorInfo {
+  operatorId?: string;
+  moniker?: string | null;
+  alias?: string | null;
+  bonded?: boolean;
+  bondedAmount?: string | number | bigint;
+  commissionBps?: number | null;
+  delegationCount?: number | null;
+  lifecycleState?: string;
+}
+
+/** Read per-operator info (self-bond, commission, lifecycle) via
+ *  `lyth_operatorInfo`. Wired in R16 Task A for the ClusterDetail
+ *  per-operator self-bond display (v4.1 §23.3 V4.1-BOND-0001 5,000 LYTH
+ *  chain-enforced floor). Returns `ok: false` on RPC error — per-operator
+ *  bond is unique and not mockable; the popup renders `bonded: —` for
+ *  any failed fetch. */
+export async function readOperatorInfo(
+  operatorId: string,
+): Promise<StakingResult<WalletOperatorInfo>> {
+  try {
+    const { result, via } = await sprintnetJsonRpc<RawOperatorInfo>(
+      "lyth_operatorInfo",
+      [operatorId],
+    );
+    if (
+      !result ||
+      typeof result !== "object" ||
+      typeof result.operatorId !== "string"
+    ) {
+      return { ok: false, reason: "malformed lyth_operatorInfo response" };
+    }
+    return {
+      ok: true,
+      via,
+      data: {
+        operatorId: result.operatorId,
+        moniker: typeof result.moniker === "string" ? result.moniker : null,
+        alias: typeof result.alias === "string" ? result.alias : null,
+        bonded: result.bonded === true,
+        bondedAmount: String(result.bondedAmount ?? 0),
+        commissionBps:
+          typeof result.commissionBps === "number" ? result.commissionBps : null,
+        delegationCount:
+          typeof result.delegationCount === "number"
+            ? result.delegationCount
+            : null,
+        lifecycleState:
+          typeof result.lifecycleState === "string" ? result.lifecycleState : "",
+      },
+    };
+  } catch (e) {
+    const reason = (e as Error)?.message ?? "lyth_operatorInfo unreachable";
     return { ok: false, reason };
   }
 }
