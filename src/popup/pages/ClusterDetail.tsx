@@ -12,9 +12,11 @@
 //   - `lyth_getDelegationHistory` cluster-relevant rows from the
 //      user's perspective (filtered by cluster id)
 //
-// Cluster-name registry (§22.8) and per-cluster APR are still mocked —
-// no SDK reader has shipped. The page renders `cluster-<id>` and the
-// MOCK_CLUSTER_APR_BPS value with a small "MOCK" affordance.
+// Cluster-name registry (§22.8) and per-cluster APR have no SDK reader
+// yet. The page renders `cluster-<id>` as the honest id-derived
+// fallback for name; APR is omitted entirely per
+// `_dev-notes/_principles/no-mock-fallbacks.md` (chain silence ↦ field
+// absent — no placeholder).
 //
 // Whitepaper alignment:
 //   §14    — cluster marketplace (this page IS the marketplace surface)
@@ -39,10 +41,6 @@ import type {
   ClusterStatus,
   DelegationHistoryRow,
   WalletOperatorInfo,
-} from "../../shared/staking";
-import {
-  MOCK_CLUSTER_APR_BPS,
-  MOCK_CLUSTER_REPUTATION,
 } from "../../shared/staking";
 import { LYTHOSHI_PER_LYTH } from "../../shared/native-amount";
 
@@ -107,9 +105,6 @@ export function ClusterDetail({
     };
   }, [cluster.clusterId, walletAddress]);
 
-  const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
-  const reputation = MOCK_CLUSTER_REPUTATION[cluster.clusterId] ?? null;
-
   return (
     <div className="ext-app">
       <div className="ext-app__top">
@@ -136,7 +131,7 @@ export function ClusterDetail({
           <div className="ext-card__head">
             <h3>Identity</h3>
           </div>
-          <ClusterIdentityCard cluster={cluster} reputation={reputation} />
+          <ClusterIdentityCard cluster={cluster} />
         </div>
 
         {/* Live status (operators, epoch/round) */}
@@ -163,22 +158,6 @@ export function ClusterDetail({
               label="Delegators"
               value={delegatorCount === null ? "—" : String(delegatorCount)}
               tooltip="Distinct wallet addresses currently delegating to this cluster."
-            />
-            <KeyValue
-              label="APR (mock)"
-              value={
-                aprBps === null
-                  ? "—"
-                  : `${(aprBps / 100).toFixed(2)}%`
-              }
-              tooltip="Per quadratic reward curve. APR is a mock — chain has no lyth_clusterApr reader yet."
-            />
-            <KeyValue
-              label="Reputation (mock)"
-              value={
-                reputation === null ? "—" : `${(reputation * 100).toFixed(0)}/100`
-              }
-              tooltip="Cluster reputation aggregate. Indexer-side aggregation is forthcoming; current value is illustrative."
             />
           </div>
         </div>
@@ -220,10 +199,8 @@ export function ClusterDetail({
 
 function ClusterIdentityCard({
   cluster,
-  reputation,
 }: {
   cluster: ClusterDirectoryEntry;
-  reputation: number | null;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -252,18 +229,14 @@ function ClusterIdentityCard({
         label="Threshold"
         value={`${cluster.threshold} of ${cluster.size}`}
       />
-      <KeyValueRow
-        label="Regions"
-        value={cluster.regions.length === 0 ? "—" : cluster.regions.join(", ")}
-        tooltip="Geographic diversity — operator-declared regions cross-checked against IP geolocation chain-side."
-      />
-      <KeyValueRow label="Active set" value={cluster.active ? "yes" : "no"} />
-      {reputation !== null && (
+      {cluster.regions.length > 0 && (
         <KeyValueRow
-          label="Reputation"
-          value={`${(reputation * 100).toFixed(0)}/100 (mock)`}
+          label="Regions"
+          value={cluster.regions.join(", ")}
+          tooltip="Geographic diversity — operator-declared regions cross-checked against IP geolocation chain-side."
         />
       )}
+      <KeyValueRow label="Active set" value={cluster.active ? "yes" : "no"} />
     </div>
   );
 }
