@@ -457,13 +457,24 @@ function ServiceTierBadgeRow({ tiers }: { tiers: ClusterServiceTiers }) {
   );
 }
 
+/** Per-operator status dot. Token vocabulary verified 2026-05-27 against
+ *  mono-core `crates/core/runtime/src/providers.rs:6195-6205`
+ *  (`bootstrap_cluster_members`): chain emits exactly three values —
+ *  `"active"`, `"jailed"`, `"offline"`. The previous mapping
+ *  (`"live"` / `"lagging"` / `"maintenance"`) used wallet-internal
+ *  vocabulary that never matched chain output, so every active
+ *  operator rendered as the red default. Anything chain might add
+ *  later (R15 audit PING #11 — formal enum) falls through to the
+ *  muted-fg dot rather than the alarming red. */
 function StateChip({ state }: { state: string }) {
   const colour =
-    state === "live"
+    state === "active"
       ? "var(--ok)"
-      : state === "lagging" || state === "maintenance"
-        ? "var(--warn)"
-        : "var(--err)";
+      : state === "jailed"
+        ? "var(--err)"
+        : state === "offline"
+          ? "var(--warn)"
+          : "var(--fg-500)";
   return (
     <span
       style={{
@@ -473,6 +484,7 @@ function StateChip({ state }: { state: string }) {
         background: colour,
         flexShrink: 0,
       }}
+      title={`operator state: ${state}`}
     />
   );
 }
