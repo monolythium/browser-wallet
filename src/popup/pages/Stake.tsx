@@ -432,6 +432,12 @@ export function Stake({
       if (action === "claim") {
         data = encodeClaimRewards();
         executionUnitLimitHex = "0x14820"; // 84000 — selector-only allowance
+      } else if (action === "undelegate") {
+        // Chain `undelegate(uint32 cluster)` removes the wallet's entire
+        // row for the cluster (full-row removal; no partial unstake) and
+        // queues the principal for redemption — no amount/weight arg.
+        data = encodeUndelegate(selectedCluster!.clusterId);
+        executionUnitLimitHex = "0x186A0";
       } else {
         const amountLythoshi = parseLythAmountToLythoshi(amountStr);
         if (amountLythoshi === null || balanceLythoshi === null) {
@@ -448,17 +454,15 @@ export function Stake({
         data =
           action === "delegate"
             ? encodeDelegate(selectedCluster!.clusterId, bps)
-            : action === "undelegate"
-              ? encodeUndelegate(selectedCluster!.clusterId, bps)
-              : encodeRedelegate(
-                  selectedCluster!.clusterId,
-                  redelegateDstClusterId!,
-                  bps,
-                );
+            : encodeRedelegate(
+                selectedCluster!.clusterId,
+                redelegateDstClusterId!,
+                bps,
+              );
         // The delegation precompile's execution-unit budget isn't measured yet
         // (chain GAP — needs Nayiem). Use a generous overhead-aware
-        // estimate; redelegate carries one extra uint256 arg so we
-        // bump the budget slightly for that path.
+        // estimate; redelegate carries one extra arg so we bump the
+        // budget slightly for that path.
         executionUnitLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
       }
       const r = await bgWalletSendTx({
@@ -720,8 +724,6 @@ export function Stake({
           <UnstakeForm
             cluster={selectedCluster}
             currentWeightBps={existingWeightBps}
-            amountStr={amountStr}
-            onAmountChange={setAmountStr}
             balanceWei={balanceLythoshi}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
@@ -962,16 +964,23 @@ function PreviewView({
 }: PreviewViewProps) {
   const amountLythoshi = parseLythAmountToLythoshi(amountStr);
   const aprBps = cluster.aprBps ?? null;
-  const moveBps =
-    amountLythoshi !== null && balanceLythoshi !== null && balanceLythoshi > 0n
+  const isUndelegate = action === "undelegate";
+  // Undelegate is full-row removal — the chain has no partial unstake, so
+  // the "moved" weight is the entire existing delegation regardless of any
+  // amount field, and the LYTH shown is the full delegated principal.
+  const fullDelegationLythoshi =
+    balanceLythoshi !== null && existingWeightBps > 0
+      ? (balanceLythoshi * BigInt(existingWeightBps)) / 10_000n
+      : 0n;
+  const moveBps = isUndelegate
+    ? existingWeightBps
+    : amountLythoshi !== null && balanceLythoshi !== null && balanceLythoshi > 0n
       ? lythAmountToBps(amountLythoshi, balanceLythoshi)
       : 0;
   const totalAfterBps =
     action === "delegate"
       ? existingWeightBps + moveBps
-      : action === "undelegate"
-        ? Math.max(0, existingWeightBps - moveBps)
-        : Math.max(0, existingWeightBps - moveBps); // source after redelegate
+      : Math.max(0, existingWeightBps - moveBps); // source after undelegate/redelegate
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div className="ext-card" style={{ padding: 14 }}>
@@ -986,7 +995,15 @@ function PreviewView({
             tone="var(--gold)"
           />
         )}
-        <Row k="Amount" v={`${amountStr} LYTH`} tone="var(--gold)" />
+        <Row
+          k="Amount"
+          v={
+            isUndelegate
+              ? `${formatLythoshi(fullDelegationLythoshi)} LYTH (entire delegation)`
+              : `${amountStr} LYTH`
+          }
+          tone="var(--gold)"
+        />
         <Row
           k={
             action === "delegate"
@@ -1012,13 +1029,21 @@ function PreviewView({
           v={aprBps === null ? "—" : `${(aprBps / 100).toFixed(2)}%`}
         />
         <Row
-          k={action === "redelegate" ? "Cluster swap" : "Unbonding"}
+          k={
+            action === "redelegate"
+              ? "Cluster swap"
+              : action === "undelegate"
+                ? "Redemption"
+                : "Unbonding"
+          }
           v={
             action === "redelegate"
               ? "Instant"
-              : "Instant (zero-unbond)"
+              : action === "undelegate"
+                ? "Queued (claim on maturity)"
+                : "Instant (zero-unbond)"
           }
-          tone="var(--ok)"
+          tone={action === "undelegate" ? "var(--gold)" : "var(--ok)"}
         />
       </div>
 
@@ -1046,7 +1071,7 @@ function PreviewView({
           {action === "delegate" &&
             "Submits `delegate(clusterId, weightBps)` to the delegation precompile via the encrypted-mempool path."}
           {action === "undelegate" &&
-            "Submits `undelegate(clusterId, weightBps)` — instant release (zero-unbond)."}
+            "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
           {action === "redelegate" &&
             "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
           Sprintnet may reject the call until the gate is activated.
