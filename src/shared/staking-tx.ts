@@ -25,6 +25,12 @@
 // chain rejects it at the precompile-gate; the wallet surfaces
 // the typed error verbatim.
 
+import {
+  encodeDelegateCalldata,
+  encodeRedelegateCalldata,
+  encodeClaimCalldata,
+} from "@monolythium/core-sdk";
+
 /** Delegation precompile address — Whitepaper §5.4 / §7.6. */
 export const DELEGATION_PRECOMPILE =
   "0x000000000000000000000000000000000000100A" as const;
@@ -91,11 +97,14 @@ function selectorHex(selector: string): string {
 // Method encoders
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** `delegate(uint256 clusterId, uint256 weightBps)` calldata. Returns
- *  a 0x-prefixed hex string ready for `bgWalletSendTx({ data })`. */
+/** `delegate(uint32 cluster, uint16 weightBps)` calldata via the SDK
+ *  encoder (chain-canonical selector `0x662337de`; mono-core
+ *  `crates/precompiles/system/delegation/src/abi.rs`). Returns a
+ *  0x-prefixed hex string ready for `bgWalletSendTx({ data })`. The LYTH
+ *  principal is sent separately as `msg.value` (tx `value`), NOT in the
+ *  calldata — see `Stake.tsx`. */
 export function encodeDelegate(clusterId: number, weightBps: number): string {
-  const sig = selectorHex(DELEGATION_SELECTORS.delegate);
-  return "0x" + sig + encodeUint256(clusterId) + encodeUint256(weightBps);
+  return encodeDelegateCalldata(clusterId, weightBps);
 }
 
 /** `undelegate(uint256 clusterId, uint256 weightBps)` calldata. */
@@ -104,27 +113,21 @@ export function encodeUndelegate(clusterId: number, weightBps: number): string {
   return "0x" + sig + encodeUint256(clusterId) + encodeUint256(weightBps);
 }
 
-/** `redelegate(uint256 srcCluster, uint256 dstCluster, uint256 weightBps)`
- *  calldata. Uses the `be79a2f` redelegation precompile with no unbonding
- *  period (§23.2 — instant cluster swap for delegators). */
+/** `redelegate(uint32 fromCluster, uint32 toCluster, uint16 weightBps)`
+ *  calldata via the SDK encoder (chain-canonical selector `0xa06ac18f`).
+ *  Atomic weight move; no new principal is committed (no `msg.value`). */
 export function encodeRedelegate(
   srcCluster: number,
   dstCluster: number,
   weightBps: number,
 ): string {
-  const sig = selectorHex(DELEGATION_SELECTORS.redelegate);
-  return (
-    "0x" +
-    sig +
-    encodeUint256(srcCluster) +
-    encodeUint256(dstCluster) +
-    encodeUint256(weightBps)
-  );
+  return encodeRedelegateCalldata(srcCluster, dstCluster, weightBps);
 }
 
-/** `claimRewards()` calldata. Selector-only — no arguments. */
+/** `claim()` calldata via the SDK encoder (chain-canonical, selector-only)
+ *  — settles + withdraws the caller's pending delegation rewards. */
 export function encodeClaimRewards(): string {
-  return DELEGATION_SELECTORS.claimRewards;
+  return encodeClaimCalldata();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
