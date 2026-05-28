@@ -48,6 +48,7 @@ import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { Modal } from "./Modal";
 import { MnemonicGrid } from "./MnemonicGrid";
+import { explainImportError } from "../lib/import-error";
 import {
   bgKeystoreStatus,
   bgKeystoreUnlock,
@@ -417,15 +418,7 @@ function ImportFlow({
         return;
       }
       const reason = r.reason ?? "Could not import wallet.";
-      // Backend duplicate-address rejection — surfaced inline so the
-      // user can edit the phrase and retry without losing modal state.
-      if (/already exists/i.test(reason)) {
-        setError("This mnemonic is already imported.");
-      } else if (/invalid PQM-?1 mnemonic|bip39/i.test(reason)) {
-        setError("Invalid recovery phrase.");
-      } else {
-        setError(reason);
-      }
+      setError(explainImportError(reason));
     } catch (e) {
       setError((e as Error).message ?? "Could not import vault.");
     } finally {
