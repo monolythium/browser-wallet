@@ -449,15 +449,18 @@ function ServiceTierBadgeRow({ tiers }: { tiers: ClusterServiceTiers }) {
   );
 }
 
-/** Per-operator status dot. Token vocabulary verified 2026-05-27 against
- *  mono-core `crates/core/runtime/src/providers.rs:6195-6205`
- *  (`bootstrap_cluster_members`): chain emits exactly three values —
- *  `"active"`, `"jailed"`, `"offline"`. The previous mapping
- *  (`"live"` / `"lagging"` / `"maintenance"`) used wallet-internal
- *  vocabulary that never matched chain output, so every active
- *  operator rendered as the red default. Anything chain might add
- *  later (R15 audit PING #11 — formal enum) falls through to the
- *  muted-fg dot rather than the alarming red. */
+/** Per-operator status dot. Live `lyth_clusterStatus(0)` probes (op-1
+ *  `178.105.15.216`, height ~87828, 2026-05-27) return a mix of
+ *  `"active"`, `"standby"`, `"jailed"`, `"offline"` — the chain emits
+ *  `"standby"` post-regenesis (supersedes the earlier "exactly three
+ *  values" reading from `providers.rs::bootstrap_cluster_members`). The
+ *  previous wallet-internal mapping (`"live"` / `"lagging"` /
+ *  `"maintenance"`) never matched chain output, so every active operator
+ *  rendered as the red default. `"active"`/`"jailed"`/`"offline"` map to
+ *  distinct colours; `"standby"` and anything chain adds later (PING #11
+ *  — formal enum) fall through to the muted-fg dot rather than the
+ *  alarming red. A dedicated standby colour is a flagged PING #11 UX
+ *  follow-up. */
 function StateChip({ state }: { state: string }) {
   const colour =
     state === "active"
