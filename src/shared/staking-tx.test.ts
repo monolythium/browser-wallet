@@ -11,6 +11,11 @@
 import { describe, expect, it } from "vitest";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
+  encodeDelegateCalldata,
+  encodeRedelegateCalldata,
+  encodeClaimCalldata,
+} from "@monolythium/core-sdk";
+import {
   DELEGATION_PRECOMPILE,
   DELEGATION_SELECTORS,
   encodeClaimRewards,
@@ -108,16 +113,23 @@ describe("encodeUint256", () => {
 // encodeDelegate / encodeUndelegate / encodeRedelegate
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Golden vectors: the wallet's encoders must equal the SDK encoders
+// byte-for-byte, and carry the chain-canonical selector (keccak256 of
+// the mono-core `abi.rs` signature). This is the regression guard
+// against the R20 drift — the wallet previously shipped
+// `delegate(uint256,uint256)` (0xd9a34952) which the live precompile
+// rejects as unknown-selector.
+
 describe("encodeDelegate", () => {
-  it("produces 4-byte selector + two 32-byte words", () => {
+  it("equals the SDK encoder + carries the chain delegate(uint32,uint16) selector", () => {
     const data = encodeDelegate(1, 2500);
-    // 0x + 4 bytes selector + 2 * 32 bytes args = 2 + 8 + 64 + 64 = 138 chars
+    expect(data).toBe(encodeDelegateCalldata(1, 2500));
+    expect(data.startsWith(computeSelector("delegate(uint32,uint16)"))).toBe(true);
+    expect(data.startsWith("0x662337de")).toBe(true);
+    // selector + cluster word + weightBps word.
     expect(data).toHaveLength(2 + 8 + 64 + 64);
-    expect(data.startsWith(DELEGATION_SELECTORS.delegate)).toBe(true);
-    // Verify both args appear in the correct position.
-    expect(data.slice(10, 10 + 64)).toBe("0".repeat(63) + "1"); // clusterId
-    // 2500 = 0x9c4 (3 hex chars), padded to 64 = 61 zeros + 3 hex.
-    expect(data.slice(10 + 64)).toBe("0".repeat(61) + "9c4");
+    expect(data.slice(10, 10 + 64)).toBe("0".repeat(63) + "1"); // cluster
+    expect(data.slice(10 + 64)).toBe("0".repeat(61) + "9c4"); // 2500 = 0x9c4
   });
 });
 
@@ -129,20 +141,19 @@ describe("encodeUndelegate", () => {
 });
 
 describe("encodeRedelegate", () => {
-  it("produces 4-byte selector + three 32-byte words", () => {
+  it("equals the SDK encoder + carries the chain redelegate(uint32,uint32,uint16) selector", () => {
     const data = encodeRedelegate(1, 2, 1500);
+    expect(data).toBe(encodeRedelegateCalldata(1, 2, 1500));
+    expect(data.startsWith(computeSelector("redelegate(uint32,uint32,uint16)"))).toBe(true);
+    expect(data.startsWith("0xa06ac18f")).toBe(true);
     expect(data).toHaveLength(2 + 8 + 64 * 3);
-    expect(data.startsWith(DELEGATION_SELECTORS.redelegate)).toBe(true);
-    expect(data.slice(10, 10 + 64)).toBe("0".repeat(63) + "1"); // src
-    expect(data.slice(10 + 64, 10 + 128)).toBe("0".repeat(63) + "2"); // dst
-    // 1500 = 0x5dc (3 hex chars), padded to 64 = 61 zeros + 3 hex.
-    expect(data.slice(10 + 128)).toBe("0".repeat(61) + "5dc");
   });
 });
 
 describe("encodeClaimRewards", () => {
-  it("is the selector-only string (no args)", () => {
-    expect(encodeClaimRewards()).toBe(DELEGATION_SELECTORS.claimRewards);
+  it("equals the SDK claim() encoder + carries the chain claim() selector", () => {
+    expect(encodeClaimRewards()).toBe(encodeClaimCalldata());
+    expect(encodeClaimRewards().startsWith(computeSelector("claim()"))).toBe(true);
   });
 });
 
