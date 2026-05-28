@@ -1,7 +1,7 @@
 // Phase 7 — RedelegateForm. Move weight from one cluster to another in
 // a single tx. Uses the `be79a2f` redelegation precompile method:
 //
-//   redelegate(uint256 srcCluster, uint256 dstCluster, uint256 weightBps)
+//   redelegate(uint32 srcCluster, uint32 dstCluster, uint16 weightBps)
 //
 // Per whitepaper §23.2, redelegation is instant for delegators — no
 // unbonding period, no cluster-side cooldown. The form's UX language

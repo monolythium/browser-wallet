@@ -1,10 +1,11 @@
-// Phase 7 commit 2 — staking-tx encoder tests.
+// staking-tx encoder tests.
 //
-// Pins three properties that matter for the chain-side gate:
-//   1. Function selectors never drift (drift would silently misroute
-//      a delegate tx into the wrong precompile method).
-//   2. Calldata encoding follows standard Solidity ABI (32-byte
-//      big-endian words, left-padded for uint256).
+// Pins three properties:
+//   1. The wallet's calldata equals the SDK 0.3.9 encoders byte-for-byte
+//      and carries the chain-canonical selector — drift would silently
+//      misroute a delegate tx into a non-existent precompile method.
+//   2. Calldata follows standard Solidity ABI (32-byte big-endian words),
+//      matching the mono-core abi.rs uint32/uint16 signatures.
 //   3. lythAmountToBps + bpsToLythAmountWei round-trip cleanly,
 //      including the truncation regime around the 1-bp boundary.
 
@@ -54,10 +55,11 @@ describe("DELEGATION_PRECOMPILE", () => {
 
 // Golden vectors: the wallet's encoders must equal the SDK encoders
 // byte-for-byte, and carry the chain-canonical selector (keccak256 of
-// the mono-core `abi.rs` signature). This is the regression guard
-// against the R20 drift — the wallet previously shipped
-// `delegate(uint256,uint256)` (0xd9a34952) which the live precompile
-// rejects as unknown-selector.
+// the mono-core `abi.rs` signature). Regression guard against the R20
+// drift — pre-R20 the wallet emitted `delegate(uint256,uint256)`
+// (0xd9a34952), which the live 0x100a precompile rejected as an unknown
+// selector. These vectors confirm we now emit the chain-canonical
+// `delegate(uint32,uint16)` (0x662337de) via SDK 0.3.9.
 
 describe("encodeDelegate", () => {
   it("equals the SDK encoder + carries the chain delegate(uint32,uint16) selector", () => {
