@@ -9,13 +9,13 @@ import { TESTNET_69420 } from "@monolythium/core-sdk";
 /** SDK package version. Mirrors mono-core-sdk/packages/ts/package.json
  *  `version`. Bump alongside any SDK sync that bumps the package
  *  version field. */
-export const SDK_PACKAGE_VERSION = "0.3.1";
+export const SDK_PACKAGE_VERSION = "0.3.9";
 
 /** SDK commit short SHA. Mirrors `git -C mono-core-sdk rev-parse --short
  *  HEAD` at the time of the last upstream sync. The wallet's
  *  pnpm-lock.yaml resolves the SDK from the workspace path, so this
  *  constant exists purely for the About-page version readout. */
-export const SDK_COMMIT_SHORT = "1d19d40";
+export const SDK_COMMIT_SHORT = "0a91be5";
 
 /** Expected Sprintnet genesis hash — the wallet's authoritative pin for
  *  GAP #11 (orphan-fork defense). Operator probes that return a
@@ -29,9 +29,13 @@ export const SDK_COMMIT_SHORT = "1d19d40";
  *  takes precedence and the human reviewer decides whether to bump it.
  *
  *  Current value tracks mono-core commit `f7236197` (2026-05-27 fresh
- *  genesis cut, v0.0.6-testnet rollout). SDK 0.3.1 still bundles the
- *  pre-regenesis hash; the About-page drift banner will surface that
- *  mismatch until Nayiem republishes the SDK chain-registry. */
+ *  genesis cut, v0.0.6-testnet rollout). The live chain has since
+ *  regenesised several times (mono-core `b7ebf657` → genesis
+ *  `0x8085c869…`, the value `lyth_chainStats` reports today), and SDK
+ *  0.3.9 bundles a different intermediate snapshot (`0xad64…`). Bumping
+ *  this security pin is a human-reviewer decision; the About-page drift
+ *  banner surfaces the mismatch and the live-registry fetch shows the
+ *  current GitHub-registry value alongside it. */
 export const SPRINTNET_GENESIS_HASH =
   "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c";
 
