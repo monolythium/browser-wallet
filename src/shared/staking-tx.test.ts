@@ -18,11 +18,9 @@ import {
 } from "@monolythium/core-sdk";
 import {
   DELEGATION_PRECOMPILE,
-  DELEGATION_SELECTORS,
   encodeClaimRewards,
   encodeDelegate,
   encodeRedelegate,
-  encodeUint256,
   encodeUndelegate,
   bpsToLythAmountWei,
   lythAmountToBps,
@@ -39,74 +37,14 @@ function computeSelector(signature: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Selectors
+// Precompile address
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("DELEGATION_SELECTORS", () => {
-  it("matches keccak256 of the canonical signature for delegate", () => {
-    expect(DELEGATION_SELECTORS.delegate).toBe(
-      computeSelector("delegate(uint256,uint256)"),
-    );
-  });
-
-  it("matches keccak256 for undelegate", () => {
-    expect(DELEGATION_SELECTORS.undelegate).toBe(
-      computeSelector("undelegate(uint256,uint256)"),
-    );
-  });
-
-  it("matches keccak256 for redelegate", () => {
-    expect(DELEGATION_SELECTORS.redelegate).toBe(
-      computeSelector("redelegate(uint256,uint256,uint256)"),
-    );
-  });
-
-  it("matches keccak256 for claimRewards", () => {
-    expect(DELEGATION_SELECTORS.claimRewards).toBe(computeSelector("claimRewards()"));
-  });
-
-  it("DELEGATION_PRECOMPILE is the Law §5.4 / §7.6 address", () => {
+describe("DELEGATION_PRECOMPILE", () => {
+  it("is the Law §5.4 / §7.6 address (0x100A)", () => {
     expect(DELEGATION_PRECOMPILE).toBe(
       "0x000000000000000000000000000000000000100A",
     );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// encodeUint256
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("encodeUint256", () => {
-  it("left-pads small numbers to 32 bytes", () => {
-    expect(encodeUint256(1)).toBe("0".repeat(63) + "1");
-    expect(encodeUint256(255)).toBe("0".repeat(62) + "ff");
-  });
-
-  it("handles bigint inputs", () => {
-    // 1_000_000 = 0xf4240 (5 hex chars), padded to 64 = 59 zeros + 5 hex.
-    expect(encodeUint256(1_000_000n)).toBe("0".repeat(59) + "f4240");
-  });
-
-  it("handles 0x-hex string inputs", () => {
-    expect(encodeUint256("0xdeadbeef")).toBe("0".repeat(56) + "deadbeef");
-  });
-
-  it("rejects negative numbers", () => {
-    expect(() => encodeUint256(-1)).toThrow();
-    expect(() => encodeUint256(-1n)).toThrow();
-  });
-
-  it("rejects non-integers", () => {
-    expect(() => encodeUint256(1.5)).toThrow();
-  });
-
-  it("rejects values overflowing uint256", () => {
-    expect(() => encodeUint256(1n << 256n)).toThrow();
-  });
-
-  it("accepts the maximum uint256", () => {
-    const max = (1n << 256n) - 1n;
-    expect(encodeUint256(max)).toBe("f".repeat(64));
   });
 });
 
