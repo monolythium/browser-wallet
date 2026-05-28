@@ -1,34 +1,27 @@
-// Phase 7 — ClusterPicker. Renders the cluster directory with the
-// whitepaper §14 + §23 metadata a delegator needs to choose informed:
-// APR, reputation, health, regions, member count, Foundation badge.
+// ClusterPicker. Renders the cluster directory with the metadata a
+// delegator needs to choose informed: health, regions, member count,
+// Foundation badge. APR + reputation render as "—" until the chain
+// surfaces the underlying primitives — the wallet refuses to display
+// synthesised values as if they were chain truth (issue #1).
 //
 // Two interaction patterns:
 //   - Tap a cluster row to select it (border flips to gold, calls
 //     `onSelect(clusterId)` so the parent can advance to the form).
 //   - Tap the chevron / "Details" affordance to expand the row in
 //     place and surface the cap-headroom, threshold, region tags,
-//     and the per-member operator state for the Avengers-assembly
-//     §14 cluster-as-team narrative.
+//     and the per-member operator state.
 //
 // Filters:
 //   - Free-text search across cluster name + numeric id + region tags.
-//   - Sort by APR (highest first — §23 default-yield) / reputation
-//     (highest first) / decentralization (geographic-diversity-weighted
-//     score; lower correlation surfaces first).
-//
-// Selection is single-cluster for Commit 2 (the explicit-choice flow).
-// Commit 3 lands AutovoteSelector for the multi-cluster batch path
-// per §23.9.
+//   - Sort by decentralization (geographic-diversity-weighted score;
+//     lower correlation surfaces first). APR + reputation sort modes
+//     would be dishonest while the values aren't chain-real.
 
 import { useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
-import {
-  MOCK_CLUSTER_APR_BPS,
-  MOCK_CLUSTER_REPUTATION,
-  type ClusterDirectoryEntry,
-} from "../../shared/staking";
+import { type ClusterDirectoryEntry } from "../../shared/staking";
 
-type SortMode = "apr" | "reputation" | "decentralization";
+type SortMode = "decentralization";
 
 interface ClusterPickerProps {
   /** Full cluster list to render. Empty list shows the empty state. */
@@ -53,10 +46,14 @@ interface ClusterPickerProps {
  *   - independent-entity bonus over Foundation entities (§30.5
  *     sunset trajectory). */
 function decentralizationScore(c: ClusterDirectoryEntry): number {
+  // Reputation factor dropped — the chain doesn't yet expose a
+  // per-cluster reputation primitive, and synthesising one would be
+  // chain-truth dishonesty (issue #1). Score is region count + an
+  // independent-entity bonus over Foundation entities; when reputation
+  // lands as a real reader, fold it back in here.
   const regionCount = c.regions.length;
-  const reputation = MOCK_CLUSTER_REPUTATION[c.clusterId] ?? 0.5;
   const independenceBonus = c.entity === "mono-labs" ? 0 : 0.15;
-  return regionCount * 1.0 + (1 - reputation) * 0.5 + independenceBonus;
+  return regionCount * 1.0 + independenceBonus;
 }
 
 export function ClusterPicker({
@@ -66,7 +63,7 @@ export function ClusterPicker({
   onShowDetails,
 }: ClusterPickerProps) {
   const [search, setSearch] = useState("");
-  const [sortMode, setSortMode] = useState<SortMode>("apr");
+  const [sortMode, setSortMode] = useState<SortMode>("decentralization");
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const visible = useMemo(() => {
@@ -83,20 +80,12 @@ export function ClusterPicker({
             return false;
           });
     return filtered.sort((a, b) => {
+      // Only one honest sort mode for now. APR + reputation modes
+      // would require chain primitives we don't yet read; they'll
+      // return once the readers land.
       switch (sortMode) {
-        case "apr": {
-          const aa = MOCK_CLUSTER_APR_BPS[a.clusterId] ?? 0;
-          const bb = MOCK_CLUSTER_APR_BPS[b.clusterId] ?? 0;
-          return bb - aa;
-        }
-        case "reputation": {
-          const ra = MOCK_CLUSTER_REPUTATION[a.clusterId] ?? 0;
-          const rb = MOCK_CLUSTER_REPUTATION[b.clusterId] ?? 0;
-          return rb - ra;
-        }
-        case "decentralization": {
+        case "decentralization":
           return decentralizationScore(b) - decentralizationScore(a);
-        }
       }
     });
   }, [clusters, search, sortMode]);
@@ -122,8 +111,8 @@ export function ClusterPicker({
           onChange={(e) => setSortMode(e.target.value as SortMode)}
           style={sortSelectStyle}
         >
-          <option value="apr">APR</option>
-          <option value="reputation">Reputation</option>
+          {/* APR + Reputation sort modes drop until the chain surfaces
+              the underlying primitives — see issue #1. */}
           <option value="decentralization">Decentralization</option>
         </select>
       </div>
@@ -186,8 +175,11 @@ function ClusterRow({
   onToggleExpand,
   onShowDetails,
 }: ClusterRowProps) {
-  const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
-  const reputation = MOCK_CLUSTER_REPUTATION[cluster.clusterId] ?? null;
+  // APR + reputation always render as null ("—") until a real
+  // per-cluster reader lands on chain. Synthesised mocks were dropped
+  // in v0.1.1 (issue #1) to avoid presenting them as chain truth.
+  const aprBps: number | null = null;
+  const reputation: number | null = null;
   const isFoundation = cluster.entity === "mono-labs";
 
   return (
