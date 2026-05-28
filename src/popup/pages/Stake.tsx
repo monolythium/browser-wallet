@@ -7,13 +7,12 @@
 // an alternative entry into the same submit step.
 //
 // Chain wiring: the form's Continue → preview → Confirm flow encodes a
-// `delegate(uint256,uint256)` calldata via shared/staking-tx.ts and
-// submits through the existing `bgWalletSendTx` IPC. The delegation
-// precompile (`0x000000000000000000000000000000000000100A`) is
-// code-complete in mono-core but verified inactive on Sprintnet at
-// Phase 7 phase-start — the wallet surfaces the typed error the chain
-// returns when the gate refuses the call. Once activated, the same
-// flow goes live with no UI change.
+// `delegate(uint32,uint16)` calldata via shared/staking-tx.ts (SDK
+// encoders) and submits through the existing `bgWalletSendTx` IPC, with
+// the staked LYTH amount sent as msg.value (the delegation principal).
+// The delegation precompile (`0x100A`) is live + enabled on Sprintnet
+// (`lyth_listActivePrecompiles`); the wallet surfaces any typed error
+// the chain returns verbatim.
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
