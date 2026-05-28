@@ -59,6 +59,7 @@ import { MultisigGovernance } from "./components/MultisigGovernance";
 import { MainMenu } from "./pages/MainMenu";
 import { NewWalletFlow } from "./pages/NewWalletFlow";
 import { generateOnboardingMnemonic } from "./lib/onboarding-mnemonic";
+import { explainImportError } from "./lib/import-error";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { ACCOUNTS, type Account } from "./demo-data";
@@ -710,7 +711,7 @@ export default function App() {
     setImportError(null);
     const r = await bgKeystoreCreateFromMnemonic(password, pendingMnemonic);
     if (!r.ok) {
-      setImportError(r.reason ?? "failed to import wallet");
+      setImportError(explainImportError(r.reason ?? "Could not import wallet."));
       setScreen("import");
       return;
     }
