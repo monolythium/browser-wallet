@@ -13,10 +13,7 @@
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import { Icon } from "../Icon";
-import {
-  MOCK_CLUSTER_APR_BPS,
-  type ClusterDirectoryEntry,
-} from "../../shared/staking";
+import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { lythAmountToBps } from "../../shared/staking-tx";
 
 export interface UnstakeFormProps {
@@ -101,7 +98,7 @@ export function UnstakeForm({
     );
   };
 
-  const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
+  const aprBps = cluster.aprBps ?? null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
