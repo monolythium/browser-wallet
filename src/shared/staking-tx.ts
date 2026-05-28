@@ -27,6 +27,7 @@
 
 import {
   encodeDelegateCalldata,
+  encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
 } from "@monolythium/core-sdk";
@@ -82,17 +83,6 @@ export function encodeUint256(value: number | bigint | string): string {
   return n.toString(16).padStart(64, "0");
 }
 
-/** Strip the `0x` prefix from a hex selector for concatenation. */
-function selectorHex(selector: string): string {
-  if (!selector.startsWith("0x") && !selector.startsWith("0X")) {
-    throw new TypeError("selector must be 0x-prefixed");
-  }
-  if (selector.length !== 10) {
-    throw new TypeError(`selector must be 4 bytes (10 chars including 0x), got ${selector.length}`);
-  }
-  return selector.slice(2);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Method encoders
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,10 +97,13 @@ export function encodeDelegate(clusterId: number, weightBps: number): string {
   return encodeDelegateCalldata(clusterId, weightBps);
 }
 
-/** `undelegate(uint256 clusterId, uint256 weightBps)` calldata. */
-export function encodeUndelegate(clusterId: number, weightBps: number): string {
-  const sig = selectorHex(DELEGATION_SELECTORS.undelegate);
-  return "0x" + sig + encodeUint256(clusterId) + encodeUint256(weightBps);
+/** `undelegate(uint32 cluster)` calldata via the SDK encoder
+ *  (chain-canonical selector `0x914f3ca8`). Removes the wallet's ENTIRE
+ *  row for `cluster` — there is no partial unstake on-chain; the
+ *  principal is queued for redemption (`completeRedemption`). No
+ *  weight/amount arg. */
+export function encodeUndelegate(clusterId: number): string {
+  return encodeUndelegateCalldata(clusterId);
 }
 
 /** `redelegate(uint32 fromCluster, uint32 toCluster, uint16 weightBps)`

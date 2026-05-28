@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
   encodeDelegateCalldata,
+  encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
 } from "@monolythium/core-sdk";
@@ -134,9 +135,13 @@ describe("encodeDelegate", () => {
 });
 
 describe("encodeUndelegate", () => {
-  it("uses the undelegate selector", () => {
-    const data = encodeUndelegate(3, 500);
-    expect(data.startsWith(DELEGATION_SELECTORS.undelegate)).toBe(true);
+  it("equals the SDK encoder + carries the chain undelegate(uint32) selector (full-row, 1 arg)", () => {
+    const data = encodeUndelegate(3);
+    expect(data).toBe(encodeUndelegateCalldata(3));
+    expect(data.startsWith(computeSelector("undelegate(uint32)"))).toBe(true);
+    expect(data.startsWith("0x914f3ca8")).toBe(true);
+    // selector + single cluster word (no weight arg).
+    expect(data).toHaveLength(2 + 8 + 64);
   });
 });
 

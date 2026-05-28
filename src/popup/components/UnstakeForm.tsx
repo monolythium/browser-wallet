@@ -1,34 +1,27 @@
-// Phase 7 — UnstakeForm. Drop weight from an existing delegation.
+// UnstakeForm — remove an existing delegation.
 //
-// Per whitepaper §23.2 ("zero unbonding period for delegators"), the
-// chain releases delegated weight instantly. There is no redemption
-// queue, no countdown, no waiting period. The form's UX language
-// is explicit about this — the user sees "Available immediately"
-// rather than a misleading lockup countdown.
+// The chain primitive `undelegate(uint32 cluster)` removes the wallet's
+// ENTIRE row for the cluster (full-row removal — there is no partial
+// unstake on-chain). The principal is queued for redemption and becomes
+// claimable via `completeRedemption` once the ticket matures. The form
+// reflects this: a single "Unstake all" confirmation, no amount input.
 //
-// Submitted as `undelegate(uint256 clusterId, uint256 weightBps)` via
-// the same bgWalletSendTx path as stake. Encoded by
-// shared/staking-tx.ts:encodeUndelegate.
+// Submitted as `undelegate(uint32 cluster)` via the same bgWalletSendTx
+// path as stake. Encoded by shared/staking-tx.ts:encodeUndelegate.
 
 import type { CSSProperties } from "react";
-import { useMemo } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { lythAmountToBps } from "../../shared/staking-tx";
 
 export interface UnstakeFormProps {
   /** Cluster currently being unstaked from. */
   cluster: ClusterDirectoryEntry;
-  /** Current delegation weight to this cluster (bps). The form's max
-   *  enforcement uses this directly. */
+  /** Current delegation weight to this cluster (bps). Displayed; the
+   *  whole row is removed regardless of amount. */
   currentWeightBps: number;
-  /** Amount string. The parent owns it so a transition back to the
-   *  delegation list and back doesn't lose typing. */
-  amountStr: string;
-  onAmountChange: (next: string) => void;
   /** Compatibility prop name retained for existing callers. Value is
    *  v4.1 native lythoshi, not 18-decimal EVM wei. Used to display
-   *  the LYTH amount the bps weight represents. */
+   *  the LYTH amount the current weight represents. */
   balanceWei: bigint | null;
   onContinue: () => void;
   onBack: () => void;
@@ -70,34 +63,15 @@ export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
 export function UnstakeForm({
   cluster,
   currentWeightBps,
-  amountStr,
-  onAmountChange,
   balanceWei,
   onContinue,
   onBack,
 }: UnstakeFormProps) {
-  const amountLythoshi = useMemo(() => lythToLythoshi(amountStr), [amountStr]);
   const currentDelegationLythoshi =
     balanceWei !== null && currentWeightBps > 0
       ? (balanceWei * BigInt(currentWeightBps)) / 10_000n
       : 0n;
-  const removeBps =
-    amountLythoshi !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountLythoshi, balanceWei)
-      : 0;
-
-  const exceedsDelegation = removeBps > currentWeightBps;
-  const amountIsZero = amountLythoshi === null || amountLythoshi === 0n;
-  const canContinue = !amountIsZero && !exceedsDelegation && balanceWei !== null;
-
-  const handleMax = () => {
-    if (balanceWei === null || currentWeightBps <= 0) return;
-    // Max = full current delegation amount in this cluster.
-    onAmountChange(
-      lythoshiToLyth(currentDelegationLythoshi, NATIVE_LYTH_DECIMALS),
-    );
-  };
-
+  const hasDelegation = currentWeightBps > 0 && balanceWei !== null;
   const aprBps = cluster.aprBps ?? null;
 
   return (
@@ -154,85 +128,40 @@ export function UnstakeForm({
         </div>
       </div>
 
-      {/* Amount input */}
+      {/* Full-row removal notice — the chain has no partial unstake. */}
       <div className="ext-card" style={{ padding: 14 }}>
-        <div style={cardLabel}>Amount to remove</div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            marginTop: 6,
-          }}
-        >
-          <input
-            type="text"
-            value={amountStr}
-            onChange={(e) => onAmountChange(e.target.value.trim())}
-            placeholder="0.0"
-            inputMode="decimal"
-            style={amountInputStyle}
-          />
-          <button
-            onClick={handleMax}
-            disabled={balanceWei === null || currentWeightBps <= 0}
-            style={{
-              ...inlineBtnStyle,
-              opacity: balanceWei === null || currentWeightBps <= 0 ? 0.5 : 1,
-            }}
-            type="button"
-          >
-            Max
-          </button>
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 11,
-              color: "var(--fg-400)",
-            }}
-          >
-            LYTH
-          </div>
-        </div>
-        {exceedsDelegation && (
-          <div style={inlineErr}>
-            Amount exceeds your current delegation in this cluster (
-            {lythoshiToLyth(currentDelegationLythoshi)} LYTH).
-          </div>
-        )}
+        <div style={cardLabel}>Unstake all</div>
         <div style={fromHint}>
-          Available immediately — zero-unbond for delegators.
-          {amountLythoshi !== null &&
-            amountLythoshi > 0n &&
-            !exceedsDelegation && (
-              <>
-                {" "}
-                Removing {(removeBps / 100).toFixed(2)}% · leaves{" "}
-                {((currentWeightBps - removeBps) / 100).toFixed(2)}% delegated.
-              </>
-            )}
+          {hasDelegation ? (
+            <>
+              Removes your <strong>entire</strong> delegation from this cluster
+              ({lythoshiToLyth(currentDelegationLythoshi)} LYTH ·{" "}
+              {(currentWeightBps / 100).toFixed(2)}%). The chain has no partial
+              unstake. Your principal enters the redemption queue and becomes
+              claimable once the ticket matures. Re-delegate any amount
+              afterward.
+            </>
+          ) : (
+            <>You have no active delegation in this cluster to unstake.</>
+          )}
         </div>
       </div>
 
       <button
         className="ext-act prim"
         onClick={onContinue}
-        disabled={!canContinue}
+        disabled={!hasDelegation}
         style={{
           width: "100%",
           padding: "12px",
           flexDirection: "row",
           gap: 8,
-          opacity: canContinue ? 1 : 0.5,
-          cursor: canContinue ? "pointer" : "default",
+          opacity: hasDelegation ? 1 : 0.5,
+          cursor: hasDelegation ? "pointer" : "default",
         }}
       >
         <Icon name="check" size={12} />
-        {amountIsZero
-          ? "Enter an amount"
-          : exceedsDelegation
-            ? "Reduce amount"
-            : "Review unstake"}
+        {hasDelegation ? "Review unstake (full)" : "No active delegation"}
       </button>
     </div>
   );
@@ -268,37 +197,6 @@ const cardLabel: CSSProperties = {
   color: "var(--fg-400)",
   letterSpacing: "0.14em",
   textTransform: "uppercase",
-};
-
-const amountInputStyle: CSSProperties = {
-  flex: 1,
-  padding: "10px 12px",
-  borderRadius: 10,
-  background: "rgba(0,0,0,0.3)",
-  border: "1px solid var(--fg-700)",
-  color: "var(--fg-100)",
-  fontSize: 13,
-  fontFamily: "var(--f-mono)",
-  boxSizing: "border-box",
-};
-
-const inlineBtnStyle: CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 10,
-  border: "1px solid var(--fg-700)",
-  background: "rgba(255,255,255,0.04)",
-  color: "var(--fg-100)",
-  fontFamily: "var(--f-sans)",
-  fontSize: 11,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-
-const inlineErr: CSSProperties = {
-  fontFamily: "var(--f-mono)",
-  fontSize: 10,
-  color: "var(--err)",
-  marginTop: 6,
 };
 
 const fromHint: CSSProperties = {
