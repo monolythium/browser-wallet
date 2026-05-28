@@ -125,7 +125,10 @@ jobs:
 
   publish-firefox:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.upload == 'true'
+    # Disabled — Firefox AMO requires `browser_specific_settings.gecko.id`
+    # in manifest.json, which we haven't allocated yet. Re-enable by
+    # removing this `if: false` once the AMO ID lands.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -188,7 +191,7 @@ jobs:
           path: "*.cosign.bundle"
 
   release:
-    needs: [build, sign, publish-firefox]
+    needs: [build, sign]
     if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
     runs-on: ubuntu-latest
     steps:
