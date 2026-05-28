@@ -6,8 +6,8 @@
 // card surfaces `via: "mock"` with an explicit illustrative banner so
 // fallback figures don't look like live reward state.
 //
-// Claim path: `claimRewards()` is a selector-only precompile call
-// (no args). Encoded via shared/staking-tx.ts:encodeClaimRewards()
+// Claim path: `claim()` is a selector-only precompile call (no args;
+// SDK encodeClaimCalldata). Encoded via shared/staking-tx.ts:encodeClaimRewards()
 // and routed through bgWalletSendTx exactly like delegate/undelegate.
 // One tx claims across every active delegation.
 
