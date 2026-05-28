@@ -1,8 +1,9 @@
 // ClusterPicker. Renders the cluster directory with the metadata a
-// delegator needs to choose informed: health, regions, member count,
-// Foundation badge. APR + reputation render as "—" until the chain
-// surfaces the underlying primitives — the wallet refuses to display
-// synthesised values as if they were chain truth (issue #1).
+// delegator needs to choose informed: APR, health, regions, member
+// count, Foundation badge. APR is the real `lyth_clusterApr` value
+// (PING #7) off `cluster.aprBps`; reputation renders "—" until the
+// chain surfaces a per-cluster reputation reader (PING #11) — the
+// wallet refuses to display synthesised values as chain truth (issue #1).
 //
 // Two interaction patterns:
 //   - Tap a cluster row to select it (border flips to gold, calls
@@ -13,15 +14,15 @@
 //
 // Filters:
 //   - Free-text search across cluster name + numeric id + region tags.
-//   - Sort by decentralization (geographic-diversity-weighted score;
-//     lower correlation surfaces first). APR + reputation sort modes
-//     would be dishonest while the values aren't chain-real.
+//   - Sort by APR (real lyth_clusterApr, default-yield) or
+//     decentralization (geographic-diversity + entity-independence,
+//     both chain-sourced). Reputation sort stays dropped (no reader).
 
 import { useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
 import { type ClusterDirectoryEntry } from "../../shared/staking";
 
-type SortMode = "decentralization";
+type SortMode = "apr" | "decentralization";
 
 interface ClusterPickerProps {
   /** Full cluster list to render. Empty list shows the empty state. */
@@ -63,7 +64,7 @@ export function ClusterPicker({
   onShowDetails,
 }: ClusterPickerProps) {
   const [search, setSearch] = useState("");
-  const [sortMode, setSortMode] = useState<SortMode>("decentralization");
+  const [sortMode, setSortMode] = useState<SortMode>("apr");
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const visible = useMemo(() => {
@@ -80,12 +81,18 @@ export function ClusterPicker({
             return false;
           });
     return filtered.sort((a, b) => {
-      // Only one honest sort mode for now. APR + reputation modes
-      // would require chain primitives we don't yet read; they'll
-      // return once the readers land.
+      // APR sort reads the real `lyth_clusterApr` value off
+      // `cluster.aprBps` (PING #7). Reputation sort stays dropped — no
+      // chain per-cluster reputation reader yet (PING #11).
       switch (sortMode) {
-        case "decentralization":
+        case "apr": {
+          const aa = a.aprBps ?? 0;
+          const bb = b.aprBps ?? 0;
+          return bb - aa;
+        }
+        case "decentralization": {
           return decentralizationScore(b) - decentralizationScore(a);
+        }
       }
     });
   }, [clusters, search, sortMode]);
@@ -111,8 +118,9 @@ export function ClusterPicker({
           onChange={(e) => setSortMode(e.target.value as SortMode)}
           style={sortSelectStyle}
         >
-          {/* APR + Reputation sort modes drop until the chain surfaces
-              the underlying primitives — see issue #1. */}
+          {/* APR sorts on the real lyth_clusterApr value (PING #7).
+              Reputation sort stays dropped — no chain reader (PING #11). */}
+          <option value="apr">APR</option>
           <option value="decentralization">Decentralization</option>
         </select>
       </div>
@@ -175,10 +183,11 @@ function ClusterRow({
   onToggleExpand,
   onShowDetails,
 }: ClusterRowProps) {
-  // APR + reputation always render as null ("—") until a real
-  // per-cluster reader lands on chain. Synthesised mocks were dropped
-  // in v0.1.1 (issue #1) to avoid presenting them as chain truth.
-  const aprBps: number | null = null;
+  // APR is the real chain value (`lyth_clusterApr` → `cluster.aprBps`,
+  // PING #7); `null` (failed/absent call) renders "—". Reputation stays
+  // null ("—") — no per-cluster reputation reader yet (PING #11); the
+  // synthesised mock was dropped in v0.1.1 (issue #1).
+  const aprBps = cluster.aprBps ?? null;
   const reputation: number | null = null;
   const isFoundation = cluster.entity === "mono-labs";
 

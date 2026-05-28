@@ -36,6 +36,7 @@ vi.mock("./tx-mldsa.js", () => ({
 
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import {
+  readClusterApr,
   readClusterDelegators,
   readClusterDirectory,
   readClusterServiceTiers,
@@ -123,6 +124,13 @@ describe("readClusterDirectory", () => {
           result: { cluster, entity: cluster === 1 ? "mono-labs" : "independent" },
         };
       }
+      if (method === "lyth_clusterApr") {
+        const cluster = (params as [number])[0];
+        return {
+          via: "operator-2",
+          result: { clusterId: cluster, aprBps: cluster === 1 ? 820 : 0 },
+        };
+      }
       throw new Error(`unexpected method ${method}`);
     });
 
@@ -134,9 +142,49 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[1]?.entity).toBe("independent");
     expect(r.data.clusters[0]?.regions).toEqual(["fsn1", "nbg1"]);
     expect(r.data.clusters[0]?.health).toBe("healthy");
+    // PING #7 — the directory fanout stitches the chain-observed APR onto
+    // each row. aprBps: 0 is a legitimate "no rewards in window" value.
+    expect(r.data.clusters[0]?.aprBps).toBe(820);
+    expect(r.data.clusters[1]?.aprBps).toBe(0);
     // The cluster-name registry is not yet emitted by the SDK; the
     // wallet normalises name to null on every directory row.
     expect(r.data.clusters[0]?.name).toBeNull();
+  });
+
+  it("sets aprBps null on every row when lyth_clusterApr is unavailable", async () => {
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusterDirectory") {
+        return {
+          via: "operator-1",
+          result: {
+            page: 0,
+            limit: 25,
+            totalClusters: 1,
+            clusters: [
+              {
+                clusterId: 5,
+                size: 10,
+                threshold: 7,
+                aggregateHealth: "ok",
+                regionDiversity: null,
+                active: true,
+              },
+            ],
+          },
+        };
+      }
+      if (method === "lyth_getClusterEntity") {
+        return { via: "operator-1", result: { cluster: 5, entity: "independent" } };
+      }
+      if (method === "lyth_clusterApr") {
+        throw methodNotFoundError("lyth_clusterApr");
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.clusters[0]?.aprBps).toBeNull();
   });
 
   it("propagates ok:false when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
@@ -250,6 +298,54 @@ describe("readClusterDirectory", () => {
     expect(r.data.totalClusters).toBe(1);
     expect(r.data.clusters[0]?.clusterId).toBe(42);
     expect(r.data.clusters[0]?.entity).toBe("independent");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterApr — PING #7 (mono-core 253cac0b, live v0.0.11-testnet)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterApr", () => {
+  it("returns the chain-observed aprBps on a well-formed response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-2",
+      result: {
+        clusterId: 3,
+        aprBps: 940,
+        blocks: { from: 8200, to: 9400, window: 1200 },
+        totalBps: 5000,
+        stakePerBpsLythoshi: 100000000,
+      },
+    });
+    const r = await readClusterApr(3);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.aprBps).toBe(940);
+  });
+
+  it("treats aprBps: 0 as a legitimate success (no rewards in window)", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { clusterId: 0, aprBps: 0 },
+    });
+    const r = await readClusterApr(0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.aprBps).toBe(0);
+  });
+
+  it("propagates ok:false when the method is absent", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError("lyth_clusterApr"));
+    const r = await readClusterApr(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects a malformed response (aprBps missing / non-numeric)", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: { clusterId: 0 } });
+    const r = await readClusterApr(0);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
   });
 });
 

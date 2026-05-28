@@ -11,10 +11,7 @@
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import { Icon } from "../Icon";
-import {
-  MOCK_CLUSTER_APR_BPS,
-  type ClusterDirectoryEntry,
-} from "../../shared/staking";
+import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { lythAmountToBps } from "../../shared/staking-tx";
 
 export interface RedelegateFormProps {
@@ -236,9 +233,9 @@ export function RedelegateForm({
                 }}
               >
                 APR{" "}
-                {MOCK_CLUSTER_APR_BPS[dstCluster.clusterId] === undefined
+                {dstCluster.aprBps === undefined || dstCluster.aprBps === null
                   ? "—"
-                  : `${(MOCK_CLUSTER_APR_BPS[dstCluster.clusterId]! / 100).toFixed(2)}%`}
+                  : `${(dstCluster.aprBps / 100).toFixed(2)}%`}
               </div>
             </button>
           )}
