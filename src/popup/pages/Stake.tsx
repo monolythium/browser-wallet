@@ -53,7 +53,6 @@ import {
   lythoshiToLythDecimal,
   parseHexQuantity,
 } from "../../shared/native-amount";
-import { MOCK_CLUSTER_APR_BPS } from "../../shared/staking";
 import {
   pickMaxDecentralization,
   pickMaxDiversity,
@@ -962,7 +961,7 @@ function PreviewView({
   onBack,
 }: PreviewViewProps) {
   const amountLythoshi = parseLythAmountToLythoshi(amountStr);
-  const aprBps = MOCK_CLUSTER_APR_BPS[cluster.clusterId] ?? null;
+  const aprBps = cluster.aprBps ?? null;
   const moveBps =
     amountLythoshi !== null && balanceLythoshi !== null && balanceLythoshi > 0n
       ? lythAmountToBps(amountLythoshi, balanceLythoshi)
