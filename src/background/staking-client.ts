@@ -31,7 +31,6 @@ import { NODE_REGISTRY_CAPABILITIES } from "@monolythium/core-sdk";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   MOCK_CLUSTER_APR_BPS,
-  MOCK_CLUSTER_REPUTATION,
   type ClusterDelegatorsView,
   type ClusterDirectoryEntry,
   type ClusterDirectoryPage,
@@ -1129,7 +1128,8 @@ export async function readRedemptionQueue(
 // Helpers re-exported for service-worker.ts test fixtures
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Mock reputation table — exposed so the SW IPC handlers can stitch a
- *  per-cluster reputation hint into the directory response when the
- *  chain doesn't surface one. */
-export { MOCK_CLUSTER_APR_BPS, MOCK_CLUSTER_REPUTATION };
+// MOCK_CLUSTER_APR_BPS / MOCK_CLUSTER_REPUTATION re-exports retired
+// in v0.1.1 (issue #4). The picker no longer reads them and the
+// remaining internal use (mockPendingRewardsView, internal-only) is
+// scoped to this module. The constants stay imported from
+// ../shared/staking for that single use site.

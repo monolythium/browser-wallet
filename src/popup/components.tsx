@@ -2874,6 +2874,10 @@ const CLOB_PLACE_LIMIT_ORDER_SELECTOR = "0x2468786f";
 const CLOB_PLACE_MARKET_ORDER_SELECTOR = "0xb9b1fa86";
 const CLOB_PLACE_MARKET_ORDER_EX_SELECTOR = "0xa6f092f0";
 const CLOB_CANCEL_ORDER_SELECTOR = "0x7489ec23";
+// ASCII-bytes sentinel — `0x` + hex("MARKET_NATIVE_MOD_V1"). Compared
+// against `tx.to.toLowerCase()` during calldata decoding to route the
+// tx into the native-market renderer. NOT a real chain address; per
+// ADR-0038 typed addresses live in the bech32m space.
 const NATIVE_MARKET_MODULE_ADDRESS_HEX = "0x4d41524b45545f4e41544956455f4d4f445f5631";
 const NATIVE_MARKET_MODULE_ADDRESS_TYPED = addressToTypedBech32(
   "systemModule",
