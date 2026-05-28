@@ -429,6 +429,11 @@ export function Stake({
     try {
       let data: string;
       let executionUnitLimitHex: string;
+      // Native LYTH principal sent as `msg.value`. Only `delegate` commits
+      // principal (mono-core ops.rs `principal_delta = ctx.value`); the
+      // others are weight-only / selector-only. valueWeiHex carries native
+      // lythoshi (8-decimal), matching the Send path's value convention.
+      let valueWeiHex = "0x0";
       if (action === "claim") {
         data = encodeClaimRewards();
         executionUnitLimitHex = "0x14820"; // 84000 — selector-only allowance
@@ -451,14 +456,20 @@ export function Stake({
           return;
         }
         const bps = lythAmountToBps(amountLythoshi, balanceLythoshi);
-        data =
-          action === "delegate"
-            ? encodeDelegate(selectedCluster!.clusterId, bps)
-            : encodeRedelegate(
-                selectedCluster!.clusterId,
-                redelegateDstClusterId!,
-                bps,
-              );
+        if (action === "delegate") {
+          data = encodeDelegate(selectedCluster!.clusterId, bps);
+          // delegate is principal-backed: the entered LYTH amount is the
+          // staked principal and must travel as msg.value (NOT 0x0, which
+          // would lock a voting weight with zero recoverable capital).
+          // weightBps in the calldata is the separate voting-power share.
+          valueWeiHex = "0x" + amountLythoshi.toString(16);
+        } else {
+          data = encodeRedelegate(
+            selectedCluster!.clusterId,
+            redelegateDstClusterId!,
+            bps,
+          );
+        }
         // The delegation precompile's execution-unit budget isn't measured yet
         // (chain GAP — needs Nayiem). Use a generous overhead-aware
         // estimate; redelegate carries one extra arg so we bump the
@@ -467,7 +478,7 @@ export function Stake({
       }
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
-        valueWeiHex: "0x0",
+        valueWeiHex,
         chainIdHex: chainId,
         data,
         executionUnitLimitHex,
@@ -1069,7 +1080,7 @@ function PreviewView({
           }}
         >
           {action === "delegate" &&
-            "Submits `delegate(clusterId, weightBps)` to the delegation precompile via the encrypted-mempool path."}
+            "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile via the encrypted-mempool path; the LYTH amount is sent as msg.value (your staked principal)."}
           {action === "undelegate" &&
             "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
           {action === "redelegate" &&
