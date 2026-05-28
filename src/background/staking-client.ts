@@ -94,6 +94,19 @@ interface RawClusterEntity {
   entity?: string;
 }
 
+// Direct RPC contract: `lyth_clusterApr(clusterId, [windowBlocks?])`
+// (mono-core `253cac0b`). Not yet typed by the SDK (0.3.9 exposes no
+// clusterApr wrapper), so the wallet calls JSON-RPC directly and reads
+// the `aprBps` baseline. Wire form keeps every field optional so a
+// misbehaving operator can't crash the parser. The chain also returns
+// `rewardIndex*` / `totalBps` raw observables for clients computing a
+// personalised APR against their own stake/bps ratio; the wallet only
+// surfaces the baseline `aprBps` today.
+interface RawClusterApr {
+  clusterId?: number;
+  aprBps?: number;
+}
+
 /** Map chain's `aggregateHealth` token vocabulary onto the wallet's
  *  `ClusterHealth` enum. Verified 2026-05-27 against mono-core
  *  `crates/core/runtime/src/providers.rs:6848-6854, 6905-6911` —
@@ -119,6 +132,7 @@ function normaliseHealth(raw: unknown): ClusterHealth {
 function normaliseDirectoryEntry(
   raw: RawClusterDirectoryEntry,
   entityByCluster: Map<number, string>,
+  aprByCluster: Map<number, number>,
 ): ClusterDirectoryEntry | null {
   if (typeof raw.clusterId !== "number") return null;
   return {
@@ -134,7 +148,42 @@ function normaliseDirectoryEntry(
     regions: Array.isArray(raw.regionDiversity) ? raw.regionDiversity.slice() : [],
     active: raw.active === true,
     entity: entityByCluster.get(raw.clusterId) ?? null,
+    aprBps: aprByCluster.has(raw.clusterId)
+      ? aprByCluster.get(raw.clusterId)!
+      : null,
   };
+}
+
+/** Read a cluster's observed APR (basis points) via `lyth_clusterApr`.
+ *  Returns `ok: false` on transport / RPC error or method-absence so the
+ *  caller can fall back to `—` per no-mock-fallbacks; `aprBps: 0` is a
+ *  legitimate success value (no reward-index growth observed in the
+ *  window). The chain's optional `windowBlocks` second param is left at
+ *  its server-side default (1200 ≈ 1h). */
+export async function readClusterApr(
+  clusterId: number,
+): Promise<StakingResult<{ aprBps: number }>> {
+  try {
+    const { result, via } = await sprintnetJsonRpc<RawClusterApr>(
+      "lyth_clusterApr",
+      [clusterId],
+    );
+    if (
+      !result ||
+      typeof result !== "object" ||
+      typeof result.aprBps !== "number" ||
+      !Number.isFinite(result.aprBps) ||
+      result.aprBps < 0
+    ) {
+      return { ok: false, reason: "malformed lyth_clusterApr response" };
+    }
+    return { ok: true, via, data: { aprBps: Math.floor(result.aprBps) } };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: (e as Error)?.message ?? "lyth_clusterApr unreachable",
+    };
+  }
 }
 
 /** Read the chain's cluster directory. Propagates `ok: false` on transport
@@ -155,29 +204,40 @@ export async function readClusterDirectory(
     ) {
       return { ok: false, reason: "malformed lyth_clusterDirectory response" };
     }
+    const clusterIds = result.clusters
+      .filter((c): c is RawClusterDirectoryEntry => typeof c?.clusterId === "number")
+      .map((c) => c.clusterId!);
     // Best-effort: fan out per-cluster `lyth_getClusterEntity` so each row
     // carries its Foundation / community badge. Failures are silent —
     // entity flag goes null rather than fail-the-whole-directory.
     const entityByCluster = new Map<number, string>();
+    // Best-effort: fan out per-cluster `lyth_clusterApr` so each row carries
+    // its observed APR (PING #7, mono-core `253cac0b`). Failures are silent —
+    // aprBps goes null and the UI renders `—` rather than fail the directory.
+    const aprByCluster = new Map<number, number>();
     await Promise.all(
-      result.clusters
-        .filter((c): c is RawClusterDirectoryEntry => typeof c?.clusterId === "number")
-        .map(async (c) => {
+      clusterIds.flatMap((clusterId) => [
+        (async () => {
           try {
             const { result: raw } = await sprintnetJsonRpc<RawClusterEntity>(
               "lyth_getClusterEntity",
-              [c.clusterId!],
+              [clusterId],
             );
             if (typeof raw?.entity === "string") {
-              entityByCluster.set(c.clusterId!, raw.entity);
+              entityByCluster.set(clusterId, raw.entity);
             }
           } catch {
             // entity lookup is best-effort
           }
-        }),
+        })(),
+        (async () => {
+          const apr = await readClusterApr(clusterId);
+          if (apr.ok) aprByCluster.set(clusterId, apr.data.aprBps);
+        })(),
+      ]),
     );
     const clusters = result.clusters
-      .map((c) => normaliseDirectoryEntry(c, entityByCluster))
+      .map((c) => normaliseDirectoryEntry(c, entityByCluster, aprByCluster))
       .filter((c): c is ClusterDirectoryEntry => c !== null);
     return {
       ok: true,
