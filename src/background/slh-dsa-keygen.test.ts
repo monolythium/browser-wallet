@@ -1,11 +1,14 @@
-// Phase 10 Commit 2 — SLH-DSA keygen + AEAD-wrap round-trip tests.
+// SLH-DSA keygen + AEAD-wrap round-trip tests.
 //
 // These tests touch real `@noble/post-quantum` cryptography but never
-// chrome.storage. SLH-DSA-SHA2-128s keygen on the 's' variant runs in
-// ~10 ms on commodity laptops; the full test file completes in
-// well under a second.
+// chrome.storage. SLH-DSA-SHA2-128s keygen is fast in isolation
+// (sub-second), but under the full 66-file suite's parallel CPU
+// contention a single keygen has been observed to run several seconds —
+// past the 5000 ms vitest default. A generous file-level testTimeout
+// (every test here is crypto-heavy) avoids flaky timeouts without
+// masking genuine hangs in lighter tests elsewhere.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { slh_dsa_sha2_128s } from "@noble/post-quantum/slh-dsa.js";
 
 import { SLH_DSA_SHA2_128S_LENGTHS } from "../shared/slh-dsa-backup.js";
@@ -22,6 +25,10 @@ import {
   wrapBackupEntropy,
   wrapSlhDsaSecret,
 } from "./slh-dsa-keygen.js";
+
+// SLH-DSA keygen under full-suite contention can exceed the 5000 ms
+// default; every test in this file is crypto-heavy.
+vi.setConfig({ testTimeout: 30_000 });
 
 /** Deterministic 32-byte entropy fixture — matches Phase 10's
  *  documented `SLH_DSA_BACKUP_ENTROPY_BYTES`. */
