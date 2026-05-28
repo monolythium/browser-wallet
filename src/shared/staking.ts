@@ -63,6 +63,15 @@ export interface ClusterDirectoryEntry {
    *  for community clusters; pass-through for anything else the chain
    *  emits. */
   entity: string | null;
+  /** Observed APR in basis points from `lyth_clusterApr(clusterId)`
+   *  (mono-core `253cac0b`, live since v0.0.11-testnet). Derived from
+   *  cumulative reward-index growth over a rolling ~1h window; `0` is a
+   *  legitimate chain value meaning "no rewards observed in the window
+   *  yet" (early-testnet / no-proposing state). `null` when the
+   *  per-cluster fanout call failed or the operator doesn't expose the
+   *  method — display falls back to `—` per no-mock-fallbacks. Optional
+   *  so non-directory ClusterDirectoryEntry fixtures stay valid. */
+  aprBps?: number | null;
 }
 
 /** Paginated wrapper. Mirrors SDK `ClusterDirectoryPageResponse`. */
@@ -447,12 +456,20 @@ export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
  *  marginally above Foundation clusters since the Foundation burns its
  *  rewards per §30.5).
  *
- *  chain GAP — see `_dev-notes/browser-wallet/active-nayiem-pings.md`
- *  PING #7 (APR / reward-rate chain primitive). No `lyth_clusterApr`,
- *  `lyth_rewardRate`, or `lyth_clusterRewardShare` reader exists in
- *  mono-core protocore.rs as of HEAD f7236197 (2026-05-27). The §23.5
- *  quadratic reward curve is deterministic by design, so a future
- *  activation just swaps the table for a per-cluster call. */
+ *  RETIRED FROM USER-FACING DISPLAY — the chain now exposes
+ *  `lyth_clusterApr(clusterId)` (mono-core `253cac0b`, live since
+ *  v0.0.11-testnet). The Stake-page APR cells read the real value off
+ *  `ClusterDirectoryEntry.aprBps` (populated by the directory fanout in
+ *  `staking-client.ts::readClusterApr`). PING #7 is resolved for the
+ *  display path.
+ *
+ *  This table is NOT yet deletable: it still feeds (1) the autovote
+ *  Max-Yield scorer (`src/shared/autovote.ts::clusterApr`, a sync
+ *  deterministic algorithm — converting it to the async chain reader is
+ *  the flagged "autovote Max-Yield disposition" follow-up) and (2) the
+ *  `lyth_pendingRewards`-unavailable fallback in
+ *  `staking-client.ts::mockPendingRewardsView`. Both must move to the
+ *  real reader before this constant can be removed. */
 export const MOCK_CLUSTER_APR_BPS: Readonly<Record<number, number>> = {
   1: 820, // 8.20% — Foundation, mid-saturation
   2: 805, // 8.05% — Foundation
