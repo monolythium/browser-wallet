@@ -87,25 +87,27 @@ export interface ClusterDirectoryPage {
 export interface ClusterMember {
   operatorId: string;
   blsPubkey: string;
-  /** Operator lifecycle state — verified 2026-05-27 against mono-core
-   *  `crates/core/runtime/src/providers.rs:6195-6205`, the chain emits
-   *  exactly three tokens:
+  /** Operator membership state inside this cluster. Free-form string on
+   *  the wire (`ClusterMemberResponse.state` is `string` in SDK 0.3.9 —
+   *  no formal enum yet, PING #11). Live `lyth_clusterStatus(0)` probes
+   *  against op-1 (`178.105.15.216`, height ~87828, 2026-05-27) return a
+   *  mix of these tokens:
    *
-   *  - `"active"` — currently signing (or jailed-but-expired, the
-   *     timeout-restoration path).
-   *  - `"jailed"` — in an active jail period (`Jailed { until_height }`
-   *     with `height < until_height`).
-   *  - `"offline"` — `Slashed { .. }` or `Ejected`.
+   *  - `"active"`  — currently signing.
+   *  - `"standby"` — in the cluster roster but not in the active signing
+   *     set (the chain DOES emit this post-regenesis — supersedes the
+   *     earlier "no standby token" reading).
+   *  - `"jailed"`  — in an active jail period.
+   *  - `"offline"` — slashed / ejected.
    *
-   *  No `"standby"` token exists on the chain side today (the chain's
-   *  internal `ClusterMember` is just `bls_pubkey + active: bool` —
-   *  there's no standby roster in the Rust data model). PING #11
-   *  tracks the long-term ask for a formal enum + an explicit
-   *  `standbyCount` field on `ClusterStatusResponse`.
+   *  PING #11 tracks the long-term ask for a formal enum on the SDK type
+   *  plus an explicit `standbyCount` aggregate on `ClusterStatusResponse`.
    *
-   *  The wallet renders the token pass-through; consumers that need
-   *  a specific colour code should map all three tokens explicitly
-   *  rather than rely on a default branch. */
+   *  The wallet renders the token pass-through. `StateChip`
+   *  (`ClusterDetail.tsx`) maps `"active"`/`"jailed"`/`"offline"`
+   *  explicitly; `"standby"` and any future token fall through to the
+   *  neutral muted-fg dot (a dedicated standby treatment is a flagged
+   *  PING #11 UX follow-up). */
   state: string;
 }
 
