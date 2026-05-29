@@ -43,6 +43,7 @@ import {
   classifyOperatorRisk,
   type OperatorRiskBadge,
 } from "../../shared/operator-risk";
+import { CHAIN_RETURNS_LEGACY_WEI } from "../../shared/chain-units";
 
 interface AboutProps {
   onBack: () => void;
@@ -616,9 +617,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH)" },
               {
                 k: "Chain decimal mode",
-                v: "legacy compat (wei wire) · wallet compensates",
-                title:
-                  "V4-LIVE-0008 operators (commit 5aead0f0) still report wei on the wire; wallet converts to lythoshi at IPC boundaries. Flip CHAIN_RETURNS_LEGACY_WEI=false when operators upgrade past a2a9e1fc.",
+                v: CHAIN_RETURNS_LEGACY_WEI
+                  ? "legacy compat (wei wire) · wallet compensates"
+                  : "lythoshi-native · no compensation",
+                title: CHAIN_RETURNS_LEGACY_WEI
+                  ? "V4-LIVE-0008 operators (commit 5aead0f0) still report wei on the wire; wallet converts to lythoshi at IPC boundaries. Flip CHAIN_RETURNS_LEGACY_WEI=false when operators upgrade past a2a9e1fc."
+                  : "Operators report 8-decimal lythoshi directly as of binary dc919df8 (2026-05-29); eth_getBalance, gas price, and lyth_executionUnitPrice fields are already in lythoshi, so the wallet applies no inbound wei compensation.",
               },
               {
                 k: "EVM compat",
