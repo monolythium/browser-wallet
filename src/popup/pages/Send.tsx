@@ -32,7 +32,11 @@ import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
-import { bech32mDisplay, bech32mToAddress } from "../../shared/bech32m";
+import {
+  bech32mDisplay,
+  bech32mToAddress,
+  type AddressKind,
+} from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
 import { classifySendError } from "../../shared/send-error";
 import {
@@ -43,7 +47,12 @@ import {
   type MonoNameParse,
   type NameCache,
 } from "../../shared/name-resolution";
-import { finalityPostureFor, monoscanTxUrl } from "../../shared/build-info";
+import {
+  finalityPostureFor,
+  monoscanTxUrl,
+  monoscanAddressUrl,
+} from "../../shared/build-info";
+import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
 import {
   activityCacheKey,
   activityPendingKey,
@@ -522,6 +531,13 @@ export function Send({
           explorerUrl={
             multisigVaultId === undefined ? monoscanTxUrl(txHash) : null
           }
+          fromAddr={account.addr}
+          to={effectiveAddr0x ?? to}
+          amountLythoshi={amountLythoshi}
+          feeLythoshi={estimatedFeeLythoshi}
+          tier={tier}
+          recipientContact={recipientContact}
+          recipientRegisteredName={recipientRegisteredName}
         />
         {/* Round 7 TASK 6 — post-send "save recipient" prompt. Fires
             after a non-multisig send when the recipient isn't already
@@ -2041,12 +2057,69 @@ interface SuccessViewProps {
   copied: boolean;
   onCopy: () => void;
   onDone: () => void;
-  /** Monoscan URL for the canonical tx hash, or null when the success item is
-   *  not a linkable on-chain tx (e.g. a multisig proposal id). */
+  /** Monoscan tx-page URL for the canonical hash, or null when the success
+   *  item is not a linkable on-chain tx (e.g. a multisig proposal id). */
   explorerUrl: string | null;
+  /** Sender (own wallet) raw 0x address. */
+  fromAddr: string;
+  /** Recipient raw 0x address. */
+  to: string;
+  amountLythoshi: bigint | null;
+  /** Chain fee, already computed by the send flow — NOT recomputed here. */
+  feeLythoshi: bigint | null;
+  tier: FeeTier;
+  recipientContact: ContactRecord | null;
+  recipientRegisteredName: string | null;
 }
 
-function SuccessView({ txHash, copied, onCopy, onDone, explorerUrl }: SuccessViewProps) {
+/** A bech32m address rendered as a Monoscan address-page link. Addresses are
+ *  always bech32m (`mono…`); the raw 0x form is never shown (§22.7). */
+function AddressLink({ addr0x, kind }: { addr0x: string; kind?: AddressKind }) {
+  const bech = bech32mDisplay(addr0x, kind);
+  return (
+    <a
+      href={monoscanAddressUrl(bech)}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="View address on Monoscan"
+      style={{
+        fontFamily: "var(--f-mono)",
+        color: "var(--fg-100)",
+        textDecoration: "none",
+        wordBreak: "break-all",
+      }}
+    >
+      {bech}
+    </a>
+  );
+}
+
+function SuccessView({
+  txHash,
+  copied,
+  onCopy,
+  onDone,
+  explorerUrl,
+  fromAddr,
+  to,
+  amountLythoshi,
+  feeLythoshi,
+  tier,
+  recipientContact,
+  recipientRegisteredName,
+}: SuccessViewProps) {
+  const isProposal = explorerUrl === null;
+  const total =
+    amountLythoshi !== null && feeLythoshi !== null
+      ? amountLythoshi + feeLythoshi
+      : null;
+  // Prefer the registered §22.8 name, then the contact name, then bare address.
+  const recipientLabel: string | null =
+    (recipientRegisteredName && recipientRegisteredName.length > 0
+      ? recipientRegisteredName
+      : null) ??
+    recipientContact?.name ??
+    null;
   return (
     <>
       <div className="ext-top">
@@ -2056,7 +2129,7 @@ function SuccessView({ txHash, copied, onCopy, onDone, explorerUrl }: SuccessVie
         <div
           style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
         >
-          Transaction sent
+          {isProposal ? "Proposal created" : "Transaction sent"}
         </div>
         <div style={{ width: 28 }} />
       </div>
@@ -2080,18 +2153,14 @@ function SuccessView({ txHash, copied, onCopy, onDone, explorerUrl }: SuccessVie
           >
             ✓
           </div>
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              color: "var(--fg-100)",
-            }}
-          >
-            Transaction submitted
+          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-100)" }}>
+            {isProposal ? "Proposal submitted" : "Transaction submitted"}
           </div>
         </div>
 
         <div className="ext-card" style={{ padding: 14 }}>
+          {/* Hash (top) — clickable to the Monoscan tx page, with the same
+              copy affordance the wallet-address rows use. */}
           <div
             style={{
               fontFamily: "var(--f-mono)",
@@ -2102,71 +2171,162 @@ function SuccessView({ txHash, copied, onCopy, onDone, explorerUrl }: SuccessVie
               marginBottom: 8,
             }}
           >
-            Transaction hash
+            {isProposal ? "Proposal ID" : "Transaction hash"}
           </div>
           <div
             style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "var(--fg-100)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
               padding: "10px 12px",
               borderRadius: 10,
               background: "rgba(0,0,0,0.3)",
               border: "1px solid var(--fg-700)",
-              wordBreak: "break-all",
-              userSelect: "all",
             }}
           >
-            {txHash}
+            {explorerUrl !== null ? (
+              <a
+                href={explorerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="View transaction on Monoscan"
+                style={{
+                  flex: 1,
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: "var(--fg-100)",
+                  textDecoration: "none",
+                  wordBreak: "break-all",
+                }}
+              >
+                {txHash}
+              </a>
+            ) : (
+              <span
+                style={{
+                  flex: 1,
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: "var(--fg-100)",
+                  wordBreak: "break-all",
+                  userSelect: "all",
+                }}
+              >
+                {txHash}
+              </span>
+            )}
+            <button
+              onClick={onCopy}
+              aria-label="Copy transaction hash"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 22,
+                height: 22,
+                padding: 0,
+                background: "transparent",
+                border: "none",
+                color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              {copied ? <CheckIcon /> : <ClipboardIcon />}
+            </button>
           </div>
-          <button
+
+          <div style={{ marginTop: 10 }}>
+            <SummaryRow
+              label="From"
+              value={<AddressLink addr0x={fromAddr} />}
+              mono
+            />
+            {recipientLabel !== null ? (
+              <SummaryRow
+                label="To"
+                value={
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      gap: 2,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: "var(--f-sans)",
+                        fontWeight: 600,
+                        fontSize: 12.5,
+                        color: "var(--fg-100)",
+                      }}
+                      title={recipientLabel}
+                    >
+                      {recipientLabel}
+                    </span>
+                    <AddressLink addr0x={to} />
+                  </div>
+                }
+              />
+            ) : (
+              <SummaryRow label="To" value={<AddressLink addr0x={to} />} mono />
+            )}
+            <SummaryRow
+              label="Amount"
+              value={
+                amountLythoshi !== null
+                  ? formatNativeLythAmount(amountLythoshi)
+                  : "—"
+              }
+              mono
+            />
+            <SummaryRow
+              label={`Fee · ${TIER_LABELS[tier]}`}
+              value={
+                feeLythoshi !== null ? formatNativeLythAmount(feeLythoshi) : "—"
+              }
+              mono
+            />
+            <div
+              style={{
+                marginTop: 8,
+                paddingTop: 10,
+                borderTop: "1px solid var(--fg-700)",
+              }}
+            >
+              <SummaryRow
+                label="Total"
+                value={total !== null ? formatNativeLythAmount(total) : "—"}
+                mono
+                emphasis
+              />
+            </div>
+          </div>
+        </div>
+
+        {explorerUrl !== null && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             className="ext-act"
-            onClick={onCopy}
             style={{
               width: "100%",
               padding: "10px",
+              display: "flex",
               flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
               gap: 8,
-              marginTop: 12,
+              textDecoration: "none",
             }}
           >
-            {copied ? "Copied" : "Copy tx hash"}
-          </button>
-          {explorerUrl !== null ? (
-            <a
-              href={explorerUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="ext-act"
-              style={{
-                width: "100%",
-                padding: "10px",
-                marginTop: 12,
-                display: "flex",
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                textDecoration: "none",
-              }}
-            >
-              <Icon name="globe" size={13} /> View on Monoscan
-            </a>
-          ) : (
-            <div
-              style={{
-                fontSize: 11,
-                color: "var(--fg-400)",
-                marginTop: 10,
-                lineHeight: 1.5,
-              }}
-            >
-              No explorer link for this item — keep this hash to track it on
-              an operator directly.
-            </div>
-          )}
-        </div>
+            <Icon name="globe" size={13} /> View on Monoscan
+          </a>
+        )}
 
         <button
           className="ext-act prim"
@@ -2176,6 +2336,7 @@ function SuccessView({ txHash, copied, onCopy, onDone, explorerUrl }: SuccessVie
             padding: "12px",
             flexDirection: "row",
             gap: 8,
+            marginTop: 10,
           }}
         >
           Done

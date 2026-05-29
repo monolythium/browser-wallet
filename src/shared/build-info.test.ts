@@ -4,7 +4,12 @@
 // drift from the explorer's hash-routed SPA path.
 
 import { describe, expect, it } from "vitest";
-import { MONOSCAN_TX_BASE, monoscanTxUrl } from "./build-info.js";
+import {
+  MONOSCAN_TX_BASE,
+  monoscanTxUrl,
+  MONOSCAN_ADDRESS_BASE,
+  monoscanAddressUrl,
+} from "./build-info.js";
 
 describe("monoscanTxUrl", () => {
   it("builds the hash-routed Monoscan tx URL", () => {
@@ -18,5 +23,19 @@ describe("monoscanTxUrl", () => {
 
   it("uses the #/tx/ SPA route base", () => {
     expect(MONOSCAN_TX_BASE).toBe("https://monoscan.xyz/#/tx/");
+  });
+});
+
+describe("monoscanAddressUrl", () => {
+  it("builds the hash-routed Monoscan address (wallet) URL from a bech32m address", () => {
+    const addr = "mono1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46";
+    expect(monoscanAddressUrl(addr)).toBe(`${MONOSCAN_ADDRESS_BASE}${addr}`);
+    expect(monoscanAddressUrl(addr)).toBe(
+      "https://monoscan.xyz/#/wallet/mono1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46",
+    );
+  });
+
+  it("uses the #/wallet/ SPA route base", () => {
+    expect(MONOSCAN_ADDRESS_BASE).toBe("https://monoscan.xyz/#/wallet/");
   });
 });
