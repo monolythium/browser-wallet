@@ -716,7 +716,7 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            Override the Sprintnet operator RPC list with your own operator
+            Override the Monolythium Testnet operator RPC list with your own operator
             nodes. Defaults use the 7 published operators in round-robin.
           </div>
           <button
