@@ -4124,9 +4124,10 @@ async function fetchOneAddressLabel(
  *
  *  The compatibility `valueWeiHex` field carries lythoshi here. Conversion
  *  to decimal LYTH happens inline via lythoshiHexToLythDecimal so the
- *  amountDecimal field is consistent with what mergeIndexerSnapshot receives
- *  on the confirmed side (AddressActivityEntry.amount is already a decimal
- *  string per the SDK binding). */
+ *  amountDecimal field is byte-identical to the confirmed side, which converts
+ *  the indexer's raw-lythoshi AddressActivityEntry.amount through the same
+ *  shared formatter (shared/lyth-units.ts). That exact-string equality is what
+ *  lets reconcilePending pair a pending row with its confirmed tx_send. */
 async function persistPendingRowBackground(args: {
   address: string;
   chainIdHex: string;
@@ -4184,6 +4185,43 @@ async function persistPendingRowBackground(args: {
     // itself was the issue, but that path is the broadcast handler's
     // catch block, not ours).
   }
+}
+
+/** Deterministic pending→confirmed eviction (C4). Once a tx carries its
+ *  canonical hash (submitEncryptedMlDsaTx surfaces `innerTxHashHex`), the chain
+ *  can be asked directly instead of relying solely on the counterparty+amount
+ *  heuristic. A pending row is dropped when `lyth_txStatus` reports it "found"
+ *  (fallback: a non-null `eth_getTransactionReceipt` with status 1). On any RPC
+ *  error / not_found the row is KEPT — the heuristic reconciler + PENDING_TTL_MS
+ *  backstop remain the safety nets, and we never synthesize a confirmation.
+ *  Bounded: pending lists are tiny (one entry per outstanding send). */
+async function dropConfirmedPendingByHash(
+  pending: PendingTxRow[],
+): Promise<PendingTxRow[]> {
+  const kept: PendingTxRow[] = [];
+  for (const p of pending) {
+    let confirmed = false;
+    try {
+      const { result } = await sprintnetJsonRpc<{ status?: string } | null>(
+        "lyth_txStatus",
+        [p.txHash],
+      );
+      if (result != null && result.status === "found") {
+        confirmed = true;
+      } else {
+        const receipt = await sprintnetJsonRpc<{ status?: number | string } | null>(
+          "eth_getTransactionReceipt",
+          [p.txHash],
+        );
+        const st = receipt.result?.status;
+        confirmed = receipt.result != null && (st === 1 || st === "0x1");
+      }
+    } catch {
+      // Status RPC unavailable / indexer disabled / not_found → keep the row.
+    }
+    if (!confirmed) kept.push(p);
+  }
+  return kept;
 }
 
 /** Persist the merged cache. Pending key only writes when its contents
@@ -6550,7 +6588,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const delegation = validateRawDelegationList(fresh.delegationHistory);
       const nextCache = mergeIndexerSnapshot({ activity, delegation }, now);
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
-      const nextPending = evictExpiredPending(reconciled, now);
+      const statusConfirmed = await dropConfirmedPendingByHash(reconciled);
+      const nextPending = evictExpiredPending(statusConfirmed, now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
       return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
     }
