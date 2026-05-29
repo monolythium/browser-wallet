@@ -6416,19 +6416,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   .map((f) => `${f.name}: ${f.reason}`)
                   .join(", ")})`
               : "";
-          // Sprintnet operators currently run V4-LIVE-0008 (commit 5aead0f0,
-          // 2026-05-18) which intentionally does NOT include the lythoshi-
-          // rescaling commits that landed on mono-core master after that
-          // date. They continue to report `eth_getBalance` in 18-decimal
-          // wei. The wallet's display path treats the bigint as lythoshi
-          // (8 decimals), so an uncompensated
-          // 0.1 LYTH balance (10^17 wei) renders as 10^9 = 1,000,000,000.
-          // Convert at the IPC boundary so the popup sees lythoshi-magnitude
-          // without changing the lythoshi-pure semantic of the shared
-          // display helpers. See shared/chain-units.ts for the migration
-          // switch — when operators upgrade past `a2a9e1fc` and report
-          // lythoshi-native, flip `CHAIN_RETURNS_LEGACY_WEI` to false and
-          // the conversion below becomes identity.
+          // Sprintnet operators now run the lythoshi-native binary
+          // `dc919df8` (2026-05-29): `eth_getBalance` is reported directly
+          // in 8-decimal lythoshi, which is exactly what the wallet's
+          // display path (`formatNativeLythAmount`) expects. The boundary
+          // helper below is therefore an identity passthrough — it is
+          // retained only as the single flag-aware chokepoint so the
+          // wallet can be re-pointed at a legacy-wei operator line by
+          // flipping `CHAIN_RETURNS_LEGACY_WEI` back to `true` in
+          // shared/chain-units.ts, with no change here. (Under the prior
+          // V4-LIVE-0008 line operators reported 18-decimal wei, so this
+          // divided by WEI_PER_LYTHOSHI to compensate.)
           const balanceHex = legacyChainBalanceHexToLythoshiHex(consensus.balanceHex);
           console.log(
             `[wallet] balance consensus: max=${consensus.balanceHex} (lythoshi=${balanceHex}) from ${consensus.contributing.length}/${total} operators${failSummary}`,
