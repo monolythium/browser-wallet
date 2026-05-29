@@ -43,6 +43,7 @@ import {
   type MonoNameParse,
   type NameCache,
 } from "../../shared/name-resolution";
+import { finalityPostureFor } from "../../shared/build-info";
 import {
   activityCacheKey,
   activityPendingKey,
@@ -298,6 +299,13 @@ export function Send({
     return contactsMap[key] ?? null;
   }, [selectedContact, effectiveAddr0x, contactsMap]);
 
+  // §25.2 item 6 — a §22.8 registered name for the recipient, reverse-
+  // resolved from the local name cache (the same cache the activity feed
+  // populates via lyth_getAddressLabel). Preferred over the contact name
+  // in the preview "To" row. There is no forward name->address RPC, so
+  // this is reverse-resolve + cache only (no new registry path).
+  const recipientRegisteredName = useRegisteredName(effectiveAddr0x);
+
   const handleMax = () => {
     if (balanceLythoshi === null || estimatedFeeLythoshi === null) return;
     const maxLythoshi = balanceLythoshi - estimatedFeeLythoshi;
@@ -479,6 +487,8 @@ export function Send({
           isMultisig={multisigVaultId !== undefined}
           passkeyDecision={passkeyDecision}
           recipientContact={recipientContact}
+          recipientRegisteredName={recipientRegisteredName}
+          finalityPosture={finalityPostureFor(chainId)}
         />
         {needsPasskey && passkeyDecision?.kind === "passkey-ok" && (
           <PasskeySignModal
@@ -1164,6 +1174,62 @@ function useNameForwardResolve(
   return state;
 }
 
+/**
+ * §25.2 item 6 — reverse-resolve a recipient address to its registered
+ * §22.8 display name from the local name cache (address-keyed,
+ * populated by lyth_getAddressLabel elsewhere in the popup). Returns the
+ * `displayName` string when the cache holds a non-null label for the
+ * address, else null. Subscribes to chrome.storage.onChanged so a fresh
+ * label resolved elsewhere lights up the preview without a re-render
+ * loop. No forward registry/RPC path — the SDK exposes no
+ * `lyth_resolveName`, so this is cache-only.
+ */
+function useRegisteredName(addr0x: string | null): string | null {
+  const [name, setName] = useState<string | null>(null);
+  const key = addr0x === null ? null : addr0x.toLowerCase();
+
+  useEffect(() => {
+    if (key === null) {
+      setName(null);
+      return;
+    }
+    let cancelled = false;
+
+    const resolve = (cache: NameCache) => {
+      if (cancelled) return;
+      const entry = cache[key];
+      const displayName = entry?.label?.displayName ?? null;
+      setName(typeof displayName === "string" && displayName.length > 0 ? displayName : null);
+    };
+
+    chrome.storage.local.get([STORAGE_KEY_NAME_CACHE], (res) => {
+      if (cancelled) return;
+      const validated = validateNameCache(res?.[STORAGE_KEY_NAME_CACHE]);
+      resolve(validated ?? {});
+    });
+
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      const change = changes[STORAGE_KEY_NAME_CACHE];
+      if (!change) return;
+      const validated = validateNameCache(change.newValue);
+      if (validated === null) return;
+      resolve(validated);
+    };
+    chrome.storage.onChanged.addListener(listener);
+
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [key]);
+
+  return name;
+}
+
 interface MonoNameResolveHintProps {
   parsed: MonoNameParse;
   resolution: NameResolutionState;
@@ -1370,6 +1436,14 @@ interface PreviewViewProps {
    *  saved contact. The "To" summary row renders the contact name
    *  above the bech32m address when present. */
   recipientContact?: ContactRecord | null;
+  /** §25.2 item 6 — recipient's §22.8 registered display name, reverse-
+   *  resolved from the local name cache. Preferred over the contact name
+   *  in the "To" row; null when the cache has no label for the address. */
+  recipientRegisteredName?: string | null;
+  /** §25.2 item 7 — static finality-posture label for the active chain
+   *  (e.g. "Anchor-level (LythiumDAG-BFT)" for native sends). Rendered as
+   *  one SummaryRow below "To". No per-tx finality RPC exists. */
+  finalityPosture?: string;
 }
 
 /** Phase 9 — preview-screen badge that tells the user which unlock
@@ -1693,10 +1767,23 @@ function PreviewView({
   isMultisig,
   passkeyDecision,
   recipientContact,
+  recipientRegisteredName,
+  finalityPosture,
 }: PreviewViewProps) {
   const total = amountLythoshi !== null && estimatedFeeLythoshi !== null
     ? amountLythoshi + estimatedFeeLythoshi
     : null;
+  // §25.2 item 6 — prefer the registered §22.8 name, then the contact
+  // name, then the bare bech32m. `recipientLabel` is null when neither a
+  // registered name nor a contact is known (bare-address render).
+  const recipientLabel: string | null =
+    (recipientRegisteredName && recipientRegisteredName.length > 0
+      ? recipientRegisteredName
+      : null) ??
+    recipientContact?.name ??
+    null;
+  const recipientLabelIsRegistered =
+    recipientLabel !== null && recipientLabel === recipientRegisteredName;
   return (
     <>
       <div className="ext-top">
@@ -1718,7 +1805,7 @@ function PreviewView({
              contact (either via the picker or because the typed
              address is known), show the contact name above the
              bech32m. Otherwise fall back to the bare address row. */}
-          {recipientContact ? (
+          {recipientLabel !== null ? (
             <SummaryRow
               label="To"
               value={
@@ -1736,10 +1823,22 @@ function PreviewView({
                       fontWeight: 600,
                       fontSize: 12.5,
                       color: "var(--fg-100)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
                     }}
-                    title={recipientContact.name}
+                    title={recipientLabel}
                   >
-                    {recipientContact.name}
+                    {recipientLabel}
+                    {recipientLabelIsRegistered && (
+                      <span
+                        className="ext-badge-att"
+                        style={{ fontSize: 9 }}
+                        title="Registered §22.8 name resolved from the chain address label."
+                      >
+                        name
+                      </span>
+                    )}
                   </span>
                   <span
                     style={{
@@ -1755,6 +1854,9 @@ function PreviewView({
             />
           ) : (
             <SummaryRow label="To" value={bech32mDisplay(to)} mono />
+          )}
+          {finalityPosture && (
+            <SummaryRow label="Finality" value={finalityPosture} />
           )}
           <SummaryRow
             label="Amount"
