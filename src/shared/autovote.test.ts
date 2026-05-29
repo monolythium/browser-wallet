@@ -267,6 +267,49 @@ describe("pickMaxDiversity", () => {
     expect(r.allocations).toEqual([]);
   });
 
+  it("ranks the highest real §25.1 diversity score first when present", () => {
+    // Two healthy independent clusters, equal reputation-table absence
+    // (both fall to the 0.5 default), differing only in their real chain
+    // diversity score. With capBps = target the algorithm picks one
+    // cluster; the higher chain score must be first.
+    const lowDiversity: ClusterDirectoryEntry = {
+      clusterId: 300,
+      name: "low-div",
+      size: 10,
+      threshold: 7,
+      health: "healthy",
+      regions: ["fsn1"],
+      active: true,
+      entity: "independent",
+      diversityScore: 1000,
+      asnVariance: 1000,
+      geoVariance: 1000,
+      hostingSpread: 1000,
+    };
+    const highDiversity: ClusterDirectoryEntry = {
+      clusterId: 301,
+      name: "high-div",
+      size: 10,
+      threshold: 7,
+      health: "healthy",
+      regions: ["fsn1"],
+      active: true,
+      entity: "independent",
+      diversityScore: 9900,
+      asnVariance: 9900,
+      geoVariance: 9900,
+      hostingSpread: 9900,
+    };
+    const r = pickMaxDiversity({
+      clusters: [lowDiversity, highDiversity],
+      targetTotalBps: 1000,
+      capBps: 1000,
+      seed: SEED_ALICE,
+      minDiversification: 1,
+    });
+    expect(r.allocations[0]?.cluster).toBe(301);
+  });
+
   it("filters offline clusters but keeps healthy/degraded", () => {
     const mix: ClusterDirectoryEntry[] = [
       ...MOCK_CLUSTERS,
@@ -380,6 +423,49 @@ describe("pickMaxDecentralization", () => {
     });
     // First allocation must be the high-spread cluster.
     expect(r.allocations[0]?.cluster).toBe(101);
+  });
+
+  it("prefers the real §25.1 diversity entropy over region-count when present", () => {
+    // Cluster A: only 1 region but HIGH chain ASN/geo/hosting entropy.
+    // Cluster B: 4 regions but LOW chain entropy. When the chain has
+    // surfaced a real ClusterDiversityView, the chain entropy wins over
+    // the region-count heuristic, so A must be picked first.
+    const realHighEntropyOneRegion: ClusterDirectoryEntry = {
+      clusterId: 200,
+      name: "real-high",
+      size: 10,
+      threshold: 7,
+      health: "healthy",
+      regions: ["fsn1"],
+      active: true,
+      entity: "independent",
+      diversityScore: 9500,
+      asnVariance: 9800,
+      geoVariance: 9200,
+      hostingSpread: 9600,
+    };
+    const realLowEntropyManyRegions: ClusterDirectoryEntry = {
+      clusterId: 201,
+      name: "real-low",
+      size: 10,
+      threshold: 7,
+      health: "healthy",
+      regions: ["fsn1", "nbg1", "hel1", "ash"],
+      active: true,
+      entity: "independent",
+      diversityScore: 1200,
+      asnVariance: 800,
+      geoVariance: 1000,
+      hostingSpread: 1500,
+    };
+    const r = pickMaxDecentralization({
+      clusters: [realLowEntropyManyRegions, realHighEntropyOneRegion],
+      targetTotalBps: 1000,
+      capBps: 1000,
+      seed: SEED_ALICE,
+      minDiversification: 1,
+    });
+    expect(r.allocations[0]?.cluster).toBe(200);
   });
 });
 

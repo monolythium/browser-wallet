@@ -246,6 +246,7 @@ import {
 import {
   readClusterDelegators,
   readClusterDirectory,
+  readClusterDiversity,
   readClusterServiceTiers,
   readClusterStatus,
   readOperatorInfo,
@@ -256,6 +257,10 @@ import {
   readRedemptionQueue,
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
+import {
+  readBridgeDrainStatus,
+  readBridgeHealth,
+} from "./bridge-health-client.js";
 import { readNativeAgentState } from "./native-agent-state-client.js";
 import { readNativeMarketOrderBookDeltas } from "./native-market-orderbook-client.js";
 import { readNativeMarketState } from "./native-market-state-client.js";
@@ -7399,6 +7404,42 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         hex += seed[i]!.toString(16).padStart(2, "0");
       }
       return { ok: true, seedHex: hex };
+    }
+    case "staking-cluster-diversity": {
+      // §25.1 read-only diversity score for one cluster. Powers both the
+      // ClusterDetail diversity card and the autovote Max-Diversity /
+      // Max-Decentralization scorers. Returns the StakingResult envelope
+      // verbatim; the popup renders `—` on `ok: false`.
+      const p = message.payload as { clusterId?: number } | undefined;
+      if (typeof p?.clusterId !== "number") {
+        return { ok: false, reason: "missing clusterId" };
+      }
+      return readClusterDiversity(p.clusterId);
+    }
+    case "bridge-health": {
+      // §20/§25.2 — live circuit-breaker / pause posture page (MB-2).
+      // Disclosure-only: the bridge has no live quote/submit path.
+      const p = message.payload as
+        | { cursor?: string | null; limit?: number }
+        | undefined;
+      const cursor = typeof p?.cursor === "string" ? p.cursor : null;
+      const outcome =
+        typeof p?.limit === "number"
+          ? await readBridgeHealth(cursor, p.limit)
+          : await readBridgeHealth(cursor);
+      return { ok: true, outcome };
+    }
+    case "bridge-drain-status": {
+      // §20/§25.2 — live per-route drain bucket (MB-2) for one
+      // (bridgeId, wrappedAsset). Disclosure-only.
+      const p = message.payload as
+        | { bridgeId?: string; wrappedAsset?: string }
+        | undefined;
+      if (typeof p?.bridgeId !== "string" || typeof p?.wrappedAsset !== "string") {
+        return { ok: false, reason: "missing bridgeId or wrappedAsset" };
+      }
+      const outcome = await readBridgeDrainStatus(p.bridgeId, p.wrappedAsset);
+      return { ok: true, outcome };
     }
     case "ws-status": {
       // Phase 11 Commit 2 — WS-client status probe. The popup uses this

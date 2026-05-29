@@ -47,6 +47,26 @@ export const SDK_REGISTRY_GENESIS_HASH: string = TESTNET_69420.genesis_hash;
 /** Sprintnet chain id (decimal, for display). */
 export const SPRINTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
 
+/** Sprintnet chain id (hex, `0x`-prefixed) — the form the popup passes
+ *  around as `chainId`. Derived from the SDK registry decimal so it
+ *  tracks any future re-chain. */
+export const SPRINTNET_CHAIN_ID_HEX: string =
+  "0x" + TESTNET_69420.chain_id.toString(16);
+
+/** §25.2 item 7 — static finality-posture label for the send/confirm
+ *  screen. There is no per-tx finality RPC, so this is a cheap static
+ *  row keyed off the active chain id. Native LythiumDAG-BFT sends settle
+ *  at anchor level (a DAG anchor is the user-facing finality unit per
+ *  the anchor-terminology lock); foreign chains the wallet relays to get
+ *  the neutral "depends on destination chain" copy. */
+export function finalityPostureFor(chainIdHex: string): string {
+  const normalised = chainIdHex.toLowerCase();
+  if (normalised === SPRINTNET_CHAIN_ID_HEX.toLowerCase()) {
+    return "Anchor-level (LythiumDAG-BFT)";
+  }
+  return "Depends on destination chain";
+}
+
 /** Pitch lines for the About page — kept here so design tweaks land in
  *  one place and so the page itself stays declarative. Phrases mirror
  *  whitepaper §28.5 (wallet portfolio differentiation). */
