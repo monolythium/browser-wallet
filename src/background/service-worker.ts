@@ -194,6 +194,11 @@ import {
   type RawDelegationHistory,
 } from "../shared/activity.js";
 import {
+  sentAddressesKey,
+  parseSentAddresses,
+  addToSentList,
+} from "../shared/sent-addresses.js";
+import {
   DEMO_ADDR_SENTINELS_LOWER,
   isDemoAddrSentinel,
 } from "../shared/demo-addr-sentinel.js";
@@ -4176,6 +4181,17 @@ async function persistPendingRowBackground(args: {
         { [pendingKey]: { pending: next } },
         () => resolve(),
       );
+    });
+    // CX3 — record the recipient in the durable sent-address log so repeat
+    // sends to it aren't re-warned as "first-time" once the pending row's TTL
+    // lapses (independent of any indexer refresh). Best-effort.
+    const sentKey = sentAddressesKey(addrLower, args.chainIdHex);
+    const sentStored = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
+    });
+    const nextSent = addToSentList(parseSentAddresses(sentStored), args.to);
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set({ [sentKey]: { addrs: nextSent } }, () => resolve());
     });
   } catch {
     // Swallow. The broadcast handler has already returned. A
