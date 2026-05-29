@@ -3358,3 +3358,31 @@ describe("wallet-mrv-receipt-status", () => {
     });
   });
 });
+
+// CX1 — get-block-tx-value: resolve a delegate tx's LYTH principal (value)
+// at (blockHeight, txIndex) for the activity-detail popup.
+describe("get-block-tx-value", () => {
+  it("returns the tx value at the given block + index", async () => {
+    rpcResponses["eth_getBlockByNumber"] = {
+      transactions: [{ value: "0x5f5e100" }, { value: "0x1" }],
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "get-block-tx-value",
+      payload: { blockHeight: 61160, txIndex: 0 },
+    })) as { ok: true; valueHex: string | null };
+    expect(r.ok).toBe(true);
+    expect(r.valueHex).toBe("0x5f5e100");
+  });
+
+  it("returns valueHex null when the tx index is absent (honest-absence)", async () => {
+    rpcResponses["eth_getBlockByNumber"] = { transactions: [] };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "get-block-tx-value",
+      payload: { blockHeight: 61160, txIndex: 3 },
+    })) as { ok: true; valueHex: string | null };
+    expect(r.ok).toBe(true);
+    expect(r.valueHex).toBeNull();
+  });
+});
