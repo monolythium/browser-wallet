@@ -668,6 +668,41 @@ export function Send({
                 resolution={nameResolution}
               />
             )}
+          {/* Known-recipient hint — when the typed/pasted address resolves to
+             a saved contact (or a §22.8 registered name), surface the name so
+             the user can confirm who they're sending to. Mutually exclusive
+             with the first-time-recipient warning below. */}
+          {(recipientContact !== null ||
+            (recipientRegisteredName !== null &&
+              recipientRegisteredName.length > 0)) && (
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                marginTop: 8,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "rgba(80,200,120,0.08)",
+                border: "1px solid rgba(80,200,120,0.35)",
+                fontSize: 11,
+                color: "var(--fg-100)",
+                lineHeight: 1.5,
+              }}
+            >
+              <Icon name="book" size={12} />
+              <span>
+                {recipientContact !== null ? (
+                  <>
+                    Saved contact: <b>{recipientContact.name}</b>
+                  </>
+                ) : (
+                  <>
+                    Registered name: <b>{recipientRegisteredName}</b>
+                  </>
+                )}
+              </span>
+            </div>
+          )}
           {recipientFamiliarity === "new" &&
             recipientContact === null &&
             (recipientRegisteredName === null ||
