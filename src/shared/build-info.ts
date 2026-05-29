@@ -6,16 +6,21 @@
 
 import { TESTNET_69420 } from "@monolythium/core-sdk";
 
-/** SDK package version. Mirrors mono-core-sdk/packages/ts/package.json
- *  `version`. Bump alongside any SDK sync that bumps the package
- *  version field. */
-export const SDK_PACKAGE_VERSION = "0.3.9";
+/** Build-time-injected version of the installed `@monolythium/core-sdk`
+ *  (Vite `define` reads node_modules/.../package.json `version`). `declare`
+ *  is type-only and erased before bundling, so the define replaces only the
+ *  usage below. Falls back to "unknown" when the read fails. */
+declare const __SDK_INSTALLED_VERSION__: string;
 
-/** SDK commit short SHA. Mirrors `git -C mono-core-sdk rev-parse --short
- *  HEAD` at the time of the last upstream sync. The wallet's
- *  pnpm-lock.yaml resolves the SDK from the workspace path, so this
- *  constant exists purely for the About-page version readout. */
-export const SDK_COMMIT_SHORT = "0a91be5";
+/** SDK package version — the ACTUALLY-INSTALLED dependency version, injected
+ *  at build time so it can never drift from the hardcoded literal again
+ *  (previously pinned to a stale "0.3.9"). No commit SHA is shown: the
+ *  installed package.json carries no gitHead, so version-only is the honest
+ *  readout. */
+export const SDK_PACKAGE_VERSION: string =
+  typeof __SDK_INSTALLED_VERSION__ === "string"
+    ? __SDK_INSTALLED_VERSION__
+    : "unknown";
 
 /** Expected Sprintnet genesis hash — the wallet's authoritative pin for
  *  GAP #11 (orphan-fork defense). Operator probes that return a
