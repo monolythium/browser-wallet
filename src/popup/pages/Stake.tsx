@@ -26,6 +26,7 @@ import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
+import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
@@ -1298,22 +1299,17 @@ function SuccessView({
             border: "1px solid var(--fg-700)",
           }}
         >
-          <a
+          <ExternalLink
             href={monoscanTxUrl(txHash)}
-            target="_blank"
-            rel="noopener noreferrer"
             title="View transaction on Monoscan"
             style={{
               flex: 1,
               fontFamily: "var(--f-mono)",
               fontSize: 10.5,
-              color: "var(--fg-100)",
-              textDecoration: "none",
-              wordBreak: "break-all",
             }}
           >
             {txHash}
-          </a>
+          </ExternalLink>
           <button
             onClick={onCopy}
             aria-label="Copy transaction hash"
@@ -1361,15 +1357,12 @@ function SuccessView({
           <ReceiptRow
             label="Delegator"
             value={
-              <a
+              <ExternalLink
                 href={monoscanAddressUrl(walletBech)}
-                target="_blank"
-                rel="noopener noreferrer"
                 title="View address on Monoscan"
-                style={{ color: "var(--fg-100)", textDecoration: "none", wordBreak: "break-all" }}
               >
                 {walletBech}
-              </a>
+              </ExternalLink>
             }
           />
           {amountLythoshi !== null && (
