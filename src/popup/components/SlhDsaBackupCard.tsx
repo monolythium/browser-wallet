@@ -291,8 +291,7 @@ export function SlhDsaBackupCard({
                         title={backup.chainRegistrationTxHash}
                         style={{ fontFamily: "var(--f-mono)" }}
                       >
-                        {backup.chainRegistrationTxHash.slice(0, 10)}…
-                        {backup.chainRegistrationTxHash.slice(-8)}
+                        {backup.chainRegistrationTxHash}
                       </ExternalLink>
                     </div>
                   )}
@@ -332,8 +331,7 @@ export function SlhDsaBackupCard({
                             title={backup.chainRegistrationTxHash}
                             style={{ fontFamily: "var(--f-mono)" }}
                           >
-                            {backup.chainRegistrationTxHash.slice(0, 10)}…
-                            {backup.chainRegistrationTxHash.slice(-6)}
+                            {backup.chainRegistrationTxHash}
                           </ExternalLink>
                         </>
                       )}
