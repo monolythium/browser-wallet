@@ -378,6 +378,19 @@ export async function bgWalletBalance(
   return send("wallet-balance", { address, chainIdHex });
 }
 
+/** CX1 — resolve a transaction's `value` (lythoshi hex) at a given
+ *  (blockHeight, txIndex). Used by the activity-detail popup to surface a
+ *  delegate tx's LYTH principal. `valueHex` is null when the block/tx isn't
+ *  present; `ok:false` on RPC failure. */
+export async function bgGetBlockTxValue(
+  blockHeight: number,
+  txIndex: number,
+): Promise<
+  { ok: true; valueHex: string | null } | { ok: false; reason?: string }
+> {
+  return send("get-block-tx-value", { blockHeight, txIndex });
+}
+
 export interface WalletAddressLabel {
   address: string;
   category: string;

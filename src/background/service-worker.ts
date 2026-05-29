@@ -6331,6 +6331,28 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
+    case "get-block-tx-value": {
+      // CX1 — on-demand resolve a transaction's `value` (lythoshi) at
+      // (blockHeight, txIndex). The activity-detail popup uses it to surface
+      // the LYTH principal of a delegate tx, since the indexer delegation
+      // entries carry no amount. Read-only; returns valueHex|null, never
+      // throws to the popup (honest-absence on any failure).
+      const p = message.payload as { blockHeight?: number; txIndex?: number };
+      if (typeof p?.blockHeight !== "number" || typeof p?.txIndex !== "number") {
+        return { ok: false, reason: "missing blockHeight/txIndex" };
+      }
+      try {
+        const heightHex = "0x" + Math.trunc(p.blockHeight).toString(16);
+        const { result } = await sprintnetJsonRpc<
+          { transactions?: Array<{ value?: string }> } | null
+        >("eth_getBlockByNumber", [heightHex, true]);
+        const tx = result?.transactions?.[p.txIndex];
+        const valueHex = typeof tx?.value === "string" ? tx.value : null;
+        return { ok: true, valueHex };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
     case "wallet-chain-block-number": {
       // Real chain-liveness probe for the popup's status-bar health
       // indicator. Calls `eth_blockNumber` on the active Sprintnet
