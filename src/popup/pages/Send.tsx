@@ -12,7 +12,6 @@ import type { ReactNode, CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../Icon";
 import {
-  bgContactsCheck,
   bgMultisigPropose,
   bgPasskeyEvaluate,
   bgPasskeyRecordUsage,
@@ -417,19 +416,9 @@ export function Send({
           });
         }
         setStep("success");
-        // Round 7 TASK 6 — after a successful send, fire-and-forget
-        // check whether the recipient is already a saved contact. If
-        // not, surface the "Save recipient" prompt on the success
-        // screen with the address pre-filled. Multisig propose
-        // (branch above) deliberately skips this — the proposal is
-        // pending until co-signers approve, so it's not the right
-        // moment to label the counterparty.
-        const sentTo = effectiveAddr0x;
-        if (sentTo) {
-          void bgContactsCheck(sentTo).then((known) => {
-            if (!known) setPendingContactAddr(sentTo);
-          });
-        }
+        // CX4 — the "Add to contacts" affordance now lives inline on the
+        // receipt's To row (shown when the recipient is neither a saved
+        // contact nor a registered name), so no auto-popup fires here.
       } else {
         setSubmitError({
           message: r.reason ?? "send failed",
@@ -544,11 +533,17 @@ export function Send({
           tier={tier}
           recipientContact={recipientContact}
           recipientRegisteredName={recipientRegisteredName}
+          showAddContact={
+            multisigVaultId === undefined &&
+            recipientContact === null &&
+            (recipientRegisteredName === null ||
+              recipientRegisteredName.length === 0)
+          }
+          onAddContact={() => setPendingContactAddr(effectiveAddr0x ?? to)}
         />
-        {/* Round 7 TASK 6 — post-send "save recipient" prompt. Fires
-            after a non-multisig send when the recipient isn't already
-            in the user's contacts. Friendly tone, not a warning;
-            dismiss-skip is one tap. */}
+        {/* CX4 — inline "Add to contacts" on the receipt (replaces the
+            post-send auto-popup). The AddContactModal opens only when the
+            user taps the affordance on the To row. */}
         {pendingContactAddr && (
           <AddContactModal
             open={true}
@@ -2085,6 +2080,10 @@ interface SuccessViewProps {
   tier: FeeTier;
   recipientContact: ContactRecord | null;
   recipientRegisteredName: string | null;
+  /** When true, render an inline "+ Add to contacts" affordance under the To
+   *  row (recipient is neither a saved contact nor a registered name). */
+  showAddContact: boolean;
+  onAddContact: () => void;
 }
 
 /** A bech32m address rendered as a Monoscan address-page link. Addresses are
@@ -2115,6 +2114,8 @@ function SuccessView({
   tier,
   recipientContact,
   recipientRegisteredName,
+  showAddContact,
+  onAddContact,
 }: SuccessViewProps) {
   const isProposal = explorerUrl === null;
   const total =
@@ -2276,6 +2277,24 @@ function SuccessView({
               />
             ) : (
               <SummaryRow label="To" value={<AddressLink addr0x={to} />} mono />
+            )}
+            {showAddContact && (
+              <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 0 4px" }}>
+                <button
+                  type="button"
+                  onClick={onAddContact}
+                  className="ext-extlink"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    padding: 0,
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 11,
+                  }}
+                >
+                  + Add to contacts
+                </button>
+              </div>
             )}
             <SummaryRow
               label="Amount"
