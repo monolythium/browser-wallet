@@ -1,23 +1,28 @@
 // Activity-detail modal — a compact summary popup opened by tapping a row in
-// the Activity list. Shares the receipt visual language (rows + ExternalLink +
-// the shared lythoshi formatter) but is intentionally smaller: addresses are
-// truncated, fee/total are dropped.
+// the Activity list. Shares the receipt visual language (rows + the shared
+// lythoshi formatter) but is intentionally smaller: addresses are truncated,
+// fee/total are dropped.
 //
-// Honest-absence throughout:
-//  - tx hash links to Monoscan only when the row carries one (pending sends);
-//    confirmed/received/indexer rows have no hash and show none (we do NOT
-//    block-lookup just to manufacture a link).
-//  - delegations have no cluster bech32m → cluster shows name + #id, no link.
-//  - delegate LYTH principal is resolved on demand from the tx `value` via a
-//    block lookup; undelegate/redelegate carry no msg.value → percentage only.
+// Address rendering is defensive: the indexer hands counterparties as bech32m
+// (`mono…`) strings while the wallet's own address is 0x — bech32mDisplay
+// handles both and NEVER throws, and the truncation is plain string slicing
+// (the strict shortBech32m/addressToBech32m path throws on non-0x input, which
+// previously crashed the whole view via the ErrorBoundary).
+//
+// Honest-absence: a delegate's LYTH principal + every row's canonical tx hash
+// are resolved on demand from the block (eth_getBlockByNumber → tx.value/.hash);
+// when the lookup fails or returns nothing, the LYTH / Monoscan button are
+// simply omitted. Delegations have no cluster bech32m → cluster shows name +
+// #id, no link.
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
+import { Icon } from "../Icon";
 import { Modal } from "./Modal";
 import { ExternalLink } from "./ExternalLink";
 import { CheckIcon, ClipboardIcon } from "./AddressLine";
-import { bech32mDisplay, shortBech32m } from "../../shared/bech32m";
+import { bech32mDisplay } from "../../shared/bech32m";
 import { monoscanAddressUrl, monoscanTxUrl } from "../../shared/build-info";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { formatWeightBpsPercent } from "../../shared/staking";
@@ -38,8 +43,10 @@ function clusterName(id: number): string {
   return `C-${String(id + 1).padStart(3, "0")}.cluster.mono`;
 }
 
-function shortHash(hash: string): string {
-  return hash.length > 20 ? `${hash.slice(0, 10)}…${hash.slice(-8)}` : hash;
+/** Middle-truncate any string (bech32m address or hash) for compact display.
+ *  Pure — never throws. */
+function truncMiddle(s: string, head = 10, tail = 6): string {
+  return s.length > head + tail + 1 ? `${s.slice(0, head)}…${s.slice(-tail)}` : s;
 }
 
 function relativeMs(ms: number): string {
@@ -87,8 +94,34 @@ function DRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-/** Truncated bech32m address → Monoscan address page, with a copy button.
- *  Renders the registered/contact name above the address when present. */
+/** "View on Monoscan" CTA → the tx page. Globe glyph, matching the receipts. */
+function MonoscanTxButton({ hash }: { hash: string }) {
+  return (
+    <a
+      href={monoscanTxUrl(hash)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="ext-act"
+      style={{
+        width: "100%",
+        padding: "10px",
+        marginTop: 12,
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        textDecoration: "none",
+      }}
+    >
+      <Icon name="globe" size={13} /> View on Monoscan
+    </a>
+  );
+}
+
+/** Truncated address → Monoscan address page, with a copy button. Accepts a
+ *  0x address (own wallet) or an already-bech32m counterparty — both via the
+ *  safe bech32mDisplay. Renders the registered/contact name when present. */
 function CopyableAddress({
   addr0x,
   name,
@@ -98,7 +131,7 @@ function CopyableAddress({
 }) {
   const [copied, setCopied] = useState(false);
   const full = bech32mDisplay(addr0x);
-  const short = shortBech32m(addr0x, 6);
+  const short = truncMiddle(full);
   const onCopy = () => {
     void navigator.clipboard.writeText(full).then(
       () => {
@@ -151,31 +184,39 @@ function CopyableAddress({
 }
 
 export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDetailProps) {
-  // On-demand LYTH principal for delegate rows (the indexer carries no amount;
-  // the delegate tx's msg.value IS the principal). Undelegate/redelegate send
-  // value:0 → we don't look up / show LYTH for those.
-  const [delegateLyth, setDelegateLyth] = useState<string | null>(null);
-  const isDelegate = row.kind === "delegate";
-  const lookupHeight = isDelegate ? row.blockHeight : null;
-  const lookupTxIndex = isDelegate ? row.txIndex : null;
+  // Confirmed rows carry a (blockHeight, txIndex) coordinate but no hash/amount
+  // in the indexer stream. Resolve the tx on demand from the block so we can:
+  //  - show the LYTH principal for delegate rows (tx msg.value), and
+  //  - link the canonical tx hash on a "View on Monoscan" button.
+  const lookupHeight = row.kind !== "pending_tx" ? row.blockHeight : null;
+  const lookupTxIndex = row.kind !== "pending_tx" ? row.txIndex : null;
+  const [resolvedValueHex, setResolvedValueHex] = useState<string | null>(null);
+  const [resolvedTxHash, setResolvedTxHash] = useState<string | null>(null);
   useEffect(() => {
     if (lookupHeight === null || lookupTxIndex === null) return;
     let cancelled = false;
     void (async () => {
       const r = await bgGetBlockTxValue(lookupHeight, lookupTxIndex);
-      if (cancelled || !r.ok || r.valueHex === null) return;
-      let v: bigint;
-      try {
-        v = BigInt(r.valueHex);
-      } catch {
-        return;
-      }
-      if (v > 0n) setDelegateLyth(formatNativeLythAmount(v));
+      if (cancelled || !r.ok) return;
+      if (r.valueHex !== null) setResolvedValueHex(r.valueHex);
+      if (r.txHash !== null) setResolvedTxHash(r.txHash);
     })();
     return () => {
       cancelled = true;
     };
   }, [lookupHeight, lookupTxIndex]);
+
+  // delegate LYTH principal (msg.value). Undelegate/redelegate send value:0 →
+  // omit (honest-absence) rather than render "0 LYTH".
+  const delegateLyth = (() => {
+    if (row.kind !== "delegate" || resolvedValueHex === null) return null;
+    try {
+      const v = BigInt(resolvedValueHex);
+      return v > 0n ? formatNativeLythAmount(v) : null;
+    } catch {
+      return null;
+    }
+  })();
 
   const name = label?.displayName ?? null;
 
@@ -192,7 +233,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
             label="Tx hash"
             value={
               <ExternalLink href={monoscanTxUrl(row.txHash)} title={row.txHash} style={{ fontFamily: "var(--f-mono)" }}>
-                {shortHash(row.txHash)}
+                {truncMiddle(row.txHash)}
               </ExternalLink>
             }
           />
@@ -200,6 +241,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
             <DRow label="Block" value={row.broadcastBlockHeight.toLocaleString("en-US")} />
           )}
           <DRow label="Submitted" value={relativeMs(row.broadcastedAtMs)} />
+          <MonoscanTxButton hash={row.txHash} />
         </div>
       </Modal>
     );
@@ -227,10 +269,9 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
               <DRow label="To" value={cp ? <CopyableAddress addr0x={cp} name={name} /> : "unknown"} />
             </>
           )}
-          {/* No tx hash on indexer rows; we do not fetch one to manufacture a
-              link. Block + tx index are the on-chain coordinate. */}
           <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
           <DRow label="Tx index" value={String(row.txIndex)} />
+          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
         </div>
       </Modal>
     );
@@ -252,6 +293,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
           <DRow label="Delegator" value={<CopyableAddress addr0x={walletAddr} />} />
           <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
           <DRow label="Tx index" value={String(row.txIndex)} />
+          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
         </div>
       </Modal>
     );
@@ -264,6 +306,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
         <DRow label="Type" value={row.kind} />
         <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
         <DRow label="Tx index" value={String(row.txIndex)} />
+        {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
       </div>
     </Modal>
   );
