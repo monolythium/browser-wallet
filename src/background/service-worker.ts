@@ -246,6 +246,7 @@ import {
 import {
   readClusterDelegators,
   readClusterDirectory,
+  readClusterDiversity,
   readClusterServiceTiers,
   readClusterStatus,
   readOperatorInfo,
@@ -256,6 +257,15 @@ import {
   readRedemptionQueue,
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
+import {
+  readBridgeDrainStatus,
+  readBridgeHealth,
+} from "./bridge-health-client.js";
+import {
+  buildSpendingPolicyClaim,
+  readSpendingPolicy,
+  type BuildClaimRequest,
+} from "./spending-policy-client.js";
 import { readNativeAgentState } from "./native-agent-state-client.js";
 import { readNativeMarketOrderBookDeltas } from "./native-market-orderbook-client.js";
 import { readNativeMarketState } from "./native-market-state-client.js";
@@ -7399,6 +7409,107 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         hex += seed[i]!.toString(16).padStart(2, "0");
       }
       return { ok: true, seedHex: hex };
+    }
+    case "staking-cluster-diversity": {
+      // §25.1 read-only diversity score for one cluster. Powers both the
+      // ClusterDetail diversity card and the autovote Max-Diversity /
+      // Max-Decentralization scorers. Returns the StakingResult envelope
+      // verbatim; the popup renders `—` on `ok: false`.
+      const p = message.payload as { clusterId?: number } | undefined;
+      if (typeof p?.clusterId !== "number") {
+        return { ok: false, reason: "missing clusterId" };
+      }
+      return readClusterDiversity(p.clusterId);
+    }
+    case "bridge-health": {
+      // §20/§25.2 — live circuit-breaker / pause posture page (MB-2).
+      // Disclosure-only: the bridge has no live quote/submit path.
+      const p = message.payload as
+        | { cursor?: string | null; limit?: number }
+        | undefined;
+      const cursor = typeof p?.cursor === "string" ? p.cursor : null;
+      const outcome =
+        typeof p?.limit === "number"
+          ? await readBridgeHealth(cursor, p.limit)
+          : await readBridgeHealth(cursor);
+      return { ok: true, outcome };
+    }
+    case "bridge-drain-status": {
+      // §20/§25.2 — live per-route drain bucket (MB-2) for one
+      // (bridgeId, wrappedAsset). Disclosure-only.
+      const p = message.payload as
+        | { bridgeId?: string; wrappedAsset?: string }
+        | undefined;
+      if (typeof p?.bridgeId !== "string" || typeof p?.wrappedAsset !== "string") {
+        return { ok: false, reason: "missing bridgeId or wrappedAsset" };
+      }
+      const outcome = await readBridgeDrainStatus(p.bridgeId, p.wrappedAsset);
+      return { ok: true, outcome };
+    }
+    case "spending-policy-get": {
+      // §18.8 — live spending-policy summary for one controlled
+      // sub-account. Returns the StakingResult envelope verbatim; the
+      // AgentPolicy page renders the SpendingPolicyView card or `—` on
+      // `ok: false`. Read-only — no unlock required.
+      const p = message.payload as { subAccount?: string } | undefined;
+      if (typeof p?.subAccount !== "string" || p.subAccount.length === 0) {
+        return { ok: false, reason: "missing subAccount" };
+      }
+      return readSpendingPolicy(p.subAccount);
+    }
+    case "spending-policy-build-claim": {
+      // §18.8 fresh-claim path. Derives a brand-new agent sub-account
+      // ML-DSA-65 keypair, signs the chain-id-bound claim message with
+      // it, and returns the setPolicyClaim calldata + the sub-account
+      // address + its one-time recovery phrase. The PRINCIPAL (active
+      // wallet) then funds the sub-account (native transfer via
+      // "wallet-send-tx") and submits the claim (also "wallet-send-tx",
+      // to = 0x110C). The two-key dance: the sub-account signs the bound
+      // message here; the principal signs + submits the outer tx.
+      //
+      // Requires the principal wallet to be unlocked so the follow-up
+      // submit (which the popup fires through "wallet-send-tx") has a
+      // signer — and so a claim can never be staged against a locked
+      // wallet that would then fail at submit time.
+      if (!isUnlockedV4()) {
+        return { ok: false, reason: "wallet locked" };
+      }
+      const principal = getUnlockedAddressV4();
+      if (!principal) {
+        return { ok: false, reason: "wallet has no unlocked address" };
+      }
+      const p = message.payload as Partial<BuildClaimRequest> | undefined;
+      if (
+        typeof p?.chainId !== "string" &&
+        typeof p?.chainId !== "number"
+      ) {
+        return { ok: false, reason: "missing chainId" };
+      }
+      if (
+        typeof p?.perTxCapLyth !== "string" ||
+        typeof p?.dailyCapLyth !== "string" ||
+        typeof p?.weeklyCapLyth !== "string" ||
+        typeof p?.monthlyCapLyth !== "string"
+      ) {
+        return { ok: false, reason: "missing cap fields" };
+      }
+      return buildSpendingPolicyClaim({
+        principal,
+        chainId: p.chainId,
+        perTxCapLyth: p.perTxCapLyth,
+        dailyCapLyth: p.dailyCapLyth,
+        weeklyCapLyth: p.weeklyCapLyth,
+        monthlyCapLyth: p.monthlyCapLyth,
+        ...(typeof p.allowRoot === "string" ? { allowRoot: p.allowRoot } : {}),
+        ...(typeof p.denyRoot === "string" ? { denyRoot: p.denyRoot } : {}),
+        ...(typeof p.categoryAllowRoot === "string"
+          ? { categoryAllowRoot: p.categoryAllowRoot }
+          : {}),
+        ...(p.timeWindow !== undefined ? { timeWindow: p.timeWindow } : {}),
+        ...(typeof p.policyExpiryUnixSeconds === "number"
+          ? { policyExpiryUnixSeconds: p.policyExpiryUnixSeconds }
+          : {}),
+      });
     }
     case "ws-status": {
       // Phase 11 Commit 2 — WS-client status probe. The popup uses this

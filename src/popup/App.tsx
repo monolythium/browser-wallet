@@ -36,6 +36,7 @@ import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar"
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Stake, clearStakeState } from "./pages/Stake";
+import { AgentPolicy } from "./pages/AgentPolicy";
 import { Delegations } from "./pages/Delegations";
 import { ClusterDetail } from "./pages/ClusterDetail";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -62,6 +63,7 @@ import { generateOnboardingMnemonic } from "./lib/onboarding-mnemonic";
 import { explainImportError } from "./lib/import-error";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
+import { useFeature } from "./hooks/useFeature";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
@@ -117,6 +119,7 @@ type Screen =
   | "receive"
   | "send"
   | "stake"
+  | "agent-policy"
   | "delegations"
   | "cluster-detail"
   | "bridge"
@@ -181,6 +184,12 @@ const SPRINTNET_FALLBACK: ChainEntry = {
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
+  // v5 pillar surfaces (agent spending-policy page) ship behind the
+  // default-off "Agent commerce (experimental)" two-tier toggle. When
+  // OFF the nav entry is hidden and the page is never mounted, so the
+  // popup matches the pre-v5 experience exactly. Flip on via Settings →
+  // Features.
+  const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
   // Round 7 TASK 4 — current UI open mode (popup vs sidepanel). The
   // MainMenu's "Switch to ..." item reads this to label the toggle as
   // the OPPOSITE option. null while the SW IPC is in flight; modes
@@ -1209,6 +1218,9 @@ export default function App() {
           onConnectedSites={() => navigateTo("connected-sites")}
           onNetworks={() => navigateTo("networks")}
           onMultisig={() => navigateTo("multisig-list")}
+          {...(agentCommerceEnabled
+            ? { onAgentPolicy: () => navigateTo("agent-policy") }
+            : {})}
           onSettings={() => navigateTo("settings")}
           onAbout={() => navigateTo("about")}
           onLockWallet={() => {
@@ -1441,6 +1453,14 @@ export default function App() {
         <Bridge
           indexer={indexerSnapshot}
           onBack={() => setScreen("home")}
+        />
+      )}
+
+      {screen === "agent-policy" && agentCommerceEnabled && (
+        <AgentPolicy
+          account={acc}
+          chainId={activeChain.chainId}
+          onBack={() => setScreen("main-menu")}
         />
       )}
 
