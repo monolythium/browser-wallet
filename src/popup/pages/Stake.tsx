@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { monoscanTxUrl } from "../../shared/build-info";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
@@ -1195,6 +1196,24 @@ function SuccessView({ action, txHash, copied, onCopy, onDone }: SuccessViewProp
         <button onClick={onCopy} style={{ ...secondaryBtn, marginTop: 8, width: "100%" }}>
           {copied ? "Copied" : "Copy hash"}
         </button>
+        <a
+          href={monoscanTxUrl(txHash)}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            ...secondaryBtn,
+            marginTop: 8,
+            width: "100%",
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            textDecoration: "none",
+          }}
+        >
+          <Icon name="globe" size={13} /> View on Monoscan
+        </a>
       </div>
       <button onClick={onDone} className="ext-act prim" style={{ padding: 12 }}>
         Done
