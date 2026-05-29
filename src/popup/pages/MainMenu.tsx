@@ -31,6 +31,9 @@ interface MainMenuProps {
    *  list. When omitted the menu item is hidden (TASK 4 ships TASK 7
    *  in a follow-up commit). */
   onMultisig?: () => void;
+  /** Optional — §18.8 agent spending-policy management. When omitted
+   *  the menu item is hidden (advanced agent-commerce UX). */
+  onAgentPolicy?: () => void;
   onSettings: () => void;
   onAbout: () => void;
   onLockWallet: () => void;
@@ -49,6 +52,7 @@ export function MainMenu({
   onConnectedSites,
   onNetworks,
   onMultisig,
+  onAgentPolicy,
   onSettings,
   onAbout,
   onLockWallet,
@@ -114,6 +118,14 @@ export function MainMenu({
               icon="multisig"
               label="Multisig wallets"
               onClick={onMultisig}
+              hasChevron
+            />
+          )}
+          {onAgentPolicy && (
+            <MenuItem
+              icon="settings"
+              label="Agent spending policy"
+              onClick={onAgentPolicy}
               hasChevron
             />
           )}
