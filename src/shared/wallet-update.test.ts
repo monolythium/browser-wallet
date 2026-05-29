@@ -39,4 +39,22 @@ describe("parseWalletUpdateCache", () => {
     expect(parseWalletUpdateCache({ lastCheckAt: "x", updateAvailable: true })).toBeNull();
     expect(parseWalletUpdateCache({ lastCheckAt: 5 })).toBeNull();
   });
+
+  it("parses lastStatus when valid and drops it when malformed", () => {
+    expect(
+      parseWalletUpdateCache({
+        lastCheckAt: 5,
+        updateAvailable: false,
+        lastStatus: "unavailable",
+      }),
+    ).toEqual({ lastCheckAt: 5, updateAvailable: false, lastStatus: "unavailable" });
+    // unknown status string is dropped (no lastStatus key)
+    expect(
+      parseWalletUpdateCache({
+        lastCheckAt: 5,
+        updateAvailable: false,
+        lastStatus: "bogus",
+      }),
+    ).toEqual({ lastCheckAt: 5, updateAvailable: false });
+  });
 });
