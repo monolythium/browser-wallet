@@ -507,3 +507,8 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .req-custody .glyph.hw { background:#e8f5ec; color:#2a7a3f; border-color:#a8d9b8; }
 .req-custody b { color: var(--fg-100); font-weight:600; }
 .ext.light .req-custody b { color:#1a1a24; }
+
+/* External (Monoscan) link affordance — subtle at rest (the ↗ glyph is the
+   cue), on-theme gold + underline on hover. NOT a loud blue link. */
+.ext-extlink { color: var(--fg-100); text-decoration: none; cursor: pointer; }
+.ext-extlink:hover { color: var(--gold); text-decoration: underline; }
