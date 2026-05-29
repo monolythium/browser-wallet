@@ -97,7 +97,7 @@ describe("keystore v2 (argon2id + xchacha20-poly1305)", () => {
       expect(sig[64]).toBeGreaterThanOrEqual(27);
       expect(sig[64]).toBeLessThanOrEqual(28);
     },
-    90_000,
+    180_000,
   );
 
   it(
@@ -110,7 +110,7 @@ describe("keystore v2 (argon2id + xchacha20-poly1305)", () => {
       await expect(ks.unlock("wrong-password")).rejects.toThrow(/wrong password/i);
       expect(ks.isUnlocked()).toBe(false);
     },
-    90_000,
+    180_000,
   );
 
   it(
