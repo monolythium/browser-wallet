@@ -170,7 +170,7 @@ interface UiApproval {
 const SPRINTNET_FALLBACK: ChainEntry = {
   chainId: "0x10F2C",
   chainIdNum: 69420,
-  name: "Monolythium · Sprintnet",
+  name: "Monolythium Testnet",
   // Bootstrap-window rpc. Mirrors SPRINTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
   // live endpoint. Updated to operator-2 on 2026-05-11 regenesis (operator-1's
