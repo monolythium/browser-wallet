@@ -105,3 +105,14 @@ export const EXTERNAL_LINKS: ReadonlyArray<{ label: string; url: string }> = [
     url: "https://monolythium.org/privacy",
   },
 ];
+
+/** Monoscan explorer base for a testnet-69420 transaction (hash-routed SPA).
+ *  The wallet only links txs whose canonical hash it knows — its own sent
+ *  txs. Received / indexer-only activity rows carry no tx hash and get no
+ *  link (honest absence; never synthesize a hash). */
+export const MONOSCAN_TX_BASE = "https://monoscan.xyz/#/tx/";
+
+/** Build the Monoscan URL for a canonical transaction hash. */
+export function monoscanTxUrl(txHash: string): string {
+  return `${MONOSCAN_TX_BASE}${txHash}`;
+}

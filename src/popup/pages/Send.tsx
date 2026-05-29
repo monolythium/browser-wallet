@@ -43,7 +43,7 @@ import {
   type MonoNameParse,
   type NameCache,
 } from "../../shared/name-resolution";
-import { finalityPostureFor } from "../../shared/build-info";
+import { finalityPostureFor, monoscanTxUrl } from "../../shared/build-info";
 import {
   activityCacheKey,
   activityPendingKey,
@@ -519,6 +519,9 @@ export function Send({
           copied={hashCopied}
           onCopy={() => void handleCopyHash()}
           onDone={onBack}
+          explorerUrl={
+            multisigVaultId === undefined ? monoscanTxUrl(txHash) : null
+          }
         />
         {/* Round 7 TASK 6 — post-send "save recipient" prompt. Fires
             after a non-multisig send when the recipient isn't already
@@ -2038,9 +2041,12 @@ interface SuccessViewProps {
   copied: boolean;
   onCopy: () => void;
   onDone: () => void;
+  /** Monoscan URL for the canonical tx hash, or null when the success item is
+   *  not a linkable on-chain tx (e.g. a multisig proposal id). */
+  explorerUrl: string | null;
 }
 
-function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
+function SuccessView({ txHash, copied, onCopy, onDone, explorerUrl }: SuccessViewProps) {
   return (
     <>
       <div className="ext-top">
@@ -2127,17 +2133,39 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
           >
             {copied ? "Copied" : "Copy tx hash"}
           </button>
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--fg-400)",
-              marginTop: 10,
-              lineHeight: 1.5,
-            }}
-          >
-            Explorer URL not yet wired for Sprintnet — keep this hash to
-            track the tx on an operator directly.
-          </div>
+          {explorerUrl !== null ? (
+            <a
+              href={explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ext-act"
+              style={{
+                width: "100%",
+                padding: "10px",
+                marginTop: 12,
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                textDecoration: "none",
+              }}
+            >
+              <Icon name="globe" size={13} /> View on Monoscan
+            </a>
+          ) : (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--fg-400)",
+                marginTop: 10,
+                lineHeight: 1.5,
+              }}
+            >
+              No explorer link for this item — keep this hash to track it on
+              an operator directly.
+            </div>
+          )}
         </div>
 
         <button
