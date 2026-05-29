@@ -142,7 +142,7 @@ export function Operators({ onBack }: OperatorsProps) {
         <div
           style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
         >
-          Sprintnet operators
+          Monolythium Testnet operators
         </div>
         <div style={{ width: 28 }} />
       </div>

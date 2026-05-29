@@ -599,7 +599,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
         {/* Chain card */}
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Sprintnet</h3>
+            <h3>Monolythium Testnet</h3>
           </div>
           <KvList
             rows={[
@@ -610,7 +610,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 title: SPRINTNET_GENESIS_HASH,
               },
               { k: "Execution", v: "Rust/RISC-V native" },
-              { k: "Whitepaper", v: "v4.1-DRAFT · 2026-05-17" },
+              { k: "Whitepaper", v: "v5.0 · May 2026" },
               { k: "Signing", v: "ML-DSA-65 (FIPS-204)" },
               { k: "Address format", v: "bech32m" },
               { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH)" },
