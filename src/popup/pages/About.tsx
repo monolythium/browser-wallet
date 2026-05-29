@@ -37,6 +37,7 @@ import {
   WALLET_PITCH,
 } from "../../shared/build-info";
 import { fetchLiveTestnetRegistry } from "../../shared/live-registry";
+import { fetchLatestSdkVersion, compareSemver } from "../../shared/sdk-latest";
 import {
   OPERATOR_RISK_LEGEND,
   classifyOperatorRisk,
@@ -104,6 +105,10 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
    *  SDK-bundled value if the GitHub raw URL is unreachable. */
   const [liveRegistryGenesis, setLiveRegistryGenesis] = useState<string | null>(null);
   const [liveRegistryBinarySha, setLiveRegistryBinarySha] = useState<string | null>(null);
+  /** Latest published @monolythium/core-sdk version from the npm registry.
+   *  null until a successful fetch lands; on any failure it stays null and
+   *  the SDK row degrades to installed-only (never a fabricated number). */
+  const [latestSdk, setLatestSdk] = useState<string | null>(null);
   const walletVersion = readWalletVersion();
 
   useEffect(() => {
@@ -117,6 +122,15 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void (async () => {
+      const v = await fetchLatestSdkVersion(ctrl.signal);
+      if (v !== null) setLatestSdk(v);
+    })();
+    return () => ctrl.abort();
   }, []);
 
   useEffect(() => {
@@ -242,7 +256,38 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <KvList
             rows={[
               { k: "Wallet", v: `v${walletVersion}` },
-              { k: "SDK", v: `v${SDK_PACKAGE_VERSION}` },
+              {
+                k: "SDK",
+                v: (() => {
+                  const installed = `v${SDK_PACKAGE_VERSION}`;
+                  if (latestSdk === null) {
+                    // Latest couldn't be determined — installed-only, honest.
+                    return (
+                      <span>
+                        {installed}{" "}
+                        <span style={{ color: "var(--fg-500)", fontSize: 10 }}>
+                          · latest: unavailable
+                        </span>
+                      </span>
+                    );
+                  }
+                  const behind = compareSemver(SDK_PACKAGE_VERSION, latestSdk) < 0;
+                  return (
+                    <span title={`Latest published on npm: ${latestSdk}`}>
+                      {installed}{" "}
+                      {behind ? (
+                        <span style={{ color: "var(--warn)", fontSize: 10 }}>
+                          · update available (latest {latestSdk})
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--ok)", fontSize: 10 }}>
+                          · latest ✓
+                        </span>
+                      )}
+                    </span>
+                  );
+                })(),
+              },
             ]}
           />
         </div>
