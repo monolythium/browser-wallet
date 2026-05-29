@@ -72,7 +72,47 @@ export interface ClusterDirectoryEntry {
    *  method — display falls back to `—` per no-mock-fallbacks. Optional
    *  so non-directory ClusterDirectoryEntry fixtures stay valid. */
   aprBps?: number | null;
+  /** §25.1 roster-diversity score from `lyth_getClusterDiversity(clusterId)`
+   *  (SDK `ClusterDiversityView.score`, MB-2/PF-6, live in 0.3.10).
+   *  Range `0..=10000` bps (`DIVERSITY_SCORE_MAX`). Headline figure
+   *  blending ASN / geo / hosting-class entropy. `null` when the
+   *  per-cluster diversity fanout failed or the operator doesn't expose
+   *  the method — autovote + the ClusterDetail card fall back to the
+   *  region-count + entity heuristic. Optional so non-directory fixtures
+   *  stay valid. */
+  diversityScore?: number | null;
+  /** §25.1 normalised ASN-distribution entropy (`0..=10000` bps,
+   *  `ClusterDiversityView.asnVariance`). `null` when unavailable. */
+  asnVariance?: number | null;
+  /** §25.1 normalised country-distribution entropy (`0..=10000` bps,
+   *  `ClusterDiversityView.geoVariance`). `null` when unavailable. */
+  geoVariance?: number | null;
+  /** §25.1 normalised hosting-class-distribution entropy (`0..=10000`
+   *  bps, `ClusterDiversityView.hostingSpread`). `null` when
+   *  unavailable. */
+  hostingSpread?: number | null;
 }
+
+/** §25.1 per-cluster roster-diversity view, mirroring SDK
+ *  `ClusterDiversityView` from `lyth_getClusterDiversity(clusterId)`.
+ *  All scores are `0..=10000` bps (`DIVERSITY_SCORE_MAX`). Lives here so
+ *  the IPC boundary + the autovote scorer share one shape without
+ *  importing the SDK at the popup edge. */
+export interface ClusterDiversity {
+  clusterId: number;
+  /** Headline diversity score (`0..=10000`). */
+  score: number;
+  /** Normalised ASN-distribution entropy (`0..=10000`). */
+  asnVariance: number;
+  /** Normalised country-distribution entropy (`0..=10000`). */
+  geoVariance: number;
+  /** Normalised hosting-class-distribution entropy (`0..=10000`). */
+  hostingSpread: number;
+}
+
+/** Maximum value of any §25.1 diversity score (bps). Mirrors SDK
+ *  `DIVERSITY_SCORE_MAX`. */
+export const DIVERSITY_SCORE_MAX = 10_000;
 
 /** Paginated wrapper. Mirrors SDK `ClusterDirectoryPageResponse`. */
 export interface ClusterDirectoryPage {

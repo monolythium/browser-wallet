@@ -29,20 +29,24 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgStakingClusterStatus,
   bgStakingClusterDelegators,
+  bgStakingClusterDiversity,
   bgStakingClusterServiceTiers,
   bgStakingDelegationHistory,
   bgStakingOperatorInfo,
 } from "../bg";
 import type {
   ClusterDirectoryEntry,
+  ClusterDiversity,
   ClusterServiceTiers,
   ClusterStatus,
   DelegationHistoryRow,
   WalletOperatorInfo,
 } from "../../shared/staking";
+import { DIVERSITY_SCORE_MAX } from "../../shared/staking";
 import { LYTHOSHI_PER_LYTH } from "../../shared/native-amount";
 
 export interface ClusterDetailProps {
@@ -62,19 +66,40 @@ export function ClusterDetail({
   walletAddress,
   onBack,
 }: ClusterDetailProps) {
+  // v5 pillar surface — the §25.1 roster-diversity card ships behind the
+  // default-off "Agent commerce (experimental)" toggle. When OFF the
+  // page renders exactly the pre-v5 cards (no diversity card).
+  const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [delegatorCount, setDelegatorCount] = useState<number | null>(null);
   const [delegationHistory, setDelegationHistory] = useState<
     DelegationHistoryRow[] | null
   >(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  // §25.1 roster diversity. Seed from the directory-carried fields (the
+  // staking-client fanout already populated them) so the card renders
+  // instantly, then refresh from the dedicated `lyth_getClusterDiversity`
+  // reader. Stays null when the chain method is unavailable; the card
+  // renders an honest "unavailable" line rather than a placeholder.
+  const [diversity, setDiversity] = useState<ClusterDiversity | null>(() =>
+    typeof cluster.diversityScore === "number"
+      ? {
+          clusterId: cluster.clusterId,
+          score: cluster.diversityScore,
+          asnVariance: cluster.asnVariance ?? 0,
+          geoVariance: cluster.geoVariance ?? 0,
+          hostingSpread: cluster.hostingSpread ?? 0,
+        }
+      : null,
+  );
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [statusRes, delegatorsRes, historyRes] = await Promise.all([
+      const [statusRes, delegatorsRes, diversityRes, historyRes] = await Promise.all([
         bgStakingClusterStatus(cluster.clusterId),
         bgStakingClusterDelegators(cluster.clusterId),
+        bgStakingClusterDiversity(cluster.clusterId),
         walletAddress
           ? bgStakingDelegationHistory(walletAddress)
           : Promise.resolve({ ok: true as const, data: { wallet: "", rows: [] } }),
@@ -89,6 +114,9 @@ export function ClusterDetail({
       }
       if (delegatorsRes.ok) {
         setDelegatorCount(delegatorsRes.data.count);
+      }
+      if (diversityRes.ok) {
+        setDiversity(diversityRes.data);
       }
       if (historyRes.ok) {
         // Filter to entries that touched this cluster (either source or
@@ -145,6 +173,23 @@ export function ClusterDetail({
             <div style={cellMuted}>Loading…</div>
           )}
         </div>
+
+        {/* §25.1 roster diversity (read-only delegator view) */}
+        {agentCommerceEnabled && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Diversity</h3>
+            </div>
+            {diversity !== null ? (
+              <ClusterDiversityCard diversity={diversity} />
+            ) : (
+              <div style={cellMuted}>
+                Diversity scoring unavailable — the chain hasn&apos;t surfaced a
+                roster-diversity score for this cluster yet.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Demand profile */}
         <div className="ext-card">
@@ -235,6 +280,89 @@ function ClusterIdentityCard({
         />
       )}
       <KeyValueRow label="Active set" value={cluster.active ? "yes" : "no"} />
+    </div>
+  );
+}
+
+/** §25.1 read-only diversity card. Renders the headline score plus the
+ *  three entropy dimensions (ASN / geo / hosting) as 0-100% bars. All
+ *  inputs are `0..=DIVERSITY_SCORE_MAX` bps; the bars normalise to a
+ *  percentage. Read-only — delegators inspect, they don't write
+ *  operator network metadata (that's an operator/Monarch surface). */
+function ClusterDiversityCard({ diversity }: { diversity: ClusterDiversity }) {
+  const pct = (bps: number) =>
+    Math.max(0, Math.min(100, Math.round((bps / DIVERSITY_SCORE_MAX) * 100)));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <KeyValueRow
+        label="Diversity score"
+        value={`${pct(diversity.score)}%`}
+        tooltip="Headline roster-diversity score from lyth_getClusterDiversity, blending ASN / country / hosting-class entropy. 0..=100%."
+      />
+      <DiversityBar
+        label="ASN spread"
+        pct={pct(diversity.asnVariance)}
+        tooltip="Normalised ASN-distribution entropy — how spread the cluster's operators are across autonomous systems."
+      />
+      <DiversityBar
+        label="Geo spread"
+        pct={pct(diversity.geoVariance)}
+        tooltip="Normalised country-distribution entropy — geographic spread of the cluster's operators."
+      />
+      <DiversityBar
+        label="Hosting spread"
+        pct={pct(diversity.hostingSpread)}
+        tooltip="Normalised hosting-class entropy — spread across bare-metal / co-location / cloud."
+      />
+    </div>
+  );
+}
+
+/** One 0-100% diversity dimension rendered as a labelled bar. */
+function DiversityBar({
+  label,
+  pct,
+  tooltip,
+}: {
+  label: string;
+  pct: number;
+  tooltip?: string;
+}) {
+  return (
+    <div title={tooltip}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          color: "var(--fg-400)",
+          marginBottom: 3,
+        }}
+      >
+        <span>{label}</span>
+        <span style={{ color: "var(--fg-100)" }}>{pct}%</span>
+      </div>
+      <div
+        style={{
+          height: 5,
+          borderRadius: 3,
+          background: "var(--bg-300, rgba(255,255,255,0.08))",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${pct}%`,
+            borderRadius: 3,
+            background:
+              "linear-gradient(90deg, var(--accent-violet, #8b5cf6), var(--accent-magenta, #d946ef))",
+          }}
+        />
+      </div>
     </div>
   );
 }

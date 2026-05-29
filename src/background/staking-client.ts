@@ -30,7 +30,9 @@ import { sprintnetJsonRpc } from "./tx-mldsa.js";
 import { NODE_REGISTRY_CAPABILITIES } from "@monolythium/core-sdk";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
+  DIVERSITY_SCORE_MAX,
   MOCK_CLUSTER_APR_BPS,
+  type ClusterDiversity,
   type ClusterDelegatorsView,
   type ClusterDirectoryEntry,
   type ClusterDirectoryPage,
@@ -107,6 +109,27 @@ interface RawClusterApr {
   aprBps?: number;
 }
 
+// SDK contract: ClusterDiversityView from `lyth_getClusterDiversity`
+// (MB-2/PF-6, live in 0.3.10). All four scores are `0..=10000` bps
+// (`DIVERSITY_SCORE_MAX`). Wire form keeps every field optional so a
+// misbehaving operator can't crash the parser; the reader clamps each
+// score into range before surfacing it.
+interface RawClusterDiversity {
+  clusterId?: number;
+  score?: number;
+  asnVariance?: number;
+  geoVariance?: number;
+  hostingSpread?: number;
+}
+
+/** Clamp a raw diversity score into `0..=DIVERSITY_SCORE_MAX`, returning
+ *  `null` for anything non-finite so a single garbage field doesn't
+ *  poison the whole view. */
+function clampDiversityScore(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  return Math.max(0, Math.min(DIVERSITY_SCORE_MAX, Math.floor(raw)));
+}
+
 /** Map chain's `aggregateHealth` token vocabulary onto the wallet's
  *  `ClusterHealth` enum. Verified 2026-05-27 against mono-core
  *  `crates/core/runtime/src/providers.rs:6848-6854, 6905-6911` —
@@ -133,8 +156,10 @@ function normaliseDirectoryEntry(
   raw: RawClusterDirectoryEntry,
   entityByCluster: Map<number, string>,
   aprByCluster: Map<number, number>,
+  diversityByCluster: Map<number, ClusterDiversity>,
 ): ClusterDirectoryEntry | null {
   if (typeof raw.clusterId !== "number") return null;
+  const diversity = diversityByCluster.get(raw.clusterId) ?? null;
   return {
     clusterId: raw.clusterId,
     // §22.8 namingRegistry precompile (0x1106) hasn't surfaced a reader
@@ -151,6 +176,14 @@ function normaliseDirectoryEntry(
     aprBps: aprByCluster.has(raw.clusterId)
       ? aprByCluster.get(raw.clusterId)!
       : null,
+    // §25.1 roster diversity, populated by the per-cluster
+    // `lyth_getClusterDiversity` fanout below. `null` when the read
+    // failed; autovote + the ClusterDetail card fall back to the
+    // region-count + entity heuristic.
+    diversityScore: diversity?.score ?? null,
+    asnVariance: diversity?.asnVariance ?? null,
+    geoVariance: diversity?.geoVariance ?? null,
+    hostingSpread: diversity?.hostingSpread ?? null,
   };
 }
 
@@ -186,6 +219,44 @@ export async function readClusterApr(
   }
 }
 
+/** Read a cluster's §25.1 roster-diversity view via
+ *  `lyth_getClusterDiversity(clusterId)` (MB-2/PF-6, SDK 0.3.10
+ *  `ClusterDiversityView`). All four scores are `0..=10000` bps. Returns
+ *  `ok: false` on transport / RPC error or method-absence so the caller
+ *  can fall back to the region-count heuristic per no-mock-fallbacks;
+ *  the chain primitive is the authoritative source when present. */
+export async function readClusterDiversity(
+  clusterId: number,
+): Promise<StakingResult<ClusterDiversity>> {
+  try {
+    const { result, via } = await sprintnetJsonRpc<RawClusterDiversity>(
+      "lyth_getClusterDiversity",
+      [clusterId],
+    );
+    const score = clampDiversityScore(result?.score);
+    if (!result || typeof result !== "object" || score === null) {
+      return { ok: false, reason: "malformed lyth_getClusterDiversity response" };
+    }
+    return {
+      ok: true,
+      via,
+      data: {
+        clusterId:
+          typeof result.clusterId === "number" ? result.clusterId : clusterId,
+        score,
+        asnVariance: clampDiversityScore(result.asnVariance) ?? 0,
+        geoVariance: clampDiversityScore(result.geoVariance) ?? 0,
+        hostingSpread: clampDiversityScore(result.hostingSpread) ?? 0,
+      },
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: (e as Error)?.message ?? "lyth_getClusterDiversity unreachable",
+    };
+  }
+}
+
 /** Read the chain's cluster directory. Propagates `ok: false` on transport
  *  failure — see `_dev-notes/_principles/no-mock-fallbacks.md`. */
 export async function readClusterDirectory(
@@ -215,6 +286,12 @@ export async function readClusterDirectory(
     // its observed APR (PING #7, mono-core `253cac0b`). Failures are silent —
     // aprBps goes null and the UI renders `—` rather than fail the directory.
     const aprByCluster = new Map<number, number>();
+    // Best-effort: fan out per-cluster `lyth_getClusterDiversity` (§25.1,
+    // SDK 0.3.10) so each row carries its real ASN/geo/hosting diversity
+    // scores. Failures are silent — the diversity fields go null and the
+    // autovote scorer + ClusterDetail card fall back to the region-count
+    // heuristic rather than failing the whole directory.
+    const diversityByCluster = new Map<number, ClusterDiversity>();
     await Promise.all(
       clusterIds.flatMap((clusterId) => [
         (async () => {
@@ -234,10 +311,16 @@ export async function readClusterDirectory(
           const apr = await readClusterApr(clusterId);
           if (apr.ok) aprByCluster.set(clusterId, apr.data.aprBps);
         })(),
+        (async () => {
+          const diversity = await readClusterDiversity(clusterId);
+          if (diversity.ok) diversityByCluster.set(clusterId, diversity.data);
+        })(),
       ]),
     );
     const clusters = result.clusters
-      .map((c) => normaliseDirectoryEntry(c, entityByCluster, aprByCluster))
+      .map((c) =>
+        normaliseDirectoryEntry(c, entityByCluster, aprByCluster, diversityByCluster),
+      )
       .filter((c): c is ClusterDirectoryEntry => c !== null);
     return {
       ok: true,
