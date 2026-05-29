@@ -61,6 +61,11 @@ import {
   type PendingActivityCache,
 } from "../../shared/activity";
 import {
+  sentAddressesKey,
+  parseSentAddresses,
+  isSentAddress,
+} from "../../shared/sent-addresses";
+import {
   FEE_MULTIPLIER_BPS_BASE,
   LYTHOSHI_PER_LYTH,
   NATIVE_LYTH_DECIMALS,
@@ -668,7 +673,10 @@ export function Send({
                 resolution={nameResolution}
               />
             )}
-          {recipientFamiliarity === "new" && (
+          {recipientFamiliarity === "new" &&
+            recipientContact === null &&
+            (recipientRegisteredName === null ||
+              recipientRegisteredName.length === 0) && (
             <div
               style={{
                 display: "flex",
@@ -1323,14 +1331,20 @@ function useRecipientFamiliarity(
     const accLower = accountAddr.toLowerCase();
     const confirmedKey = activityCacheKey(accLower, chainIdHex);
     const pendingKey = activityPendingKey(accLower, chainIdHex);
+    // CX3 — durable per-(vault,chain) sent-address log. Written on every
+    // successful send and never TTL-evicted, so a known recipient stays
+    // "seen" even after the pending row's 5-min TTL lapses and before an
+    // indexer refresh re-caches the confirmed send (the old re-warn bug).
+    const sentKey = sentAddressesKey(accLower, chainIdHex);
     let cancelled = false;
     setState("unknown");
 
-    chrome.storage.local.get([confirmedKey, pendingKey], (res) => {
+    chrome.storage.local.get([confirmedKey, pendingKey, sentKey], (res) => {
       if (cancelled) return;
       const confirmed = res?.[confirmedKey] as ActivityCache | undefined;
       const pending = res?.[pendingKey] as PendingActivityCache | undefined;
 
+      const inSent = isSentAddress(parseSentAddresses(res?.[sentKey]), target);
       const inConfirmed = (confirmed?.confirmed ?? []).some((r) => {
         if (r.kind === "tx_send") return r.counterparty === target;
         if (r.kind === "token_transfer")
@@ -1340,7 +1354,7 @@ function useRecipientFamiliarity(
       const inPending = (pending?.pending ?? []).some(
         (r) => r.to.toLowerCase() === target,
       );
-      setState(inConfirmed || inPending ? "seen" : "new");
+      setState(inSent || inConfirmed || inPending ? "seen" : "new");
     });
 
     return () => {
