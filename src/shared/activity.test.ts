@@ -20,6 +20,8 @@ import {
   mergeIndexerSnapshot,
   evictExpiredPending,
   reconcilePending,
+  NATIVE_LYTH_TOKEN_ID,
+  isNativeLythTokenId,
   type PendingTxRow,
   type ConfirmedRow,
   type DelegateRow,
@@ -441,6 +443,32 @@ describe("mapAddressActivityToRows", () => {
       new Set(),
     );
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("token_transfer");
+  });
+
+  it("routes a zero (Hash::ZERO) tokenId transfer to native tx_send, not token_transfer", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ tokenId: NATIVE_LYTH_TOKEN_ID, direction: "out" })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("tx_send");
+  });
+
+  it("routes a zero-tokenId inbound transfer to native tx_receive", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ tokenId: NATIVE_LYTH_TOKEN_ID, direction: "in" })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("tx_receive");
+  });
+
+  it("keeps a real (non-zero) MRC-20 tokenId as token_transfer", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ tokenId: "0x" + "11".repeat(32), direction: "in" })],
+      new Set(),
+    );
     expect(rows[0]?.kind).toBe("token_transfer");
   });
 
@@ -926,5 +954,19 @@ describe("mergeIndexerSnapshot", () => {
       "2", // (100, 0, 5)
       "3", // (100, 0, 3)
     ]);
+  });
+});
+
+describe("isNativeLythTokenId", () => {
+  it("treats null / empty / all-zero hex as native LYTH", () => {
+    expect(isNativeLythTokenId(null)).toBe(true);
+    expect(isNativeLythTokenId("")).toBe(true);
+    expect(isNativeLythTokenId("0x0")).toBe(true);
+    expect(isNativeLythTokenId(NATIVE_LYTH_TOKEN_ID)).toBe(true);
+  });
+
+  it("treats a real non-zero token id as NOT native", () => {
+    expect(isNativeLythTokenId("0x" + "11".repeat(32))).toBe(false);
+    expect(isNativeLythTokenId("0xdeadbeef")).toBe(false);
   });
 });
