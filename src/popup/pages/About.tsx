@@ -41,6 +41,10 @@ import { fetchLatestSdkVersion, compareSemver } from "../../shared/sdk-latest";
 import {
   requestWalletUpdateStatus,
   CWS_LISTING_URL,
+  STORAGE_KEY_WALLET_UPDATE,
+  parseWalletUpdateCache,
+  shouldCheckWalletUpdate,
+  nextUpdateAvailable,
   type WalletUpdateStatus,
 } from "../../shared/wallet-update";
 import {
@@ -147,8 +151,34 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      const now = Date.now();
+      const stored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_WALLET_UPDATE], (res) =>
+          resolve(res?.[STORAGE_KEY_WALLET_UPDATE]),
+        );
+      });
+      if (cancelled) return;
+      const cache = parseWalletUpdateCache(stored);
+      // Fresh cache → show the last verdict WITHOUT re-calling the API. The
+      // check is shared with the home banner and rate-limited to ~12h; calling
+      // it on every About open is what made Chrome return "throttled".
+      if (cache && !shouldCheckWalletUpdate(cache.lastCheckAt, now)) {
+        setUpdateStatus(
+          cache.lastStatus ??
+            (cache.updateAvailable ? "update_available" : "no_update"),
+        );
+        return;
+      }
       const s = await requestWalletUpdateStatus();
-      if (!cancelled) setUpdateStatus(s);
+      if (cancelled) return;
+      setUpdateStatus(s);
+      chrome.storage.local.set({
+        [STORAGE_KEY_WALLET_UPDATE]: {
+          lastCheckAt: now,
+          updateAvailable: nextUpdateAvailable(s, cache?.updateAvailable ?? false),
+          lastStatus: s,
+        },
+      });
     })();
     return () => {
       cancelled = true;
