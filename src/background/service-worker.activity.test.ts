@@ -1344,6 +1344,58 @@ describe("wallet-activity-get", () => {
     expect(r.errors.addressActivity).toBeDefined();
     expect(r.errors.delegationHistory).toBeDefined();
   });
+
+  // C4 — deterministic pending confirmation via the canonical hash.
+  function seedEmptyIndexer() {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = []; // no heuristic match available
+  }
+  function seedPending(txHash: string) {
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    storageLocal[pendingKey] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash,
+          to: "0xrecipient",
+          amountDecimal: "0.01",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 100,
+          via: "operator-test",
+        },
+      ],
+    };
+  }
+
+  it("evicts a pending row when lyth_txStatus reports the canonical hash found", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    seedPending("0x" + "ab".repeat(32));
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: unknown[] };
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(0);
+  });
+
+  it("keeps a pending row when lyth_txStatus is not_found and no receipt (graceful)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    seedPending("0x" + "cd".repeat(32));
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: unknown[] };
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
