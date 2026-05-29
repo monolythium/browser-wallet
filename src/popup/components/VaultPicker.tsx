@@ -281,14 +281,7 @@ export function VaultPicker({
 
   return (
     <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
-      <div
-        ref={chipRef}
-        className="ext-acc"
-        onClick={handleChipClick}
-        aria-disabled={!ready}
-        title={ready ? undefined : "Wallets appear after first unlock"}
-        style={chipDisabledStyle}
-      >
+      <div ref={chipRef} className="ext-acc">
         <div className="ext-acc__lbl">
           {/* Round 7 TASK 2 — row 1 uses a 3-column grid so the name +
              pencil cluster sits VISUALLY CENTERED in the row regardless
@@ -298,11 +291,26 @@ export function VaultPicker({
              left-weighted. */}
           <div
             className="n"
+            onClick={handleChipClick}
+            role="button"
+            tabIndex={ready ? 0 : -1}
+            aria-disabled={!ready}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            title={ready ? "Switch wallet" : "Wallets appear after first unlock"}
+            onKeyDown={(e) => {
+              if (!ready) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                handleChipClick();
+              }
+            }}
             style={{
               display: "grid",
               gridTemplateColumns: "1fr auto 1fr",
               alignItems: "center",
               gap: 6,
+              ...chipDisabledStyle,
             }}
           >
             {/* Col 1 — empty spacer for centering. */}
@@ -409,25 +417,29 @@ export function VaultPicker({
             className="a"
             style={{
               display: "flex",
-              alignItems: "center",
+              alignItems: "flex-start",
               justifyContent: "center",
-              gap: 4,
-              marginTop: 3,
+              gap: 6,
+              marginTop: 5,
             }}
           >
             <span
               onClick={handleAddrCopy}
               title={addrCopied ? "Copied" : fullAddr}
               style={{
+                flex: "1 1 auto",
                 minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "clip",
-                whiteSpace: "nowrap",
+                // Full address — wrap onto a second line if it doesn't fit at
+                // this size; never clip/ellipsis/truncate (§22.7 full bech32m).
+                whiteSpace: "normal",
+                wordBreak: "break-all",
+                textAlign: "center",
+                lineHeight: 1.4,
                 fontFamily: "var(--f-mono)",
-                fontSize: 14,
+                fontSize: 14.5,
                 fontWeight: 500,
                 color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
-                letterSpacing: "-0.06em",
+                letterSpacing: "-0.02em",
                 cursor: "copy",
               }}
             >
