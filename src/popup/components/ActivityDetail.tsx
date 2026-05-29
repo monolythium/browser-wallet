@@ -223,7 +223,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
   // ── Pending send ──
   if (row.kind === "pending_tx") {
     return (
-      <Modal open onClose={onClose} title="Pending send">
+      <Modal open onClose={onClose} title="Pending send" showClose>
         <div>
           <DRow label="Status" value="Pending" />
           <DRow label="Amount" value={`${row.amountDecimal} LYTH`} />
@@ -254,7 +254,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
       row.kind === "token_transfer" ? "Token transfer" : isIn ? "Received" : "Sent";
     const cp = row.counterparty;
     return (
-      <Modal open onClose={onClose} title={title}>
+      <Modal open onClose={onClose} title={title} showClose>
         <div>
           <DRow label="Status" value="Confirmed" />
           <DRow label="Amount" value={row.amountDecimal !== null ? `${row.amountDecimal} LYTH` : "—"} />
@@ -282,7 +282,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
     const title =
       row.kind === "undelegate" ? "Undelegation" : row.kind === "redelegate" ? "Redelegation" : "Delegation";
     return (
-      <Modal open onClose={onClose} title={title}>
+      <Modal open onClose={onClose} title={title} showClose>
         <div>
           <DRow label="Status" value="Confirmed" />
           {row.kind === "delegate" && delegateLyth !== null && (
@@ -301,7 +301,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
 
   // ── rebalance / crossing_to_private — minimal honest view ──
   return (
-    <Modal open onClose={onClose} title="Activity">
+    <Modal open onClose={onClose} title="Activity" showClose>
       <div>
         <DRow label="Type" value={row.kind} />
         <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
