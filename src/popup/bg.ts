@@ -2067,6 +2067,78 @@ export async function bgReadBridgeDrainStatus(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// v5 wiring — §18.8 spending-policy agent sub-accounts (CONSUMER PILLAR).
+//
+// readSpendingPolicy is a plain RPC read (StakingResult envelope).
+// bgBuildSpendingPolicyClaim derives a fresh agent sub-account keypair
+// SW-side, signs the chain-id-bound claim message with it, and returns
+// the setPolicyClaim calldata + the sub-account address + its one-time
+// recovery phrase. The principal then funds + submits via
+// `bgWalletSendTx` (native transfer to fund; calldata to 0x110C to
+// register). Revoke = bgWalletSendTx with `encodeDisable(subAccount)`.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Convenience re-export of the SDK §18.8 policy view shape. */
+export type SpendingPolicyView =
+  import("@monolythium/core-sdk").SpendingPolicyView;
+
+/** Read the live §18.8 spending policy for one controlled sub-account
+ *  (`lyth_getSpendingPolicy`). `ok: false` on transport/shape error —
+ *  no mock fallback. `subAccount` may be `0x` hex or typed `mono`
+ *  bech32m. */
+export async function bgReadSpendingPolicy(
+  subAccount: string,
+): Promise<
+  | { ok: true; data: SpendingPolicyView; via?: string }
+  | { ok: false; reason: string }
+> {
+  return send("spending-policy-get", { subAccount });
+}
+
+/** The popup-side claim-builder request. Caps are decimal LYTH strings
+ *  ("" / "0" == no cap); roots are optional 0x-hex 32-byte words; the
+ *  time window + expiry are opt-in. `chainId` is the active chain's hex
+ *  id — the SW binds it into the signed claim message. */
+export interface BgBuildSpendingPolicyClaimRequest {
+  chainId: string;
+  perTxCapLyth: string;
+  dailyCapLyth: string;
+  weeklyCapLyth: string;
+  monthlyCapLyth: string;
+  allowRoot?: string;
+  denyRoot?: string;
+  categoryAllowRoot?: string;
+  timeWindow?: { startHour: number; endHour: number } | null;
+  policyExpiryUnixSeconds?: number;
+}
+
+/** The SW reply for a fresh-claim build. On success the popup shows the
+ *  sub-account recovery phrase (one-time), funds `subAccountAddress`
+ *  with a native transfer, then submits `data` to `to` (0x110C) via
+ *  {@link bgWalletSendTx}. */
+export type BgBuildSpendingPolicyClaimReply =
+  | {
+      ok: true;
+      to: string;
+      valueWeiHex: "0x0";
+      data: string;
+      subAccountAddress: string;
+      subAccountBech32m: string;
+      subAccountMnemonic: string;
+    }
+  | { ok: false; reason: string };
+
+/** Derive a fresh agent sub-account, sign the §18.8 claim-bound message
+ *  with it, and build the `setPolicyClaim` calldata. Requires the
+ *  principal wallet to be unlocked (the follow-up submit needs a
+ *  signer). */
+export async function bgBuildSpendingPolicyClaim(
+  req: BgBuildSpendingPolicyClaimRequest,
+): Promise<BgBuildSpendingPolicyClaimReply> {
+  return send("spending-policy-build-claim", req);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Phase 9 — passkey + two-tier IPC helpers
 // ────────────────────────────────────────────────────────────────────────────
 
