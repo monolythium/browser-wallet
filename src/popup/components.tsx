@@ -477,6 +477,10 @@ interface TopProps {
    *  dispatches here instead of opening the legacy single-page modal.
    *  Threaded through Home for App-level routing to NewWalletFlow. */
   onNewWalletFlow?: () => void;
+  /** Fires after a VaultAddModal completion so App can re-run
+   *  refreshKeystoreStatus and the chip shows the new vault's name
+   *  immediately (no need to lock/unlock or reopen). */
+  onVaultComplete?: () => void;
 }
 
 // Phase 5 Commit 3: chip replaced with <VaultPicker /> (multi-vault
@@ -496,7 +500,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (Round 4 design).
-export function Top({ account, onNewWalletFlow }: TopProps) {
+export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       <div
@@ -516,6 +520,7 @@ export function Top({ account, onNewWalletFlow }: TopProps) {
       <VaultPicker
         activeAccount={account}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
+        {...(onVaultComplete ? { onVaultComplete } : {})}
       />
     </div>
   );
@@ -1582,9 +1587,13 @@ interface HomeProps {
    *  dropdown entry routes to App's NewWalletFlow screen instead of
    *  opening the legacy single-page VaultAddModal fresh mode. */
   onNewWalletFlow?: () => void;
+  /** Threaded through Top → VaultPicker so a successful VaultAddModal
+   *  completion (import or multisig) can re-run App's hydration and the
+   *  chip shows the new vault's name without lock/unlock or reopen. */
+  onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -1611,6 +1620,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         onOpenAccounts={onOpenAccounts}
         onSettings={onSettings}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
+        {...(onVaultComplete ? { onVaultComplete } : {})}
       />
       <div className="ext-body">
         {topSlot}
