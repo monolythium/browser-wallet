@@ -18,6 +18,14 @@ import {
   STORAGE_KEY_VAULTS_CONTAINER_V4,
 } from "../shared/constants";
 import { hexLythoshiToLythNumber } from "../shared/native-amount";
+import {
+  CWS_LISTING_URL,
+  STORAGE_KEY_WALLET_UPDATE,
+  shouldCheckWalletUpdate,
+  nextUpdateAvailable,
+  parseWalletUpdateCache,
+  requestWalletUpdateStatus,
+} from "../shared/wallet-update";
 import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
@@ -204,6 +212,54 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // CX5 — wallet-version update check vs the Chrome Web Store. Rate-limited
+  // to ~2×/day via a cached lastCheckAt; reflects the last-known verdict
+  // immediately, then refreshes via chrome.runtime.requestUpdateCheck.
+  // Honest-absence: dev/unpacked or throttled → no banner.
+  const [walletUpdateAvailable, setWalletUpdateAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const now = Date.now();
+      const stored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_WALLET_UPDATE], (res) =>
+          resolve(res?.[STORAGE_KEY_WALLET_UPDATE]),
+        );
+      });
+      if (cancelled) return;
+      const cache = parseWalletUpdateCache(stored);
+      const prior = cache?.updateAvailable ?? false;
+      if (prior) setWalletUpdateAvailable(true);
+      if (!shouldCheckWalletUpdate(cache?.lastCheckAt ?? null, now)) return;
+      const status = await requestWalletUpdateStatus();
+      if (cancelled) return;
+      const updateAvailable = nextUpdateAvailable(status, prior);
+      setWalletUpdateAvailable(updateAvailable);
+      chrome.storage.local.set({
+        [STORAGE_KEY_WALLET_UPDATE]: { lastCheckAt: now, updateAvailable },
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.runtime?.onUpdateAvailable) {
+      return;
+    }
+    const onUpd = () => {
+      setWalletUpdateAvailable(true);
+      chrome.storage.local.set({
+        [STORAGE_KEY_WALLET_UPDATE]: {
+          lastCheckAt: Date.now(),
+          updateAvailable: true,
+        },
+      });
+    };
+    chrome.runtime.onUpdateAvailable.addListener(onUpd);
+    return () => chrome.runtime.onUpdateAvailable.removeListener(onUpd);
   }, []);
   // Round 7 TASK 4 — back-navigation stack. When user navigates via the
   // hamburger menu (main-menu → contacts), back from contacts should
@@ -794,6 +850,35 @@ export default function App() {
               }
             : {})}
         />
+      )}
+
+      {screen === "home" && walletUpdateAvailable && (
+        <button
+          type="button"
+          onClick={() =>
+            window.open(CWS_LISTING_URL, "_blank", "noopener,noreferrer")
+          }
+          title="Open the Monolythium wallet on the Chrome Web Store"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            padding: "8px 14px",
+            border: "none",
+            borderBottom: "1px solid rgba(242,180,65,0.3)",
+            background:
+              "linear-gradient(90deg, rgba(242,180,65,0.18), rgba(242,180,65,0.04))",
+            color: "var(--gold)",
+            fontFamily: "var(--f-sans)",
+            fontSize: 11.5,
+            textAlign: "left",
+            cursor: "pointer",
+          }}
+        >
+          <span aria-hidden="true">⬆</span>
+          <span>A wallet update is available — update on the Chrome Web Store ↗</span>
+        </button>
       )}
 
       {screen === "loading" && <div className="ext-body" style={{ padding: 24, color: "var(--fg-300)" }}>Loading…</div>}
