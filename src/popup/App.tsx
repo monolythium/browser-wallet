@@ -36,6 +36,7 @@ import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar"
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Stake, clearStakeState } from "./pages/Stake";
+import { AgentPolicy } from "./pages/AgentPolicy";
 import { Delegations } from "./pages/Delegations";
 import { ClusterDetail } from "./pages/ClusterDetail";
 import { NetworkDetail } from "./pages/NetworkDetail";
@@ -117,6 +118,7 @@ type Screen =
   | "receive"
   | "send"
   | "stake"
+  | "agent-policy"
   | "delegations"
   | "cluster-detail"
   | "bridge"
@@ -1209,6 +1211,7 @@ export default function App() {
           onConnectedSites={() => navigateTo("connected-sites")}
           onNetworks={() => navigateTo("networks")}
           onMultisig={() => navigateTo("multisig-list")}
+          onAgentPolicy={() => navigateTo("agent-policy")}
           onSettings={() => navigateTo("settings")}
           onAbout={() => navigateTo("about")}
           onLockWallet={() => {
@@ -1441,6 +1444,14 @@ export default function App() {
         <Bridge
           indexer={indexerSnapshot}
           onBack={() => setScreen("home")}
+        />
+      )}
+
+      {screen === "agent-policy" && (
+        <AgentPolicy
+          account={acc}
+          chainId={activeChain.chainId}
+          onBack={() => setScreen("main-menu")}
         />
       )}
 
