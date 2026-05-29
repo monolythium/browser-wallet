@@ -280,37 +280,53 @@ export function VaultPicker({
   };
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
-      <div ref={chipRef} className="ext-acc">
+    <div
+      ref={(el) => {
+        wrapRef.current = el;
+        // Anchor the dropdown to the whole top-bar (selector + address) so it
+        // opens below the address block, not over it.
+        chipRef.current = el;
+      }}
+      style={{
+        position: "relative",
+        flex: 1,
+        minWidth: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      {/* Wallet selector — the "Wallet 1" pill. Clicking it (or the chevron)
+          opens the picker; rename pencil is inside. The address moved to its
+          own block below: a visual separation, no logic change. */}
+      <div
+        className="ext-acc"
+        onClick={handleChipClick}
+        role="button"
+        tabIndex={ready ? 0 : -1}
+        aria-disabled={!ready}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={ready ? "Switch wallet" : "Wallets appear after first unlock"}
+        onKeyDown={(e) => {
+          if (!ready) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleChipClick();
+          }
+        }}
+        style={chipDisabledStyle}
+      >
         <div className="ext-acc__lbl">
-          {/* Round 7 TASK 2 — row 1 uses a 3-column grid so the name +
-             pencil cluster sits VISUALLY CENTERED in the row regardless
-             of the right-side cluster (multisig pill + chevron).
-             Round 6's flex layout left-aligned the name and just
-             spacer-pushed the chevron, making the row read as
-             left-weighted. */}
+          {/* 3-column grid so the name + pencil cluster sits visually centered
+             regardless of the right-side cluster (multisig pill + chevron). */}
           <div
             className="n"
-            onClick={handleChipClick}
-            role="button"
-            tabIndex={ready ? 0 : -1}
-            aria-disabled={!ready}
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            title={ready ? "Switch wallet" : "Wallets appear after first unlock"}
-            onKeyDown={(e) => {
-              if (!ready) return;
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleChipClick();
-              }
-            }}
             style={{
               display: "grid",
               gridTemplateColumns: "1fr auto 1fr",
               alignItems: "center",
               gap: 6,
-              ...chipDisabledStyle,
             }}
           >
             {/* Col 1 — empty spacer for centering. */}
@@ -404,70 +420,54 @@ export function VaultPicker({
               </span>
             </span>
           </div>
-          {/* Row 2 — FULL bech32m address (single line, prominent) + copy.
-             Round 7 TASK 2 — bump 13.5 → 14 px, tighten letter-spacing
-             to -0.06 em so 43 chars still fit in ~317 px of chip
-             content width (43 × 7.18 ≈ 309 px + 4 px gap + 20 px copy
-             button = 333 px against 341 px available). Drop flex:1 from
-             the address span so the copy button hugs the END of the
-             text instead of the end of the span — Round 6's flex:1
-             span left ~9 px of empty span past the text end that read
-             as extra gap. Cluster centers via justify-content. */}
-          <div
-            className="a"
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "center",
-              gap: 6,
-              marginTop: 5,
-            }}
-          >
-            <span
-              onClick={handleAddrCopy}
-              title={addrCopied ? "Copied" : fullAddr}
-              style={{
-                flex: "1 1 auto",
-                minWidth: 0,
-                // Full address — wrap onto a second line if it doesn't fit at
-                // this size; never clip/ellipsis/truncate (§22.7 full bech32m).
-                whiteSpace: "normal",
-                wordBreak: "break-all",
-                textAlign: "center",
-                lineHeight: 1.4,
-                fontFamily: "var(--f-mono)",
-                fontSize: 14.5,
-                fontWeight: 500,
-                color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
-                letterSpacing: "-0.02em",
-                cursor: "copy",
-              }}
-            >
-              {fullAddr}
-            </span>
-            <button
-              type="button"
-              onClick={handleAddrCopy}
-              aria-label="Copy address"
-              title={addrCopied ? "Copied" : "Copy address"}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 20,
-                height: 20,
-                padding: 0,
-                background: "transparent",
-                border: "none",
-                color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
-                cursor: "pointer",
-                flexShrink: 0,
-              }}
-            >
-              {addrCopied ? <CheckIcon /> : <ClipboardIcon />}
-            </button>
-          </div>
         </div>
+      </div>
+
+      {/* Address — a SEPARATE block below the selector pill (the visual
+          separation the design asks for): full bech32m address (wraps, never
+          truncates) + copy button. Tapping copies; it is NOT part of the
+          picker hit-area, so it never opens the dropdown. */}
+      <div className="ext-acc-addr">
+        <span
+          onClick={handleAddrCopy}
+          title={addrCopied ? "Copied" : fullAddr}
+          style={{
+            flex: "1 1 auto",
+            minWidth: 0,
+            whiteSpace: "normal",
+            wordBreak: "break-all",
+            lineHeight: 1.4,
+            fontFamily: "var(--f-mono)",
+            fontSize: 13.5,
+            fontWeight: 500,
+            color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
+            letterSpacing: "-0.01em",
+            cursor: "copy",
+          }}
+        >
+          {fullAddr}
+        </span>
+        <button
+          type="button"
+          onClick={handleAddrCopy}
+          aria-label="Copy address"
+          title={addrCopied ? "Copied" : "Copy address"}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 22,
+            height: 22,
+            padding: 0,
+            background: "transparent",
+            border: "none",
+            color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          {addrCopied ? <CheckIcon /> : <ClipboardIcon />}
+        </button>
       </div>
 
       {open && ready && anchor &&
