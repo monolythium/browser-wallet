@@ -2410,6 +2410,7 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
     valueWeiHex: tx.valueWeiHex,
     data: tx.data,
     chainIdHex: args.chainIdHex,
+    executionUnitLimitHex: tx.executionUnitLimitHex,
   });
 
   if (!submit.ok) {
