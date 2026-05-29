@@ -374,14 +374,18 @@ export default function App() {
   // Fetch the unlocked v3 keypair and patch `acc` with its real EVM
   // address + algo. Demo data stays as the fallback shape; only the
   // identity-bearing fields are overridden so Home keeps rendering the
-  // same component without a rewrite.
+  // same component without a rewrite. The chip's visible label comes
+  // from the active vault's `label` (via bgVaultsList → VaultPicker);
+  // we deliberately do NOT override `acc.label` here — a prior override
+  // ("ML-DSA-65 wallet") leaked through VaultPicker's fallback during
+  // the pre-fetch tick and showed up as the apparent wallet name on
+  // fresh installs.
   const loadActiveAccount = async () => {
     const r = await bgWalletActiveAccount();
     if (!r.ok) return;
     setAcc((prev) => ({
       ...prev,
       id: "v3-active",
-      label: "ML-DSA-65 wallet",
       addr: r.account.address,
       algo: r.account.algo === "mldsa" ? "mldsa" : "slhdsa",
       custody: r.account.custody,
@@ -1026,6 +1030,10 @@ export default function App() {
           // Import + Multisig dropdown entries still open
           // VaultAddModal as before.
           onNewWalletFlow={() => navigateTo("new-wallet-flow")}
+          // Re-run hydration when VaultAddModal completes so the chip
+          // shows the new vault's name immediately, instead of waiting
+          // for a lock/unlock or reopen to remount the tree.
+          onVaultComplete={() => void refreshKeystoreStatus()}
           topSlot={
             activeVaultSummary ? (
               <>

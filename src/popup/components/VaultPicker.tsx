@@ -60,9 +60,10 @@ const MAX_LABEL_LEN = 32;
 
 export interface VaultPickerProps {
   /** Active account passed through from the parent header — used to
-   *  render the chip's visible label + address regardless of container
-   *  state (so the pre-migration disabled chip still shows the user's
-   *  current address line). */
+   *  render the chip's address regardless of container state. The chip's
+   *  visible LABEL no longer falls back to `activeAccount.label`; the
+   *  active vault's `label` from `bgVaultsList()` is the single source of
+   *  truth, with a neutral em-dash placeholder during the pre-fetch tick. */
   activeAccount: Account;
   /** Round 13 TASK 1 — when provided, the dropdown's "New wallet"
    *  CTA dispatches to this callback (typically App-level
@@ -71,11 +72,19 @@ export interface VaultPickerProps {
    *  modes still go through VaultAddModal so the in-app flow
    *  changes only affect the fresh-mnemonic path. */
   onNewWalletFlow?: () => void;
+  /** Fires after a VaultAddModal (or MultisigCreateModal) completion so
+   *  the parent can re-run its hydration (`refreshKeystoreStatus` →
+   *  `loadActiveAccount` + `loadActiveVaultSummary`). Without this the
+   *  picker would only refresh its own list and the App-level state
+   *  would still reflect the pre-import vault, leaving the chip showing
+   *  a stale label until lock/unlock or reopen remounted the tree. */
+  onVaultComplete?: () => void;
 }
 
 export function VaultPicker({
   activeAccount,
   onNewWalletFlow,
+  onVaultComplete,
 }: VaultPickerProps) {
   // undefined = pre-fetch tick; null = bgVaultsList resolved with no
   // container (still legacy single-vault); array = container ready.
@@ -233,11 +242,13 @@ export function VaultPicker({
   const handleAddComplete = async () => {
     setAddMode(null);
     await refresh();
+    onVaultComplete?.();
   };
   const handleMultisigCancel = () => setMultisigOpen(false);
   const handleMultisigComplete = async () => {
     setMultisigOpen(false);
     await refresh();
+    onVaultComplete?.();
   };
 
   const chipDisabledStyle: CSSProperties = ready
@@ -259,7 +270,10 @@ export function VaultPicker({
   // moved OUT of the chip entirely (lives in .ext-top above) so the
   // chip's row 2 is purely the address line.
   const activeVault = ready ? vaults!.find((v) => v.isActive) ?? null : null;
-  const displayLabel = activeVault?.label ?? activeAccount.label;
+  // Neutral em-dash placeholder while the vault list is still loading or
+  // the active vault hasn't resolved — never fall back to activeAccount.label
+  // (which used to leak the algo name "ML-DSA-65 wallet" on first install).
+  const displayLabel = activeVault?.label ?? "—";
   const fullAddr = bech32mDisplay(activeAccount.addr);
   const [addrCopied, setAddrCopied] = useState(false);
   const handleAddrCopy = (e: ReactMouseEvent) => {
