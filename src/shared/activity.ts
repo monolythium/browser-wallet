@@ -50,6 +50,18 @@ export const PENDING_TTL_MS = 5 * 60 * 1000;
  *  interval. */
 export const PENDING_MATCH_BLOCK_WINDOW = 10;
 
+/** Indexer sentinel for native LYTH (`Hash::ZERO`, indexer commit 3537b135).
+ *  A transfer carrying this tokenId is native LYTH, not an MRC-20 token. */
+export const NATIVE_LYTH_TOKEN_ID = "0x" + "00".repeat(32);
+
+/** True when a transfer's tokenId denotes native LYTH — `null`, empty, or
+ *  all-zero hex of any length — rather than a real MRC-20 token id. */
+export function isNativeLythTokenId(tokenId: string | null): boolean {
+  if (tokenId === null) return true;
+  const body = tokenId.toLowerCase().replace(/^0x/, "");
+  return body.length === 0 || /^0+$/.test(body);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage keys
 // ─────────────────────────────────────────────────────────────────────────────
@@ -464,7 +476,10 @@ export function mapAddressActivityToRows(
     const anchorKey = `${e.blockHeight}.${e.txIndex}.${e.logIndex}`;
 
     if (e.kind === "transfer") {
-      if (e.tokenId !== null && e.tokenId.length > 0) {
+      // Native LYTH arrives with a zero (Hash::ZERO) or null tokenId — route it
+      // to tx_send/tx_receive by direction. Only a real (non-zero) MRC-20 token
+      // id becomes a token_transfer row.
+      if (e.tokenId !== null && e.tokenId.length > 0 && !isNativeLythTokenId(e.tokenId)) {
         out.push({
           kind: "token_transfer",
           blockHeight: e.blockHeight,
