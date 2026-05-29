@@ -1860,6 +1860,7 @@ export type {
   ClusterDelegatorsView,
   ClusterDirectoryEntry,
   ClusterDirectoryPage,
+  ClusterDiversity,
   ClusterHealth,
   ClusterMember,
   ClusterStatus,
@@ -1880,6 +1881,7 @@ export type {
 import type {
   ClusterDelegatorsView,
   ClusterDirectoryPage,
+  ClusterDiversity,
   ClusterServiceTiers,
   ClusterStatus,
   DelegationCap,
@@ -1906,6 +1908,16 @@ export async function bgStakingClusterStatus(
   clusterId: number,
 ): Promise<StakingResult<ClusterStatus>> {
   return send("staking-cluster-status", { clusterId });
+}
+
+/** Read a cluster's §25.1 roster-diversity view via
+ *  `lyth_getClusterDiversity` (SDK 0.3.10). Powers the ClusterDetail
+ *  read-only diversity card. Returns `ok: false` when the chain method
+ *  is absent / unreachable; the card renders `—` in that case. */
+export async function bgStakingClusterDiversity(
+  clusterId: number,
+): Promise<StakingResult<ClusterDiversity>> {
+  return send("staking-cluster-diversity", { clusterId });
 }
 
 /** Read per-operator info via `lyth_operatorInfo` — R16 Task A.
@@ -1997,6 +2009,133 @@ export async function bgStakingAutovoteSeed(): Promise<
   { ok: true; seedHex: string } | { ok: false; reason: string }
 > {
   return send("staking-autovote-seed");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// v5 wiring — bridge circuit-breaker / drain health reads (§20/§25.2).
+//
+// Disclosure-only. The SDK exposes NO live bridge quote/submit primitive
+// (BRIDGE_QUOTE_API_BLOCKED_REASON / BRIDGE_SUBMIT_API_BLOCKED_REASON),
+// so these enrich the static `BridgeRouteDisclosure` rows with live
+// pause posture + remaining drain headroom; there is no send path.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Convenience re-export of the typed outcome the SW returns for
+ *  `bridge-health`. */
+export type BridgeHealthOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("@monolythium/core-sdk").BridgeHealthResponse
+  >;
+
+/** Convenience re-export of the typed outcome the SW returns for
+ *  `bridge-drain-status`. */
+export type BridgeDrainStatusOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("@monolythium/core-sdk").BridgeDrainStatus
+  >;
+
+/** Read a page of bridge-record circuit-breaker / pause posture (MB-2
+ *  `lyth_bridgeHealth`). The popup branches on
+ *  `outcome.kind === "live"` before showing any live-data badge; a
+ *  not-deployed operator collapses to `mock-not-deployed` with an empty
+ *  records page so the disclosure panel keeps rendering. */
+export async function bgReadBridgeHealth(
+  cursor?: string | null,
+  limit?: number,
+): Promise<
+  | { ok: true; outcome: BridgeHealthOutcome }
+  | { ok: false; reason?: string }
+> {
+  const payload: { cursor?: string | null; limit?: number } = {};
+  if (cursor !== undefined) payload.cursor = cursor;
+  if (limit !== undefined) payload.limit = limit;
+  return send("bridge-health", payload);
+}
+
+/** Read the live per-route drain bucket for one `(bridgeId,
+ *  wrappedAsset)` pair (MB-2 `lyth_bridgeDrainStatus`). `remaining` is
+ *  the chain-computed `cap - drained` clamped at 0; `"0x0"` means "no
+ *  per-asset cap" (the bridge default applies). */
+export async function bgReadBridgeDrainStatus(
+  bridgeId: string,
+  wrappedAsset: string,
+): Promise<
+  | { ok: true; outcome: BridgeDrainStatusOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("bridge-drain-status", { bridgeId, wrappedAsset });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// v5 wiring — §18.8 spending-policy agent sub-accounts (CONSUMER PILLAR).
+//
+// readSpendingPolicy is a plain RPC read (StakingResult envelope).
+// bgBuildSpendingPolicyClaim derives a fresh agent sub-account keypair
+// SW-side, signs the chain-id-bound claim message with it, and returns
+// the setPolicyClaim calldata + the sub-account address + its one-time
+// recovery phrase. The principal then funds + submits via
+// `bgWalletSendTx` (native transfer to fund; calldata to 0x110C to
+// register). Revoke = bgWalletSendTx with `encodeDisable(subAccount)`.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Convenience re-export of the SDK §18.8 policy view shape. */
+export type SpendingPolicyView =
+  import("@monolythium/core-sdk").SpendingPolicyView;
+
+/** Read the live §18.8 spending policy for one controlled sub-account
+ *  (`lyth_getSpendingPolicy`). `ok: false` on transport/shape error —
+ *  no mock fallback. `subAccount` may be `0x` hex or typed `mono`
+ *  bech32m. */
+export async function bgReadSpendingPolicy(
+  subAccount: string,
+): Promise<
+  | { ok: true; data: SpendingPolicyView; via?: string }
+  | { ok: false; reason: string }
+> {
+  return send("spending-policy-get", { subAccount });
+}
+
+/** The popup-side claim-builder request. Caps are decimal LYTH strings
+ *  ("" / "0" == no cap); roots are optional 0x-hex 32-byte words; the
+ *  time window + expiry are opt-in. `chainId` is the active chain's hex
+ *  id — the SW binds it into the signed claim message. */
+export interface BgBuildSpendingPolicyClaimRequest {
+  chainId: string;
+  perTxCapLyth: string;
+  dailyCapLyth: string;
+  weeklyCapLyth: string;
+  monthlyCapLyth: string;
+  allowRoot?: string;
+  denyRoot?: string;
+  categoryAllowRoot?: string;
+  timeWindow?: { startHour: number; endHour: number } | null;
+  policyExpiryUnixSeconds?: number;
+}
+
+/** The SW reply for a fresh-claim build. On success the popup shows the
+ *  sub-account recovery phrase (one-time), funds `subAccountAddress`
+ *  with a native transfer, then submits `data` to `to` (0x110C) via
+ *  {@link bgWalletSendTx}. */
+export type BgBuildSpendingPolicyClaimReply =
+  | {
+      ok: true;
+      to: string;
+      valueWeiHex: "0x0";
+      data: string;
+      subAccountAddress: string;
+      subAccountBech32m: string;
+      subAccountMnemonic: string;
+    }
+  | { ok: false; reason: string };
+
+/** Derive a fresh agent sub-account, sign the §18.8 claim-bound message
+ *  with it, and build the `setPolicyClaim` calldata. Requires the
+ *  principal wallet to be unlocked (the follow-up submit needs a
+ *  signer). */
+export async function bgBuildSpendingPolicyClaim(
+  req: BgBuildSpendingPolicyClaimRequest,
+): Promise<BgBuildSpendingPolicyClaimReply> {
+  return send("spending-policy-build-claim", req);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

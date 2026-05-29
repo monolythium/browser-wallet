@@ -3,7 +3,7 @@
 //
 // `bgWalletSendTx` takes the precompile address as `to`, the LYTH
 // principal as `valueWeiHex`, and the calldata as `data`. The calldata
-// encoding is delegated to the SDK 0.3.9 encoders
+// encoding is delegated to the SDK 0.3.10 encoders
 // (`encode{Delegate,Undelegate,Redelegate,Claim}Calldata`), which match
 // the chain-canonical ABI signatures in mono-core
 // `crates/precompiles/system/delegation/src/abi.rs`
@@ -32,7 +32,7 @@ export const DELEGATION_PRECOMPILE =
   "0x000000000000000000000000000000000000100A" as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Method encoders (delegated to the chain-canonical SDK 0.3.9 encoders)
+// Method encoders (delegated to the chain-canonical SDK 0.3.10 encoders)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** `delegate(uint32 cluster, uint16 weightBps)` calldata via the SDK
