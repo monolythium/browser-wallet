@@ -4802,6 +4802,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await createVaultFromNewMnemonic(p.password);
         await resetAutoLock();
+        // Build the multi-vault container immediately. createVaultFromNewMnemonic
+        // writes a v4 SINGLE-vault envelope (`mono.vault.v4`); the popup's
+        // VaultPicker reads the multi-vault CONTAINER (`mono.vaults.v4`),
+        // which is built by migrateLegacyToContainerV4 — historically called
+        // only from unlockContainerV4. Without this, fresh installs landed on
+        // home with the chip disabled and the literal tooltip "Wallets appear
+        // after first unlock", until the user lock/unlocked. Best-effort: on
+        // failure the existing unlock-time migration still recovers, so we
+        // don't fail the create.
+        try {
+          await unlockContainerV4(p.password);
+        } catch {
+          // Will migrate on the next unlock — non-fatal.
+        }
         return { ok: true, mnemonic: r.mnemonic, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -4812,6 +4826,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await createVaultFromMnemonic(p.password, p.mnemonic);
         await resetAutoLock();
+        // Build the multi-vault container immediately — see the longer note
+        // on `keystore-create-new` above. Best-effort: a failure here is
+        // recovered by the existing migration inside unlockContainerV4.
+        try {
+          await unlockContainerV4(p.password);
+        } catch {
+          // Will migrate on the next unlock — non-fatal.
+        }
         return { ok: true, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
