@@ -238,7 +238,11 @@ export default function App() {
       const updateAvailable = nextUpdateAvailable(status, prior);
       setWalletUpdateAvailable(updateAvailable);
       chrome.storage.local.set({
-        [STORAGE_KEY_WALLET_UPDATE]: { lastCheckAt: now, updateAvailable },
+        [STORAGE_KEY_WALLET_UPDATE]: {
+          lastCheckAt: now,
+          updateAvailable,
+          lastStatus: status,
+        },
       });
     })();
     return () => {
@@ -255,6 +259,7 @@ export default function App() {
         [STORAGE_KEY_WALLET_UPDATE]: {
           lastCheckAt: Date.now(),
           updateAvailable: true,
+          lastStatus: "update_available",
         },
       });
     };
