@@ -53,6 +53,7 @@ import {
   monoscanAddressUrl,
 } from "../../shared/build-info";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
+import { ExternalLink } from "../components/ExternalLink";
 import {
   activityCacheKey,
   activityPendingKey,
@@ -2077,20 +2078,13 @@ interface SuccessViewProps {
 function AddressLink({ addr0x, kind }: { addr0x: string; kind?: AddressKind }) {
   const bech = bech32mDisplay(addr0x, kind);
   return (
-    <a
+    <ExternalLink
       href={monoscanAddressUrl(bech)}
-      target="_blank"
-      rel="noopener noreferrer"
       title="View address on Monoscan"
-      style={{
-        fontFamily: "var(--f-mono)",
-        color: "var(--fg-100)",
-        textDecoration: "none",
-        wordBreak: "break-all",
-      }}
+      style={{ fontFamily: "var(--f-mono)" }}
     >
       {bech}
-    </a>
+    </ExternalLink>
   );
 }
 
@@ -2185,23 +2179,18 @@ function SuccessView({
             }}
           >
             {explorerUrl !== null ? (
-              <a
+              <ExternalLink
                 href={explorerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
                 title="View transaction on Monoscan"
                 style={{
                   flex: 1,
                   fontFamily: "var(--f-mono)",
                   fontSize: 12,
                   lineHeight: 1.5,
-                  color: "var(--fg-100)",
-                  textDecoration: "none",
-                  wordBreak: "break-all",
                 }}
               >
                 {txHash}
-              </a>
+              </ExternalLink>
             ) : (
               <span
                 style={{
