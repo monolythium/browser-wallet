@@ -27,6 +27,7 @@
 
 import { shake256 } from "@noble/hashes/sha3.js";
 import {
+  DIVERSITY_SCORE_MAX,
   MOCK_CLUSTER_APR_BPS,
   MOCK_CLUSTER_REPUTATION,
   type ClusterDirectoryEntry,
@@ -143,9 +144,18 @@ function shuffle<T>(arr: T[], seed: Uint8Array, tag: string): T[] {
 // Cluster metadata accessors (mock-aware)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** APR in bps for a cluster. Falls back to 0 when the chain hasn't yet
- *  surfaced an APR (cluster excluded from yield-driven modes). */
+/** APR in bps for a cluster. Prefers the live `aprBps` carried on the
+ *  directory entry (`lyth_clusterApr`, populated by the staking-client
+ *  fanout); falls back to the mock table when the chain read failed.
+ *
+ *  TODO(monolythium-vision): there is no per-cluster forward-looking APR
+ *  field on `ClusterDiversityView` — Max Yield ranks on the observed
+ *  `aprBps` baseline + the reputation/liveness proxy below. When the
+ *  chain ships a yield-projection reader, swap the proxy for it. */
 function clusterApr(c: ClusterDirectoryEntry): number {
+  if (typeof c.aprBps === "number" && Number.isFinite(c.aprBps) && c.aprBps >= 0) {
+    return c.aprBps;
+  }
   return MOCK_CLUSTER_APR_BPS[c.clusterId] ?? 0;
 }
 
@@ -156,13 +166,51 @@ function clusterReputation(c: ClusterDirectoryEntry): number {
   return MOCK_CLUSTER_REPUTATION[c.clusterId] ?? 0.5;
 }
 
-/** Decentralization score. Higher = more decentralized. Identical
- *  formula to the ClusterPicker sort to keep "Max Decentralization"
- *  and the picker's sort visually consistent. */
+/** True when the directory entry carries a real §25.1 diversity score
+ *  from `lyth_getClusterDiversity` (the staking-client fanout leaves the
+ *  diversity fields `null` when the chain read failed). */
+function hasRealDiversity(c: ClusterDirectoryEntry): boolean {
+  return typeof c.diversityScore === "number" && Number.isFinite(c.diversityScore);
+}
+
+/** §25.1 diversity rank score for Max Diversity. When the chain has
+ *  surfaced a real `ClusterDiversityView`, rank on the headline score
+ *  (normalised to `[0, 1]`) blended with reputation × liveness so a
+ *  diverse-but-unreliable cluster doesn't dominate. Falls back to the
+ *  reputation × liveness proxy (the pre-0.3.10 behaviour) when the chain
+ *  score is absent. */
+function diversityRankScore(c: ClusterDirectoryEntry): number {
+  const liveness = c.health === "healthy" ? 1 : 0.5;
+  if (hasRealDiversity(c)) {
+    const norm = (c.diversityScore as number) / DIVERSITY_SCORE_MAX;
+    // 70% chain diversity, 30% reputation × liveness — the chain score
+    // is the authoritative §25.1 signal; reputation/liveness break ties.
+    return norm * 0.7 + clusterReputation(c) * liveness * 0.3;
+  }
+  return clusterReputation(c) * liveness;
+}
+
+/** Decentralization score. Higher = more decentralized. When the chain
+ *  has surfaced a real `ClusterDiversityView`, route on the
+ *  ASN/geo/hosting entropy (the actual §25.1 decentralization signal)
+ *  plus the independent-entity bonus. Falls back to the region-count +
+ *  inverse-reputation + independence heuristic when the chain score is
+ *  absent — keeping "Max Decentralization" and the ClusterPicker sort
+ *  visually consistent on operators that don't expose the method yet. */
 function decentralizationScore(c: ClusterDirectoryEntry): number {
+  const independenceBonus = c.entity === "mono-labs" ? 0 : 0.15;
+  if (hasRealDiversity(c)) {
+    // ASN + geo + hosting entropy are the three §25.1 decentralization
+    // dimensions; average them into `[0, 1]` and scale to a comparable
+    // magnitude (×4) so the independence bonus stays a tie-breaker rather
+    // than dominating, matching the heuristic's ~0..5 range.
+    const asn = (c.asnVariance ?? 0) / DIVERSITY_SCORE_MAX;
+    const geo = (c.geoVariance ?? 0) / DIVERSITY_SCORE_MAX;
+    const hosting = (c.hostingSpread ?? 0) / DIVERSITY_SCORE_MAX;
+    return ((asn + geo + hosting) / 3) * 4 + independenceBonus;
+  }
   const regionCount = c.regions.length;
   const reputation = clusterReputation(c);
-  const independenceBonus = c.entity === "mono-labs" ? 0 : 0.15;
   return regionCount * 1.0 + (1 - reputation) * 0.5 + independenceBonus;
 }
 
@@ -309,22 +357,21 @@ export function pickMaxDiversity(input: AutovoteInput): AutovoteResult {
     input.capBps === null ? 1 : Math.ceil(target / Math.max(1, input.capBps));
   const wanted = Math.max(input.minDiversification, capImplied, 1);
   const count = Math.min(wanted, eligible.length);
-  // Rank by reputation × heuristic "liveness" proxy (we use 1.0 for
-  // healthy, 0.5 for degraded; offline already filtered).
+  // Rank by the §25.1 diversity rank score — real chain
+  // `ClusterDiversityView` (score × reputation × liveness) when present,
+  // falling back to the reputation × liveness proxy otherwise.
   const ranked = eligible.slice().sort((a, b) => {
-    const score = (c: ClusterDirectoryEntry) =>
-      clusterReputation(c) * (c.health === "healthy" ? 1 : 0.5);
-    return score(b) - score(a);
+    return diversityRankScore(b) - diversityRankScore(a);
   });
-  // Top tier = clusters within 10% reputation of the top, capped at
+  // Top tier = clusters within 10% rank-score of the top, capped at
   // 2 * count so the seed has a meaningful sample size; shuffle the
   // tier; concat the rest.
-  const topRep = clusterReputation(ranked[0]!);
-  const repFloor = Math.max(0, topRep - 0.1);
+  const topScore = diversityRankScore(ranked[0]!);
+  const scoreFloor = Math.max(0, topScore - 0.1);
   const topBracket: ClusterDirectoryEntry[] = [];
   const tail: ClusterDirectoryEntry[] = [];
   for (const c of ranked) {
-    if (clusterReputation(c) >= repFloor && topBracket.length < count * 2) {
+    if (diversityRankScore(c) >= scoreFloor && topBracket.length < count * 2) {
       topBracket.push(c);
     } else {
       tail.push(c);

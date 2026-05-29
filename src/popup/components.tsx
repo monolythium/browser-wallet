@@ -11,11 +11,15 @@
 import type { ReactNode, CSSProperties } from "react";
 import { useState, useEffect } from "react";
 import {
+  BRIDGE_QUOTE_API_BLOCKED_REASON,
+  BRIDGE_SUBMIT_API_BLOCKED_REASON,
   NATIVE_AGENT_MODULE_ADDRESS,
   NATIVE_AGENT_MODULE_ADDRESS_BYTES,
   PRECOMPILE_ADDRESSES,
   addressToTypedBech32,
+  bridgeDrainRemaining,
   type AddressKind,
+  type BridgeCircuitBreakerFields,
 } from "@monolythium/core-sdk";
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
@@ -55,6 +59,12 @@ import {
   bgWalletChainBlockNumber,
   bgFocusApproval,
   bgWsSubscribeNewHeads,
+  bgReadBridgeDrainStatus,
+  bgReadBridgeHealth,
+} from "./bg";
+import type {
+  BridgeDrainStatusOutcome,
+  BridgeHealthOutcome,
 } from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { ActivityList } from "./components/ActivityList";
@@ -2207,6 +2217,15 @@ function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) 
         />
       )}
 
+      {route && assessment && (
+        <BridgeRouteRiskPanel
+          route={route}
+          riskTier={assessment.riskTier}
+          bridgeId={candidate.bridgeId}
+          wrappedAsset={candidate.wrappedAsset}
+        />
+      )}
+
       <BridgeDisclosureSection
         title="Trust"
         rows={display.trustRows}
@@ -2226,6 +2245,190 @@ function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) 
       )}
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §20.2 / §25.2 — pre-send bridge RISK DISCLOSURE panel.
+//
+// Display-only. The SDK exposes NO live bridge quote/submit primitive
+// (BRIDGE_QUOTE_API_BLOCKED_REASON / BRIDGE_SUBMIT_API_BLOCKED_REASON),
+// so this panel renders the route's risk posture BEFORE any (disabled)
+// send CTA — it must NOT imply a live send is possible. It enriches the
+// static `BridgeRouteDisclosure` (drainCapAtomic / circuitBreaker /
+// insuranceAtomic / lastIncidentDate / adminControl + the SDK riskTier)
+// with the LIVE MB-2 reads (`lyth_bridgeDrainStatus` remaining bucket +
+// `lyth_bridgeHealth` pause posture) when bridgeId + wrappedAsset are
+// known. Falls back to the static disclosure when the live reads aren't
+// live (operator offline / method not deployed).
+
+type SdkBridgeRouteDisclosure = NonNullable<BridgeRouteChoiceCandidate["route"]>;
+
+function BridgeRouteRiskPanel({
+  route,
+  riskTier,
+  bridgeId,
+  wrappedAsset,
+}: {
+  route: SdkBridgeRouteDisclosure;
+  riskTier: string;
+  bridgeId: string | null;
+  wrappedAsset: string | null;
+}) {
+  const [drain, setDrain] = useState<BridgeDrainStatusOutcome | null>(null);
+  const [breaker, setBreaker] = useState<BridgeCircuitBreakerFields | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (bridgeId === null || wrappedAsset === null) {
+      setDrain(null);
+      setBreaker(null);
+      return;
+    }
+    void (async () => {
+      const [drainRes, healthRes] = await Promise.all([
+        bgReadBridgeDrainStatus(bridgeId, wrappedAsset),
+        bgReadBridgeHealth(null, 50),
+      ]);
+      if (cancelled) return;
+      if (drainRes.ok) setDrain(drainRes.outcome);
+      if (healthRes.ok && healthRes.outcome.kind === "live") {
+        const matched = matchBridgeHealthRecord(healthRes.outcome, bridgeId);
+        setBreaker(matched);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridgeId, wrappedAsset]);
+
+  // Drain-cap REMAINING: prefer the live per-route bucket; fall back to
+  // the bridge-default cap when only the breaker is live; fall back to
+  // the static disclosure cap as the last resort.
+  const liveDrain = drain && drain.kind === "live" ? drain.data : null;
+  const remainingDisplay = (() => {
+    if (liveDrain) {
+      // capPerWindow "0x0" means no per-asset cap — the bridge default
+      // applies, so there is no per-route remaining bucket to show.
+      if (liveDrain.capPerWindow === "0x0") return "no per-asset cap";
+      return `${liveDrain.remaining} / ${liveDrain.capPerWindow}`;
+    }
+    // No live bucket — show the static disclosed cap. The SDK helper
+    // computes remaining from cap+drained; with no drained figure on the
+    // static disclosure we surface the cap itself.
+    const fallbackRemaining = bridgeDrainRemaining(route.drainCapAtomic, "0");
+    return fallbackRemaining === null
+      ? "cap disabled"
+      : `${fallbackRemaining} (cap, static)`;
+  })();
+
+  const breakerDisplay = (() => {
+    if (breaker) {
+      return breaker.paused
+        ? `paused @ block ${breaker.pausedAtBlock ?? "?"}`
+        : "armed";
+    }
+    return `${route.circuitBreaker} (static)`;
+  })();
+
+  const insuranceDisplay =
+    route.insuranceAtomic === "0" ? "none disclosed" : route.insuranceAtomic;
+  const lastIncidentDisplay = route.lastIncidentDate ?? "none disclosed";
+
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        padding: 10,
+        borderRadius: 8,
+        border: "1px solid var(--border-200, rgba(255,255,255,0.08))",
+        background: "var(--bg-200, rgba(255,255,255,0.03))",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-400)",
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+          }}
+        >
+          Risk disclosure
+        </div>
+        <span className={bridgeRiskTierBadgeClass(riskTier)}>{riskTier}</span>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 8,
+        }}
+      >
+        <BridgeRouteMetric
+          label="Route"
+          value={route.protocol ? `${route.bridge} · ${route.protocol}` : route.bridge}
+        />
+        <BridgeRouteMetric
+          label="Verifier"
+          value={`${route.verifier.model} ${route.verifier.threshold}/${route.verifier.participantCount}`}
+        />
+        <BridgeRouteMetric label="Drain remaining" value={remainingDisplay} />
+        <BridgeRouteMetric label="Circuit breaker" value={breakerDisplay} />
+        <BridgeRouteMetric label="Insurance" value={insuranceDisplay} />
+        <BridgeRouteMetric label="Last incident" value={lastIncidentDisplay} />
+        <BridgeRouteMetric label="Admin control" value={route.adminControl} />
+        <BridgeRouteMetric
+          label="Live reads"
+          value={
+            liveDrain || breaker
+              ? "live (MB-2)"
+              : bridgeId === null
+                ? "static only"
+                : "static (operator offline)"
+          }
+        />
+      </div>
+      <BridgeRouteReasonList
+        title="Sending disabled"
+        reasons={[BRIDGE_QUOTE_API_BLOCKED_REASON, BRIDGE_SUBMIT_API_BLOCKED_REASON]}
+        tone="muted"
+      />
+    </div>
+  );
+}
+
+/** Find the bridge-health record for a bridgeId in a live health page,
+ *  returning its circuit-breaker posture or null when absent. */
+function matchBridgeHealthRecord(
+  outcome: BridgeHealthOutcome,
+  bridgeId: string,
+): BridgeCircuitBreakerFields | null {
+  if (outcome.kind !== "live") return null;
+  const target = bridgeId.toLowerCase();
+  for (const record of outcome.data.records) {
+    if (record.bridgeId.toLowerCase() === target) {
+      return record.circuitBreaker;
+    }
+  }
+  return null;
+}
+
+/** Map the SDK §20 risk tier onto an existing badge class. `blocked`
+ *  reuses the closed/warning treatment; everything else falls to the
+ *  neutral bridged badge so we don't invent a new chromatic taxonomy. */
+function bridgeRiskTierBadgeClass(riskTier: string): string {
+  return riskTier === "blocked" || riskTier === "high"
+    ? "ext-badge-bridged"
+    : "ext-badge-att";
 }
 
 interface BridgeRouteMetricProps {
