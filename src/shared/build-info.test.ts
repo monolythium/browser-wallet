@@ -9,6 +9,7 @@ import {
   monoscanTxUrl,
   MONOSCAN_ADDRESS_BASE,
   monoscanAddressUrl,
+  SDK_PACKAGE_VERSION,
 } from "./build-info.js";
 
 describe("monoscanTxUrl", () => {
@@ -37,5 +38,13 @@ describe("monoscanAddressUrl", () => {
 
   it("uses the #/wallet/ SPA route base", () => {
     expect(MONOSCAN_ADDRESS_BASE).toBe("https://monoscan.xyz/#/wallet/");
+  });
+});
+
+describe("SDK_PACKAGE_VERSION (build-time injected, not hardcoded)", () => {
+  it("is a real semver string — not the previously-stale 0.3.9 literal", () => {
+    expect(SDK_PACKAGE_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+    expect(SDK_PACKAGE_VERSION).not.toBe("0.3.9");
+    expect(SDK_PACKAGE_VERSION).not.toBe("unknown");
   });
 });

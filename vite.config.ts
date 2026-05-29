@@ -1,10 +1,35 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { crx } from "@crxjs/vite-plugin";
 import manifest from "./manifest.json" with { type: "json" };
 
+// Read the ACTUALLY-INSTALLED @monolythium/core-sdk version at build time and
+// inject it into the bundle (the About page reads it via __SDK_INSTALLED_VERSION__).
+// Read the file directly — the SDK's package `exports` doesn't expose
+// ./package.json, so a bare require/import of it would be blocked.
+function readInstalledSdkVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(
+        new URL(
+          "./node_modules/@monolythium/core-sdk/package.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { version?: string };
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 export default defineConfig({
   plugins: [react(), crx({ manifest })],
+  define: {
+    __SDK_INSTALLED_VERSION__: JSON.stringify(readInstalledSdkVersion()),
+  },
   build: {
     target: "es2022",
     sourcemap: true,
