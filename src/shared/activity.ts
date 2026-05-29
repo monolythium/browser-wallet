@@ -28,6 +28,8 @@
 //   §25.4  — CrossingToPrivateRow defined but never client-synthesized; only
 //            renders when the indexer emits the kind on Sprintnet.
 
+import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
@@ -393,7 +395,7 @@ export interface RawAddressActivity {
   direction: "in" | "out" | null;
   counterparty: string | null;
   tokenId: string | null;
-  amount: string | null;               // decimal LYTH for native rows; token decimal for token rows
+  amount: string | null;               // raw lythoshi for native rows (mapper converts to decimal LYTH); token base units for token rows
   cluster: number | null;
   weightBps: number | null;
   subKind: string | null;
@@ -497,7 +499,8 @@ export function mapAddressActivityToRows(
           txIndex: e.txIndex,
           logIndex: e.logIndex,
           counterparty: e.counterparty,
-          amountDecimal: e.amount,
+          amountDecimal:
+            e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
         });
       } else if (e.direction === "in") {
         out.push({
@@ -506,7 +509,8 @@ export function mapAddressActivityToRows(
           txIndex: e.txIndex,
           logIndex: e.logIndex,
           counterparty: e.counterparty,
-          amountDecimal: e.amount,
+          amountDecimal:
+            e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
         });
       }
       // direction null + no tokenId — drop (shouldn't happen on a transfer).
@@ -569,7 +573,8 @@ export function mapAddressActivityToRows(
         blockHeight: e.blockHeight,
         txIndex: e.txIndex,
         logIndex: e.logIndex,
-        amountDecimal: e.amount,
+        amountDecimal:
+          e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
       });
       continue;
     }
