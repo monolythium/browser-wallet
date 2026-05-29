@@ -39,6 +39,11 @@ import {
 import { fetchLiveTestnetRegistry } from "../../shared/live-registry";
 import { fetchLatestSdkVersion, compareSemver } from "../../shared/sdk-latest";
 import {
+  requestWalletUpdateStatus,
+  CWS_LISTING_URL,
+  type WalletUpdateStatus,
+} from "../../shared/wallet-update";
+import {
   OPERATOR_RISK_LEGEND,
   classifyOperatorRisk,
   type OperatorRiskBadge,
@@ -109,6 +114,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
    *  null until a successful fetch lands; on any failure it stays null and
    *  the SDK row degrades to installed-only (never a fabricated number). */
   const [latestSdk, setLatestSdk] = useState<string | null>(null);
+  /** Wallet-version update-check verdict, surfaced here so the user can SEE
+   *  whether the check works (it only returns a real result in the Chrome Web
+   *  Store build — dev/unpacked → "unavailable", which we show explicitly). */
+  const [updateStatus, setUpdateStatus] = useState<WalletUpdateStatus | "checking">(
+    "checking",
+  );
   const walletVersion = readWalletVersion();
 
   useEffect(() => {
@@ -131,6 +142,17 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
       if (v !== null) setLatestSdk(v);
     })();
     return () => ctrl.abort();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const s = await requestWalletUpdateStatus();
+      if (!cancelled) setUpdateStatus(s);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -256,6 +278,49 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <KvList
             rows={[
               { k: "Wallet", v: `v${walletVersion}` },
+              {
+                k: "Update",
+                v: (() => {
+                  switch (updateStatus) {
+                    case "checking":
+                      return (
+                        <span style={{ color: "var(--fg-500)", fontSize: 10 }}>
+                          checking…
+                        </span>
+                      );
+                    case "update_available":
+                      return (
+                        <a
+                          href={CWS_LISTING_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open the Chrome Web Store listing"
+                          style={{ color: "var(--gold)", textDecoration: "none" }}
+                        >
+                          available — open Web Store ↗
+                        </a>
+                      );
+                    case "no_update":
+                      return <span style={{ color: "var(--ok)" }}>up to date</span>;
+                    case "throttled":
+                      return (
+                        <span style={{ color: "var(--fg-500)", fontSize: 10 }}>
+                          check throttled — try later
+                        </span>
+                      );
+                    case "unavailable":
+                    default:
+                      return (
+                        <span
+                          style={{ color: "var(--fg-500)", fontSize: 10 }}
+                          title="The update check only works in the Chrome Web Store build (not a dev/unpacked load)."
+                        >
+                          unavailable in this build
+                        </span>
+                      );
+                  }
+                })(),
+              },
               {
                 k: "SDK",
                 v: (() => {
