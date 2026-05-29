@@ -773,35 +773,63 @@ export function Stake({
           />
         )}
 
-        {step === "redelegate-dst-pick" && (
-          <>
-            <div
-              style={{
-                marginBottom: 8,
-                fontFamily: "var(--f-mono)",
-                fontSize: 10,
-                color: "var(--fg-400)",
-                lineHeight: 1.5,
-              }}
-            >
-              Pick the destination cluster. Source and destination must
-              differ.
-            </div>
-            <ClusterPicker
-              clusters={clusters.filter(
-                (c) => c.clusterId !== selectedClusterId,
-              )}
-              selectedClusterId={redelegateDstClusterId}
-              {...(onShowClusterDetail
-                ? { onShowDetails: onShowClusterDetail }
-                : {})}
-              onSelect={(id) => {
-                setRedelegateDstClusterId(id);
-                setStep("redelegate-form");
-              }}
-            />
-          </>
-        )}
+        {step === "redelegate-dst-pick" &&
+          (() => {
+            // Destination = the same `cluster_directory` the delegate picker
+            // uses, excluding the source cluster — UNLESS excluding it would
+            // empty the list (this testnet currently advertises a single
+            // cluster, so the old unconditional filter rendered nothing).
+            // Never down to an empty list.
+            const excludingSource = clusters.filter(
+              (c) => c.clusterId !== selectedClusterId,
+            );
+            const dstClusters =
+              excludingSource.length > 0 ? excludingSource : clusters;
+            const onlySourceAvailable =
+              excludingSource.length === 0 && clusters.length > 0;
+            return (
+              <>
+                <div
+                  style={{
+                    marginBottom: 8,
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 10,
+                    color: "var(--fg-400)",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {onlySourceAvailable
+                    ? "Only one cluster is currently advertised — redelegation needs a second cluster to move weight to."
+                    : "Pick the destination cluster (must differ from the source)."}
+                </div>
+                {clusters.length === 0 ? (
+                  <div
+                    style={{
+                      padding: 20,
+                      textAlign: "center",
+                      fontSize: 12,
+                      color: "var(--fg-400)",
+                      fontFamily: "var(--f-mono)",
+                    }}
+                  >
+                    Loading cluster directory…
+                  </div>
+                ) : (
+                  <ClusterPicker
+                    clusters={dstClusters}
+                    selectedClusterId={redelegateDstClusterId}
+                    {...(onShowClusterDetail
+                      ? { onShowDetails: onShowClusterDetail }
+                      : {})}
+                    onSelect={(id) => {
+                      setRedelegateDstClusterId(id);
+                      setStep("redelegate-form");
+                    }}
+                  />
+                )}
+              </>
+            );
+          })()}
 
         {step === "form" && selectedCluster !== null && (
           <StakeForm
