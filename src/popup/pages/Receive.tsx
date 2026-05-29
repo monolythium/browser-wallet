@@ -171,7 +171,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
             Network
           </div>
           <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg-100)" }}>
-            Send LYTH on Sprintnet only. Chain id 69420 (0x10F2C). Sending
+            Send LYTH on Monolythium Testnet only. Chain id 69420 (0x10F2C). Sending
             LYTH from a different chain may result in lost funds.
           </div>
         </div>

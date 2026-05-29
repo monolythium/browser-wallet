@@ -73,7 +73,7 @@ export function finalityPostureFor(chainIdHex: string): string {
 export const WALLET_PITCH: ReadonlyArray<{ title: string; body: string }> = [
   {
     title: "Post-quantum native",
-    body: "Sprintnet signs every transaction with ML-DSA-65 (NIST FIPS 204). No legacy secp256k1 fallback, no swap-at-mainnet migration drama.",
+    body: "Monolythium Testnet signs every transaction with ML-DSA-65 (NIST FIPS 204). No legacy secp256k1 fallback, no swap-at-mainnet migration drama.",
   },
   {
     title: "Multisig built-in",

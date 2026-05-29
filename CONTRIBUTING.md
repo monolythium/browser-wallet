@@ -28,7 +28,7 @@ Keep both green before opening the PR.
 - **Direct private-key exfiltration paths.** The keystore lives behind a password-derived KEK; signing operations decrypt the seed into in-memory state for the duration of one operation and zero it afterward. Don't add an export-private-key path that bypasses the password gate. Recovery-phrase reveal goes through the existing flow (re-prompt + hold-to-reveal).
 - **Content-script changes that loosen the EIP-1193 provider boundary.** The provider lives in `MAIN` world; the bridge in isolated world. Don't merge them. Don't add new postMessage channels that bypass the request/approval flow.
 - **Adding broad host permissions to `manifest.json`.** Today the extension uses `permissions: ["alarms", "storage"]` and content scripts on `<all_urls>` for the EIP-1193 injection. Any expansion needs a specific, documented justification in the PR.
-- **AI-assisted code without an honest commit author.** If you used Claude / Codex / Cursor / Copilot to write code, sign the commit with YOUR identity, not the tool's. We rewrote the public history to scrub a previous slip on this point.
+- **Commits without an honest author.** Sign every commit with your own name and email.
 
 ## Commit + PR conventions
 

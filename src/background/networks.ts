@@ -1,7 +1,7 @@
 // Monolythium Wallet — network constants and chain capabilities.
 //
 // Chain markers indicating which signing path the wallet should use.
-// ML-DSA-65 is mandatory on Monolythium Sprintnet (chain_id 69420);
+// ML-DSA-65 is mandatory on Monolythium Testnet (chain_id 69420);
 // other Ethereum-compatible chains keep the legacy secp256k1 path.
 
 import { MONOLYTHIUM_TESTNET_CHAIN_ID, getRpcEndpoints } from "@monolythium/core-sdk";
@@ -13,7 +13,7 @@ import {
 } from "../shared/operators.js";
 import { SPRINTNET_GENESIS_HASH } from "../shared/build-info.js";
 
-/** Sprintnet (Monolythium L1 testnet) chain id, exposed as 0x-quantity hex. */
+/** Monolythium Testnet (L1 testnet) chain id, exposed as 0x-quantity hex. */
 export const SPRINTNET_CHAIN_ID_HEX =
   "0x" + MONOLYTHIUM_TESTNET_CHAIN_ID.toString(16).toUpperCase(); // "0x10F2C"
 
@@ -21,21 +21,21 @@ export const SPRINTNET_CHAIN_ID_HEX =
 export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 
 /**
- * Minimum execution-unit limit for a plain LYTH transfer on Sprintnet.
+ * Minimum execution-unit limit for a plain LYTH transfer on Monolythium Testnet.
  * Empirically verified via admission rejection on a foundation operator: the chain
  * enforces a floor of 24309 (presumably ML-DSA-65 verify + envelope
  * decrypt + state proof overhead). 30000 = 0x7530 leaves headroom.
  * If the floor moves above this, the wallet needs a bump.
  *
- * Note: `eth_estimateGas` is NOT trustworthy for Sprintnet — it returns
+ * Note: `eth_estimateGas` is NOT trustworthy for Monolythium Testnet — it returns
  * the compatibility execution estimate only (~21000) and ignores the
- * mempool intrinsic floor. The Sprintnet code paths must hardcode this
+ * mempool intrinsic floor. The Monolythium Testnet code paths must hardcode this
  * constant instead of estimating.
  */
 export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
 /**
- * Sprintnet operator RPC endpoints — sourced from the SDK-bundled chain
+ * Monolythium Testnet operator RPC endpoints — sourced from the SDK-bundled chain
  * registry (`@monolythium/core-sdk` `getRpcEndpoints("testnet-69420")`).
  * Broadcast paths iterate this list and use the first responder. Registry
  * order is intentional and refreshed by bumping the SDK package.
@@ -138,23 +138,23 @@ export interface BuiltinChain {
   chainIdNum: number;
   name: string;
   /** Single RPC URL for `RpcClient` consumers (user-added chains via
-   * wallet_addEthereumChain). Sprintnet reads/writes funnel through
+   * wallet_addEthereumChain). Monolythium Testnet reads/writes funnel through
    * `sprintnetJsonRpc` (operator iteration), not through this URL — it's
    * here only to satisfy callers that still ask for one. */
   rpc: string;
   blockExplorer?: string;
   nativeCurrency?: { name: string; symbol: string; decimals: number };
-  /** True for Foundation-attested official chains (Sprintnet today). */
+  /** True for Foundation-attested official chains (Monolythium Testnet today). */
   official: boolean;
 }
 
 /**
- * Built-in chains shipped with the wallet. v4.1 ships exactly one —
- * Sprintnet (chain_id 69420). All other chains are user-added at
+ * Built-in chains shipped with the wallet. The wallet ships exactly one —
+ * Monolythium Testnet (chain_id 69420). All other chains are user-added at
  * runtime via `wallet_addEthereumChain`.
  *
  * Note: the legacy "Local devnet" (0x7A69) and old DNS alias have been
- * removed. Sprintnet IS the testnet, and the canonical RPC list comes from
+ * removed. Monolythium Testnet IS the testnet, and the canonical RPC list comes from
  * the SDK-bundled chain registry (`SPRINTNET_OPERATOR_RPCS`) — the `rpc`
  * field below is the first operator, kept for `RpcClient` consumers
  * (user-added chains); the read/write hot path goes through
@@ -164,7 +164,7 @@ export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
   {
     chainId: SPRINTNET_CHAIN_ID_HEX,
     chainIdNum: SPRINTNET_CHAIN_ID,
-    name: "Monolythium · Sprintnet",
+    name: "Monolythium Testnet",
     rpc: SPRINTNET_OPERATOR_RPCS_DEFAULTS[0]!.rpc,
     nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
     official: true,
@@ -173,9 +173,9 @@ export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
 
 /**
  * Returns true when the chain id requires the ML-DSA-65 native envelope.
- * Sprintnet refuses RLP+secp256k1 raw txs at the decoder layer per Law §2.1.
+ * Monolythium Testnet refuses RLP+secp256k1 raw txs at the decoder layer per Law §2.1.
  *
- * Today this is "is it Sprintnet"; once mainnet is live this expands to
+ * Today this is "is it Monolythium Testnet"; once mainnet is live this expands to
  * "any Monolythium-protocol chain id" — keep this predicate single-source
  * so the routing in service-worker.ts touches one constant.
  */
