@@ -63,6 +63,7 @@ import { generateOnboardingMnemonic } from "./lib/onboarding-mnemonic";
 import { explainImportError } from "./lib/import-error";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
+import { useFeature } from "./hooks/useFeature";
 import { ACCOUNTS, type Account } from "./demo-data";
 import {
   bgListPending,
@@ -183,6 +184,12 @@ const SPRINTNET_FALLBACK: ChainEntry = {
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
+  // v5 pillar surfaces (agent spending-policy page) ship behind the
+  // default-off "Agent commerce (experimental)" two-tier toggle. When
+  // OFF the nav entry is hidden and the page is never mounted, so the
+  // popup matches the pre-v5 experience exactly. Flip on via Settings →
+  // Features.
+  const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
   // Round 7 TASK 4 — current UI open mode (popup vs sidepanel). The
   // MainMenu's "Switch to ..." item reads this to label the toggle as
   // the OPPOSITE option. null while the SW IPC is in flight; modes
@@ -1211,7 +1218,9 @@ export default function App() {
           onConnectedSites={() => navigateTo("connected-sites")}
           onNetworks={() => navigateTo("networks")}
           onMultisig={() => navigateTo("multisig-list")}
-          onAgentPolicy={() => navigateTo("agent-policy")}
+          {...(agentCommerceEnabled
+            ? { onAgentPolicy: () => navigateTo("agent-policy") }
+            : {})}
           onSettings={() => navigateTo("settings")}
           onAbout={() => navigateTo("about")}
           onLockWallet={() => {
@@ -1447,7 +1456,7 @@ export default function App() {
         />
       )}
 
-      {screen === "agent-policy" && (
+      {screen === "agent-policy" && agentCommerceEnabled && (
         <AgentPolicy
           account={acc}
           chainId={activeChain.chainId}

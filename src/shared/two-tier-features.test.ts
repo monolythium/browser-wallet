@@ -16,6 +16,31 @@ describe("defaultTwoTierState", () => {
       expect(s[flag]).toEqual({ enabled: false, firstSeenAt: null });
     }
   });
+
+  it("registers the AGENT_COMMERCE flag, default OFF", () => {
+    // The v5 pillar surfaces (agent spending-policy page, bridge route
+    // risk panel, cluster roster-diversity card) gate on this flag. It
+    // must ship disabled so the popup matches the pre-v5 experience until
+    // the user opts in via Settings → Features.
+    expect(FEATURE_FLAGS).toContain("AGENT_COMMERCE");
+    const s = defaultTwoTierState();
+    expect(s.AGENT_COMMERCE).toEqual({ enabled: false, firstSeenAt: null });
+    expect(isFeatureEnabled(s, "AGENT_COMMERCE")).toBe(false);
+  });
+
+  it("treats unknown / empty stored state as AGENT_COMMERCE off", () => {
+    // A fresh install (no stored blob) and a pre-v5 stored blob that
+    // predates the flag both normalise to the default-off shape.
+    expect(isFeatureEnabled(normaliseTwoTierState(null), "AGENT_COMMERCE")).toBe(
+      false,
+    );
+    expect(
+      isFeatureEnabled(
+        normaliseTwoTierState({ TRADING_INTERFACE: { enabled: true, firstSeenAt: 1 } }),
+        "AGENT_COMMERCE",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("setFeature", () => {
