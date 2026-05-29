@@ -67,6 +67,7 @@ import type {
   BridgeHealthOutcome,
 } from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
+import { useFeature } from "./hooks/useFeature";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
 import {
@@ -2116,6 +2117,10 @@ function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) 
   const display = formatBridgeRouteDisclosureDisplay(candidate.disclosure);
   const route = candidate.route;
   const assessment = candidate.assessment;
+  // v5 pillar surface — the live risk-disclosure panel ships behind the
+  // default-off "Agent commerce (experimental)" toggle. When OFF the
+  // card renders exactly the pre-v5 disclosure rows (no extra panel).
+  const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
 
   return (
     <div className="ext-card" style={{ padding: 14 }}>
@@ -2217,7 +2222,7 @@ function BridgeRouteCandidateCard({ candidate }: BridgeRouteCandidateCardProps) 
         />
       )}
 
-      {route && assessment && (
+      {agentCommerceEnabled && route && assessment && (
         <BridgeRouteRiskPanel
           route={route}
           riskTier={assessment.riskTier}
