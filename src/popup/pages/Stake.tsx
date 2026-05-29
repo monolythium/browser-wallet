@@ -14,9 +14,18 @@
 // (`lyth_listActivePrecompiles`); the wallet surfaces any typed error
 // the chain returns verbatim.
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { Icon } from "../Icon";
-import { monoscanTxUrl } from "../../shared/build-info";
+import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
+import { bech32mDisplay } from "../../shared/bech32m";
+import { formatNativeLythAmount } from "../../shared/native-fee-display";
+import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
@@ -841,6 +850,17 @@ export function Stake({
             copied={hashCopied}
             onCopy={() => void handleCopyHash()}
             onDone={onBack}
+            clusterLabel={
+              clusters.find((c) => c.clusterId === selectedClusterId)?.name ??
+              null
+            }
+            clusterId={selectedClusterId}
+            walletAddr0x={account.addr}
+            amountLythoshi={
+              action === "delegate"
+                ? parseLythAmountToLythoshi(amountStr)
+                : null
+            }
           />
         )}
 
@@ -1143,9 +1163,65 @@ interface SuccessViewProps {
   copied: boolean;
   onCopy: () => void;
   onDone: () => void;
+  /** Cluster display label (directory name, or `cluster-<id>` fallback). */
+  clusterLabel: string | null;
+  /** Numeric cluster id (clusters are id-indexed; no per-cluster address). */
+  clusterId: number | null;
+  /** The delegator's own wallet raw 0x address. */
+  walletAddr0x: string;
+  /** Delegated amount for the delegate action; null for claim/undelegate/redelegate. */
+  amountLythoshi: bigint | null;
 }
 
-function SuccessView({ action, txHash, copied, onCopy, onDone }: SuccessViewProps) {
+/** One receipt row: uppercase mono label + right-aligned value node. */
+function ReceiptRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "baseline",
+        gap: 12,
+        padding: "6px 0",
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 9.5,
+          color: "var(--fg-500)",
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 11,
+          color: "var(--fg-100)",
+          textAlign: "right",
+          wordBreak: "break-all",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function SuccessView({
+  action,
+  txHash,
+  copied,
+  onCopy,
+  onDone,
+  clusterLabel,
+  clusterId,
+  walletAddr0x,
+  amountLythoshi,
+}: SuccessViewProps) {
   const title =
     action === "claim"
       ? "Rewards claim submitted"
@@ -1154,23 +1230,23 @@ function SuccessView({ action, txHash, copied, onCopy, onDone }: SuccessViewProp
         : action === "redelegate"
           ? "Cluster swap submitted (instant)"
           : "Delegation submitted";
+  const walletBech = bech32mDisplay(walletAddr0x);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div
         style={{
-          padding: "40px 20px",
+          padding: "40px 20px 12px",
           textAlign: "center",
           color: "var(--ok)",
         }}
       >
         <Icon name="check" size={40} />
-        <div
-          style={{ marginTop: 16, fontSize: 13.5, fontWeight: 600 }}
-        >
+        <div style={{ marginTop: 16, fontSize: 13.5, fontWeight: 600 }}>
           {title}
         </div>
       </div>
       <div className="ext-card" style={{ padding: 12 }}>
+        {/* Hash (top) — clickable to the Monoscan tx page + address-style copy. */}
         <div
           style={{
             fontFamily: "var(--f-mono)",
@@ -1178,43 +1254,118 @@ function SuccessView({ action, txHash, copied, onCopy, onDone }: SuccessViewProp
             color: "var(--fg-500)",
             letterSpacing: "0.1em",
             textTransform: "uppercase",
+            marginBottom: 6,
           }}
         >
           Transaction hash
         </div>
         <div
           style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10.5,
-            color: "var(--fg-200)",
-            marginTop: 6,
-            wordBreak: "break-all",
-          }}
-        >
-          {txHash}
-        </div>
-        <button onClick={onCopy} style={{ ...secondaryBtn, marginTop: 8, width: "100%" }}>
-          {copied ? "Copied" : "Copy hash"}
-        </button>
-        <a
-          href={monoscanTxUrl(txHash)}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            ...secondaryBtn,
-            marginTop: 8,
-            width: "100%",
             display: "flex",
-            flexDirection: "row",
             alignItems: "center",
-            justifyContent: "center",
             gap: 8,
-            textDecoration: "none",
+            padding: "8px 10px",
+            borderRadius: 8,
+            background: "rgba(0,0,0,0.25)",
+            border: "1px solid var(--fg-700)",
           }}
         >
-          <Icon name="globe" size={13} /> View on Monoscan
-        </a>
+          <a
+            href={monoscanTxUrl(txHash)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View transaction on Monoscan"
+            style={{
+              flex: 1,
+              fontFamily: "var(--f-mono)",
+              fontSize: 10.5,
+              color: "var(--fg-100)",
+              textDecoration: "none",
+              wordBreak: "break-all",
+            }}
+          >
+            {txHash}
+          </a>
+          <button
+            onClick={onCopy}
+            aria-label="Copy transaction hash"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 22,
+              height: 22,
+              padding: 0,
+              background: "transparent",
+              border: "none",
+              color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            {copied ? <CheckIcon /> : <ClipboardIcon />}
+          </button>
+        </div>
+
+        <div style={{ marginTop: 8 }}>
+          {/* Cluster — id-indexed; the directory carries no bech32m address,
+              so there is no honest Monoscan cluster link (no-mock). */}
+          <ReceiptRow
+            label="Cluster"
+            value={
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
+                  gap: 2,
+                }}
+              >
+                <span style={{ color: "var(--fg-100)", fontFamily: "var(--f-sans)", fontWeight: 600 }}>
+                  {clusterLabel ?? (clusterId !== null ? `cluster-${clusterId}` : "—")}
+                </span>
+                {clusterId !== null && (
+                  <span style={{ color: "var(--fg-500)" }}>cluster #{clusterId}</span>
+                )}
+              </div>
+            }
+          />
+          <ReceiptRow
+            label="Delegator"
+            value={
+              <a
+                href={monoscanAddressUrl(walletBech)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="View address on Monoscan"
+                style={{ color: "var(--fg-100)", textDecoration: "none", wordBreak: "break-all" }}
+              >
+                {walletBech}
+              </a>
+            }
+          />
+          {amountLythoshi !== null && (
+            <ReceiptRow label="Amount" value={formatNativeLythAmount(amountLythoshi)} />
+          )}
+        </div>
       </div>
+      <a
+        href={monoscanTxUrl(txHash)}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          ...secondaryBtn,
+          width: "100%",
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          textDecoration: "none",
+        }}
+      >
+        <Icon name="globe" size={13} /> View on Monoscan
+      </a>
       <button onClick={onDone} className="ext-act prim" style={{ padding: 12 }}>
         Done
       </button>
