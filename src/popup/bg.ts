@@ -1860,6 +1860,7 @@ export type {
   ClusterDelegatorsView,
   ClusterDirectoryEntry,
   ClusterDirectoryPage,
+  ClusterDiversity,
   ClusterHealth,
   ClusterMember,
   ClusterStatus,
@@ -1880,6 +1881,7 @@ export type {
 import type {
   ClusterDelegatorsView,
   ClusterDirectoryPage,
+  ClusterDiversity,
   ClusterServiceTiers,
   ClusterStatus,
   DelegationCap,
@@ -1906,6 +1908,16 @@ export async function bgStakingClusterStatus(
   clusterId: number,
 ): Promise<StakingResult<ClusterStatus>> {
   return send("staking-cluster-status", { clusterId });
+}
+
+/** Read a cluster's §25.1 roster-diversity view via
+ *  `lyth_getClusterDiversity` (SDK 0.3.10). Powers the ClusterDetail
+ *  read-only diversity card. Returns `ok: false` when the chain method
+ *  is absent / unreachable; the card renders `—` in that case. */
+export async function bgStakingClusterDiversity(
+  clusterId: number,
+): Promise<StakingResult<ClusterDiversity>> {
+  return send("staking-cluster-diversity", { clusterId });
 }
 
 /** Read per-operator info via `lyth_operatorInfo` — R16 Task A.
@@ -1997,6 +2009,61 @@ export async function bgStakingAutovoteSeed(): Promise<
   { ok: true; seedHex: string } | { ok: false; reason: string }
 > {
   return send("staking-autovote-seed");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// v5 wiring — bridge circuit-breaker / drain health reads (§20/§25.2).
+//
+// Disclosure-only. The SDK exposes NO live bridge quote/submit primitive
+// (BRIDGE_QUOTE_API_BLOCKED_REASON / BRIDGE_SUBMIT_API_BLOCKED_REASON),
+// so these enrich the static `BridgeRouteDisclosure` rows with live
+// pause posture + remaining drain headroom; there is no send path.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Convenience re-export of the typed outcome the SW returns for
+ *  `bridge-health`. */
+export type BridgeHealthOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("@monolythium/core-sdk").BridgeHealthResponse
+  >;
+
+/** Convenience re-export of the typed outcome the SW returns for
+ *  `bridge-drain-status`. */
+export type BridgeDrainStatusOutcome =
+  import("../shared/chain-readiness.js").ChainOutcome<
+    import("@monolythium/core-sdk").BridgeDrainStatus
+  >;
+
+/** Read a page of bridge-record circuit-breaker / pause posture (MB-2
+ *  `lyth_bridgeHealth`). The popup branches on
+ *  `outcome.kind === "live"` before showing any live-data badge; a
+ *  not-deployed operator collapses to `mock-not-deployed` with an empty
+ *  records page so the disclosure panel keeps rendering. */
+export async function bgReadBridgeHealth(
+  cursor?: string | null,
+  limit?: number,
+): Promise<
+  | { ok: true; outcome: BridgeHealthOutcome }
+  | { ok: false; reason?: string }
+> {
+  const payload: { cursor?: string | null; limit?: number } = {};
+  if (cursor !== undefined) payload.cursor = cursor;
+  if (limit !== undefined) payload.limit = limit;
+  return send("bridge-health", payload);
+}
+
+/** Read the live per-route drain bucket for one `(bridgeId,
+ *  wrappedAsset)` pair (MB-2 `lyth_bridgeDrainStatus`). `remaining` is
+ *  the chain-computed `cap - drained` clamped at 0; `"0x0"` means "no
+ *  per-asset cap" (the bridge default applies). */
+export async function bgReadBridgeDrainStatus(
+  bridgeId: string,
+  wrappedAsset: string,
+): Promise<
+  | { ok: true; outcome: BridgeDrainStatusOutcome }
+  | { ok: false; reason?: string }
+> {
+  return send("bridge-drain-status", { bridgeId, wrappedAsset });
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -39,6 +39,7 @@ import {
   readClusterApr,
   readClusterDelegators,
   readClusterDirectory,
+  readClusterDiversity,
   readClusterServiceTiers,
   readClusterStatus,
   readDelegationCap,
@@ -149,6 +150,98 @@ describe("readClusterDirectory", () => {
     // The cluster-name registry is not yet emitted by the SDK; the
     // wallet normalises name to null on every directory row.
     expect(r.data.clusters[0]?.name).toBeNull();
+  });
+
+  it("stitches the §25.1 diversity score onto each row from the fanout", async () => {
+    mockedRpc.mockImplementation(async (method: string, params: unknown[]) => {
+      if (method === "lyth_clusterDirectory") {
+        return {
+          via: "operator-2",
+          result: {
+            page: 0,
+            limit: 25,
+            totalClusters: 1,
+            clusters: [
+              {
+                clusterId: 4,
+                size: 10,
+                threshold: 7,
+                aggregateHealth: "ok",
+                regionDiversity: ["fsn1", "ash"],
+                active: true,
+              },
+            ],
+          },
+        };
+      }
+      if (method === "lyth_getClusterEntity") {
+        return { via: "operator-2", result: { cluster: 4, entity: "independent" } };
+      }
+      if (method === "lyth_clusterApr") {
+        return { via: "operator-2", result: { clusterId: 4, aprBps: 880 } };
+      }
+      if (method === "lyth_getClusterDiversity") {
+        const cluster = (params as [number])[0];
+        return {
+          via: "operator-2",
+          result: {
+            clusterId: cluster,
+            score: 7700,
+            asnVariance: 8000,
+            geoVariance: 7000,
+            hostingSpread: 6500,
+          },
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.clusters[0]?.diversityScore).toBe(7700);
+    expect(r.data.clusters[0]?.asnVariance).toBe(8000);
+    expect(r.data.clusters[0]?.geoVariance).toBe(7000);
+    expect(r.data.clusters[0]?.hostingSpread).toBe(6500);
+  });
+
+  it("leaves diversity fields null when lyth_getClusterDiversity is unavailable", async () => {
+    mockedRpc.mockImplementation(async (method: string) => {
+      if (method === "lyth_clusterDirectory") {
+        return {
+          via: "operator-1",
+          result: {
+            page: 0,
+            limit: 25,
+            totalClusters: 1,
+            clusters: [
+              {
+                clusterId: 5,
+                size: 10,
+                threshold: 7,
+                aggregateHealth: "ok",
+                regionDiversity: null,
+                active: true,
+              },
+            ],
+          },
+        };
+      }
+      if (method === "lyth_getClusterEntity") {
+        return { via: "operator-1", result: { cluster: 5, entity: "independent" } };
+      }
+      if (method === "lyth_clusterApr") {
+        return { via: "operator-1", result: { clusterId: 5, aprBps: 0 } };
+      }
+      if (method === "lyth_getClusterDiversity") {
+        throw methodNotFoundError("lyth_getClusterDiversity");
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const r = await readClusterDirectory(0, 25);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.clusters[0]?.diversityScore).toBeNull();
+    expect(r.data.clusters[0]?.asnVariance).toBeNull();
   });
 
   it("sets aprBps null on every row when lyth_clusterApr is unavailable", async () => {
@@ -343,6 +436,69 @@ describe("readClusterApr", () => {
   it("rejects a malformed response (aprBps missing / non-numeric)", async () => {
     mockedRpc.mockResolvedValue({ via: "operator-1", result: { clusterId: 0 } });
     const r = await readClusterApr(0);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/malformed/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterDiversity (§25.1, SDK 0.3.10)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterDiversity", () => {
+  it("normalises a well-formed lyth_getClusterDiversity response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-2",
+      result: {
+        clusterId: 3,
+        score: 8200,
+        asnVariance: 9100,
+        geoVariance: 7600,
+        hostingSpread: 6400,
+      },
+    });
+    const r = await readClusterDiversity(3);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data).toEqual({
+      clusterId: 3,
+      score: 8200,
+      asnVariance: 9100,
+      geoVariance: 7600,
+      hostingSpread: 6400,
+    });
+  });
+
+  it("clamps out-of-range scores into 0..=10000", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: {
+        clusterId: 1,
+        score: 12000,
+        asnVariance: -50,
+        geoVariance: 10000,
+        hostingSpread: 0,
+      },
+    });
+    const r = await readClusterDiversity(1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.score).toBe(10_000);
+    expect(r.data.asnVariance).toBe(0);
+    expect(r.data.geoVariance).toBe(10_000);
+    expect(r.data.hostingSpread).toBe(0);
+  });
+
+  it("propagates ok:false when the method is absent", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError("lyth_getClusterDiversity"));
+    const r = await readClusterDiversity(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects a malformed response (score missing / non-numeric)", async () => {
+    mockedRpc.mockResolvedValue({ via: "operator-1", result: { clusterId: 0 } });
+    const r = await readClusterDiversity(0);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toMatch(/malformed/);
