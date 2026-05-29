@@ -29,6 +29,7 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgStakingClusterStatus,
   bgStakingClusterDelegators,
@@ -65,6 +66,10 @@ export function ClusterDetail({
   walletAddress,
   onBack,
 }: ClusterDetailProps) {
+  // v5 pillar surface — the §25.1 roster-diversity card ships behind the
+  // default-off "Agent commerce (experimental)" toggle. When OFF the
+  // page renders exactly the pre-v5 cards (no diversity card).
+  const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [delegatorCount, setDelegatorCount] = useState<number | null>(null);
   const [delegationHistory, setDelegationHistory] = useState<
@@ -170,19 +175,21 @@ export function ClusterDetail({
         </div>
 
         {/* §25.1 roster diversity (read-only delegator view) */}
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Diversity</h3>
-          </div>
-          {diversity !== null ? (
-            <ClusterDiversityCard diversity={diversity} />
-          ) : (
-            <div style={cellMuted}>
-              Diversity scoring unavailable — the chain hasn&apos;t surfaced a
-              roster-diversity score for this cluster yet.
+        {agentCommerceEnabled && (
+          <div className="ext-card">
+            <div className="ext-card__head">
+              <h3>Diversity</h3>
             </div>
-          )}
-        </div>
+            {diversity !== null ? (
+              <ClusterDiversityCard diversity={diversity} />
+            ) : (
+              <div style={cellMuted}>
+                Diversity scoring unavailable — the chain hasn&apos;t surfaced a
+                roster-diversity score for this cluster yet.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Demand profile */}
         <div className="ext-card">

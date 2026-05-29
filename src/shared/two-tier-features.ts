@@ -37,6 +37,7 @@ export const FEATURE_FLAGS = [
   "MARKETPLACE",
   "AI_FEATURES",
   "REGISTRY",
+  "AGENT_COMMERCE",
 ] as const;
 
 export type FeatureFlag = (typeof FEATURE_FLAGS)[number];
@@ -147,5 +148,10 @@ export const FEATURE_META: Record<FeatureFlag, FeatureMeta> = {
     label: "Name registry",
     tagline:
       "Hierarchical name resolution + registration UI (§22.8 lookup + future register flow).",
+  },
+  AGENT_COMMERCE: {
+    label: "Agent commerce (experimental)",
+    tagline:
+      "Agent spending-policy sub-accounts (§18.8), bridge route risk disclosure (§20.2 / §25.2), and cluster roster-diversity scoring (§25.1). Experimental — hidden by default.",
   },
 };
