@@ -30,7 +30,6 @@ import {
 } from "../../shared/slh-dsa-backup";
 import {
   EXTERNAL_LINKS,
-  SDK_COMMIT_SHORT,
   SDK_PACKAGE_VERSION,
   SDK_REGISTRY_GENESIS_HASH,
   SPRINTNET_CHAIN_ID_DEC,
@@ -243,7 +242,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <KvList
             rows={[
               { k: "Wallet", v: `v${walletVersion}` },
-              { k: "SDK", v: `v${SDK_PACKAGE_VERSION} · ${SDK_COMMIT_SHORT}` },
+              { k: "SDK", v: `v${SDK_PACKAGE_VERSION}` },
             ]}
           />
         </div>
