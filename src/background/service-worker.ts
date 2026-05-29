@@ -6174,20 +6174,33 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const { result } = await sprintnetJsonRpc<{
-          status?: string;
-          blockNumber?: string;
+          status?: unknown;
+          blockNumber?: unknown;
+          block_number?: unknown;
         } | null>("eth_getTransactionReceipt", [p.txHash]);
         if (!result) {
           return { ok: true, receipt: null };
         }
-        return {
-          ok: true,
-          receipt: {
-            status: typeof result.status === "string" ? result.status : null,
-            blockNumber:
-              typeof result.blockNumber === "string" ? result.blockNumber : null,
-          },
-        };
+        // Sprintnet operators emit receipts with a numeric `status` (0/1) +
+        // snake_case `block_number`, not the EVM-standard hex-string `status`
+        // + camelCase `blockNumber`. Accept both shapes and normalize to the
+        // hex-string form the UI's `parseInt(value, 16)` expects, so an
+        // included receipt is recognised instead of looking "still pending".
+        const rawStatus = result.status;
+        const status =
+          typeof rawStatus === "string"
+            ? rawStatus
+            : typeof rawStatus === "number"
+              ? "0x" + rawStatus.toString(16)
+              : null;
+        const rawBlockNumber = result.blockNumber ?? result.block_number;
+        const blockNumber =
+          typeof rawBlockNumber === "string"
+            ? rawBlockNumber
+            : typeof rawBlockNumber === "number"
+              ? "0x" + rawBlockNumber.toString(16)
+              : null;
+        return { ok: true, receipt: { status, blockNumber } };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
