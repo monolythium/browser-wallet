@@ -126,6 +126,16 @@ import {
 // recordNotification is intentionally NOT exposed via any IPC handler — §0.4
 // (only the wallet's own tracked-tx registry can emit notifications).
 import { recordNotification } from "./notifications-store.js";
+// Phase 2 notifications — the OS toast + unread badge amplifier on top of
+// the Phase-1 records. Fired ONLY when recordNotification returns
+// added:true (i.e. a new terminal transition for one of the wallet's own
+// tracked txs); best-effort, so OS-deny / quota / unsupported environment
+// never escape into the snapshot path.
+import {
+  fireOsNotification,
+  installNotificationsClickListener,
+  refreshUnreadBadge,
+} from "./notifications-os.js";
 // Phase 1.5 notifications — broadcast-time operation tag. The wallet-send-tx
 // handler reads p.opKind into a handler-local var (sanitized via isTxOpKind)
 // and threads it ONLY to persistPendingRowBackground — never to the signer.
@@ -6740,6 +6750,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         queueMicrotask(() => {
           void (async () => {
             try {
+              let anyAdded = false;
               for (const row of heuristicallyMatched) {
                 // The matched confirmed row's blockHeight is the most
                 // precise block we have. Falls back to null when no exact
@@ -6751,7 +6762,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                     c.counterparty.toLowerCase() === row.to.toLowerCase() &&
                     c.amountDecimal === row.amountDecimal,
                 );
-                await recordNotification({
+                const result = await recordNotification({
                   addressLower,
                   chainIdHex,
                   txHash: row.txHash,
@@ -6765,9 +6776,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   amountDecimal: row.amountDecimal,
                   counterparty: row.to,
                 });
+                // Phase 2 — fire OS toast ONLY when this snapshot produced
+                // a NEW record (the dedupe set blocks already-notified
+                // txs). §0.4 honored: every toast derives from a
+                // wallet-own tracked-tx transition.
+                if (result.added && result.record !== null) {
+                  anyAdded = true;
+                  await fireOsNotification(result.record);
+                }
               }
               for (const t of terminalByHash) {
-                await recordNotification({
+                const result = await recordNotification({
                   addressLower,
                   chainIdHex,
                   txHash: t.row.txHash,
@@ -6781,6 +6800,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   amountDecimal: t.row.amountDecimal,
                   counterparty: t.row.to,
                 });
+                if (result.added && result.record !== null) {
+                  anyAdded = true;
+                  await fireOsNotification(result.record);
+                }
+              }
+              // Phase 2 — single badge refresh per batch. getUnread reads
+              // chrome.storage so it sees every record this loop wrote;
+              // one call covers both heuristic + status-RPC paths.
+              if (anyAdded) {
+                await refreshUnreadBadge();
               }
             } catch {
               // Best-effort; never break the snapshot response.
@@ -7930,6 +7959,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { error: `unknown popup op ${message.op}` };
   }
 }
+
+// ---- Phase 2 notifications — top-level listener registrations ----
+//
+// MV3 re-inits the SW per event; listeners added inside an async path can
+// be missed. Register `chrome.notifications.onClicked` here at module top
+// level BEFORE the onMessage router so a click delivered to a freshly-
+// woken SW finds a handler. The handler opens Monoscan for the canonical
+// inner tx hash parsed off the notification id. Refresh the toolbar
+// badge once at startup so the unread pip is correct after a re-init.
+
+installNotificationsClickListener();
+void refreshUnreadBadge();
 
 // ---- message routing ----
 

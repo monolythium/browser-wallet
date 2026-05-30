@@ -38,6 +38,19 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
 const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
+// Phase 2 — mock the OS notification + badge layer so existing tests
+// don't have to stub chrome.notifications + chrome.action. The Phase-2
+// behavior (toast / badge / click) is unit-tested in notifications-os.test.ts;
+// this mock just keeps the SW import graph happy and lets the dedupe test
+// below count fireOsNotification calls across two snapshot ticks.
+const mockFireOsNotification = vi.hoisted(() => vi.fn(async () => {}));
+const mockRefreshUnreadBadge = vi.hoisted(() => vi.fn(async () => {}));
+const mockInstallNotificationsClickListener = vi.hoisted(() => vi.fn(() => {}));
+vi.mock("./notifications-os.js", () => ({
+  fireOsNotification: mockFireOsNotification,
+  refreshUnreadBadge: mockRefreshUnreadBadge,
+  installNotificationsClickListener: mockInstallNotificationsClickListener,
+}));
 
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
 const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
@@ -568,6 +581,8 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   rpcCalls.length = 0;
   submitMlDsaCalls.length = 0;
+  mockFireOsNotification.mockClear();
+  mockRefreshUnreadBadge.mockClear();
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
@@ -1636,6 +1651,13 @@ describe("wallet-activity-get", () => {
     const ids = (storageLocal[NOTIF_NOTIFIED_KEY] as { ids: string[] }).ids;
     expect(ids).toHaveLength(1);
     expect(ids[0]).toBe(`${TESTNET_CHAIN_ID_HEX}:${txHash}`);
+    // Phase 2 — the OS toast fires ONLY on added:true, so two snapshots
+    // of the same tx produce exactly ONE fireOsNotification call (no
+    // double toast). The badge refresh runs once per snapshot batch
+    // that added something — only the first snapshot adds, so only one
+    // refresh call.
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    expect(mockRefreshUnreadBadge).toHaveBeenCalledTimes(1);
   });
 
   it("hook prefers row.opKind over the coarse fallback (Phase 1.5 — kind:'delegate' carried through)", async () => {
