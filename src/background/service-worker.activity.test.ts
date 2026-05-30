@@ -76,6 +76,9 @@ interface CapturedRpcCall {
   params: unknown[];
 }
 const rpcCalls: CapturedRpcCall[] = [];
+// Capture of submitEncryptedMlDsaTx argument objects — used by the Phase 1.5
+// metadata-only invariant test (assert opKind never reaches the signer).
+const submitMlDsaCalls: Record<string, unknown>[] = [];
 let rpcResponses: Record<string, unknown> = {};
 let rpcErrors: Record<string, { code: number; message: string }> = {};
 
@@ -101,7 +104,8 @@ vi.mock("./tx-mldsa.js", () => ({
     contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
     failing: [],
   })),
-  submitEncryptedMlDsaTx: vi.fn(async () => {
+  submitEncryptedMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
+    submitMlDsaCalls.push(args);
     if (submitFailure !== null) {
       throw submitFailure;
     }
@@ -563,6 +567,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.unstubAllEnvs();
   rpcCalls.length = 0;
+  submitMlDsaCalls.length = 0;
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
@@ -2011,6 +2016,125 @@ describe("wallet-send-tx pending-row prepend", () => {
     };
     expect(persisted).toBeDefined();
     expect(persisted.pending[0]?.broadcastBlockHeight).toBeNull();
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Phase 1.5 — opKind tagging. opKind is pending-row metadata only; it
+  // must NEVER reach submitEncryptedMlDsaTx's argument object (the signed
+  // tx bytes / ML-DSA-65 signature / encrypted envelope / nonce / fee /
+  // gas must be identical with or without opKind).
+  // ───────────────────────────────────────────────────────────────────────
+
+  const PENDING_KEY = `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+
+  async function dispatchSend(payload: Record<string, unknown>) {
+    seedSprintnetNonceAndFee();
+    rpcResponses["eth_blockNumber"] = "0x64";
+    const r = await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload,
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    return r;
+  }
+
+  it("per-caller tagging — a known opKind rides through to the pending-row record", async () => {
+    const cases: Array<{ opKind: string }> = [
+      { opKind: "send" },
+      { opKind: "delegate" },
+      { opKind: "undelegate" },
+      { opKind: "redelegate" },
+      { opKind: "claim" },
+      { opKind: "emergency-key" },
+      { opKind: "agent-policy" },
+      { opKind: "contract_call" },
+    ];
+    for (const { opKind } of cases) {
+      storageLocal = {};
+      await dispatchSend({
+        to: "0xrecipient",
+        valueWeiHex: "0x989680",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        opKind,
+      });
+      const persisted = storageLocal[PENDING_KEY] as {
+        pending: Array<{ opKind?: string }>;
+      };
+      expect(persisted.pending[0]?.opKind).toBe(opKind);
+    }
+  });
+
+  it("legacy / absent path — no opKind in the payload → no opKind on the row", async () => {
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    });
+    const persisted = storageLocal[PENDING_KEY] as {
+      pending: Array<Record<string, unknown>>;
+    };
+    expect(persisted.pending[0]).toBeDefined();
+    expect("opKind" in persisted.pending[0]!).toBe(false);
+  });
+
+  it("unknown literal coerced to fallback — { opKind: 'garbage' } → row.opKind === 'contract_call'", async () => {
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      opKind: "garbage",
+    });
+    const persisted = storageLocal[PENDING_KEY] as {
+      pending: Array<{ opKind?: string }>;
+    };
+    expect(persisted.pending[0]?.opKind).toBe("contract_call");
+  });
+
+  it("non-string opKind coerced to fallback (defense in depth)", async () => {
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      // Cast to make TypeScript happy in the test; the runtime guard
+      // is what we're exercising here.
+      opKind: 42 as unknown as string,
+    });
+    const persisted = storageLocal[PENDING_KEY] as {
+      pending: Array<{ opKind?: string }>;
+    };
+    expect(persisted.pending[0]?.opKind).toBe("contract_call");
+  });
+
+  it("METADATA-ONLY INVARIANT — opKind NEVER reaches submitEncryptedMlDsaTx's argument object", async () => {
+    // First dispatch — WITH opKind. Capture the signer arg.
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      opKind: "delegate",
+    });
+    const withOp = submitMlDsaCalls[0]!;
+    expect(withOp).toBeDefined();
+    // The signer must NOT see opKind on the argument object — that
+    // would mean opKind is reaching the signing path, which would
+    // break the metadata-only invariant.
+    expect("opKind" in withOp).toBe(false);
+
+    // Reset and dispatch identically WITHOUT opKind. The captured
+    // argument object must be byte-equal — proves the signed tx bytes
+    // / signature / envelope / fee / nonce do not depend on opKind.
+    submitMlDsaCalls.length = 0;
+    storageLocal = {};
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    });
+    const withoutOp = submitMlDsaCalls[0]!;
+    expect(withoutOp).toBeDefined();
+    expect(withoutOp).toEqual(withOp);
   });
 });
 

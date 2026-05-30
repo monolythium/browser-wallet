@@ -32,6 +32,48 @@
  *  notifications fire only on terminal transitions, not every send). */
 export const NOTIFICATION_HISTORY_CAP = 50;
 
+/** Operation tag attached to a pending row at broadcast time (popup
+ *  → IPC → SW handler → `persistPendingRowBackground`'s pending-row
+ *  record). The Phase-1 notifications hook reads `row.opKind` and uses
+ *  it verbatim as the resulting `NotificationRecord.kind`, which the
+ *  toast / notification-center renders via {@link notificationTitle}
+ *  to a friendly title.
+ *
+ *  CRITICAL invariant: `opKind` is **pending-row metadata only** — it
+ *  is never plumbed into `submitEncryptedMlDsaTx`'s argument object and
+ *  cannot affect the signed tx bytes, the ML-DSA-65 signature, the
+ *  encrypted envelope, the nonce, the fee, or the gas. See the
+ *  metadata-only invariant test in `service-worker.activity.test.ts`.
+ *
+ *  `contract_call` is the explicit fallback for untagged paths (legacy
+ *  Phase-1 records on disk + any caller that omits `opKind`). */
+export type TxOpKind =
+  | "send"
+  | "delegate"
+  | "undelegate"
+  | "redelegate"
+  | "claim"
+  | "emergency-key"
+  | "agent-policy"
+  | "contract_call";
+
+/** Runtime guard for `TxOpKind`. Used by the SW handler to coerce
+ *  unknown / malformed literals (e.g. a future popup sending a kind we
+ *  don't recognize) to a safe fallback rather than propagating
+ *  garbage into the pending-row record. */
+export function isTxOpKind(v: unknown): v is TxOpKind {
+  return (
+    v === "send" ||
+    v === "delegate" ||
+    v === "undelegate" ||
+    v === "redelegate" ||
+    v === "claim" ||
+    v === "emergency-key" ||
+    v === "agent-policy" ||
+    v === "contract_call"
+  );
+}
+
 /** One persisted notification — the row a Phase-3 list / detail-popup
  *  renders, and the row Phase-2's `chrome.notifications.create` derives
  *  its title + body from. Phase 1 only fills this shape; nothing reads

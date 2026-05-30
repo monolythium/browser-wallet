@@ -398,6 +398,7 @@ export function Send({
         to: effectiveAddr0x,
         valueWeiHex: valueLythoshiHex,
         chainIdHex: chainId,
+        opKind: "send",
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
