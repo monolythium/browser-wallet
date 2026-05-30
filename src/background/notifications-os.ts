@@ -52,6 +52,50 @@ const NOTIFICATION_ICON_URL = "icon-48.png";
  *  attention-red used elsewhere (`var(--err)` family ≈ `#dc5050`). */
 const BADGE_BG_COLOR = "#dc5050";
 
+/** Phase 5 — user-facing toggle key. The flag gates ONLY the OS toast
+ *  (chrome.notifications.create). The in-app notification history record
+ *  AND the unread badge run regardless — the notifications center stays
+ *  the durable record (§0.4). Default true (absent ⇒ on); fail-open on a
+ *  storage read error so a corrupt blob can never silently mute the
+ *  user. */
+const OS_ENABLED_KEY = "mono.notifications.os-enabled.v1";
+
+/** Read the OS-toast enabled flag. Default `true` (absent key ⇒ on).
+ *  Fails open: a chrome.storage error returns `true` so a transient
+ *  read failure can't silently mute the user. */
+export async function getOsNotificationsEnabled(): Promise<boolean> {
+  try {
+    if (typeof chrome === "undefined" || !chrome.storage?.local?.get) {
+      return true;
+    }
+    const v = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([OS_ENABLED_KEY], (res) =>
+        resolve(res?.[OS_ENABLED_KEY]),
+      );
+    });
+    if (v === undefined) return true;
+    return v !== false;
+  } catch {
+    return true;
+  }
+}
+
+/** Persist the OS-toast enabled flag. Best-effort. */
+export async function setOsNotificationsEnabled(
+  enabled: boolean,
+): Promise<void> {
+  try {
+    if (typeof chrome === "undefined" || !chrome.storage?.local?.set) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set({ [OS_ENABLED_KEY]: !!enabled }, () => resolve());
+    });
+  } catch {
+    // Best-effort.
+  }
+}
+
 /** Middle-truncate any string (bech32m address or hash) for compact
  *  display. Pure — never throws. Mirrors the helper in
  *  `popup/components/ActivityDetail.tsx` so the toast body reads the
@@ -92,7 +136,11 @@ export function notificationBody(record: NotificationRecord): string {
 /** Fire one OS toast for a freshly-recorded notification. Best-effort:
  *  any `chrome.notifications.create` failure (API absent / OS-denied /
  *  user disabled / quota / unsupported environment) is swallowed
- *  internally so it can never break the SW snapshot path. */
+ *  internally so it can never break the SW snapshot path.
+ *
+ *  Phase 5 — gated by the user-facing OS-enabled flag: when off, the
+ *  toast is skipped entirely (history + badge still run on the caller
+ *  side; the notifications center remains the durable record). */
 export async function fireOsNotification(
   record: NotificationRecord,
 ): Promise<void> {
@@ -103,6 +151,8 @@ export async function fireOsNotification(
     ) {
       return;
     }
+    const enabled = await getOsNotificationsEnabled();
+    if (!enabled) return;
     const title = notificationTitle(record.kind, record.status);
     const message = notificationBody(record);
     // `chrome.notifications.create` returns a Promise in MV3 — wrap with
