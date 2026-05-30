@@ -125,7 +125,12 @@ import {
 // calls this to record one notification per tracked-tx terminal transition.
 // recordNotification is intentionally NOT exposed via any IPC handler — §0.4
 // (only the wallet's own tracked-tx registry can emit notifications).
-import { recordNotification } from "./notifications-store.js";
+import {
+  getUnread,
+  listAllNotifications,
+  markAllNotificationsRead,
+  recordNotification,
+} from "./notifications-store.js";
 // Phase 2 notifications — the OS toast + unread badge amplifier on top of
 // the Phase-1 records. Fired ONLY when recordNotification returns
 // added:true (i.e. a new terminal transition for one of the wallet's own
@@ -7953,6 +7958,46 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(method !== undefined && { method }),
           ...(via !== undefined && { via }),
         };
+      }
+    }
+    case "notifications-list": {
+      // Phase 3 — global inbox: every `mono.notifications.history.*`
+      // entry merged + sorted newest-first. The popup's Notifications
+      // page renders this verbatim. §0.4: no notification-creating IPC
+      // is added — only reads + mark-as-read. `recordNotification` stays
+      // SW-only (only the wallet's own tracked-tx terminal transitions
+      // can emit).
+      try {
+        const records = await listAllNotifications();
+        return { ok: true, records };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-mark-all-read": {
+      // Phase 3 — flip every record across every scope's history to
+      // read:true. Returns the count of records that changed; the
+      // toolbar badge clears on the next `refreshUnreadBadge` call,
+      // which we also fire here so the pip updates without waiting
+      // for the next snapshot tick.
+      try {
+        const { flipped } = await markAllNotificationsRead();
+        // Best-effort badge refresh — a badge failure is harmless.
+        void refreshUnreadBadge();
+        return { ok: true, flipped };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-unread": {
+      // Phase 3 — global unread count for the MainMenu's bell-row pill
+      // (matches the toolbar badge). Derived from history; no separate
+      // counter key.
+      try {
+        const count = await getUnread();
+        return { ok: true, count };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
       }
     }
     default:
