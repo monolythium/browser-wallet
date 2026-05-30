@@ -3868,3 +3868,154 @@ describe("get-block-tx-value", () => {
     expect(r.txHash).toBeNull();
   });
 });
+
+// GAP-N1 C1 — the headless poll-core. Drives `pollPendingAndNotify`
+// directly against the in-memory chrome stub: seeds a pending row, seeds
+// the receipt RPC, and asserts detect→record→toast→badge + write-back.
+// `recordNotification` is the REAL store (notifications-store.js is NOT
+// mocked); `fireOsNotification`/`refreshUnreadBadge` are the hoisted mocks.
+describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const pendingKey = (addr: string, chain: string) =>
+    `mono.activity.pending.${addr}.${chain}`;
+  const historyKey = (addr: string, chain: string) =>
+    `mono.notifications.history.${addr}.${chain}.v1`;
+  function pendingRow(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: "pending_tx",
+      txHash: "0x" + "1".repeat(64),
+      to: "0x" + "2".repeat(40),
+      amountDecimal: "1.5",
+      broadcastedAtMs: Date.now(),
+      broadcastBlockHeight: 100,
+      via: "mock-operator",
+      opKind: "send",
+      ...overrides,
+    };
+  }
+
+  it("confirmed pending → records + writes back kept (terminal dropped)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+
+    const { remaining } = await pollPendingAndNotify();
+
+    expect(remaining).toBe(0);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    expect(mockRefreshUnreadBadge).toHaveBeenCalled();
+    expect(
+      (storageLocal[pendingKey(ADDR, CHAIN)] as { pending: unknown[] }).pending,
+    ).toEqual([]);
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string; txHash: string; blockNumber: number | null }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("confirmed");
+    expect(hist.entries[0]!.txHash).toBe("0x" + "1".repeat(64));
+    expect(hist.entries[0]!.blockNumber).toBe(123);
+  });
+
+  it("failed pending → recorded as FAILED, never confirmed (#5117)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    // lyth_txStatus does NOT report a failed tx as "found" (indexer surfaces
+    // only confirmed) → falls through to the receipt, whose status is the
+    // authoritative verdict.
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 0, block_number: 123 };
+
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("failed");
+    expect(hist.entries[0]!.status).not.toBe("confirmed");
+  });
+
+  it("null receipt → kept (still pending), no record, no toast", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+
+    const { remaining } = await pollPendingAndNotify();
+
+    expect(remaining).toBe(1);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(storageLocal[historyKey(ADDR, CHAIN)]).toBeUndefined();
+    expect(
+      (storageLocal[pendingKey(ADDR, CHAIN)] as { pending: unknown[] }).pending,
+    ).toHaveLength(1);
+  });
+
+  it("notified-set dedupe → no double toast when the same tx is re-polled", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+
+    await pollPendingAndNotify();
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+
+    // Re-add the same pending row (a race / re-add). The persisted
+    // notified-set must block a second toast + second history entry.
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    await pollPendingAndNotify();
+
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(1);
+  });
+
+  it("TTL-evicted row → excluded from notify + never polled + written back []", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    // Ancient broadcast time (well past PENDING_TTL_MS = 5 min).
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [pendingRow({ broadcastedAtMs: 1_000_000 })],
+    };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+
+    const { remaining } = await pollPendingAndNotify();
+
+    expect(remaining).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(storageLocal[historyKey(ADDR, CHAIN)]).toBeUndefined();
+    expect(
+      (storageLocal[pendingKey(ADDR, CHAIN)] as { pending: unknown[] }).pending,
+    ).toEqual([]);
+    // The expired row was dropped before any RPC.
+    expect(
+      rpcCalls.filter((c) => c.method === "eth_getTransactionReceipt"),
+    ).toHaveLength(0);
+  });
+
+  it("multi-scope fan-out → both pending keys processed", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    const ADDR2 = "0x" + "3".repeat(40);
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [pendingRow({ txHash: "0x" + "a".repeat(64) })],
+    };
+    storageLocal[pendingKey(ADDR2, CHAIN)] = {
+      pending: [pendingRow({ txHash: "0x" + "b".repeat(64) })],
+    };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+
+    const { remaining } = await pollPendingAndNotify();
+
+    expect(remaining).toBe(0);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2);
+    expect(
+      (storageLocal[pendingKey(ADDR, CHAIN)] as { pending: unknown[] }).pending,
+    ).toEqual([]);
+    expect(
+      (storageLocal[pendingKey(ADDR2, CHAIN)] as { pending: unknown[] }).pending,
+    ).toEqual([]);
+  });
+});
