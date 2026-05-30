@@ -253,6 +253,8 @@ export function AgentPolicy({ account, chainId, onBack }: AgentPolicyProps) {
           to: claim.subAccountAddress,
           valueWeiHex: lythToLythoshiHex(form.fundLyth.trim()),
           chainIdHex: chainId,
+          // Plain native LYTH transfer to the agent's sub-account.
+          opKind: "send",
         });
         if (!fundRes.ok) {
           setSubmitError({
@@ -275,6 +277,7 @@ export function AgentPolicy({ account, chainId, onBack }: AgentPolicyProps) {
         chainIdHex: chainId,
         data: claim.data,
         executionUnitLimitHex: SPENDING_POLICY_CLAIM_UNIT_LIMIT_HEX,
+        opKind: "agent-policy",
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -318,6 +321,7 @@ export function AgentPolicy({ account, chainId, onBack }: AgentPolicyProps) {
         chainIdHex: chainId,
         data: encodeDisable(subAccount),
         executionUnitLimitHex: SPENDING_POLICY_TOGGLE_UNIT_LIMIT_HEX,
+        opKind: "agent-policy",
       });
       if (r.ok) {
         setTxHash(r.result.txHash);

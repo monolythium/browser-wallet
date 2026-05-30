@@ -25,6 +25,9 @@ export interface ModalProps {
   title?: ReactNode;
   /** Title color override (e.g. gold for warning modals). */
   titleAccent?: string;
+  /** When true, render a top-right "×" close button in the header. Opt-in so
+   *  existing modals are visually unchanged. */
+  showClose?: boolean;
   children: ReactNode;
 }
 
@@ -33,7 +36,7 @@ export interface ModalProps {
 // per Modal instance to keep ids unique across multiple open modals.
 let modalIdCounter = 0;
 
-export function Modal({ open, onClose, title, titleAccent, children }: ModalProps) {
+export function Modal({ open, onClose, title, titleAccent, showClose, children }: ModalProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -87,7 +90,7 @@ export function Modal({ open, onClose, title, titleAccent, children }: ModalProp
           color: "var(--fg-100)",
         }}
       >
-        {title != null && (
+        {title != null && !showClose && (
           <div
             id={titleId}
             style={{
@@ -100,6 +103,58 @@ export function Modal({ open, onClose, title, titleAccent, children }: ModalProp
             }}
           >
             {title}
+          </div>
+        )}
+        {showClose && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+            }}
+          >
+            {title != null ? (
+              <span
+                id={titleId}
+                style={{
+                  fontWeight: 600,
+                  fontSize: 12,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  minWidth: 0,
+                  color: titleAccent ?? "var(--fg-100)",
+                }}
+              >
+                {title}
+              </span>
+            ) : (
+              <span />
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 24,
+                height: 24,
+                padding: 0,
+                marginLeft: 8,
+                background: "transparent",
+                border: "none",
+                color: "var(--fg-400)",
+                cursor: "pointer",
+                flexShrink: 0,
+                fontSize: 18,
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
           </div>
         )}
         {children}

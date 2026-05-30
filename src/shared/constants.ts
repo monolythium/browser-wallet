@@ -4,6 +4,12 @@ export type AutoLockMinutes = (typeof AUTO_LOCK_OPTIONS)[number];
 
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
+/** GAP-N1 — periodic poll that runs `pollPendingAndNotify` while any tx is
+ *  pending, so a transaction confirming while every wallet surface is closed
+ *  still toasts + badges at confirm time. Self-limiting: created when the
+ *  pending set becomes non-empty, cleared when it empties. */
+export const ALARM_NOTIF_POLL = "monolythium.notif-poll";
+
 // chrome.storage.local
 export const STORAGE_KEY_AUTO_LOCK_MINUTES = "mono.autoLockMinutes";
 export const STORAGE_KEY_PENDING_APPROVALS = "mono.pending-approvals";

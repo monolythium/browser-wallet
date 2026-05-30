@@ -13,6 +13,7 @@ import {
   lythoshiHexToLythDecimal,
   weiHexToLythDecimal,
 } from "./wei-decimal.js";
+import { lythoshiDecimalToLythDecimal } from "../shared/lyth-units.js";
 
 // Each fixture: a bigint lythoshi value + the expected decimal string.
 // The fixture set covers zero, the smallest non-zero unit, common fractional
@@ -72,5 +73,25 @@ describe("lythoshiHexToLythDecimal", () => {
   it("accepts lowercase and uppercase hex digits identically", () => {
     expect(lythoshiHexToLythDecimal("0x75bcd15")).toBe("1.23456789");
     expect(lythoshiHexToLythDecimal("0x75BCD15")).toBe("1.23456789");
+  });
+});
+
+// The activity mapper (confirmed side) converts the indexer's DECIMAL lythoshi
+// string, while the pending-row writer converts a HEX lythoshi string. Both
+// must agree to the byte or reconcilePending (exact string equality) won't fire.
+describe("lythoshiDecimalToLythDecimal — reconciler byte-identity", () => {
+  for (const { lythoshi, expected, label } of FIXTURES) {
+    it(`${label}: decimal entry point matches the hex entry point and equals "${expected}"`, () => {
+      const fromDecimal = lythoshiDecimalToLythDecimal(lythoshi.toString(10));
+      const fromHex = lythoshiHexToLythDecimal("0x" + lythoshi.toString(16));
+      expect(fromDecimal).toBe(expected);
+      expect(fromDecimal).toBe(fromHex);
+    });
+  }
+
+  it("returns '0' for malformed (non-integer) decimal input", () => {
+    expect(lythoshiDecimalToLythDecimal("1.0")).toBe("0");
+    expect(lythoshiDecimalToLythDecimal("0x10")).toBe("0");
+    expect(lythoshiDecimalToLythDecimal("")).toBe("0");
   });
 });

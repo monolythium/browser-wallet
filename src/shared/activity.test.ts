@@ -20,6 +20,8 @@ import {
   mergeIndexerSnapshot,
   evictExpiredPending,
   reconcilePending,
+  NATIVE_LYTH_TOKEN_ID,
+  isNativeLythTokenId,
   type PendingTxRow,
   type ConfirmedRow,
   type DelegateRow,
@@ -402,7 +404,7 @@ describe("mapAddressActivityToRows", () => {
     direction: "out",
     counterparty: "0xabc",
     tokenId: null,
-    amount: "1.0",
+    amount: "100000000", // raw lythoshi = 1 LYTH (indexer wire is lythoshi)
     cluster: null,
     weightBps: null,
     subKind: null,
@@ -414,12 +416,23 @@ describe("mapAddressActivityToRows", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.kind).toBe("tx_send");
     expect((rows[0] as TxSendRow).counterparty).toBe("0xabc");
-    expect((rows[0] as TxSendRow).amountDecimal).toBe("1.0");
+    expect((rows[0] as TxSendRow).amountDecimal).toBe("1");
   });
 
-  it("preserves native 8-decimal LYTH amount strings for tx_send rows", () => {
+  it("converts the indexer's raw lythoshi amount to decimal LYTH for tx_send rows", () => {
+    // The indexer wires amounts as raw lythoshi; 1_000_000 lythoshi = 0.01 LYTH
+    // (the 0.01-LYTH test transfer that previously rendered as "1000000").
     const rows = mapAddressActivityToRows(
-      [makeActivity({ amount: "0.00000001" })],
+      [makeActivity({ amount: "1000000" })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as TxSendRow).amountDecimal).toBe("0.01");
+  });
+
+  it("converts a 1-lythoshi receive to 0.00000001 LYTH (8-decimal floor)", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ direction: "in", amount: "1" })],
       new Set(),
     );
     expect(rows).toHaveLength(1);
@@ -441,6 +454,32 @@ describe("mapAddressActivityToRows", () => {
       new Set(),
     );
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("token_transfer");
+  });
+
+  it("routes a zero (Hash::ZERO) tokenId transfer to native tx_send, not token_transfer", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ tokenId: NATIVE_LYTH_TOKEN_ID, direction: "out" })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("tx_send");
+  });
+
+  it("routes a zero-tokenId inbound transfer to native tx_receive", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ tokenId: NATIVE_LYTH_TOKEN_ID, direction: "in" })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("tx_receive");
+  });
+
+  it("keeps a real (non-zero) MRC-20 tokenId as token_transfer", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ tokenId: "0x" + "11".repeat(32), direction: "in" })],
+      new Set(),
+    );
     expect(rows[0]?.kind).toBe("token_transfer");
   });
 
@@ -883,7 +922,7 @@ describe("mergeIndexerSnapshot", () => {
             direction: "out",
             counterparty: "0xabc",
             tokenId: null,
-            amount: "1",
+            amount: "100000000",
             cluster: null,
             weightBps: null,
             subKind: null,
@@ -896,7 +935,7 @@ describe("mergeIndexerSnapshot", () => {
             direction: "in",
             counterparty: "0xabc",
             tokenId: null,
-            amount: "2",
+            amount: "200000000",
             cluster: null,
             weightBps: null,
             subKind: null,
@@ -909,7 +948,7 @@ describe("mergeIndexerSnapshot", () => {
             direction: "in",
             counterparty: "0xabc",
             tokenId: null,
-            amount: "3",
+            amount: "300000000",
             cluster: null,
             weightBps: null,
             subKind: null,
@@ -926,5 +965,19 @@ describe("mergeIndexerSnapshot", () => {
       "2", // (100, 0, 5)
       "3", // (100, 0, 3)
     ]);
+  });
+});
+
+describe("isNativeLythTokenId", () => {
+  it("treats null / empty / all-zero hex as native LYTH", () => {
+    expect(isNativeLythTokenId(null)).toBe(true);
+    expect(isNativeLythTokenId("")).toBe(true);
+    expect(isNativeLythTokenId("0x0")).toBe(true);
+    expect(isNativeLythTokenId(NATIVE_LYTH_TOKEN_ID)).toBe(true);
+  });
+
+  it("treats a real non-zero token id as NOT native", () => {
+    expect(isNativeLythTokenId("0x" + "11".repeat(32))).toBe(false);
+    expect(isNativeLythTokenId("0xdeadbeef")).toBe(false);
   });
 });
