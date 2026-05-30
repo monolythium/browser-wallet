@@ -119,6 +119,50 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
   });
 });
 
+describe("sprintnetJsonRpc — GAP-N1 per-call timeout (opts.timeoutMs)", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("opts.timeoutMs aborts a hung fetch → transport failure → throws", async () => {
+    // fetch never resolves on its own; it rejects ONLY when the
+    // AbortController's signal fires, proving the timeout wiring drives it.
+    globalThis.fetch = vi.fn(
+      (_url: unknown, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          );
+        }),
+    ) as unknown as typeof fetch;
+
+    // Single mocked operator → the abort exhausts the list → it throws.
+    await expect(
+      sprintnetJsonRpc("eth_getTransactionReceipt", [], { timeoutMs: 20 }),
+    ).rejects.toThrow();
+  });
+
+  it("without opts.timeoutMs no abort signal is passed (back-compat) and resolves", async () => {
+    let capturedSignal: unknown = "unset";
+    globalThis.fetch = vi.fn(
+      async (_url: unknown, init?: { signal?: unknown }) => {
+        capturedSignal = init?.signal;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ jsonrpc: "2.0", id: 1, result: "0xok" }),
+        };
+      },
+    ) as unknown as typeof fetch;
+
+    const r = await sprintnetJsonRpc<string>("eth_blockNumber", []);
+    expect(r.result).toBe("0xok");
+    // No timeoutMs ⇒ no AbortController ⇒ no signal key on the fetch init.
+    expect(capturedSignal).toBeUndefined();
+  });
+});
+
 describe("submitEncryptedMlDsaTx — canonical hash threading (C1)", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
