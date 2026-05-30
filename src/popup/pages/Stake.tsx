@@ -492,6 +492,10 @@ export function Stake({
         chainIdHex: chainId,
         data,
         executionUnitLimitHex,
+        // `action` is "delegate" | "undelegate" | "redelegate" at this call
+        // site (claim has its own handler below). All three are valid
+        // TxOpKind literals so this rides through verbatim.
+        opKind: action,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -534,6 +538,7 @@ export function Stake({
         chainIdHex: chainId,
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
+        opKind: "claim",
       });
       if (r.ok) {
         setTxHash(r.result.txHash);

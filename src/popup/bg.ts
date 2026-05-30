@@ -10,6 +10,7 @@ import { legacyChainFeeSuggestionWeiToLythoshi } from "../shared/chain-units.js"
 import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
+import type { TxOpKind } from "../shared/notifications.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
@@ -875,6 +876,15 @@ export async function bgWalletSendTx(args: {
   executionUnitLimitHex?: string;
   /** Optional encrypted-mempool class override for SDK-built action plans. */
   mempoolClass?: number;
+  /** Phase-1.5 — optional operation tag forwarded to the pending-row
+   *  record so the notifications hook can label the resulting
+   *  NotificationRecord with a friendly title (Phase 2 toast + Phase 3
+   *  UI). PENDING-ROW METADATA ONLY: the SW never plumbs this into
+   *  `submitEncryptedMlDsaTx`'s argument object — the signed tx bytes,
+   *  the ML-DSA-65 signature, the encrypted envelope, the nonce, the
+   *  fee, and the gas are unchanged whether this is set or not. Omit
+   *  for the coarse `"send"` / `"contract_call"` fallback. */
+  opKind?: TxOpKind;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -2411,6 +2421,7 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
     data: tx.data,
     chainIdHex: args.chainIdHex,
     executionUnitLimitHex: tx.executionUnitLimitHex,
+    opKind: "emergency-key",
   });
 
   if (!submit.ok) {

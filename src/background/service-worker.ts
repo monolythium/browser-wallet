@@ -126,6 +126,10 @@ import {
 // recordNotification is intentionally NOT exposed via any IPC handler — §0.4
 // (only the wallet's own tracked-tx registry can emit notifications).
 import { recordNotification } from "./notifications-store.js";
+// Phase 1.5 notifications — broadcast-time operation tag. The wallet-send-tx
+// handler reads p.opKind into a handler-local var (sanitized via isTxOpKind)
+// and threads it ONLY to persistPendingRowBackground — never to the signer.
+import { isTxOpKind, type TxOpKind } from "../shared/notifications.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
@@ -4145,6 +4149,10 @@ async function persistPendingRowBackground(args: {
   to: string;
   valueWeiHex: string;
   via: string;
+  /** Phase 1.5 — broadcast-time operation tag for the notifications hook.
+   *  Pure pending-row metadata; the upstream handler ensures it never
+   *  reaches `submitEncryptedMlDsaTx`. */
+  opKind?: TxOpKind;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -4178,6 +4186,7 @@ async function persistPendingRowBackground(args: {
       broadcastedAtMs: now,
       broadcastBlockHeight,
       via: args.via,
+      ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -7791,6 +7800,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         gasLimitHex?: string;
         mempoolClass?: unknown;
         class?: unknown;
+        // Phase 1.5 notifications — optional operation tag. METADATA
+        // ONLY: this is never plumbed into submitEncryptedMlDsaTx; it
+        // rides only into persistPendingRowBackground's pending-row
+        // record so the notifications hook can label the resulting
+        // NotificationRecord with a friendly title. An unknown literal
+        // is coerced to the "contract_call" fallback (defense in depth).
+        opKind?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -7812,6 +7828,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       ) {
         return { ok: false, reason: "gasLimitHex must be 0x-prefixed hex" };
       }
+      // Phase 1.5 notifications — tolerate but sanitize opKind. Absent stays
+      // absent (legacy/untagged path → coarse fallback at the hook). A known
+      // literal rides through. An unknown / non-string value is coerced to
+      // the fallback "contract_call" so a buggy caller produces a coarse-but-
+      // valid notification instead of corrupting the row.
+      const acceptedOpKind: TxOpKind | undefined =
+        p.opKind === undefined
+          ? undefined
+          : isTxOpKind(p.opKind)
+            ? p.opKind
+            : "contract_call";
       let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
       try {
         mempoolClass = mempoolClassOverride(p);
@@ -7862,6 +7889,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
+          // Metadata-only: opKind never reached submitEncryptedMlDsaTx —
+          // it travels straight from the popup → here → the pending-row
+          // record for the notifications hook to read back.
+          ...(acceptedOpKind !== undefined ? { opKind: acceptedOpKind } : {}),
         });
         return { ok: true, txHash, via };
       } catch (e) {

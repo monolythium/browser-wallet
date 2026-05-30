@@ -147,6 +147,7 @@ export function Delegations({
         chainIdHex: chainId,
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
+        opKind: "claim",
       });
       if (r.ok) setClaimResult({ ok: true, txHash: r.result.txHash });
       else setClaimResult({ ok: false, reason: r.reason ?? "claim rejected" });
