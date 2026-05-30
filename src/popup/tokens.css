@@ -4,8 +4,8 @@
 ===================================================== */
 :root {
   /* ---------- Typography ---------- */
-  --f-sans:  "General Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --f-sansc: "General Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --f-sans:  "IBM Plex Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --f-sansc: "IBM Plex Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
   --f-mono:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* ---------- Canvas: cool near-black with blue undertone ---------- */
