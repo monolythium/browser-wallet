@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   NOTIFICATION_HISTORY_CAP,
   appendCapped,
+  isTxOpKind,
   notificationId,
   notifiedSetKey,
   notificationsHistoryKey,
   parseHistoryEnvelope,
   parseNotifiedSetEnvelope,
   type NotificationRecord,
+  type TxOpKind,
 } from "./notifications.js";
 
 function fixtureRecord(
@@ -128,6 +130,32 @@ describe("parseHistoryEnvelope", () => {
     };
     const parsed = parseHistoryEnvelope(env);
     expect(parsed?.entries.length).toBe(0);
+  });
+});
+
+describe("isTxOpKind", () => {
+  it("accepts every TxOpKind literal", () => {
+    const kinds: TxOpKind[] = [
+      "send",
+      "delegate",
+      "undelegate",
+      "redelegate",
+      "claim",
+      "emergency-key",
+      "agent-policy",
+      "contract_call",
+    ];
+    for (const k of kinds) expect(isTxOpKind(k)).toBe(true);
+  });
+
+  it("rejects unknown / wrong-type values", () => {
+    expect(isTxOpKind("Send")).toBe(false);        // wrong case
+    expect(isTxOpKind("token-transfer")).toBe(false); // not in union
+    expect(isTxOpKind("")).toBe(false);
+    expect(isTxOpKind(undefined)).toBe(false);
+    expect(isTxOpKind(null)).toBe(false);
+    expect(isTxOpKind(42)).toBe(false);
+    expect(isTxOpKind({})).toBe(false);
   });
 });
 
