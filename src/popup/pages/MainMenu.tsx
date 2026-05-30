@@ -10,9 +10,11 @@
 // any sub-screen reached via this menu returns HERE, not to home. See
 // Round 7 TASK 4 acceptance notes.
 
+import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "../Icon";
 import type { UiOpenMode } from "../bg";
+import { bgGetUnread } from "../bg";
 
 interface MainMenuProps {
   /** Current ui-mode (sidebar vs popup) so the toggle item can label
@@ -41,6 +43,9 @@ interface MainMenuProps {
    *  the menu. Reuses the existing ResetWallet screen (password reauth
    *  + DELETE confirm); the hamburger surface only navigates there. */
   onResetWallet: () => void;
+  /** Phase 3 notifications — open the Notifications page. When omitted
+   *  the bell row is hidden (test harnesses / pre-wired callers). */
+  onNotifications?: () => void;
 }
 
 export function MainMenu({
@@ -57,6 +62,7 @@ export function MainMenu({
   onAbout,
   onLockWallet,
   onResetWallet,
+  onNotifications,
 }: MainMenuProps) {
   const switchLabel =
     uiMode === null
@@ -64,6 +70,24 @@ export function MainMenu({
       : uiMode === "popup"
         ? "Switch to sidebar"
         : "Switch to popup";
+
+  // Phase 3 — unread count for the bell row's pill. Fetched once on
+  // mount; the value is read-only here (mutation lives on the
+  // Notifications page via "Mark all as read"). Stays `null` until the
+  // IPC resolves so the pill doesn't flash a zero on every menu open.
+  const [unread, setUnread] = useState<number | null>(null);
+  useEffect(() => {
+    if (!onNotifications) return;
+    let cancelled = false;
+    void (async () => {
+      const r = await bgGetUnread();
+      if (cancelled) return;
+      setUnread(r.ok ? r.count : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onNotifications]);
 
   return (
     <>
@@ -85,6 +109,22 @@ export function MainMenu({
       </div>
 
       <div className="ext-body" style={{ paddingTop: 4 }}>
+        {onNotifications && (
+          <MenuSection>
+            <MenuItem
+              icon="bell"
+              label="Notifications"
+              onClick={onNotifications}
+              hasChevron
+              rightSlot={
+                unread !== null && unread > 0 ? (
+                  <UnreadPill count={unread} />
+                ) : undefined
+              }
+            />
+          </MenuSection>
+        )}
+
         <MenuSection>
           <MenuItem
             icon="expand"
@@ -206,6 +246,9 @@ interface MenuItemProps {
   onClick: () => void;
   hasChevron?: boolean;
   danger?: boolean;
+  /** Phase 3 — optional content rendered BEFORE the chevron (e.g. an
+   *  unread-count pill on the bell row). */
+  rightSlot?: ReactNode;
 }
 
 function MenuItem({
@@ -214,6 +257,7 @@ function MenuItem({
   onClick,
   hasChevron,
   danger,
+  rightSlot,
 }: MenuItemProps) {
   const style: CSSProperties = {
     display: "flex",
@@ -257,6 +301,17 @@ function MenuItem({
         <Icon name={icon} size={16} />
       </span>
       <span style={{ flex: 1 }}>{label}</span>
+      {rightSlot !== undefined && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            flexShrink: 0,
+          }}
+        >
+          {rightSlot}
+        </span>
+      )}
       {hasChevron && (
         <span
           style={{
@@ -269,5 +324,35 @@ function MenuItem({
         </span>
       )}
     </button>
+  );
+}
+
+/** Small red pill rendering the unread notification count next to the
+ *  bell row. Matches the toolbar badge palette (`#dc5050`); kept inline
+ *  so it ships with the menu and stays a single source of truth for
+ *  the pill chrome. */
+function UnreadPill({ count }: { count: number }) {
+  // Cap at 99+ so a hypothetical large inbox doesn't blow the layout.
+  const text = count > 99 ? "99+" : String(count);
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 18,
+        height: 18,
+        padding: "0 6px",
+        borderRadius: 9,
+        background: "#dc5050",
+        color: "#fff",
+        fontSize: 10.5,
+        fontWeight: 700,
+        fontFamily: "var(--f-sans)",
+        lineHeight: 1,
+      }}
+    >
+      {text}
+    </span>
   );
 }
