@@ -2486,6 +2486,19 @@ export async function bgGetUnread(): Promise<
   return send("notifications-get-unread");
 }
 
+/** Polish C2 — flip ONE record's `read` flag to true by its full id.
+ *  Returns `flipped:true` when the record was found and was previously
+ *  unread; `flipped:false` for an already-read or unknown id (no-op).
+ *  The SW also fires a best-effort `refreshUnreadBadge()` on a flip, so
+ *  the toolbar badge updates without waiting for the next snapshot. */
+export async function bgMarkNotificationRead(
+  id: string,
+): Promise<
+  { ok: true; flipped: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-mark-read", { id });
+}
+
 /** Phase 5 — read the user-facing OS-toast toggle. Default `true`
  *  (absent ⇒ on). The flag gates ONLY the OS toast; the in-app
  *  notification history and the toolbar unread badge keep working

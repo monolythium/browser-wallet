@@ -344,4 +344,118 @@ describe("notifications-store", () => {
     await markAllNotificationsRead();
     expect(await getUnread()).toBe(0);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Polish C2 — per-record click-to-mark-read. Wired from the
+  // Notifications page when the user opens a notification's detail.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it("markNotificationRead flips exactly that record (other records in the same scope untouched)", async () => {
+    const {
+      recordNotification,
+      markNotificationRead,
+      listAllNotifications,
+    } = await import("./notifications-store.js");
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_2 }),
+    );
+
+    const r = await markNotificationRead(`${CHAIN_A}:${HASH_1}`);
+    expect(r.flipped).toBe(true);
+
+    const all = await listAllNotifications();
+    const flipped = all.find((x) => x.id === `${CHAIN_A}:${HASH_1}`);
+    const other = all.find((x) => x.id === `${CHAIN_A}:${HASH_2}`);
+    expect(flipped?.read).toBe(true);
+    // The other record in the SAME scope must remain unread.
+    expect(other?.read).toBe(false);
+  });
+
+  it("markNotificationRead locates the right scope across multiple history blobs", async () => {
+    const {
+      recordNotification,
+      markNotificationRead,
+      listAllNotifications,
+    } = await import("./notifications-store.js");
+    // Seed across two distinct (addr, chain) scopes; target the second.
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_B, txHash: HASH_2 }),
+    );
+
+    const r = await markNotificationRead(`${CHAIN_B}:${HASH_2}`);
+    expect(r.flipped).toBe(true);
+
+    const all = await listAllNotifications();
+    const aScope = all.find((x) => x.id === `${CHAIN_A}:${HASH_1}`);
+    const bScope = all.find((x) => x.id === `${CHAIN_B}:${HASH_2}`);
+    expect(aScope?.read).toBe(false);
+    expect(bScope?.read).toBe(true);
+  });
+
+  it("markNotificationRead is idempotent — a second call on the same id is a no-op", async () => {
+    const { recordNotification, markNotificationRead } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    const id = `${CHAIN_A}:${HASH_1}`;
+
+    const first = await markNotificationRead(id);
+    expect(first.flipped).toBe(true);
+
+    // Pin a sentinel on a sibling storage key and confirm the no-op
+    // does not touch storage (writeStorage was not called for this
+    // second invocation).
+    const sentinelKey = "mono.notifications.sentinel";
+    storage[sentinelKey] = { schemaVersion: 0, entries: ["sentinel"] };
+
+    const second = await markNotificationRead(id);
+    expect(second.flipped).toBe(false);
+    expect(storage[sentinelKey]).toEqual({
+      schemaVersion: 0,
+      entries: ["sentinel"],
+    });
+  });
+
+  it("markNotificationRead returns flipped:false for an unknown id and writes nothing", async () => {
+    const { recordNotification, markNotificationRead } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    const r = await markNotificationRead(`${CHAIN_A}:0xffffffffffff`);
+    expect(r.flipped).toBe(false);
+  });
+
+  it("getUnread decrements by exactly one after a per-record flip", async () => {
+    const { recordNotification, markNotificationRead, getUnread } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_2 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_B, txHash: HASH_1 }),
+    );
+    expect(await getUnread()).toBe(3);
+
+    const r = await markNotificationRead(`${CHAIN_A}:${HASH_1}`);
+    expect(r.flipped).toBe(true);
+    expect(await getUnread()).toBe(2);
+
+    // Second call → already-read → no further decrement.
+    await markNotificationRead(`${CHAIN_A}:${HASH_1}`);
+    expect(await getUnread()).toBe(2);
+  });
 });
