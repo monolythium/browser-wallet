@@ -11,15 +11,24 @@ interface RedemptionQueueCardProps {
   isMock: boolean;
   error: string | null;
   clusters: ReadonlyArray<ClusterDirectoryEntry>;
+  /** Submit `completeRedemption(index)` for a matured ticket. When
+   *  omitted (e.g. the queue is the local fallback) the per-ticket
+   *  action is hidden. */
+  onComplete?: ((ticketIndex: number) => void) | undefined;
+  /** Ticket index whose completion tx is in flight; disables that
+   *  ticket's button while submitting. */
+  completingIndex?: number | null;
 }
 
-type TicketTone = "unavailable" | "cooldown" | "pending";
+type TicketTone = "ready" | "cooldown" | "pending";
 
 export function RedemptionQueueCard({
   queue,
   isMock,
   error,
   clusters,
+  onComplete,
+  completingIndex = null,
 }: RedemptionQueueCardProps) {
   const clusterById = useMemo(() => {
     const m = new Map<number, ClusterDirectoryEntry>();
@@ -97,6 +106,19 @@ export function RedemptionQueueCard({
                 {status.detail !== null && (
                   <div style={statusDetailStyle(status.tone)}>{status.detail}</div>
                 )}
+
+                {onComplete !== undefined && ticket.mature === true && (
+                  <button
+                    type="button"
+                    onClick={() => onComplete(ticket.index)}
+                    disabled={completingIndex === ticket.index}
+                    style={completeBtnStyle(completingIndex === ticket.index)}
+                  >
+                    {completingIndex === ticket.index
+                      ? "Completing…"
+                      : "Complete redemption"}
+                  </button>
+                )}
               </div>
             );
           })}
@@ -113,23 +135,23 @@ export function redemptionTicketStatus(ticket: RedemptionQueueRow): {
 } {
   if (ticket.mature === true) {
     return {
-      label: "Height reached",
+      label: "Ready to redeem",
       detail:
-        "Height maturity is reached, but principal payout is unavailable until chain escrow accounting lands.",
-      tone: "unavailable",
+        "This ticket has matured. Complete the redemption to return the principal to your balance.",
+      tone: "ready",
     };
   }
   if (ticket.mature === false) {
     return {
-      label: "Height cooldown",
-      detail: `Height maturity is pending until block ${ticket.maturityHeight}; principal payout is unavailable until chain escrow accounting lands.`,
+      label: "Maturing",
+      detail: `Matures at block ${ticket.maturityHeight}; the principal becomes redeemable then.`,
       tone: "cooldown",
     };
   }
   return {
     label: "Probe pending",
     detail:
-      "Maturity probe unavailable for this block selector; principal payout is unavailable until chain escrow accounting lands.",
+      "Maturity could not be determined for this block selector. Once the ticket matures you can complete the redemption to return the principal.",
     tone: "pending",
   };
 }
@@ -270,7 +292,21 @@ const kvValueStyle: CSSProperties = {
 };
 
 function statusBadgeStyle(tone: TicketTone): CSSProperties {
-  const attentionTone = tone === "unavailable" || tone === "cooldown";
+  if (tone === "ready") {
+    return {
+      flex: "0 0 auto",
+      fontFamily: "var(--f-mono)",
+      fontSize: 8.5,
+      letterSpacing: "0.08em",
+      textTransform: "uppercase",
+      padding: "2px 6px",
+      borderRadius: 999,
+      color: "var(--ok)",
+      border: "1px solid rgba(80,200,120,0.45)",
+      background: "rgba(80,200,120,0.08)",
+    };
+  }
+  const attentionTone = tone === "cooldown";
   return {
     flex: "0 0 auto",
     fontFamily: "var(--f-mono)",
@@ -290,12 +326,35 @@ function statusBadgeStyle(tone: TicketTone): CSSProperties {
 }
 
 function statusDetailStyle(tone: TicketTone): CSSProperties {
-  const attentionTone = tone === "unavailable" || tone === "cooldown";
+  const color =
+    tone === "ready"
+      ? "var(--ok)"
+      : tone === "cooldown"
+        ? "var(--warn)"
+        : "var(--fg-500)";
   return {
     marginTop: 8,
     fontFamily: "var(--f-mono)",
     fontSize: 9.5,
-    color: attentionTone ? "var(--warn)" : "var(--fg-500)",
+    color,
     lineHeight: 1.45,
+  };
+}
+
+function completeBtnStyle(disabled: boolean): CSSProperties {
+  return {
+    marginTop: 8,
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid rgba(80,200,120,0.45)",
+    background: "rgba(80,200,120,0.08)",
+    color: "var(--ok)",
+    fontFamily: "var(--f-mono)",
+    fontSize: 10,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    cursor: disabled ? "default" : "pointer",
+    opacity: disabled ? 0.6 : 1,
   };
 }
