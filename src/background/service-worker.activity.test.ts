@@ -1396,6 +1396,268 @@ describe("wallet-activity-get", () => {
     expect(r.ok).toBe(true);
     expect(r.pending).toHaveLength(1);
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Phase 1 notifications — post-write microtask hook fires one
+  // NotificationRecord per tracked-tx terminal transition. The §0.2 invariant
+  // ("status from the real on-chain receipt, never optimism") is the most
+  // load-bearing assertion: a `status:0` receipt MUST be stored as
+  // `status:"failed"`, never coerced to confirmed. TTL-evicted rows must
+  // never fire. See _dev-notes/.../2026-05-30_notifications-phase1-plan.md.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** Drain the microtask + storage stub callback queues. The hook is a
+   *  post-write microtask + an async IIFE that awaits chrome.storage round-
+   *  trips; one setTimeout(0) is sufficient to flush both queues. */
+  async function flushNotificationMicrotasks() {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+  }
+
+  function seedPendingCustom(args: {
+    txHash: string;
+    to: string;
+    amountDecimal: string;
+    broadcastBlockHeight: number | null;
+    broadcastedAtMs?: number;
+  }) {
+    const pendingKey = `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    storageLocal[pendingKey] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash: args.txHash,
+          to: args.to,
+          amountDecimal: args.amountDecimal,
+          broadcastedAtMs: args.broadcastedAtMs ?? Date.now(),
+          broadcastBlockHeight: args.broadcastBlockHeight,
+          via: "operator-test",
+        },
+      ],
+    };
+  }
+
+  const NOTIF_HISTORY_KEY = `mono.notifications.history.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}.v1`;
+  const NOTIF_NOTIFIED_KEY = `mono.notifications.notified.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}.v1`;
+
+  it("records a 'confirmed' send notification when reconcilePending drops a heuristic-matched row", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 100,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "transfer",
+        direction: "out",
+        counterparty: "0xdead",
+        tokenId: null,
+        // Indexer emits raw lythoshi as a decimal string. 150_000_000
+        // lythoshi → "1.5" LYTH after lythoshiDecimalToLythDecimal,
+        // matching the pending row's already-converted amountDecimal.
+        amount: "150000000",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    const txHash = "0x" + "ab".repeat(32);
+    seedPendingCustom({
+      txHash,
+      to: "0xdead",
+      amountDecimal: "1.5",
+      broadcastBlockHeight: 100,
+    });
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ txHash: string; status: string; kind: string; blockNumber: number | null }> }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    expect(hist!.entries[0]?.txHash).toBe(txHash);
+    expect(hist!.entries[0]?.status).toBe("confirmed");
+    expect(hist!.entries[0]?.kind).toBe("send");
+    expect(hist!.entries[0]?.blockNumber).toBe(100);
+  });
+
+  it("records a 'confirmed' contract_call when eth_getTransactionReceipt.status === 1 (b4d6101 normalizer reused)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    // Sprintnet operators emit numeric status + snake_case block_number —
+    // the same shape the b4d6101 fix handled. Re-asserts the normalizer.
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 12345 };
+    const txHash = "0x" + "11".repeat(32);
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "01".repeat(20),
+      amountDecimal: "0.05",
+      broadcastBlockHeight: 200,
+    });
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ txHash: string; status: string; kind: string; blockNumber: number | null }> }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    expect(hist!.entries[0]?.txHash).toBe(txHash);
+    expect(hist!.entries[0]?.status).toBe("confirmed");
+    expect(hist!.entries[0]?.kind).toBe("contract_call");
+    expect(hist!.entries[0]?.blockNumber).toBe(12345);
+  });
+
+  it("records 'failed' when eth_getTransactionReceipt.status === 0 — NEVER coerced to confirmed (§0.2)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 0, block_number: 12346 };
+    const txHash = "0x" + "22".repeat(32);
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "02".repeat(20),
+      amountDecimal: "0.00",
+      broadcastBlockHeight: 201,
+    });
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ txHash: string; status: string; kind: string; blockNumber: number | null }> }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    // THE invariant: a status:0 receipt is stored as "failed", not coerced
+    // to "confirmed". This is the MetaMask #5117 hazard Phase 2's toast
+    // would otherwise reproduce.
+    expect(hist!.entries[0]?.status).toBe("failed");
+    expect(hist!.entries[0]?.kind).toBe("contract_call");
+    expect(hist!.entries[0]?.blockNumber).toBe(12346);
+  });
+
+  it("does NOT record a notification for a TTL-evicted row (age-only eviction is not a terminal transition)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    const txHash = "0x" + "33".repeat(32);
+    // Past the 5-minute TTL — evictExpiredPending will drop it, but it
+    // never reached a terminal state we can attribute to the chain.
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "03".repeat(20),
+      amountDecimal: "0.99",
+      broadcastBlockHeight: 1,
+      broadcastedAtMs: Date.now() - (5 * 60_000) - 5_000,
+    });
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    expect(storageLocal[NOTIF_HISTORY_KEY]).toBeUndefined();
+    expect(storageLocal[NOTIF_NOTIFIED_KEY]).toBeUndefined();
+  });
+
+  it("dedupes across snapshots — the same txHash recorded on two snapshots produces ONE record", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    const txHash = "0x" + "44".repeat(32);
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "04".repeat(20),
+      amountDecimal: "0.10",
+      broadcastBlockHeight: 300,
+    });
+
+    // First snapshot — records the notification + writes the dedupe-set entry.
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+    const after1 = (storageLocal[NOTIF_HISTORY_KEY] as { entries: unknown[] })
+      .entries;
+    expect(after1).toHaveLength(1);
+
+    // Re-seed the same pending row + force a stale cache so the snapshot
+    // path runs again. Re-seeding mimics a second snapshot tick where the
+    // pending list still carries the same tx hash.
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "04".repeat(20),
+      amountDecimal: "0.10",
+      broadcastBlockHeight: 300,
+    });
+    const cacheKey = `mono.activity.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    const stored = storageLocal[cacheKey] as
+      | { lastFetchedAtMs: number }
+      | undefined;
+    if (stored) {
+      storageLocal[cacheKey] = { ...stored, lastFetchedAtMs: stored.lastFetchedAtMs - 60_000 };
+    }
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    // Still exactly one record — the dedupe-set blocked the second insert.
+    const after2 = (storageLocal[NOTIF_HISTORY_KEY] as { entries: unknown[] })
+      .entries;
+    expect(after2).toHaveLength(1);
+    const ids = (storageLocal[NOTIF_NOTIFIED_KEY] as { ids: string[] }).ids;
+    expect(ids).toHaveLength(1);
+    expect(ids[0]).toBe(`${TESTNET_CHAIN_ID_HEX}:${txHash}`);
+  });
+
+  it("snapshot response returns BEFORE notification writes complete (post-write microtask placement)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    const txHash = "0x" + "55".repeat(32);
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "05".repeat(20),
+      amountDecimal: "0.01",
+      broadcastBlockHeight: 400,
+    });
+
+    const dispatched = dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await dispatched;
+    // Immediately after the handler resolves, the notification I/O is
+    // still pending in the microtask + chrome.storage callback queue —
+    // the handler must NOT have awaited it.
+    expect(storageLocal[NOTIF_HISTORY_KEY]).toBeUndefined();
+    // Drain queues — the notification lands now.
+    await flushNotificationMicrotasks();
+    expect(storageLocal[NOTIF_HISTORY_KEY]).toBeDefined();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
