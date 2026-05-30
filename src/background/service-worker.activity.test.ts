@@ -46,10 +46,14 @@ const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
 const mockFireOsNotification = vi.hoisted(() => vi.fn(async () => {}));
 const mockRefreshUnreadBadge = vi.hoisted(() => vi.fn(async () => {}));
 const mockInstallNotificationsClickListener = vi.hoisted(() => vi.fn(() => {}));
+// GAP-N1 C3 — presence probe. Default false (closed) so existing tests
+// record read:false (today's behavior); C3 tests override per-case.
+const mockIsWalletSurfaceOpen = vi.hoisted(() => vi.fn(async () => false));
 vi.mock("./notifications-os.js", () => ({
   fireOsNotification: mockFireOsNotification,
   refreshUnreadBadge: mockRefreshUnreadBadge,
   installNotificationsClickListener: mockInstallNotificationsClickListener,
+  isWalletSurfaceOpen: mockIsWalletSurfaceOpen,
 }));
 
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
@@ -600,6 +604,8 @@ beforeEach(() => {
   submitMlDsaCalls.length = 0;
   mockFireOsNotification.mockClear();
   mockRefreshUnreadBadge.mockClear();
+  mockIsWalletSurfaceOpen.mockClear();
+  mockIsWalletSurfaceOpen.mockResolvedValue(false);
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
@@ -4124,5 +4130,56 @@ describe("GAP-N1 C2 — notif-poll alarm lifecycle + back-off", () => {
     expect(
       (created.at(-1)!.info as { periodInMinutes: number }).periodInMinutes,
     ).toBe(2);
+  });
+});
+
+// GAP-N1 C3 — presence-aware read on the poll path (isWalletSurfaceOpen is
+// the hoisted mock here; its real getContexts probe is unit-tested in
+// notifications-os.test.ts). Confirms: closed → read:false → unread; open →
+// read:true → no unread; the toast fires in BOTH (presence never gates it).
+describe("GAP-N1 C3 — presence-aware read (poll path)", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const pk = `mono.activity.pending.${ADDR}.${CHAIN}`;
+  const hk = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+  const row = {
+    kind: "pending_tx",
+    txHash: "0x" + "1".repeat(64),
+    to: "0x" + "2".repeat(40),
+    amountDecimal: "1.5",
+    broadcastedAtMs: Date.now(),
+    broadcastBlockHeight: 100,
+    via: "mock-operator",
+    opKind: "send",
+  };
+  function seedConfirmed() {
+    storageLocal[pk] = { pending: [row] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+  }
+
+  it("no surface open → read:false → unread accumulates; toast still fires", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    const { getUnread } = await import("./notifications-store.js");
+    mockIsWalletSurfaceOpen.mockResolvedValue(false);
+    seedConfirmed();
+    await pollPendingAndNotify();
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[hk] as { entries: Array<{ read: boolean }> };
+    expect(hist.entries[0]!.read).toBe(false);
+    expect(await getUnread()).toBe(1);
+  });
+
+  it("a surface open → read:true → no unread; toast still fires", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    const { getUnread } = await import("./notifications-store.js");
+    mockIsWalletSurfaceOpen.mockResolvedValue(true);
+    seedConfirmed();
+    await pollPendingAndNotify();
+    // Presence does NOT gate the toast — it fires in both cases.
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[hk] as { entries: Array<{ read: boolean }> };
+    expect(hist.entries[0]!.read).toBe(true);
+    expect(await getUnread()).toBe(0);
   });
 });
