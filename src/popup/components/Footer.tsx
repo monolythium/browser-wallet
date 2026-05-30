@@ -10,47 +10,47 @@
 // chrome.action popup vs side panel vs full-screen tab). Direct API
 // call routes through Chrome's tab manager in every surface.
 //
-// Round 12 TASK 6 — definitive placement (4th attempt across rounds 8,
-// 9, 10, 11, 12). The previous three attempts each tried a different
-// CSS positioning strategy:
-//   Round 8/9: position:sticky inside .ext-body — broke when home
-//     content didn't overflow (sticky's natural-flow position was
-//     mid-card and nothing pushed it down).
-//   Round 10:  position:fixed bottom:0 outside .ext-body + 32 px
-//     spacer at end of body to clear the overlay — overlay style
-//     left a visible gap between the last card and the footer
-//     because the footer covered the viewport, not the content.
-//
-// The fundamental insight we kept missing: the parent .ext is already
-// a flex column with .ext-body { flex: 1 }. That layout naturally
-// puts the LAST child at the bottom of .ext without any positioning
-// CSS. The footer just needs to be a normal-flow flex sibling of
-// .ext-body. When content is short, .ext-body still fills the
-// remaining height (flex:1) and the footer sits at the bottom of
-// .ext (= bottom of the popup viewport, sidebar panel, or fullscreen
-// card). When content is long, .ext-body scrolls internally and the
-// footer stays put at the bottom of .ext (still visible — same
-// position as the short-content case).
-//
-// No position:fixed, no position:sticky, no spacer needed.
-// Old `sticky` prop is retained as a no-op so existing call sites
-// don't break.
+// Round 13 — placement superseded. Rounds 8–12 all kept the footer as a
+// normal-flow flex SIBLING of .ext-body so the .ext flex column pinned it
+// to the bottom of the frame (always visible, regardless of scroll). A UI
+// review judged that frame-pinned strip too persistent: the footer should
+// read as the END of the page, not as chrome. So the footer is now
+// rendered as the LAST child INSIDE .ext-body (the home scroll container)
+// — it flows after the content and is seen only when the home page is
+// scrolled to the bottom. Negative horizontal margins in baseStyle cancel
+// .ext-body's 14px side padding so the strip still spans the full body
+// width. The home call site (components.tsx) is the only consumer; the
+// legacy `sticky` prop remains a no-op.
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 
 const MONO_LABS_URL = "https://mono-labs.org/";
-const WALLET_VERSION = "v0.0.1";
+
+/** The wallet's own version, read at runtime from the extension manifest —
+ *  the single source of truth (manifest.json, kept in lockstep with
+ *  package.json; 0.1.3 at time of writing). Mirrors readWalletVersion() /
+ *  getExtensionVersion() in About.tsx + Settings.tsx. Replaces a hardcoded
+ *  "v0.0.1" literal that had gone stale. Falls back only when getManifest
+ *  is unavailable (non-extension context / tests). */
+function readWalletVersion(): string {
+  try {
+    return chrome.runtime.getManifest().version;
+  } catch {
+    return "0.0.1";
+  }
+}
 
 interface FooterProps {
-  /** Round 12 TASK 6 — legacy from Round 10's position:fixed era.
-   *  Now a no-op: Footer is always in normal flow because the
-   *  parent .ext's flex-column layout places the last child at the
-   *  bottom automatically. Prop retained so existing call sites
-   *  don't break; can be removed once all callers drop it. */
+  /** Legacy from Round 10's position:fixed era. Now a no-op: the Footer
+   *  is always in normal flow — Round 13 places it as the last child
+   *  inside .ext-body, so it scrolls with the home content. Prop retained
+   *  so existing call sites don't break; can be removed once all callers
+   *  drop it. */
   sticky?: boolean;
 }
 
 export function Footer(_props: FooterProps = {}) {
+  const walletVersion = readWalletVersion();
   const openMonoLabs = (e: ReactMouseEvent) => {
     e.preventDefault();
     // chrome.tabs is available in both popup + side panel + extension
@@ -73,8 +73,18 @@ export function Footer(_props: FooterProps = {}) {
     // content the scrollbar reveals just above it; no backdrop-blur
     // needed since we're not overlapping anything any more.
     background: "rgba(10, 10, 20, 0.65)",
-    // flex:none so a parent flex:1 sibling (.ext-body) gets all the
-    // expansion budget and the footer keeps its intrinsic height.
+    // The footer now flows as the LAST element INSIDE the scrollable home
+    // body (.ext-body), not as a frame-pinned sibling. Negative horizontal
+    // margins cancel .ext-body's 14px side padding so the divider strip
+    // still spans the full body width; marginTop gives it breathing room
+    // from the last content card. It becomes visible only when the home
+    // content is scrolled to the bottom — by design.
+    marginTop: 18,
+    marginLeft: -14,
+    marginRight: -14,
+    // flex:none is now a no-op (the footer is a block child of the scroll
+    // container, not a flex sibling) but harmless; kept so the intrinsic
+    // height stays explicit.
     flex: "none",
   };
 
@@ -106,7 +116,7 @@ export function Footer(_props: FooterProps = {}) {
       <span style={{ opacity: 0.85 }}>© 2026 All rights reserved</span>
       <span style={{ opacity: 0.5 }}>·</span>
       <span style={{ opacity: 0.7, fontFamily: "var(--f-mono)" }}>
-        {WALLET_VERSION}
+        v{walletVersion}
       </span>
     </footer>
   );

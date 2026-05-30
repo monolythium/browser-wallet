@@ -198,6 +198,11 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-acc__lbl .n { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:-0.01em; }
 .ext-acc__lbl .a { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:1px; letter-spacing:0.02em; }
 .ext.light .ext-acc__lbl .a { color:#606369; }
+/* Address block — a separate element below the wallet-selector pill (the
+   selector and the address read as two distinct surfaces). Full bech32m
+   address + copy button. */
+.ext-acc-addr { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:10px; background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); }
+.ext.light .ext-acc-addr { background:#fff; border:1px solid #e0e0e7; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
 
 .ext-iconbtn { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; color: var(--fg-200); background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); cursor:pointer; transition: all 160ms var(--e-out); }
 .ext-iconbtn:hover, .ext-iconbtn:active { background: rgba(255,255,255,0.09); border-color: var(--fg-500); }
@@ -334,6 +339,23 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-act-row__right .amt { color:#1a1a24; }
 .ext-act-row__right .amt.opaque { color: var(--fg-400); font-size:11.5px; font-family: var(--f-sans); font-style:italic; }
 .ext-act-row__right .sym { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:2px; letter-spacing:0.04em; }
+
+/* Phase 3 notifications — unread indicator. A small blue dot pinned to
+   the bottom-left of a notification row, visible only on rows whose
+   record.read === false. The wallet's existing "blue" attention color
+   is `oklch(0.78 0.14 240)` (used elsewhere for the private-denom hint
+   at components.tsx:1639); reused here so the dot reads as the same
+   "needs your attention" cue. */
+.ext-unread {
+  position: absolute;
+  left: 0;
+  bottom: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: oklch(0.78 0.14 240);
+  pointer-events: none;
+}
 
 /* Phase 4.4 — pending-row indicator (commit 12: spin animation deferred
    here from commit 11 per the CSS-reuse constraint). The dot sits in the
@@ -507,3 +529,8 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .req-custody .glyph.hw { background:#e8f5ec; color:#2a7a3f; border-color:#a8d9b8; }
 .req-custody b { color: var(--fg-100); font-weight:600; }
 .ext.light .req-custody b { color:#1a1a24; }
+
+/* External (Monoscan) link affordance — subtle at rest (the ↗ glyph is the
+   cue), on-theme gold + underline on hover. NOT a loud blue link. */
+.ext-extlink { color: var(--fg-100); text-decoration: none; cursor: pointer; }
+.ext-extlink:hover { color: var(--gold); text-decoration: underline; }

@@ -9,15 +9,17 @@
 //
 // Empty/error/stale state copy is locked verbatim per the plan.
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useActivity } from "../hooks/useActivity.js";
 import { useActivityKind } from "../hooks/useActivityKind.js";
 import { useNameResolution } from "../hooks/useNameResolution.js";
 import { useIndexerStatus } from "../hooks/useIndexerStatus.js";
 import { ActivityRow } from "./ActivityRow.js";
+import { ActivityDetail } from "./ActivityDetail.js";
 import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity.js";
 import type { WalletActivityKindEnvelope } from "../../shared/activity-kind.js";
+import type { NameLabel } from "../../shared/name-resolution.js";
 
 export interface ActivityListProps {
   /** Unlocked account address (0x form). Null while the wallet boots
@@ -209,6 +211,12 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
   // the envelope is irrelevant.
   const activityKind = useActivityKind(addr, chainIdHex);
 
+  // CX1 — row tapped → open the compact tx-detail modal.
+  const [selected, setSelected] = useState<{
+    row: ActivityRowType;
+    label: NameLabel | undefined;
+  } | null>(null);
+
   // Derive counterparty addresses for name resolution. Pulls from both
   // confirmed rows and pending rows so a Pending row's recipient also
   // gets a label if one is registered. Deduped + lowercased per commit
@@ -278,12 +286,34 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
                   ? `pending-${row.txHash}`
                   : `${row.blockHeight}-${row.txIndex}-${row.logIndex}-${row.kind}`;
               return (
-                <ActivityRow key={key} row={row} counterpartyLabel={label} />
+                <div
+                  key={key}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelected({ row, label })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelected({ row, label });
+                    }
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
+                  <ActivityRow row={row} counterpartyLabel={label} />
+                </div>
               );
             })}
           </div>
         );
       })()}
+      {selected && addr && (
+        <ActivityDetail
+          row={selected.row}
+          label={selected.label}
+          walletAddr={addr}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </>
   );
 }

@@ -15,6 +15,7 @@ import {
   SLH_DSA_SHA2_128S_LENGTHS,
 } from "./slh-dsa-backup.js";
 import {
+  EMERGENCY_KEY_REGISTER_GAS_LIMIT_HEX,
   EMERGENCY_KEY_REGISTER_SIGNATURE,
   buildEmergencyKeyRegisterTx,
   encodeEmergencyKeyRegister,
@@ -162,5 +163,14 @@ describe("buildEmergencyKeyRegisterTx", () => {
     );
     const tx = buildEmergencyKeyRegisterTx(pubkey);
     expect(tx.data).toBe(encodeEmergencyKeyRegister(pubkey));
+  });
+
+  it("includes the named gas constant on the tx shape so the SW does not fall back to the native-transfer floor", () => {
+    const pubkey = new Uint8Array(SLH_DSA_SHA2_128S_LENGTHS.publicKey);
+    const tx = buildEmergencyKeyRegisterTx(pubkey);
+    expect(tx.executionUnitLimitHex).toBe(EMERGENCY_KEY_REGISTER_GAS_LIMIT_HEX);
+    // Pin the exact value so a future drift in the constant doesn't silently
+    // re-introduce an under-provisioned send.
+    expect(tx.executionUnitLimitHex).toBe("0x1d4c0");
   });
 });

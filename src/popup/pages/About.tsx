@@ -30,7 +30,6 @@ import {
 } from "../../shared/slh-dsa-backup";
 import {
   EXTERNAL_LINKS,
-  SDK_COMMIT_SHORT,
   SDK_PACKAGE_VERSION,
   SDK_REGISTRY_GENESIS_HASH,
   SPRINTNET_CHAIN_ID_DEC,
@@ -38,11 +37,22 @@ import {
   WALLET_PITCH,
 } from "../../shared/build-info";
 import { fetchLiveTestnetRegistry } from "../../shared/live-registry";
+import { fetchLatestSdkVersion, compareSemver } from "../../shared/sdk-latest";
+import {
+  requestWalletUpdateStatus,
+  CWS_LISTING_URL,
+  STORAGE_KEY_WALLET_UPDATE,
+  parseWalletUpdateCache,
+  shouldCheckWalletUpdate,
+  nextUpdateAvailable,
+  type WalletUpdateStatus,
+} from "../../shared/wallet-update";
 import {
   OPERATOR_RISK_LEGEND,
   classifyOperatorRisk,
   type OperatorRiskBadge,
 } from "../../shared/operator-risk";
+import { CHAIN_RETURNS_LEGACY_WEI } from "../../shared/chain-units";
 
 interface AboutProps {
   onBack: () => void;
@@ -104,6 +114,16 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
    *  SDK-bundled value if the GitHub raw URL is unreachable. */
   const [liveRegistryGenesis, setLiveRegistryGenesis] = useState<string | null>(null);
   const [liveRegistryBinarySha, setLiveRegistryBinarySha] = useState<string | null>(null);
+  /** Latest published @monolythium/core-sdk version from the npm registry.
+   *  null until a successful fetch lands; on any failure it stays null and
+   *  the SDK row degrades to installed-only (never a fabricated number). */
+  const [latestSdk, setLatestSdk] = useState<string | null>(null);
+  /** Wallet-version update-check verdict, surfaced here so the user can SEE
+   *  whether the check works (it only returns a real result in the Chrome Web
+   *  Store build — dev/unpacked → "unavailable", which we show explicitly). */
+  const [updateStatus, setUpdateStatus] = useState<WalletUpdateStatus | "checking">(
+    "checking",
+  );
   const walletVersion = readWalletVersion();
 
   useEffect(() => {
@@ -113,6 +133,52 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
       if (cancelled || info === null) return;
       setLiveRegistryGenesis(info.genesis_hash);
       setLiveRegistryBinarySha(info.binary_sha);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void (async () => {
+      const v = await fetchLatestSdkVersion(ctrl.signal);
+      if (v !== null) setLatestSdk(v);
+    })();
+    return () => ctrl.abort();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const now = Date.now();
+      const stored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_WALLET_UPDATE], (res) =>
+          resolve(res?.[STORAGE_KEY_WALLET_UPDATE]),
+        );
+      });
+      if (cancelled) return;
+      const cache = parseWalletUpdateCache(stored);
+      // Fresh cache → show the last verdict WITHOUT re-calling the API. The
+      // check is shared with the home banner and rate-limited to ~12h; calling
+      // it on every About open is what made Chrome return "throttled".
+      if (cache && !shouldCheckWalletUpdate(cache.lastCheckAt, now)) {
+        setUpdateStatus(
+          cache.lastStatus ??
+            (cache.updateAvailable ? "update_available" : "no_update"),
+        );
+        return;
+      }
+      const s = await requestWalletUpdateStatus();
+      if (cancelled) return;
+      setUpdateStatus(s);
+      chrome.storage.local.set({
+        [STORAGE_KEY_WALLET_UPDATE]: {
+          lastCheckAt: now,
+          updateAvailable: nextUpdateAvailable(s, cache?.updateAvailable ?? false),
+          lastStatus: s,
+        },
+      });
     })();
     return () => {
       cancelled = true;
@@ -242,7 +308,81 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <KvList
             rows={[
               { k: "Wallet", v: `v${walletVersion}` },
-              { k: "SDK", v: `v${SDK_PACKAGE_VERSION} · ${SDK_COMMIT_SHORT}` },
+              {
+                k: "Update",
+                v: (() => {
+                  switch (updateStatus) {
+                    case "checking":
+                      return (
+                        <span style={{ color: "var(--fg-500)", fontSize: 10 }}>
+                          checking…
+                        </span>
+                      );
+                    case "update_available":
+                      return (
+                        <a
+                          href={CWS_LISTING_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open the Chrome Web Store listing"
+                          style={{ color: "var(--gold)", textDecoration: "none" }}
+                        >
+                          available — open Web Store ↗
+                        </a>
+                      );
+                    case "no_update":
+                      return <span style={{ color: "var(--ok)" }}>up to date</span>;
+                    case "throttled":
+                      return (
+                        <span style={{ color: "var(--fg-500)", fontSize: 10 }}>
+                          check throttled — try later
+                        </span>
+                      );
+                    case "unavailable":
+                    default:
+                      return (
+                        <span
+                          style={{ color: "var(--fg-500)", fontSize: 10 }}
+                          title="The update check only works in the Chrome Web Store build (not a dev/unpacked load)."
+                        >
+                          unavailable in this build
+                        </span>
+                      );
+                  }
+                })(),
+              },
+              {
+                k: "SDK",
+                v: (() => {
+                  const installed = `v${SDK_PACKAGE_VERSION}`;
+                  if (latestSdk === null) {
+                    // Latest couldn't be determined — installed-only, honest.
+                    return (
+                      <span>
+                        {installed}{" "}
+                        <span style={{ color: "var(--fg-500)", fontSize: 10 }}>
+                          · latest: unavailable
+                        </span>
+                      </span>
+                    );
+                  }
+                  const behind = compareSemver(SDK_PACKAGE_VERSION, latestSdk) < 0;
+                  return (
+                    <span title={`Latest published on npm: ${latestSdk}`}>
+                      {installed}{" "}
+                      {behind ? (
+                        <span style={{ color: "var(--warn)", fontSize: 10 }}>
+                          · update available (latest {latestSdk})
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--ok)", fontSize: 10 }}>
+                          · latest ✓
+                        </span>
+                      )}
+                    </span>
+                  );
+                })(),
+              },
             ]}
           />
         </div>
@@ -616,9 +756,12 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH)" },
               {
                 k: "Chain decimal mode",
-                v: "legacy compat (wei wire) · wallet compensates",
-                title:
-                  "V4-LIVE-0008 operators (commit 5aead0f0) still report wei on the wire; wallet converts to lythoshi at IPC boundaries. Flip CHAIN_RETURNS_LEGACY_WEI=false when operators upgrade past a2a9e1fc.",
+                v: CHAIN_RETURNS_LEGACY_WEI
+                  ? "legacy compat (wei wire) · wallet compensates"
+                  : "lythoshi-native · no compensation",
+                title: CHAIN_RETURNS_LEGACY_WEI
+                  ? "V4-LIVE-0008 operators (commit 5aead0f0) still report wei on the wire; wallet converts to lythoshi at IPC boundaries. Flip CHAIN_RETURNS_LEGACY_WEI=false when operators upgrade past a2a9e1fc."
+                  : "Operators report 8-decimal lythoshi directly as of binary dc919df8 (2026-05-29); eth_getBalance, gas price, and lyth_executionUnitPrice fields are already in lythoshi, so the wallet applies no inbound wei compensation.",
               },
               {
                 k: "EVM compat",
