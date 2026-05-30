@@ -395,7 +395,16 @@ export default function App() {
       algo: r.account.algo === "mldsa" ? "mldsa" : "slhdsa",
       custody: r.account.custody,
       denom: "public",
-      balance: null,
+      // Preserve the last-known balance on a SAME-address refresh (refocus,
+      // SW-restart, vault-flow re-hydrate) so Home doesn't flash "0.00" while
+      // refreshBalance re-fetches — the prior value is still the real balance.
+      // Only clear to null on an actual account SWITCH, where the prior
+      // balance belongs to a different address and would be wrong to show.
+      // (Never a synthesized 0 — refreshBalance repopulates the real value.)
+      balance:
+        r.account.address.toLowerCase() === prev.addr.toLowerCase()
+          ? prev.balance
+          : null,
       pinned: true,
     }));
   };
