@@ -121,6 +121,11 @@ import {
   // Round 4 TASK 2 — session-rehydrate across MV3 SW hibernation.
   tryRestoreFromSessionV4,
 } from "./keystore-mldsa.js";
+// Phase 1 notifications — the chokepoint hook in wallet-indexer-snapshot
+// calls this to record one notification per tracked-tx terminal transition.
+// recordNotification is intentionally NOT exposed via any IPC handler — §0.4
+// (only the wallet's own tracked-tx registry can emit notifications).
+import { recordNotification } from "./notifications-store.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
@@ -4203,41 +4208,84 @@ async function persistPendingRowBackground(args: {
   }
 }
 
-/** Deterministic pending→confirmed eviction (C4). Once a tx carries its
- *  canonical hash (submitEncryptedMlDsaTx surfaces `innerTxHashHex`), the chain
- *  can be asked directly instead of relying solely on the counterparty+amount
- *  heuristic. A pending row is dropped when `lyth_txStatus` reports it "found"
- *  (fallback: a non-null `eth_getTransactionReceipt` with status 1). On any RPC
- *  error / not_found the row is KEPT — the heuristic reconciler + PENDING_TTL_MS
- *  backstop remain the safety nets, and we never synthesize a confirmation.
+/** Terminal-state classifier for one pending row — see Phase 1 notifications
+ *  plan §P2. Carries the genuine confirmed/failed bit + receipt blockNumber
+ *  through to the snapshot hook so notifications can fire honestly (the
+ *  MetaMask #5117 hazard: never show a failed tx as confirmed). */
+export interface TerminalPendingTx {
+  row: PendingTxRow;
+  status: "confirmed" | "failed";
+  blockNumber: number | null;
+}
+
+/** Deterministic pending→terminal classification (C4 + Phase 1 notifications).
+ *  Once a tx carries its canonical hash (`submitEncryptedMlDsaTx` surfaces
+ *  `innerTxHashHex`), the chain can be asked directly instead of relying solely
+ *  on the counterparty+amount heuristic. Returns:
+ *
+ *   - `kept`: rows still pending (no explicit terminal answer from the RPC).
+ *     `lyth_txStatus`'s `not_found`, a `null` receipt, an unknown/non-1/non-0
+ *     status, or any RPC throw all land here. The heuristic reconciler +
+ *     PENDING_TTL_MS backstop remain the safety nets, and we never synthesize
+ *     a verdict.
+ *   - `terminal`: rows that the chain explicitly resolved this round. A
+ *     `lyth_txStatus="found"` fast-path is tagged "confirmed" (the indexer
+ *     surfaces only included entries; if a later receipt fetch disagrees, the
+ *     next snapshot supersedes — we still never fabricate). The
+ *     `eth_getTransactionReceipt` branch reuses the b4d6101 Sprintnet
+ *     normalizer (numeric `status` 0/1 OR hex string; `blockNumber ??
+ *     block_number`, numeric OR hex string) — the operators' actual receipt
+ *     shape, not the EVM-standard hex-string shape.
+ *
  *  Bounded: pending lists are tiny (one entry per outstanding send). */
 async function dropConfirmedPendingByHash(
   pending: PendingTxRow[],
-): Promise<PendingTxRow[]> {
+): Promise<{ kept: PendingTxRow[]; terminal: TerminalPendingTx[] }> {
   const kept: PendingTxRow[] = [];
+  const terminal: TerminalPendingTx[] = [];
   for (const p of pending) {
-    let confirmed = false;
     try {
       const { result } = await sprintnetJsonRpc<{ status?: string } | null>(
         "lyth_txStatus",
         [p.txHash],
       );
       if (result != null && result.status === "found") {
-        confirmed = true;
+        // lyth_txStatus reports inclusion but not the status bit; the
+        // indexer surfaces only confirmed entries, so treat as confirmed.
+        terminal.push({ row: p, status: "confirmed", blockNumber: null });
+        continue;
+      }
+      const receipt = await sprintnetJsonRpc<{
+        status?: number | string;
+        blockNumber?: unknown;
+        block_number?: unknown;
+      } | null>("eth_getTransactionReceipt", [p.txHash]);
+      if (receipt.result == null) {
+        kept.push(p);
+        continue;
+      }
+      const rawStatus = receipt.result.status;
+      const rawBn = receipt.result.blockNumber ?? receipt.result.block_number;
+      const parsedBn =
+        typeof rawBn === "number"
+          ? rawBn
+          : typeof rawBn === "string"
+            ? Number.parseInt(rawBn, 16)
+            : NaN;
+      const blockNumber = Number.isFinite(parsedBn) ? parsedBn : null;
+      if (rawStatus === 1 || rawStatus === "0x1") {
+        terminal.push({ row: p, status: "confirmed", blockNumber });
+      } else if (rawStatus === 0 || rawStatus === "0x0") {
+        terminal.push({ row: p, status: "failed", blockNumber });
       } else {
-        const receipt = await sprintnetJsonRpc<{ status?: number | string } | null>(
-          "eth_getTransactionReceipt",
-          [p.txHash],
-        );
-        const st = receipt.result?.status;
-        confirmed = receipt.result != null && (st === 1 || st === "0x1");
+        kept.push(p);
       }
     } catch {
-      // Status RPC unavailable / indexer disabled / not_found → keep the row.
+      // Status RPC unavailable / not_found → keep the row. Never synthesize.
+      kept.push(p);
     }
-    if (!confirmed) kept.push(p);
   }
-  return kept;
+  return { kept, terminal };
 }
 
 /** Persist the merged cache. Pending key only writes when its contents
@@ -6663,9 +6711,66 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const delegation = validateRawDelegationList(fresh.delegationHistory);
       const nextCache = mergeIndexerSnapshot({ activity, delegation }, now);
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
-      const statusConfirmed = await dropConfirmedPendingByHash(reconciled);
-      const nextPending = evictExpiredPending(statusConfirmed, now);
+      const { kept, terminal: terminalByHash } = await dropConfirmedPendingByHash(reconciled);
+      const nextPending = evictExpiredPending(kept, now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
+      // Phase 1 notifications hook — post-write microtask. The hook records
+      // one notification per row that just reached a TERMINAL state (the
+      // confirmed/failed bit from the indexer reconcile or the receipt-RPC
+      // classifier above) and explicitly DOES NOT record TTL-evicted rows.
+      // Scheduled as a microtask so the snapshot response returns before any
+      // notification I/O — a slow/failed notification write must never delay
+      // or break activity persistence. See plan §P6.
+      {
+        const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
+        const heuristicallyMatched = prevPending.filter(
+          (r) => !reconciledHashes.has(r.txHash),
+        );
+        const addressLower = p.address.toLowerCase();
+        const chainIdHex = p.chainIdHex;
+        queueMicrotask(() => {
+          void (async () => {
+            try {
+              for (const row of heuristicallyMatched) {
+                // The matched confirmed row's blockHeight is the most
+                // precise block we have. Falls back to null when no exact
+                // match is found (defensive — should be rare).
+                const match = nextCache.confirmed.find(
+                  (c) =>
+                    c.kind === "tx_send" &&
+                    c.counterparty != null &&
+                    c.counterparty.toLowerCase() === row.to.toLowerCase() &&
+                    c.amountDecimal === row.amountDecimal,
+                );
+                await recordNotification({
+                  addressLower,
+                  chainIdHex,
+                  txHash: row.txHash,
+                  status: "confirmed",
+                  blockNumber: match ? match.blockHeight : null,
+                  kind: "send",
+                  amountDecimal: row.amountDecimal,
+                  counterparty: row.to,
+                });
+              }
+              for (const t of terminalByHash) {
+                await recordNotification({
+                  addressLower,
+                  chainIdHex,
+                  txHash: t.row.txHash,
+                  status: t.status,
+                  blockNumber: t.blockNumber,
+                  kind: "contract_call",
+                  amountDecimal: t.row.amountDecimal,
+                  counterparty: t.row.to,
+                });
+              }
+            } catch {
+              // Best-effort; never break the snapshot response.
+            }
+          })();
+        });
+      }
       return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
     }
     case "wallet-activity-kind": {
