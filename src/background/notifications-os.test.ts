@@ -426,3 +426,57 @@ describe("Phase 5 — OS-toast flag (mono.notifications.os-enabled.v1)", () => {
     expect(await getOsNotificationsEnabled()).toBe(true);
   });
 });
+
+// GAP-N1 C3 — the real presence probe (chrome.runtime.getContexts). Defaults
+// FALSE on any error / missing API so an unrecognized environment behaves as
+// "closed" (badge accumulates; unread is never silently muted).
+describe("isWalletSurfaceOpen — GAP-N1 C3 presence probe", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  function setRuntime(getContexts: unknown): void {
+    (globalThis as { chrome?: { runtime?: unknown } }).chrome!.runtime = {
+      getContexts,
+    };
+  }
+
+  it("true when a POPUP context is open", async () => {
+    setRuntime(vi.fn(async () => [{ contextType: "POPUP" }]));
+    const { isWalletSurfaceOpen } = await import("./notifications-os.js");
+    expect(await isWalletSurfaceOpen()).toBe(true);
+  });
+
+  it("true when a SIDE_PANEL context is open", async () => {
+    setRuntime(vi.fn(async () => [{ contextType: "SIDE_PANEL" }]));
+    const { isWalletSurfaceOpen } = await import("./notifications-os.js");
+    expect(await isWalletSurfaceOpen()).toBe(true);
+  });
+
+  it("false when no contexts are open", async () => {
+    setRuntime(vi.fn(async () => []));
+    const { isWalletSurfaceOpen } = await import("./notifications-os.js");
+    expect(await isWalletSurfaceOpen()).toBe(false);
+  });
+
+  it("false when getContexts is absent (Chrome < 116)", async () => {
+    // The stub installs chrome WITHOUT chrome.runtime.getContexts.
+    const { isWalletSurfaceOpen } = await import("./notifications-os.js");
+    expect(await isWalletSurfaceOpen()).toBe(false);
+  });
+
+  it("false when getContexts throws (defensive default)", async () => {
+    setRuntime(
+      vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    );
+    const { isWalletSurfaceOpen } = await import("./notifications-os.js");
+    expect(await isWalletSurfaceOpen()).toBe(false);
+  });
+});
