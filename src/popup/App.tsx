@@ -27,6 +27,7 @@ import {
   requestWalletUpdateStatus,
 } from "../shared/wallet-update";
 import "./tokens.css";
+import "./themes.css";
 import "./glass.css";
 import "./ext.css";
 import {
