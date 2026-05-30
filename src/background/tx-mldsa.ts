@@ -70,6 +70,7 @@ function hexToBytes(s: string): Uint8Array {
 export async function sprintnetJsonRpc<T>(
   method: string,
   params: unknown[],
+  opts?: { timeoutMs?: number },
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
   // Round 13 TASK 3 — track genesis-pin failures separately so the
@@ -96,15 +97,25 @@ export async function sprintnetJsonRpc<T>(
       continue;
     }
     let res: Response;
+    // GAP-N1 — optional per-call timeout (mirrors the balance-probe
+    // AbortController pattern below). Default (no timeoutMs) is unchanged:
+    // no AbortController, no signal — every existing caller is byte-identical.
+    const ctrl = opts?.timeoutMs ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), opts!.timeoutMs) : null;
     try {
       res = await fetch(v.rpc, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        ...(ctrl ? { signal: ctrl.signal } : {}),
       });
     } catch (e) {
+      // A timeout surfaces here as an AbortError → treated like any transport
+      // failure: record it and fall through to the next operator.
       lastTransportErr = e as Error;
       continue;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
     }
     if (!res.ok) {
       lastTransportErr = new Error(`HTTP ${res.status} from ${v.name}`);
