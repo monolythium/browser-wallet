@@ -205,6 +205,40 @@ export async function listAllNotifications(): Promise<NotificationRecord[]> {
   }
 }
 
+/** Polish C2 — flip ONE record's `read` to `true` by its full id
+ *  (`${chainIdHex}:${txHash}`). Scans every `mono.notifications.history.*`
+ *  envelope, locates the scope holding the id, and writes back only that
+ *  scope. Returns `{ flipped: true }` when the record was found and was
+ *  previously unread; `{ flipped: false }` when the id is unknown OR the
+ *  record was already `read:true` (so a second tap is a no-op and writes
+ *  nothing). Best-effort — any chrome.storage failure is swallowed and
+ *  reported as `{ flipped: false }`. */
+export async function markNotificationRead(
+  id: string,
+): Promise<{ flipped: boolean }> {
+  try {
+    const all = await readAllStorage();
+    for (const [k, v] of Object.entries(all)) {
+      if (!k.startsWith("mono.notifications.history.")) continue;
+      const env = parseHistoryEnvelope(v);
+      if (!env) continue;
+      let flipped = false;
+      const next = env.entries.map((r) => {
+        if (r.id !== id || r.read) return r;
+        flipped = true;
+        return { ...r, read: true };
+      });
+      if (flipped) {
+        await writeStorage({ [k]: { schemaVersion: 0, entries: next } });
+        return { flipped: true };
+      }
+    }
+    return { flipped: false };
+  } catch {
+    return { flipped: false };
+  }
+}
+
 /** GLOBAL mark-all-read — flip every record across every scope's history
  *  to `read: true`. Returns the number of records that changed
  *  (already-read records do not count). Phase 3 wires the
