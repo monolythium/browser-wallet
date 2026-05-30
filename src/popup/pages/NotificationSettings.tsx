@@ -96,7 +96,7 @@ export function NotificationSettings({ onBack }: NotificationSettingsProps) {
       <div className="ext-body">
         <div className="ext-card">
           <NotifToggleRow
-            label="Chrome notifications"
+            label="System notifications"
             description="Show a system notification when a transaction confirms or fails. In-app notifications are always kept."
             value={notifSettings.os}
             saving={savingNotif === "os"}
