@@ -2485,3 +2485,23 @@ export async function bgGetUnread(): Promise<
 > {
   return send("notifications-get-unread");
 }
+
+/** Phase 5 — read the user-facing OS-toast toggle. Default `true`
+ *  (absent ⇒ on). The flag gates ONLY the OS toast; the in-app
+ *  notification history and the toolbar unread badge keep working
+ *  regardless. */
+export async function bgGetNotificationsOsEnabled(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-os-enabled");
+}
+
+/** Phase 5 — write the user-facing OS-toast toggle. Boolean validated
+ *  at the IPC boundary. */
+export async function bgSetNotificationsOsEnabled(
+  enabled: boolean,
+): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-set-os-enabled", { enabled });
+}
