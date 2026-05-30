@@ -146,6 +146,10 @@ describe("notificationTitle / NOTIFICATION_LABELS", () => {
     ["redelegate", { confirmed: "Restaked", failed: "Restake failed" }],
     ["claim", { confirmed: "Rewards claimed", failed: "Claim failed" }],
     [
+      "complete-redemption",
+      { confirmed: "Redemption completed", failed: "Redemption failed" },
+    ],
+    [
       "emergency-key",
       { confirmed: "Backup key registered", failed: "Backup registration failed" },
     ],
@@ -174,6 +178,7 @@ describe("notificationTitle / NOTIFICATION_LABELS", () => {
       "undelegate",
       "redelegate",
       "claim",
+      "complete-redemption",
       "emergency-key",
       "agent-policy",
       "contract_call",
@@ -193,6 +198,7 @@ describe("isTxOpKind", () => {
       "undelegate",
       "redelegate",
       "claim",
+      "complete-redemption",
       "emergency-key",
       "agent-policy",
       "contract_call",

@@ -53,6 +53,7 @@ export type TxOpKind =
   | "undelegate"
   | "redelegate"
   | "claim"
+  | "complete-redemption"
   | "emergency-key"
   | "agent-policy"
   | "contract_call";
@@ -68,6 +69,7 @@ export function isTxOpKind(v: unknown): v is TxOpKind {
     v === "undelegate" ||
     v === "redelegate" ||
     v === "claim" ||
+    v === "complete-redemption" ||
     v === "emergency-key" ||
     v === "agent-policy" ||
     v === "contract_call"
@@ -189,6 +191,10 @@ export const NOTIFICATION_LABELS: Record<
   undelegate: { confirmed: "Unstaked", failed: "Unstake failed" },
   redelegate: { confirmed: "Restaked", failed: "Restake failed" },
   claim: { confirmed: "Rewards claimed", failed: "Claim failed" },
+  "complete-redemption": {
+    confirmed: "Redemption completed",
+    failed: "Redemption failed",
+  },
   "emergency-key": {
     confirmed: "Backup key registered",
     failed: "Backup registration failed",

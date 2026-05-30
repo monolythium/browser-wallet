@@ -87,13 +87,13 @@ describe("RedemptionQueueCard", () => {
     expect(html).toContain("3 tickets");
     expect(html).toContain("halcyon.cluster.mono");
     expect(html).toContain("cluster-9");
-    expect(html).toContain("Height reached");
+    expect(html).toContain("Ready to redeem");
     expect(html).toContain(
-      "Height maturity is reached, but principal payout is unavailable until chain escrow accounting lands.",
+      "This ticket has matured. Complete the redemption to return the principal to your balance.",
     );
-    expect(html).toContain("Height cooldown");
+    expect(html).toContain("Maturing");
     expect(html).toContain(
-      "Height maturity is pending until block 22; principal payout is unavailable until chain escrow accounting lands.",
+      "Matures at block 22; the principal becomes redeemable then.",
     );
     expect(html).toContain("Probe pending");
     expect(html).toContain("25.00%");
@@ -105,14 +105,51 @@ describe("RedemptionQueueCard", () => {
     expect(html).not.toContain("0 LYTH");
     expect(html).not.toContain("Unlock");
     expect(html).not.toContain("Mature at the probed block height");
+    // The false escrow-accounting claim must be gone everywhere.
+    expect(html).not.toContain("unavailable until chain escrow accounting");
+    // No onComplete handler passed → no per-ticket action rendered.
     expect(html).not.toMatch(/<button\b/i);
   });
 
-  it("does not render a principal payout action for height-mature tickets", () => {
+  it("renders a Complete redemption action for matured tickets when onComplete is wired", () => {
     const html = renderToStaticMarkup(
       <RedemptionQueueCard
         queue={queue([
           ticket({
+            index: 0,
+            mature: true,
+            amountLythoshi: "100000000",
+            createdHeight: "10",
+            maturityHeight: "20",
+          }),
+          ticket({
+            index: 1,
+            mature: false,
+            createdHeight: "12",
+            maturityHeight: "22",
+          }),
+        ])}
+        isMock={false}
+        error={null}
+        clusters={clusters}
+        onComplete={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Ready to redeem");
+    expect(html).toContain("Complete redemption");
+    expect(html).toMatch(/<button\b/i);
+    // The not-yet-mature ticket must not expose the action.
+    expect((html.match(/Complete redemption/g) ?? []).length).toBe(1);
+    expect(html).not.toContain("unavailable until chain escrow accounting");
+  });
+
+  it("disables the in-flight ticket's Complete redemption button", () => {
+    const html = renderToStaticMarkup(
+      <RedemptionQueueCard
+        queue={queue([
+          ticket({
+            index: 0,
             mature: true,
             amountLythoshi: "100000000",
             createdHeight: "10",
@@ -122,15 +159,13 @@ describe("RedemptionQueueCard", () => {
         isMock={false}
         error={null}
         clusters={clusters}
+        onComplete={() => {}}
+        completingIndex={0}
       />,
     );
 
-    expect(html).toContain("Height reached");
-    expect(html).toContain("principal payout is unavailable");
-    expect(html).not.toMatch(/<button\b/i);
-    expect(html).not.toContain("completeRedemption");
-    expect(html).not.toContain("Withdraw");
-    expect(html).not.toContain("Claim principal");
+    expect(html).toContain("Completing");
+    expect(html).toMatch(/<button\b[^>]*disabled/i);
   });
 
   it("renders an honest empty live queue", () => {
@@ -186,18 +221,25 @@ describe("redemption queue formatting helpers", () => {
     expect(formatRedemptionQueueAmount("not-a-quantity")).toBeNull();
   });
 
-  it("maps mature, cooldown, and unknown probes to non-payout labels", () => {
+  it("maps mature, cooldown, and unknown probes to accurate redemption labels", () => {
     expect(redemptionTicketStatus(ticket({ mature: true })).label).toBe(
-      "Height reached",
+      "Ready to redeem",
     );
     expect(redemptionTicketStatus(ticket({ mature: true })).detail).toContain(
-      "principal payout is unavailable",
+      "Complete the redemption to return the principal",
     );
+    expect(redemptionTicketStatus(ticket({ mature: true })).tone).toBe("ready");
     expect(redemptionTicketStatus(ticket({ mature: false })).label).toBe(
-      "Height cooldown",
+      "Maturing",
     );
     expect(redemptionTicketStatus(ticket({ mature: null })).label).toBe(
       "Probe pending",
     );
+    // The false escrow-accounting claim must be gone from every status.
+    for (const m of [true, false, null] as const) {
+      expect(redemptionTicketStatus(ticket({ mature: m })).detail).not.toContain(
+        "unavailable until chain escrow accounting",
+      );
+    }
   });
 });
