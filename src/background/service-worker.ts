@@ -6757,7 +6757,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   txHash: row.txHash,
                   status: "confirmed",
                   blockNumber: match ? match.blockHeight : null,
-                  kind: "send",
+                  // Phase 1.5 — prefer the broadcast-time tag if the
+                  // popup supplied one; otherwise fall back to the
+                  // coarse "send" (Phase-1 behavior — the heuristic
+                  // match path is by definition a tx_send).
+                  kind: row.opKind ?? "send",
                   amountDecimal: row.amountDecimal,
                   counterparty: row.to,
                 });
@@ -6769,7 +6773,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   txHash: t.row.txHash,
                   status: t.status,
                   blockNumber: t.blockNumber,
-                  kind: "contract_call",
+                  // Phase 1.5 — prefer the broadcast-time tag; otherwise
+                  // fall back to the coarse "contract_call" (Phase-1
+                  // behavior — the status-RPC path catches every
+                  // non-tx_send tracked tx).
+                  kind: t.row.opKind ?? "contract_call",
                   amountDecimal: t.row.amountDecimal,
                   counterparty: t.row.to,
                 });

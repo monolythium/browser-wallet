@@ -34,6 +34,7 @@ import {
   parseHistoryEnvelope,
   parseNotifiedSetEnvelope,
   type NotificationRecord,
+  type TxOpKind,
 } from "../shared/notifications.js";
 
 async function readStorage(key: string): Promise<unknown> {
@@ -63,7 +64,10 @@ export interface RecordNotificationInput {
   txHash: string;
   status: "confirmed" | "failed";
   blockNumber: number | null;
-  kind: "send" | "contract_call";
+  /** Phase 1.5 — full TxOpKind union. The Phase-1 coarse literals
+   *  ("send", "contract_call") remain valid and are the fallbacks the
+   *  hook uses when the pending row carries no broadcast-time `opKind`. */
+  kind: TxOpKind;
   amountDecimal: string;
   counterparty: string;
 }
