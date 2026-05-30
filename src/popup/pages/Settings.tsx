@@ -4,9 +4,11 @@ import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import {
   bgGetAutoLockMinutes,
+  bgGetNotificationsOsEnabled,
   bgGetUiOpenMode,
   bgKeystoreLock,
   bgSetAutoLockMinutes,
+  bgSetNotificationsOsEnabled,
   bgSetUiOpenMode,
   type SignAlgo,
   type UiOpenMode,
@@ -96,6 +98,13 @@ export function Settings({
   const [savingUiMode, setSavingUiMode] = useState(false);
   const [uiModePending, setUiModePending] = useState(false);
 
+  // Phase 5 — OS-toast toggle. Default ON; persists in
+  // mono.notifications.os-enabled.v1. Gates ONLY the OS toast; the
+  // in-app notification center and the toolbar badge keep working
+  // regardless when off.
+  const [osNotifEnabled, setOsNotifEnabled] = useState<boolean | null>(null);
+  const [savingOsNotif, setSavingOsNotif] = useState(false);
+
   // Round 6 TASK 6 — Account section inline copy state.
   const [addrCopied, setAddrCopied] = useState(false);
   const handleAddrCopy = (e: ReactMouseEvent) => {
@@ -123,6 +132,13 @@ export function Settings({
       if (cancelled) return;
       if (r.ok) setUiMode(r.mode);
     })();
+    void (async () => {
+      const r = await bgGetNotificationsOsEnabled();
+      if (cancelled) return;
+      // Default ON if the IPC failed or the SW is unreachable — fail-open
+      // mirrors fireOsNotification's behavior on a flag-read error.
+      setOsNotifEnabled(r.ok ? r.enabled : true);
+    })();
     return () => {
       cancelled = true;
     };
@@ -149,6 +165,14 @@ export function Settings({
       setUiModePending(true);
     }
     setSavingUiMode(false);
+  };
+
+  const handlePickOsNotif = async (next: boolean) => {
+    if (savingOsNotif || next === osNotifEnabled) return;
+    setSavingOsNotif(true);
+    const r = await bgSetNotificationsOsEnabled(next);
+    if (r.ok) setOsNotifEnabled(r.enabled);
+    setSavingOsNotif(false);
   };
 
   const handleLockNow = async () => {
@@ -659,6 +683,62 @@ export function Settings({
               <Icon name="warn" size={13} />
               Reset wallet
             </button>
+          </div>
+        </div>
+
+        {/* Phase 5 — Notifications card. Default ON. Gates ONLY the OS
+           toast (chrome.notifications.create); the in-app notifications
+           center and the toolbar unread badge stay live regardless. */}
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Notifications</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            Show Chrome notifications for tx confirmations.
+            In-app notifications are always kept.
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 6,
+            }}
+          >
+            {([true, false] as const).map((val) => {
+              const active = osNotifEnabled === val;
+              return (
+                <button
+                  key={val ? "on" : "off"}
+                  onClick={() => void handlePickOsNotif(val)}
+                  disabled={savingOsNotif || osNotifEnabled === null}
+                  style={{
+                    padding: "8px 4px",
+                    borderRadius: 8,
+                    border: active
+                      ? "1px solid var(--gold)"
+                      : "1px solid var(--fg-700)",
+                    background: active
+                      ? "var(--gold-bg)"
+                      : "rgba(255,255,255,0.04)",
+                    color: active ? "var(--gold)" : "var(--fg-100)",
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 12,
+                    fontWeight: active ? 600 : 500,
+                    cursor: "pointer",
+                    transition: "all 150ms var(--e-out)",
+                  }}
+                >
+                  {val ? "On" : "Off"}
+                </button>
+              );
+            })}
           </div>
         </div>
 
