@@ -1108,11 +1108,18 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // cleared when the pending set empties; the 5-min PENDING_TTL_MS backstop
 // bounds any stuck tx.
 
-/** MV3 packed-extension alarm-period floor (minutes). */
-const NOTIF_POLL_PERIOD_MIN = 1;
+/** Notification-poll alarm cadence (minutes). 0.5 = 30 s, the MV3 alarm floor
+ *  on modern Chrome (was 1 min). This is BOTH the first-fire delay and the
+ *  repeat period (see ensureNotifPollAlarm), so a tx that confirms while every
+ *  wallet surface is closed is detected within ~30 s — the tightest a
+ *  closed-extension background poll can be without a service-worker keepalive
+ *  hack (the browser throttles SW wakeups to this floor). Was 1 min, which let
+ *  the user reopen before the first fire so the on-open path always won — the
+ *  "only notifies on open" report this fixes. */
+const NOTIF_POLL_PERIOD_MIN = 0.5;
 /** Per-call AbortController timeout for the poll's classification RPC. */
 const NOTIF_POLL_RPC_TIMEOUT_MS = 5_000;
-/** Back-off cap: periods 1 → 2 → 4 min (4 < the 5-min PENDING_TTL_MS, so a
+/** Back-off cap: periods 0.5 → 1 → 2 min (2 < the 5-min PENDING_TTL_MS, so a
  *  recoverable tx still gets one more poll before TTL eviction). */
 const NOTIF_POLL_BACKOFF_CAP = 2;
 let notifPollBackoff = 0;
@@ -1123,7 +1130,15 @@ async function ensureNotifPollAlarm(
   periodMin = NOTIF_POLL_PERIOD_MIN,
 ): Promise<void> {
   try {
-    await chrome.alarms.create(ALARM_NOTIF_POLL, { periodInMinutes: periodMin });
+    // delayInMinutes is set equal to periodInMinutes so the FIRST fire is
+    // explicit at `periodMin` (a periodInMinutes-only alarm's first fire is
+    // also one period out, but stating the delay guarantees it across Chrome
+    // versions). Re-creating with the same name replaces the schedule, so this
+    // stays idempotent.
+    await chrome.alarms.create(ALARM_NOTIF_POLL, {
+      delayInMinutes: periodMin,
+      periodInMinutes: periodMin,
+    });
   } catch {
     // best-effort
   }

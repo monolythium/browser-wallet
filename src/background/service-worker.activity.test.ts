@@ -4127,9 +4127,11 @@ describe("GAP-N1 C2 — notif-poll alarm lifecycle + back-off", () => {
     await flushAsync();
     const created = alarmCreateCalls.filter((c) => c.name === ALARM_NOTIF_POLL);
     expect(created.length).toBeGreaterThan(0);
+    // Base period is now 0.5 min (30 s MV3 floor); one back-off doubles it to
+    // 1 min (0.5 * 2**1). Still < the 5-min PENDING_TTL_MS.
     expect(
       (created.at(-1)!.info as { periodInMinutes: number }).periodInMinutes,
-    ).toBe(2);
+    ).toBe(1);
   });
 });
 
