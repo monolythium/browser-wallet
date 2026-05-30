@@ -562,6 +562,7 @@ import {
 import { addressToBech32m } from "../shared/bech32m.js";
 import {
   ALARM_AUTO_LOCK,
+  ALARM_NOTIF_POLL,
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
   AUTO_LOCK_OPTIONS,
@@ -827,6 +828,13 @@ void (async () => {
   await purgeDemoAddrCacheKeys();
   session.chainId = await loadActiveChainId();
 
+  // GAP-N1 — re-arm the poll if a tx was left pending across an SW restart /
+  // extension reload (periodic alarms survive hibernation but a reload clears
+  // them), so away-confirmations are still observed.
+  if (await hasAnyPendingTx()) {
+    void ensureNotifPollAlarm();
+  }
+
   // Pre-mark WS down for operators with no explicit `ws_url`. See
   // `prefillUnknownWsEndpointsDown` for the V4-LIVE-0008 rationale.
   prefillUnknownWsEndpointsDown();
@@ -1079,6 +1087,96 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
     if (typeof deadline === "number" && Date.now() < deadline) return;
     await triggerAutoLock();
+  })();
+});
+
+// ---- GAP-N1 — notification poll alarm ----
+//
+// A periodic alarm that runs `pollPendingAndNotify` while any tx is pending,
+// so an away-confirmation (a tx that confirms while every wallet surface is
+// closed) still toasts + badges at confirm time. LOCK-INDEPENDENT — unlike
+// the auto-lock alarm there is NO isUnlockedV4 gate: the poll reads only
+// public receipts for already-stored hashes and writes only the notification
+// store + toast + badge. Self-limiting: armed when a pending row is persisted,
+// cleared when the pending set empties; the 5-min PENDING_TTL_MS backstop
+// bounds any stuck tx.
+
+/** MV3 packed-extension alarm-period floor (minutes). */
+const NOTIF_POLL_PERIOD_MIN = 1;
+/** Per-call AbortController timeout for the poll's classification RPC. */
+const NOTIF_POLL_RPC_TIMEOUT_MS = 5_000;
+/** Back-off cap: periods 1 → 2 → 4 min (4 < the 5-min PENDING_TTL_MS, so a
+ *  recoverable tx still gets one more poll before TTL eviction). */
+const NOTIF_POLL_BACKOFF_CAP = 2;
+let notifPollBackoff = 0;
+
+/** Arm the poll alarm (idempotent — create with the same name replaces).
+ *  NO isUnlockedV4 gate — the poll is lock-independent by design. */
+async function ensureNotifPollAlarm(
+  periodMin = NOTIF_POLL_PERIOD_MIN,
+): Promise<void> {
+  try {
+    await chrome.alarms.create(ALARM_NOTIF_POLL, { periodInMinutes: periodMin });
+  } catch {
+    // best-effort
+  }
+}
+
+async function clearNotifPollAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.clear(ALARM_NOTIF_POLL);
+  } catch {
+    // best-effort
+  }
+}
+
+/** True if ANY `mono.activity.pending.*` scope holds ≥1 row. Lock-independent
+ *  prefix-scan; used for the boot re-arm + the clear/re-create race guard. */
+async function hasAnyPendingTx(): Promise<boolean> {
+  try {
+    const all = await new Promise<Record<string, unknown>>((resolve) => {
+      chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+    });
+    for (const key of Object.keys(all)) {
+      if (!key.startsWith("mono.activity.pending.")) continue;
+      if ((validatePendingActivityCache(all[key])?.pending ?? []).length > 0) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== ALARM_NOTIF_POLL) return;
+  void (async () => {
+    const { remaining, allFailed } = await pollPendingAndNotify();
+    if (remaining === 0) {
+      // Clear/re-create race guard (cf. the auto-lock deadline guard above):
+      // a tx persisted between the scan and now would have re-armed via
+      // persistPendingRowBackground; only clear if STILL empty. The residual
+      // window is recovered by the next persist's ensureNotifPollAlarm + the
+      // boot re-arm.
+      if (!(await hasAnyPendingTx())) {
+        await clearNotifPollAlarm();
+        notifPollBackoff = 0;
+      }
+      return;
+    }
+    // Consecutive all-operators-failure back-off — lengthen the period so a
+    // total outage with a stuck tx doesn't wake the SW every minute. Reset
+    // the moment a tick reaches an operator again.
+    if (allFailed) {
+      if (notifPollBackoff < NOTIF_POLL_BACKOFF_CAP) {
+        notifPollBackoff++;
+        await ensureNotifPollAlarm(NOTIF_POLL_PERIOD_MIN * 2 ** notifPollBackoff);
+      }
+    } else if (notifPollBackoff !== 0) {
+      notifPollBackoff = 0;
+      await ensureNotifPollAlarm(NOTIF_POLL_PERIOD_MIN);
+    }
   })();
 });
 
@@ -4214,6 +4312,10 @@ async function persistPendingRowBackground(args: {
         () => resolve(),
       );
     });
+    // GAP-N1 — a pending row now exists → arm the headless poll so this tx's
+    // terminal transition is observed (toast + badge) even if every wallet
+    // surface is closed before it confirms. Idempotent; lock-independent.
+    void ensureNotifPollAlarm();
     // CX3 — record the recipient in the durable sent-address log so repeat
     // sends to it aren't re-warned as "first-time" once the pending row's TTL
     // lapses (independent of any indexer refresh). Best-effort.
@@ -4267,14 +4369,26 @@ export interface TerminalPendingTx {
  *  Bounded: pending lists are tiny (one entry per outstanding send). */
 async function dropConfirmedPendingByHash(
   pending: PendingTxRow[],
-): Promise<{ kept: PendingTxRow[]; terminal: TerminalPendingTx[] }> {
+  opts?: { timeoutMs?: number },
+): Promise<{
+  kept: PendingTxRow[];
+  terminal: TerminalPendingTx[];
+  /** GAP-N1 — count of rows whose classification RPC threw (timeout /
+   *  transport / all-operators-down). Additive: the popup chokepoint
+   *  caller destructures only `{ kept, terminal }` and ignores this, so its
+   *  behavior is unchanged. The poll-core uses it to drive the all-fail
+   *  back-off. */
+  rpcFailures: number;
+}> {
   const kept: PendingTxRow[] = [];
   const terminal: TerminalPendingTx[] = [];
+  let rpcFailures = 0;
   for (const p of pending) {
     try {
       const { result } = await sprintnetJsonRpc<{ status?: string } | null>(
         "lyth_txStatus",
         [p.txHash],
+        opts,
       );
       if (result != null && result.status === "found") {
         // lyth_txStatus reports inclusion but not the status bit; the
@@ -4286,7 +4400,7 @@ async function dropConfirmedPendingByHash(
         status?: number | string;
         blockNumber?: unknown;
         block_number?: unknown;
-      } | null>("eth_getTransactionReceipt", [p.txHash]);
+      } | null>("eth_getTransactionReceipt", [p.txHash], opts);
       if (receipt.result == null) {
         kept.push(p);
         continue;
@@ -4309,10 +4423,11 @@ async function dropConfirmedPendingByHash(
       }
     } catch {
       // Status RPC unavailable / not_found → keep the row. Never synthesize.
+      rpcFailures++;
       kept.push(p);
     }
   }
-  return { kept, terminal };
+  return { kept, terminal, rpcFailures };
 }
 
 /** GAP-N1 — headless background poll core. Enumerates every
@@ -4324,13 +4439,22 @@ async function dropConfirmedPendingByHash(
  *  notification store + OS toast + badge. It NEVER touches signing /
  *  broadcast / fee / nonce / encrypted payload.
  *
- *  Returns `{ remaining }` = pending rows still outstanding across all
- *  scopes after this tick, so the alarm caller (C2) can self-clear at 0.
+ *  Returns `{ remaining, allFailed }`: `remaining` = pending rows still
+ *  outstanding across all scopes after this tick (the alarm caller self-
+ *  clears at 0); `allFailed` = there were rows to check and EVERY
+ *  classification RPC failed with nothing terminal (the alarm caller backs
+ *  off so a total outage doesn't wake the SW every minute).
  *  Exported for unit tests (driven directly against the in-memory chrome
  *  stub); production calls it from the ALARM_NOTIF_POLL onAlarm branch.
  *  Best-effort: never throws out of the alarm. */
-export async function pollPendingAndNotify(): Promise<{ remaining: number }> {
+export async function pollPendingAndNotify(): Promise<{
+  remaining: number;
+  allFailed: boolean;
+}> {
   let remaining = 0;
+  let checkedTotal = 0;
+  let failedTotal = 0;
+  let terminalTotal = 0;
   try {
     const all = await new Promise<Record<string, unknown>>((resolve) => {
       chrome.storage.local.get(null, (res) => resolve(res ?? {}));
@@ -4356,7 +4480,13 @@ export async function pollPendingAndNotify(): Promise<{ remaining: number }> {
       }
       // TTL-evict FIRST so an expired row is neither notified nor re-polled.
       const live = evictExpiredPending(pending, now);
-      const { kept, terminal } = await dropConfirmedPendingByHash(live);
+      const { kept, terminal, rpcFailures } = await dropConfirmedPendingByHash(
+        live,
+        { timeoutMs: NOTIF_POLL_RPC_TIMEOUT_MS },
+      );
+      checkedTotal += live.length;
+      failedTotal += rpcFailures;
+      terminalTotal += terminal.length;
       for (const t of terminal) {
         // Same shape the popup terminal-by-hash loop builds. The status is
         // receipt-derived (confirmed/failed) — #5117 preserved.
@@ -4388,7 +4518,9 @@ export async function pollPendingAndNotify(): Promise<{ remaining: number }> {
   } catch {
     // Best-effort — a poll failure must never escape the alarm.
   }
-  return { remaining };
+  const allFailed =
+    checkedTotal > 0 && failedTotal === checkedTotal && terminalTotal === 0;
+  return { remaining, allFailed };
 }
 
 /** Persist the merged cache. Pending key only writes when its contents
