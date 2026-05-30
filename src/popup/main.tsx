@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { applyTheme, readTheme } from "./theme";
 
 // Round 5 TASK 1 — runtime mode discriminator. Round 4's heuristic
 // (h > 700 || w > 460) failed on shorter browser windows: a 720-pixel
@@ -40,5 +41,9 @@ function detectMode(): "popup" | "sidepanel" | "fullscreen" {
   return "popup";
 }
 document.documentElement.dataset.mode = detectMode();
+
+// Apply the saved theme before first paint (localStorage is synchronous, so
+// there is no flash of the default palette on popup open).
+applyTheme(readTheme());
 
 createRoot(document.getElementById("root")!).render(<App />);
