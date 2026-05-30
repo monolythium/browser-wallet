@@ -1638,6 +1638,75 @@ describe("wallet-activity-get", () => {
     expect(ids[0]).toBe(`${TESTNET_CHAIN_ID_HEX}:${txHash}`);
   });
 
+  it("hook prefers row.opKind over the coarse fallback (Phase 1.5 — kind:'delegate' carried through)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 555 };
+    const txHash = "0x" + "66".repeat(32);
+    // Seed a pending row with the broadcast-time opKind tag attached
+    // (mimics what persistPendingRowBackground writes when the popup
+    // passes opKind:"delegate" through wallet-send-tx).
+    storageLocal[
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`
+    ] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash,
+          to: "0x" + "06".repeat(20),
+          amountDecimal: "0.01",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 500,
+          via: "operator-test",
+          opKind: "delegate",
+        },
+      ],
+    };
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ kind: string; status: string }> }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    // The hook used row.opKind verbatim instead of falling back to the
+    // coarse "contract_call".
+    expect(hist!.entries[0]?.kind).toBe("delegate");
+    expect(hist!.entries[0]?.status).toBe("confirmed");
+  });
+
+  it("hook falls back to coarse 'contract_call' when row has no opKind (legacy/untagged path)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 556 };
+    const txHash = "0x" + "77".repeat(32);
+    // Phase-1-style pending row with NO opKind field.
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "07".repeat(20),
+      amountDecimal: "0.02",
+      broadcastBlockHeight: 501,
+    });
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ kind: string }> }
+      | undefined;
+    expect(hist!.entries[0]?.kind).toBe("contract_call");
+  });
+
   it("snapshot response returns BEFORE notification writes complete (post-write microtask placement)", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found" };
