@@ -4471,6 +4471,9 @@ export async function pollPendingAndNotify(): Promise<{
     // now ⇒ the user is present ⇒ record read (no badge bump); closed ⇒
     // accumulate unread. Defaults false (closed) on any error.
     const surfaceOpen = await isWalletSurfaceOpen();
+    // Lock state for the toast/badge gates (orthogonal to presence): gate-only,
+    // no decryption. Computed once per tick.
+    const unlocked = isUnlockedV4();
     for (const key of Object.keys(all)) {
       if (!key.startsWith("mono.activity.pending.")) continue;
       // key = mono.activity.pending.<addrLower>.<chainIdHex>; addresses and
@@ -4513,7 +4516,7 @@ export async function pollPendingAndNotify(): Promise<{
           read: surfaceOpen,
         });
         if (result.added && result.record !== null) {
-          await fireOsNotification(result.record);
+          await fireOsNotification(result.record, { unlocked });
         }
       }
       // Write back ONLY the still-pending rows (terminal + TTL-expired
@@ -4526,7 +4529,7 @@ export async function pollPendingAndNotify(): Promise<{
       }
       remaining += kept.length;
     }
-    await refreshUnreadBadge();
+    await refreshUnreadBadge({ unlocked });
   } catch {
     // Best-effort — a poll failure must never escape the alarm.
   }
@@ -5058,6 +5061,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
           ]);
           await resetAutoLock();
+          // GAP-N1 settings — surface any unread that was HELD while locked
+          // ("Unread badge while locked" off) now that the user unlocked.
+          void refreshUnreadBadge({ unlocked: true });
           return { ok: true, address: r.address };
         } catch {
           failCount += 1;
@@ -6985,6 +6991,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               // open, so this is usually read:true; the poll path supplies
               // the closed→unread case.)
               const surfaceOpen = await isWalletSurfaceOpen();
+              // Lock state for the toast/badge gates (orthogonal to presence).
+              const unlocked = isUnlockedV4();
               let anyAdded = false;
               for (const row of heuristicallyMatched) {
                 // The matched confirmed row's blockHeight is the most
@@ -7018,7 +7026,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 // wallet-own tracked-tx transition.
                 if (result.added && result.record !== null) {
                   anyAdded = true;
-                  await fireOsNotification(result.record);
+                  await fireOsNotification(result.record, { unlocked });
                 }
               }
               for (const t of terminalByHash) {
@@ -7039,14 +7047,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 });
                 if (result.added && result.record !== null) {
                   anyAdded = true;
-                  await fireOsNotification(result.record);
+                  await fireOsNotification(result.record, { unlocked });
                 }
               }
               // Phase 2 — single badge refresh per batch. getUnread reads
               // chrome.storage so it sees every record this loop wrote;
               // one call covers both heuristic + status-RPC paths.
               if (anyAdded) {
-                await refreshUnreadBadge();
+                await refreshUnreadBadge({ unlocked });
               }
             } catch {
               // Best-effort; never break the snapshot response.
@@ -8215,7 +8223,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const { flipped } = await markAllNotificationsRead();
         // Best-effort badge refresh — a badge failure is harmless.
-        void refreshUnreadBadge();
+        void refreshUnreadBadge({ unlocked: isUnlockedV4() });
         return { ok: true, flipped };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -8257,7 +8265,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const r = await markNotificationRead(p.id);
-        if (r.flipped) void refreshUnreadBadge();
+        if (r.flipped) void refreshUnreadBadge({ unlocked: isUnlockedV4() });
         return { ok: true, flipped: r.flipped };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -8356,7 +8364,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
 // badge once at startup so the unread pip is correct after a re-init.
 
 installNotificationsClickListener();
-void refreshUnreadBadge();
+void refreshUnreadBadge({ unlocked: isUnlockedV4() });
 
 // ---- message routing ----
 

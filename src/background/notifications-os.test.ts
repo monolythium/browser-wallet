@@ -541,3 +541,116 @@ describe("GAP-N1 settings — show-details / notify-when-locked / badge-when-loc
     expect(await getBadgeWhenLocked()).toBe(true);
   });
 });
+
+// GAP-N1 C2 — the gating itself: fireOsNotification's lock gate + show-details
+// body branch, and refreshUnreadBadge's badge-when-locked hold. `unlocked` is
+// passed in (gate-only). The in-app record write is separate (recordNotification
+// takes no settings — covered in notifications-store.test.ts).
+describe("GAP-N1 C2 — toast + badge gating on the new settings", () => {
+  let captures: ChromeStubCaptures;
+
+  beforeEach(() => {
+    captures = installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("locked + notify-when-locked OFF → no toast", async () => {
+    captures.storage["mono.notifications.notify-when-locked.v1"] = false;
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({ kind: "send", status: "confirmed" }),
+      { unlocked: false },
+    );
+    expect(captures.notificationsCreate).toHaveLength(0);
+  });
+
+  it("locked + notify-when-locked ON (default) → toast fires", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({ kind: "send", status: "confirmed" }),
+      { unlocked: false },
+    );
+    expect(captures.notificationsCreate).toHaveLength(1);
+  });
+
+  it("unlocked → notify-when-locked is irrelevant (toast fires even when OFF)", async () => {
+    captures.storage["mono.notifications.notify-when-locked.v1"] = false;
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({ kind: "send", status: "confirmed" }),
+      { unlocked: true },
+    );
+    expect(captures.notificationsCreate).toHaveLength(1);
+  });
+
+  it("show-details OFF → generic confirmed body (no amount / address / op)", async () => {
+    captures.storage["mono.notifications.show-details.v1"] = false;
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({ kind: "delegate", status: "confirmed", amountDecimal: "1.5" }),
+      { unlocked: true },
+    );
+    const call = captures.notificationsCreate[0]!;
+    expect(call.options.title).toBe("Monolythium");
+    expect(call.options.message).toBe("Transaction confirmed");
+    expect(call.options.message as string).not.toContain("LYTH");
+    expect(call.options.message as string).not.toContain("1.5");
+  });
+
+  it("show-details OFF + failed → 'Transaction failed'", async () => {
+    captures.storage["mono.notifications.show-details.v1"] = false;
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(baseRecord({ kind: "send", status: "failed" }), {
+      unlocked: true,
+    });
+    expect(captures.notificationsCreate[0]!.options.message).toBe(
+      "Transaction failed",
+    );
+  });
+
+  it("os-enabled OFF suppresses the toast regardless of the new settings", async () => {
+    captures.storage["mono.notifications.os-enabled.v1"] = false;
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({ kind: "send", status: "confirmed" }),
+      { unlocked: false },
+    );
+    expect(captures.notificationsCreate).toHaveLength(0);
+  });
+
+  it("locked + badge-when-locked OFF → count held (empty) though unread > 0", async () => {
+    captures.storage[`mono.notifications.history.${ADDR}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [baseRecord({ kind: "send" })],
+    };
+    captures.storage["mono.notifications.badge-when-locked.v1"] = false;
+    const { refreshUnreadBadge } = await import("./notifications-os.js");
+    await refreshUnreadBadge({ unlocked: false });
+    expect(captures.badgeText).toEqual([""]);
+  });
+
+  it("locked + badge-when-locked ON (default) → count shown", async () => {
+    captures.storage[`mono.notifications.history.${ADDR}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [baseRecord({ kind: "send" })],
+    };
+    const { refreshUnreadBadge } = await import("./notifications-os.js");
+    await refreshUnreadBadge({ unlocked: false });
+    expect(captures.badgeText).toEqual(["1"]);
+  });
+
+  it("unlock → refreshUnreadBadge({unlocked:true}) surfaces the held count", async () => {
+    captures.storage[`mono.notifications.history.${ADDR}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [baseRecord({ kind: "send" })],
+    };
+    captures.storage["mono.notifications.badge-when-locked.v1"] = false;
+    const { refreshUnreadBadge } = await import("./notifications-os.js");
+    await refreshUnreadBadge({ unlocked: true });
+    expect(captures.badgeText).toEqual(["1"]);
+  });
+});
