@@ -138,8 +138,10 @@ import {
 // never escape into the snapshot path.
 import {
   fireOsNotification,
+  getOsNotificationsEnabled,
   installNotificationsClickListener,
   refreshUnreadBadge,
+  setOsNotificationsEnabled,
 } from "./notifications-os.js";
 // Phase 1.5 notifications — broadcast-time operation tag. The wallet-send-tx
 // handler reads p.opKind into a handler-local var (sanitized via isTxOpKind)
@@ -7996,6 +7998,33 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const count = await getUnread();
         return { ok: true, count };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-os-enabled": {
+      // Phase 5 — read the user-facing OS-toast toggle. Default true
+      // (absent ⇒ on). §0.4 still holds: this is read-only.
+      try {
+        const enabled = await getOsNotificationsEnabled();
+        return { ok: true, enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-os-enabled": {
+      // Phase 5 — write the user-facing OS-toast toggle. Boolean
+      // validated at the IPC boundary (anything non-boolean is rejected
+      // before touching storage). Gates ONLY the OS toast; history +
+      // badge keep running regardless on the chokepoint hook side, so
+      // the notifications center remains the durable record.
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setOsNotificationsEnabled(p.enabled);
+        return { ok: true, enabled: p.enabled };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }

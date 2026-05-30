@@ -334,3 +334,95 @@ describe("installNotificationsClickListener", () => {
     expect(stub.mock.calls).toHaveLength(1);
   });
 });
+
+// Phase 5 — user-facing OS-toast toggle. The flag (default true) gates
+// ONLY chrome.notifications.create. The in-app notification history and
+// the toolbar unread badge keep running on the hook side regardless,
+// because both are owned by the SW chokepoint (recordNotification +
+// refreshUnreadBadge), not by fireOsNotification.
+describe("Phase 5 — OS-toast flag (mono.notifications.os-enabled.v1)", () => {
+  let captures: ChromeStubCaptures;
+
+  beforeEach(() => {
+    captures = installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("default ON — flag absent → fireOsNotification calls chrome.notifications.create", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(baseRecord({ kind: "send", status: "confirmed" }));
+    expect(captures.notificationsCreate).toHaveLength(1);
+  });
+
+  it("flag OFF → fireOsNotification SKIPS the toast (chrome.notifications.create NOT called)", async () => {
+    captures.storage["mono.notifications.os-enabled.v1"] = false;
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(baseRecord({ kind: "send", status: "confirmed" }));
+    expect(captures.notificationsCreate).toHaveLength(0);
+  });
+
+  it("flag OFF does NOT mute history / badge — recordNotification still writes, refreshUnreadBadge still updates", async () => {
+    captures.storage["mono.notifications.os-enabled.v1"] = false;
+    const { fireOsNotification, refreshUnreadBadge } = await import(
+      "./notifications-os.js"
+    );
+    const { recordNotification } = await import("./notifications-store.js");
+
+    // Simulate the SW chokepoint sequence: recordNotification first
+    // (history + the notified set), then fireOsNotification (the only
+    // part the flag should gate), then refreshUnreadBadge once per
+    // batch.
+    const res = await recordNotification({
+      addressLower: ADDR,
+      chainIdHex: CHAIN,
+      txHash: HASH,
+      status: "confirmed",
+      blockNumber: 100,
+      kind: "send",
+      amountDecimal: "0.10",
+      counterparty: "0x" + "01".repeat(20),
+    });
+    expect(res.added).toBe(true);
+    expect(res.record).not.toBeNull();
+
+    await fireOsNotification(res.record!);
+    await refreshUnreadBadge();
+
+    // The toast is suppressed by the flag — but the history blob was
+    // written under the per-scope key, and the badge text reflects the
+    // freshly-written unread record.
+    expect(captures.notificationsCreate).toHaveLength(0);
+    const histKey = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+    expect(captures.storage[histKey]).toBeDefined();
+    expect(captures.badgeText).toEqual(["1"]);
+  });
+
+  it("fail-open — a flag-read error keeps the toast firing (no regression to Phase-2 behavior)", async () => {
+    // Replace chrome.storage.local.get with a throwing stub.
+    (
+      globalThis as {
+        chrome?: { storage?: { local?: { get?: unknown } } };
+      }
+    ).chrome!.storage!.local!.get = () => {
+      throw new Error("storage read denied");
+    };
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(baseRecord({ kind: "send", status: "confirmed" }));
+    expect(captures.notificationsCreate).toHaveLength(1);
+  });
+
+  it("get/set round-trip — set(false) then get() === false; default get() === true", async () => {
+    const { getOsNotificationsEnabled, setOsNotificationsEnabled } = await import(
+      "./notifications-os.js"
+    );
+    expect(await getOsNotificationsEnabled()).toBe(true);
+    await setOsNotificationsEnabled(false);
+    expect(await getOsNotificationsEnabled()).toBe(false);
+    await setOsNotificationsEnabled(true);
+    expect(await getOsNotificationsEnabled()).toBe(true);
+  });
+});
