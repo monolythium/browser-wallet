@@ -6942,8 +6942,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         cacheKey,
         pendingKey,
       );
+      // Bug A F1 — bypass the staleness short-circuit when pending rows exist
+      // so a refocus/nav refresh (and the F2 ~4s re-poll in useActivity) falls
+      // through to the authoritative reconcile (dropConfirmedPendingByHash
+      // below) instead of returning the cached pending row unchanged. Without
+      // this, a tx that confirms in ~3-5s lingers as "pending" for up to the
+      // full 30s cache window. NARROW: only when prevPending.length > 0 — a
+      // non-pending refresh keeps the 30s cache benefit for the common case.
+      // Reconcile only flips a confirmed/failed verdict off the receipt
+      // (#5117 preserved); it never invents a confirmation.
       const isFresh =
-        prevCache !== null && now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS;
+        prevCache !== null &&
+        now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS &&
+        prevPending.length === 0;
       if (isFresh) {
         const pending = evictExpiredPending(prevPending, now);
         if (pending.length !== prevPending.length) {
