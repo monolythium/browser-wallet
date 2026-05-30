@@ -1,0 +1,262 @@
+// Phase 1 — `notifications-store` round-trip coverage.
+//
+// We stub `chrome.storage.local` with an in-memory record (the same
+// pattern used by `keystore.test.ts`) so the real `recordNotification`
+// path is exercised under Node, including the dedupe + cap + namespacing
+// + status-fidelity invariants the chokepoint hook depends on.
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+interface StorageMap {
+  [k: string]: unknown;
+}
+
+function installChromeStub(): { storage: StorageMap } {
+  const storage: StorageMap = {};
+  (globalThis as { chrome?: unknown }).chrome = {
+    storage: {
+      local: {
+        get: (
+          keys: string | string[] | null,
+          cb: (res: Record<string, unknown>) => void,
+        ) => {
+          if (keys === null) {
+            // `chrome.storage.local.get(null, …)` returns ALL entries —
+            // this is what `getUnread` uses to aggregate across scopes.
+            queueMicrotask(() => cb({ ...storage }));
+            return;
+          }
+          const arr = typeof keys === "string" ? [keys] : keys;
+          const out: Record<string, unknown> = {};
+          for (const k of arr) {
+            if (k in storage) out[k] = storage[k];
+          }
+          queueMicrotask(() => cb(out));
+        },
+        set: (entries: Record<string, unknown>, cb: () => void) => {
+          for (const [k, v] of Object.entries(entries)) {
+            storage[k] = v;
+          }
+          queueMicrotask(() => cb());
+        },
+        remove: (keys: string | string[], cb?: () => void) => {
+          const arr = typeof keys === "string" ? [keys] : keys;
+          for (const k of arr) delete storage[k];
+          if (cb) queueMicrotask(() => cb());
+        },
+      },
+    },
+  };
+  return { storage };
+}
+
+const ADDR_A = "0x" + "ab".repeat(20);
+const ADDR_B = "0x" + "cd".repeat(20);
+const CHAIN_A = "0x10f2c";
+const CHAIN_B = "0x1";
+const HASH_1 = "0x" + "11".repeat(32);
+const HASH_2 = "0x" + "22".repeat(32);
+
+function baseInput(overrides: {
+  addressLower?: string;
+  chainIdHex?: string;
+  txHash?: string;
+  status?: "confirmed" | "failed";
+  kind?: "send" | "contract_call";
+  blockNumber?: number | null;
+} = {}) {
+  return {
+    addressLower: ADDR_A,
+    chainIdHex: CHAIN_A,
+    txHash: HASH_1,
+    status: "confirmed" as const,
+    blockNumber: 100,
+    kind: "send" as const,
+    amountDecimal: "0.10",
+    counterparty: "0x" + "01".repeat(20),
+    ...overrides,
+  };
+}
+
+describe("notifications-store", () => {
+  let storage: StorageMap;
+
+  beforeEach(() => {
+    ({ storage } = installChromeStub());
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("records a new notification and writes both history + notified-set", async () => {
+    const { recordNotification } = await import("./notifications-store.js");
+    const r = await recordNotification(baseInput());
+    expect(r.added).toBe(true);
+    expect(r.record?.id).toBe(`${CHAIN_A}:${HASH_1}`);
+    expect(r.record?.read).toBe(false);
+    expect(r.record?.schemaVersion).toBe(0);
+    expect(
+      (storage[`mono.notifications.history.${ADDR_A}.${CHAIN_A}.v1`] as {
+        entries: unknown[];
+      }).entries,
+    ).toHaveLength(1);
+    expect(
+      (storage[`mono.notifications.notified.${ADDR_A}.${CHAIN_A}.v1`] as {
+        ids: string[];
+      }).ids,
+    ).toContain(`${CHAIN_A}:${HASH_1}`);
+  });
+
+  it("dedupes — a second call with the same (addr, chain, txHash) is a no-op", async () => {
+    const { recordNotification } = await import("./notifications-store.js");
+    const first = await recordNotification(baseInput());
+    expect(first.added).toBe(true);
+    const second = await recordNotification(baseInput());
+    expect(second.added).toBe(false);
+    expect(second.record).toBeNull();
+    const entries = (storage[
+      `mono.notifications.history.${ADDR_A}.${CHAIN_A}.v1`
+    ] as { entries: unknown[] }).entries;
+    expect(entries).toHaveLength(1);
+    const ids = (storage[
+      `mono.notifications.notified.${ADDR_A}.${CHAIN_A}.v1`
+    ] as { ids: string[] }).ids;
+    expect(ids).toHaveLength(1);
+  });
+
+  it("caps history at 50 newest-first when overflowed (51 in → 50 retained)", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    for (let i = 0; i < 51; i++) {
+      const hash = "0x" + i.toString(16).padStart(64, "0");
+      await recordNotification(baseInput({ txHash: hash }));
+    }
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    expect(list).toHaveLength(50);
+    // Newest first — `i=50` is the most recent insert.
+    const expectedNewest =
+      "0x" + (50).toString(16).padStart(64, "0");
+    expect(list[0]?.txHash).toBe(expectedNewest);
+    // The very first insert (`i=0`) is dropped.
+    const droppedHash = "0x" + (0).toString(16).padStart(64, "0");
+    expect(list.find((r) => r.txHash === droppedHash)).toBeUndefined();
+    // Dedupe-set keeps ALL ids — it's intentionally uncapped so a long-
+    // dropped record can't re-fire if it ever resurfaces.
+    const ids = (storage[
+      `mono.notifications.notified.${ADDR_A}.${CHAIN_A}.v1`
+    ] as { ids: string[] }).ids;
+    expect(ids).toHaveLength(51);
+  });
+
+  it("isolates scope per (addr, chain) — no cross-bleed in history or dedupe-set", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    // Same txHash recorded for two different addresses (same chain).
+    await recordNotification(baseInput({ addressLower: ADDR_A, txHash: HASH_1 }));
+    const otherAddr = await recordNotification(
+      baseInput({ addressLower: ADDR_B, txHash: HASH_1 }),
+    );
+    // Dedupe is per-scope — the SAME tx on a DIFFERENT addr is "new".
+    expect(otherAddr.added).toBe(true);
+
+    // Same txHash recorded for the same address on a different chain.
+    const otherChain = await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_B, txHash: HASH_1 }),
+    );
+    expect(otherChain.added).toBe(true);
+
+    expect(await listNotifications(ADDR_A, CHAIN_A)).toHaveLength(1);
+    expect(await listNotifications(ADDR_B, CHAIN_A)).toHaveLength(1);
+    expect(await listNotifications(ADDR_A, CHAIN_B)).toHaveLength(1);
+    // ADDR_B / CHAIN_B was never touched.
+    expect(await listNotifications(ADDR_B, CHAIN_B)).toHaveLength(0);
+  });
+
+  it("status fidelity — a 'failed' input is stored as 'failed', never coerced", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(baseInput({ txHash: HASH_1, status: "failed" }));
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    expect(list[0]?.status).toBe("failed");
+    // And the round-trip preserves the literal — guard against any future
+    // accidental coercion in the read path.
+    const env = storage[
+      `mono.notifications.history.${ADDR_A}.${CHAIN_A}.v1`
+    ] as { entries: Array<{ status: string }> };
+    expect(env.entries[0]?.status).toBe("failed");
+  });
+
+  it("markAllRead flips unread entries; idempotent on already-read scopes", async () => {
+    const { recordNotification, markAllRead, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(baseInput({ txHash: HASH_1 }));
+    await recordNotification(baseInput({ txHash: HASH_2 }));
+
+    const first = await markAllRead(ADDR_A, CHAIN_A);
+    expect(first.flipped).toBe(2);
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    expect(list.every((r) => r.read)).toBe(true);
+
+    const second = await markAllRead(ADDR_A, CHAIN_A);
+    expect(second.flipped).toBe(0);
+  });
+
+  it("getUnread sums unread across ALL scopes (no separate counter key)", async () => {
+    const { recordNotification, markAllRead, getUnread } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(baseInput({ addressLower: ADDR_A, txHash: HASH_1 }));
+    await recordNotification(baseInput({ addressLower: ADDR_A, txHash: HASH_2 }));
+    await recordNotification(baseInput({ addressLower: ADDR_B, txHash: HASH_1 }));
+    expect(await getUnread()).toBe(3);
+
+    // Marking one scope read drops only that scope's contribution.
+    await markAllRead(ADDR_A, CHAIN_A);
+    expect(await getUnread()).toBe(1);
+
+    // The derived count goes to zero when every scope is read.
+    await markAllRead(ADDR_B, CHAIN_A);
+    expect(await getUnread()).toBe(0);
+  });
+
+  it("tolerant parse — garbage at the history key heals on the next write", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    // Plant junk where the history envelope should live.
+    storage[`mono.notifications.history.${ADDR_A}.${CHAIN_A}.v1`] =
+      "this is not an envelope";
+    // The read path returns [] for the garbage scope.
+    expect(await listNotifications(ADDR_A, CHAIN_A)).toEqual([]);
+
+    // recordNotification heals — next call writes a fresh envelope.
+    const r = await recordNotification(baseInput({ txHash: HASH_1 }));
+    expect(r.added).toBe(true);
+    expect(await listNotifications(ADDR_A, CHAIN_A)).toHaveLength(1);
+  });
+
+  it("stored record matches the NotificationRecord schema (id, read:false, schemaVersion:0)", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(baseInput({ txHash: HASH_1 }));
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    const rec = list[0];
+    expect(rec).toBeDefined();
+    expect(rec?.id).toBe(`${CHAIN_A}:${HASH_1}`);
+    expect(rec?.txHash).toBe(HASH_1);
+    expect(rec?.read).toBe(false);
+    expect(rec?.schemaVersion).toBe(0);
+    expect(rec?.status).toBe("confirmed");
+    expect(rec?.kind).toBe("send");
+    expect(rec?.blockNumber).toBe(100);
+    expect(rec?.amountDecimal).toBe("0.10");
+    expect(typeof rec?.createdAtMs).toBe("number");
+  });
+});
