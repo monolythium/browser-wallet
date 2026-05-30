@@ -80,7 +80,7 @@ const BRAND_FRAGMENTS = [
 const CANONICAL_BRAND_HOSTS = [
   "monolythium.org",
   "monolythium.vision",
-  "monoscan.io",
+  "monoscan.xyz",
   "metamask.io",
   "coinbase.com",
   "uniswap.org",
