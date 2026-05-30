@@ -1443,6 +1443,85 @@ describe("wallet-activity-get", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
+  // staleness short-circuit and falls through to the authoritative reconcile
+  // (dropConfirmedPendingByHash), so a tx that confirms in ~3-5s clears from
+  // "pending" promptly instead of after the full 30s cache window. NARROW: a
+  // non-pending refresh still serves the fresh cache. Each test primes a FRESH
+  // cache first, so a cleared pending row can ONLY come from the F1 bypass
+  // (not the stale >30s path).
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** First call populates the cache with lastFetchedAtMs ≈ now (fresh). */
+  async function primeFreshCache() {
+    seedEmptyIndexer();
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+  }
+
+  it("F1: with a FRESH cache + pending, bypasses the short-circuit and clears a confirmed pending", async () => {
+    await primeFreshCache();
+    const callsAfterPrime = rpcCalls.length;
+    // Cache is fresh (<30s). Seed a pending row + a 'found' status.
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 321 };
+    seedPending("0x" + "a1".repeat(32));
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: unknown[] };
+    expect(r.ok).toBe(true);
+    // Reconciled despite the fresh cache → the short-circuit was bypassed.
+    expect(r.pending).toHaveLength(0);
+    // And it actually re-fetched (did not serve from cache).
+    expect(rpcCalls.length).toBeGreaterThan(callsAfterPrime);
+  });
+
+  it("F1: with a FRESH cache + pending, a status:0 receipt records 'failed' — never confirmed (#5117)", async () => {
+    await primeFreshCache();
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 0, block_number: 654 };
+    const txHash = "0x" + "b2".repeat(32);
+    seedPendingCustom({
+      txHash,
+      to: "0x" + "0b".repeat(20),
+      amountDecimal: "0.00",
+      broadcastBlockHeight: 50,
+    });
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: unknown[] };
+    await flushNotificationMicrotasks();
+    // Terminal (failed) → dropped from pending, even with a fresh cache.
+    expect(r.pending).toHaveLength(0);
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ txHash: string; status: string }> }
+      | undefined;
+    expect(hist?.entries.at(-1)?.status).toBe("failed");
+  });
+
+  it("F1 is narrow: with a FRESH cache + NO pending, still short-circuits (no reconcile RPC)", async () => {
+    await primeFreshCache();
+    const callsAfterPrime = rpcCalls.length;
+    // No pending rows — a second call must serve from the fresh cache.
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: unknown[] };
+    expect(r.ok).toBe(true);
+    expect(rpcCalls.length).toBe(callsAfterPrime); // unchanged — cache served
+    expect(rpcCalls.some((c) => c.method === "lyth_txStatus")).toBe(false);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Phase 1 notifications — post-write microtask hook fires one
   // NotificationRecord per tracked-tx terminal transition. The §0.2 invariant
   // ("status from the real on-chain receipt, never optimism") is the most
