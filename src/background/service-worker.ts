@@ -4315,6 +4315,82 @@ async function dropConfirmedPendingByHash(
   return { kept, terminal };
 }
 
+/** GAP-N1 — headless background poll core. Enumerates every
+ *  `mono.activity.pending.*` scope, asks the chain whether each KNOWN
+ *  pending tx has reached a terminal state, and runs the SAME
+ *  detect→record→toast→badge sequence the popup chokepoint runs — but
+ *  with no surface open. READ-AND-NOTIFY ONLY: it reads public receipts
+ *  for hashes already in plaintext storage and writes only the
+ *  notification store + OS toast + badge. It NEVER touches signing /
+ *  broadcast / fee / nonce / encrypted payload.
+ *
+ *  Returns `{ remaining }` = pending rows still outstanding across all
+ *  scopes after this tick, so the alarm caller (C2) can self-clear at 0.
+ *  Exported for unit tests (driven directly against the in-memory chrome
+ *  stub); production calls it from the ALARM_NOTIF_POLL onAlarm branch.
+ *  Best-effort: never throws out of the alarm. */
+export async function pollPendingAndNotify(): Promise<{ remaining: number }> {
+  let remaining = 0;
+  try {
+    const all = await new Promise<Record<string, unknown>>((resolve) => {
+      chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+    });
+    const now = Date.now();
+    for (const key of Object.keys(all)) {
+      if (!key.startsWith("mono.activity.pending.")) continue;
+      // key = mono.activity.pending.<addrLower>.<chainIdHex>; addresses and
+      // chainIdHex never contain a dot, so the LAST dot splits them.
+      const rest = key.slice("mono.activity.pending.".length);
+      const dot = rest.lastIndexOf(".");
+      if (dot <= 0) continue;
+      const addressLower = rest.slice(0, dot);
+      const chainIdHex = rest.slice(dot + 1);
+      const pending = validatePendingActivityCache(all[key])?.pending ?? [];
+      if (pending.length === 0) continue;
+      // Sprintnet-only: the receipt RPC + indexer are Sprintnet-shaped.
+      // Non-Sprintnet rows still count toward `remaining` (don't strand the
+      // alarm) but aren't polled.
+      if (!chainRequiresMlDsa(chainIdHex)) {
+        remaining += pending.length;
+        continue;
+      }
+      // TTL-evict FIRST so an expired row is neither notified nor re-polled.
+      const live = evictExpiredPending(pending, now);
+      const { kept, terminal } = await dropConfirmedPendingByHash(live);
+      for (const t of terminal) {
+        // Same shape the popup terminal-by-hash loop builds. The status is
+        // receipt-derived (confirmed/failed) — #5117 preserved.
+        const result = await recordNotification({
+          addressLower,
+          chainIdHex,
+          txHash: t.row.txHash,
+          status: t.status,
+          blockNumber: t.blockNumber,
+          kind: t.row.opKind ?? "contract_call",
+          amountDecimal: t.row.amountDecimal,
+          counterparty: t.row.to,
+        });
+        if (result.added && result.record !== null) {
+          await fireOsNotification(result.record);
+        }
+      }
+      // Write back ONLY the still-pending rows (terminal + TTL-expired
+      // dropped) so they aren't re-polled. Change-guard mirrors
+      // writeActivityStorage so we don't fire a spurious onChanged.
+      if (kept.length !== pending.length) {
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set({ [key]: { pending: kept } }, () => resolve());
+        });
+      }
+      remaining += kept.length;
+    }
+    await refreshUnreadBadge();
+  } catch {
+    // Best-effort — a poll failure must never escape the alarm.
+  }
+  return { remaining };
+}
+
 /** Persist the merged cache. Pending key only writes when its contents
  *  changed, so chrome.storage.onChanged doesn't fire spuriously on
  *  no-op reconciliations. */
