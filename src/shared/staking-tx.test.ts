@@ -16,10 +16,12 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
+  encodeCompleteRedemptionCalldata,
 } from "@monolythium/core-sdk";
 import {
   DELEGATION_PRECOMPILE,
   encodeClaimRewards,
+  encodeCompleteRedemption,
   encodeDelegate,
   encodeRedelegate,
   encodeUndelegate,
@@ -99,6 +101,20 @@ describe("encodeClaimRewards", () => {
   it("equals the SDK claim() encoder + carries the chain claim() selector", () => {
     expect(encodeClaimRewards()).toBe(encodeClaimCalldata());
     expect(encodeClaimRewards().startsWith(computeSelector("claim()"))).toBe(true);
+  });
+});
+
+describe("encodeCompleteRedemption", () => {
+  it("equals the SDK encoder + carries the chain completeRedemption(uint64) selector", () => {
+    const data = encodeCompleteRedemption(2);
+    expect(data).toBe(encodeCompleteRedemptionCalldata(2));
+    expect(
+      data.startsWith(computeSelector("completeRedemption(uint64)")),
+    ).toBe(true);
+    expect(data.startsWith("0x26169d0a")).toBe(true);
+    // selector + single ticket-index word.
+    expect(data).toHaveLength(2 + 8 + 64);
+    expect(data.slice(10)).toBe("0".repeat(63) + "2"); // index = 2
   });
 });
 

@@ -53,6 +53,7 @@ import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
   encodeClaimRewards,
+  encodeCompleteRedemption,
   encodeDelegate,
   encodeRedelegate,
   encodeUndelegate,
@@ -249,6 +250,16 @@ export function Stake({
   const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
   const [redemptionQueueError, setRedemptionQueueError] =
     useState<string | null>(null);
+  // Complete-redemption is self-contained (it has no preview/confirm
+  // step and no principal arg), so it rides its own in-flight index +
+  // result toast rather than the delegate/undelegate `step`/`action`
+  // state machine below.
+  const [completingIndex, setCompletingIndex] = useState<number | null>(null);
+  const [redemptionResult, setRedemptionResult] = useState<
+    | { ok: true; txHash: string }
+    | { ok: false; reason: string }
+    | null
+  >(null);
 
   // Phase 9 — §28.5 Q29 TRADING_INTERFACE flag gates the advanced
   // reward analytics surface (per-cluster breakdown inside RewardCard).
@@ -563,6 +574,49 @@ export function Stake({
     }
   };
 
+  // Complete-redemption — submit `completeRedemption(index)` for a
+  // matured ticket through the same bgWalletSendTx envelope as
+  // claim/undelegate. With liquid bonding the ticket matures at the
+  // undelegate height, so a mature ticket is immediately redeemable;
+  // the call returns the queued principal to the wallet balance and
+  // prunes the ticket. Self-contained (no preview/confirm step) so it
+  // does not touch the delegate/undelegate `step`/`action` machine.
+  const handleCompleteRedemption = async (ticketIndex: number) => {
+    setCompletingIndex(ticketIndex);
+    setRedemptionResult(null);
+    try {
+      const r = await bgWalletSendTx({
+        to: DELEGATION_PRECOMPILE,
+        valueWeiHex: "0x0",
+        chainIdHex: chainId,
+        data: encodeCompleteRedemption(ticketIndex),
+        executionUnitLimitHex: "0x186A0", // 100000 — single-arg precompile call
+        opKind: "complete-redemption",
+      });
+      if (r.ok) {
+        setRedemptionResult({ ok: true, txHash: r.result.txHash });
+        // Refresh the queue so the redeemed ticket drops out.
+        const queueR = await bgStakingRedemptionQueue(account.addr);
+        if (queueR.ok) {
+          setRedemptionQueue(queueR.data);
+          setRedemptionQueueMock(queueR.via === "mock");
+        }
+      } else {
+        setRedemptionResult({
+          ok: false,
+          reason: r.reason ?? "redemption rejected",
+        });
+      }
+    } catch (e) {
+      setRedemptionResult({
+        ok: false,
+        reason: (e as Error).message ?? "redemption failed",
+      });
+    } finally {
+      setCompletingIndex(null);
+    }
+  };
+
   const handleCopyHash = async () => {
     if (txHash === null) return;
     try {
@@ -647,7 +701,55 @@ export function Stake({
                 isMock={redemptionQueueMock}
                 error={redemptionQueueError}
                 clusters={clusters}
+                onComplete={
+                  redemptionQueueMock
+                    ? undefined
+                    : (ticketIndex) =>
+                        void handleCompleteRedemption(ticketIndex)
+                }
+                completingIndex={completingIndex}
               />
+            )}
+
+            {/* Redemption result toast */}
+            {redemptionResult !== null && (
+              <div
+                style={
+                  redemptionResult.ok
+                    ? {
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "rgba(80,200,120,0.08)",
+                        border: "1px solid rgba(80,200,120,0.4)",
+                        fontFamily: "var(--f-mono)",
+                        fontSize: 10.5,
+                        color: "var(--ok)",
+                        lineHeight: 1.5,
+                      }
+                    : {
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "rgba(220,80,80,0.08)",
+                        border: "1px solid rgba(220,80,80,0.4)",
+                        fontFamily: "var(--f-mono)",
+                        fontSize: 10.5,
+                        color: "var(--err)",
+                        lineHeight: 1.5,
+                      }
+                }
+              >
+                {redemptionResult.ok ? (
+                  <>
+                    Redemption submitted ·{" "}
+                    <span style={{ color: "var(--fg-200)" }}>
+                      {redemptionResult.txHash.slice(0, 10)}…
+                      {redemptionResult.txHash.slice(-6)}
+                    </span>
+                  </>
+                ) : (
+                  redemptionResult.reason
+                )}
+              </div>
             )}
 
             {/* Existing delegations — manage Unstake / Redelegate per row */}
