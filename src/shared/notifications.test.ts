@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   NOTIFICATION_HISTORY_CAP,
+  NOTIFICATION_LABELS,
   appendCapped,
   isTxOpKind,
   notificationId,
+  notificationTitle,
   notifiedSetKey,
   notificationsHistoryKey,
   parseHistoryEnvelope,
@@ -130,6 +132,56 @@ describe("parseHistoryEnvelope", () => {
     };
     const parsed = parseHistoryEnvelope(env);
     expect(parsed?.entries.length).toBe(0);
+  });
+});
+
+describe("notificationTitle / NOTIFICATION_LABELS", () => {
+  // Pin every kind's confirmed/failed wording explicitly — these are
+  // the user-facing strings the Phase-2 toast + Phase-3 row title will
+  // render, so a one-line table makes drift obvious.
+  const expected: Array<[TxOpKind, { confirmed: string; failed: string }]> = [
+    ["send", { confirmed: "Sent", failed: "Send failed" }],
+    ["delegate", { confirmed: "Staked", failed: "Stake failed" }],
+    ["undelegate", { confirmed: "Unstaked", failed: "Unstake failed" }],
+    ["redelegate", { confirmed: "Restaked", failed: "Restake failed" }],
+    ["claim", { confirmed: "Rewards claimed", failed: "Claim failed" }],
+    [
+      "emergency-key",
+      { confirmed: "Backup key registered", failed: "Backup registration failed" },
+    ],
+    [
+      "agent-policy",
+      { confirmed: "Agent policy updated", failed: "Agent policy failed" },
+    ],
+    [
+      "contract_call",
+      { confirmed: "Transaction confirmed", failed: "Transaction failed" },
+    ],
+  ];
+
+  for (const [kind, labels] of expected) {
+    it(`renders ${kind} → confirmed: "${labels.confirmed}" / failed: "${labels.failed}"`, () => {
+      expect(notificationTitle(kind, "confirmed")).toBe(labels.confirmed);
+      expect(notificationTitle(kind, "failed")).toBe(labels.failed);
+      expect(NOTIFICATION_LABELS[kind]).toEqual(labels);
+    });
+  }
+
+  it("covers every TxOpKind literal (no fall-through)", () => {
+    const kinds: TxOpKind[] = [
+      "send",
+      "delegate",
+      "undelegate",
+      "redelegate",
+      "claim",
+      "emergency-key",
+      "agent-policy",
+      "contract_call",
+    ];
+    for (const k of kinds) {
+      expect(NOTIFICATION_LABELS[k].confirmed.length).toBeGreaterThan(0);
+      expect(NOTIFICATION_LABELS[k].failed.length).toBeGreaterThan(0);
+    }
   });
 });
 
