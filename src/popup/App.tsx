@@ -18,6 +18,14 @@ import {
   STORAGE_KEY_VAULTS_CONTAINER_V4,
 } from "../shared/constants";
 import { hexLythoshiToLythNumber } from "../shared/native-amount";
+import {
+  CWS_LISTING_URL,
+  STORAGE_KEY_WALLET_UPDATE,
+  shouldCheckWalletUpdate,
+  nextUpdateAvailable,
+  parseWalletUpdateCache,
+  requestWalletUpdateStatus,
+} from "../shared/wallet-update";
 import "./tokens.css";
 import "./glass.css";
 import "./ext.css";
@@ -43,6 +51,7 @@ import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
 import { Operators } from "./pages/Operators";
+import { NotificationSettings } from "./pages/NotificationSettings";
 import { About } from "./pages/About";
 import { Welcome } from "./pages/Welcome";
 import { SetPassword } from "./pages/SetPassword";
@@ -58,6 +67,7 @@ import { MrvNative } from "./pages/MrvNative";
 import { Pending as MultisigPending } from "./pages/Pending";
 import { MultisigGovernance } from "./components/MultisigGovernance";
 import { MainMenu } from "./pages/MainMenu";
+import { Notifications } from "./pages/Notifications";
 import { NewWalletFlow } from "./pages/NewWalletFlow";
 import { generateOnboardingMnemonic } from "./lib/onboarding-mnemonic";
 import { explainImportError } from "./lib/import-error";
@@ -81,6 +91,7 @@ import {
   bgWalletSetActiveChain,
   bgChainList,
   bgGetUiOpenMode,
+  bgGetUnread,
   bgSetUiOpenMode,
   type UiOpenMode,
   type VaultSummary,
@@ -113,6 +124,7 @@ type Screen =
   | "network-edit"
   | "settings"
   | "operators"
+  | "notification-settings"
   | "about"
   | "reveal-phrase"
   | "reset-wallet"
@@ -133,7 +145,8 @@ type Screen =
   | "features"
   | "main-menu"
   | "contacts"
-  | "new-wallet-flow";
+  | "new-wallet-flow"
+  | "notifications";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -204,6 +217,59 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // CX5 — wallet-version update check vs the Chrome Web Store. Rate-limited
+  // to ~2×/day via a cached lastCheckAt; reflects the last-known verdict
+  // immediately, then refreshes via chrome.runtime.requestUpdateCheck.
+  // Honest-absence: dev/unpacked or throttled → no banner.
+  const [walletUpdateAvailable, setWalletUpdateAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const now = Date.now();
+      const stored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_WALLET_UPDATE], (res) =>
+          resolve(res?.[STORAGE_KEY_WALLET_UPDATE]),
+        );
+      });
+      if (cancelled) return;
+      const cache = parseWalletUpdateCache(stored);
+      const prior = cache?.updateAvailable ?? false;
+      if (prior) setWalletUpdateAvailable(true);
+      if (!shouldCheckWalletUpdate(cache?.lastCheckAt ?? null, now)) return;
+      const status = await requestWalletUpdateStatus();
+      if (cancelled) return;
+      const updateAvailable = nextUpdateAvailable(status, prior);
+      setWalletUpdateAvailable(updateAvailable);
+      chrome.storage.local.set({
+        [STORAGE_KEY_WALLET_UPDATE]: {
+          lastCheckAt: now,
+          updateAvailable,
+          lastStatus: status,
+        },
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.runtime?.onUpdateAvailable) {
+      return;
+    }
+    const onUpd = () => {
+      setWalletUpdateAvailable(true);
+      chrome.storage.local.set({
+        [STORAGE_KEY_WALLET_UPDATE]: {
+          lastCheckAt: Date.now(),
+          updateAvailable: true,
+          lastStatus: "update_available",
+        },
+      });
+    };
+    chrome.runtime.onUpdateAvailable.addListener(onUpd);
+    return () => chrome.runtime.onUpdateAvailable.removeListener(onUpd);
   }, []);
   // Round 7 TASK 4 — back-navigation stack. When user navigates via the
   // hamburger menu (main-menu → contacts), back from contacts should
@@ -313,19 +379,32 @@ export default function App() {
   // Fetch the unlocked v3 keypair and patch `acc` with its real EVM
   // address + algo. Demo data stays as the fallback shape; only the
   // identity-bearing fields are overridden so Home keeps rendering the
-  // same component without a rewrite.
+  // same component without a rewrite. The chip's visible label comes
+  // from the active vault's `label` (via bgVaultsList → VaultPicker);
+  // we deliberately do NOT override `acc.label` here — a prior override
+  // ("ML-DSA-65 wallet") leaked through VaultPicker's fallback during
+  // the pre-fetch tick and showed up as the apparent wallet name on
+  // fresh installs.
   const loadActiveAccount = async () => {
     const r = await bgWalletActiveAccount();
     if (!r.ok) return;
     setAcc((prev) => ({
       ...prev,
       id: "v3-active",
-      label: "ML-DSA-65 wallet",
       addr: r.account.address,
       algo: r.account.algo === "mldsa" ? "mldsa" : "slhdsa",
       custody: r.account.custody,
       denom: "public",
-      balance: null,
+      // Preserve the last-known balance on a SAME-address refresh (refocus,
+      // SW-restart, vault-flow re-hydrate) so Home doesn't flash "0.00" while
+      // refreshBalance re-fetches — the prior value is still the real balance.
+      // Only clear to null on an actual account SWITCH, where the prior
+      // balance belongs to a different address and would be wrong to show.
+      // (Never a synthesized 0 — refreshBalance repopulates the real value.)
+      balance:
+        r.account.address.toLowerCase() === prev.addr.toLowerCase()
+          ? prev.balance
+          : null,
       pinned: true,
     }));
   };
@@ -416,6 +495,41 @@ export default function App() {
   // followup calls also retry once on the same error class.
   useEffect(() => {
     void bgPing();
+  }, []);
+
+  // Polish C1 — drive the top-bar bell's small unread dot. The dot
+  // mirrors the global unread count (same source as Phase-2's toolbar
+  // badge and Phase-3's MainMenu pill). We fetch on mount + subscribe
+  // to `chrome.storage.onChanged` for any `mono.notifications.history.*`
+  // write so the dot updates in real time as new records land, the
+  // user marks one read, or "Mark all as read" fires — no polling tick.
+  const [bannerUnread, setBannerUnread] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const r = await bgGetUnread();
+      if (cancelled) return;
+      setBannerUnread(r.ok ? r.count : 0);
+    };
+    void refresh();
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      if (
+        Object.keys(changes).some((k) =>
+          k.startsWith("mono.notifications.history."),
+        )
+      ) {
+        void refresh();
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
   }, []);
 
   // ---- mount-time bootstrap ----
@@ -744,6 +858,7 @@ export default function App() {
     screen === "network-edit" ||
     screen === "settings" ||
     screen === "operators" ||
+    screen === "notification-settings" ||
     screen === "mrv-native" ||
     screen === "receive" ||
     screen === "send" ||
@@ -783,10 +898,16 @@ export default function App() {
           // matched), masking the bug — the actual fix is using the
           // stack at both entry pushers (top-bar + MainMenu).
           onOpenNetworks={() => navigateTo("networks")}
+          unreadCount={bannerUnread}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),
                 onConnectedSites: () => navigateTo("connected-sites"),
+                // Polish C1 — bell entry to the global notifications
+                // page. Same destination as the MainMenu bell row;
+                // exposing it on the top bar so the inbox is reachable
+                // without opening the hamburger menu.
+                onNotifications: () => navigateTo("notifications"),
                 // Round 7 TASK 4 — top-bar lock-button replaced with the
                 // hamburger menu trigger. Lock moves into the MainMenu's
                 // bottom (danger) section.
@@ -794,6 +915,35 @@ export default function App() {
               }
             : {})}
         />
+      )}
+
+      {screen === "home" && walletUpdateAvailable && (
+        <button
+          type="button"
+          onClick={() =>
+            window.open(CWS_LISTING_URL, "_blank", "noopener,noreferrer")
+          }
+          title="Open the Monolythium wallet on the Chrome Web Store"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            padding: "8px 14px",
+            border: "none",
+            borderBottom: "1px solid rgba(242,180,65,0.3)",
+            background:
+              "linear-gradient(90deg, rgba(242,180,65,0.18), rgba(242,180,65,0.04))",
+            color: "var(--gold)",
+            fontFamily: "var(--f-sans)",
+            fontSize: 11.5,
+            textAlign: "left",
+            cursor: "pointer",
+          }}
+        >
+          <span aria-hidden="true">⬆</span>
+          <span>A wallet update is available — update on the Chrome Web Store ↗</span>
+        </button>
       )}
 
       {screen === "loading" && <div className="ext-body" style={{ padding: 24, color: "var(--fg-300)" }}>Loading…</div>}
@@ -936,6 +1086,10 @@ export default function App() {
           // Import + Multisig dropdown entries still open
           // VaultAddModal as before.
           onNewWalletFlow={() => navigateTo("new-wallet-flow")}
+          // Re-run hydration when VaultAddModal completes so the chip
+          // shows the new vault's name immediately, instead of waiting
+          // for a lock/unlock or reopen to remount the tree.
+          onVaultComplete={() => void refreshKeystoreStatus()}
           topSlot={
             activeVaultSummary ? (
               <>
@@ -1053,6 +1207,7 @@ export default function App() {
           // navigateBack handles both pushers.
           onResetWallet={() => navigateTo("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
+          onOpenNotificationSettings={() => setScreen("notification-settings")}
           onOpenMrvNative={() => setScreen("mrv-native")}
           // Round 9 TASK 2 — Settings → About now pushes onto the
           // screen stack via navigateTo so About's onBack (which
@@ -1096,6 +1251,10 @@ export default function App() {
 
       {screen === "operators" && (
         <Operators onBack={() => setScreen("settings")} />
+      )}
+
+      {screen === "notification-settings" && (
+        <NotificationSettings onBack={() => setScreen("settings")} />
       )}
 
       {screen === "mrv-native" && (
@@ -1236,12 +1395,21 @@ export default function App() {
           // ResetWallet (via navigateBack) returns to the menu instead
           // of skipping to home.
           onResetWallet={() => navigateTo("reset-wallet")}
+          // Phase 3 notifications — open the global inbox. navigateTo
+          // pushes "main-menu" so back from the Notifications page
+          // returns to the menu.
+          onNotifications={() => navigateTo("notifications")}
         />
       )}
 
       {/* Round 7 TASK 5 — Contacts page. Reached from MainMenu;
          onBack via navigateBack to return to the menu. */}
       {screen === "contacts" && <Contacts onBack={navigateBack} />}
+
+      {/* Phase 3 — Notifications page. Global inbox; reached from the
+         hamburger menu's bell row. onBack via navigateBack returns to
+         the menu. */}
+      {screen === "notifications" && <Notifications onBack={navigateBack} />}
 
       {/* Round 13 TASK 1 — in-app new wallet flow. Reached from the
          VaultPicker dropdown's "New wallet" entry (push "home" onto

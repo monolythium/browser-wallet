@@ -5,13 +5,13 @@
 // (src/background/wei-decimal.test.ts) can import the helper without
 // dragging in the SW's module-scope chrome.* references.
 
-const LYTHOSHI_PER_LYTH = 100_000_000n;
-const LYTHOSHI_DECIMALS = 8;
+import { formatLythoshiToLythDecimal } from "../shared/lyth-units.js";
 
 /** Hex lythoshi → decimal LYTH string (trimming trailing zeros, no decimal
  *  point when fractional part is zero). The string output is the
- *  `amountDecimal` field on PendingTxRow; it must match the indexer's
- *  native `AddressActivityEntry.amount` byte-for-byte for reconcilePending
+ *  `amountDecimal` field on PendingTxRow; it must match the confirmed-side
+ *  amount the activity mapper produces byte-for-byte — both convert via
+ *  shared/lyth-units.ts:formatLythoshiToLythDecimal — for reconcilePending
  *  in shared/activity.ts to fire. */
 export function lythoshiHexToLythDecimal(lythoshiHex: string): string {
   if (!/^0x[0-9a-fA-F]+$/.test(lythoshiHex)) return "0";
@@ -21,17 +21,7 @@ export function lythoshiHexToLythDecimal(lythoshiHex: string): string {
   } catch {
     return "0";
   }
-  if (lythoshi < 0n) return "0";
-  const intPart = lythoshi / LYTHOSHI_PER_LYTH;
-  const fracPart = lythoshi % LYTHOSHI_PER_LYTH;
-  if (fracPart === 0n) return intPart.toString();
-  const fracStr = fracPart
-    .toString()
-    .padStart(LYTHOSHI_DECIMALS, "0")
-    .replace(/0+$/, "");
-  return fracStr.length === 0
-    ? intPart.toString()
-    : `${intPart.toString()}.${fracStr}`;
+  return formatLythoshiToLythDecimal(lythoshi);
 }
 
 /** @deprecated Compatibility export for the service-worker IPC field

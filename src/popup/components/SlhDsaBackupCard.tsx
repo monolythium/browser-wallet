@@ -25,6 +25,7 @@ import {
   bgSlhDsaBackupSetRegistrationStatus,
   bgSlhDsaBackupSubmitRegistration,
 } from "../bg";
+import { ExternalLink } from "./ExternalLink";
 import { SlhDsaBackupRevealModal } from "./SlhDsaBackupRevealModal";
 import { SlhDsaRotationRehearsal } from "./SlhDsaRotationRehearsal";
 import {
@@ -32,6 +33,7 @@ import {
   backupStatusLabel,
   isBackupComplete,
 } from "../../shared/slh-dsa-backup.js";
+import { monoscanTxUrl } from "../../shared/build-info";
 
 /** Receipt poll cadence + max-duration. Keep small so a popup
  *  that's been left open briefly catches the registration; abort
@@ -283,8 +285,14 @@ export function SlhDsaBackupCard({
                   </div>
                   {backup.chainRegistrationTxHash && (
                     <div style={txHashStyle}>
-                      tx: {backup.chainRegistrationTxHash.slice(0, 10)}…
-                      {backup.chainRegistrationTxHash.slice(-8)}
+                      tx:{" "}
+                      <ExternalLink
+                        href={monoscanTxUrl(backup.chainRegistrationTxHash)}
+                        title={backup.chainRegistrationTxHash}
+                        style={{ fontFamily: "var(--f-mono)" }}
+                      >
+                        {backup.chainRegistrationTxHash}
+                      </ExternalLink>
                     </div>
                   )}
                   <button
@@ -315,8 +323,18 @@ export function SlhDsaBackupCard({
                   {backup.chainRegistrationBlock !== undefined && (
                     <div style={txHashStyle}>
                       Block {backup.chainRegistrationBlock}
-                      {backup.chainRegistrationTxHash &&
-                        ` · tx ${backup.chainRegistrationTxHash.slice(0, 10)}…${backup.chainRegistrationTxHash.slice(-6)}`}
+                      {backup.chainRegistrationTxHash && (
+                        <>
+                          {" · tx "}
+                          <ExternalLink
+                            href={monoscanTxUrl(backup.chainRegistrationTxHash)}
+                            title={backup.chainRegistrationTxHash}
+                            style={{ fontFamily: "var(--f-mono)" }}
+                          >
+                            {backup.chainRegistrationTxHash}
+                          </ExternalLink>
+                        </>
+                      )}
                     </div>
                   )}
                   <button

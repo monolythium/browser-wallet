@@ -28,6 +28,9 @@
 //   §25.4  — CrossingToPrivateRow defined but never client-synthesized; only
 //            renders when the indexer emits the kind on Sprintnet.
 
+import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
+import { isTxOpKind, type TxOpKind } from "./notifications.js";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,6 +52,18 @@ export const PENDING_TTL_MS = 5 * 60 * 1000;
  *  block landing, narrower than a typical "user sends another identical tx"
  *  interval. */
 export const PENDING_MATCH_BLOCK_WINDOW = 10;
+
+/** Indexer sentinel for native LYTH (`Hash::ZERO`, indexer commit 3537b135).
+ *  A transfer carrying this tokenId is native LYTH, not an MRC-20 token. */
+export const NATIVE_LYTH_TOKEN_ID = "0x" + "00".repeat(32);
+
+/** True when a transfer's tokenId denotes native LYTH — `null`, empty, or
+ *  all-zero hex of any length — rather than a real MRC-20 token id. */
+export function isNativeLythTokenId(tokenId: string | null): boolean {
+  if (tokenId === null) return true;
+  const body = tokenId.toLowerCase().replace(/^0x/, "");
+  return body.length === 0 || /^0+$/.test(body);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage keys
@@ -81,6 +96,15 @@ export interface PendingTxRow {
   broadcastedAtMs: number;
   broadcastBlockHeight: number | null;
   via: string;                         // operator name that accepted the encrypted envelope
+  /** Phase-1.5 broadcast-time operation tag. Threaded from the popup
+   *  through the SW handler into this row PURELY as metadata for the
+   *  notifications hook — never part of the signed tx. Optional: rows
+   *  written before this field existed (legacy Phase-1) and any
+   *  untagged caller leave it undefined, in which case the hook falls
+   *  back to the coarse `send` / `contract_call` classification. An
+   *  unknown literal arriving at the validator is coerced to the
+   *  fallback `"contract_call"`. */
+  opKind?: TxOpKind;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -215,13 +239,22 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
   if (input === null || typeof input !== "object") return null;
   const r = input as Record<string, unknown>;
   switch (r.kind) {
-    case "pending_tx":
+    case "pending_tx": {
       if (!isNonEmptyString(r.txHash)) return null;
       if (!isNonEmptyString(r.to)) return null;
       if (typeof r.amountDecimal !== "string") return null;
       if (!isFiniteNumber(r.broadcastedAtMs)) return null;
       if (!isNumberOrNull(r.broadcastBlockHeight)) return null;
       if (typeof r.via !== "string") return null;
+      // Phase-1.5 — `opKind` is optional. Coerce an unknown / non-string
+      // literal to the fallback `"contract_call"` so a future schema
+      // mismatch or a buggy caller produces a coarse-but-valid record
+      // instead of dropping the row. Absent stays absent (legacy Phase-1
+      // rows + untagged paths fall back at the hook).
+      let opKind: TxOpKind | undefined;
+      if (r.opKind !== undefined) {
+        opKind = isTxOpKind(r.opKind) ? r.opKind : "contract_call";
+      }
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -230,7 +263,9 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         broadcastedAtMs: r.broadcastedAtMs,
         broadcastBlockHeight: r.broadcastBlockHeight,
         via: r.via,
+        ...(opKind !== undefined ? { opKind } : {}),
       };
+    }
 
     case "tx_send":
     case "tx_receive": {
@@ -381,7 +416,7 @@ export interface RawAddressActivity {
   direction: "in" | "out" | null;
   counterparty: string | null;
   tokenId: string | null;
-  amount: string | null;               // decimal LYTH for native rows; token decimal for token rows
+  amount: string | null;               // raw lythoshi for native rows (mapper converts to decimal LYTH); token base units for token rows
   cluster: number | null;
   weightBps: number | null;
   subKind: string | null;
@@ -464,7 +499,10 @@ export function mapAddressActivityToRows(
     const anchorKey = `${e.blockHeight}.${e.txIndex}.${e.logIndex}`;
 
     if (e.kind === "transfer") {
-      if (e.tokenId !== null && e.tokenId.length > 0) {
+      // Native LYTH arrives with a zero (Hash::ZERO) or null tokenId — route it
+      // to tx_send/tx_receive by direction. Only a real (non-zero) MRC-20 token
+      // id becomes a token_transfer row.
+      if (e.tokenId !== null && e.tokenId.length > 0 && !isNativeLythTokenId(e.tokenId)) {
         out.push({
           kind: "token_transfer",
           blockHeight: e.blockHeight,
@@ -482,7 +520,8 @@ export function mapAddressActivityToRows(
           txIndex: e.txIndex,
           logIndex: e.logIndex,
           counterparty: e.counterparty,
-          amountDecimal: e.amount,
+          amountDecimal:
+            e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
         });
       } else if (e.direction === "in") {
         out.push({
@@ -491,7 +530,8 @@ export function mapAddressActivityToRows(
           txIndex: e.txIndex,
           logIndex: e.logIndex,
           counterparty: e.counterparty,
-          amountDecimal: e.amount,
+          amountDecimal:
+            e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
         });
       }
       // direction null + no tokenId — drop (shouldn't happen on a transfer).
@@ -554,7 +594,8 @@ export function mapAddressActivityToRows(
         blockHeight: e.blockHeight,
         txIndex: e.txIndex,
         logIndex: e.logIndex,
-        amountDecimal: e.amount,
+        amountDecimal:
+          e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
       });
       continue;
     }

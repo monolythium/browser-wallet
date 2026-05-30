@@ -26,6 +26,9 @@ interface SettingsProps {
   onResetWallet: () => void;
   /** Routes to the Sprintnet operators sub-page (Phase 4.3). */
   onOpenOperators: () => void;
+  /** Routes to the NotificationSettings sub-page (the four notification
+   *  toggles, relocated behind "Manage notifications"). */
+  onOpenNotificationSettings: () => void;
   /** Routes to the MRV native contract plan preview surface. */
   onOpenMrvNative: () => void;
   /** Routes to the About page (Phase 6 commit 4) — version stack,
@@ -80,6 +83,7 @@ export function Settings({
   onShowConnectedSites,
   onResetWallet,
   onOpenOperators,
+  onOpenNotificationSettings,
   onOpenMrvNative,
   onOpenAbout,
   onOpenDelegations,
@@ -662,6 +666,49 @@ export function Settings({
           </div>
         </div>
 
+        {/* Notifications — relocated behind "Manage notifications" (mirrors
+           the Network operators card+submenu) to keep this page short. The
+           four toggles live on the NotificationSettings sub-page; their
+           values / IPC / gating are unchanged. */}
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Notifications</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            Control system notifications, what details they show, and how they
+            behave while the wallet is locked.
+          </div>
+          <button
+            onClick={onOpenNotificationSettings}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>Manage notifications</span>
+            <Icon name="chev" size={12} />
+          </button>
+        </div>
+
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Developer tools</h3>
@@ -803,3 +850,4 @@ const multisigBtnStyle: CSSProperties = {
   justifyContent: "space-between",
   gap: 8,
 };
+

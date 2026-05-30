@@ -28,6 +28,15 @@
  *  Unknown values fall through to `"unknown"` rather than crashing. */
 export type ClusterHealth = "healthy" | "degraded" | "offline" | "unknown";
 
+/** Format a delegation weight (basis points) as a percent string —
+ *  e.g. 107 → "1.07%". This is the weight share, NOT a LYTH amount (the
+ *  indexer delegation entries carry no LYTH amount; see the activity
+ *  delegation rows). Returns "—" for null / non-finite input. */
+export function formatWeightBpsPercent(bps: number | null): string {
+  if (bps === null || !Number.isFinite(bps)) return "—";
+  return `${(bps / 100).toFixed(2)}%`;
+}
+
 /** Cluster directory row. Mirrors SDK `ClusterDirectoryEntryResponse` + the
  *  entity flag pulled in via `lyth_getClusterEntity` (so a single popup-
  *  visible cluster card carries the Foundation / community badge per §30.5

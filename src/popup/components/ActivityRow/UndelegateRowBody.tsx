@@ -1,5 +1,6 @@
 import { Icon } from "../../Icon.js";
 import type { UndelegateRow } from "../../../shared/activity.js";
+import { formatWeightBpsPercent } from "../../../shared/staking.js";
 
 export interface UndelegateRowBodyProps {
   row: UndelegateRow;
@@ -10,7 +11,6 @@ function clusterName(id: number): string {
 }
 
 export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
-  const bps = row.weightBps;
   return (
     <div className="ext-act-row">
       <div className="dir in">
@@ -27,8 +27,8 @@ export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
         </div>
       </div>
       <div className="ext-act-row__right">
-        <div className="amt">{bps !== null ? `${bps} bps` : "—"}</div>
-        <div className="sym">undelegated</div>
+        <div className="amt">{formatWeightBpsPercent(row.weightBps)}</div>
+        <div className="sym">weight</div>
       </div>
     </div>
   );
