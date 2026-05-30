@@ -137,6 +137,17 @@ interface ChainStatusBannerProps {
    *  button to the right of `onSettings` when provided. Omit in
    *  approval contexts. */
   onConnectedSites?: () => void;
+  /** Notifications polish C1 — bell entry to the global notifications
+   *  page. Renders between Connected sites and the hamburger, with an
+   *  optional small unread dot driven by `unreadCount`. The page itself
+   *  was added in Phase 3; the bell is a top-bar entry so the inbox is
+   *  reachable without opening the hamburger menu. */
+  onNotifications?: () => void;
+  /** Polish C1 — when > 0, paints a small blue dot on the bell glyph
+   *  (no number; the bell-row pill in MainMenu still shows the count).
+   *  Caller is expected to fetch this via `bgGetUnread()` and refresh
+   *  it on storage change so the dot stays in sync. */
+  unreadCount?: number;
   /** Round 7 TASK 4 — hamburger menu shortcut (was Round 6's lock
    *  button before the MainMenu screen took over the lock surface).
    *  Renders a 3-line hamburger icon on the far right when provided;
@@ -149,6 +160,8 @@ export function ChainStatusBanner({
   onOpenNetworks,
   onSettings,
   onConnectedSites,
+  onNotifications,
+  unreadCount,
   onMenu,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
@@ -286,8 +299,11 @@ export function ChainStatusBanner({
   // window, where switching chains mid-approval would be unsafe.
   // Round 9 TASK 3 — slightly larger padding + subtle bg lift so the
   // network selector reads as a clearly tappable pill.
+  // Polish C1 — trim 2 px of horizontal padding + 1 px of caret gap so
+  // the new bell + hamburger fit comfortably on the right cluster
+  // without crowding the network pill on narrower popup widths.
   const chipStyle: CSSProperties = {
-    padding: "4px 10px",
+    padding: "4px 8px",
     border: "1px solid var(--fg-700)",
     borderRadius: 999,
     background: "rgba(255,255,255,0.04)",
@@ -297,7 +313,7 @@ export function ChainStatusBanner({
     color: "inherit",
     display: "inline-flex",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
     lineHeight: 1,
   };
 
@@ -373,7 +389,7 @@ export function ChainStatusBanner({
         }}
       />
       {body}
-      {(onSettings || onConnectedSites || onMenu) && (
+      {(onSettings || onConnectedSites || onNotifications || onMenu) && (
         <>
           <span style={{ flex: 1 }} />
           <div
@@ -398,6 +414,14 @@ export function ChainStatusBanner({
                 icon="globe"
               />
             )}
+            {onNotifications && (
+              <BannerActionButton
+                onClick={onNotifications}
+                ariaLabel="Notifications"
+                icon="bell"
+                showDot={typeof unreadCount === "number" && unreadCount > 0}
+              />
+            )}
             {onMenu && (
               <BannerActionButton
                 onClick={onMenu}
@@ -420,10 +444,15 @@ function BannerActionButton({
   onClick,
   ariaLabel,
   icon,
+  showDot,
 }: {
   onClick: () => void;
   ariaLabel: string;
   icon: import("./Icon").IconName;
+  /** Polish C1 — when true, paints a small blue dot on the button's
+   *  top-right corner (matches the `.ext-unread` hue used on rows in
+   *  the Notifications page so the affordance reads consistently). */
+  showDot?: boolean;
 }) {
   return (
     <button
@@ -432,6 +461,7 @@ function BannerActionButton({
       aria-label={ariaLabel}
       title={ariaLabel}
       style={{
+        position: "relative",
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
@@ -459,6 +489,21 @@ function BannerActionButton({
       }}
     >
       <Icon name={icon} size={16} />
+      {showDot && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 5,
+            right: 5,
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: "oklch(0.78 0.14 240)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
     </button>
   );
 }
