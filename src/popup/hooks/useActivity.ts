@@ -50,6 +50,15 @@ const EMPTY: UseActivityResult = {
   refresh: async () => {},
 };
 
+/** Bug A F2 — while ≥1 pending row exists, re-poll this often (ms). ~4s sits
+ *  inside the chain's ~3-5s anchor-finality window, so a tx that confirms
+ *  while a surface is open flips out of "pending" within ~one finality round
+ *  instead of waiting for the next 30s activity refresh or the GAP-N1 alarm.
+ *  Paired with the SW-side F1 bypass (wallet-activity-get skips the 30s
+ *  staleness short-circuit when pending rows exist) so each tick actually
+ *  reconciles against the operators. */
+const PENDING_REPOLL_MS = 4_000;
+
 export function useActivity(
   addr: string | null,
   chainIdHex: string | null,
@@ -139,6 +148,24 @@ export function useActivity(
       chrome.storage.onChanged.removeListener(listener);
     };
   }, [addr, chainIdHex, refresh]);
+
+  // Bug A F2 — bounded short-interval re-poll while pending rows exist. Runs
+  // ONLY while the hook is mounted (i.e. a surface is open) AND there is ≥1
+  // pending row; the interval is torn down the moment the set empties and on
+  // unmount, so no timer leaks and no duplicate timers. Each tick re-runs the
+  // same `refresh()` IPC path (which, via F1, bypasses the 30s staleness cache
+  // when pending exists and reconciles against the operators); the SW writes
+  // the pending key and the onChanged listener above re-renders. Coexists with
+  // the GAP-N1 alarm + the path-agnostic notified-set dedupe, so the re-poll,
+  // the alarm, and refocus/nav can't double-notify.
+  const hasPending = pending.length > 0;
+  useEffect(() => {
+    if (!hasPending) return;
+    const id = setInterval(() => {
+      void refresh();
+    }, PENDING_REPOLL_MS);
+    return () => clearInterval(id);
+  }, [hasPending, refresh]);
 
   if (!addr || !chainIdHex || !addr.startsWith("0x")) return EMPTY;
   return { cache, pending, loading, errors, refresh };
