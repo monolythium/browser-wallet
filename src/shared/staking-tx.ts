@@ -24,6 +24,7 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
+  encodeCompleteRedemptionCalldata,
 } from "@monolythium/core-sdk";
 
 /** Delegation precompile address — Whitepaper §5.4 / §7.6
@@ -69,6 +70,16 @@ export function encodeRedelegate(
  *  — settles + withdraws the caller's pending delegation rewards. */
 export function encodeClaimRewards(): string {
   return encodeClaimCalldata();
+}
+
+/** `completeRedemption(uint64 index)` calldata via the SDK encoder
+ *  (chain-canonical selector `0x26169d0a`). Settles the matured
+ *  redemption ticket at `index`, returning the queued principal to the
+ *  caller and pruning the ticket. With liquid bonding the ticket matures
+ *  at the undelegate height, so this becomes claimable in the same/next
+ *  anchor as the `undelegate` that created it. No `msg.value`. */
+export function encodeCompleteRedemption(ticketIndex: number): string {
+  return encodeCompleteRedemptionCalldata(ticketIndex);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
