@@ -180,6 +180,66 @@ export async function markAllRead(
   }
 }
 
+/** GLOBAL inbox read — every `mono.notifications.history.*` envelope's
+ *  entries, merged + sorted newest-first. Phase 3 reads this from the
+ *  popup-side Notifications page so the user sees one unified list
+ *  across all vaults / addresses (matches Phase 2's toolbar badge
+ *  which also aggregates globally via `getUnread()`). Per-active-wallet
+ *  scoping is a future refinement; today the badge + page agree. */
+export async function listAllNotifications(): Promise<NotificationRecord[]> {
+  try {
+    const all = await readAllStorage();
+    const merged: NotificationRecord[] = [];
+    for (const [k, v] of Object.entries(all)) {
+      if (!k.startsWith("mono.notifications.history.")) continue;
+      const env = parseHistoryEnvelope(v);
+      if (!env) continue;
+      merged.push(...env.entries);
+    }
+    // Newest-first by createdAtMs (the moment the SW observed the
+    // terminal transition — the user's natural sort).
+    merged.sort((a, b) => b.createdAtMs - a.createdAtMs);
+    return merged;
+  } catch {
+    return [];
+  }
+}
+
+/** GLOBAL mark-all-read — flip every record across every scope's history
+ *  to `read: true`. Returns the number of records that changed
+ *  (already-read records do not count). Phase 3 wires the
+ *  "Mark all as read" CTA here, and Phase 2's badge clears on the next
+ *  `refreshUnreadBadge()`. Best-effort: a scope that fails to write
+ *  doesn't prevent the others from succeeding. */
+export async function markAllNotificationsRead(): Promise<{ flipped: number }> {
+  try {
+    const all = await readAllStorage();
+    let flipped = 0;
+    const writes: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(all)) {
+      if (!k.startsWith("mono.notifications.history.")) continue;
+      const env = parseHistoryEnvelope(v);
+      if (!env) continue;
+      let scopeChanged = false;
+      const next = env.entries.map((r) => {
+        if (r.read) return r;
+        flipped++;
+        scopeChanged = true;
+        return { ...r, read: true };
+      });
+      if (scopeChanged) {
+        writes[k] = { schemaVersion: 0, entries: next };
+      }
+    }
+    if (Object.keys(writes).length > 0) {
+      await writeStorage(writes);
+    }
+    return { flipped };
+  } catch {
+    return { flipped: 0 };
+  }
+}
+
 /** Derived global unread count = sum of `!read` across every
  *  `mono.notifications.history.*` history blob. Single source of truth
  *  (no separate counter key → no sync hazard). */
