@@ -1841,18 +1841,15 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
            backup, feature discovery) when relevant; a manual re-entry
            button was clutter on a finished wallet. */}
 
+        {/* Round 13 — Footer now flows as the LAST element INSIDE the
+           .ext-body scroll container instead of being a frame-pinned
+           sibling. A UI review found the always-visible frame-pinned
+           strip too persistent; the footer should read as the end of the
+           page. It now appears only when the home content is scrolled to
+           the bottom. (Footer's baseStyle uses negative horizontal
+           margins to span the body's side padding.) */}
+        <Footer />
       </div>
-      {/* Round 12 TASK 6 — Footer is a normal-flow sibling of .ext-body.
-         .ext is a flex column with .ext-body { flex: 1 }, so the
-         layout naturally pushes the footer to the bottom of .ext
-         (= the popup/sidebar/fullscreen viewport) without any
-         position:sticky or position:fixed gymnastics. Previous
-         rounds (8/9 sticky-inside, 10/11 fixed-overlay-with-spacer)
-         each tried clever positioning and missed that the existing
-         flex layout already places the last child at the bottom.
-         The 32 px clearance spacer that paired with position:fixed
-         is also gone — no overlay means no clearance needed. */}
-      <Footer />
     </>
   );
 }
