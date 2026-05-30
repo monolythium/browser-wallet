@@ -26,6 +26,7 @@ import {
 } from "../bg";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { notificationTitle } from "../../shared/notifications";
+import { NotificationDetail } from "../components/NotificationDetail";
 
 interface NotificationsProps {
   onBack: () => void;
@@ -88,6 +89,7 @@ function isZeroAmount(amountDecimal: string): boolean {
 export function Notifications({ onBack }: NotificationsProps) {
   const [records, setRecords] = useState<NotificationRecord[] | null>(null);
   const [marking, setMarking] = useState(false);
+  const [selected, setSelected] = useState<NotificationRecord | null>(null);
 
   const refresh = useCallback(async () => {
     const r = await bgListNotifications();
@@ -146,22 +148,51 @@ export function Notifications({ onBack }: NotificationsProps) {
         ) : (
           <div className="ext-card" style={{ padding: "4px 12px" }}>
             {records.map((rec) => (
-              <NotificationRow key={rec.id} record={rec} />
+              <NotificationRow
+                key={rec.id}
+                record={rec}
+                onOpen={() => setSelected(rec)}
+              />
             ))}
           </div>
         )}
       </div>
+
+      {selected !== null && (
+        <NotificationDetail
+          record={selected}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </>
   );
 }
 
-function NotificationRow({ record }: { record: NotificationRecord }) {
+function NotificationRow({
+  record,
+  onOpen,
+}: {
+  record: NotificationRecord;
+  onOpen: () => void;
+}) {
   const title = notificationTitle(record.kind, record.status);
   const short = truncMiddle(bech32mDisplay(record.counterparty));
   const showAmount = !isZeroAmount(record.amountDecimal);
 
   return (
-    <div className="ext-act-row" style={{ position: "relative" }}>
+    <div
+      className="ext-act-row"
+      style={{ position: "relative" }}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
       <div
         className="dir"
         style={{
@@ -212,12 +243,21 @@ function NotificationRow({ record }: { record: NotificationRecord }) {
       <div
         className="ext-act-row__right"
         style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
           fontSize: 10.5,
           color: "var(--fg-400)",
           fontFamily: "var(--f-mono)",
         }}
       >
-        {relativeMs(record.createdAtMs)}
+        <span>{relativeMs(record.createdAtMs)}</span>
+        <span
+          aria-hidden
+          style={{ display: "inline-flex", color: "var(--fg-400)" }}
+        >
+          <Icon name="chev" size={12} />
+        </span>
       </div>
 
       {!record.read && <span className="ext-unread" aria-label="Unread" />}
