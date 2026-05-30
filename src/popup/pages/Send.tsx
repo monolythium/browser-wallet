@@ -12,7 +12,6 @@ import type { ReactNode, CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../Icon";
 import {
-  bgContactsCheck,
   bgMultisigPropose,
   bgPasskeyEvaluate,
   bgPasskeyRecordUsage,
@@ -32,7 +31,11 @@ import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
-import { bech32mDisplay, bech32mToAddress } from "../../shared/bech32m";
+import {
+  bech32mDisplay,
+  bech32mToAddress,
+  type AddressKind,
+} from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
 import { classifySendError } from "../../shared/send-error";
 import {
@@ -43,13 +46,24 @@ import {
   type MonoNameParse,
   type NameCache,
 } from "../../shared/name-resolution";
-import { finalityPostureFor } from "../../shared/build-info";
+import {
+  finalityPostureFor,
+  monoscanTxUrl,
+  monoscanAddressUrl,
+} from "../../shared/build-info";
+import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
+import { ExternalLink } from "../components/ExternalLink";
 import {
   activityCacheKey,
   activityPendingKey,
   type ActivityCache,
   type PendingActivityCache,
 } from "../../shared/activity";
+import {
+  sentAddressesKey,
+  parseSentAddresses,
+  isSentAddress,
+} from "../../shared/sent-addresses";
 import {
   FEE_MULTIPLIER_BPS_BASE,
   LYTHOSHI_PER_LYTH,
@@ -384,6 +398,7 @@ export function Send({
         to: effectiveAddr0x,
         valueWeiHex: valueLythoshiHex,
         chainIdHex: chainId,
+        opKind: "send",
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -402,19 +417,9 @@ export function Send({
           });
         }
         setStep("success");
-        // Round 7 TASK 6 — after a successful send, fire-and-forget
-        // check whether the recipient is already a saved contact. If
-        // not, surface the "Save recipient" prompt on the success
-        // screen with the address pre-filled. Multisig propose
-        // (branch above) deliberately skips this — the proposal is
-        // pending until co-signers approve, so it's not the right
-        // moment to label the counterparty.
-        const sentTo = effectiveAddr0x;
-        if (sentTo) {
-          void bgContactsCheck(sentTo).then((known) => {
-            if (!known) setPendingContactAddr(sentTo);
-          });
-        }
+        // CX4 — the "Add to contacts" affordance now lives inline on the
+        // receipt's To row (shown when the recipient is neither a saved
+        // contact nor a registered name), so no auto-popup fires here.
       } else {
         setSubmitError({
           message: r.reason ?? "send failed",
@@ -519,11 +524,27 @@ export function Send({
           copied={hashCopied}
           onCopy={() => void handleCopyHash()}
           onDone={onBack}
+          explorerUrl={
+            multisigVaultId === undefined ? monoscanTxUrl(txHash) : null
+          }
+          fromAddr={account.addr}
+          to={effectiveAddr0x ?? to}
+          amountLythoshi={amountLythoshi}
+          feeLythoshi={estimatedFeeLythoshi}
+          tier={tier}
+          recipientContact={recipientContact}
+          recipientRegisteredName={recipientRegisteredName}
+          showAddContact={
+            multisigVaultId === undefined &&
+            recipientContact === null &&
+            (recipientRegisteredName === null ||
+              recipientRegisteredName.length === 0)
+          }
+          onAddContact={() => setPendingContactAddr(effectiveAddr0x ?? to)}
         />
-        {/* Round 7 TASK 6 — post-send "save recipient" prompt. Fires
-            after a non-multisig send when the recipient isn't already
-            in the user's contacts. Friendly tone, not a warning;
-            dismiss-skip is one tap. */}
+        {/* CX4 — inline "Add to contacts" on the receipt (replaces the
+            post-send auto-popup). The AddContactModal opens only when the
+            user taps the affordance on the To row. */}
         {pendingContactAddr && (
           <AddContactModal
             open={true}
@@ -648,7 +669,45 @@ export function Send({
                 resolution={nameResolution}
               />
             )}
-          {recipientFamiliarity === "new" && (
+          {/* Known-recipient hint — when the typed/pasted address resolves to
+             a saved contact (or a §22.8 registered name), surface the name so
+             the user can confirm who they're sending to. Mutually exclusive
+             with the first-time-recipient warning below. */}
+          {(recipientContact !== null ||
+            (recipientRegisteredName !== null &&
+              recipientRegisteredName.length > 0)) && (
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                marginTop: 8,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "rgba(80,200,120,0.08)",
+                border: "1px solid rgba(80,200,120,0.35)",
+                fontSize: 11,
+                color: "var(--fg-100)",
+                lineHeight: 1.5,
+              }}
+            >
+              <Icon name="book" size={12} />
+              <span>
+                {recipientContact !== null ? (
+                  <>
+                    Saved contact: <b>{recipientContact.name}</b>
+                  </>
+                ) : (
+                  <>
+                    Registered name: <b>{recipientRegisteredName}</b>
+                  </>
+                )}
+              </span>
+            </div>
+          )}
+          {recipientFamiliarity === "new" &&
+            recipientContact === null &&
+            (recipientRegisteredName === null ||
+              recipientRegisteredName.length === 0) && (
             <div
               style={{
                 display: "flex",
@@ -1303,14 +1362,20 @@ function useRecipientFamiliarity(
     const accLower = accountAddr.toLowerCase();
     const confirmedKey = activityCacheKey(accLower, chainIdHex);
     const pendingKey = activityPendingKey(accLower, chainIdHex);
+    // CX3 — durable per-(vault,chain) sent-address log. Written on every
+    // successful send and never TTL-evicted, so a known recipient stays
+    // "seen" even after the pending row's 5-min TTL lapses and before an
+    // indexer refresh re-caches the confirmed send (the old re-warn bug).
+    const sentKey = sentAddressesKey(accLower, chainIdHex);
     let cancelled = false;
     setState("unknown");
 
-    chrome.storage.local.get([confirmedKey, pendingKey], (res) => {
+    chrome.storage.local.get([confirmedKey, pendingKey, sentKey], (res) => {
       if (cancelled) return;
       const confirmed = res?.[confirmedKey] as ActivityCache | undefined;
       const pending = res?.[pendingKey] as PendingActivityCache | undefined;
 
+      const inSent = isSentAddress(parseSentAddresses(res?.[sentKey]), target);
       const inConfirmed = (confirmed?.confirmed ?? []).some((r) => {
         if (r.kind === "tx_send") return r.counterparty === target;
         if (r.kind === "token_transfer")
@@ -1320,7 +1385,7 @@ function useRecipientFamiliarity(
       const inPending = (pending?.pending ?? []).some(
         (r) => r.to.toLowerCase() === target,
       );
-      setState(inConfirmed || inPending ? "seen" : "new");
+      setState(inSent || inConfirmed || inPending ? "seen" : "new");
     });
 
     return () => {
@@ -2038,9 +2103,68 @@ interface SuccessViewProps {
   copied: boolean;
   onCopy: () => void;
   onDone: () => void;
+  /** Monoscan tx-page URL for the canonical hash, or null when the success
+   *  item is not a linkable on-chain tx (e.g. a multisig proposal id). */
+  explorerUrl: string | null;
+  /** Sender (own wallet) raw 0x address. */
+  fromAddr: string;
+  /** Recipient raw 0x address. */
+  to: string;
+  amountLythoshi: bigint | null;
+  /** Chain fee, already computed by the send flow — NOT recomputed here. */
+  feeLythoshi: bigint | null;
+  tier: FeeTier;
+  recipientContact: ContactRecord | null;
+  recipientRegisteredName: string | null;
+  /** When true, render an inline "+ Add to contacts" affordance under the To
+   *  row (recipient is neither a saved contact nor a registered name). */
+  showAddContact: boolean;
+  onAddContact: () => void;
 }
 
-function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
+/** A bech32m address rendered as a Monoscan address-page link. Addresses are
+ *  always bech32m (`mono…`); the raw 0x form is never shown (§22.7). */
+function AddressLink({ addr0x, kind }: { addr0x: string; kind?: AddressKind }) {
+  const bech = bech32mDisplay(addr0x, kind);
+  return (
+    <ExternalLink
+      href={monoscanAddressUrl(bech)}
+      title="View address on Monoscan"
+      style={{ fontFamily: "var(--f-mono)" }}
+    >
+      {bech}
+    </ExternalLink>
+  );
+}
+
+function SuccessView({
+  txHash,
+  copied,
+  onCopy,
+  onDone,
+  explorerUrl,
+  fromAddr,
+  to,
+  amountLythoshi,
+  feeLythoshi,
+  tier,
+  recipientContact,
+  recipientRegisteredName,
+  showAddContact,
+  onAddContact,
+}: SuccessViewProps) {
+  const isProposal = explorerUrl === null;
+  const total =
+    amountLythoshi !== null && feeLythoshi !== null
+      ? amountLythoshi + feeLythoshi
+      : null;
+  // Prefer the registered §22.8 name, then the contact name, then bare address.
+  const recipientLabel: string | null =
+    (recipientRegisteredName && recipientRegisteredName.length > 0
+      ? recipientRegisteredName
+      : null) ??
+    recipientContact?.name ??
+    null;
   return (
     <>
       <div className="ext-top">
@@ -2050,7 +2174,7 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
         <div
           style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
         >
-          Transaction sent
+          {isProposal ? "Proposal created" : "Transaction sent"}
         </div>
         <div style={{ width: 28 }} />
       </div>
@@ -2074,18 +2198,14 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
           >
             ✓
           </div>
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              color: "var(--fg-100)",
-            }}
-          >
-            Transaction submitted
+          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-100)" }}>
+            {isProposal ? "Proposal submitted" : "Transaction submitted"}
           </div>
         </div>
 
         <div className="ext-card" style={{ padding: 14 }}>
+          {/* Hash (top) — clickable to the Monoscan tx page, with the same
+              copy affordance the wallet-address rows use. */}
           <div
             style={{
               fontFamily: "var(--f-mono)",
@@ -2096,49 +2216,175 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
               marginBottom: 8,
             }}
           >
-            Transaction hash
+            {isProposal ? "Proposal ID" : "Transaction hash"}
           </div>
           <div
             style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "var(--fg-100)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
               padding: "10px 12px",
               borderRadius: 10,
               background: "rgba(0,0,0,0.3)",
               border: "1px solid var(--fg-700)",
-              wordBreak: "break-all",
-              userSelect: "all",
             }}
           >
-            {txHash}
+            {explorerUrl !== null ? (
+              <ExternalLink
+                href={explorerUrl}
+                title="View transaction on Monoscan"
+                style={{
+                  flex: 1,
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                {txHash}
+              </ExternalLink>
+            ) : (
+              <span
+                style={{
+                  flex: 1,
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: "var(--fg-100)",
+                  wordBreak: "break-all",
+                  userSelect: "all",
+                }}
+              >
+                {txHash}
+              </span>
+            )}
+            <button
+              onClick={onCopy}
+              aria-label="Copy transaction hash"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 22,
+                height: 22,
+                padding: 0,
+                background: "transparent",
+                border: "none",
+                color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              {copied ? <CheckIcon /> : <ClipboardIcon />}
+            </button>
           </div>
-          <button
+
+          <div style={{ marginTop: 10 }}>
+            <SummaryRow
+              label="From"
+              value={<AddressLink addr0x={fromAddr} />}
+              mono
+            />
+            {recipientLabel !== null ? (
+              <SummaryRow
+                label="To"
+                value={
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      gap: 2,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: "var(--f-sans)",
+                        fontWeight: 600,
+                        fontSize: 12.5,
+                        color: "var(--fg-100)",
+                      }}
+                      title={recipientLabel}
+                    >
+                      {recipientLabel}
+                    </span>
+                    <AddressLink addr0x={to} />
+                  </div>
+                }
+              />
+            ) : (
+              <SummaryRow label="To" value={<AddressLink addr0x={to} />} mono />
+            )}
+            {showAddContact && (
+              <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 0 4px" }}>
+                <button
+                  type="button"
+                  onClick={onAddContact}
+                  className="ext-extlink"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    padding: 0,
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 11,
+                  }}
+                >
+                  + Add to contacts
+                </button>
+              </div>
+            )}
+            <SummaryRow
+              label="Amount"
+              value={
+                amountLythoshi !== null
+                  ? formatNativeLythAmount(amountLythoshi)
+                  : "—"
+              }
+              mono
+            />
+            <SummaryRow
+              label={`Fee · ${TIER_LABELS[tier]}`}
+              value={
+                feeLythoshi !== null ? formatNativeLythAmount(feeLythoshi) : "—"
+              }
+              mono
+            />
+            <div
+              style={{
+                marginTop: 8,
+                paddingTop: 10,
+                borderTop: "1px solid var(--fg-700)",
+              }}
+            >
+              <SummaryRow
+                label="Total"
+                value={total !== null ? formatNativeLythAmount(total) : "—"}
+                mono
+                emphasis
+              />
+            </div>
+          </div>
+        </div>
+
+        {explorerUrl !== null && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             className="ext-act"
-            onClick={onCopy}
             style={{
               width: "100%",
               padding: "10px",
+              display: "flex",
               flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
               gap: 8,
-              marginTop: 12,
+              textDecoration: "none",
             }}
           >
-            {copied ? "Copied" : "Copy tx hash"}
-          </button>
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--fg-400)",
-              marginTop: 10,
-              lineHeight: 1.5,
-            }}
-          >
-            Explorer URL not yet wired for Sprintnet — keep this hash to
-            track the tx on an operator directly.
-          </div>
-        </div>
+            <Icon name="globe" size={13} /> View on Monoscan
+          </a>
+        )}
 
         <button
           className="ext-act prim"
@@ -2148,6 +2394,7 @@ function SuccessView({ txHash, copied, onCopy, onDone }: SuccessViewProps) {
             padding: "12px",
             flexDirection: "row",
             gap: 8,
+            marginTop: 10,
           }}
         >
           Done

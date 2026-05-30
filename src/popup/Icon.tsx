@@ -8,7 +8,7 @@ export type IconName =
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
-  | "expand" | "copy" | "trash";
+  | "expand" | "copy" | "trash" | "external" | "bell";
 
 interface IconProps {
   name: IconName;
@@ -286,6 +286,25 @@ export function Icon({ name, size = 16 }: IconProps) {
         <svg {...props}>
           <polyline points="3 6 5 6 21 6" />
           <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+        </svg>
+      );
+    case "external":
+      // ↗ up-right arrow — the "opens externally" affordance for inline
+      // Monoscan links, companion to the globe used on the big CTA buttons.
+      return (
+        <svg {...props}>
+          <line x1="7" y1="17" x2="17" y2="7" />
+          <polyline points="8 7 17 7 17 16" />
+        </svg>
+      );
+    case "bell":
+      // Phase 3 — Notifications row in the hamburger menu + future header
+      // glyph. Bell silhouette + clapper line; matches the stroke-only
+      // pattern of every other glyph (currentColor + strokeWidth 1.8).
+      return (
+        <svg {...props}>
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
         </svg>
       );
     default:

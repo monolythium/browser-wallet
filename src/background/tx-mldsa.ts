@@ -70,6 +70,7 @@ function hexToBytes(s: string): Uint8Array {
 export async function sprintnetJsonRpc<T>(
   method: string,
   params: unknown[],
+  opts?: { timeoutMs?: number },
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
   // Round 13 TASK 3 — track genesis-pin failures separately so the
@@ -96,15 +97,25 @@ export async function sprintnetJsonRpc<T>(
       continue;
     }
     let res: Response;
+    // GAP-N1 — optional per-call timeout (mirrors the balance-probe
+    // AbortController pattern below). Default (no timeoutMs) is unchanged:
+    // no AbortController, no signal — every existing caller is byte-identical.
+    const ctrl = opts?.timeoutMs ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), opts!.timeoutMs) : null;
     try {
       res = await fetch(v.rpc, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        ...(ctrl ? { signal: ctrl.signal } : {}),
       });
     } catch (e) {
+      // A timeout surfaces here as an AbortError → treated like any transport
+      // failure: record it and fall through to the next operator.
       lastTransportErr = e as Error;
       continue;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
     }
     if (!res.ok) {
       lastTransportErr = new Error(`HTTP ${res.status} from ${v.name}`);
@@ -358,6 +369,7 @@ export async function buildEncryptedSubmission(args: {
 }): Promise<{
   envelopeWireHex: string;
   innerSighashHex: string;
+  innerTxHashHex: string;
   innerWireBytes: number;
 }> {
   const backend = getUnlockedBackendV4();
@@ -374,26 +386,39 @@ export async function buildEncryptedSubmission(args: {
   });
 }
 
-/** Submit an encrypted-envelope hex blob via `lyth_submitEncrypted`. */
+/** Submit an encrypted-envelope hex blob via `lyth_submitEncrypted`. The RPC
+ *  returns the pre-decryption ENVELOPE/submission hash, NOT the canonical
+ *  inner-tx hash the chain indexes after Ferveo decryption — so it is named
+ *  `submissionHash` and must never be surfaced as the displayed tx hash. */
 export async function broadcastEncryptedEnvelope(envelopeWireHex: string): Promise<{
-  txHash: string;
+  submissionHash: string;
   via: string;
 }> {
   const { result, via } = await sprintnetJsonRpc<string>(
     "lyth_submitEncrypted",
     [envelopeWireHex],
   );
-  return { txHash: result, via };
+  return { submissionHash: result, via };
 }
 
-/** One-shot helper used by the service worker. */
+/** One-shot helper used by the service worker. `txHash` is the CANONICAL
+ *  inner-tx hash (`signed.txHash`, surfaced by the SDK as `innerTxHashHex`) —
+ *  the value the chain indexes and `eth_getTransactionByHash` / `lyth_txStatus`
+ *  resolve. `submissionHash` is the pre-decryption envelope hash from
+ *  `lyth_submitEncrypted`, retained for debugging/logging only. */
 export async function submitEncryptedMlDsaTx(req: EthSendTxFields): Promise<{
   txHash: string;
+  submissionHash: string;
   via: string;
   innerSighashHex: string;
 }> {
   const encryptionKey = await fetchSprintnetEncryptionKey();
   const wrapped = await buildEncryptedSubmission({ txReq: req, encryptionKey });
-  const { txHash, via } = await broadcastEncryptedEnvelope(wrapped.envelopeWireHex);
-  return { txHash, via, innerSighashHex: wrapped.innerSighashHex };
+  const { submissionHash, via } = await broadcastEncryptedEnvelope(wrapped.envelopeWireHex);
+  return {
+    txHash: wrapped.innerTxHashHex,
+    submissionHash,
+    via,
+    innerSighashHex: wrapped.innerSighashHex,
+  };
 }

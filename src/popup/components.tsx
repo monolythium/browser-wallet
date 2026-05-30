@@ -137,6 +137,17 @@ interface ChainStatusBannerProps {
    *  button to the right of `onSettings` when provided. Omit in
    *  approval contexts. */
   onConnectedSites?: () => void;
+  /** Notifications polish C1 — bell entry to the global notifications
+   *  page. Renders between Connected sites and the hamburger, with an
+   *  optional small unread dot driven by `unreadCount`. The page itself
+   *  was added in Phase 3; the bell is a top-bar entry so the inbox is
+   *  reachable without opening the hamburger menu. */
+  onNotifications?: () => void;
+  /** Polish C1 — when > 0, paints a small blue dot on the bell glyph
+   *  (no number; the bell-row pill in MainMenu still shows the count).
+   *  Caller is expected to fetch this via `bgGetUnread()` and refresh
+   *  it on storage change so the dot stays in sync. */
+  unreadCount?: number;
   /** Round 7 TASK 4 — hamburger menu shortcut (was Round 6's lock
    *  button before the MainMenu screen took over the lock surface).
    *  Renders a 3-line hamburger icon on the far right when provided;
@@ -149,6 +160,8 @@ export function ChainStatusBanner({
   onOpenNetworks,
   onSettings,
   onConnectedSites,
+  onNotifications,
+  unreadCount,
   onMenu,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
@@ -286,8 +299,11 @@ export function ChainStatusBanner({
   // window, where switching chains mid-approval would be unsafe.
   // Round 9 TASK 3 — slightly larger padding + subtle bg lift so the
   // network selector reads as a clearly tappable pill.
+  // Polish C1 — trim 2 px of horizontal padding + 1 px of caret gap so
+  // the new bell + hamburger fit comfortably on the right cluster
+  // without crowding the network pill on narrower popup widths.
   const chipStyle: CSSProperties = {
-    padding: "4px 10px",
+    padding: "4px 8px",
     border: "1px solid var(--fg-700)",
     borderRadius: 999,
     background: "rgba(255,255,255,0.04)",
@@ -297,7 +313,7 @@ export function ChainStatusBanner({
     color: "inherit",
     display: "inline-flex",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
     lineHeight: 1,
   };
 
@@ -373,7 +389,7 @@ export function ChainStatusBanner({
         }}
       />
       {body}
-      {(onSettings || onConnectedSites || onMenu) && (
+      {(onSettings || onConnectedSites || onNotifications || onMenu) && (
         <>
           <span style={{ flex: 1 }} />
           <div
@@ -398,6 +414,14 @@ export function ChainStatusBanner({
                 icon="globe"
               />
             )}
+            {onNotifications && (
+              <BannerActionButton
+                onClick={onNotifications}
+                ariaLabel="Notifications"
+                icon="bell"
+                showDot={typeof unreadCount === "number" && unreadCount > 0}
+              />
+            )}
             {onMenu && (
               <BannerActionButton
                 onClick={onMenu}
@@ -420,10 +444,15 @@ function BannerActionButton({
   onClick,
   ariaLabel,
   icon,
+  showDot,
 }: {
   onClick: () => void;
   ariaLabel: string;
   icon: import("./Icon").IconName;
+  /** Polish C1 — when true, paints a small blue dot on the button's
+   *  top-right corner (matches the `.ext-unread` hue used on rows in
+   *  the Notifications page so the affordance reads consistently). */
+  showDot?: boolean;
 }) {
   return (
     <button
@@ -432,6 +461,7 @@ function BannerActionButton({
       aria-label={ariaLabel}
       title={ariaLabel}
       style={{
+        position: "relative",
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
@@ -459,6 +489,21 @@ function BannerActionButton({
       }}
     >
       <Icon name={icon} size={16} />
+      {showDot && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 5,
+            right: 5,
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: "oklch(0.78 0.14 240)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
     </button>
   );
 }
@@ -477,6 +522,10 @@ interface TopProps {
    *  dispatches here instead of opening the legacy single-page modal.
    *  Threaded through Home for App-level routing to NewWalletFlow. */
   onNewWalletFlow?: () => void;
+  /** Fires after a VaultAddModal completion so App can re-run
+   *  refreshKeystoreStatus and the chip shows the new vault's name
+   *  immediately (no need to lock/unlock or reopen). */
+  onVaultComplete?: () => void;
 }
 
 // Phase 5 Commit 3: chip replaced with <VaultPicker /> (multi-vault
@@ -496,7 +545,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (Round 4 design).
-export function Top({ account, onNewWalletFlow }: TopProps) {
+export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       <div
@@ -516,6 +565,7 @@ export function Top({ account, onNewWalletFlow }: TopProps) {
       <VaultPicker
         activeAccount={account}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
+        {...(onVaultComplete ? { onVaultComplete } : {})}
       />
     </div>
   );
@@ -1582,9 +1632,13 @@ interface HomeProps {
    *  dropdown entry routes to App's NewWalletFlow screen instead of
    *  opening the legacy single-page VaultAddModal fresh mode. */
   onNewWalletFlow?: () => void;
+  /** Threaded through Top → VaultPicker so a successful VaultAddModal
+   *  completion (import or multisig) can re-run App's hydration and the
+   *  chip shows the new vault's name without lock/unlock or reopen. */
+  onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow }: HomeProps) {
+export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const isPriv = account.denom === "private";
@@ -1611,6 +1665,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         onOpenAccounts={onOpenAccounts}
         onSettings={onSettings}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
+        {...(onVaultComplete ? { onVaultComplete } : {})}
       />
       <div className="ext-body">
         {topSlot}
@@ -1786,18 +1841,15 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
            backup, feature discovery) when relevant; a manual re-entry
            button was clutter on a finished wallet. */}
 
+        {/* Round 13 — Footer now flows as the LAST element INSIDE the
+           .ext-body scroll container instead of being a frame-pinned
+           sibling. A UI review found the always-visible frame-pinned
+           strip too persistent; the footer should read as the end of the
+           page. It now appears only when the home content is scrolled to
+           the bottom. (Footer's baseStyle uses negative horizontal
+           margins to span the body's side padding.) */}
+        <Footer />
       </div>
-      {/* Round 12 TASK 6 — Footer is a normal-flow sibling of .ext-body.
-         .ext is a flex column with .ext-body { flex: 1 }, so the
-         layout naturally pushes the footer to the bottom of .ext
-         (= the popup/sidebar/fullscreen viewport) without any
-         position:sticky or position:fixed gymnastics. Previous
-         rounds (8/9 sticky-inside, 10/11 fixed-overlay-with-spacer)
-         each tried clever positioning and missed that the existing
-         flex layout already places the last child at the bottom.
-         The 32 px clearance spacer that paired with position:fixed
-         is also gone — no overlay means no clearance needed. */}
-      <Footer />
     </>
   );
 }

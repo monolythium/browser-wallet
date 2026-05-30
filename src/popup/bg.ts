@@ -10,6 +10,7 @@ import { legacyChainFeeSuggestionWeiToLythoshi } from "../shared/chain-units.js"
 import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
+import type { TxOpKind } from "../shared/notifications.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
@@ -376,6 +377,20 @@ export async function bgWalletBalance(
   chainIdHex: string,
 ): Promise<{ ok: true; balanceHex: string } | { ok: false; reason?: string }> {
   return send("wallet-balance", { address, chainIdHex });
+}
+
+/** Resolve a transaction's `value` (lythoshi hex) and canonical `hash` at a
+ *  given (blockHeight, txIndex). Used by the activity-detail popup to surface
+ *  a delegate tx's LYTH principal and a "View on Monoscan" tx link. Each field
+ *  is null when the block/tx isn't present; `ok:false` on RPC failure. */
+export async function bgGetBlockTxValue(
+  blockHeight: number,
+  txIndex: number,
+): Promise<
+  | { ok: true; valueHex: string | null; txHash: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("get-block-tx-value", { blockHeight, txIndex });
 }
 
 export interface WalletAddressLabel {
@@ -861,6 +876,15 @@ export async function bgWalletSendTx(args: {
   executionUnitLimitHex?: string;
   /** Optional encrypted-mempool class override for SDK-built action plans. */
   mempoolClass?: number;
+  /** Phase-1.5 — optional operation tag forwarded to the pending-row
+   *  record so the notifications hook can label the resulting
+   *  NotificationRecord with a friendly title (Phase 2 toast + Phase 3
+   *  UI). PENDING-ROW METADATA ONLY: the SW never plumbs this into
+   *  `submitEncryptedMlDsaTx`'s argument object — the signed tx bytes,
+   *  the ML-DSA-65 signature, the encrypted envelope, the nonce, the
+   *  fee, and the gas are unchanged whether this is set or not. Omit
+   *  for the coarse `"send"` / `"contract_call"` fallback. */
+  opKind?: TxOpKind;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -2396,6 +2420,8 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
     valueWeiHex: tx.valueWeiHex,
     data: tx.data,
     chainIdHex: args.chainIdHex,
+    executionUnitLimitHex: tx.executionUnitLimitHex,
+    opKind: "emergency-key",
   });
 
   if (!submit.ok) {
@@ -2421,4 +2447,113 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
     return { ok: false, reason: setRes.reason };
   }
   return { ok: true, txHash, backup: setRes.backup };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 notifications — read-only popup surface. The SW is the only
+// thing that can WRITE a notification (§0.4 — recordNotification is not
+// exported via any IPC). The popup can only LIST, MARK-AS-READ, and GET
+// the unread count.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type { NotificationRecord, TxOpKind } from "../shared/notifications.js";
+
+/** Global inbox — every `mono.notifications.history.*` envelope's entries,
+ *  merged + sorted newest-first by `createdAtMs`. Phase 3's Notifications
+ *  page renders this. */
+export async function bgListNotifications(): Promise<
+  | { ok: true; records: import("../shared/notifications.js").NotificationRecord[] }
+  | { ok: false; reason?: string }
+> {
+  return send("notifications-list");
+}
+
+/** Flip every record across every scope's history to `read: true`.
+ *  Returns the count of records flipped (zero on a second call to an
+ *  all-read inbox). The SW also fires a best-effort badge refresh, so
+ *  the toolbar pip clears without waiting for the next snapshot tick. */
+export async function bgMarkAllNotificationsRead(): Promise<
+  { ok: true; flipped: number } | { ok: false; reason?: string }
+> {
+  return send("notifications-mark-all-read");
+}
+
+/** Global unread count — drives the MainMenu's bell-row pill (matches
+ *  the toolbar badge that `getUnread()` already drives on the SW side). */
+export async function bgGetUnread(): Promise<
+  { ok: true; count: number } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-unread");
+}
+
+/** Polish C2 — flip ONE record's `read` flag to true by its full id.
+ *  Returns `flipped:true` when the record was found and was previously
+ *  unread; `flipped:false` for an already-read or unknown id (no-op).
+ *  The SW also fires a best-effort `refreshUnreadBadge()` on a flip, so
+ *  the toolbar badge updates without waiting for the next snapshot. */
+export async function bgMarkNotificationRead(
+  id: string,
+): Promise<
+  { ok: true; flipped: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-mark-read", { id });
+}
+
+/** Phase 5 — read the user-facing OS-toast toggle. Default `true`
+ *  (absent ⇒ on). The flag gates ONLY the OS toast; the in-app
+ *  notification history and the toolbar unread badge keep working
+ *  regardless. */
+export async function bgGetNotificationsOsEnabled(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-os-enabled");
+}
+
+/** Phase 5 — write the user-facing OS-toast toggle. Boolean validated
+ *  at the IPC boundary. */
+export async function bgSetNotificationsOsEnabled(
+  enabled: boolean,
+): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-set-os-enabled", { enabled });
+}
+
+// GAP-N1 settings — three additional notification toggles (default true).
+// Each mirrors the Phase-5 get/set wrapper; all gate on-screen surfaces only.
+
+/** "Show transaction details" — off ⇒ generic toast body (no amount/address). */
+export async function bgGetShowDetails(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-show-details");
+}
+export async function bgSetShowDetails(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-show-details", { enabled });
+}
+
+/** "Notify while locked" — off ⇒ no toast for txs that confirm while locked. */
+export async function bgGetNotifyWhenLocked(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-notify-when-locked");
+}
+export async function bgSetNotifyWhenLocked(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-notify-when-locked", { enabled });
+}
+
+/** "Unread badge while locked" — off ⇒ the count is held while locked. */
+export async function bgGetBadgeWhenLocked(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-badge-when-locked");
+}
+export async function bgSetBadgeWhenLocked(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-badge-when-locked", { enabled });
 }
