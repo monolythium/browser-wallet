@@ -96,6 +96,68 @@ export async function setOsNotificationsEnabled(
   }
 }
 
+// GAP-N1 settings — three additional user-facing notification toggles, all
+// default ON (absent ⇒ true) and fail-open (a read error ⇒ true) exactly like
+// the Phase-5 os-enabled flag. Local-only. They gate only the on-screen
+// surfaces (the OS toast + the toolbar badge), NEVER the in-app history record
+// (§0.4 — recordNotification always writes).
+const SHOW_DETAILS_KEY = "mono.notifications.show-details.v1";
+const NOTIFY_WHEN_LOCKED_KEY = "mono.notifications.notify-when-locked.v1";
+const BADGE_WHEN_LOCKED_KEY = "mono.notifications.badge-when-locked.v1";
+
+/** Default-true, fail-open boolean setting read (mirrors the os-enabled
+ *  semantics: absent key ⇒ true; a chrome.storage error ⇒ true, so a
+ *  transient failure never silently mutes the user). */
+async function getBoolSetting(key: string): Promise<boolean> {
+  try {
+    if (typeof chrome === "undefined" || !chrome.storage?.local?.get) {
+      return true;
+    }
+    const v = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([key], (res) => resolve(res?.[key]));
+    });
+    return v === undefined ? true : v !== false;
+  } catch {
+    return true;
+  }
+}
+
+/** Persist a boolean setting. Best-effort. */
+async function setBoolSetting(key: string, enabled: boolean): Promise<void> {
+  try {
+    if (typeof chrome === "undefined" || !chrome.storage?.local?.set) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set({ [key]: !!enabled }, () => resolve());
+    });
+  } catch {
+    // Best-effort.
+  }
+}
+
+/** "Show transaction details" — when off, toasts carry a generic body
+ *  (no amount/address/op). Default true. */
+export const getShowDetails = (): Promise<boolean> =>
+  getBoolSetting(SHOW_DETAILS_KEY);
+export const setShowDetails = (enabled: boolean): Promise<void> =>
+  setBoolSetting(SHOW_DETAILS_KEY, enabled);
+
+/** "Notify while locked" — when off, no OS toast fires for a tx that
+ *  confirms while the wallet is locked (the record + badge still update).
+ *  Default true. */
+export const getNotifyWhenLocked = (): Promise<boolean> =>
+  getBoolSetting(NOTIFY_WHEN_LOCKED_KEY);
+export const setNotifyWhenLocked = (enabled: boolean): Promise<void> =>
+  setBoolSetting(NOTIFY_WHEN_LOCKED_KEY, enabled);
+
+/** "Unread badge while locked" — when off, the toolbar count is held (not
+ *  surfaced) while locked; it appears on unlock. Default true. */
+export const getBadgeWhenLocked = (): Promise<boolean> =>
+  getBoolSetting(BADGE_WHEN_LOCKED_KEY);
+export const setBadgeWhenLocked = (enabled: boolean): Promise<void> =>
+  setBoolSetting(BADGE_WHEN_LOCKED_KEY, enabled);
+
 /** GAP-N1 / polish C3 — true when at least one POPUP or SIDE_PANEL wallet
  *  surface is currently open. Used at notification-record time to set the
  *  `read` flag: a surface open at observe-time means the user is present

@@ -139,11 +139,17 @@ import {
 // never escape into the snapshot path.
 import {
   fireOsNotification,
+  getBadgeWhenLocked,
+  getNotifyWhenLocked,
   getOsNotificationsEnabled,
+  getShowDetails,
   installNotificationsClickListener,
   isWalletSurfaceOpen,
   refreshUnreadBadge,
+  setBadgeWhenLocked,
+  setNotifyWhenLocked,
   setOsNotificationsEnabled,
+  setShowDetails,
 } from "./notifications-os.js";
 // Phase 1.5 notifications — broadcast-time operation tag. The wallet-send-tx
 // handler reads p.opKind into a handler-local var (sanitized via isTxOpKind)
@@ -8269,6 +8275,67 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         await setOsNotificationsEnabled(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    // GAP-N1 settings — three additional boolean toggles, mirroring the
+    // Phase-5 os-enabled get/set (boolean-validated at the boundary; default
+    // true; local-only). Each gates an on-screen surface only — never the
+    // in-app history record.
+    case "notifications-get-show-details": {
+      try {
+        return { ok: true, enabled: await getShowDetails() };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-show-details": {
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setShowDetails(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-notify-when-locked": {
+      try {
+        return { ok: true, enabled: await getNotifyWhenLocked() };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-notify-when-locked": {
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setNotifyWhenLocked(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-badge-when-locked": {
+      try {
+        return { ok: true, enabled: await getBadgeWhenLocked() };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-badge-when-locked": {
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setBadgeWhenLocked(p.enabled);
         return { ok: true, enabled: p.enabled };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
