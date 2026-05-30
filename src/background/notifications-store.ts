@@ -70,6 +70,11 @@ export interface RecordNotificationInput {
   kind: TxOpKind;
   amountDecimal: string;
   counterparty: string;
+  /** GAP-N1 / polish C3 — presence at observe-time. `true` ⇒ a wallet
+   *  surface was open when this record was created ⇒ store it already-read
+   *  (no badge bump). Omitted/`false` ⇒ unread (the historical default).
+   *  Set by the caller via `isWalletSurfaceOpen()`. */
+  read?: boolean;
 }
 
 /** Append a notification for a tracked-tx terminal transition.
@@ -108,7 +113,7 @@ export async function recordNotification(
       amountDecimal: input.amountDecimal,
       counterparty: input.counterparty,
       createdAtMs: Date.now(),
-      read: false,
+      read: input.read ?? false,
       schemaVersion: 0,
     };
 

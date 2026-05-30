@@ -458,4 +458,28 @@ describe("notifications-store", () => {
     await markNotificationRead(`${CHAIN_A}:${HASH_1}`);
     expect(await getUnread()).toBe(2);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // GAP-N1 C3 — presence-aware read at insert. `input.read` defaults false
+  // (today's behavior); `true` ⇒ the record lands already-read (no unread).
+  // ───────────────────────────────────────────────────────────────────────
+
+  it("read:true → record.read true + getUnread does NOT count it", async () => {
+    const { recordNotification, getUnread } = await import(
+      "./notifications-store.js"
+    );
+    const r = await recordNotification({ ...baseInput(), read: true });
+    expect(r.added).toBe(true);
+    expect(r.record?.read).toBe(true);
+    expect(await getUnread()).toBe(0);
+  });
+
+  it("read omitted → record.read false (default) + getUnread counts it", async () => {
+    const { recordNotification, getUnread } = await import(
+      "./notifications-store.js"
+    );
+    const r = await recordNotification(baseInput());
+    expect(r.record?.read).toBe(false);
+    expect(await getUnread()).toBe(1);
+  });
 });

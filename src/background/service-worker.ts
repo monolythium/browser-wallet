@@ -141,6 +141,7 @@ import {
   fireOsNotification,
   getOsNotificationsEnabled,
   installNotificationsClickListener,
+  isWalletSurfaceOpen,
   refreshUnreadBadge,
   setOsNotificationsEnabled,
 } from "./notifications-os.js";
@@ -4460,6 +4461,10 @@ export async function pollPendingAndNotify(): Promise<{
       chrome.storage.local.get(null, (res) => resolve(res ?? {}));
     });
     const now = Date.now();
+    // C3 — presence at observe-time, computed ONCE per tick: a surface open
+    // now ⇒ the user is present ⇒ record read (no badge bump); closed ⇒
+    // accumulate unread. Defaults false (closed) on any error.
+    const surfaceOpen = await isWalletSurfaceOpen();
     for (const key of Object.keys(all)) {
       if (!key.startsWith("mono.activity.pending.")) continue;
       // key = mono.activity.pending.<addrLower>.<chainIdHex>; addresses and
@@ -4499,6 +4504,7 @@ export async function pollPendingAndNotify(): Promise<{
           kind: t.row.opKind ?? "contract_call",
           amountDecimal: t.row.amountDecimal,
           counterparty: t.row.to,
+          read: surfaceOpen,
         });
         if (result.added && result.record !== null) {
           await fireOsNotification(result.record);
@@ -6966,6 +6972,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         queueMicrotask(() => {
           void (async () => {
             try {
+              // C3 — presence at observe-time, computed ONCE per batch and
+              // threaded into both record loops. A surface open now ⇒ record
+              // read (no badge bump); closed ⇒ accumulate unread. Defaults
+              // false on any error. (On the popup path a surface is typically
+              // open, so this is usually read:true; the poll path supplies
+              // the closed→unread case.)
+              const surfaceOpen = await isWalletSurfaceOpen();
               let anyAdded = false;
               for (const row of heuristicallyMatched) {
                 // The matched confirmed row's blockHeight is the most
@@ -6991,6 +7004,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   kind: row.opKind ?? "send",
                   amountDecimal: row.amountDecimal,
                   counterparty: row.to,
+                  read: surfaceOpen,
                 });
                 // Phase 2 — fire OS toast ONLY when this snapshot produced
                 // a NEW record (the dedupe set blocks already-notified
@@ -7015,6 +7029,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   kind: t.row.opKind ?? "contract_call",
                   amountDecimal: t.row.amountDecimal,
                   counterparty: t.row.to,
+                  read: surfaceOpen,
                 });
                 if (result.added && result.record !== null) {
                   anyAdded = true;

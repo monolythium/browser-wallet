@@ -96,6 +96,31 @@ export async function setOsNotificationsEnabled(
   }
 }
 
+/** GAP-N1 / polish C3 — true when at least one POPUP or SIDE_PANEL wallet
+ *  surface is currently open. Used at notification-record time to set the
+ *  `read` flag: a surface open at observe-time means the user is present
+ *  (record as read, no badge bump); closed ⇒ accumulate unread. Defaults
+ *  FALSE on any error / missing API (Chrome < 116) so an unrecognized
+ *  environment behaves as "closed" — it never silently mutes the unread
+ *  state. Full-view (`?mode=fullscreen`) is a normal tab, NOT a
+ *  POPUP/SIDE_PANEL context, so it reads as closed (by design). */
+export async function isWalletSurfaceOpen(): Promise<boolean> {
+  try {
+    if (
+      typeof chrome === "undefined" ||
+      typeof chrome.runtime?.getContexts !== "function"
+    ) {
+      return false;
+    }
+    const ctxs = await chrome.runtime.getContexts({
+      contextTypes: ["POPUP", "SIDE_PANEL"] as chrome.runtime.ContextType[],
+    });
+    return Array.isArray(ctxs) && ctxs.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Middle-truncate any string (bech32m address or hash) for compact
  *  display. Pure — never throws. Mirrors the helper in
  *  `popup/components/ActivityDetail.tsx` so the toast body reads the
