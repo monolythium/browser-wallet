@@ -340,6 +340,23 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-act-row__right .amt.opaque { color: var(--fg-400); font-size:11.5px; font-family: var(--f-sans); font-style:italic; }
 .ext-act-row__right .sym { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:2px; letter-spacing:0.04em; }
 
+/* Phase 3 notifications — unread indicator. A small blue dot pinned to
+   the bottom-left of a notification row, visible only on rows whose
+   record.read === false. The wallet's existing "blue" attention color
+   is `oklch(0.78 0.14 240)` (used elsewhere for the private-denom hint
+   at components.tsx:1639); reused here so the dot reads as the same
+   "needs your attention" cue. */
+.ext-unread {
+  position: absolute;
+  left: 0;
+  bottom: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: oklch(0.78 0.14 240);
+  pointer-events: none;
+}
+
 /* Phase 4.4 — pending-row indicator (commit 12: spin animation deferred
    here from commit 11 per the CSS-reuse constraint). The dot sits in the
    icon slot's top-right corner; the rotating ring gives a "work in
