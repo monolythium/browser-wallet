@@ -51,6 +51,7 @@ import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
 import { Operators } from "./pages/Operators";
+import { NotificationSettings } from "./pages/NotificationSettings";
 import { About } from "./pages/About";
 import { Welcome } from "./pages/Welcome";
 import { SetPassword } from "./pages/SetPassword";
@@ -123,6 +124,7 @@ type Screen =
   | "network-edit"
   | "settings"
   | "operators"
+  | "notification-settings"
   | "about"
   | "reveal-phrase"
   | "reset-wallet"
@@ -847,6 +849,7 @@ export default function App() {
     screen === "network-edit" ||
     screen === "settings" ||
     screen === "operators" ||
+    screen === "notification-settings" ||
     screen === "mrv-native" ||
     screen === "receive" ||
     screen === "send" ||
@@ -1195,6 +1198,7 @@ export default function App() {
           // navigateBack handles both pushers.
           onResetWallet={() => navigateTo("reset-wallet")}
           onOpenOperators={() => setScreen("operators")}
+          onOpenNotificationSettings={() => setScreen("notification-settings")}
           onOpenMrvNative={() => setScreen("mrv-native")}
           // Round 9 TASK 2 — Settings → About now pushes onto the
           // screen stack via navigateTo so About's onBack (which
@@ -1238,6 +1242,10 @@ export default function App() {
 
       {screen === "operators" && (
         <Operators onBack={() => setScreen("settings")} />
+      )}
+
+      {screen === "notification-settings" && (
+        <NotificationSettings onBack={() => setScreen("settings")} />
       )}
 
       {screen === "mrv-native" && (
