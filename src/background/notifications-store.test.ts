@@ -482,4 +482,19 @@ describe("notifications-store", () => {
     expect(r.record?.read).toBe(false);
     expect(await getUnread()).toBe(1);
   });
+
+  it("writes the in-app record regardless of notification settings (settings gate only surfaces)", async () => {
+    // recordNotification takes NO notification-settings input — the
+    // show-details / notify-when-locked / badge-when-locked toggles live in
+    // notifications-os and gate ONLY fireOsNotification / refreshUnreadBadge.
+    // So the durable in-app record is always written (§0.4), even when the
+    // toast is suppressed and the badge is held.
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    const r = await recordNotification(baseInput());
+    expect(r.added).toBe(true);
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    expect(list).toHaveLength(1);
+  });
 });

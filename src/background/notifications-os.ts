@@ -230,6 +230,7 @@ export function notificationBody(record: NotificationRecord): string {
  *  side; the notifications center remains the durable record). */
 export async function fireOsNotification(
   record: NotificationRecord,
+  opts?: { unlocked?: boolean },
 ): Promise<void> {
   try {
     if (
@@ -240,8 +241,23 @@ export async function fireOsNotification(
     }
     const enabled = await getOsNotificationsEnabled();
     if (!enabled) return;
-    const title = notificationTitle(record.kind, record.status);
-    const message = notificationBody(record);
+    // Lock gate: when the wallet is locked, only toast if the user opted in
+    // ("Notify while locked"). `unlocked` is a plain boolean passed by the SW
+    // caller (gate-only — no decryption here). Default true so a caller that
+    // omits it (or an open surface) is unaffected.
+    const unlocked = opts?.unlocked ?? true;
+    if (!unlocked && !(await getNotifyWhenLocked())) return;
+    // Privacy: full body only when "Show transaction details" is on; else a
+    // generic status-only toast (no amount / address / op).
+    const showDetails = await getShowDetails();
+    const title = showDetails
+      ? notificationTitle(record.kind, record.status)
+      : "Monolythium";
+    const message = showDetails
+      ? notificationBody(record)
+      : record.status === "failed"
+        ? "Transaction failed"
+        : "Transaction confirmed";
     // `chrome.notifications.create` returns a Promise in MV3 — wrap with
     // try/catch so a rejection (rare, but happens on some platforms when
     // the user has blocked notifications globally) doesn't escape.
@@ -259,7 +275,9 @@ export async function fireOsNotification(
 /** Recompute the toolbar unread badge from `getUnread()` and push it to
  *  `chrome.action.setBadgeText`. Empty string clears the pip (per the
  *  chrome.action contract). Best-effort. */
-export async function refreshUnreadBadge(): Promise<void> {
+export async function refreshUnreadBadge(opts?: {
+  unlocked?: boolean;
+}): Promise<void> {
   try {
     if (
       typeof chrome === "undefined" ||
@@ -268,9 +286,15 @@ export async function refreshUnreadBadge(): Promise<void> {
       return;
     }
     const n = await getUnread();
-    const text = n > 0 ? String(n) : "";
+    // While locked with "Unread badge while locked" off, hide the count — the
+    // unread record is still kept; the next unlocked refresh surfaces it. The
+    // count itself never reveals tx content. `unlocked` is gate-only.
+    const unlocked = opts?.unlocked ?? true;
+    const suppressed = !unlocked && !(await getBadgeWhenLocked());
+    const text = !suppressed && n > 0 ? String(n) : "";
     await chrome.action.setBadgeText({ text });
     if (
+      !suppressed &&
       n > 0 &&
       typeof chrome.action.setBadgeBackgroundColor === "function"
     ) {
