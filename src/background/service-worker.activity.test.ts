@@ -415,6 +415,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
 });
 
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
+import { ALARM_NOTIF_POLL } from "../shared/constants.js";
 import { submitEncryptedMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -433,6 +434,12 @@ const onChangedListeners: Array<
 > = [];
 let storageLocal: Record<string, unknown> = {};
 let storageSession: Record<string, unknown> = {};
+// GAP-N1 — capture chrome.alarms listeners + create/clear calls so the
+// notif-poll alarm lifecycle is testable. Listeners are registered once at
+// SW import (beforeAll) and persist; the call arrays reset per test.
+const capturedAlarmListeners: Array<(alarm: { name: string }) => void> = [];
+const alarmCreateCalls: Array<{ name: string; info: unknown }> = [];
+const alarmClearCalls: string[] = [];
 
 function makeStorageArea(map: () => Record<string, unknown>, areaName: string) {
   return {
@@ -490,9 +497,19 @@ function installChromeStub(): void {
       },
     },
     alarms: {
-      onAlarm: { addListener: vi.fn() },
-      create: vi.fn(() => Promise.resolve()),
-      clear: vi.fn(() => Promise.resolve(true)),
+      onAlarm: {
+        addListener: (l: (alarm: { name: string }) => void) => {
+          capturedAlarmListeners.push(l);
+        },
+      },
+      create: (name: string, info: unknown) => {
+        alarmCreateCalls.push({ name, info });
+        return Promise.resolve();
+      },
+      clear: (name: string) => {
+        alarmClearCalls.push(name);
+        return Promise.resolve(true);
+      },
     },
     runtime: {
       onMessage: {
@@ -591,6 +608,8 @@ beforeEach(() => {
   unlocked = true;
   storageLocal = {};
   storageSession = {};
+  alarmCreateCalls.length = 0;
+  alarmClearCalls.length = 0;
   mockVerifyNoEvmFinalityEvidenceThreshold.mockReset();
   mockGetNoEvmReceiptTrustPolicy.mockReset();
   mockGetNoEvmReceiptTrustPolicy.mockReturnValue(null);
@@ -4017,5 +4036,93 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
     expect(
       (storageLocal[pendingKey(ADDR2, CHAIN)] as { pending: unknown[] }).pending,
     ).toEqual([]);
+  });
+});
+
+// GAP-N1 C2 — the notif-poll alarm lifecycle + back-off. Drives the captured
+// onAlarm listener + the send-flow persist; the per-call RPC timeout is
+// covered in tx-mldsa.test.ts.
+describe("GAP-N1 C2 — notif-poll alarm lifecycle + back-off", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const pk = (addr: string, chain: string) =>
+    `mono.activity.pending.${addr}.${chain}`;
+  function row(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: "pending_tx",
+      txHash: "0x" + "1".repeat(64),
+      to: "0x" + "2".repeat(40),
+      amountDecimal: "1.5",
+      broadcastedAtMs: Date.now(),
+      broadcastBlockHeight: 100,
+      via: "mock-operator",
+      opKind: "send",
+      ...overrides,
+    };
+  }
+  const flushAsync = async () => {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+  };
+  const fireNotifPoll = () => {
+    for (const l of capturedAlarmListeners) l({ name: ALARM_NOTIF_POLL });
+  };
+
+  it("persisting a pending row (via wallet-send-tx) arms the poll alarm", async () => {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: { to: "0xrecipient", valueWeiHex: "0x989680", chainIdHex: CHAIN },
+    });
+    // Fire-and-forget persist → queueMicrotask + a macrotask to settle.
+    await new Promise<void>((r) => queueMicrotask(r));
+    await new Promise<void>((r) => setTimeout(r, 10));
+    expect(alarmCreateCalls.map((c) => c.name)).toContain(ALARM_NOTIF_POLL);
+  });
+
+  it("onAlarm runs the poll-core and clears the alarm when the set empties", async () => {
+    storageLocal[pk(ADDR, CHAIN)] = { pending: [row()] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+    fireNotifPoll();
+    await flushAsync();
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    // remaining 0 + the race re-check still empty → cleared.
+    expect(alarmClearCalls).toContain(ALARM_NOTIF_POLL);
+  });
+
+  it("onAlarm does NOT clear while a tx is still pending", async () => {
+    storageLocal[pk(ADDR, CHAIN)] = { pending: [row()] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null; // still pending
+    fireNotifPoll();
+    await flushAsync();
+    expect(alarmClearCalls).not.toContain(ALARM_NOTIF_POLL);
+  });
+
+  it("backs off (lengthens the period) on consecutive all-operator failures", async () => {
+    // A clean empty tick first resets any back-off carried from a prior test.
+    fireNotifPoll();
+    await flushAsync();
+    // Now an all-fail tick with a pending row: lyth_txStatus throws → the row
+    // is kept (never mislabeled) and the tick counts as all-failed.
+    storageLocal[pk(ADDR, CHAIN)] = { pending: [row()] };
+    rpcErrors["lyth_txStatus"] = { code: -32000, message: "operator down" };
+    alarmCreateCalls.length = 0;
+    fireNotifPoll();
+    await flushAsync();
+    const created = alarmCreateCalls.filter((c) => c.name === ALARM_NOTIF_POLL);
+    expect(created.length).toBeGreaterThan(0);
+    expect(
+      (created.at(-1)!.info as { periodInMinutes: number }).periodInMinutes,
+    ).toBe(2);
   });
 });
