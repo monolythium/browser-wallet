@@ -66,6 +66,7 @@ import { MrvNative } from "./pages/MrvNative";
 import { Pending as MultisigPending } from "./pages/Pending";
 import { MultisigGovernance } from "./components/MultisigGovernance";
 import { MainMenu } from "./pages/MainMenu";
+import { Notifications } from "./pages/Notifications";
 import { NewWalletFlow } from "./pages/NewWalletFlow";
 import { generateOnboardingMnemonic } from "./lib/onboarding-mnemonic";
 import { explainImportError } from "./lib/import-error";
@@ -141,7 +142,8 @@ type Screen =
   | "features"
   | "main-menu"
   | "contacts"
-  | "new-wallet-flow";
+  | "new-wallet-flow"
+  | "notifications";
 
 // Screens where a SW-pushed walletLocked=true signal should NOT kick the
 // user back to the Unlock screen. Onboarding flows are protected because
@@ -1334,12 +1336,21 @@ export default function App() {
           // ResetWallet (via navigateBack) returns to the menu instead
           // of skipping to home.
           onResetWallet={() => navigateTo("reset-wallet")}
+          // Phase 3 notifications — open the global inbox. navigateTo
+          // pushes "main-menu" so back from the Notifications page
+          // returns to the menu.
+          onNotifications={() => navigateTo("notifications")}
         />
       )}
 
       {/* Round 7 TASK 5 — Contacts page. Reached from MainMenu;
          onBack via navigateBack to return to the menu. */}
       {screen === "contacts" && <Contacts onBack={navigateBack} />}
+
+      {/* Phase 3 — Notifications page. Global inbox; reached from the
+         hamburger menu's bell row. onBack via navigateBack returns to
+         the menu. */}
+      {screen === "notifications" && <Notifications onBack={navigateBack} />}
 
       {/* Round 13 TASK 1 — in-app new wallet flow. Reached from the
          VaultPicker dropdown's "New wallet" entry (push "home" onto
