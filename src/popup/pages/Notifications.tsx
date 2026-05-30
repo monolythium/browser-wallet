@@ -21,6 +21,7 @@ import { Icon, type IconName } from "../Icon";
 import {
   bgListNotifications,
   bgMarkAllNotificationsRead,
+  bgMarkNotificationRead,
   type NotificationRecord,
   type TxOpKind,
 } from "../bg";
@@ -107,6 +108,26 @@ export function Notifications({ onBack }: NotificationsProps) {
     setMarking(false);
   }, [refresh]);
 
+  // Polish C2 — opening a record's detail also marks JUST that record
+  // read. The SW fires refreshUnreadBadge on a successful flip; here we
+  // optimistically update the local list so the row's blue dot clears
+  // before the chrome.storage.onChanged callback rolls around (the
+  // top-bar bell dot updates via that listener on its own).
+  const handleOpenRecord = useCallback((rec: NotificationRecord) => {
+    setSelected(rec);
+    if (rec.read) return;
+    void (async () => {
+      const r = await bgMarkNotificationRead(rec.id);
+      if (r.ok && r.flipped) {
+        setRecords((prev) =>
+          prev
+            ? prev.map((x) => (x.id === rec.id ? { ...x, read: true } : x))
+            : prev,
+        );
+      }
+    })();
+  }, []);
+
   const hasUnread = (records ?? []).some((r) => !r.read);
 
   return (
@@ -151,7 +172,7 @@ export function Notifications({ onBack }: NotificationsProps) {
               <NotificationRow
                 key={rec.id}
                 record={rec}
-                onOpen={() => setSelected(rec)}
+                onOpen={() => handleOpenRecord(rec)}
               />
             ))}
           </div>

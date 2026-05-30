@@ -129,6 +129,7 @@ import {
   getUnread,
   listAllNotifications,
   markAllNotificationsRead,
+  markNotificationRead,
   recordNotification,
 } from "./notifications-store.js";
 // Phase 2 notifications — the OS toast + unread badge amplifier on top of
@@ -8008,6 +8009,27 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const enabled = await getOsNotificationsEnabled();
         return { ok: true, enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-mark-read": {
+      // Polish C2 — flip ONE record's read flag to true. The id payload
+      // is validated as a non-empty string at the IPC boundary so the
+      // store helper never sees garbage. Fires refreshUnreadBadge on a
+      // successful flip so the toolbar badge updates without waiting
+      // for the next snapshot tick (and the popup's onChanged listener
+      // refreshes the top-bar bell dot). §0.4 holds: this is a WRITE to
+      // an existing record's UI read flag — NOT a notification-creating
+      // IPC. recordNotification stays SW-only.
+      const p = (message.payload ?? {}) as { id?: unknown };
+      if (typeof p.id !== "string" || p.id.length === 0) {
+        return { ok: false, reason: "id must be a non-empty string" };
+      }
+      try {
+        const r = await markNotificationRead(p.id);
+        if (r.flipped) void refreshUnreadBadge();
+        return { ok: true, flipped: r.flipped };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
