@@ -2448,3 +2448,40 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
   }
   return { ok: true, txHash, backup: setRes.backup };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 notifications — read-only popup surface. The SW is the only
+// thing that can WRITE a notification (§0.4 — recordNotification is not
+// exported via any IPC). The popup can only LIST, MARK-AS-READ, and GET
+// the unread count.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type { NotificationRecord, TxOpKind } from "../shared/notifications.js";
+
+/** Global inbox — every `mono.notifications.history.*` envelope's entries,
+ *  merged + sorted newest-first by `createdAtMs`. Phase 3's Notifications
+ *  page renders this. */
+export async function bgListNotifications(): Promise<
+  | { ok: true; records: import("../shared/notifications.js").NotificationRecord[] }
+  | { ok: false; reason?: string }
+> {
+  return send("notifications-list");
+}
+
+/** Flip every record across every scope's history to `read: true`.
+ *  Returns the count of records flipped (zero on a second call to an
+ *  all-read inbox). The SW also fires a best-effort badge refresh, so
+ *  the toolbar pip clears without waiting for the next snapshot tick. */
+export async function bgMarkAllNotificationsRead(): Promise<
+  { ok: true; flipped: number } | { ok: false; reason?: string }
+> {
+  return send("notifications-mark-all-read");
+}
+
+/** Global unread count — drives the MainMenu's bell-row pill (matches
+ *  the toolbar badge that `getUnread()` already drives on the SW side). */
+export async function bgGetUnread(): Promise<
+  { ok: true; count: number } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-unread");
+}

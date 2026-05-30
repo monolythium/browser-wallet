@@ -259,4 +259,89 @@ describe("notifications-store", () => {
     expect(rec?.amountDecimal).toBe("0.10");
     expect(typeof rec?.createdAtMs).toBe("number");
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Phase 3 — global inbox helpers (listAllNotifications +
+  // markAllNotificationsRead). The Notifications page reads via these.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it("listAllNotifications merges every scope and sorts newest-first by createdAtMs", async () => {
+    const { recordNotification, listAllNotifications } = await import(
+      "./notifications-store.js"
+    );
+    // Spread three records across two distinct scopes (addr × chain).
+    // We can't pin createdAtMs directly because recordNotification stamps
+    // Date.now(), but sequential awaits guarantee monotonically-increasing
+    // timestamps — so the LAST insert must be at index 0 of the merged
+    // list and the FIRST insert at the end.
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    // Small wait so the next record gets a strictly-later createdAtMs.
+    await new Promise<void>((r) => setTimeout(r, 5));
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await new Promise<void>((r) => setTimeout(r, 5));
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_B, txHash: HASH_2 }),
+    );
+
+    const all = await listAllNotifications();
+    expect(all).toHaveLength(3);
+    // Newest-first: the LAST insert (ADDR_A / CHAIN_B / HASH_2) leads.
+    expect(all[0]?.id).toBe(`${CHAIN_B}:${HASH_2}`);
+    // Monotonic — the merged sort respects createdAtMs across scopes.
+    expect(all[0]!.createdAtMs).toBeGreaterThanOrEqual(all[1]!.createdAtMs);
+    expect(all[1]!.createdAtMs).toBeGreaterThanOrEqual(all[2]!.createdAtMs);
+  });
+
+  it("listAllNotifications returns [] when no history keys exist", async () => {
+    const { listAllNotifications } = await import("./notifications-store.js");
+    expect(await listAllNotifications()).toEqual([]);
+  });
+
+  it("markAllNotificationsRead flips every scope's records; second call returns 0", async () => {
+    const {
+      recordNotification,
+      markAllNotificationsRead,
+      listAllNotifications,
+    } = await import("./notifications-store.js");
+    // Plant 2 records on ADDR_A/CHAIN_A and 1 on ADDR_B/CHAIN_A.
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_2 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+
+    const first = await markAllNotificationsRead();
+    expect(first.flipped).toBe(3);
+    const all = await listAllNotifications();
+    expect(all.every((r) => r.read)).toBe(true);
+
+    // Idempotent — a second call on an already-all-read inbox.
+    const second = await markAllNotificationsRead();
+    expect(second.flipped).toBe(0);
+  });
+
+  it("getUnread reflects markAllNotificationsRead → goes from N to 0", async () => {
+    const {
+      recordNotification,
+      markAllNotificationsRead,
+      getUnread,
+    } = await import("./notifications-store.js");
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    expect(await getUnread()).toBe(2);
+    await markAllNotificationsRead();
+    expect(await getUnread()).toBe(0);
+  });
 });
