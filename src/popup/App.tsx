@@ -90,6 +90,7 @@ import {
   bgWalletSetActiveChain,
   bgChainList,
   bgGetUiOpenMode,
+  bgGetUnread,
   bgSetUiOpenMode,
   type UiOpenMode,
   type VaultSummary,
@@ -485,6 +486,41 @@ export default function App() {
     void bgPing();
   }, []);
 
+  // Polish C1 — drive the top-bar bell's small unread dot. The dot
+  // mirrors the global unread count (same source as Phase-2's toolbar
+  // badge and Phase-3's MainMenu pill). We fetch on mount + subscribe
+  // to `chrome.storage.onChanged` for any `mono.notifications.history.*`
+  // write so the dot updates in real time as new records land, the
+  // user marks one read, or "Mark all as read" fires — no polling tick.
+  const [bannerUnread, setBannerUnread] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const r = await bgGetUnread();
+      if (cancelled) return;
+      setBannerUnread(r.ok ? r.count : 0);
+    };
+    void refresh();
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      if (
+        Object.keys(changes).some((k) =>
+          k.startsWith("mono.notifications.history."),
+        )
+      ) {
+        void refresh();
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, []);
+
   // ---- mount-time bootstrap ----
   useEffect(() => {
     void (async () => {
@@ -850,10 +886,16 @@ export default function App() {
           // matched), masking the bug — the actual fix is using the
           // stack at both entry pushers (top-bar + MainMenu).
           onOpenNetworks={() => navigateTo("networks")}
+          unreadCount={bannerUnread}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),
                 onConnectedSites: () => navigateTo("connected-sites"),
+                // Polish C1 — bell entry to the global notifications
+                // page. Same destination as the MainMenu bell row;
+                // exposing it on the top bar so the inbox is reachable
+                // without opening the hamburger menu.
+                onNotifications: () => navigateTo("notifications"),
                 // Round 7 TASK 4 — top-bar lock-button replaced with the
                 // hamburger menu trigger. Lock moves into the MainMenu's
                 // bottom (danger) section.
