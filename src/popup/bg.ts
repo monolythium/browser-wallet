@@ -2518,3 +2518,42 @@ export async function bgSetNotificationsOsEnabled(
 > {
   return send("notifications-set-os-enabled", { enabled });
 }
+
+// GAP-N1 settings — three additional notification toggles (default true).
+// Each mirrors the Phase-5 get/set wrapper; all gate on-screen surfaces only.
+
+/** "Show transaction details" — off ⇒ generic toast body (no amount/address). */
+export async function bgGetShowDetails(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-show-details");
+}
+export async function bgSetShowDetails(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-show-details", { enabled });
+}
+
+/** "Notify while locked" — off ⇒ no toast for txs that confirm while locked. */
+export async function bgGetNotifyWhenLocked(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-notify-when-locked");
+}
+export async function bgSetNotifyWhenLocked(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-notify-when-locked", { enabled });
+}
+
+/** "Unread badge while locked" — off ⇒ the count is held while locked. */
+export async function bgGetBadgeWhenLocked(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-badge-when-locked");
+}
+export async function bgSetBadgeWhenLocked(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-badge-when-locked", { enabled });
+}

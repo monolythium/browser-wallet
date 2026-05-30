@@ -4183,3 +4183,28 @@ describe("GAP-N1 C3 — presence-aware read (poll path)", () => {
     expect(await getUnread()).toBe(0);
   });
 });
+
+// Notification settings IPC — the three new setters validate a boolean at the
+// boundary BEFORE touching storage (the reject path returns early, so it's
+// exercised even though notifications-os.js is mocked here). The get/set
+// round-trip + default + fail-open are covered against the real helpers in
+// notifications-os.test.ts.
+describe("notification settings IPC — boolean validation at the boundary", () => {
+  const NEW_SET_OPS = [
+    "notifications-set-show-details",
+    "notifications-set-notify-when-locked",
+    "notifications-set-badge-when-locked",
+  ] as const;
+
+  for (const op of NEW_SET_OPS) {
+    it(`${op} rejects a non-boolean payload`, async () => {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op,
+        payload: { enabled: "nope" },
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      expect(r.reason).toContain("boolean");
+    });
+  }
+});
