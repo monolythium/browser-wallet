@@ -480,3 +480,64 @@ describe("isWalletSurfaceOpen — GAP-N1 C3 presence probe", () => {
     expect(await isWalletSurfaceOpen()).toBe(false);
   });
 });
+
+// GAP-N1 settings — the three new notification toggles. Same default-true,
+// fail-open semantics as the Phase-5 os-enabled flag.
+describe("GAP-N1 settings — show-details / notify-when-locked / badge-when-locked", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("getShowDetails defaults true (absent) and round-trips via setShowDetails", async () => {
+    const { getShowDetails, setShowDetails } = await import(
+      "./notifications-os.js"
+    );
+    expect(await getShowDetails()).toBe(true);
+    await setShowDetails(false);
+    expect(await getShowDetails()).toBe(false);
+    await setShowDetails(true);
+    expect(await getShowDetails()).toBe(true);
+  });
+
+  it("getNotifyWhenLocked defaults true (absent) and round-trips", async () => {
+    const { getNotifyWhenLocked, setNotifyWhenLocked } = await import(
+      "./notifications-os.js"
+    );
+    expect(await getNotifyWhenLocked()).toBe(true);
+    await setNotifyWhenLocked(false);
+    expect(await getNotifyWhenLocked()).toBe(false);
+    await setNotifyWhenLocked(true);
+    expect(await getNotifyWhenLocked()).toBe(true);
+  });
+
+  it("getBadgeWhenLocked defaults true (absent) and round-trips", async () => {
+    const { getBadgeWhenLocked, setBadgeWhenLocked } = await import(
+      "./notifications-os.js"
+    );
+    expect(await getBadgeWhenLocked()).toBe(true);
+    await setBadgeWhenLocked(false);
+    expect(await getBadgeWhenLocked()).toBe(false);
+    await setBadgeWhenLocked(true);
+    expect(await getBadgeWhenLocked()).toBe(true);
+  });
+
+  it("each setting fails open (true) on a chrome.storage read error", async () => {
+    (
+      globalThis as {
+        chrome?: { storage?: { local?: { get?: unknown } } };
+      }
+    ).chrome!.storage!.local!.get = () => {
+      throw new Error("storage read denied");
+    };
+    const { getShowDetails, getNotifyWhenLocked, getBadgeWhenLocked } =
+      await import("./notifications-os.js");
+    expect(await getShowDetails()).toBe(true);
+    expect(await getNotifyWhenLocked()).toBe(true);
+    expect(await getBadgeWhenLocked()).toBe(true);
+  });
+});
