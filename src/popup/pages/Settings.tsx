@@ -4,11 +4,17 @@ import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import {
   bgGetAutoLockMinutes,
+  bgGetBadgeWhenLocked,
   bgGetNotificationsOsEnabled,
+  bgGetNotifyWhenLocked,
+  bgGetShowDetails,
   bgGetUiOpenMode,
   bgKeystoreLock,
   bgSetAutoLockMinutes,
+  bgSetBadgeWhenLocked,
   bgSetNotificationsOsEnabled,
+  bgSetNotifyWhenLocked,
+  bgSetShowDetails,
   bgSetUiOpenMode,
   type SignAlgo,
   type UiOpenMode,
@@ -66,6 +72,22 @@ const ALGO_LABEL: Record<SignAlgo, string> = {
 
 const FALLBACK_OPTIONS: readonly number[] = [5, 15, 30, 60];
 
+// Notification settings — the Phase-5 master ("os") + three GAP-N1 toggles.
+// The setter map keeps handlePickNotif a one-liner; each value mirrors its
+// bg wrapper's signature.
+type NotifKey = "os" | "details" | "notifyLocked" | "badgeLocked";
+const NOTIF_SETTERS: Record<
+  NotifKey,
+  (enabled: boolean) => Promise<
+    { ok: true; enabled: boolean } | { ok: false; reason?: string }
+  >
+> = {
+  os: bgSetNotificationsOsEnabled,
+  details: bgSetShowDetails,
+  notifyLocked: bgSetNotifyWhenLocked,
+  badgeLocked: bgSetBadgeWhenLocked,
+};
+
 function getExtensionVersion(): string {
   try {
     return chrome.runtime.getManifest().version;
@@ -98,12 +120,14 @@ export function Settings({
   const [savingUiMode, setSavingUiMode] = useState(false);
   const [uiModePending, setUiModePending] = useState(false);
 
-  // Phase 5 — OS-toast toggle. Default ON; persists in
-  // mono.notifications.os-enabled.v1. Gates ONLY the OS toast; the
-  // in-app notification center and the toolbar badge keep working
-  // regardless when off.
-  const [osNotifEnabled, setOsNotifEnabled] = useState<boolean | null>(null);
-  const [savingOsNotif, setSavingOsNotif] = useState(false);
+  // Notification settings — the Phase-5 master ("os") + three GAP-N1
+  // privacy/UX toggles, all default ON. `null` = still loading. They gate
+  // only the on-screen surfaces (toast + badge); the in-app record is always
+  // kept. Persisted in mono.notifications.*.v1 (local-only).
+  const [notifSettings, setNotifSettings] = useState<
+    Record<NotifKey, boolean | null>
+  >({ os: null, details: null, notifyLocked: null, badgeLocked: null });
+  const [savingNotif, setSavingNotif] = useState<NotifKey | null>(null);
 
   // Round 6 TASK 6 — Account section inline copy state.
   const [addrCopied, setAddrCopied] = useState(false);
@@ -133,11 +157,21 @@ export function Settings({
       if (r.ok) setUiMode(r.mode);
     })();
     void (async () => {
-      const r = await bgGetNotificationsOsEnabled();
+      // Fail-open default ON if the IPC failed / SW unreachable — mirrors the
+      // SW-side fail-open read so the UI never misrepresents the flags.
+      const [os, details, notifyLocked, badgeLocked] = await Promise.all([
+        bgGetNotificationsOsEnabled(),
+        bgGetShowDetails(),
+        bgGetNotifyWhenLocked(),
+        bgGetBadgeWhenLocked(),
+      ]);
       if (cancelled) return;
-      // Default ON if the IPC failed or the SW is unreachable — fail-open
-      // mirrors fireOsNotification's behavior on a flag-read error.
-      setOsNotifEnabled(r.ok ? r.enabled : true);
+      setNotifSettings({
+        os: os.ok ? os.enabled : true,
+        details: details.ok ? details.enabled : true,
+        notifyLocked: notifyLocked.ok ? notifyLocked.enabled : true,
+        badgeLocked: badgeLocked.ok ? badgeLocked.enabled : true,
+      });
     })();
     return () => {
       cancelled = true;
@@ -167,12 +201,13 @@ export function Settings({
     setSavingUiMode(false);
   };
 
-  const handlePickOsNotif = async (next: boolean) => {
-    if (savingOsNotif || next === osNotifEnabled) return;
-    setSavingOsNotif(true);
-    const r = await bgSetNotificationsOsEnabled(next);
-    if (r.ok) setOsNotifEnabled(r.enabled);
-    setSavingOsNotif(false);
+  const handlePickNotif = async (key: NotifKey, next: boolean) => {
+    if (savingNotif !== null || notifSettings[key] === next) return;
+    setSavingNotif(key);
+    const setter = NOTIF_SETTERS[key];
+    const r = await setter(next);
+    if (r.ok) setNotifSettings((s) => ({ ...s, [key]: r.enabled }));
+    setSavingNotif(null);
   };
 
   const handleLockNow = async () => {
@@ -686,60 +721,43 @@ export function Settings({
           </div>
         </div>
 
-        {/* Phase 5 — Notifications card. Default ON. Gates ONLY the OS
-           toast (chrome.notifications.create); the in-app notifications
-           center and the toolbar unread badge stay live regardless. */}
+        {/* Notifications — the Phase-5 master + three GAP-N1 privacy/UX
+           toggles, all default ON. Each gates an on-screen surface only
+           (OS toast / toolbar badge); the in-app notification center is
+           always the durable record regardless of these settings. */}
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Notifications</h3>
           </div>
-          <div
-            style={{
-              fontSize: 11.5,
-              color: "var(--fg-300)",
-              lineHeight: 1.5,
-              marginBottom: 10,
-            }}
-          >
-            Show Chrome notifications for tx confirmations.
-            In-app notifications are always kept.
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 6,
-            }}
-          >
-            {([true, false] as const).map((val) => {
-              const active = osNotifEnabled === val;
-              return (
-                <button
-                  key={val ? "on" : "off"}
-                  onClick={() => void handlePickOsNotif(val)}
-                  disabled={savingOsNotif || osNotifEnabled === null}
-                  style={{
-                    padding: "8px 4px",
-                    borderRadius: 8,
-                    border: active
-                      ? "1px solid var(--gold)"
-                      : "1px solid var(--fg-700)",
-                    background: active
-                      ? "var(--gold-bg)"
-                      : "rgba(255,255,255,0.04)",
-                    color: active ? "var(--gold)" : "var(--fg-100)",
-                    fontFamily: "var(--f-sans)",
-                    fontSize: 12,
-                    fontWeight: active ? 600 : 500,
-                    cursor: "pointer",
-                    transition: "all 150ms var(--e-out)",
-                  }}
-                >
-                  {val ? "On" : "Off"}
-                </button>
-              );
-            })}
-          </div>
+          <NotifToggleRow
+            label="Chrome notifications"
+            description="Show a system notification when a transaction confirms or fails. In-app notifications are always kept."
+            value={notifSettings.os}
+            saving={savingNotif === "os"}
+            onPick={(v) => void handlePickNotif("os", v)}
+          />
+          <NotifToggleRow
+            label="Show transaction details"
+            description="Include the amount and address in notifications. Off shows only 'Transaction confirmed' — safer on shared screens. In-app details are unaffected."
+            value={notifSettings.details}
+            saving={savingNotif === "details"}
+            onPick={(v) => void handlePickNotif("details", v)}
+          />
+          <NotifToggleRow
+            label="Notify while locked"
+            description="Notify for transactions that confirm while the wallet is locked. Off holds them until you next unlock. In-app records are always kept."
+            value={notifSettings.notifyLocked}
+            saving={savingNotif === "notifyLocked"}
+            onPick={(v) => void handlePickNotif("notifyLocked", v)}
+          />
+          <NotifToggleRow
+            label="Unread badge while locked"
+            description="Show the unread count on the toolbar icon while locked. The count never reveals transaction details."
+            value={notifSettings.badgeLocked}
+            saving={savingNotif === "badgeLocked"}
+            onPick={(v) => void handlePickNotif("badgeLocked", v)}
+            last
+          />
         </div>
 
         <div className="ext-card">
@@ -883,3 +901,80 @@ const multisigBtnStyle: CSSProperties = {
   justifyContent: "space-between",
   gap: 8,
 };
+
+/** One labelled On/Off toggle row inside the Notifications section. Reuses the
+ *  Phase-5 pill-pair pattern; `value === null` while the setting is loading. */
+function NotifToggleRow({
+  label,
+  description,
+  value,
+  saving,
+  onPick,
+  last,
+}: {
+  label: string;
+  description: string;
+  value: boolean | null;
+  saving: boolean;
+  onPick: (next: boolean) => void;
+  last?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        marginBottom: last ? 0 : 16,
+        paddingBottom: last ? 0 : 16,
+        borderBottom: last ? "none" : "1px solid var(--fg-700)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: "var(--fg-100)",
+          marginBottom: 3,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--fg-300)",
+          lineHeight: 1.45,
+          marginBottom: 8,
+        }}
+      >
+        {description}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        {([true, false] as const).map((val) => {
+          const active = value === val;
+          return (
+            <button
+              key={val ? "on" : "off"}
+              onClick={() => onPick(val)}
+              disabled={saving || value === null}
+              style={{
+                padding: "8px 4px",
+                borderRadius: 8,
+                border: active
+                  ? "1px solid var(--gold)"
+                  : "1px solid var(--fg-700)",
+                background: active ? "var(--gold-bg)" : "rgba(255,255,255,0.04)",
+                color: active ? "var(--gold)" : "var(--fg-100)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12,
+                fontWeight: active ? 600 : 500,
+                cursor: "pointer",
+                transition: "all 150ms var(--e-out)",
+              }}
+            >
+              {val ? "On" : "Off"}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
