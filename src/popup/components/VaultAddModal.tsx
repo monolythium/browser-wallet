@@ -54,6 +54,7 @@ import {
   bgKeystoreUnlock,
   bgVaultAddFresh,
   bgVaultAddImport,
+  bgVaultSelect,
 } from "../bg";
 
 const MAX_LABEL_LEN = 32;
@@ -414,6 +415,16 @@ function ImportFlow({
     try {
       const r = await bgVaultAddImport(cleaned.join(" "), trimmedLabel);
       if (r.ok) {
+        // Auto-activate the imported vault so the chip shows the real name
+        // and the picker is clickable immediately. Mirrors the fresh-create
+        // SW path which auto-switches, and NewWalletFlow's manual select.
+        // Without this the user sees the leaky "ML-DSA-65 wallet" fallback
+        // until lock/unlock or reopen rehydrates the tree.
+        const selR = await bgVaultSelect(r.vaultId);
+        if (!selR.ok) {
+          setError(selR.reason ?? "Imported but could not activate the new vault. Pick it from the wallet dropdown.");
+          return;
+        }
         onComplete();
         return;
       }

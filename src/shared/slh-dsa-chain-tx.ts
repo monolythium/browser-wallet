@@ -47,6 +47,14 @@ import {
  *  4-byte selector. */
 export const EMERGENCY_KEY_REGISTER_SIGNATURE = "register(uint16,bytes)";
 
+/** Execution-unit limit for the precompile call. The Sprintnet native-
+ *  transfer floor (`SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = 30000`)
+ *  is insufficient for the precompile's validate-and-store work — a prior
+ *  attempt with that floor consumed all gas and reverted (`status:0`).
+ *  120000 gives ~4× headroom; the chain does not support
+ *  `eth_estimateGas`, so we cannot estimate at runtime. */
+export const EMERGENCY_KEY_REGISTER_GAS_LIMIT_HEX = "0x1d4c0"; // 120000
+
 // ────────────────────────────────────────────────────────────────────────────
 // Selector — computed once on module load (deterministic; we don't
 // hardcode because the test seam pins the value separately).
@@ -161,6 +169,9 @@ export interface RegisterTxShape {
   to: string;
   data: string;
   valueWeiHex: string;
+  /** Execution-unit limit (hex). The registration is a contract call; the
+   *  SW's default is the native-transfer floor, which is too low. */
+  executionUnitLimitHex: string;
 }
 
 /** Build the full tx-shape for the wallet's send path. */
@@ -171,5 +182,6 @@ export function buildEmergencyKeyRegisterTx(
     to: EMERGENCY_KEY_PRECOMPILE_ADDRESS,
     data: encodeEmergencyKeyRegister(pubkey),
     valueWeiHex: "0x0",
+    executionUnitLimitHex: EMERGENCY_KEY_REGISTER_GAS_LIMIT_HEX,
   };
 }

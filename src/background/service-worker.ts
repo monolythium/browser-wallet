@@ -121,6 +121,40 @@ import {
   // Round 4 TASK 2 — session-rehydrate across MV3 SW hibernation.
   tryRestoreFromSessionV4,
 } from "./keystore-mldsa.js";
+// Phase 1 notifications — the chokepoint hook in wallet-indexer-snapshot
+// calls this to record one notification per tracked-tx terminal transition.
+// recordNotification is intentionally NOT exposed via any IPC handler — §0.4
+// (only the wallet's own tracked-tx registry can emit notifications).
+import {
+  getUnread,
+  listAllNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+  recordNotification,
+} from "./notifications-store.js";
+// Phase 2 notifications — the OS toast + unread badge amplifier on top of
+// the Phase-1 records. Fired ONLY when recordNotification returns
+// added:true (i.e. a new terminal transition for one of the wallet's own
+// tracked txs); best-effort, so OS-deny / quota / unsupported environment
+// never escape into the snapshot path.
+import {
+  fireOsNotification,
+  getBadgeWhenLocked,
+  getNotifyWhenLocked,
+  getOsNotificationsEnabled,
+  getShowDetails,
+  installNotificationsClickListener,
+  isWalletSurfaceOpen,
+  refreshUnreadBadge,
+  setBadgeWhenLocked,
+  setNotifyWhenLocked,
+  setOsNotificationsEnabled,
+  setShowDetails,
+} from "./notifications-os.js";
+// Phase 1.5 notifications — broadcast-time operation tag. The wallet-send-tx
+// handler reads p.opKind into a handler-local var (sanitized via isTxOpKind)
+// and threads it ONLY to persistPendingRowBackground — never to the signer.
+import { isTxOpKind, type TxOpKind } from "../shared/notifications.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
@@ -193,6 +227,11 @@ import {
   type RawAddressActivity,
   type RawDelegationHistory,
 } from "../shared/activity.js";
+import {
+  sentAddressesKey,
+  parseSentAddresses,
+  addToSentList,
+} from "../shared/sent-addresses.js";
 import {
   DEMO_ADDR_SENTINELS_LOWER,
   isDemoAddrSentinel,
@@ -530,6 +569,7 @@ import {
 import { addressToBech32m } from "../shared/bech32m.js";
 import {
   ALARM_AUTO_LOCK,
+  ALARM_NOTIF_POLL,
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
   AUTO_LOCK_OPTIONS,
@@ -795,6 +835,13 @@ void (async () => {
   await purgeDemoAddrCacheKeys();
   session.chainId = await loadActiveChainId();
 
+  // GAP-N1 — re-arm the poll if a tx was left pending across an SW restart /
+  // extension reload (periodic alarms survive hibernation but a reload clears
+  // them), so away-confirmations are still observed.
+  if (await hasAnyPendingTx()) {
+    void ensureNotifPollAlarm();
+  }
+
   // Pre-mark WS down for operators with no explicit `ws_url`. See
   // `prefillUnknownWsEndpointsDown` for the V4-LIVE-0008 rationale.
   prefillUnknownWsEndpointsDown();
@@ -1047,6 +1094,111 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
     if (typeof deadline === "number" && Date.now() < deadline) return;
     await triggerAutoLock();
+  })();
+});
+
+// ---- GAP-N1 — notification poll alarm ----
+//
+// A periodic alarm that runs `pollPendingAndNotify` while any tx is pending,
+// so an away-confirmation (a tx that confirms while every wallet surface is
+// closed) still toasts + badges at confirm time. LOCK-INDEPENDENT — unlike
+// the auto-lock alarm there is NO isUnlockedV4 gate: the poll reads only
+// public receipts for already-stored hashes and writes only the notification
+// store + toast + badge. Self-limiting: armed when a pending row is persisted,
+// cleared when the pending set empties; the 5-min PENDING_TTL_MS backstop
+// bounds any stuck tx.
+
+/** Notification-poll alarm cadence (minutes). 0.5 = 30 s, the MV3 alarm floor
+ *  on modern Chrome (was 1 min). This is BOTH the first-fire delay and the
+ *  repeat period (see ensureNotifPollAlarm), so a tx that confirms while every
+ *  wallet surface is closed is detected within ~30 s — the tightest a
+ *  closed-extension background poll can be without a service-worker keepalive
+ *  hack (the browser throttles SW wakeups to this floor). Was 1 min, which let
+ *  the user reopen before the first fire so the on-open path always won — the
+ *  "only notifies on open" report this fixes. */
+const NOTIF_POLL_PERIOD_MIN = 0.5;
+/** Per-call AbortController timeout for the poll's classification RPC. */
+const NOTIF_POLL_RPC_TIMEOUT_MS = 5_000;
+/** Back-off cap: periods 0.5 → 1 → 2 min (2 < the 5-min PENDING_TTL_MS, so a
+ *  recoverable tx still gets one more poll before TTL eviction). */
+const NOTIF_POLL_BACKOFF_CAP = 2;
+let notifPollBackoff = 0;
+
+/** Arm the poll alarm (idempotent — create with the same name replaces).
+ *  NO isUnlockedV4 gate — the poll is lock-independent by design. */
+async function ensureNotifPollAlarm(
+  periodMin = NOTIF_POLL_PERIOD_MIN,
+): Promise<void> {
+  try {
+    // delayInMinutes is set equal to periodInMinutes so the FIRST fire is
+    // explicit at `periodMin` (a periodInMinutes-only alarm's first fire is
+    // also one period out, but stating the delay guarantees it across Chrome
+    // versions). Re-creating with the same name replaces the schedule, so this
+    // stays idempotent.
+    await chrome.alarms.create(ALARM_NOTIF_POLL, {
+      delayInMinutes: periodMin,
+      periodInMinutes: periodMin,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+async function clearNotifPollAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.clear(ALARM_NOTIF_POLL);
+  } catch {
+    // best-effort
+  }
+}
+
+/** True if ANY `mono.activity.pending.*` scope holds ≥1 row. Lock-independent
+ *  prefix-scan; used for the boot re-arm + the clear/re-create race guard. */
+async function hasAnyPendingTx(): Promise<boolean> {
+  try {
+    const all = await new Promise<Record<string, unknown>>((resolve) => {
+      chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+    });
+    for (const key of Object.keys(all)) {
+      if (!key.startsWith("mono.activity.pending.")) continue;
+      if ((validatePendingActivityCache(all[key])?.pending ?? []).length > 0) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== ALARM_NOTIF_POLL) return;
+  void (async () => {
+    const { remaining, allFailed } = await pollPendingAndNotify();
+    if (remaining === 0) {
+      // Clear/re-create race guard (cf. the auto-lock deadline guard above):
+      // a tx persisted between the scan and now would have re-armed via
+      // persistPendingRowBackground; only clear if STILL empty. The residual
+      // window is recovered by the next persist's ensureNotifPollAlarm + the
+      // boot re-arm.
+      if (!(await hasAnyPendingTx())) {
+        await clearNotifPollAlarm();
+        notifPollBackoff = 0;
+      }
+      return;
+    }
+    // Consecutive all-operators-failure back-off — lengthen the period so a
+    // total outage with a stuck tx doesn't wake the SW every minute. Reset
+    // the moment a tick reaches an operator again.
+    if (allFailed) {
+      if (notifPollBackoff < NOTIF_POLL_BACKOFF_CAP) {
+        notifPollBackoff++;
+        await ensureNotifPollAlarm(NOTIF_POLL_PERIOD_MIN * 2 ** notifPollBackoff);
+      }
+    } else if (notifPollBackoff !== 0) {
+      notifPollBackoff = 0;
+      await ensureNotifPollAlarm(NOTIF_POLL_PERIOD_MIN);
+    }
   })();
 });
 
@@ -4124,9 +4276,10 @@ async function fetchOneAddressLabel(
  *
  *  The compatibility `valueWeiHex` field carries lythoshi here. Conversion
  *  to decimal LYTH happens inline via lythoshiHexToLythDecimal so the
- *  amountDecimal field is consistent with what mergeIndexerSnapshot receives
- *  on the confirmed side (AddressActivityEntry.amount is already a decimal
- *  string per the SDK binding). */
+ *  amountDecimal field is byte-identical to the confirmed side, which converts
+ *  the indexer's raw-lythoshi AddressActivityEntry.amount through the same
+ *  shared formatter (shared/lyth-units.ts). That exact-string equality is what
+ *  lets reconcilePending pair a pending row with its confirmed tx_send. */
 async function persistPendingRowBackground(args: {
   address: string;
   chainIdHex: string;
@@ -4134,6 +4287,10 @@ async function persistPendingRowBackground(args: {
   to: string;
   valueWeiHex: string;
   via: string;
+  /** Phase 1.5 — broadcast-time operation tag for the notifications hook.
+   *  Pure pending-row metadata; the upstream handler ensures it never
+   *  reaches `submitEncryptedMlDsaTx`. */
+  opKind?: TxOpKind;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -4167,6 +4324,7 @@ async function persistPendingRowBackground(args: {
       broadcastedAtMs: now,
       broadcastBlockHeight,
       via: args.via,
+      ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -4176,6 +4334,21 @@ async function persistPendingRowBackground(args: {
         () => resolve(),
       );
     });
+    // GAP-N1 — a pending row now exists → arm the headless poll so this tx's
+    // terminal transition is observed (toast + badge) even if every wallet
+    // surface is closed before it confirms. Idempotent; lock-independent.
+    void ensureNotifPollAlarm();
+    // CX3 — record the recipient in the durable sent-address log so repeat
+    // sends to it aren't re-warned as "first-time" once the pending row's TTL
+    // lapses (independent of any indexer refresh). Best-effort.
+    const sentKey = sentAddressesKey(addrLower, args.chainIdHex);
+    const sentStored = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
+    });
+    const nextSent = addToSentList(parseSentAddresses(sentStored), args.to);
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set({ [sentKey]: { addrs: nextSent } }, () => resolve());
+    });
   } catch {
     // Swallow. The broadcast handler has already returned. A
     // pending-write failure is silent UX degradation only — the user
@@ -4184,6 +4357,200 @@ async function persistPendingRowBackground(args: {
     // itself was the issue, but that path is the broadcast handler's
     // catch block, not ours).
   }
+}
+
+/** Terminal-state classifier for one pending row — see Phase 1 notifications
+ *  plan §P2. Carries the genuine confirmed/failed bit + receipt blockNumber
+ *  through to the snapshot hook so notifications can fire honestly (the
+ *  MetaMask #5117 hazard: never show a failed tx as confirmed). */
+export interface TerminalPendingTx {
+  row: PendingTxRow;
+  status: "confirmed" | "failed";
+  blockNumber: number | null;
+}
+
+/** Deterministic pending→terminal classification (C4 + Phase 1 notifications).
+ *  Once a tx carries its canonical hash (`submitEncryptedMlDsaTx` surfaces
+ *  `innerTxHashHex`), the chain can be asked directly instead of relying solely
+ *  on the counterparty+amount heuristic. Returns:
+ *
+ *   - `kept`: rows still pending (no explicit terminal answer from the RPC).
+ *     `lyth_txStatus`'s `not_found`, a `null` receipt, an unknown/non-1/non-0
+ *     status, or any RPC throw all land here. The heuristic reconciler +
+ *     PENDING_TTL_MS backstop remain the safety nets, and we never synthesize
+ *     a verdict.
+ *   - `terminal`: rows that the chain explicitly resolved this round. A
+ *     `lyth_txStatus="found"` fast-path is tagged "confirmed" (the indexer
+ *     surfaces only included entries; if a later receipt fetch disagrees, the
+ *     next snapshot supersedes — we still never fabricate). The
+ *     `eth_getTransactionReceipt` branch reuses the b4d6101 Sprintnet
+ *     normalizer (numeric `status` 0/1 OR hex string; `blockNumber ??
+ *     block_number`, numeric OR hex string) — the operators' actual receipt
+ *     shape, not the EVM-standard hex-string shape.
+ *
+ *  Bounded: pending lists are tiny (one entry per outstanding send). */
+async function dropConfirmedPendingByHash(
+  pending: PendingTxRow[],
+  opts?: { timeoutMs?: number },
+): Promise<{
+  kept: PendingTxRow[];
+  terminal: TerminalPendingTx[];
+  /** GAP-N1 — count of rows whose classification RPC threw (timeout /
+   *  transport / all-operators-down). Additive: the popup chokepoint
+   *  caller destructures only `{ kept, terminal }` and ignores this, so its
+   *  behavior is unchanged. The poll-core uses it to drive the all-fail
+   *  back-off. */
+  rpcFailures: number;
+}> {
+  const kept: PendingTxRow[] = [];
+  const terminal: TerminalPendingTx[] = [];
+  let rpcFailures = 0;
+  for (const p of pending) {
+    try {
+      const { result } = await sprintnetJsonRpc<{ status?: string } | null>(
+        "lyth_txStatus",
+        [p.txHash],
+        opts,
+      );
+      if (result != null && result.status === "found") {
+        // lyth_txStatus reports inclusion but not the status bit; the
+        // indexer surfaces only confirmed entries, so treat as confirmed.
+        terminal.push({ row: p, status: "confirmed", blockNumber: null });
+        continue;
+      }
+      const receipt = await sprintnetJsonRpc<{
+        status?: number | string;
+        blockNumber?: unknown;
+        block_number?: unknown;
+      } | null>("eth_getTransactionReceipt", [p.txHash], opts);
+      if (receipt.result == null) {
+        kept.push(p);
+        continue;
+      }
+      const rawStatus = receipt.result.status;
+      const rawBn = receipt.result.blockNumber ?? receipt.result.block_number;
+      const parsedBn =
+        typeof rawBn === "number"
+          ? rawBn
+          : typeof rawBn === "string"
+            ? Number.parseInt(rawBn, 16)
+            : NaN;
+      const blockNumber = Number.isFinite(parsedBn) ? parsedBn : null;
+      if (rawStatus === 1 || rawStatus === "0x1") {
+        terminal.push({ row: p, status: "confirmed", blockNumber });
+      } else if (rawStatus === 0 || rawStatus === "0x0") {
+        terminal.push({ row: p, status: "failed", blockNumber });
+      } else {
+        kept.push(p);
+      }
+    } catch {
+      // Status RPC unavailable / not_found → keep the row. Never synthesize.
+      rpcFailures++;
+      kept.push(p);
+    }
+  }
+  return { kept, terminal, rpcFailures };
+}
+
+/** GAP-N1 — headless background poll core. Enumerates every
+ *  `mono.activity.pending.*` scope, asks the chain whether each KNOWN
+ *  pending tx has reached a terminal state, and runs the SAME
+ *  detect→record→toast→badge sequence the popup chokepoint runs — but
+ *  with no surface open. READ-AND-NOTIFY ONLY: it reads public receipts
+ *  for hashes already in plaintext storage and writes only the
+ *  notification store + OS toast + badge. It NEVER touches signing /
+ *  broadcast / fee / nonce / encrypted payload.
+ *
+ *  Returns `{ remaining, allFailed }`: `remaining` = pending rows still
+ *  outstanding across all scopes after this tick (the alarm caller self-
+ *  clears at 0); `allFailed` = there were rows to check and EVERY
+ *  classification RPC failed with nothing terminal (the alarm caller backs
+ *  off so a total outage doesn't wake the SW every minute).
+ *  Exported for unit tests (driven directly against the in-memory chrome
+ *  stub); production calls it from the ALARM_NOTIF_POLL onAlarm branch.
+ *  Best-effort: never throws out of the alarm. */
+export async function pollPendingAndNotify(): Promise<{
+  remaining: number;
+  allFailed: boolean;
+}> {
+  let remaining = 0;
+  let checkedTotal = 0;
+  let failedTotal = 0;
+  let terminalTotal = 0;
+  try {
+    const all = await new Promise<Record<string, unknown>>((resolve) => {
+      chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+    });
+    const now = Date.now();
+    // C3 — presence at observe-time, computed ONCE per tick: a surface open
+    // now ⇒ the user is present ⇒ record read (no badge bump); closed ⇒
+    // accumulate unread. Defaults false (closed) on any error.
+    const surfaceOpen = await isWalletSurfaceOpen();
+    // Lock state for the toast/badge gates (orthogonal to presence): gate-only,
+    // no decryption. Computed once per tick.
+    const unlocked = isUnlockedV4();
+    for (const key of Object.keys(all)) {
+      if (!key.startsWith("mono.activity.pending.")) continue;
+      // key = mono.activity.pending.<addrLower>.<chainIdHex>; addresses and
+      // chainIdHex never contain a dot, so the LAST dot splits them.
+      const rest = key.slice("mono.activity.pending.".length);
+      const dot = rest.lastIndexOf(".");
+      if (dot <= 0) continue;
+      const addressLower = rest.slice(0, dot);
+      const chainIdHex = rest.slice(dot + 1);
+      const pending = validatePendingActivityCache(all[key])?.pending ?? [];
+      if (pending.length === 0) continue;
+      // Sprintnet-only: the receipt RPC + indexer are Sprintnet-shaped.
+      // Non-Sprintnet rows still count toward `remaining` (don't strand the
+      // alarm) but aren't polled.
+      if (!chainRequiresMlDsa(chainIdHex)) {
+        remaining += pending.length;
+        continue;
+      }
+      // TTL-evict FIRST so an expired row is neither notified nor re-polled.
+      const live = evictExpiredPending(pending, now);
+      const { kept, terminal, rpcFailures } = await dropConfirmedPendingByHash(
+        live,
+        { timeoutMs: NOTIF_POLL_RPC_TIMEOUT_MS },
+      );
+      checkedTotal += live.length;
+      failedTotal += rpcFailures;
+      terminalTotal += terminal.length;
+      for (const t of terminal) {
+        // Same shape the popup terminal-by-hash loop builds. The status is
+        // receipt-derived (confirmed/failed) — #5117 preserved.
+        const result = await recordNotification({
+          addressLower,
+          chainIdHex,
+          txHash: t.row.txHash,
+          status: t.status,
+          blockNumber: t.blockNumber,
+          kind: t.row.opKind ?? "contract_call",
+          amountDecimal: t.row.amountDecimal,
+          counterparty: t.row.to,
+          read: surfaceOpen,
+        });
+        if (result.added && result.record !== null) {
+          await fireOsNotification(result.record, { unlocked });
+        }
+      }
+      // Write back ONLY the still-pending rows (terminal + TTL-expired
+      // dropped) so they aren't re-polled. Change-guard mirrors
+      // writeActivityStorage so we don't fire a spurious onChanged.
+      if (kept.length !== pending.length) {
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set({ [key]: { pending: kept } }, () => resolve());
+        });
+      }
+      remaining += kept.length;
+    }
+    await refreshUnreadBadge({ unlocked });
+  } catch {
+    // Best-effort — a poll failure must never escape the alarm.
+  }
+  const allFailed =
+    checkedTotal > 0 && failedTotal === checkedTotal && terminalTotal === 0;
+  return { remaining, allFailed };
 }
 
 /** Persist the merged cache. Pending key only writes when its contents
@@ -4709,6 +5076,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
           ]);
           await resetAutoLock();
+          // GAP-N1 settings — surface any unread that was HELD while locked
+          // ("Unread badge while locked" off) now that the user unlocked.
+          void refreshUnreadBadge({ unlocked: true });
           return { ok: true, address: r.address };
         } catch {
           failCount += 1;
@@ -4748,6 +5118,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await createVaultFromNewMnemonic(p.password);
         await resetAutoLock();
+        // Build the multi-vault container immediately. createVaultFromNewMnemonic
+        // writes a v4 SINGLE-vault envelope (`mono.vault.v4`); the popup's
+        // VaultPicker reads the multi-vault CONTAINER (`mono.vaults.v4`),
+        // which is built by migrateLegacyToContainerV4 — historically called
+        // only from unlockContainerV4. Without this, fresh installs landed on
+        // home with the chip disabled and the literal tooltip "Wallets appear
+        // after first unlock", until the user lock/unlocked. Best-effort: on
+        // failure the existing unlock-time migration still recovers, so we
+        // don't fail the create.
+        try {
+          await unlockContainerV4(p.password);
+        } catch {
+          // Will migrate on the next unlock — non-fatal.
+        }
         return { ok: true, mnemonic: r.mnemonic, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -4758,6 +5142,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await createVaultFromMnemonic(p.password, p.mnemonic);
         await resetAutoLock();
+        // Build the multi-vault container immediately — see the longer note
+        // on `keystore-create-new` above. Best-effort: a failure here is
+        // recovered by the existing migration inside unlockContainerV4.
+        try {
+          await unlockContainerV4(p.password);
+        } catch {
+          // Will migrate on the next unlock — non-fatal.
+        }
         return { ok: true, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -6120,20 +6512,33 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const { result } = await sprintnetJsonRpc<{
-          status?: string;
-          blockNumber?: string;
+          status?: unknown;
+          blockNumber?: unknown;
+          block_number?: unknown;
         } | null>("eth_getTransactionReceipt", [p.txHash]);
         if (!result) {
           return { ok: true, receipt: null };
         }
-        return {
-          ok: true,
-          receipt: {
-            status: typeof result.status === "string" ? result.status : null,
-            blockNumber:
-              typeof result.blockNumber === "string" ? result.blockNumber : null,
-          },
-        };
+        // Sprintnet operators emit receipts with a numeric `status` (0/1) +
+        // snake_case `block_number`, not the EVM-standard hex-string `status`
+        // + camelCase `blockNumber`. Accept both shapes and normalize to the
+        // hex-string form the UI's `parseInt(value, 16)` expects, so an
+        // included receipt is recognised instead of looking "still pending".
+        const rawStatus = result.status;
+        const status =
+          typeof rawStatus === "string"
+            ? rawStatus
+            : typeof rawStatus === "number"
+              ? "0x" + rawStatus.toString(16)
+              : null;
+        const rawBlockNumber = result.blockNumber ?? result.block_number;
+        const blockNumber =
+          typeof rawBlockNumber === "string"
+            ? rawBlockNumber
+            : typeof rawBlockNumber === "number"
+              ? "0x" + rawBlockNumber.toString(16)
+              : null;
+        return { ok: true, receipt: { status, blockNumber } };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
@@ -6293,6 +6698,30 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
+    case "get-block-tx-value": {
+      // On-demand resolve a transaction's `value` (lythoshi) AND canonical
+      // `hash` at (blockHeight, txIndex). The activity-detail popup uses the
+      // value to surface a delegate tx's LYTH principal (the indexer carries
+      // none) and the hash to render a "View on Monoscan" button on a
+      // confirmed row. Read-only; returns valueHex/txHash | null, never throws
+      // to the popup (honest-absence on any failure).
+      const p = message.payload as { blockHeight?: number; txIndex?: number };
+      if (typeof p?.blockHeight !== "number" || typeof p?.txIndex !== "number") {
+        return { ok: false, reason: "missing blockHeight/txIndex" };
+      }
+      try {
+        const heightHex = "0x" + Math.trunc(p.blockHeight).toString(16);
+        const { result } = await sprintnetJsonRpc<
+          { transactions?: Array<{ value?: string; hash?: string }> } | null
+        >("eth_getBlockByNumber", [heightHex, true]);
+        const tx = result?.transactions?.[p.txIndex];
+        const valueHex = typeof tx?.value === "string" ? tx.value : null;
+        const txHash = typeof tx?.hash === "string" ? tx.hash : null;
+        return { ok: true, valueHex, txHash };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
     case "wallet-chain-block-number": {
       // Real chain-liveness probe for the popup's status-bar health
       // indicator. Calls `eth_blockNumber` on the active Sprintnet
@@ -6416,19 +6845,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   .map((f) => `${f.name}: ${f.reason}`)
                   .join(", ")})`
               : "";
-          // Sprintnet operators currently run V4-LIVE-0008 (commit 5aead0f0,
-          // 2026-05-18) which intentionally does NOT include the lythoshi-
-          // rescaling commits that landed on mono-core master after that
-          // date. They continue to report `eth_getBalance` in 18-decimal
-          // wei. The wallet's display path treats the bigint as lythoshi
-          // (8 decimals), so an uncompensated
-          // 0.1 LYTH balance (10^17 wei) renders as 10^9 = 1,000,000,000.
-          // Convert at the IPC boundary so the popup sees lythoshi-magnitude
-          // without changing the lythoshi-pure semantic of the shared
-          // display helpers. See shared/chain-units.ts for the migration
-          // switch — when operators upgrade past `a2a9e1fc` and report
-          // lythoshi-native, flip `CHAIN_RETURNS_LEGACY_WEI` to false and
-          // the conversion below becomes identity.
+          // Sprintnet operators now run the lythoshi-native binary
+          // `dc919df8` (2026-05-29): `eth_getBalance` is reported directly
+          // in 8-decimal lythoshi, which is exactly what the wallet's
+          // display path (`formatNativeLythAmount`) expects. The boundary
+          // helper below is therefore an identity passthrough — it is
+          // retained only as the single flag-aware chokepoint so the
+          // wallet can be re-pointed at a legacy-wei operator line by
+          // flipping `CHAIN_RETURNS_LEGACY_WEI` back to `true` in
+          // shared/chain-units.ts, with no change here. (Under the prior
+          // V4-LIVE-0008 line operators reported 18-decimal wei, so this
+          // divided by WEI_PER_LYTHOSHI to compensate.)
           const balanceHex = legacyChainBalanceHexToLythoshiHex(consensus.balanceHex);
           console.log(
             `[wallet] balance consensus: max=${consensus.balanceHex} (lythoshi=${balanceHex}) from ${consensus.contributing.length}/${total} operators${failSummary}`,
@@ -6515,8 +6942,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         cacheKey,
         pendingKey,
       );
+      // Bug A F1 — bypass the staleness short-circuit when pending rows exist
+      // so a refocus/nav refresh (and the F2 ~4s re-poll in useActivity) falls
+      // through to the authoritative reconcile (dropConfirmedPendingByHash
+      // below) instead of returning the cached pending row unchanged. Without
+      // this, a tx that confirms in ~3-5s lingers as "pending" for up to the
+      // full 30s cache window. NARROW: only when prevPending.length > 0 — a
+      // non-pending refresh keeps the 30s cache benefit for the common case.
+      // Reconcile only flips a confirmed/failed verdict off the receipt
+      // (#5117 preserved); it never invents a confirmation.
       const isFresh =
-        prevCache !== null && now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS;
+        prevCache !== null &&
+        now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS &&
+        prevPending.length === 0;
       if (isFresh) {
         const pending = evictExpiredPending(prevPending, now);
         if (pending.length !== prevPending.length) {
@@ -6552,8 +6990,104 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const delegation = validateRawDelegationList(fresh.delegationHistory);
       const nextCache = mergeIndexerSnapshot({ activity, delegation }, now);
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
-      const nextPending = evictExpiredPending(reconciled, now);
+      const { kept, terminal: terminalByHash } = await dropConfirmedPendingByHash(reconciled);
+      const nextPending = evictExpiredPending(kept, now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
+      // Phase 1 notifications hook — post-write microtask. The hook records
+      // one notification per row that just reached a TERMINAL state (the
+      // confirmed/failed bit from the indexer reconcile or the receipt-RPC
+      // classifier above) and explicitly DOES NOT record TTL-evicted rows.
+      // Scheduled as a microtask so the snapshot response returns before any
+      // notification I/O — a slow/failed notification write must never delay
+      // or break activity persistence. See plan §P6.
+      {
+        const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
+        const heuristicallyMatched = prevPending.filter(
+          (r) => !reconciledHashes.has(r.txHash),
+        );
+        const addressLower = p.address.toLowerCase();
+        const chainIdHex = p.chainIdHex;
+        queueMicrotask(() => {
+          void (async () => {
+            try {
+              // C3 — presence at observe-time, computed ONCE per batch and
+              // threaded into both record loops. A surface open now ⇒ record
+              // read (no badge bump); closed ⇒ accumulate unread. Defaults
+              // false on any error. (On the popup path a surface is typically
+              // open, so this is usually read:true; the poll path supplies
+              // the closed→unread case.)
+              const surfaceOpen = await isWalletSurfaceOpen();
+              // Lock state for the toast/badge gates (orthogonal to presence).
+              const unlocked = isUnlockedV4();
+              let anyAdded = false;
+              for (const row of heuristicallyMatched) {
+                // The matched confirmed row's blockHeight is the most
+                // precise block we have. Falls back to null when no exact
+                // match is found (defensive — should be rare).
+                const match = nextCache.confirmed.find(
+                  (c) =>
+                    c.kind === "tx_send" &&
+                    c.counterparty != null &&
+                    c.counterparty.toLowerCase() === row.to.toLowerCase() &&
+                    c.amountDecimal === row.amountDecimal,
+                );
+                const result = await recordNotification({
+                  addressLower,
+                  chainIdHex,
+                  txHash: row.txHash,
+                  status: "confirmed",
+                  blockNumber: match ? match.blockHeight : null,
+                  // Phase 1.5 — prefer the broadcast-time tag if the
+                  // popup supplied one; otherwise fall back to the
+                  // coarse "send" (Phase-1 behavior — the heuristic
+                  // match path is by definition a tx_send).
+                  kind: row.opKind ?? "send",
+                  amountDecimal: row.amountDecimal,
+                  counterparty: row.to,
+                  read: surfaceOpen,
+                });
+                // Phase 2 — fire OS toast ONLY when this snapshot produced
+                // a NEW record (the dedupe set blocks already-notified
+                // txs). §0.4 honored: every toast derives from a
+                // wallet-own tracked-tx transition.
+                if (result.added && result.record !== null) {
+                  anyAdded = true;
+                  await fireOsNotification(result.record, { unlocked });
+                }
+              }
+              for (const t of terminalByHash) {
+                const result = await recordNotification({
+                  addressLower,
+                  chainIdHex,
+                  txHash: t.row.txHash,
+                  status: t.status,
+                  blockNumber: t.blockNumber,
+                  // Phase 1.5 — prefer the broadcast-time tag; otherwise
+                  // fall back to the coarse "contract_call" (Phase-1
+                  // behavior — the status-RPC path catches every
+                  // non-tx_send tracked tx).
+                  kind: t.row.opKind ?? "contract_call",
+                  amountDecimal: t.row.amountDecimal,
+                  counterparty: t.row.to,
+                  read: surfaceOpen,
+                });
+                if (result.added && result.record !== null) {
+                  anyAdded = true;
+                  await fireOsNotification(result.record, { unlocked });
+                }
+              }
+              // Phase 2 — single badge refresh per batch. getUnread reads
+              // chrome.storage so it sees every record this loop wrote;
+              // one call covers both heuristic + status-RPC paths.
+              if (anyAdded) {
+                await refreshUnreadBadge({ unlocked });
+              }
+            } catch {
+              // Best-effort; never break the snapshot response.
+            }
+          })();
+        });
+      }
       return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
     }
     case "wallet-activity-kind": {
@@ -7574,6 +8108,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         gasLimitHex?: string;
         mempoolClass?: unknown;
         class?: unknown;
+        // Phase 1.5 notifications — optional operation tag. METADATA
+        // ONLY: this is never plumbed into submitEncryptedMlDsaTx; it
+        // rides only into persistPendingRowBackground's pending-row
+        // record so the notifications hook can label the resulting
+        // NotificationRecord with a friendly title. An unknown literal
+        // is coerced to the "contract_call" fallback (defense in depth).
+        opKind?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -7595,6 +8136,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       ) {
         return { ok: false, reason: "gasLimitHex must be 0x-prefixed hex" };
       }
+      // Phase 1.5 notifications — tolerate but sanitize opKind. Absent stays
+      // absent (legacy/untagged path → coarse fallback at the hook). A known
+      // literal rides through. An unknown / non-string value is coerced to
+      // the fallback "contract_call" so a buggy caller produces a coarse-but-
+      // valid notification instead of corrupting the row.
+      const acceptedOpKind: TxOpKind | undefined =
+        p.opKind === undefined
+          ? undefined
+          : isTxOpKind(p.opKind)
+            ? p.opKind
+            : "contract_call";
       let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
       try {
         mempoolClass = mempoolClassOverride(p);
@@ -7645,6 +8197,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
+          // Metadata-only: opKind never reached submitEncryptedMlDsaTx —
+          // it travels straight from the popup → here → the pending-row
+          // record for the notifications hook to read back.
+          ...(acceptedOpKind !== undefined ? { opKind: acceptedOpKind } : {}),
         });
         return { ok: true, txHash, via };
       } catch (e) {
@@ -7670,10 +8226,171 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
     }
+    case "notifications-list": {
+      // Phase 3 — global inbox: every `mono.notifications.history.*`
+      // entry merged + sorted newest-first. The popup's Notifications
+      // page renders this verbatim. §0.4: no notification-creating IPC
+      // is added — only reads + mark-as-read. `recordNotification` stays
+      // SW-only (only the wallet's own tracked-tx terminal transitions
+      // can emit).
+      try {
+        const records = await listAllNotifications();
+        return { ok: true, records };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-mark-all-read": {
+      // Phase 3 — flip every record across every scope's history to
+      // read:true. Returns the count of records that changed; the
+      // toolbar badge clears on the next `refreshUnreadBadge` call,
+      // which we also fire here so the pip updates without waiting
+      // for the next snapshot tick.
+      try {
+        const { flipped } = await markAllNotificationsRead();
+        // Best-effort badge refresh — a badge failure is harmless.
+        void refreshUnreadBadge({ unlocked: isUnlockedV4() });
+        return { ok: true, flipped };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-unread": {
+      // Phase 3 — global unread count for the MainMenu's bell-row pill
+      // (matches the toolbar badge). Derived from history; no separate
+      // counter key.
+      try {
+        const count = await getUnread();
+        return { ok: true, count };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-os-enabled": {
+      // Phase 5 — read the user-facing OS-toast toggle. Default true
+      // (absent ⇒ on). §0.4 still holds: this is read-only.
+      try {
+        const enabled = await getOsNotificationsEnabled();
+        return { ok: true, enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-mark-read": {
+      // Polish C2 — flip ONE record's read flag to true. The id payload
+      // is validated as a non-empty string at the IPC boundary so the
+      // store helper never sees garbage. Fires refreshUnreadBadge on a
+      // successful flip so the toolbar badge updates without waiting
+      // for the next snapshot tick (and the popup's onChanged listener
+      // refreshes the top-bar bell dot). §0.4 holds: this is a WRITE to
+      // an existing record's UI read flag — NOT a notification-creating
+      // IPC. recordNotification stays SW-only.
+      const p = (message.payload ?? {}) as { id?: unknown };
+      if (typeof p.id !== "string" || p.id.length === 0) {
+        return { ok: false, reason: "id must be a non-empty string" };
+      }
+      try {
+        const r = await markNotificationRead(p.id);
+        if (r.flipped) void refreshUnreadBadge({ unlocked: isUnlockedV4() });
+        return { ok: true, flipped: r.flipped };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-os-enabled": {
+      // Phase 5 — write the user-facing OS-toast toggle. Boolean
+      // validated at the IPC boundary (anything non-boolean is rejected
+      // before touching storage). Gates ONLY the OS toast; history +
+      // badge keep running regardless on the chokepoint hook side, so
+      // the notifications center remains the durable record.
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setOsNotificationsEnabled(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    // GAP-N1 settings — three additional boolean toggles, mirroring the
+    // Phase-5 os-enabled get/set (boolean-validated at the boundary; default
+    // true; local-only). Each gates an on-screen surface only — never the
+    // in-app history record.
+    case "notifications-get-show-details": {
+      try {
+        return { ok: true, enabled: await getShowDetails() };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-show-details": {
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setShowDetails(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-notify-when-locked": {
+      try {
+        return { ok: true, enabled: await getNotifyWhenLocked() };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-notify-when-locked": {
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setNotifyWhenLocked(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-badge-when-locked": {
+      try {
+        return { ok: true, enabled: await getBadgeWhenLocked() };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-badge-when-locked": {
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setBadgeWhenLocked(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
     default:
       return { error: `unknown popup op ${message.op}` };
   }
 }
+
+// ---- Phase 2 notifications — top-level listener registrations ----
+//
+// MV3 re-inits the SW per event; listeners added inside an async path can
+// be missed. Register `chrome.notifications.onClicked` here at module top
+// level BEFORE the onMessage router so a click delivered to a freshly-
+// woken SW finds a handler. The handler opens Monoscan for the canonical
+// inner tx hash parsed off the notification id. Refresh the toolbar
+// badge once at startup so the unread pip is correct after a re-init.
+
+installNotificationsClickListener();
+void refreshUnreadBadge({ unlocked: isUnlockedV4() });
 
 // ---- message routing ----
 
