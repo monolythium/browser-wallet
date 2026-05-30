@@ -93,13 +93,13 @@ export interface NotificationRecord {
    *  for heuristic-matched sends). `null` on `lyth_txStatus="found"`
    *  fast-path or when the receipt didn't carry a parseable value. */
   blockNumber: number | null;
-  /** Coarse classification at the chokepoint. Phase 1 emits "send" for
-   *  rows matched by the indexer's `tx_send` reconcile path, and
-   *  "contract_call" for rows dropped by the status-RPC path
-   *  (delegate / undelegate / redelegate / claim / token transfers /
-   *  emergency-key registration). Finer per-precompile classification
-   *  is deferred to a later phase that decodes the calldata selector. */
-  kind: "send" | "contract_call";
+  /** Operation classification used to render the friendly title via
+   *  {@link notificationTitle}. The Phase-1 hook prefers the pending row's
+   *  broadcast-time `opKind` tag and falls back to the coarse `"send"`
+   *  (step-1 heuristic match) / `"contract_call"` (step-2 status-RPC) for
+   *  legacy / untagged rows. Both fallbacks are valid `TxOpKind` literals,
+   *  so Phase-1 records already on disk parse and render unchanged. */
+  kind: TxOpKind;
   /** Canonical 2-dp LYTH string — already the formatted decimal that
    *  the pending-row + confirmed-row sides share via the
    *  `shared/lyth-units.ts` formatter. NEVER a BigInt; chrome.storage
@@ -172,8 +172,44 @@ function asNotificationStatus(v: unknown): "confirmed" | "failed" | undefined {
   return v === "confirmed" || v === "failed" ? v : undefined;
 }
 
-function asNotificationKind(v: unknown): "send" | "contract_call" | undefined {
-  return v === "send" || v === "contract_call" ? v : undefined;
+function asNotificationKind(v: unknown): TxOpKind | undefined {
+  return isTxOpKind(v) ? v : undefined;
+}
+
+/** Friendly title strings for each operation kind × status. Phase 2's
+ *  OS toast and Phase 3's notification-center row both call
+ *  {@link notificationTitle} (the helper below) so the wording stays
+ *  centralized here — no magic strings at the consumer sites. */
+export const NOTIFICATION_LABELS: Record<
+  TxOpKind,
+  { confirmed: string; failed: string }
+> = {
+  send: { confirmed: "Sent", failed: "Send failed" },
+  delegate: { confirmed: "Staked", failed: "Stake failed" },
+  undelegate: { confirmed: "Unstaked", failed: "Unstake failed" },
+  redelegate: { confirmed: "Restaked", failed: "Restake failed" },
+  claim: { confirmed: "Rewards claimed", failed: "Claim failed" },
+  "emergency-key": {
+    confirmed: "Backup key registered",
+    failed: "Backup registration failed",
+  },
+  "agent-policy": {
+    confirmed: "Agent policy updated",
+    failed: "Agent policy failed",
+  },
+  contract_call: {
+    confirmed: "Transaction confirmed",
+    failed: "Transaction failed",
+  },
+};
+
+/** Render the friendly title for a notification. Used by Phase 2's toast
+ *  (`chrome.notifications.create` title) and Phase 3's row title. */
+export function notificationTitle(
+  kind: TxOpKind,
+  status: "confirmed" | "failed",
+): string {
+  return NOTIFICATION_LABELS[kind][status];
 }
 
 function asNotificationRecord(raw: unknown): NotificationRecord | null {
