@@ -6778,6 +6778,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
+    case "wallet-tx-fee": {
+      // On-demand LYTH fee for a confirmed self-paid tx, read from the native
+      // receipt (the indexer activity stream carries no fee, and the eth-compat
+      // receipt has no price). Used by the activity-detail popup, whose rows are
+      // indexer-sourced and have no persisted fee field. Read-only; returns the
+      // lythoshi string or null (zero fee / failed / reverted / pruned), never
+      // throws to the popup (honest-absence).
+      const p = message.payload as { txHash?: unknown };
+      if (typeof p?.txHash !== "string" || p.txHash.length === 0) {
+        return { ok: false, reason: "missing txHash" };
+      }
+      const feeLythoshi = await fetchConfirmedFeeLythoshi(p.txHash);
+      return { ok: true, feeLythoshi: feeLythoshi ?? null };
+    }
     case "wallet-chain-block-number": {
       // Real chain-liveness probe for the popup's status-bar health
       // indicator. Calls `eth_blockNumber` on the active Sprintnet
