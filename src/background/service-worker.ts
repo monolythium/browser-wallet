@@ -61,18 +61,7 @@ import {
   type AddChainSpec,
   type TypedDataEnvelope,
 } from "./approvals.js";
-import {
-  hasVault,
-  hasLegacyVault,
-  getStoredAddress,
-  getUnlockedAddress,
-  isUnlocked,
-  lock as lockKeystore,
-  unlock as unlockKeystore,
-  personalSign as keystorePersonalSign,
-  signTypedDataV4,
-  computeTypedDataDigest,
-} from "./keystore.js";
+import { computeTypedDataDigest } from "./keystore.js";
 import {
   isUnlockedV4,
   getUnlockedAddressV4,
@@ -1414,10 +1403,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
       try {
         // The wallet's on-chain address is derived from the ML-DSA-65
-        // pubkey, and the popup unlock flow populates the v4 backend.
-        const sig = isUnlockedV4()
-          ? personalSignV4(messageParam)
-          : await keystorePersonalSign(messageParam);
+        // pubkey; the early `if (!isUnlockedV4()) return err` above
+        // guarantees the v4 backend is unlocked here.
+        const sig = personalSignV4(messageParam);
         return ok("0x" + bytesToHex(sig));
       } catch (e) {
         return err(ERR_INTERNAL, `signing failed: ${(e as Error).message}`);
@@ -1741,13 +1729,10 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, "typed data could not be parsed as EIP-712 v4");
       }
       try {
-        // Same v4 routing as personal_sign — the v4 ML-DSA backend is
-        // the one that's unlocked and is the one whose pubkey defines
-        // the wallet's on-chain address. See the comment in the
-        // personal_sign branch above.
-        const sig = isUnlockedV4()
-          ? signTypedDataV4FromV4(parsed)
-          : await signTypedDataV4(parsed);
+        // Same v4 routing as personal_sign — the v4 ML-DSA backend is the
+        // one whose pubkey defines the wallet's on-chain address. The early
+        // `if (!isUnlockedV4())` guard above guarantees it is unlocked here.
+        const sig = signTypedDataV4FromV4(parsed);
         return ok("0x" + bytesToHex(sig));
       } catch (e) {
         return err(ERR_INTERNAL, `typed-data sign failed: ${(e as Error).message}`);
@@ -4634,47 +4619,29 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true };
     }
     case "keystore-status": {
-      // Strategy A — v4 (ML-DSA-65) is the new primary vault. Detection
-      // order: v4 first (current canonical shape), v2 next (still
-      // unlockable for non-Sprintnet chains pending a v2→v4 migration
-      // rule), v1 last (PBKDF2+AES-GCM, surfaced as legacy-only so the
-      // popup nudges re-creation). v3 storage entries (Phase 3) are
-      // unreachable from this code path — the storage key was bumped
-      // from "mono.vault.v3" to "mono.vault.v4" in Phase 3.5 Commit A,
-      // so any pre-upgrade dev session naturally falls through to
-      // Welcome and re-onboards.
-      //
-      // `legacyVault` is the popup's banner trigger ("vault format
-      // upgraded — re-import your seed"). It fires whenever any
-      // non-current vault is on disk: v1 always, plus v2 once v4 is
-      // the new primary or once we've deprecated v2.
-      // Either a legacy single-vault entry (mono.vault.v4) OR a Phase
-      // 5 container (mono.vaults.v4) counts as "v4 present" for the
-      // popup's gating purposes — both unlock through the same dispatcher
-      // handler.
+      // v4 (ML-DSA-65) is the only vault format. A populated multi-vault
+      // container (mono.vaults.v4) means "wallet present"; its absence means
+      // "no wallet" → the popup routes to Welcome. The v2/v1 "vault format
+      // upgraded — re-import your seed" banner was retired with the legacy
+      // keystore (no popup surface consumed `legacyVault`).
       const v4Exists = await hasContainerV4();
-      const v2Exists = await hasVault();
-      const v1Exists = await hasLegacyVault();
       if (v4Exists) {
         return {
           hasVault: true,
-          legacyVault: v1Exists || v2Exists,
+          legacyVault: false,
           unlocked: isUnlockedV4(),
           address: getUnlockedAddressV4() ?? (await getStoredAddressV4()),
           custody: "sw" as const,
           algo: "mldsa" as const,
         };
       }
-      // No v4 vault. If a v2 vault exists, the user can still unlock it
-      // for legacy chains; the banner flips on so the home/onboarding
-      // surface tells them v2 is the older format.
       return {
-        hasVault: v2Exists,
-        legacyVault: v1Exists || v2Exists,
-        unlocked: isUnlocked(),
-        address: getUnlockedAddress() ?? (await getStoredAddress()),
+        hasVault: false,
+        legacyVault: false,
+        unlocked: false,
+        address: null,
         custody: "sw" as const,
-        algo: "secp256k1" as const,
+        algo: "mldsa" as const,
       };
     }
     case "chain-list": {
@@ -5065,13 +5032,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
-      // Phase 5: prefer the multi-vault container path. unlockContainerV4
-      // runs migration opportunistically when a legacy mono.vault.v4
-      // entry exists and no container does — the user's existing
-      // password is used to decrypt legacy, then the same password
-      // derives MEK + wraps a fresh VEK over the migrated seed. Rate
-      // limiting wraps both branches identically; every wrong-password
-      // attempt counts against the shared SESSION_KEY_UNLOCK_FAIL_COUNT.
+      // v4 multi-vault container unlock. Rate limiting counts every
+      // wrong-password attempt against the shared SESSION_KEY_UNLOCK_FAIL_COUNT.
       if (await hasContainerV4()) {
         const ses = await chrome.storage.session.get([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
@@ -5121,18 +5083,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           };
         }
       }
-      try {
-        const r = await unlockKeystore(p.password);
-        return { ok: true, address: r.address };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
+      return { ok: false, reason: "no v4 vault — run onboarding first" };
     }
     case "keystore-lock": {
       await triggerAutoLock();
-      // Legacy v2 lock kept inline so a v2-only user still locks cleanly
-      // through this op; lockV4() inside triggerAutoLock() is idempotent.
-      lockKeystore();
       return { ok: true };
     }
     case "keystore-create-new": {
