@@ -4125,6 +4125,38 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
     expect(hist.entries[0]!.status).toBe("confirmed");
   });
 
+  it("wallet-activity-failed returns only the failed records for the scope (Activity-list source)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    // Record one CONFIRMED tx...
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [pendingRow({ txHash: "0x" + "a".repeat(64) })],
+    };
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 50 };
+    await pollPendingAndNotify();
+    // ...and one FAILED tx (reverted receipt).
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [pendingRow({ txHash: "0x" + "b".repeat(64) })],
+    };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 99 };
+    await pollPendingAndNotify();
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-failed",
+      payload: { address: ADDR, chainIdHex: CHAIN },
+    })) as {
+      ok: true;
+      failed: Array<{ status: string; txHash: string; blockNumber: number | null }>;
+    };
+    expect(r.ok).toBe(true);
+    // Only the failed tx — the confirmed one is excluded.
+    expect(r.failed).toHaveLength(1);
+    expect(r.failed[0]!.status).toBe("failed");
+    expect(r.failed[0]!.txHash).toBe("0x" + "b".repeat(64));
+    expect(r.failed[0]!.blockNumber).toBe(99);
+  });
+
   it("null receipt → kept (still pending), no record, no toast", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };

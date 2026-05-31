@@ -471,6 +471,22 @@ export async function bgWalletActivityGet(
   return send("wallet-activity-get", { address, chainIdHex });
 }
 
+/** Failed txs for (address, chain), sourced from the notification history
+ *  (the indexer activity stream is success-only). Newest-first. Drives the
+ *  red "<Type> failed" rows in the Activity list. */
+export async function bgWalletActivityFailed(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      failed: import("../shared/notifications.js").NotificationRecord[];
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-failed", { address, chainIdHex });
+}
+
 // Phase 4.4 — batched name resolution via lyth_getAddressLabel.
 // Re-export the wallet-internal label types so popup callers don't
 // need to reach into shared/.
