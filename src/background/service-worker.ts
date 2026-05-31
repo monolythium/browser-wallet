@@ -4417,6 +4417,34 @@ export interface TerminalPendingTx {
   row: PendingTxRow;
   status: "confirmed" | "failed";
   blockNumber: number | null;
+  /** Receipt `tx_index` — the tx's position in its block. With blockNumber it
+   *  uniquely identifies the inclusion slot, so a bridged confirmed row can be
+   *  matched to the indexer's canonical row by exact (block, txIndex)
+   *  regardless of kind (tx_send, delegate, undelegate, …). Null when absent. */
+  txIndex: number | null;
+}
+
+/** Parse a Sprintnet receipt's block + tx index. Numeric (the operators' shape)
+ *  or hex-string; null when absent/unparseable. */
+function parseReceiptBlockTx(result: {
+  blockNumber?: unknown;
+  block_number?: unknown;
+  tx_index?: unknown;
+  txIndex?: unknown;
+}): { blockNumber: number | null; txIndex: number | null } {
+  const num = (raw: unknown): number | null => {
+    const n =
+      typeof raw === "number"
+        ? raw
+        : typeof raw === "string"
+          ? Number.parseInt(raw, 16)
+          : NaN;
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    blockNumber: num(result.blockNumber ?? result.block_number),
+    txIndex: num(result.tx_index ?? result.txIndex),
+  };
 }
 
 /** Deterministic pending→terminal classification (C4 + Phase 1 notifications).
@@ -4473,53 +4501,45 @@ async function dropConfirmedPendingByHash(
         // receipt can't reveal a revert).
         let status: "confirmed" | "failed" = "confirmed";
         let blockNumber: number | null = null;
+        let txIndex: number | null = null;
         try {
           const receipt = await sprintnetJsonRpc<{
             status?: number | string;
             blockNumber?: unknown;
             block_number?: unknown;
+            tx_index?: unknown;
+            txIndex?: unknown;
           } | null>("eth_getTransactionReceipt", [p.txHash], opts);
           if (receipt.result != null) {
-            const rawBn =
-              receipt.result.blockNumber ?? receipt.result.block_number;
-            const parsedBn =
-              typeof rawBn === "number"
-                ? rawBn
-                : typeof rawBn === "string"
-                  ? Number.parseInt(rawBn, 16)
-                  : NaN;
-            blockNumber = Number.isFinite(parsedBn) ? parsedBn : null;
+            const anchor = parseReceiptBlockTx(receipt.result);
+            blockNumber = anchor.blockNumber;
+            txIndex = anchor.txIndex;
             const rawStatus = receipt.result.status;
             if (rawStatus === 0 || rawStatus === "0x0") status = "failed";
           }
         } catch {
           // Receipt unavailable — inclusion stands as confirmed.
         }
-        terminal.push({ row: p, status, blockNumber });
+        terminal.push({ row: p, status, blockNumber, txIndex });
         continue;
       }
       const receipt = await sprintnetJsonRpc<{
         status?: number | string;
         blockNumber?: unknown;
         block_number?: unknown;
+        tx_index?: unknown;
+        txIndex?: unknown;
       } | null>("eth_getTransactionReceipt", [p.txHash], opts);
       if (receipt.result == null) {
         kept.push(p);
         continue;
       }
       const rawStatus = receipt.result.status;
-      const rawBn = receipt.result.blockNumber ?? receipt.result.block_number;
-      const parsedBn =
-        typeof rawBn === "number"
-          ? rawBn
-          : typeof rawBn === "string"
-            ? Number.parseInt(rawBn, 16)
-            : NaN;
-      const blockNumber = Number.isFinite(parsedBn) ? parsedBn : null;
+      const { blockNumber, txIndex } = parseReceiptBlockTx(receipt.result);
       if (rawStatus === 1 || rawStatus === "0x1") {
-        terminal.push({ row: p, status: "confirmed", blockNumber });
+        terminal.push({ row: p, status: "confirmed", blockNumber, txIndex });
       } else if (rawStatus === 0 || rawStatus === "0x0") {
-        terminal.push({ row: p, status: "failed", blockNumber });
+        terminal.push({ row: p, status: "failed", blockNumber, txIndex });
       } else {
         kept.push(p);
       }
@@ -7178,14 +7198,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const bridgedConfirmed = terminalByHash
         .filter((t) => t.status === "confirmed")
         .map((t) => {
-          // Stamp the receipt's inclusion block so the row renders as a
-          // confirmed send immediately (not "Pending") and reconcilePending can
-          // match the indexer's canonical row by its exact block. Fall back to
-          // the broadcast anchor; if neither is known leave it unflagged (it
-          // stays a plain pending row until the indexer surfaces it).
+          // Stamp the receipt's inclusion (block, txIndex) so the row renders as
+          // confirmed immediately (not "Pending") and reconcilePending can match
+          // the indexer's canonical row by that exact slot — for ANY kind
+          // (transfer OR delegate/undelegate/redelegate), not just tx_send.
+          // Fall back to the broadcast anchor for the block; if no block is
+          // known leave it unflagged (a plain pending row until the indexer
+          // surfaces it).
           const block = t.blockNumber ?? t.row.broadcastBlockHeight;
           return block !== null
-            ? { ...t.row, confirmedBlockHeight: block }
+            ? {
+                ...t.row,
+                confirmedBlockHeight: block,
+                ...(t.txIndex !== null ? { confirmedTxIndex: t.txIndex } : {}),
+              }
             : t.row;
         });
       const nextPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
