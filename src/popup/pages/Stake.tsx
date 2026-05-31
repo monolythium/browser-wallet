@@ -1241,7 +1241,7 @@ function PreviewView({
             "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
           {action === "redelegate" &&
             "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
-          Sprintnet may reject the call until the gate is activated.
+          Monolythium Testnet may reject the call until the gate is activated.
         </div>
       </div>
 
