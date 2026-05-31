@@ -59,20 +59,6 @@ const EMPTY: UseActivityResult = {
   refresh: async () => {},
 };
 
-/** Bug A F2 — while ≥1 pending row exists, re-poll this often (ms). The chain
- *  produces BLS fast blocks well under a second (measured ~0.3 s/block on
- *  Sprintnet), so a broadcast tx is typically included within ~1 s. The old
- *  4 s interval was the dominant source of perceived latency — the tx had long
- *  since confirmed on-chain but the row sat "pending" until the next poll. Poll
- *  at 1.5 s so the UI reflects the chain's real speed (a confirm shows within
- *  ~1.5 s instead of up to 4 s) while staying well above a hammer-the-RPC
- *  cadence. Bounded: this interval runs ONLY while a surface is open AND a
- *  pending row exists — a window that is now usually just a second or two.
- *  Paired with the SW-side F1 bypass (wallet-activity-get skips the 30s
- *  staleness short-circuit when pending rows exist) so each tick actually
- *  reconciles against the operators. */
-const PENDING_REPOLL_MS = 1_500;
-
 export function useActivity(
   addr: string | null,
   chainIdHex: string | null,
@@ -183,23 +169,11 @@ export function useActivity(
     };
   }, [addr, chainIdHex, refresh]);
 
-  // Bug A F2 — bounded short-interval re-poll while pending rows exist. Runs
-  // ONLY while the hook is mounted (i.e. a surface is open) AND there is ≥1
-  // pending row; the interval is torn down the moment the set empties and on
-  // unmount, so no timer leaks and no duplicate timers. Each tick re-runs the
-  // same `refresh()` IPC path (which, via F1, bypasses the 30s staleness cache
-  // when pending exists and reconciles against the operators); the SW writes
-  // the pending key and the onChanged listener above re-renders. Coexists with
-  // the GAP-N1 alarm + the path-agnostic notified-set dedupe, so the re-poll,
-  // the alarm, and refocus/nav can't double-notify.
-  const hasPending = pending.length > 0;
-  useEffect(() => {
-    if (!hasPending) return;
-    const id = setInterval(() => {
-      void refresh();
-    }, PENDING_REPOLL_MS);
-    return () => clearInterval(id);
-  }, [hasPending, refresh]);
+  // Bug A F2 — the short-interval re-poll while a tx is pending now lives at the
+  // App level (src/popup/App.tsx, PENDING_REPOLL_MS) so it runs on EVERY screen
+  // while the popup is open, not just the Activity tab. That poll drives the
+  // SW reconcile; the cache/pending state here stays live via the onChanged
+  // listener above (and the GAP-N1 alarm still covers the closed-surface case).
 
   if (!addr || !chainIdHex || !addr.startsWith("0x")) return EMPTY;
   return { cache, pending, failed, loading, errors, refresh };
