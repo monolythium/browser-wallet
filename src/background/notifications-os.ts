@@ -104,6 +104,7 @@ export async function setOsNotificationsEnabled(
 const SHOW_DETAILS_KEY = "mono.notifications.show-details.v1";
 const NOTIFY_WHEN_LOCKED_KEY = "mono.notifications.notify-when-locked.v1";
 const BADGE_WHEN_LOCKED_KEY = "mono.notifications.badge-when-locked.v1";
+const INCOMING_ENABLED_KEY = "mono.notifications.incoming-enabled.v1";
 
 /** Default-true, fail-open boolean setting read (mirrors the os-enabled
  *  semantics: absent key ⇒ true; a chrome.storage error ⇒ true, so a
@@ -157,6 +158,13 @@ export const getBadgeWhenLocked = (): Promise<boolean> =>
   getBoolSetting(BADGE_WHEN_LOCKED_KEY);
 export const setBadgeWhenLocked = (enabled: boolean): Promise<void> =>
   setBoolSetting(BADGE_WHEN_LOCKED_KEY, enabled);
+
+/** "Incoming transfers" (Item 7c) — when off, no OS toast fires for an
+ *  incoming LYTH transfer (the in-app record is still kept). Default true. */
+export const getIncomingEnabled = (): Promise<boolean> =>
+  getBoolSetting(INCOMING_ENABLED_KEY);
+export const setIncomingEnabled = (enabled: boolean): Promise<void> =>
+  setBoolSetting(INCOMING_ENABLED_KEY, enabled);
 
 /** GAP-N1 / polish C3 — true when at least one POPUP or SIDE_PANEL wallet
  *  surface is currently open. Used at notification-record time to set the
