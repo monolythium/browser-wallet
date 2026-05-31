@@ -2602,3 +2602,15 @@ export async function bgSetBadgeWhenLocked(
 ): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
   return send("notifications-set-badge-when-locked", { enabled });
 }
+
+/** "Incoming transfers" — off ⇒ no toast when LYTH arrives (record still kept). */
+export async function bgGetIncomingEnabled(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-incoming-enabled");
+}
+export async function bgSetIncomingEnabled(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-incoming-enabled", { enabled });
+}
