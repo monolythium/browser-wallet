@@ -95,31 +95,11 @@ vi.mock("./approvals.js", () => ({
 
 // Keystore mock — deterministic signing, always unlocked unless a test flips it.
 // The dApp request path (handleRpc / buildSendTxView) consults the v4 keystore
-// through the v4 keystore; the v2 helpers stay imported only for the
-// popup-IPC keystore-status migration-display branch. The two mocks share
-// `unlocked` / `vaultExists` flags so tests can flip both code paths.
+// (mocked below). `computeTypedDataDigest` is the real pure helper from
+// ./typed-data.js (no chrome dependency, deterministic), so it needs no mock.
+// `unlocked` / `vaultExists` let tests flip the v4 mock's lock / has-vault state.
 let unlocked = true;
 let vaultExists = true;
-
-vi.mock("./keystore.js", () => ({
-  hasVault: vi.fn(async () => vaultExists),
-  hasLegacyVault: vi.fn(async () => false),
-  getStoredAddress: vi.fn(async () => DETERMINISTIC_ADDRESS),
-  getUnlockedAddress: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
-  isUnlocked: vi.fn(() => unlocked),
-  lock: vi.fn(() => {
-    unlocked = false;
-  }),
-  unlock: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
-  createVaultFromNewMnemonic: vi.fn(async () => ({
-    mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-    address: DETERMINISTIC_ADDRESS,
-  })),
-  createVaultFromMnemonic: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
-  personalSign: vi.fn(async () => DETERMINISTIC_SIG_BYTES),
-  signTypedDataV4: vi.fn(async () => DETERMINISTIC_SIG_BYTES),
-  computeTypedDataDigest: vi.fn(() => new Uint8Array(32).fill(0x42)),
-}));
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => vaultExists),
