@@ -17,7 +17,10 @@ import { useIndexerStatus } from "../hooks/useIndexerStatus.js";
 import { ActivityRow } from "./ActivityRow.js";
 import { ActivityDetail } from "./ActivityDetail.js";
 import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
-import type { ActivityRow as ActivityRowType } from "../../shared/activity.js";
+import {
+  mergeActivityNewestFirst,
+  type ActivityRow as ActivityRowType,
+} from "../../shared/activity.js";
 import type { WalletActivityKindEnvelope } from "../../shared/activity-kind.js";
 import type { NameLabel } from "../../shared/name-resolution.js";
 import { type NotificationRecord } from "../../shared/notifications.js";
@@ -248,12 +251,17 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
 
   const { labels } = useNameResolution(counterpartyAddrs, chainIdHex);
 
-  // Composite list: pending first (newest broadcasts at top), then
-  // confirmed (already newest-first per mergeIndexerSnapshot).
+  // Single chronological list (newest-first), pending + confirmed + failed
+  // interleaved — failed rows no longer pin to the top. `rows` (pending +
+  // confirmed) is kept for the loading/empty/error guards below.
   const rows: ActivityRowType[] = useMemo(() => {
     if (!cache) return [...pending];
     return [...pending, ...cache.confirmed];
   }, [cache, pending]);
+  const merged = useMemo(
+    () => mergeActivityNewestFirst(pending, cache?.confirmed ?? [], failed),
+    [pending, cache, failed],
+  );
 
   const hasIndexerError = !!errors.ipc || !!errors.addressActivity;
 
@@ -292,21 +300,25 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
         if (rows.length === 0 && failed.length === 0) {
           return emptyState(activityKind.envelope);
         }
-        // Live rows — failed txs (newest-first) at the top, then pending +
-        // confirmed. Failed rows come from the notification history; they
-        // aren't in the indexer stream and have no ActivityRow kind, so
-        // they render via FailedActivityRow.
+        // Live rows — pending + confirmed + failed merged into ONE list sorted
+        // strictly newest-first (mergeActivityNewestFirst). Failed rows come
+        // from the notification history (not the success-only indexer stream)
+        // and render via NotificationRow; the rest via ActivityRow.
         return (
           <div>
-            {failed.map((rec) => (
-              <NotificationRow
-                key={`failed-${rec.txHash}`}
-                record={rec}
-                showUnread={false}
-                onOpen={() => setSelectedFailed(rec)}
-              />
-            ))}
-            {rows.map((row) => {
+            {merged.map((item) => {
+              if (item.tag === "failed") {
+                const rec = item.record;
+                return (
+                  <NotificationRow
+                    key={`failed-${rec.txHash}`}
+                    record={rec}
+                    showUnread={false}
+                    onOpen={() => setSelectedFailed(rec)}
+                  />
+                );
+              }
+              const row = item.row;
               const cp = counterpartyOf(row);
               const label = cp ? labels.get(cp) : undefined;
               const key =
