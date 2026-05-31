@@ -5,6 +5,7 @@
 // matching the existing Home stake-cluster display convention.
 
 import { Icon } from "../../Icon.js";
+import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { DelegateRow } from "../../../shared/activity.js";
 import { formatWeightBpsPercent } from "../../../shared/staking.js";
 
@@ -30,6 +31,8 @@ export function DelegateRowBody({ row }: DelegateRowBodyProps) {
           Delegated to {clusterName(row.cluster)}
         </div>
         <div className="ext-act-row__meta">
+          <span>{txTypeLabel(row)}</span>
+          <span>·</span>
           <span>block {row.blockHeight.toLocaleString("en-US")}</span>
         </div>
       </div>
