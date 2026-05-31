@@ -7178,7 +7178,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const activity = validateRawActivityList(fresh.addressActivity);
       const delegation = validateRawDelegationList(fresh.delegationHistory);
-      const nextCache = mergeIndexerSnapshot({ activity, delegation }, now);
+      // Pass the prior pending + confirmed rows so a delegation's send-time
+      // cluster name is threaded onto its confirmed row (the indexer stream
+      // carries only the numeric id, §C). prevConfirmed keeps the name sticky
+      // across the rebuild once reconcilePending drops the pending row.
+      const nextCache = mergeIndexerSnapshot({ activity, delegation }, now, {
+        pending: prevPending,
+        confirmed: prevCache?.confirmed ?? [],
+      });
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
       const { kept, terminal: terminalByHash } = await dropConfirmedPendingByHash(reconciled);
       // Indexer-lag bridge (open-surface display path). A tx confirmed via the
