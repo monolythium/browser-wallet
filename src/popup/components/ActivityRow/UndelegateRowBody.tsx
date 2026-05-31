@@ -1,14 +1,10 @@
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { UndelegateRow } from "../../../shared/activity.js";
-import { formatWeightBpsPercent } from "../../../shared/staking.js";
+import { clusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
 
 export interface UndelegateRowBodyProps {
   row: UndelegateRow;
-}
-
-function clusterName(id: number): string {
-  return `C-${String(id + 1).padStart(3, "0")}.cluster.mono`;
 }
 
 export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
@@ -19,7 +15,7 @@ export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
-          Withdrew delegation from {clusterName(row.cluster)}
+          Withdrew delegation from {clusterLabel(row.cluster, row.clusterName)}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>
