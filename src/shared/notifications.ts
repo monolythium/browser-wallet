@@ -111,6 +111,14 @@ export interface NotificationRecord {
    *  pending-row (what the user intended to send to, or the precompile
    *  address for contract calls). */
   counterparty: string;
+  /** Total tx fee in lythoshi (decimal string), captured at the confirmed
+   *  terminal transition from `lyth_nativeReceipt.fee.total_lythoshi`
+   *  (lythoshi, NOT wei). OPTIONAL + only set for confirmed self-paid txs
+   *  with a non-zero fee: failed/reverted/pruned txs have no native receipt,
+   *  and a zero-fee (near-zero-gas testnet) tx leaves it unset. Display
+   *  formats it as `- <amount> LYTH`; absent ⇒ no fee line (no-mock).
+   *  Migration-safe: records written before this field just omit it. */
+  feeLythoshi?: string;
   /** Epoch ms at the moment the SW observed the terminal transition.
    *  This is the notification's fire-time — distinct from the
    *  pending-row's `broadcastedAtMs` (which is broadcast time). */
@@ -239,6 +247,12 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
         ? r.blockNumber
         : undefined;
   if (blockNumber === undefined) return null;
+  // Optional fee — tolerate absent (legacy) + ignore a malformed value rather
+  // than rejecting the whole record (the fee is non-essential metadata).
+  const feeLythoshi =
+    typeof r.feeLythoshi === "string" && /^[0-9]+$/.test(r.feeLythoshi)
+      ? r.feeLythoshi
+      : undefined;
   return {
     id: r.id,
     txHash: r.txHash,
@@ -250,6 +264,7 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     createdAtMs: r.createdAtMs,
     read: r.read,
     schemaVersion: 0,
+    ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
   };
 }
 
