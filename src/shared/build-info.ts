@@ -67,7 +67,7 @@ export const SPRINTNET_CHAIN_ID_HEX: string =
 export function finalityPostureFor(chainIdHex: string): string {
   const normalised = chainIdHex.toLowerCase();
   if (normalised === SPRINTNET_CHAIN_ID_HEX.toLowerCase()) {
-    return "Anchor-level (LythiumDAG-BFT)";
+    return "Anchor-level (Starfish-C)";
   }
   return "Depends on destination chain";
 }
