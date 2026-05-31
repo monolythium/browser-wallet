@@ -106,7 +106,7 @@ describe("buildBridgeRouteChoiceState", () => {
 
     expect(state.selected).toBeNull();
     expect(state.blockedReasons).toContain(
-      "no SDK-ranked bridge route satisfies the v4.1 disclosure floor",
+      "no SDK-ranked bridge route satisfies the disclosure floor",
     );
     expect(state.candidates[0]?.state).toBe("blocked");
     expect(state.candidates[0]?.assessment?.blockedReasons).toEqual(
@@ -120,7 +120,7 @@ describe("buildBridgeRouteChoiceState", () => {
     expect(state.transferPreview.intent).toBeNull();
     expect(state.transferPreview.blockedReasons).toEqual(
       expect.arrayContaining([
-        "no SDK-ranked bridge route satisfies the v4.1 disclosure floor",
+        "no SDK-ranked bridge route satisfies the disclosure floor",
         "quote preview requires an SDK-selected route",
       ]),
     );
