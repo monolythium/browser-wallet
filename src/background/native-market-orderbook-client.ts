@@ -63,5 +63,5 @@ async function fetchNativeMarketOrderBookDeltas(
     }
     return validateNativeMarketOrderBookReplayResponse(body.data ?? body);
   }
-  throw lastTransportErr ?? new Error("no Sprintnet operator reachable");
+  throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
 }
