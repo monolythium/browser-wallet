@@ -1464,7 +1464,12 @@ describe("wallet-activity-get", () => {
     };
   }
 
-  it("evicts a pending row when lyth_txStatus reports the canonical hash found", async () => {
+  it("BRIDGE: keeps a receipt-confirmed pending row visible when the indexer hasn't surfaced it yet (no vanish)", async () => {
+    // The receipt confirms (lyth_txStatus found) but the indexer's success
+    // stream hasn't indexed the activity row in this snapshot. Dropping it now
+    // would make the tx vanish (pending gone, confirmed not yet indexed) — so
+    // it's bridged: kept in pending (still rendered, poll still alive) until
+    // the indexer surfaces the canonical confirmed row (next test).
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
     seedPending("0x" + "ab".repeat(32));
@@ -1474,7 +1479,45 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     })) as { ok: true; pending: unknown[] };
     expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+  });
+
+  it("BRIDGE: drops the bridged row once the indexer surfaces the canonical tx_send", async () => {
+    // Indexer now returns the matching tx_send (out, 0.01 LYTH = 1_000_000
+    // lythoshi, to 0xrecipient, at the broadcast anchor) → reconcilePending
+    // drops the pending row and the real confirmed row renders. No duplicate.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 100,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "out",
+        counterparty: "0xrecipient",
+        tokenId: null,
+        amount: "1000000",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 100 };
+    seedPending("0x" + "ab".repeat(32));
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      pending: unknown[];
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
     expect(r.pending).toHaveLength(0);
+    expect(r.cache.confirmed.some((c) => c.kind === "tx_send")).toBe(true);
   });
 
   it("keeps a pending row when lyth_txStatus is not_found and no receipt (graceful)", async () => {
@@ -1511,7 +1554,7 @@ describe("wallet-activity-get", () => {
     });
   }
 
-  it("F1: with a FRESH cache + pending, bypasses the short-circuit and clears a confirmed pending", async () => {
+  it("F1: with a FRESH cache + pending, bypasses the short-circuit + re-fetches; a receipt-confirmed row is bridged until the indexer surfaces it", async () => {
     await primeFreshCache();
     const callsAfterPrime = rpcCalls.length;
     // Cache is fresh (<30s). Seed a pending row + a 'found' status.
@@ -1524,10 +1567,11 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     })) as { ok: true; pending: unknown[] };
     expect(r.ok).toBe(true);
-    // Reconciled despite the fresh cache → the short-circuit was bypassed.
-    expect(r.pending).toHaveLength(0);
-    // And it actually re-fetched (did not serve from cache).
+    // It actually re-fetched (did not serve from the fresh cache) → F1 bypass.
     expect(rpcCalls.length).toBeGreaterThan(callsAfterPrime);
+    // Confirmed via the receipt but not yet in the (empty) indexer snapshot →
+    // bridged (kept visible), not vanished.
+    expect(r.pending).toHaveLength(1);
   });
 
   it("F1: with a FRESH cache + pending, a status:0 receipt records 'failed' — never confirmed (#5117)", async () => {
