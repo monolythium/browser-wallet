@@ -393,6 +393,20 @@ export async function bgGetBlockTxValue(
   return send("get-block-tx-value", { blockHeight, txIndex });
 }
 
+/** Best-effort total tx fee in lythoshi for a confirmed self-paid tx, read
+ *  from the native receipt (`lyth_nativeReceipt.fee.total_lythoshi`). Used by
+ *  the activity-detail popup, which has no persisted fee field (indexer-sourced
+ *  rows). `feeLythoshi` is null when the fee is zero / the native receipt is
+ *  unavailable (failed / reverted / pruned). LYTH not wei. */
+export async function bgWalletTxFee(
+  txHash: string,
+): Promise<
+  | { ok: true; feeLythoshi: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-tx-fee", { txHash });
+}
+
 export interface WalletAddressLabel {
   address: string;
   category: string;

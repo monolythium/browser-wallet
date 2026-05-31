@@ -20,6 +20,7 @@ import {
   notificationTitle,
   type NotificationRecord,
 } from "../../shared/notifications";
+import { formatNativeLythAmount } from "../../shared/native-fee-display";
 
 export interface NotificationDetailProps {
   record: NotificationRecord;
@@ -42,6 +43,14 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
   const title = notificationTitle(record.kind, record.status);
   const showAmount = !isZeroAmount(record.amountDecimal);
   const showBlock = record.blockNumber !== null;
+  // Fee is captured (lythoshi) only for confirmed self-paid txs with a non-zero
+  // fee, so presence ⇒ show it as a debit. Absent ⇒ no fee line (no-mock).
+  const feeText =
+    record.feeLythoshi !== undefined &&
+    /^[0-9]+$/.test(record.feeLythoshi) &&
+    BigInt(record.feeLythoshi) > 0n
+      ? `- ${formatNativeLythAmount(BigInt(record.feeLythoshi))}`
+      : null;
 
   return (
     <Modal open onClose={onClose} title={title} showClose>
@@ -50,6 +59,7 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
         {showAmount && (
           <DRow label="Amount" value={`${record.amountDecimal} LYTH`} />
         )}
+        {feeText && <DRow label="Fee" value={feeText} />}
         <DRow label="To" value={<CopyableAddress addr0x={record.counterparty} />} />
         {showBlock && (
           <DRow
