@@ -1060,6 +1060,17 @@ export default function App() {
       {screen === "locked" && (
         <UnlockScreen
           address={keystore?.address ?? null}
+          onUnlocked={() => {
+            // Route to Home synchronously on a successful unlock instead of
+            // depending SOLELY on the cross-context walletLocked=false storage
+            // event. After an auto-lock + SW wake that event can fail to flip
+            // the popup's screen (the "unlocked but stuck on the lock screen
+            // until reopen" report); manual lock keeps the same warm popup/SW
+            // so it always delivered. resetAutoLock re-armed the alarm minutes
+            // out, so Home won't immediately re-lock.
+            setScreen("home");
+            void refreshKeystoreStatus();
+          }}
           onForgotImport={() => navigateTo("forgot-password")}
           onForgotReset={() => {
             void refreshKeystoreStatus();
