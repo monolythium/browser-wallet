@@ -1,7 +1,8 @@
 // Activity-detail modal — a compact summary popup opened by tapping a row in
 // the Activity list. Shares the receipt visual language (rows + the shared
-// lythoshi formatter) but is intentionally smaller: addresses are truncated,
-// fee/total are dropped.
+// lythoshi formatter) but is intentionally smaller: addresses are truncated.
+// The LYTH fee is resolved on demand from the native receipt for self-paid
+// rows (the indexer stream carries no fee); incoming rows show no fee line.
 //
 // Address rendering is defensive: the indexer hands counterparties as bech32m
 // (`mono…`) strings while the wallet's own address is 0x — bech32mDisplay
@@ -32,7 +33,7 @@ import { formatWeightBpsPercent } from "../../shared/staking";
 import { txTypeLabel } from "../../shared/tx-type-label";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity";
 import type { NameLabel } from "../../shared/name-resolution";
-import { bgGetBlockTxValue } from "../bg";
+import { bgGetBlockTxValue, bgWalletTxFee } from "../bg";
 
 export interface ActivityDetailProps {
   row: ActivityRowType;
@@ -45,6 +46,23 @@ export interface ActivityDetailProps {
 
 function clusterName(id: number): string {
   return `C-${String(id + 1).padStart(3, "0")}.cluster.mono`;
+}
+
+/** Rows the queried wallet paid the fee for (it originated the tx). Incoming
+ *  transfers + system rebalances were paid by someone else → no fee line. */
+function isSelfPaid(row: ActivityRowType): boolean {
+  switch (row.kind) {
+    case "tx_send":
+    case "delegate":
+    case "undelegate":
+    case "redelegate":
+    case "crossing_to_private":
+      return true;
+    case "token_transfer":
+      return row.direction === "out";
+    default:
+      return false;
+  }
 }
 
 // `truncMiddle`, `relativeMs`, `DRow`, `MonoscanTxButton`, and
@@ -75,6 +93,36 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
       cancelled = true;
     };
   }, [lookupHeight, lookupTxIndex]);
+
+  // LYTH fee — resolved on demand from the native receipt once the canonical
+  // tx hash is known, but only for rows the wallet paid for (self-paid). The
+  // indexer activity stream carries no fee, so this is the only honest source
+  // for an indexer-sourced confirmed row. Null on zero-fee / unavailable
+  // (failed / reverted / pruned) → no fee line (no-mock).
+  const selfPaid = isSelfPaid(row);
+  const [resolvedFeeLythoshi, setResolvedFeeLythoshi] = useState<string | null>(null);
+  useEffect(() => {
+    if (!selfPaid || resolvedTxHash === null) return;
+    let cancelled = false;
+    void (async () => {
+      const r = await bgWalletTxFee(resolvedTxHash);
+      if (cancelled || !r.ok) return;
+      if (r.feeLythoshi !== null) setResolvedFeeLythoshi(r.feeLythoshi);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selfPaid, resolvedTxHash]);
+
+  const feeText = (() => {
+    if (resolvedFeeLythoshi === null) return null;
+    try {
+      const v = BigInt(resolvedFeeLythoshi);
+      return v > 0n ? `- ${formatNativeLythAmount(v)}` : null;
+    } catch {
+      return null;
+    }
+  })();
 
   // delegate LYTH principal (msg.value). Undelegate/redelegate send value:0 →
   // omit (honest-absence) rather than render "0 LYTH".
@@ -138,7 +186,9 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
               <DRow label="To" value={cp ? <CopyableAddress addr0x={cp} name={name} /> : "unknown"} />
             </>
           )}
-          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
+          {feeText && <DRow label="Fee" value={feeText} />}
+          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
+          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
         </div>
       </Modal>
     );
@@ -157,7 +207,9 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
           <DRow label="Weight" value={formatWeightBpsPercent(row.weightBps)} />
           <DRow label="Cluster" value={`${clusterName(row.cluster)} · #${row.cluster}`} />
           <DRow label="Delegator" value={<CopyableAddress addr0x={walletAddr} />} />
-          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
+          {feeText && <DRow label="Fee" value={feeText} />}
+          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
+          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
         </div>
       </Modal>
     );
@@ -167,8 +219,8 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
   return (
     <Modal open onClose={onClose} title={txTypeLabel(row)} showClose>
       <div>
+        {feeText && <DRow label="Fee" value={feeText} />}
         <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
-        <DRow label="Tx index" value={String(row.txIndex)} />
         {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
       </div>
     </Modal>
