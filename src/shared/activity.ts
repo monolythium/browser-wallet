@@ -29,7 +29,7 @@
 //            renders when the indexer emits the kind on Sprintnet.
 
 import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
-import { isTxOpKind, type TxOpKind } from "./notifications.js";
+import { isTxOpKind, type NotificationRecord, type TxOpKind } from "./notifications.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -733,4 +733,57 @@ export function mergeIndexerSnapshot(
   const capped = merged.slice(0, ACTIVITY_ROLLING_WINDOW);
 
   return { confirmed: capped, lastFetchedAtMs: now };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unified Activity ordering (pending + confirmed + failed, newest-first)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A single rendered Activity entry, tagged by source: an indexer/pending
+ *  `ActivityRow` or a failed-tx `NotificationRecord` (failed txs aren't in the
+ *  success-only indexer stream — they come from the notification history). */
+export type MergedActivityItem =
+  | { tag: "row"; row: ActivityRow }
+  | { tag: "failed"; record: NotificationRecord };
+
+/** Newest-first recency for the unified list. All three sources expose a block
+ *  height — pending: the broadcast anchor; confirmed: `blockHeight`; failed:
+ *  the receipt `blockNumber`. A null/absent block means "not yet anchored"
+ *  (just-broadcast pending, or a `lyth_txStatus="found"` fast-path failed) →
+ *  it floats to the top (Infinity). The wall-clock `ms` is the secondary key
+ *  (pending: broadcast time; failed: createdAt); confirmed rows carry no
+ *  wall-clock, so they use 0 and stay block-ordered among themselves. */
+function mergedRecency(item: MergedActivityItem): { block: number; ms: number } {
+  if (item.tag === "failed") {
+    return { block: item.record.blockNumber ?? Infinity, ms: item.record.createdAtMs };
+  }
+  const row = item.row;
+  if (row.kind === "pending_tx") {
+    return { block: row.broadcastBlockHeight ?? Infinity, ms: row.broadcastedAtMs };
+  }
+  return { block: row.blockHeight, ms: 0 };
+}
+
+/** Merge pending + confirmed + failed into ONE list sorted newest-first, the
+ *  same chronological intent the notification center uses (so a failed row no
+ *  longer pins above a newer pending row). Pure + stable: same-block confirmed
+ *  rows keep their incoming (blockHeight, txIndex, logIndex) order. Two
+ *  unanchored rows (block === Infinity) fall through to the ms tie-break —
+ *  Infinity === Infinity, so the comparator never produces NaN. */
+export function mergeActivityNewestFirst(
+  pending: PendingTxRow[],
+  confirmed: ConfirmedRow[],
+  failed: NotificationRecord[],
+): MergedActivityItem[] {
+  const items: MergedActivityItem[] = [
+    ...pending.map((row): MergedActivityItem => ({ tag: "row", row })),
+    ...confirmed.map((row): MergedActivityItem => ({ tag: "row", row })),
+    ...failed.map((record): MergedActivityItem => ({ tag: "failed", record })),
+  ];
+  return items.sort((a, b) => {
+    const ra = mergedRecency(a);
+    const rb = mergedRecency(b);
+    if (ra.block !== rb.block) return rb.block - ra.block;
+    return rb.ms - ra.ms;
+  });
 }
