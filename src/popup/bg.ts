@@ -915,6 +915,13 @@ export async function bgWalletSendTx(args: {
    *  fee, and the gas are unchanged whether this is set or not. Omit
    *  for the coarse `"send"` / `"contract_call"` fallback. */
   opKind?: TxOpKind;
+  /** Cluster a delegation send (delegate / undelegate / redelegate) targets.
+   *  PENDING-ROW METADATA ONLY (same invariant as opKind) — forwarded to the
+   *  pending row + notification record so the detail can name the cluster
+   *  (the tx `to` is the delegation module, not the cluster). Never reaches
+   *  the signer. Omit for non-delegation sends. */
+  clusterId?: number;
+  clusterName?: string;
   /** SDK 0.3.11 optional-encryption toggle. DEFAULT (omitted / false) =
    *  the PLAINTEXT `mesh_submitTx` path, which is the functional
    *  inclusion path on the live chain (`encrypted_mempool_required =

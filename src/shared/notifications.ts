@@ -119,6 +119,14 @@ export interface NotificationRecord {
    *  formats it as `- <amount> LYTH`; absent ⇒ no fee line (no-mock).
    *  Migration-safe: records written before this field just omit it. */
   feeLythoshi?: string;
+  /** Cluster a delegation tx (delegate / undelegate / redelegate) targeted,
+   *  captured at send time from the pending row. `clusterId` is the numeric
+   *  directory id; `clusterName` is the directory display name when known.
+   *  There is NO `monok1` cluster address in the data model, so the detail
+   *  surfaces name + #id (or just #id). Both optional; absent on non-delegation
+   *  kinds + legacy records. */
+  clusterId?: number;
+  clusterName?: string;
   /** Epoch ms at the moment the SW observed the terminal transition.
    *  This is the notification's fire-time — distinct from the
    *  pending-row's `broadcastedAtMs` (which is broadcast time). */
@@ -253,6 +261,15 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     typeof r.feeLythoshi === "string" && /^[0-9]+$/.test(r.feeLythoshi)
       ? r.feeLythoshi
       : undefined;
+  // Optional cluster metadata — tolerate absent + ignore malformed.
+  const clusterId =
+    typeof r.clusterId === "number" && Number.isFinite(r.clusterId)
+      ? r.clusterId
+      : undefined;
+  const clusterName =
+    typeof r.clusterName === "string" && r.clusterName.length > 0
+      ? r.clusterName
+      : undefined;
   return {
     id: r.id,
     txHash: r.txHash,
@@ -265,6 +282,8 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     read: r.read,
     schemaVersion: 0,
     ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+    ...(clusterId !== undefined ? { clusterId } : {}),
+    ...(clusterName !== undefined ? { clusterName } : {}),
   };
 }
 
