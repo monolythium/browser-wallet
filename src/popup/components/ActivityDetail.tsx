@@ -143,7 +143,12 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
     return (
       <Modal open onClose={onClose} title={txTypeLabel(row)} showClose>
         <div>
-          <DRow label="Status" value="Pending" />
+          {/* Confirmed via the receipt but awaiting the indexer's canonical
+              row — show it as Confirmed at the receipt's inclusion block. */}
+          <DRow
+            label="Status"
+            value={row.confirmedBlockHeight !== undefined ? "Confirmed" : "Pending"}
+          />
           <DRow label="Amount" value={`${row.amountDecimal} LYTH`} />
           <DRow label="From" value={<CopyableAddress addr0x={walletAddr} />} />
           <DRow label="To" value={<CopyableAddress addr0x={row.to} name={name} />} />
@@ -155,8 +160,12 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
               </ExternalLink>
             }
           />
-          {row.broadcastBlockHeight !== null && (
-            <DRow label="Block" value={row.broadcastBlockHeight.toLocaleString("en-US")} />
+          {row.confirmedBlockHeight !== undefined ? (
+            <DRow label="Block" value={row.confirmedBlockHeight.toLocaleString("en-US")} />
+          ) : (
+            row.broadcastBlockHeight !== null && (
+              <DRow label="Block" value={row.broadcastBlockHeight.toLocaleString("en-US")} />
+            )
           )}
           <DRow label="Submitted" value={relativeMs(row.broadcastedAtMs)} />
           <MonoscanTxButton hash={row.txHash} />

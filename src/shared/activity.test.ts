@@ -690,6 +690,30 @@ describe("reconcilePending", () => {
     expect(reconcilePending([pending], [confirmed])).toEqual([]);
   });
 
+  it("matches an indexer bech32m counterparty against a 0x pending `to` (the linger bug)", () => {
+    // The indexer returns counterparty as bech32m; a pending row's `to` is the
+    // 0x EVM address it was broadcast with. They must normalize to the same 0x —
+    // otherwise reconcilePending never matched + the row lingered to the alarm.
+    const pending = makePending({
+      to: "0x01029862840d227ee9e76a845c8cbb80ba1d7d23",
+      broadcastBlockHeight: 1000,
+    });
+    const confirmed = makeTxSend({
+      counterparty: "mono1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46",
+      blockHeight: 1005,
+    });
+    expect(reconcilePending([pending], [confirmed])).toEqual([]);
+  });
+
+  it("matches a bridged row by its inclusion block, not the stale broadcast anchor", () => {
+    // A receipt-confirmed (bridged) row carries confirmedBlockHeight (inclusion
+    // block). Reconcile against that, so a broadcast→inclusion gap wider than the
+    // window still matches the indexer's canonical row.
+    const pending = makePending({ broadcastBlockHeight: 1000, confirmedBlockHeight: 1400 });
+    const confirmed = makeTxSend({ blockHeight: 1400 }); // 400 from broadcast (>window), 0 from inclusion
+    expect(reconcilePending([pending], [confirmed])).toEqual([]);
+  });
+
   it("matches pending and confirmed rows at 1-lythoshi precision", () => {
     const pending = makePending({ amountDecimal: "0.00000001" });
     const confirmed = makeTxSend({
