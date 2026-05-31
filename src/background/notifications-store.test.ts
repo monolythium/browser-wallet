@@ -65,6 +65,8 @@ function baseInput(overrides: {
   kind?: "send" | "contract_call";
   blockNumber?: number | null;
   feeLythoshi?: string;
+  clusterId?: number;
+  clusterName?: string;
 } = {}) {
   return {
     addressLower: ADDR_A,
@@ -124,6 +126,23 @@ describe("notifications-store", () => {
     expect(withFee?.feeLythoshi).toBe("600000");
     expect(noFee).toBeDefined();
     expect("feeLythoshi" in (noFee as object)).toBe(false);
+  });
+
+  it("persists + round-trips optional cluster metadata; absent stays absent", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ txHash: HASH_1, clusterId: 1, clusterName: "halcyon.cluster.mono" }),
+    );
+    await recordNotification(baseInput({ txHash: HASH_2 }));
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    const withCluster = list.find((r) => r.txHash === HASH_1);
+    const noCluster = list.find((r) => r.txHash === HASH_2);
+    expect(withCluster?.clusterId).toBe(1);
+    expect(withCluster?.clusterName).toBe("halcyon.cluster.mono");
+    expect("clusterId" in (noCluster as object)).toBe(false);
+    expect("clusterName" in (noCluster as object)).toBe(false);
   });
 
   it("dedupes — a second call with the same (addr, chain, txHash) is a no-op", async () => {

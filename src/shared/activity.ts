@@ -105,6 +105,14 @@ export interface PendingTxRow {
    *  unknown literal arriving at the validator is coerced to the
    *  fallback `"contract_call"`. */
   opKind?: TxOpKind;
+  /** Cluster targeted by a delegation tx (delegate / undelegate / redelegate),
+   *  captured from the Stake send flow PURELY as notification metadata — never
+   *  part of the signed tx. `clusterId` is the numeric directory id; there is
+   *  no `monok1` cluster address in the data model, so `clusterName` carries
+   *  the directory display name when known. Both optional + absent on
+   *  non-delegation sends and legacy rows. */
+  clusterId?: number;
+  clusterName?: string;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -255,6 +263,13 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       if (r.opKind !== undefined) {
         opKind = isTxOpKind(r.opKind) ? r.opKind : "contract_call";
       }
+      // Cluster metadata (delegation sends). Optional; drop malformed values
+      // rather than rejecting the whole row — it's non-essential metadata.
+      const clusterId = isFiniteNumber(r.clusterId) ? r.clusterId : undefined;
+      const clusterName =
+        typeof r.clusterName === "string" && r.clusterName.length > 0
+          ? r.clusterName
+          : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -264,6 +279,8 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         broadcastBlockHeight: r.broadcastBlockHeight,
         via: r.via,
         ...(opKind !== undefined ? { opKind } : {}),
+        ...(clusterId !== undefined ? { clusterId } : {}),
+        ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
 
