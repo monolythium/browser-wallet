@@ -12,7 +12,7 @@ export interface TxSendRowBodyProps {
 export function TxSendRowBody({ row, counterpartyLabel }: TxSendRowBodyProps) {
   return (
     <div className="ext-act-row">
-      <div className="dir out">
+      <div className="dir out sent-ok">
         <Icon name="send" size={13} />
       </div>
       <div className="ext-act-row__main">
