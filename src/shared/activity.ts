@@ -28,6 +28,7 @@
 //   §25.4  — CrossingToPrivateRow defined but never client-synthesized; only
 //            renders when the indexer emits the kind on Sprintnet.
 
+import { bech32mToAddress } from "./bech32m.js";
 import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
 import { isTxOpKind, type NotificationRecord, type TxOpKind } from "./notifications.js";
 
@@ -46,12 +47,16 @@ export const PENDING_TTL_MS = 5 * 60 * 1000;
 
 /** Heuristic match window for pending-row reconciliation: when a confirmed
  *  entry's blockHeight falls within ±this many blocks of the pending row's
- *  anchor and counterparty + amount + direction match, treat the pair as
- *  the same on-chain event and evict the pending row. ±10 at 3-second
- *  block cadence is ±30 seconds — wider than the gap between broadcast and
- *  block landing, narrower than a typical "user sends another identical tx"
- *  interval. */
-export const PENDING_MATCH_BLOCK_WINDOW = 10;
+ *  anchor and counterparty + amount match, treat the pair as the same on-chain
+ *  event and evict the pending row. Sprintnet produces BLS fast blocks
+ *  ~0.3 s apart (measured), so the gap between the broadcast anchor and the
+ *  inclusion block — plus the indexer's materialization delay before the row
+ *  is queryable — spans many more blocks than the old ±10 (≈3 s here) allowed,
+ *  which left a receipt-confirmed pending row unmatched (and lingering until
+ *  the 30 s alarm). ±300 ≈ ±90 s of blocks: comfortably covers broadcast →
+ *  indexed while staying far narrower than a "user re-sends the identical
+ *  amount to the same address" interval. */
+export const PENDING_MATCH_BLOCK_WINDOW = 300;
 
 /** Indexer sentinel for native LYTH (`Hash::ZERO`, indexer commit 3537b135).
  *  A transfer carrying this tokenId is native LYTH, not an MRC-20 token. */
@@ -113,6 +118,14 @@ export interface PendingTxRow {
    *  non-delegation sends and legacy rows. */
   clusterId?: number;
   clusterName?: string;
+  /** Set once the tx is confirmed via the real-time receipt (the inclusion
+   *  block from `eth_getTransactionReceipt`) but BEFORE the indexer has
+   *  surfaced the canonical confirmed row. Presence flips the row's render
+   *  from "Pending" to a confirmed send, so a confirm shows at chain speed
+   *  instead of sitting on "Pending" through the indexer's materialization
+   *  delay. The row is dropped (replaced by the indexer's canonical row) once
+   *  reconcilePending matches it; this field is the precise match anchor. */
+  confirmedBlockHeight?: number;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -270,6 +283,10 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         typeof r.clusterName === "string" && r.clusterName.length > 0
           ? r.clusterName
           : undefined;
+      // Receipt-confirmed-but-not-yet-indexed marker (the inclusion block).
+      const confirmedBlockHeight = isFiniteNumber(r.confirmedBlockHeight)
+        ? r.confirmedBlockHeight
+        : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -281,6 +298,7 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(opKind !== undefined ? { opKind } : {}),
         ...(clusterId !== undefined ? { clusterId } : {}),
         ...(clusterName !== undefined ? { clusterName } : {}),
+        ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
       };
     }
 
@@ -655,6 +673,21 @@ export function evictExpiredPending(
  *     pending row's `broadcastBlockHeight` anchor. When the anchor is
  *     null (eth_blockNumber fetch failed), no heuristic match is possible
  *     and the TTL backstop is the sole eviction path. */
+/** Normalize an address for matching. The indexer returns a confirmed row's
+ *  counterparty as BECH32M (`mono…`), while a pending row's `to` is the 0x EVM
+ *  address it was broadcast with — so a raw string compare never matched and
+ *  reconcilePending never evicted a confirmed pending row (it lingered until
+ *  the 30 s alarm). Convert both to lowercase 0x before comparing; anything
+ *  unparseable falls back to its lowercased self. */
+function normalizeAddrForMatch(a: string): string {
+  if (a.startsWith("0x") || a.startsWith("0X")) return a.toLowerCase();
+  try {
+    return bech32mToAddress(a, null).toLowerCase();
+  } catch {
+    return a.toLowerCase();
+  }
+}
+
 function pendingMatchesConfirmed(
   pending: PendingTxRow,
   confirmed: ConfirmedRow,
@@ -662,11 +695,17 @@ function pendingMatchesConfirmed(
   if (confirmed.kind !== "tx_send") return false;
   if (pending.broadcastBlockHeight === null) return false;
   if (confirmed.counterparty === null) return false;
-  if (confirmed.counterparty.toLowerCase() !== pending.to.toLowerCase()) {
+  if (
+    normalizeAddrForMatch(confirmed.counterparty) !==
+    normalizeAddrForMatch(pending.to)
+  ) {
     return false;
   }
   if (confirmed.amountDecimal !== pending.amountDecimal) return false;
-  const delta = Math.abs(confirmed.blockHeight - pending.broadcastBlockHeight);
+  // Match against the receipt's inclusion block when we have it (bridged
+  // confirmed rows), else the broadcast anchor — within the fast-chain window.
+  const anchor = pending.confirmedBlockHeight ?? pending.broadcastBlockHeight;
+  const delta = Math.abs(confirmed.blockHeight - anchor);
   return delta <= PENDING_MATCH_BLOCK_WINDOW;
 }
 
@@ -768,6 +807,11 @@ function mergedRecency(item: MergedActivityItem): { block: number; ms: number } 
   }
   const row = item.row;
   if (row.kind === "pending_tx") {
+    // A receipt-confirmed (bridged) row sorts by its real inclusion block so it
+    // interleaves with confirmed rows; a still-pending row floats to the top.
+    if (row.confirmedBlockHeight !== undefined) {
+      return { block: row.confirmedBlockHeight, ms: row.broadcastedAtMs };
+    }
     return { block: row.broadcastBlockHeight ?? Infinity, ms: row.broadcastedAtMs };
   }
   return { block: row.blockHeight, ms: 0 };

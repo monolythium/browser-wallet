@@ -7177,7 +7177,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // surface via the notification-history failed-row path.
       const bridgedConfirmed = terminalByHash
         .filter((t) => t.status === "confirmed")
-        .map((t) => t.row);
+        .map((t) => {
+          // Stamp the receipt's inclusion block so the row renders as a
+          // confirmed send immediately (not "Pending") and reconcilePending can
+          // match the indexer's canonical row by its exact block. Fall back to
+          // the broadcast anchor; if neither is known leave it unflagged (it
+          // stays a plain pending row until the indexer surfaces it).
+          const block = t.blockNumber ?? t.row.broadcastBlockHeight;
+          return block !== null
+            ? { ...t.row, confirmedBlockHeight: block }
+            : t.row;
+        });
       const nextPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
       // Phase 1 notifications hook — post-write microtask. The hook records
