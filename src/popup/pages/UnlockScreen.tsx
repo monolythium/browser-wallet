@@ -212,17 +212,22 @@ export function UnlockScreen({
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
           Unlock Monolythium Wallet
         </h2>
-        <div
-          style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 11,
-            color: "var(--fg-400)",
-            marginTop: 8,
-            letterSpacing: "0.04em",
-          }}
-        >
-          {shortAddress(address)}
-        </div>
+        {/* Top-tier address privacy: while locked the SW returns no address
+           (getUnlockedAddressV4 is null when locked), so render no chip at
+           all — never hint the active address before unlock. */}
+        {address && (
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 11,
+              color: "var(--fg-400)",
+              marginTop: 8,
+              letterSpacing: "0.04em",
+            }}
+          >
+            {shortAddress(address)}
+          </div>
+        )}
       </div>
 
       <div

@@ -1591,20 +1591,14 @@ async function appendVaultRecord(
 
 // ---- public API ----
 
-export async function getStoredAddressV4(): Promise<string | null> {
-  // Container-aware: the active vault's address is non-sensitive metadata
-  // (already exposed via listVaultsV4) and must resolve while LOCKED so the
-  // SW's `getUnlockedAddressV4() ?? (await getStoredAddressV4())` fallback
-  // still surfaces an address for a modern install with no backend loaded.
-  const c = await loadVaultsContainerV4();
-  if (!c) return null;
-  return c.vaults.find((v) => v.id === c.activeVaultId)?.addr ?? null;
-}
-
 export function isUnlockedV4(): boolean {
   return unlocked !== null;
 }
 
+/** The active address — ONLY when unlocked. Returns null while locked: the
+ *  address lives in the in-memory backend set on unlock and is never resolved
+ *  from the at-rest container metadata while locked (top-tier address privacy).
+ *  Callers MUST treat null as "no address available right now". */
 export function getUnlockedAddressV4(): string | null {
   return unlocked?.address ?? null;
 }
