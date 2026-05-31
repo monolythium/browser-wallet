@@ -18,6 +18,7 @@ import {
   mapAddressActivityToRows,
   delegationKeySet,
   mergeIndexerSnapshot,
+  mergeActivityNewestFirst,
   evictExpiredPending,
   reconcilePending,
   NATIVE_LYTH_TOKEN_ID,
@@ -979,5 +980,84 @@ describe("isNativeLythTokenId", () => {
   it("treats a real non-zero token id as NOT native", () => {
     expect(isNativeLythTokenId("0x" + "11".repeat(32))).toBe(false);
     expect(isNativeLythTokenId("0xdeadbeef")).toBe(false);
+  });
+});
+
+describe("mergeActivityNewestFirst", () => {
+  const pending = (over: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xp",
+    to: "0x2",
+    amountDecimal: "1",
+    broadcastedAtMs: 1000,
+    broadcastBlockHeight: null,
+    via: "op",
+    ...over,
+  });
+  const confirmed = (over: Partial<TxSendRow> = {}): TxSendRow => ({
+    kind: "tx_send",
+    blockHeight: 100,
+    txIndex: 0,
+    logIndex: 0,
+    counterparty: "0x3",
+    amountDecimal: "1",
+    ...over,
+  });
+  const failed = (over: Record<string, unknown> = {}) =>
+    ({
+      id: "c:0xf",
+      txHash: "0xf",
+      status: "failed",
+      blockNumber: null,
+      kind: "delegate",
+      amountDecimal: "1",
+      counterparty: "0x4",
+      createdAtMs: 2000,
+      read: false,
+      schemaVersion: 0,
+      ...over,
+    }) as Parameters<typeof mergeActivityNewestFirst>[2][number];
+
+  it("interleaves a failed row chronologically instead of pinning it on top", () => {
+    // failed at 23s-ago (block 41269) must sit BELOW a newer pending (7s ago,
+    // not yet anchored) — the bug was failed-always-on-top.
+    const now = 100_000;
+    const out = mergeActivityNewestFirst(
+      [pending({ txHash: "0xnew", broadcastedAtMs: now - 7_000 })],
+      [],
+      [failed({ txHash: "0xold", blockNumber: 41269, createdAtMs: now - 23_000 })],
+    );
+    expect(out.map((i) => (i.tag === "row" ? "pending" : "failed"))).toEqual([
+      "pending",
+      "failed",
+    ]);
+  });
+
+  it("orders by block desc, with unanchored (null-block) rows floating to top", () => {
+    const out = mergeActivityNewestFirst(
+      [pending({ txHash: "0xp", broadcastBlockHeight: null, broadcastedAtMs: 5000 })],
+      [confirmed({ blockHeight: 200 }), confirmed({ blockHeight: 100 })],
+      [failed({ txHash: "0xf", blockNumber: 150, createdAtMs: 1 })],
+    );
+    const blocks = out.map((i) =>
+      i.tag === "row"
+        ? i.row.kind === "pending_tx"
+          ? "pending"
+          : (i.row as TxSendRow).blockHeight
+        : "failed150",
+    );
+    // null-block pending first, then 200, then failed@150, then 100.
+    expect(blocks).toEqual(["pending", 200, "failed150", 100]);
+  });
+
+  it("does not NaN when two rows are both unanchored (Infinity===Infinity → ms tie-break)", () => {
+    const out = mergeActivityNewestFirst(
+      [pending({ txHash: "0xa", broadcastBlockHeight: null, broadcastedAtMs: 10 })],
+      [],
+      [failed({ txHash: "0xb", blockNumber: null, createdAtMs: 20 })],
+    );
+    // Both block=Infinity → newer ms (failed@20) first.
+    expect(out[0]!.tag === "failed").toBe(true);
+    expect(out[1]!.tag === "row").toBe(true);
   });
 });
