@@ -4,6 +4,10 @@
 
 **License:** Apache-2.0 · **Status:** preview (testnet only) · **Stack:** Manifest V3 · React 19 · TypeScript · Vite + `@crxjs/vite-plugin`
 
+## Install
+
+**[Add to your browser — Chrome Web Store →](https://chromewebstore.google.com/detail/hendlkmpghhmhmggjebkpbedncpepkgj)** (Chrome · Brave · Edge). Canonical extension ID `hendlkmpghhmhmggjebkpbedncpepkgj`, publisher **Mono Labs R&D LLC** — verify both before installing. Firefox (AMO) is still planned. Runs against testnet 69420.
+
 ---
 
 ## Status: preview
@@ -11,7 +15,7 @@
 Functional Manifest V3 extension with substantive crypto + EIP-1193 implementation, but not yet production-grade. Set expectations before adopting:
 
 - **Chain target is testnet.** Monolythium mainnet has not launched. Anything you connect to here runs against the public testnet today; mainnet activation is gated on separate protocol milestones.
-- **Not yet on a browser extension store.** No Chrome Web Store listing, no Firefox AMO listing. Until a signed release ships, the only install path is "build from source, load `dist/` as unpacked extension."
+- **Live on the Chrome Web Store** (Chromium browsers) — see [Install](#install) above. Firefox (AMO) is not yet published; for Firefox or development, build from source and load `dist/` as an unpacked extension.
 - **Fallback operator RPCs are placeholders** (`192.0.2.0/24` — IETF TEST-NET-1). The wallet's primary chain-config source is the SDK chain-registry; the bundled `FALLBACK_OPERATORS_2026_05_25` array in `src/background/networks.ts` only kicks in when the registry is unreachable. To override with real RPCs, copy [`examples/operators.json.example`](./examples/operators.json.example) to `examples/operators.json` (gitignored).
 - **SDK comes from npm, pinned exact.** `package.json` pins `@monolythium/core-sdk@0.2.0` (exact, not `^0.2.0`) — the SDK is pre-1.0, semver isn't a stability contract there, and a silent patch upgrade could shift wire-format bytes (vault layout, address derivation). Every wallet release bumps the SDK pin deliberately.
 
