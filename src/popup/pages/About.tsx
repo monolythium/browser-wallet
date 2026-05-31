@@ -751,7 +751,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               },
               { k: "Execution", v: "Rust/RISC-V native" },
               { k: "Whitepaper", v: "v5.0 · May 2026" },
-              { k: "Signing", v: "ML-DSA-65 (FIPS-204)" },
+              { k: "Signing", v: "ML-DSA-65 (FIPS 204)" },
               { k: "Address format", v: "bech32m" },
               { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH)" },
               {
