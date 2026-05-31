@@ -69,8 +69,13 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
           <DRow label="Amount" value={`${record.amountDecimal} LYTH`} />
         )}
         {feeText && <DRow label="Fee" value={feeText} />}
-        <DRow label="To" value={<CopyableAddress addr0x={record.counterparty} />} />
-        {clusterText && <DRow label="Cluster" value={clusterText} />}
+        {clusterText ? (
+          // Delegation tx: the `to` is the delegation module — name the cluster
+          // instead of the bare module address.
+          <DRow label="Cluster" value={clusterText} />
+        ) : (
+          <DRow label="To" value={<CopyableAddress addr0x={record.counterparty} />} />
+        )}
         {showBlock && (
           <DRow
             label="Block"
