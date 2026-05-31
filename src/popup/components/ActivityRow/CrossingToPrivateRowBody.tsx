@@ -46,8 +46,6 @@ export function CrossingToPrivateRowBody({ row }: CrossingToPrivateRowBodyProps)
         <div className="ext-act-row__meta">
           <span>block {row.blockHeight.toLocaleString("en-US")}</span>
           <span>·</span>
-          <span>tx {row.txIndex}</span>
-          <span>·</span>
           <span>crossing</span>
         </div>
       </div>
