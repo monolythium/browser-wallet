@@ -19,6 +19,10 @@ import {
 } from "../shared/constants";
 import { hexLythoshiToLythNumber } from "../shared/native-amount";
 import {
+  activityPendingKey,
+  validatePendingActivityCache,
+} from "../shared/activity";
+import {
   CWS_LISTING_URL,
   STORAGE_KEY_WALLET_UPDATE,
   shouldCheckWalletUpdate,
@@ -195,6 +199,15 @@ const SPRINTNET_FALLBACK: ChainEntry = {
   active: true,
   nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
 };
+
+/** While a broadcast tx is still pending, reconcile this often (ms). The chain
+ *  produces BLS fast blocks well under a second, so a tx is typically included
+ *  within ~1s; poll at 1.5s so a confirm surfaces near the chain's real speed.
+ *  This poll lives at the App level (not the Activity tab) so it runs on EVERY
+ *  screen while the popup is open — a tx sent from Send/Home flips without
+ *  waiting for a tab change or the 30s background alarm. The SW only does the
+ *  heavy reconcile when a pending row exists, so each tick is cheap otherwise. */
+const PENDING_REPOLL_MS = 1_500;
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
@@ -675,6 +688,52 @@ export default function App() {
   useEffect(() => {
     void refreshActivity();
   }, [refreshActivity]);
+
+  // Pending-tx detection — track whether the active (addr, chain) has any
+  // pending row, sourced from the same chrome.storage key the SW writes on
+  // broadcast. Seeded on mount/dep-change + kept live via onChanged so the
+  // poll below starts/stops the instant a pending row appears or terminalizes.
+  const [hasPendingTx, setHasPendingTx] = useState(false);
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) {
+      setHasPendingTx(false);
+      return;
+    }
+    const key = activityPendingKey(acc.addr.toLowerCase(), activeChain.chainId);
+    let cancelled = false;
+    const apply = (raw: unknown) => {
+      if (cancelled) return;
+      const v = validatePendingActivityCache(raw);
+      setHasPendingTx((v?.pending.length ?? 0) > 0);
+    };
+    chrome.storage.local.get([key], (res) => apply(res?.[key]));
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      if (key in changes) apply(changes[key]?.newValue);
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [acc.addr, activeChain.chainId]);
+
+  // App-wide pending reconcile poll — while a pending tx exists, reconcile
+  // every PENDING_REPOLL_MS (firing immediately, no first-tick wait) REGARDLESS
+  // of which screen is open, so the row flips to confirmed/failed at the chain's
+  // real speed even from Send/Home. The Activity tab + notification surfaces
+  // update reactively off the SW's storage writes. Stops when the set empties.
+  useEffect(() => {
+    if (!hasPendingTx) return;
+    void refreshActivity();
+    const id = setInterval(() => {
+      void refreshActivity();
+    }, PENDING_REPOLL_MS);
+    return () => clearInterval(id);
+  }, [hasPendingTx, refreshActivity]);
 
   // Refetch balance when the user lands on Home so in-popup navigations
   // (Send → Home, Networks → Home, etc.) reflect a balance that may have
