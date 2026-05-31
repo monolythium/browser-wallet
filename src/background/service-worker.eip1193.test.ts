@@ -123,6 +123,11 @@ vi.mock("./keystore.js", () => ({
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => vaultExists),
+  hasContainerV4: vi.fn(async () => vaultExists),
+  unlockContainerV4: vi.fn(async () => ({
+    address: DETERMINISTIC_ADDRESS,
+    vaultId: "v1",
+  })),
   getStoredAddressV4: vi.fn(async () => DETERMINISTIC_ADDRESS),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
   isUnlockedV4: vi.fn(() => unlocked),
