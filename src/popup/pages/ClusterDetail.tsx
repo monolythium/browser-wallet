@@ -503,7 +503,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
                   fontSize: 10,
                   flexShrink: 0,
                 }}
-                title="Operator self-bond (V4.1-BOND-0001 5,000 LYTH floor)"
+                title="Operator self-bond (5,000 LYTH chain-enforced floor)"
               >
                 {formatBondLyth(operatorInfo.get(m.operatorId))}
               </span>
