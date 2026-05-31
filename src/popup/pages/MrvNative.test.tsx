@@ -458,7 +458,7 @@ describe("MrvNative", () => {
     );
     expect(pollingHtml).toContain("Receipt status: waiting for inclusion");
     expect(pollingHtml).toContain("eth_getTransactionReceipt");
-    expect(pollingHtml).toContain("Validator finality is not established here");
+    expect(pollingHtml).toContain("Anchor-level (BLS) finality is not established here");
 
     const includedHtml = renderToStaticMarkup(
       <MrvNativePlanPreview
@@ -722,7 +722,7 @@ describe("MrvNative", () => {
       "Snapshot archive signature digest material is present",
     );
     expect(digestArchiveHtml).toContain(
-      "not validator finality, and archive signature verification is reported separately",
+      "not anchor-level (BLS) finality, and archive signature verification is reported separately",
     );
     expect(digestArchiveHtml).toContain("Archive signature digest");
     expect(digestArchiveHtml).toContain(ARCHIVE_SIGNATURE_DIGEST);
