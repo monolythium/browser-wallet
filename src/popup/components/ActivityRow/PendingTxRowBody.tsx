@@ -7,6 +7,7 @@
 // rotating amber ring indicator.
 
 import { Icon } from "../../Icon.js";
+import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { renderCounterparty } from "../ActivityRow.js";
 import type { PendingTxRow } from "../../../shared/activity.js";
 import type { NameLabel } from "../../../shared/name-resolution.js";
@@ -36,6 +37,8 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           {renderCounterparty(row.to, counterpartyLabel)}
         </div>
         <div className="ext-act-row__meta">
+          <span>{txTypeLabel(row)}</span>
+          <span>·</span>
           <span>{relativeMs(row.broadcastedAtMs, Date.now())}</span>
           <span>·</span>
           <span>via {row.via}</span>

@@ -1,4 +1,5 @@
 import { Icon } from "../../Icon.js";
+import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { UndelegateRow } from "../../../shared/activity.js";
 import { formatWeightBpsPercent } from "../../../shared/staking.js";
 
@@ -21,6 +22,8 @@ export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
           Withdrew delegation from {clusterName(row.cluster)}
         </div>
         <div className="ext-act-row__meta">
+          <span>{txTypeLabel(row)}</span>
+          <span>·</span>
           <span>block {row.blockHeight.toLocaleString("en-US")}</span>
         </div>
       </div>
