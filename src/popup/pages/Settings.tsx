@@ -805,7 +805,7 @@ export function Settings({
             }}
           >
             Preview MRV native contract deploy and call transaction plans with
-            v4.1 execution-unit and lythoshi fee fields.
+            execution-unit and lythoshi fee fields.
           </div>
           <button
             onClick={onOpenMrvNative}
