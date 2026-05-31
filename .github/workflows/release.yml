@@ -123,44 +123,6 @@ jobs:
             "https://www.googleapis.com/chromewebstore/v1.1/items/$EXTENSION_ID/publish"
           rm /tmp/sa.json
 
-  publish-firefox:
-    needs: build
-    # Disabled — Firefox AMO requires `browser_specific_settings.gecko.id`
-    # in manifest.json, which we haven't allocated yet. Re-enable by
-    # removing this `if: false` once the AMO ID lands.
-    if: false
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: browser-wallet-zip
-
-      - name: Install web-ext + sign
-        env:
-          AMO_JWT_ISSUER: ${{ secrets.FIREFOX_AMO_JWT_ISSUER }}
-          AMO_JWT_SECRET: ${{ secrets.FIREFOX_AMO_JWT_SECRET }}
-        run: |
-          npm install -g web-ext
-          mkdir unpacked
-          unzip -q browser-wallet-*.zip -d unpacked
-          cd unpacked
-          web-ext sign \
-            --api-key "$AMO_JWT_ISSUER" \
-            --api-secret "$AMO_JWT_SECRET" \
-            --channel listed \
-            --artifacts-dir ../signed
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: firefox-signed-xpi
-          path: signed/*.xpi
-
   sign:
     needs: build
     runs-on: ubuntu-latest
