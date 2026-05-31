@@ -74,6 +74,10 @@ export interface RecordNotificationInput {
    *  confirmed self-paid txs with a non-zero fee (from
    *  `lyth_nativeReceipt.fee.total_lythoshi`). Omitted otherwise. */
   feeLythoshi?: string;
+  /** Cluster the delegation tx targeted (numeric id + optional directory
+   *  name), threaded from the pending row. Omitted on non-delegation kinds. */
+  clusterId?: number;
+  clusterName?: string;
   /** GAP-N1 / polish C3 — presence at observe-time. `true` ⇒ a wallet
    *  surface was open when this record was created ⇒ store it already-read
    *  (no badge bump). Omitted/`false` ⇒ unread (the historical default).
@@ -120,6 +124,8 @@ export async function recordNotification(
       read: input.read ?? false,
       schemaVersion: 0,
       ...(input.feeLythoshi !== undefined ? { feeLythoshi: input.feeLythoshi } : {}),
+      ...(input.clusterId !== undefined ? { clusterId: input.clusterId } : {}),
+      ...(input.clusterName !== undefined ? { clusterName: input.clusterName } : {}),
     };
 
     const historyKey = notificationsHistoryKey(

@@ -2378,6 +2378,55 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(withoutOp).toBeDefined();
     expect(withoutOp).toEqual(withOp);
   });
+
+  it("cluster metadata rides through to the pending row; malformed values dropped", async () => {
+    storageLocal = {};
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      opKind: "delegate",
+      clusterId: 1,
+      clusterName: "halcyon.cluster.mono",
+    });
+    const persisted = storageLocal[PENDING_KEY] as {
+      pending: Array<{ clusterId?: number; clusterName?: string }>;
+    };
+    expect(persisted.pending[0]?.clusterId).toBe(1);
+    expect(persisted.pending[0]?.clusterName).toBe("halcyon.cluster.mono");
+
+    // Malformed cluster fields are dropped (defense in depth).
+    storageLocal = {};
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      clusterId: "nope" as unknown as number,
+      clusterName: 42 as unknown as string,
+    });
+    const p2 = storageLocal[PENDING_KEY] as {
+      pending: Array<Record<string, unknown>>;
+    };
+    expect("clusterId" in p2.pending[0]!).toBe(false);
+    expect("clusterName" in p2.pending[0]!).toBe(false);
+  });
+
+  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitEncryptedMlDsaTx", async () => {
+    submitMlDsaCalls.length = 0;
+    storageLocal = {};
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      opKind: "delegate",
+      clusterId: 3,
+      clusterName: "polar.cluster.mono",
+    });
+    const arg = submitMlDsaCalls[0]!;
+    expect(arg).toBeDefined();
+    expect("clusterId" in arg).toBe(false);
+    expect("clusterName" in arg).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

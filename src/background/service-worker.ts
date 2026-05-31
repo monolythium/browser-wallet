@@ -4326,6 +4326,9 @@ async function persistPendingRowBackground(args: {
    *  Pure pending-row metadata; the upstream handler ensures it never
    *  reaches `submitEncryptedMlDsaTx`. */
   opKind?: TxOpKind;
+  /** Cluster metadata for delegation sends — same metadata-only invariant. */
+  clusterId?: number;
+  clusterName?: string;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -4360,6 +4363,8 @@ async function persistPendingRowBackground(args: {
       broadcastBlockHeight,
       via: args.via,
       ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
+      ...(args.clusterId !== undefined ? { clusterId: args.clusterId } : {}),
+      ...(args.clusterName !== undefined ? { clusterName: args.clusterName } : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -4630,6 +4635,10 @@ export async function pollPendingAndNotify(): Promise<{
           counterparty: t.row.to,
           read: surfaceOpen,
           ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+          ...(t.row.clusterId !== undefined ? { clusterId: t.row.clusterId } : {}),
+          ...(t.row.clusterName !== undefined
+            ? { clusterName: t.row.clusterName }
+            : {}),
         });
         if (result.added && result.record !== null) {
           await fireOsNotification(result.record, { unlocked });
@@ -7119,6 +7128,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   counterparty: row.to,
                   read: surfaceOpen,
                   ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+                  ...(row.clusterId !== undefined ? { clusterId: row.clusterId } : {}),
+                  ...(row.clusterName !== undefined
+                    ? { clusterName: row.clusterName }
+                    : {}),
                 });
                 // Phase 2 — fire OS toast ONLY when this snapshot produced
                 // a NEW record (the dedupe set blocks already-notified
@@ -7151,6 +7164,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   counterparty: t.row.to,
                   read: surfaceOpen,
                   ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+                  ...(t.row.clusterId !== undefined
+                    ? { clusterId: t.row.clusterId }
+                    : {}),
+                  ...(t.row.clusterName !== undefined
+                    ? { clusterName: t.row.clusterName }
+                    : {}),
                 });
                 if (result.added && result.record !== null) {
                   anyAdded = true;
@@ -8219,6 +8238,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // NotificationRecord with a friendly title. An unknown literal
         // is coerced to the "contract_call" fallback (defense in depth).
         opKind?: unknown;
+        // Cluster metadata for delegation sends — METADATA ONLY (same as
+        // opKind): rides only into the pending row, never the signer.
+        clusterId?: unknown;
+        clusterName?: unknown;
         // SDK 0.3.11 optional-encryption toggle. DEFAULT (absent /
         // false) = the PLAINTEXT `mesh_submitTx` path, which is the
         // functional inclusion path on the live chain
@@ -8261,6 +8284,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           : isTxOpKind(p.opKind)
             ? p.opKind
             : "contract_call";
+      // Cluster metadata — METADATA ONLY (never reaches the signer). Sanitize:
+      // a finite number id + a non-empty string name; anything else is dropped.
+      const acceptedClusterId =
+        typeof p.clusterId === "number" && Number.isFinite(p.clusterId)
+          ? p.clusterId
+          : undefined;
+      const acceptedClusterName =
+        typeof p.clusterName === "string" && p.clusterName.length > 0
+          ? p.clusterName
+          : undefined;
       let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
       try {
         mempoolClass = mempoolClassOverride(p);
@@ -8330,6 +8363,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // it travels straight from the popup → here → the pending-row
           // record for the notifications hook to read back.
           ...(acceptedOpKind !== undefined ? { opKind: acceptedOpKind } : {}),
+          ...(acceptedClusterId !== undefined ? { clusterId: acceptedClusterId } : {}),
+          ...(acceptedClusterName !== undefined
+            ? { clusterName: acceptedClusterName }
+            : {}),
         });
         return { ok: true, txHash, via };
       } catch (e) {
