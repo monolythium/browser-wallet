@@ -362,7 +362,6 @@ vi.mock("./keystore-mldsa.js", () => ({
     address: DETERMINISTIC_ADDRESS,
     vaultId: "v1",
   })),
-  getStoredAddressV4: vi.fn(async () => DETERMINISTIC_ADDRESS),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
   isUnlockedV4: vi.fn(() => unlocked),
   unlockV4: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
@@ -638,6 +637,36 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// keystore-status — locked address privacy (top-tier)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("keystore-status address privacy", () => {
+  it("returns the active address when unlocked", async () => {
+    unlocked = true;
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-status" })) as {
+      hasVault: boolean;
+      unlocked: boolean;
+      address: string | null;
+    };
+    expect(r.hasVault).toBe(true);
+    expect(r.unlocked).toBe(true);
+    expect(r.address).toBe(DETERMINISTIC_ADDRESS);
+  });
+
+  it("returns a null address when locked (never resolves the address while locked)", async () => {
+    unlocked = false;
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-status" })) as {
+      hasVault: boolean;
+      unlocked: boolean;
+      address: string | null;
+    };
+    expect(r.hasVault).toBe(true);
+    expect(r.unlocked).toBe(false);
+    expect(r.address).toBeNull();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

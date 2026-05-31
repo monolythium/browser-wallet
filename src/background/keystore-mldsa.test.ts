@@ -327,6 +327,8 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
       // active vault's backend is reloaded.
       ks.lockV4();
       expect(ks.isUnlockedV4()).toBe(false);
+      // Top-tier address privacy: no address is resolvable while locked.
+      expect(ks.getUnlockedAddressV4()).toBeNull();
       const r = await ks.unlockContainerV4(password);
       expect(r.address).toBe(address);
       expect(typeof r.vaultId).toBe("string");
