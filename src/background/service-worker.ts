@@ -7161,7 +7161,24 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const nextCache = mergeIndexerSnapshot({ activity, delegation }, now);
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
       const { kept, terminal: terminalByHash } = await dropConfirmedPendingByHash(reconciled);
-      const nextPending = evictExpiredPending(kept, now);
+      // Indexer-lag bridge (open-surface display path). A tx confirmed via the
+      // real-time receipt is dropped from `kept`, but the indexer's success
+      // stream usually hasn't surfaced its canonical row in THIS snapshot yet —
+      // the chain includes the tx a beat before the indexer writes the activity
+      // row, and since reconcilePending ran first without matching it, the
+      // confirmed row is NOT in nextCache. Dropping it now would make the tx
+      // VANISH (pending gone, confirmed not yet indexed) until a much later
+      // refresh — exactly the "sent but not shown in Activity" report. Keep
+      // confirmed rows in the pending list so the tx stays visible AND the
+      // App-level poll keeps running; a later tick's reconcilePending drops the
+      // row the instant the indexer surfaces the canonical confirmed row (which
+      // then renders — no duplicate, no gap). Failed rows are never in the
+      // success-only indexer stream, so they are NOT bridged: they drop here and
+      // surface via the notification-history failed-row path.
+      const bridgedConfirmed = terminalByHash
+        .filter((t) => t.status === "confirmed")
+        .map((t) => t.row);
+      const nextPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
       // Phase 1 notifications hook — post-write microtask. The hook records
       // one notification per row that just reached a TERMINAL state (the
