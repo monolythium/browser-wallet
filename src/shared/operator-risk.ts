@@ -191,7 +191,7 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
     label: "Untrusted genesis",
     body:
       "Operator's block-0 hash doesn't match the wallet's pinned " +
-      "Sprintnet genesis. The wallet's RPC dispatcher excludes operators " +
+      "Monolythium Testnet genesis. The wallet's RPC dispatcher excludes operators " +
       "with mismatched genesis (GAP #11 orphan-fork defense).",
   },
   {
