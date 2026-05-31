@@ -49,6 +49,7 @@ export const NOTIFICATION_HISTORY_CAP = 50;
  *  Phase-1 records on disk + any caller that omits `opKind`). */
 export type TxOpKind =
   | "send"
+  | "receive"
   | "delegate"
   | "undelegate"
   | "redelegate"
@@ -65,6 +66,7 @@ export type TxOpKind =
 export function isTxOpKind(v: unknown): v is TxOpKind {
   return (
     v === "send" ||
+    v === "receive" ||
     v === "delegate" ||
     v === "undelegate" ||
     v === "redelegate" ||
@@ -203,6 +205,9 @@ export const NOTIFICATION_LABELS: Record<
   { confirmed: string; failed: string }
 > = {
   send: { confirmed: "Sent", failed: "Send failed" },
+  // Incoming transfers only fire on confirmation; the "failed" string is unused
+  // (an inbound transfer the wallet didn't send has no failed state for us).
+  receive: { confirmed: "Received", failed: "Received" },
   delegate: { confirmed: "Staked", failed: "Stake failed" },
   undelegate: { confirmed: "Unstaked", failed: "Unstake failed" },
   redelegate: { confirmed: "Restaked", failed: "Restake failed" },
