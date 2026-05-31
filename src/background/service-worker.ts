@@ -61,7 +61,7 @@ import {
   type AddChainSpec,
   type TypedDataEnvelope,
 } from "./approvals.js";
-import { computeTypedDataDigest } from "./keystore.js";
+import { computeTypedDataDigest } from "./typed-data.js";
 import {
   isUnlockedV4,
   getUnlockedAddressV4,
