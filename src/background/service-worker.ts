@@ -4414,10 +4414,11 @@ export interface TerminalPendingTx {
  *     PENDING_TTL_MS backstop remain the safety nets, and we never synthesize
  *     a verdict.
  *   - `terminal`: rows that the chain explicitly resolved this round. A
- *     `lyth_txStatus="found"` fast-path is tagged "confirmed" (the indexer
- *     surfaces only included entries; if a later receipt fetch disagrees, the
- *     next snapshot supersedes — we still never fabricate). The
- *     `eth_getTransactionReceipt` branch reuses the b4d6101 Sprintnet
+ *     `lyth_txStatus="found"` means INCLUDED (not necessarily successful — a
+ *     reverted tx is still "found"), so the receipt's status bit is read to
+ *     tag confirmed vs failed; only when no receipt is available does the
+ *     indexer's inclusion stand as confirmed (we still never fabricate a
+ *     failure). The `eth_getTransactionReceipt` branch reuses the b4d6101 Sprintnet
  *     normalizer (numeric `status` 0/1 OR hex string; `blockNumber ??
  *     block_number`, numeric OR hex string) — the operators' actual receipt
  *     shape, not the EVM-standard hex-string shape.
@@ -4447,9 +4448,38 @@ async function dropConfirmedPendingByHash(
         opts,
       );
       if (result != null && result.status === "found") {
-        // lyth_txStatus reports inclusion but not the status bit; the
-        // indexer surfaces only confirmed entries, so treat as confirmed.
-        terminal.push({ row: p, status: "confirmed", blockNumber: null });
+        // lyth_txStatus reports INCLUSION, not success — a reverted (failed)
+        // tx is still "found". Read the receipt for the authoritative status
+        // bit so a failed tx isn't mislabeled "confirmed" (which would toast
+        // e.g. "Staked" for a reverted stake and never surface it as failed).
+        // Receipt unavailable / unparseable → the indexer's inclusion stands
+        // as confirmed (the one residual assumption; a not-yet-available
+        // receipt can't reveal a revert).
+        let status: "confirmed" | "failed" = "confirmed";
+        let blockNumber: number | null = null;
+        try {
+          const receipt = await sprintnetJsonRpc<{
+            status?: number | string;
+            blockNumber?: unknown;
+            block_number?: unknown;
+          } | null>("eth_getTransactionReceipt", [p.txHash], opts);
+          if (receipt.result != null) {
+            const rawBn =
+              receipt.result.blockNumber ?? receipt.result.block_number;
+            const parsedBn =
+              typeof rawBn === "number"
+                ? rawBn
+                : typeof rawBn === "string"
+                  ? Number.parseInt(rawBn, 16)
+                  : NaN;
+            blockNumber = Number.isFinite(parsedBn) ? parsedBn : null;
+            const rawStatus = receipt.result.status;
+            if (rawStatus === 0 || rawStatus === "0x0") status = "failed";
+          }
+        } catch {
+          // Receipt unavailable — inclusion stands as confirmed.
+        }
+        terminal.push({ row: p, status, blockNumber });
         continue;
       }
       const receipt = await sprintnetJsonRpc<{
