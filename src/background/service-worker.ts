@@ -249,6 +249,7 @@ import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   submitEncryptedMlDsaTx,
+  submitPlaintextMlDsaTx,
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
   type EthSendTxFields,
@@ -2038,6 +2039,31 @@ async function suggestFee(chainIdHex: string): Promise<{
     maxFeePerGas: gasPriceHex,
     gasLimit: null,
   };
+}
+
+/**
+ * SDK 0.3.11 sane-fee invariant: the priority tip must never exceed the
+ * max execution-unit price (`priority_tip <= max_execution_unit_price`).
+ * A tip above the ceiling is meaningless — the chain re-clamps it, which
+ * would desync the fee the wallet displays from the fee actually paid.
+ * Clamp at the wallet boundary so the two agree. Both inputs are
+ * `0x`-prefixed hex quantities; the smaller is returned verbatim so we
+ * never widen the user's intended ceiling.
+ */
+function clampPriorityTipToMaxFee(
+  priorityTipHex: string,
+  maxFeeHex: string,
+): string {
+  try {
+    const tip = BigInt(priorityTipHex);
+    const cap = BigInt(maxFeeHex);
+    return tip > cap ? maxFeeHex : priorityTipHex;
+  } catch {
+    // Non-hex input shouldn't reach here (suggestFee returns hex), but if
+    // it does, fall back to the unmodified tip rather than throwing on the
+    // hot send path.
+    return priorityTipHex;
+  }
 }
 
 // ---- Passkey IPC marshalling ----
@@ -8115,6 +8141,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // NotificationRecord with a friendly title. An unknown literal
         // is coerced to the "contract_call" fallback (defense in depth).
         opKind?: unknown;
+        // SDK 0.3.11 optional-encryption toggle. DEFAULT (absent /
+        // false) = the PLAINTEXT `mesh_submitTx` path, which is the
+        // functional inclusion path on the live chain
+        // (`encrypted_mempool_required = false`). `true` engages the
+        // threshold-encrypted `lyth_submitEncrypted` pipeline, which is
+        // NOT live yet (fast-follow) — the popup gates it behind a
+        // default-off, disabled PREVIEW toggle so a user cannot submit
+        // an encrypted tx that will not confirm. Anything non-boolean is
+        // treated as the safe plaintext default.
+        private?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -8172,7 +8208,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // their caller-supplied estimate because the hint is sized for native
         // transfers only.
         const gasHex = p.gasLimitHex ?? fee.gasLimit ?? "0x5208";
-        const { txHash, via } = await submitEncryptedMlDsaTx({
+        // SDK 0.3.11 sane fee defaults: the priority tip never exceeds the
+        // max execution-unit price the wallet is willing to pay. A tip above
+        // the ceiling would be silently re-clamped chain-side; clamp here so
+        // the displayed fee and the submitted fee agree.
+        const maxPriorityFeePerGas = clampPriorityTipToMaxFee(
+          fee.maxPriorityFeePerGas,
+          fee.maxFeePerGas,
+        );
+        const txReq: EthSendTxFields = {
           to: p.to,
           value: p.valueWeiHex,
           ...(p.data !== undefined ? { data: p.data } : {}),
@@ -8180,9 +8224,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           gas: gasHex,
           nonce: nonceHex,
           maxFeePerGas: fee.maxFeePerGas,
-          maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+          maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
-        });
+        };
+        // DEFAULT = plaintext (`mesh_submitTx`). Only the explicit
+        // `private === true` opt-in engages the not-yet-live encrypted
+        // pipeline; the popup keeps that toggle default-off + disabled.
+        const usePrivate = p.private === true;
+        const { txHash, via } = usePrivate
+          ? await submitEncryptedMlDsaTx(txReq)
+          : await submitPlaintextMlDsaTx(txReq);
         // Phase 4.4 — fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are

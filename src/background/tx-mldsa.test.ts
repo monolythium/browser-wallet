@@ -34,9 +34,19 @@ const CANONICAL_TX_HASH =
 const ENVELOPE_SUBMISSION_HASH =
   "0x7bcde98eb1820654644c07e33627f772ba9df56b189508af97c26c82268d1ba4";
 
+const PLAINTEXT_SIGNED_TX_WIRE_HEX = "0xcafef00d";
+
 vi.mock("@monolythium/core-sdk/crypto", () => ({
   buildEncryptedSubmission: vi.fn(async () => ({
     envelopeWireHex: "0xdeadbeef",
+    innerSighashHex: "0xsighash",
+    innerTxHashHex: CANONICAL_TX_HASH,
+    innerWireBytes: 4,
+  })),
+  // SDK 0.3.11 plaintext builder — signs over the canonical sighash and
+  // returns the bincode `SignedTransaction` wire bytes + canonical hashes.
+  buildPlaintextSubmission: vi.fn(() => ({
+    signedTxWireHex: PLAINTEXT_SIGNED_TX_WIRE_HEX,
     innerSighashHex: "0xsighash",
     innerTxHashHex: CANONICAL_TX_HASH,
     innerWireBytes: 4,
@@ -51,6 +61,8 @@ import {
   sprintnetJsonRpc,
   submitEncryptedMlDsaTx,
   broadcastEncryptedEnvelope,
+  submitPlaintextMlDsaTx,
+  broadcastPlaintextTransaction,
 } from "./tx-mldsa.js";
 
 describe("sprintnetJsonRpc — method/via/code stamping", () => {
@@ -212,5 +224,65 @@ describe("submitEncryptedMlDsaTx — canonical hash threading (C1)", () => {
     const b = await broadcastEncryptedEnvelope("0xdeadbeef");
     expect(b.submissionHash).toBe(ENVELOPE_SUBMISSION_HASH);
     expect(b.via).toBe("operator-test");
+  });
+});
+
+describe("submitPlaintextMlDsaTx — default plaintext path (mesh_submitTx)", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  // The plaintext path makes exactly one RPC: mesh_submitTx, which echoes
+  // the canonical 32-byte native tx hash on admission. We capture the
+  // method so the test proves the DEFAULT submit hits the plaintext API
+  // (NOT lyth_submitEncrypted) and validates the echoed hash.
+  function installPlaintextFetch(echoHash: string): { methods: string[] } {
+    const methods: string[] = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        method?: string;
+      };
+      if (typeof body.method === "string") methods.push(body.method);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jsonrpc: "2.0", id: 1, result: echoHash }),
+      };
+    }) as unknown as typeof fetch;
+    return { methods };
+  }
+
+  it("submits via mesh_submitTx and returns the node-validated canonical tx hash", async () => {
+    const captured = installPlaintextFetch(CANONICAL_TX_HASH);
+    const r = await submitPlaintextMlDsaTx({
+      to: "0x0102030405060708090a0b0c0d0e0f1011121314",
+      value: "0xf4240",
+      gas: "0x7530",
+      gasPrice: "0x7d0",
+      nonce: "0x0",
+      chainIdHex: "0x10F2C",
+    });
+    expect(r.txHash).toBe(CANONICAL_TX_HASH);
+    expect(r.via).toBe("operator-test");
+    // The DEFAULT path is plaintext: mesh_submitTx, never lyth_submitEncrypted.
+    expect(captured.methods).toContain("mesh_submitTx");
+    expect(captured.methods).not.toContain("lyth_submitEncrypted");
+  });
+
+  it("rejects loud when the node echoes a hash that doesn't match the locally computed one", async () => {
+    const wrong =
+      "0x" + "ab".repeat(32); // 32 bytes but not CANONICAL_TX_HASH
+    installPlaintextFetch(wrong);
+    await expect(broadcastPlaintextTransaction("0xcafe", CANONICAL_TX_HASH)).rejects.toThrow(
+      /does not match locally computed/,
+    );
+  });
+
+  it("rejects a non-canonical (non-32-byte) echoed hash", async () => {
+    installPlaintextFetch("0x1234");
+    await expect(broadcastPlaintextTransaction("0xcafe", CANONICAL_TX_HASH)).rejects.toThrow(
+      /non-canonical tx hash/,
+    );
   });
 });

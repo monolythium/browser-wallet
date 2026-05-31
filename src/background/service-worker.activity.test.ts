@@ -126,7 +126,28 @@ vi.mock("./tx-mldsa.js", () => ({
     if (submitFailure !== null) {
       throw submitFailure;
     }
-    return { txHash: SUBMITTED_TX_HASH, via: "mock-operator" };
+    return {
+      txHash: SUBMITTED_TX_HASH,
+      submissionHash: SUBMITTED_TX_HASH,
+      via: "mock-operator",
+      innerSighashHex: "0x" + "b".repeat(64),
+    };
+  }),
+  // SDK 0.3.11 DEFAULT path. `wallet-send-tx` routes here unless the
+  // caller opts into the not-yet-live encrypted path (`private: true`).
+  // It feeds the SAME `submitMlDsaCalls` capture so the metadata-only
+  // invariant (`opKind` never reaches the signer) and the arg-shape
+  // assertions hold against whichever path the default is.
+  submitPlaintextMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
+    submitMlDsaCalls.push(args);
+    if (submitFailure !== null) {
+      throw submitFailure;
+    }
+    return {
+      txHash: SUBMITTED_TX_HASH,
+      via: "mock-operator",
+      innerSighashHex: "0x" + "b".repeat(64),
+    };
   }),
 }));
 
@@ -420,7 +441,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
 
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import { ALARM_NOTIF_POLL } from "../shared/constants.js";
-import { submitEncryptedMlDsaTx } from "./tx-mldsa.js";
+import { submitEncryptedMlDsaTx, submitPlaintextMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -2140,7 +2161,9 @@ describe("wallet-send-tx pending-row prepend", () => {
       },
     })) as { ok: true; txHash: string };
     expect(r.ok).toBe(true);
-    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+    // DEFAULT submit = PLAINTEXT (`submitPlaintextMlDsaTx`). No `private`
+    // flag in the payload ⇒ the encrypted path must NOT be engaged.
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
       to: "0x0000000000000000000000000000000000001001",
       value: "0x0",
       data: "0x2468786f" + "00".repeat(192),
@@ -2151,6 +2174,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       maxPriorityFeePerGas: "0x2540be400",
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     });
+    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("fire-and-forget timing: send-tx reply resolves BEFORE pending storage write completes", async () => {
