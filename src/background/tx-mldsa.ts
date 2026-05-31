@@ -230,7 +230,7 @@ export async function sprintnetMaxBalanceConsensus(
 ): Promise<BalanceConsensusResult> {
   const operators = getActiveOperators();
   if (operators.length === 0) {
-    throw new Error("no Sprintnet operators configured");
+    throw new Error("no Monolythium Testnet operators configured");
   }
 
   const probes = operators.map(async (op) => {
@@ -308,7 +308,7 @@ export async function sprintnetMaxBalanceConsensus(
   if (contributing.length === 0) {
     const summary = failing.map((f) => `${f.name}: ${f.reason}`).join("; ");
     throw new Error(
-      `all ${operators.length} Sprintnet operators failed eth_getBalance: ${summary}`,
+      `all ${operators.length} Monolythium Testnet operators failed eth_getBalance: ${summary}`,
     );
   }
 

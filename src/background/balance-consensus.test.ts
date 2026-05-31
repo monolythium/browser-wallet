@@ -145,7 +145,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-c.test": async () => ({ ok: false, status: 503, json: async () => ({}) }),
     });
     await expect(sprintnetMaxBalanceConsensus("0xabc")).rejects.toThrow(
-      /all 3 Sprintnet operators failed/,
+      /all 3 Monolythium Testnet operators failed/,
     );
   });
 
