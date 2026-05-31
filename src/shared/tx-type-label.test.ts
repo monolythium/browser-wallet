@@ -56,6 +56,7 @@ describe("txTypeLabel", () => {
 describe("txTypeLabelForOpKind", () => {
   it("maps every op kind to a friendly noun", () => {
     expect(txTypeLabelForOpKind("send")).toBe("Outgoing transfer");
+    expect(txTypeLabelForOpKind("receive")).toBe("Incoming transfer");
     expect(txTypeLabelForOpKind("undelegate")).toBe("Unstake");
     expect(txTypeLabelForOpKind("redelegate")).toBe("Restake");
     expect(txTypeLabelForOpKind("complete-redemption")).toBe("Redemption");
