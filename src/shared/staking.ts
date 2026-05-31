@@ -37,6 +37,20 @@ export function formatWeightBpsPercent(bps: number | null): string {
   return `${(bps / 100).toFixed(2)}%`;
 }
 
+/** Display label for a delegation row's cluster. Returns the real
+ *  `*.cluster.mono` name when one was captured at send time (threaded onto the
+ *  confirmed row via `applyCapturedClusterNames`), otherwise an honest
+ *  `Cluster #<id>` using the RAW numeric id. NEVER fabricates a name: the
+ *  chain/indexer ships no cluster name (§C — `cluster` is a numeric id only;
+ *  no `lyth_resolveName` / `lyth_clusterName` reader and no `monok1` cluster
+ *  address in mono-core), so an indexer-sourced (non-originated) stake honestly
+ *  shows `Cluster #<id>` until a chain name source exists. Mirrors the
+ *  NotificationRow / NotificationDetail real-name-or-#id treatment. */
+export function clusterLabel(cluster: number, clusterName?: string | null): string {
+  if (typeof clusterName === "string" && clusterName.length > 0) return clusterName;
+  return `Cluster #${cluster}`;
+}
+
 /** Cluster directory row. Mirrors SDK `ClusterDirectoryEntryResponse` + the
  *  entity flag pulled in via `lyth_getClusterEntity` (so a single popup-
  *  visible cluster card carries the Foundation / community badge per §30.5
