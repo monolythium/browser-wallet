@@ -18,6 +18,7 @@ import {
   mapAddressActivityToRows,
   delegationKeySet,
   mergeIndexerSnapshot,
+  applyCapturedClusterNames,
   mergeActivityNewestFirst,
   evictExpiredPending,
   reconcilePending,
@@ -182,6 +183,49 @@ describe("validateActivityRow", () => {
     const undel = { ...del, kind: "undelegate" };
     expect(validateActivityRow(del)).toEqual(del);
     expect(validateActivityRow(undel)).toEqual(undel);
+  });
+
+  it("round-trips an optional clusterName on delegate / undelegate / redelegate rows", () => {
+    const del = {
+      kind: "delegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 0,
+      weightBps: 1234,
+      clusterName: "halcyon.cluster.mono",
+    };
+    expect(validateActivityRow(del)).toEqual(del);
+    const redel = {
+      kind: "redelegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 3,
+      toCluster: 9,
+      weightBps: 500,
+      clusterName: "salt.cluster.mono",
+    };
+    expect(validateActivityRow(redel)).toEqual(redel);
+  });
+
+  it("drops a malformed/empty clusterName rather than rejecting the delegation row", () => {
+    const bad = {
+      kind: "delegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 0,
+      weightBps: 1234,
+      clusterName: "",
+    };
+    const got = validateActivityRow(bad);
+    expect(got).not.toBeNull();
+    expect("clusterName" in (got as object)).toBe(false);
+    const badType = { ...bad, clusterName: 42 as unknown as string };
+    const got2 = validateActivityRow(badType);
+    expect(got2).not.toBeNull();
+    expect("clusterName" in (got2 as object)).toBe(false);
   });
 
   it("accepts delegate with null weightBps (activity-stream fallback)", () => {
@@ -389,6 +433,85 @@ describe("mapDelegationHistoryToRows", () => {
   it("drops unknown kinds (forward-compat)", () => {
     const rows = mapDelegationHistoryToRows([makeDel({ kind: "rebalanced" })]);
     expect(rows).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// applyCapturedClusterNames — thread the send-time cluster name onto the
+// confirmed indexer row (the indexer carries only the numeric id, §C).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("applyCapturedClusterNames", () => {
+  const delRow = (over: Partial<DelegateRow> = {}): DelegateRow => ({
+    kind: "delegate",
+    blockHeight: 100,
+    txIndex: 2,
+    logIndex: 0,
+    cluster: 0,
+    weightBps: 5000,
+    ...over,
+  });
+  const pendingNamed = (over: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xdead",
+    to: "0x100a",
+    amountDecimal: "1",
+    broadcastedAtMs: 1,
+    broadcastBlockHeight: 100,
+    via: "operator-1",
+    confirmedBlockHeight: 100,
+    confirmedTxIndex: 2,
+    clusterName: "halcyon.cluster.mono",
+    clusterId: 0,
+    ...over,
+  });
+
+  it("threads the captured name from a bridged pending row onto the confirmed delegate row (cluster 0)", () => {
+    const out = applyCapturedClusterNames([delRow({ cluster: 0 })], {
+      pending: [pendingNamed()],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBe("halcyon.cluster.mono");
+    expect((out[0] as DelegateRow).cluster).toBe(0);
+  });
+
+  it("keeps the name sticky from prevConfirmed after the pending row is gone", () => {
+    const prev = [delRow({ clusterName: "salt.cluster.mono" })];
+    const out = applyCapturedClusterNames([delRow()], { confirmed: prev });
+    expect((out[0] as DelegateRow).clusterName).toBe("salt.cluster.mono");
+  });
+
+  it("prefers the already-named prevConfirmed copy over a pending capture", () => {
+    const out = applyCapturedClusterNames([delRow()], {
+      confirmed: [delRow({ clusterName: "polar.cluster.mono" })],
+      pending: [pendingNamed({ clusterName: "halcyon.cluster.mono" })],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBe("polar.cluster.mono");
+  });
+
+  it("leaves a row WITHOUT a matching source unnamed (honest #id fallback at render)", () => {
+    const out = applyCapturedClusterNames([delRow({ cluster: 0 })], {
+      pending: [pendingNamed({ confirmedTxIndex: 99 })], // slot mismatch
+    });
+    expect((out[0] as DelegateRow).clusterName).toBeUndefined();
+  });
+
+  it("never overwrites an existing clusterName", () => {
+    const out = applyCapturedClusterNames([delRow({ clusterName: "real.cluster.mono" })], {
+      pending: [pendingNamed({ clusterName: "other.cluster.mono" })],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBe("real.cluster.mono");
+  });
+
+  it("matches by exact (blockHeight, txIndex) slot, not by cluster id", () => {
+    const out = applyCapturedClusterNames([delRow({ blockHeight: 200 })], {
+      pending: [pendingNamed({ confirmedBlockHeight: 999 })],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBeUndefined();
+  });
+
+  it("is a no-op when no prior sources are supplied", () => {
+    const rows = [delRow()];
+    expect(applyCapturedClusterNames(rows, {})).toBe(rows);
   });
 });
 
@@ -803,6 +926,70 @@ describe("mergeIndexerSnapshot", () => {
     const r = mergeIndexerSnapshot({ activity: [], delegation: [] }, 1_700_000_000_000);
     expect(r.confirmed).toEqual([]);
     expect(r.lastFetchedAtMs).toBe(1_700_000_000_000);
+  });
+
+  it("threads a captured cluster name (from prior.pending) onto the confirmed delegate row; leaves an un-sourced row unnamed", () => {
+    const r = mergeIndexerSnapshot(
+      {
+        activity: [],
+        delegation: [
+          {
+            blockHeight: 150,
+            txIndex: 2,
+            logIndex: 0,
+            wallet: "0xself",
+            cluster: 0, // the real, 0-indexed cluster the user delegated to
+            toCluster: null,
+            kind: "delegated",
+            weightBps: 5000,
+            walletTotalBps: null,
+          },
+        ],
+      },
+      1,
+      {
+        pending: [
+          {
+            kind: "pending_tx",
+            txHash: "0xdead",
+            to: "0x100a",
+            amountDecimal: "1",
+            broadcastedAtMs: 1,
+            broadcastBlockHeight: 150,
+            via: "operator-1",
+            confirmedBlockHeight: 150,
+            confirmedTxIndex: 2,
+            clusterId: 0,
+            clusterName: "halcyon.cluster.mono",
+          },
+        ],
+      },
+    );
+    const del = r.confirmed.find((c) => c.kind === "delegate") as DelegateRow;
+    expect(del.cluster).toBe(0);
+    expect(del.clusterName).toBe("halcyon.cluster.mono");
+
+    // No prior → the same confirmed row stays unnamed (honest #id fallback).
+    const bare = mergeIndexerSnapshot(
+      {
+        activity: [],
+        delegation: [
+          {
+            blockHeight: 150,
+            txIndex: 2,
+            logIndex: 0,
+            wallet: "0xself",
+            cluster: 0,
+            toCluster: null,
+            kind: "delegated",
+            weightBps: 5000,
+            walletTotalBps: null,
+          },
+        ],
+      },
+      1,
+    );
+    expect((bare.confirmed[0] as DelegateRow).clusterName).toBeUndefined();
   });
 
   it("interleaves activity + delegation streams, newest first", () => {

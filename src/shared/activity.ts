@@ -171,12 +171,22 @@ export interface DelegateRow extends ConfirmedAnchor {
   kind: "delegate";
   cluster: number;
   weightBps: number | null;
+  /** Real `*.cluster.mono` name the wallet captured at send time (threaded
+   *  off the matching pending row by `applyCapturedClusterNames`). The indexer
+   *  stream carries only the numeric `cluster` id (§C — no name field, no
+   *  reverse-resolver in mono-core), so this is the ONLY source of a real name
+   *  for a confirmed row, and only for txs THIS wallet originated. Absent for
+   *  non-originated (indexer-only) stakes → render falls back to `Cluster #id`.
+   *  Never fabricated. */
+  clusterName?: string;
 }
 
 export interface UndelegateRow extends ConfirmedAnchor {
   kind: "undelegate";
   cluster: number;
   weightBps: number | null;
+  /** Send-time `*.cluster.mono` name; see DelegateRow.clusterName. */
+  clusterName?: string;
 }
 
 /** Redelegate carries source + destination cluster. When the row is mapped
@@ -187,6 +197,10 @@ export interface RedelegateRow extends ConfirmedAnchor {
   cluster: number;                     // source
   toCluster: number | null;            // destination (null only on activity-stream fallback)
   weightBps: number | null;
+  /** Send-time name of the SOURCE `cluster` (redelegate captures the source per
+   *  commit 7dbb4ea); see DelegateRow.clusterName. The destination `toCluster`
+   *  has no captured name. */
+  clusterName?: string;
 }
 
 /** §23.7 auto-rebalance row — reserved for future cap-tightening events.
@@ -352,6 +366,13 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       if (!validateConfirmedAnchor(r)) return null;
       if (!isFiniteNumber(r.cluster)) return null;
       if (!isNumberOrNull(r.weightBps)) return null;
+      // Optional send-time cluster name (threaded onto confirmed rows by
+      // applyCapturedClusterNames, then round-tripped through the cache). Drop
+      // a malformed/empty value rather than rejecting the row — non-essential.
+      const clusterName =
+        typeof r.clusterName === "string" && r.clusterName.length > 0
+          ? r.clusterName
+          : undefined;
       return {
         kind: r.kind,
         blockHeight: r.blockHeight as number,
@@ -359,6 +380,7 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         logIndex: r.logIndex as number,
         cluster: r.cluster,
         weightBps: r.weightBps,
+        ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
 
@@ -367,6 +389,10 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       if (!isFiniteNumber(r.cluster)) return null;
       if (!isNumberOrNull(r.toCluster)) return null;
       if (!isNumberOrNull(r.weightBps)) return null;
+      const clusterName =
+        typeof r.clusterName === "string" && r.clusterName.length > 0
+          ? r.clusterName
+          : undefined;
       return {
         kind: "redelegate",
         blockHeight: r.blockHeight as number,
@@ -375,6 +401,7 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         cluster: r.cluster,
         toCluster: r.toCluster,
         weightBps: r.weightBps,
+        ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
 
@@ -756,6 +783,59 @@ export function delegationKeySet(
   return out;
 }
 
+/** True for the three delegation-family confirmed rows (the ones that carry an
+ *  optional captured cluster name). */
+function isDelegationRow(
+  r: ConfirmedRow,
+): r is DelegateRow | UndelegateRow | RedelegateRow {
+  return r.kind === "delegate" || r.kind === "undelegate" || r.kind === "redelegate";
+}
+
+/** Thread the real `*.cluster.mono` name a delegation tx captured at send time
+ *  onto its confirmed indexer row. The indexer stream has NO cluster name (§C:
+ *  `cluster` is a numeric id only, and mono-core ships no name-registry /
+ *  reverse-resolver), so without this a confirmed delegate/undelegate/redelegate
+ *  row loses the name its pending row held and the render falls back to a bare
+ *  `Cluster #id`. The confirmed cache is rebuilt from the indexer on every
+ *  non-fresh poll, so the name must be made STICKY across rebuilds — hence two
+ *  sources, `prevConfirmed` first:
+ *   - `prevConfirmed`: a delegation row at the same (blockHeight, txIndex) that
+ *     already carries a name (survives the rebuild after reconcilePending has
+ *     dropped the pending row).
+ *   - `pending`: a bridged pending row whose receipt slot
+ *     (confirmedBlockHeight, confirmedTxIndex) matches — the first-confirmation
+ *     capture, before any named cache exists.
+ *  Matched by the exact (blockHeight, txIndex) inclusion slot — the same key
+ *  pendingMatchesConfirmed uses (one tx = one slot = one delegation row).
+ *  METADATA-ONLY: never touches signed bytes. A confirmed row that already has
+ *  a name (e.g. the prevConfirmed copy carried in) is left untouched. */
+export function applyCapturedClusterNames(
+  confirmed: ConfirmedRow[],
+  prior: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
+): ConfirmedRow[] {
+  const pending = prior.pending ?? [];
+  const prevConfirmed = prior.confirmed ?? [];
+  if (pending.length === 0 && prevConfirmed.length === 0) return confirmed;
+  return confirmed.map((row) => {
+    if (!isDelegationRow(row) || row.clusterName !== undefined) return row;
+    const prevNamed = prevConfirmed.find(
+      (p): p is DelegateRow | UndelegateRow | RedelegateRow =>
+        isDelegationRow(p) &&
+        p.clusterName !== undefined &&
+        p.blockHeight === row.blockHeight &&
+        p.txIndex === row.txIndex,
+    );
+    const pendNamed = pending.find(
+      (p) =>
+        p.clusterName !== undefined &&
+        p.confirmedBlockHeight === row.blockHeight &&
+        p.confirmedTxIndex === row.txIndex,
+    );
+    const name = prevNamed?.clusterName ?? pendNamed?.clusterName;
+    return name !== undefined ? { ...row, clusterName: name } : row;
+  });
+}
+
 /** Merge a fresh indexer snapshot into the previous cache. Pure function:
  *
  *  1. Map delegation-history rows (canonical source — full richness).
@@ -771,13 +851,18 @@ export function delegationKeySet(
  *     (so a self-send shows both legs) while still collapsing a genuine
  *     same-kind duplicate (delegation-history rows are pushed first, so they
  *     win over the activity-stream copy of the same event).
- *  5. Cap at ACTIVITY_ROLLING_WINDOW newest rows. */
+ *  5. Cap at ACTIVITY_ROLLING_WINDOW newest rows.
+ *  6. When `prior` is supplied, thread captured cluster names onto the
+ *     delegation rows (applyCapturedClusterNames) so an originated stake keeps
+ *     its real `*.cluster.mono` name after the indexer supersedes the pending
+ *     row. */
 export function mergeIndexerSnapshot(
   fresh: {
     activity: RawAddressActivity[];
     delegation: RawDelegationHistory[];
   },
   now: number,
+  prior?: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
 ): ActivityCache {
   const delegationRows = mapDelegationHistoryToRows(fresh.delegation);
   const keys = delegationKeySet(delegationRows);
@@ -803,8 +888,9 @@ export function mergeIndexerSnapshot(
   }
   merged.sort(compareConfirmedNewestFirst);
   const capped = merged.slice(0, ACTIVITY_ROLLING_WINDOW);
+  const named = prior ? applyCapturedClusterNames(capped, prior) : capped;
 
-  return { confirmed: capped, lastFetchedAtMs: now };
+  return { confirmed: named, lastFetchedAtMs: now };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
