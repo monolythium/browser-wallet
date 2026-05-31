@@ -814,6 +814,34 @@ describe("mergeIndexerSnapshot", () => {
     ]);
   });
 
+  it("SELF-TRANSFER: keeps BOTH the out + in legs (same anchor, u32::MAX logIndex)", () => {
+    // The indexer emits two entries for a self-send at the SAME
+    // (blockHeight, txIndex, logIndex) — native transfers share the
+    // logIndex=0xFFFFFFFF sentinel. Both must survive the dedupe.
+    const SELF = "mono1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46";
+    const leg = (direction: "in" | "out") => ({
+      blockHeight: 107461,
+      txIndex: 0,
+      logIndex: 4294967295,
+      kind: "transfer" as const,
+      direction,
+      counterparty: SELF,
+      tokenId: "0x" + "00".repeat(32),
+      amount: "12000000",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    });
+    const r = mergeIndexerSnapshot({ activity: [leg("in"), leg("out")], delegation: [] }, 1);
+    const kinds = r.confirmed.map((c) => c.kind).sort();
+    expect(kinds).toEqual(["tx_receive", "tx_send"]);
+    // Both legs carry the same amount + the self counterparty.
+    for (const c of r.confirmed) {
+      expect((c as { amountDecimal: string | null }).amountDecimal).toBe("0.12");
+      expect((c as { counterparty: string | null }).counterparty).toBe(SELF);
+    }
+  });
+
   it("DEDUPE: when both streams surface the same on-chain delegation event, DelegationHistoryRecord wins", () => {
     // This is the central correctness test for the activity-vs-delegation
     // dedupe pinned in the Phase 4.4 plan. The activity-stream entry at
