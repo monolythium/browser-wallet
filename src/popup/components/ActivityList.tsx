@@ -20,59 +20,9 @@ import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity.js";
 import type { WalletActivityKindEnvelope } from "../../shared/activity-kind.js";
 import type { NameLabel } from "../../shared/name-resolution.js";
-import {
-  notificationTitle,
-  type NotificationRecord,
-} from "../../shared/notifications.js";
-import { monoscanTxUrl } from "../../shared/build-info.js";
-
-/** "0", "0.00", "" etc. — omit the amount cell for zero-value ops. */
-function isZeroAmountStr(s: string): boolean {
-  return s.length === 0 || /^0(\.0+)?$/.test(s);
-}
-
-/** A failed tx, rendered in the same .ext-act-row grid with a red accent.
- *  Sourced from the notification history (status:"failed") since the
- *  success-only indexer stream never carries failures. The whole row opens
- *  the tx on Monoscan. */
-function FailedActivityRow({ rec }: { rec: NotificationRecord }) {
-  const open = () =>
-    window.open(monoscanTxUrl(rec.txHash), "_blank", "noopener,noreferrer");
-  return (
-    <div
-      className="ext-act-row"
-      role="button"
-      tabIndex={0}
-      title="View on Monoscan"
-      onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          open();
-        }
-      }}
-      style={{ cursor: "pointer" }}
-    >
-      <div className="dir out" style={{ background: "var(--err)" }} aria-hidden="true" />
-      <div className="ext-act-row__main">
-        <div className="ext-act-row__who" style={{ color: "var(--err)" }}>
-          {notificationTitle(rec.kind, "failed")}
-        </div>
-        <div className="ext-act-row__meta">
-          failed
-          {rec.blockNumber != null ? ` · block ${rec.blockNumber}` : ""} · Monoscan ↗
-        </div>
-      </div>
-      <div className="ext-act-row__right">
-        {!isZeroAmountStr(rec.amountDecimal) && (
-          <div className="amt" style={{ color: "var(--err)" }}>
-            {rec.amountDecimal} LYTH
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+import { type NotificationRecord } from "../../shared/notifications.js";
+import { NotificationRow } from "./NotificationRow.js";
+import { NotificationDetail } from "./NotificationDetail.js";
 
 export interface ActivityListProps {
   /** Unlocked account address (0x form). Null while the wallet boots
@@ -269,6 +219,13 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
     row: ActivityRowType;
     label: NameLabel | undefined;
   } | null>(null);
+  // Failed tx tapped → open the shared NotificationDetail popup (same
+  // Status / Amount / To / Block / Date / View-on-Monoscan view the
+  // notification center uses). Separate state since failed rows are
+  // NotificationRecords, not ActivityRowType.
+  const [selectedFailed, setSelectedFailed] = useState<NotificationRecord | null>(
+    null,
+  );
 
   // Derive counterparty addresses for name resolution. Pulls from both
   // confirmed rows and pending rows so a Pending row's recipient also
@@ -342,7 +299,12 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
         return (
           <div>
             {failed.map((rec) => (
-              <FailedActivityRow key={`failed-${rec.txHash}`} rec={rec} />
+              <NotificationRow
+                key={`failed-${rec.txHash}`}
+                record={rec}
+                showUnread={false}
+                onOpen={() => setSelectedFailed(rec)}
+              />
             ))}
             {rows.map((row) => {
               const cp = counterpartyOf(row);
@@ -378,6 +340,12 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
           label={selected.label}
           walletAddr={addr}
           onClose={() => setSelected(null)}
+        />
+      )}
+      {selectedFailed && (
+        <NotificationDetail
+          record={selectedFailed}
+          onClose={() => setSelectedFailed(null)}
         />
       )}
     </>
