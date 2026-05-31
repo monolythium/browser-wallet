@@ -68,7 +68,7 @@ import {
 import {
   computeTypedDataDigest,
   hexOrUtf8ToBytes,
-} from "./keystore.js";
+} from "./typed-data.js";
 import type {
   MultisigSigner,
   MultisigVaultMeta,

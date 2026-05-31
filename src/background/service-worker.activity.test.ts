@@ -350,22 +350,10 @@ vi.mock("./networks.js", () => ({
   getActiveOperators: vi.fn(() => []),
 }));
 
-// Keystore (v2 + v4) — fixed unlocked address, never actually signs.
+// Keystore (v4) — fixed unlocked address, never actually signs. The
+// `computeTypedDataDigest` helper now lives in ./typed-data.js (pure, no
+// chrome dependency) and runs for real — no mock needed.
 let unlocked = true;
-vi.mock("./keystore.js", () => ({
-  hasVault: vi.fn(async () => true),
-  hasLegacyVault: vi.fn(async () => false),
-  getStoredAddress: vi.fn(async () => DETERMINISTIC_ADDRESS),
-  getUnlockedAddress: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
-  isUnlocked: vi.fn(() => unlocked),
-  lock: vi.fn(() => {
-    unlocked = false;
-  }),
-  unlock: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
-  personalSign: vi.fn(() => new Uint8Array(65)),
-  signTypedDataV4: vi.fn(() => new Uint8Array(65)),
-  computeTypedDataDigest: vi.fn(() => new Uint8Array(32)),
-}));
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
