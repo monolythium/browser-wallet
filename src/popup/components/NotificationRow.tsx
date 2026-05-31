@@ -25,6 +25,8 @@ function iconForKind(kind: TxOpKind): IconName {
   switch (kind) {
     case "send":
       return "send";
+    case "receive":
+      return "receive";
     case "delegate":
     case "undelegate":
     case "redelegate":
@@ -52,7 +54,7 @@ function badgeRingColor(status: "confirmed" | "failed"): string {
  *  and incoming ("receive", green) are untouched. All current op kinds are
  *  outgoing; the `receive` kind (Item 7a) is excluded so incoming stays green. */
 function isOutgoingConfirmed(record: NotificationRecord): boolean {
-  return record.status === "confirmed" && (record.kind as string) !== "receive";
+  return record.status === "confirmed" && record.kind !== "receive";
 }
 
 /** True for amount strings that mean "zero LYTH" — the body omits the amount
