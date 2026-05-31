@@ -281,11 +281,11 @@ describe("readClusterDirectory", () => {
   });
 
   it("propagates ok:false when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
-    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+    mockedRpc.mockRejectedValue(new Error("no Monolythium Testnet operator reachable"));
     const r = await readClusterDirectory(0, 25);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.reason).toContain("no Sprintnet operator reachable");
+    expect(r.reason).toContain("no Monolythium Testnet operator reachable");
   });
 
   it("rejects a malformed response (missing clusters[] array)", async () => {
@@ -1069,7 +1069,7 @@ describe("readPendingRewards", () => {
   });
 
   it("falls back to the mock derivation on transport failure", async () => {
-    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+    mockedRpc.mockRejectedValue(new Error("no Monolythium Testnet operator reachable"));
 
     const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2000 }]);
     expect(r.ok).toBe(true);
@@ -1274,7 +1274,7 @@ describe("readRedemptionQueue", () => {
   });
 
   it("falls back to an empty mock queue on transport failure", async () => {
-    mockedRpc.mockRejectedValue(new Error("no Sprintnet operator reachable"));
+    mockedRpc.mockRejectedValue(new Error("no Monolythium Testnet operator reachable"));
 
     const r = await readRedemptionQueue(wallet);
     expect(r.ok).toBe(true);

@@ -1438,7 +1438,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, (e as Error).message);
       }
       if (!chainRequiresMlDsa(session.chainId)) {
-        return err(4200, "eth_sendTransaction only supports native encrypted Sprintnet sends");
+        return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
       }
 
       // Build the approval view BEFORE opening the popup so the user sees
@@ -1520,7 +1520,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      return err(4200, "eth_sendTransaction only supports native encrypted Sprintnet sends");
+      return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
     }
 
     case "monolythium_submitMrvNativePlan": {
@@ -1548,7 +1548,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, "MRV native submission chainId must match the active wallet chain");
       }
       if (!chainRequiresMlDsa(chainIdHex)) {
-        return err(-32602, "MRV native submission is only wired for Sprintnet today");
+        return err(-32602, "MRV native submission is only wired for Monolythium Testnet today");
       }
       const displayFromAddr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
       if (!displayFromAddr) {
@@ -1617,7 +1617,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, "MRV native submission chainId must match the active wallet chain");
       }
       if (!chainRequiresMlDsa(chainIdHex)) {
-        return err(-32602, "MRV native submission is only wired for Sprintnet today");
+        return err(-32602, "MRV native submission is only wired for Monolythium Testnet today");
       }
       const displayFromAddr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
       if (!displayFromAddr) {
@@ -6909,7 +6909,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing address or chainIdHex" };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
-        return { ok: false, reason: "indexer snapshot is only wired for Sprintnet today" };
+        return { ok: false, reason: "indexer snapshot is only wired for Monolythium Testnet today" };
       }
       const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex, {
         includeMrcAccount: true,
@@ -6951,7 +6951,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing address or chainIdHex" };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
-        return { ok: false, reason: "activity-get is only wired for Sprintnet today" };
+        return { ok: false, reason: "activity-get is only wired for Monolythium Testnet today" };
       }
       // Round 3.5 — defense in depth: refuse activity fetches for popup
       // demo-data sentinel addresses so no cache row lands keyed by
@@ -7205,7 +7205,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "addresses must be an array" };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
-        return { ok: false, reason: "resolve-names is only wired for Sprintnet today" };
+        return { ok: false, reason: "resolve-names is only wired for Monolythium Testnet today" };
       }
       const requested: string[] = [];
       const seen = new Set<string>();
@@ -7318,7 +7318,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing chainIdHex" };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
-        return { ok: false, reason: "indexer-status is only wired for Sprintnet today" };
+        return { ok: false, reason: "indexer-status is only wired for Monolythium Testnet today" };
       }
       const now = Date.now();
       const gate = await readMethodGate(STORAGE_KEY_INDEXER_STATUS_METHOD_GATE);
@@ -7432,7 +7432,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const chainIdHex = p.chainIdHex ?? session.chainId;
       if (!chainRequiresMlDsa(chainIdHex)) {
-        return { ok: false, reason: "MRV planning is only wired for Sprintnet today" };
+        return { ok: false, reason: "MRV planning is only wired for Monolythium Testnet today" };
       }
       if (!isUnlockedV4()) {
         return { ok: false, reason: "wallet locked" };
@@ -7490,7 +7490,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const chainIdHex = p.chainIdHex ?? session.chainId;
       if (!chainRequiresMlDsa(chainIdHex)) {
-        return { ok: false, reason: "MRV planning is only wired for Sprintnet today" };
+        return { ok: false, reason: "MRV planning is only wired for Monolythium Testnet today" };
       }
       if (!isUnlockedV4()) {
         return { ok: false, reason: "wallet locked" };
@@ -7540,7 +7540,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing chainIdHex" };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
-        return { ok: false, reason: "MRV submission is only wired for Sprintnet today" };
+        return { ok: false, reason: "MRV submission is only wired for Monolythium Testnet today" };
       }
       if (!isUnlockedV4()) {
         return { ok: false, reason: "wallet locked" };
@@ -7594,7 +7594,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!chainRequiresMlDsa(requestChainIdHex)) {
         return {
           ok: false,
-          reason: "MRV receipt polling is only wired for Sprintnet today",
+          reason: "MRV receipt polling is only wired for Monolythium Testnet today",
         };
       }
       let registryTrust:
@@ -8190,7 +8190,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
-        return { ok: false, reason: "send is only wired for Sprintnet today" };
+        return { ok: false, reason: "send is only wired for Monolythium Testnet today" };
       }
       if (!isUnlockedV4()) {
         return { ok: false, reason: "wallet locked" };
