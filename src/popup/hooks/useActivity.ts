@@ -59,14 +59,19 @@ const EMPTY: UseActivityResult = {
   refresh: async () => {},
 };
 
-/** Bug A F2 — while ≥1 pending row exists, re-poll this often (ms). ~4s sits
- *  inside the chain's ~3-5s anchor-finality window, so a tx that confirms
- *  while a surface is open flips out of "pending" within ~one finality round
- *  instead of waiting for the next 30s activity refresh or the GAP-N1 alarm.
+/** Bug A F2 — while ≥1 pending row exists, re-poll this often (ms). The chain
+ *  produces BLS fast blocks well under a second (measured ~0.3 s/block on
+ *  Sprintnet), so a broadcast tx is typically included within ~1 s. The old
+ *  4 s interval was the dominant source of perceived latency — the tx had long
+ *  since confirmed on-chain but the row sat "pending" until the next poll. Poll
+ *  at 1.5 s so the UI reflects the chain's real speed (a confirm shows within
+ *  ~1.5 s instead of up to 4 s) while staying well above a hammer-the-RPC
+ *  cadence. Bounded: this interval runs ONLY while a surface is open AND a
+ *  pending row exists — a window that is now usually just a second or two.
  *  Paired with the SW-side F1 bypass (wallet-activity-get skips the 30s
  *  staleness short-circuit when pending rows exist) so each tick actually
  *  reconciles against the operators. */
-const PENDING_REPOLL_MS = 4_000;
+const PENDING_REPOLL_MS = 1_500;
 
 export function useActivity(
   addr: string | null,
