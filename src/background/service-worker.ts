@@ -65,7 +65,6 @@ import { computeTypedDataDigest } from "./typed-data.js";
 import {
   isUnlockedV4,
   getUnlockedAddressV4,
-  getStoredAddressV4,
   lockV4,
   createVaultFromNewMnemonic,
   createVaultFromMnemonic,
@@ -1325,7 +1324,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return ok(String(parseInt(session.chainId, 16)));
 
     case "eth_accounts": {
-      const addr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
+      // Locked → getUnlockedAddressV4() is null → return [] (never resolve or
+      // leak the address to a dApp while locked).
+      const addr = getUnlockedAddressV4();
       if (!addr) return ok([]);
       return ok(session.connectedOrigins.has(origin) ? [addr] : []);
     }
@@ -1393,7 +1394,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         kind: "personal_sign",
         origin,
         message: messageParam,
-        address: getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "",
+        address: getUnlockedAddressV4() ?? "",
       });
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the message");
@@ -1537,7 +1538,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!chainRequiresMlDsa(chainIdHex)) {
         return err(-32602, "MRV native submission is only wired for Monolythium Testnet today");
       }
-      const displayFromAddr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
+      const displayFromAddr = getUnlockedAddressV4();
       if (!displayFromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no address");
       }
@@ -1606,7 +1607,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!chainRequiresMlDsa(chainIdHex)) {
         return err(-32602, "MRV native submission is only wired for Monolythium Testnet today");
       }
-      const displayFromAddr = getUnlockedAddressV4() ?? (await getStoredAddressV4());
+      const displayFromAddr = getUnlockedAddressV4();
       if (!displayFromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no address");
       }
@@ -1716,7 +1717,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       const decision = await gatedEnqueue({
         kind: "typed_sign",
         origin,
-        address: address ?? getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "",
+        address: address ?? getUnlockedAddressV4() ?? "",
         rawTypedData,
         parsed,
         digest,
@@ -1899,7 +1900,7 @@ async function buildSendTxView(
 
   const client = rpcClientFor(chainId);
   const fromAddr =
-    txReq.from ?? getUnlockedAddressV4() ?? (await getStoredAddressV4()) ?? "0x0000000000000000000000000000000000000000";
+    txReq.from ?? getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
 
   const [pricePerExecutionUnitLythoshiHex, nonce] = await Promise.all([
     view.pricePerExecutionUnitLythoshiHex != null
@@ -4630,7 +4631,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           hasVault: true,
           legacyVault: false,
           unlocked: isUnlockedV4(),
-          address: getUnlockedAddressV4() ?? (await getStoredAddressV4()),
+          address: getUnlockedAddressV4(),
           custody: "sw" as const,
           algo: "mldsa" as const,
         };
@@ -6767,7 +6768,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!isUnlockedV4()) {
         return { ok: false, reason: "locked" };
       }
-      const address = getUnlockedAddressV4() ?? (await getStoredAddressV4());
+      const address = getUnlockedAddressV4();
       if (!address) {
         return { ok: false, reason: "v3 vault has no stored address" };
       }
