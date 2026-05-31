@@ -47,6 +47,14 @@ function badgeRingColor(status: "confirmed" | "failed"): string {
   return status === "failed" ? "var(--err, #dc5050)" : "var(--ok, #7ee3c1)";
 }
 
+/** Item 6 — an OUTGOING + CONFIRMED (successful sent) record's icon glyph takes
+ *  the theme accent (var(--gold)). The status ring stays green; failed (red)
+ *  and incoming ("receive", green) are untouched. All current op kinds are
+ *  outgoing; the `receive` kind (Item 7a) is excluded so incoming stays green. */
+function isOutgoingConfirmed(record: NotificationRecord): boolean {
+  return record.status === "confirmed" && (record.kind as string) !== "receive";
+}
+
 /** True for amount strings that mean "zero LYTH" — the body omits the amount
  *  so a 0-LYTH claim / agent-policy reads cleanly. */
 function isZeroAmount(amountDecimal: string): boolean {
@@ -111,7 +119,9 @@ export function NotificationRow({
           height: 28,
           borderRadius: "50%",
           border: `1px solid ${badgeRingColor(record.status)}`,
-          color: badgeRingColor(record.status),
+          color: isOutgoingConfirmed(record)
+            ? "var(--gold)"
+            : badgeRingColor(record.status),
           background: "rgba(255,255,255,0.03)",
         }}
       >
