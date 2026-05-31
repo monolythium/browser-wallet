@@ -620,6 +620,17 @@ export default function App() {
     return () => chrome.storage.onChanged.removeListener(listener);
   }, [refreshKeystoreStatus]);
 
+  // Belt-and-braces lock→home: if any keystore refresh discovers the SW is
+  // unlocked while the popup is still on the lock screen — e.g. the SW
+  // restored its session after a hibernation race and there was no
+  // walletLocked=false onChanged to flip us (it was already false) — route to
+  // Home. Only flips FROM "locked", so it never disturbs onboarding/approval.
+  useEffect(() => {
+    if (keystore?.unlocked && screen === "locked") {
+      setScreen("home");
+    }
+  }, [keystore?.unlocked, screen]);
+
   // visibilitychange safety net — when the popup becomes visible again
   // (e.g. an approval window regaining focus), re-sync state in case the
   // SW silently restarted and lost the unlocked backend in between, and
