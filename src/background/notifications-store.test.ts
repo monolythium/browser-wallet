@@ -64,6 +64,7 @@ function baseInput(overrides: {
   status?: "confirmed" | "failed";
   kind?: "send" | "contract_call";
   blockNumber?: number | null;
+  feeLythoshi?: string;
 } = {}) {
   return {
     addressLower: ADDR_A,
@@ -107,6 +108,22 @@ describe("notifications-store", () => {
         ids: string[];
       }).ids,
     ).toContain(`${CHAIN_A}:${HASH_1}`);
+  });
+
+  it("persists + round-trips an optional feeLythoshi; absent stays absent", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    // With a fee → stored + read back verbatim.
+    await recordNotification(baseInput({ txHash: HASH_1, feeLythoshi: "600000" }));
+    // Without a fee → the field is omitted (no fake "0").
+    await recordNotification(baseInput({ txHash: HASH_2 }));
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    const withFee = list.find((r) => r.txHash === HASH_1);
+    const noFee = list.find((r) => r.txHash === HASH_2);
+    expect(withFee?.feeLythoshi).toBe("600000");
+    expect(noFee).toBeDefined();
+    expect("feeLythoshi" in (noFee as object)).toBe(false);
   });
 
   it("dedupes — a second call with the same (addr, chain, txHash) is a no-op", async () => {

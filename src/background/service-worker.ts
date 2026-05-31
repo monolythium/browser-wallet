@@ -4517,6 +4517,33 @@ async function dropConfirmedPendingByHash(
   return { kept, terminal, rpcFailures };
 }
 
+/** Best-effort total tx fee (lythoshi decimal string) for a CONFIRMED self-paid
+ *  tx, read from `lyth_nativeReceipt.fee.total_lythoshi`. The eth-compat
+ *  `eth_getTransactionReceipt` the classifier reads carries gas_used + status
+ *  only (no price / no fee total), so the LYTH fee comes from the native
+ *  receipt. Returns the lythoshi string only when it parses + is > 0:
+ *   - failed / reverted / pruned txs → `lyth_nativeReceipt` `-32090 not found`
+ *     → undefined (no fee line)
+ *   - a zero fee (near-zero-gas testnet) → undefined (display would hide it)
+ *  READ-ONLY + isolated: wrapped so it can never throw into the notification
+ *  path, and it never touches signing / broadcast / nonce / payload. The fee
+ *  is lythoshi (1 LYTH = 1e8), NOT 18-decimal wei. */
+async function fetchConfirmedFeeLythoshi(
+  txHash: string,
+  opts?: { timeoutMs?: number },
+): Promise<string | undefined> {
+  try {
+    const { result } = await sprintnetJsonRpc<{
+      fee?: { total_lythoshi?: unknown } | null;
+    } | null>("lyth_nativeReceipt", [txHash], opts);
+    const raw = result?.fee?.total_lythoshi;
+    if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) return undefined;
+    return BigInt(raw) > 0n ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** GAP-N1 — headless background poll core. Enumerates every
  *  `mono.activity.pending.*` scope, asks the chain whether each KNOWN
  *  pending tx has reached a terminal state, and runs the SAME
@@ -4584,6 +4611,14 @@ export async function pollPendingAndNotify(): Promise<{
       for (const t of terminal) {
         // Same shape the popup terminal-by-hash loop builds. The status is
         // receipt-derived (confirmed/failed) — #5117 preserved.
+        // Capture the LYTH fee for confirmed self-paid txs (native receipt);
+        // best-effort — failed/zero-fee leaves it unset.
+        const feeLythoshi =
+          t.status === "confirmed"
+            ? await fetchConfirmedFeeLythoshi(t.row.txHash, {
+                timeoutMs: NOTIF_POLL_RPC_TIMEOUT_MS,
+              })
+            : undefined;
         const result = await recordNotification({
           addressLower,
           chainIdHex,
@@ -4594,6 +4629,7 @@ export async function pollPendingAndNotify(): Promise<{
           amountDecimal: t.row.amountDecimal,
           counterparty: t.row.to,
           read: surfaceOpen,
+          ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
         });
         if (result.added && result.record !== null) {
           await fireOsNotification(result.record, { unlocked });
@@ -7051,6 +7087,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                     c.counterparty.toLowerCase() === row.to.toLowerCase() &&
                     c.amountDecimal === row.amountDecimal,
                 );
+                // Heuristic match = a confirmed self-paid tx_send → capture
+                // the native-receipt LYTH fee (best-effort).
+                const feeLythoshi = await fetchConfirmedFeeLythoshi(row.txHash);
                 const result = await recordNotification({
                   addressLower,
                   chainIdHex,
@@ -7065,6 +7104,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   amountDecimal: row.amountDecimal,
                   counterparty: row.to,
                   read: surfaceOpen,
+                  ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
                 });
                 // Phase 2 — fire OS toast ONLY when this snapshot produced
                 // a NEW record (the dedupe set blocks already-notified
@@ -7076,6 +7116,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 }
               }
               for (const t of terminalByHash) {
+                // Capture the LYTH fee for confirmed self-paid txs (native
+                // receipt); best-effort — failed/zero-fee leaves it unset.
+                const feeLythoshi =
+                  t.status === "confirmed"
+                    ? await fetchConfirmedFeeLythoshi(t.row.txHash)
+                    : undefined;
                 const result = await recordNotification({
                   addressLower,
                   chainIdHex,
@@ -7090,6 +7136,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   amountDecimal: t.row.amountDecimal,
                   counterparty: t.row.to,
                   read: surfaceOpen,
+                  ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
                 });
                 if (result.added && result.record !== null) {
                   anyAdded = true;
