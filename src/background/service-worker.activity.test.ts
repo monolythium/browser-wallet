@@ -1300,7 +1300,7 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: "0x1" },
     })) as { ok: false; reason?: string };
     expect(r.ok).toBe(false);
-    expect(r.reason).toContain("Sprintnet");
+    expect(r.reason).toContain("Monolythium Testnet");
   });
 
   it("first call: fetches, validates, merges, persists", async () => {
