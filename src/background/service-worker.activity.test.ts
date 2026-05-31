@@ -4020,6 +4020,35 @@ describe("get-block-tx-value", () => {
   });
 });
 
+// C3 — wallet-tx-fee: on-demand native-receipt LYTH fee for the activity-detail
+// popup (indexer rows have no persisted fee).
+describe("wallet-tx-fee", () => {
+  it("returns the native-receipt fee (lythoshi) for a tx", async () => {
+    rpcResponses["lyth_nativeReceipt"] = {
+      fee: { total_lythoshi: "600000" },
+      reverted: false,
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "1".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.ok).toBe(true);
+    expect(r.feeLythoshi).toBe("600000");
+  });
+
+  it("returns null when the native receipt is unavailable / zero (honest-absence)", async () => {
+    // No seeded lyth_nativeReceipt → the mock throws -32601 → best-effort null.
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "2".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.ok).toBe(true);
+    expect(r.feeLythoshi).toBeNull();
+  });
+});
+
 // GAP-N1 C1 — the headless poll-core. Drives `pollPendingAndNotify`
 // directly against the in-memory chrome stub: seeds a pending row, seeds
 // the receipt RPC, and asserts detect→record→toast→badge + write-back.
