@@ -20,6 +20,59 @@ import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity.js";
 import type { WalletActivityKindEnvelope } from "../../shared/activity-kind.js";
 import type { NameLabel } from "../../shared/name-resolution.js";
+import {
+  notificationTitle,
+  type NotificationRecord,
+} from "../../shared/notifications.js";
+import { monoscanTxUrl } from "../../shared/build-info.js";
+
+/** "0", "0.00", "" etc. — omit the amount cell for zero-value ops. */
+function isZeroAmountStr(s: string): boolean {
+  return s.length === 0 || /^0(\.0+)?$/.test(s);
+}
+
+/** A failed tx, rendered in the same .ext-act-row grid with a red accent.
+ *  Sourced from the notification history (status:"failed") since the
+ *  success-only indexer stream never carries failures. The whole row opens
+ *  the tx on Monoscan. */
+function FailedActivityRow({ rec }: { rec: NotificationRecord }) {
+  const open = () =>
+    window.open(monoscanTxUrl(rec.txHash), "_blank", "noopener,noreferrer");
+  return (
+    <div
+      className="ext-act-row"
+      role="button"
+      tabIndex={0}
+      title="View on Monoscan"
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
+      }}
+      style={{ cursor: "pointer" }}
+    >
+      <div className="dir out" style={{ background: "var(--err)" }} aria-hidden="true" />
+      <div className="ext-act-row__main">
+        <div className="ext-act-row__who" style={{ color: "var(--err)" }}>
+          {notificationTitle(rec.kind, "failed")}
+        </div>
+        <div className="ext-act-row__meta">
+          failed
+          {rec.blockNumber != null ? ` · block ${rec.blockNumber}` : ""} · Monoscan ↗
+        </div>
+      </div>
+      <div className="ext-act-row__right">
+        {!isZeroAmountStr(rec.amountDecimal) && (
+          <div className="amt" style={{ color: "var(--err)" }}>
+            {rec.amountDecimal} LYTH
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export interface ActivityListProps {
   /** Unlocked account address (0x form). Null while the wallet boots
@@ -201,7 +254,7 @@ function errorState(onRetry: () => void) {
 }
 
 export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
-  const { cache, pending, loading, errors, refresh } = useActivity(
+  const { cache, pending, failed, loading, errors, refresh } = useActivity(
     addr,
     chainIdHex,
   );
@@ -262,22 +315,35 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
           />
         )}
       {(() => {
-        // Loading: first fetch hasn't returned AND cache is null.
-        if (loading && cache === null && pending.length === 0) {
+        // Loading: first fetch hasn't returned AND nothing to show yet.
+        if (
+          loading &&
+          cache === null &&
+          pending.length === 0 &&
+          failed.length === 0
+        ) {
           return loadingSkeleton();
         }
-        // IPC failure / total indexer outage with no cache to fall back to.
-        if (hasIndexerError && rows.length === 0) {
+        // IPC failure / total indexer outage with nothing to fall back to.
+        if (hasIndexerError && rows.length === 0 && failed.length === 0) {
           return errorState(() => void refresh());
         }
         // Empty state. The kind probe (useActivityKind) discriminates
         // not_found / indexer_disabled / pruned / private / unknown
         // so the user sees context-aware copy rather than the historical
         // generic "no transactions yet" for every absence reason.
-        if (rows.length === 0) return emptyState(activityKind.envelope);
-        // Live rows.
+        if (rows.length === 0 && failed.length === 0) {
+          return emptyState(activityKind.envelope);
+        }
+        // Live rows — failed txs (newest-first) at the top, then pending +
+        // confirmed. Failed rows come from the notification history; they
+        // aren't in the indexer stream and have no ActivityRow kind, so
+        // they render via FailedActivityRow.
         return (
           <div>
+            {failed.map((rec) => (
+              <FailedActivityRow key={`failed-${rec.txHash}`} rec={rec} />
+            ))}
             {rows.map((row) => {
               const cp = counterpartyOf(row);
               const label = cp ? labels.get(cp) : undefined;
