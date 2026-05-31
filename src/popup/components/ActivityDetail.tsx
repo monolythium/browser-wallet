@@ -13,8 +13,9 @@
 // Honest-absence: a delegate's LYTH principal + every row's canonical tx hash
 // are resolved on demand from the block (eth_getBlockByNumber → tx.value/.hash);
 // when the lookup fails or returns nothing, the LYTH / Monoscan button are
-// simply omitted. Delegations have no cluster bech32m → cluster shows name +
-// #id, no link.
+// simply omitted. Delegations have no cluster bech32m → the cluster shows the
+// real captured *.cluster.mono name when known, else an honest `Cluster #<id>`
+// (clusterLabel); never a fabricated name, no link.
 
 import { useEffect, useState } from "react";
 
@@ -29,7 +30,7 @@ import {
 } from "./_detailModalParts";
 import { monoscanTxUrl } from "../../shared/build-info";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
-import { formatWeightBpsPercent } from "../../shared/staking";
+import { clusterLabel, formatWeightBpsPercent } from "../../shared/staking";
 import { txTypeLabel } from "../../shared/tx-type-label";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity";
 import type { NameLabel } from "../../shared/name-resolution";
@@ -42,10 +43,6 @@ export interface ActivityDetailProps {
   /** The active wallet's own 0x address (the From of sends / Delegator). */
   walletAddr: string;
   onClose: () => void;
-}
-
-function clusterName(id: number): string {
-  return `C-${String(id + 1).padStart(3, "0")}.cluster.mono`;
 }
 
 /** Rows the queried wallet paid the fee for (it originated the tx). Incoming
@@ -214,7 +211,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
             <DRow label="Amount" value={delegateLyth} />
           )}
           <DRow label="Weight" value={formatWeightBpsPercent(row.weightBps)} />
-          <DRow label="Cluster" value={`${clusterName(row.cluster)} · #${row.cluster}`} />
+          <DRow label="Cluster" value={clusterLabel(row.cluster, row.clusterName)} />
           <DRow label="Delegator" value={<CopyableAddress addr0x={walletAddr} />} />
           {feeText && <DRow label="Fee" value={feeText} />}
           <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />

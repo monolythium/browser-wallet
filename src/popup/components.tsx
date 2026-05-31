@@ -24,6 +24,7 @@ import {
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
+import { clusterLabel } from "../shared/staking";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import {
@@ -1686,7 +1687,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               {activeChip === "total"
                 ? "—% · 24h · attested"
                 : latestDelegation
-                  ? `${latestDelegation.kind} · C-${String(latestDelegation.cluster + 1).padStart(3, "0")} · ${latestDelegation.weightBps} bps`
+                  ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
                   : "delegated · 0 / 10 clusters"}
             </div>
           )}
