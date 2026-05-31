@@ -152,7 +152,7 @@ export async function sprintnetJsonRpc<T>(
       `Chain genesis mismatch — all ${totalOperators} operators reported untrusted block 0. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See About → Operators.`,
     );
   }
-  throw lastTransportErr ?? new Error("no Sprintnet operator reachable");
+  throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
 }
 
 /**
