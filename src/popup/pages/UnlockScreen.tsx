@@ -6,6 +6,7 @@ import {
 } from "../bg";
 import { ChainStatusBanner } from "../components";
 import { Modal } from "../components/Modal";
+import { WalletLogo } from "../components/WalletLogo";
 import { bech32mDisplay } from "../../shared/bech32m";
 
 interface UnlockScreenProps {
@@ -165,29 +166,10 @@ export function UnlockScreen({
           }}
           aria-hidden="true"
         >
-          {/* Wallet logo — the gradient "M" squircle, identical treatment to
-             the Welcome screen: var(--gold) gradient fill + var(--ink-000)
-             "M". The logo asset itself is unchanged; the lock badge below is
-             composed as an overlay. */}
-          <div
-            style={{
-              width: 56,
-              height: 56,
-              display: "grid",
-              placeItems: "center",
-              borderRadius: "var(--r-xl)",
-              background:
-                "linear-gradient(180deg, var(--gold-hi), var(--gold))",
-              color: "var(--ink-000)",
-              fontFamily: "var(--f-sansc)",
-              fontSize: 26,
-              fontWeight: 700,
-              boxShadow:
-                "0 8px 22px rgba(var(--gold-glow), 0.35), inset 0 1px 0 rgba(255,255,255,0.35)",
-            }}
-          >
-            M
-          </div>
+          {/* Wallet logo — the gradient squircle + Monolythium "M" mark
+             (shared WalletLogo; theme-driven fill + mark). The lock badge
+             below is composed as an overlay on its bottom-right corner. */}
+          <WalletLogo size={56} />
           {/* Lock badge — bottom-right corner, slightly overlapping the
              squircle. Fill is the logo's exact accent (var(--gold)); a 2px
              ring in the page background (var(--ink-000)) separates it from
@@ -228,7 +210,7 @@ export function UnlockScreen({
           </div>
         </div>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-          Unlock wallet
+          Unlock Monolythium Wallet
         </h2>
         <div
           style={{
