@@ -25,6 +25,36 @@ function relativeMs(ms: number, now: number): string {
 }
 
 export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyProps) {
+  // Confirmed via the real-time receipt but the indexer hasn't surfaced the
+  // canonical row yet — render it as a confirmed send (no spinner, theme-accent
+  // icon, "block N") so the confirm shows at chain speed instead of sitting on
+  // "Pending" through the indexer's materialization delay. This row is replaced
+  // by the indexer's tx_send within a few seconds (reconcilePending drops it),
+  // so it mirrors TxSendRowBody for a seamless swap.
+  if (row.confirmedBlockHeight !== undefined) {
+    return (
+      <div className="ext-act-row">
+        <div className="dir out sent-ok">
+          <Icon name="send" size={13} />
+        </div>
+        <div className="ext-act-row__main">
+          <div className="ext-act-row__who">
+            Sent {row.amountDecimal} LYTH to{" "}
+            {renderCounterparty(row.to, counterpartyLabel)}
+          </div>
+          <div className="ext-act-row__meta">
+            <span>{txTypeLabel(row)}</span>
+            <span>·</span>
+            <span>block {row.confirmedBlockHeight.toLocaleString("en-US")}</span>
+          </div>
+        </div>
+        <div className="ext-act-row__right">
+          <div className="amt">-{row.amountDecimal}</div>
+          <div className="sym">LYTH</div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="ext-act-row">
       <div className="dir out" style={{ position: "relative" }}>
