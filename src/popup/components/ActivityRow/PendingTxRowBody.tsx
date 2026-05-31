@@ -6,8 +6,9 @@
 // The .ext-pending-dot class (ext.css, added in commit 12) gives the
 // rotating amber ring indicator.
 
-import { Icon } from "../../Icon.js";
+import { Icon, type IconName } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
+import { notificationTitle } from "../../../shared/notifications.js";
 import { renderCounterparty } from "../ActivityRow.js";
 import type { PendingTxRow } from "../../../shared/activity.js";
 import type { NameLabel } from "../../../shared/name-resolution.js";
@@ -32,15 +33,44 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
   // by the indexer's tx_send within a few seconds (reconcilePending drops it),
   // so it mirrors TxSendRowBody for a seamless swap.
   if (row.confirmedBlockHeight !== undefined) {
+    const opKind = row.opKind;
+    const isSend = opKind === undefined || opKind === "send";
+    const isDelegation =
+      opKind === "delegate" ||
+      opKind === "undelegate" ||
+      opKind === "redelegate";
+    const iconName: IconName = isDelegation
+      ? "stake"
+      : opKind === "claim" || opKind === "complete-redemption"
+        ? "receive"
+        : "send";
+    const showAmount = !/^0(\.0+)?$/.test(row.amountDecimal);
+    // Cluster target for delegations (the tx `to` is the module, not the
+    // cluster); the real *.cluster.mono name when captured, else #id.
+    const clusterTarget = isDelegation
+      ? (row.clusterName ?? (row.clusterId !== undefined ? `cluster #${row.clusterId}` : null))
+      : null;
     return (
       <div className="ext-act-row">
-        <div className="dir out sent-ok">
-          <Icon name="send" size={13} />
+        {/* Sends keep the theme-accent (sent-ok) like TxSendRowBody, for a
+            seamless swap when the indexer's tx_send replaces this row. */}
+        <div className={isSend ? "dir out sent-ok" : "dir out"}>
+          <Icon name={iconName} size={13} />
         </div>
         <div className="ext-act-row__main">
           <div className="ext-act-row__who">
-            Sent {row.amountDecimal} LYTH to{" "}
-            {renderCounterparty(row.to, counterpartyLabel)}
+            {isSend ? (
+              <>
+                Sent {row.amountDecimal} LYTH to{" "}
+                {renderCounterparty(row.to, counterpartyLabel)}
+              </>
+            ) : (
+              <>
+                {notificationTitle(opKind ?? "send", "confirmed")}
+                {showAmount ? ` ${row.amountDecimal} LYTH` : ""}
+                {clusterTarget ? ` · ${clusterTarget}` : ""}
+              </>
+            )}
           </div>
           <div className="ext-act-row__meta">
             <span>{txTypeLabel(row)}</span>
@@ -49,8 +79,17 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           </div>
         </div>
         <div className="ext-act-row__right">
-          <div className="amt">-{row.amountDecimal}</div>
-          <div className="sym">LYTH</div>
+          {isSend ? (
+            <>
+              <div className="amt">-{row.amountDecimal}</div>
+              <div className="sym">LYTH</div>
+            </>
+          ) : showAmount ? (
+            <>
+              <div className="amt">{row.amountDecimal}</div>
+              <div className="sym">LYTH</div>
+            </>
+          ) : null}
         </div>
       </div>
     );

@@ -126,6 +126,11 @@ export interface PendingTxRow {
    *  delay. The row is dropped (replaced by the indexer's canonical row) once
    *  reconcilePending matches it; this field is the precise match anchor. */
   confirmedBlockHeight?: number;
+  /** Receipt `tx_index` of the confirmed tx — paired with confirmedBlockHeight
+   *  it pins the exact inclusion slot, so reconcilePending can match the
+   *  indexer's canonical row by (block, txIndex) for ANY kind (transfer OR
+   *  delegate / undelegate / redelegate), not just `tx_send`. */
+  confirmedTxIndex?: number;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -283,9 +288,13 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         typeof r.clusterName === "string" && r.clusterName.length > 0
           ? r.clusterName
           : undefined;
-      // Receipt-confirmed-but-not-yet-indexed marker (the inclusion block).
+      // Receipt-confirmed-but-not-yet-indexed marker (the inclusion block + tx
+      // index — the precise, kind-agnostic match anchor against the indexer).
       const confirmedBlockHeight = isFiniteNumber(r.confirmedBlockHeight)
         ? r.confirmedBlockHeight
+        : undefined;
+      const confirmedTxIndex = isFiniteNumber(r.confirmedTxIndex)
+        ? r.confirmedTxIndex
         : undefined;
       return {
         kind: "pending_tx",
@@ -299,6 +308,7 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(clusterId !== undefined ? { clusterId } : {}),
         ...(clusterName !== undefined ? { clusterName } : {}),
         ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
+        ...(confirmedTxIndex !== undefined ? { confirmedTxIndex } : {}),
       };
     }
 
@@ -692,6 +702,23 @@ function pendingMatchesConfirmed(
   pending: PendingTxRow,
   confirmed: ConfirmedRow,
 ): boolean {
+  // Bridged (receipt-confirmed) row with a precise inclusion slot: match the
+  // indexer's canonical row by exact (block, txIndex), regardless of KIND. A
+  // delegate / undelegate / redelegate (or claim) surfaces as a delegation row,
+  // NEVER a tx_send, so the counterparty/amount heuristic below could never
+  // retire it — it would linger until the 30 s alarm. The (block, txIndex)
+  // pair uniquely identifies the wallet's own tx in its activity stream.
+  if (
+    pending.confirmedBlockHeight !== undefined &&
+    pending.confirmedTxIndex !== undefined
+  ) {
+    return (
+      confirmed.blockHeight === pending.confirmedBlockHeight &&
+      confirmed.txIndex === pending.confirmedTxIndex
+    );
+  }
+  // Heuristic match for not-yet-confirmed rows (the indexer-first path):
+  // tx_send + counterparty + amount + block window.
   if (confirmed.kind !== "tx_send") return false;
   if (pending.broadcastBlockHeight === null) return false;
   if (confirmed.counterparty === null) return false;
@@ -702,10 +729,7 @@ function pendingMatchesConfirmed(
     return false;
   }
   if (confirmed.amountDecimal !== pending.amountDecimal) return false;
-  // Match against the receipt's inclusion block when we have it (bridged
-  // confirmed rows), else the broadcast anchor — within the fast-chain window.
-  const anchor = pending.confirmedBlockHeight ?? pending.broadcastBlockHeight;
-  const delta = Math.abs(confirmed.blockHeight - anchor);
+  const delta = Math.abs(confirmed.blockHeight - pending.broadcastBlockHeight);
   return delta <= PENDING_MATCH_BLOCK_WINDOW;
 }
 
