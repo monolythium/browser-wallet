@@ -62,7 +62,7 @@ interface SettingsProps {
 
 const ALGO_LABEL: Record<SignAlgo, string> = {
   mldsa: "ML-DSA-65 (post-quantum)",
-  slhdsa: "SLH-DSA-128s (post-quantum)",
+  slhdsa: "SLH-DSA-SHA2-128s (post-quantum)",
   secp256k1: "secp256k1 (legacy)",
 };
 
