@@ -66,7 +66,19 @@ export function NotificationRow({
   showUnread?: boolean;
 }) {
   const title = notificationTitle(record.kind, record.status);
-  const short = truncMiddle(bech32mDisplay(record.counterparty));
+  // Delegation rows (delegate/undelegate/redelegate) target a cluster, but the
+  // tx `to` is the delegation module — prefer the captured cluster name (or
+  // #id) over the raw module address. Fall back to the address when a record
+  // predates cluster capture (no metadata) — never blank.
+  const isDelegation =
+    record.kind === "delegate" ||
+    record.kind === "undelegate" ||
+    record.kind === "redelegate";
+  const clusterLabel =
+    isDelegation && record.clusterId !== undefined
+      ? (record.clusterName ?? `#${record.clusterId}`)
+      : null;
+  const short = clusterLabel ?? truncMiddle(bech32mDisplay(record.counterparty));
   const showAmount = !isZeroAmount(record.amountDecimal);
   // Type-noun on the meta line (Outgoing transfer / Stake / …), before the
   // amount · counterparty. Same vocabulary the Activity detail + rows use.
