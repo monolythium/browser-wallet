@@ -507,6 +507,13 @@ export function Stake({
         // site (claim has its own handler below). All three are valid
         // TxOpKind literals so this rides through verbatim.
         opKind: action,
+        // Cluster metadata so the notification + detail can name the cluster
+        // (the tx `to` is the delegation module, not the cluster). For
+        // redelegate this is the SOURCE cluster. Pending-row metadata only —
+        // never part of the signed tx. `name` is the real *.cluster.mono
+        // directory name when registered; omitted when null.
+        clusterId: selectedCluster!.clusterId,
+        ...(selectedCluster!.name ? { clusterName: selectedCluster!.name } : {}),
       });
       if (r.ok) {
         setTxHash(r.result.txHash);

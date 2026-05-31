@@ -51,6 +51,15 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
     BigInt(record.feeLythoshi) > 0n
       ? `- ${formatNativeLythAmount(BigInt(record.feeLythoshi))}`
       : null;
+  // Cluster a delegation tx targeted — the tx `to` is the delegation module,
+  // so name the cluster explicitly. Real *.cluster.mono name when known, else
+  // the numeric id (there is no monok1 cluster address). Absent ⇒ no row.
+  const clusterText =
+    record.clusterId !== undefined
+      ? record.clusterName
+        ? `${record.clusterName} · #${record.clusterId}`
+        : `#${record.clusterId}`
+      : null;
 
   return (
     <Modal open onClose={onClose} title={title} showClose>
@@ -61,6 +70,7 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
         )}
         {feeText && <DRow label="Fee" value={feeText} />}
         <DRow label="To" value={<CopyableAddress addr0x={record.counterparty} />} />
+        {clusterText && <DRow label="Cluster" value={clusterText} />}
         {showBlock && (
           <DRow
             label="Block"
