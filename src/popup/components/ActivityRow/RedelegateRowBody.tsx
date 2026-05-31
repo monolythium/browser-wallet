@@ -1,18 +1,17 @@
-// Redelegate row. When `toCluster` is null (activity-stream fallback per
-// commit 1), renders without a destination — "Moved delegation from
-// C-NNN.cluster.mono" only. The DelegationHistoryRecord path always
-// surfaces toCluster.
+// Redelegate row. The SOURCE cluster shows the real *.cluster.mono name the
+// wallet captured at send time when known (clusterLabel), else an honest
+// `Cluster #<id>`. The DESTINATION (toCluster) has no captured name — it shows
+// `Cluster #<id>` (and is null on the activity-stream fallback, where the
+// destination is unknown and the " to …" segment is omitted entirely). Never a
+// fabricated name (§C: no cluster-name reader in mono-core).
 
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { RedelegateRow } from "../../../shared/activity.js";
+import { clusterLabel } from "../../../shared/staking.js";
 
 export interface RedelegateRowBodyProps {
   row: RedelegateRow;
-}
-
-function clusterName(id: number): string {
-  return `C-${String(id + 1).padStart(3, "0")}.cluster.mono`;
 }
 
 export function RedelegateRowBody({ row }: RedelegateRowBodyProps) {
@@ -24,8 +23,8 @@ export function RedelegateRowBody({ row }: RedelegateRowBodyProps) {
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
-          Moved delegation from {clusterName(row.cluster)}
-          {row.toCluster !== null ? ` to ${clusterName(row.toCluster)}` : ""}
+          Moved delegation from {clusterLabel(row.cluster, row.clusterName)}
+          {row.toCluster !== null ? ` to ${clusterLabel(row.toCluster)}` : ""}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>
