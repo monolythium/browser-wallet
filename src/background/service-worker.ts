@@ -115,6 +115,7 @@ import {
 import {
   getUnread,
   listAllNotifications,
+  listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
   recordNotification,
@@ -7108,6 +7109,29 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         });
       }
       return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
+    }
+    case "wallet-activity-failed": {
+      // Failed txs are NOT in the success-only indexer activity stream, so the
+      // Activity list sources them from the notification history — already
+      // persisted, capped, and deduped by recordNotification on every failed
+      // terminal transition (poll + on-open paths). Scope to the active
+      // (address, chain) and return only the status:"failed" records.
+      const p = message.payload as { address?: string; chainIdHex?: string };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: true, failed: [] };
+      }
+      try {
+        const records = await listNotifications(
+          p.address.toLowerCase(),
+          p.chainIdHex,
+        );
+        return {
+          ok: true,
+          failed: records.filter((r) => r.status === "failed"),
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
     }
     case "wallet-activity-kind": {
       // Phase 11 Commit 3 — typed AddressActivityKind probe (chain

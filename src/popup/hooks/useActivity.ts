@@ -20,13 +20,21 @@ import {
   type PendingTxRow,
 } from "../../shared/activity.js";
 import { isDemoAddrSentinel } from "../../shared/demo-addr-sentinel.js";
-import { bgWalletActivityGet } from "../bg.js";
+import {
+  notificationsHistoryKey,
+  type NotificationRecord,
+} from "../../shared/notifications.js";
+import { bgWalletActivityGet, bgWalletActivityFailed } from "../bg.js";
 
 export interface UseActivityResult {
   /** Confirmed-row cache. Null until the first IPC reply lands. */
   cache: ActivityCache | null;
   /** Synthetic pending rows from local Send broadcasts. */
   pending: PendingTxRow[];
+  /** Failed txs (status:"failed") for this (addr, chain), newest-first —
+   *  sourced from the notification history since the indexer activity stream
+   *  is success-only. Rendered as red "<Type> failed" rows. */
+  failed: NotificationRecord[];
   /** True until the first IPC reply resolves for the current (addr, chain).
    *  Re-fetches on focus / screen change do NOT flip this back to true —
    *  the cached data stays rendered while the fresh fetch runs in the
@@ -45,6 +53,7 @@ export interface UseActivityResult {
 const EMPTY: UseActivityResult = {
   cache: null,
   pending: [],
+  failed: [],
   loading: false,
   errors: {},
   refresh: async () => {},
@@ -65,6 +74,7 @@ export function useActivity(
 ): UseActivityResult {
   const [cache, setCache] = useState<ActivityCache | null>(null);
   const [pending, setPending] = useState<PendingTxRow[]>([]);
+  const [failed, setFailed] = useState<NotificationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   // Race protection: each fetch captures the current token; when the IPC
@@ -88,9 +98,18 @@ export function useActivity(
     // one-shot migration to remove pre-existing sentinel cache keys.
     if (isDemoAddrSentinel(addr)) return;
     const myToken = ++tokenRef.current;
-    const r = await bgWalletActivityGet(addr, chainIdHex);
+    // Activity (indexer cache + pending) and failed (notification history)
+    // are independent reads — fetch in parallel so the failed rows don't add
+    // a second round-trip of latency.
+    const [r, fr] = await Promise.all([
+      bgWalletActivityGet(addr, chainIdHex),
+      bgWalletActivityFailed(addr, chainIdHex),
+    ]);
     if (myToken !== tokenRef.current) return;
     setLoading(false);
+    // `failed` is independent of the activity fetch outcome — set it whenever
+    // the read succeeded, even if the indexer fetch errored.
+    if (fr.ok) setFailed(fr.failed);
     if (!r.ok) {
       setErrors({ ipc: r.reason ?? "fetch failed" });
       return;
@@ -104,6 +123,7 @@ export function useActivity(
     if (!addr || !chainIdHex || !addr.startsWith("0x") || isDemoAddrSentinel(addr)) {
       setCache(null);
       setPending([]);
+      setFailed([]);
       setLoading(false);
       setErrors({});
       return;
@@ -112,6 +132,7 @@ export function useActivity(
     setLoading(true);
     setCache(null);
     setPending([]);
+    setFailed([]);
     setErrors({});
     void refresh();
 
@@ -123,6 +144,11 @@ export function useActivity(
     // pending writer that doesn't go through this hook's IPC channel.
     const cacheKey = activityCacheKey(addr.toLowerCase(), chainIdHex);
     const pendingKey = activityPendingKey(addr.toLowerCase(), chainIdHex);
+    // Notification history is where failed txs live; watch it so a tx that
+    // fails while a surface is open surfaces its red row promptly (the SW
+    // writes the failed record in a post-response microtask, so the in-band
+    // fetch above can miss it — this picks up that write).
+    const historyKey = notificationsHistoryKey(addr.toLowerCase(), chainIdHex);
     const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
       changes,
       area,
@@ -137,6 +163,9 @@ export function useActivity(
         const next = changes[pendingKey]?.newValue;
         const validated = validatePendingActivityCache(next);
         if (validated) setPending(validated.pending);
+      }
+      if (historyKey in changes) {
+        void refresh();
       }
     };
     chrome.storage.onChanged.addListener(listener);
@@ -168,5 +197,5 @@ export function useActivity(
   }, [hasPending, refresh]);
 
   if (!addr || !chainIdHex || !addr.startsWith("0x")) return EMPTY;
-  return { cache, pending, loading, errors, refresh };
+  return { cache, pending, failed, loading, errors, refresh };
 }
