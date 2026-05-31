@@ -51,9 +51,11 @@ export const EMERGENCY_KEY_REGISTER_SIGNATURE = "register(uint16,bytes)";
  *  transfer floor (`SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = 30000`)
  *  is insufficient for the precompile's validate-and-store work — a prior
  *  attempt with that floor consumed all gas and reverted (`status:0`).
- *  120000 gives ~4× headroom; the chain does not support
- *  `eth_estimateGas`, so we cannot estimate at runtime. */
-export const EMERGENCY_KEY_REGISTER_GAS_LIMIT_HEX = "0x1d4c0"; // 120000
+ *  The chain does not support `eth_estimateGas`, so we cannot estimate at
+ *  runtime. Aligned to the SDK 0.3.11 sane register/tx execution-unit-limit
+ *  default (~200000) — same ceiling as the spending-policy `set` call — so
+ *  every register surface carries consistent, well-provisioned headroom. */
+export const EMERGENCY_KEY_REGISTER_GAS_LIMIT_HEX = "0x30D40"; // 200000
 
 // ────────────────────────────────────────────────────────────────────────────
 // Selector — computed once on module load (deterministic; we don't
