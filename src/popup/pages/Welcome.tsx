@@ -1,3 +1,5 @@
+import { WalletLogo } from "../components/WalletLogo";
+
 interface WelcomeProps {
   onCreateNew: () => void;
   onImport: () => void;
@@ -23,25 +25,8 @@ export function Welcome({
           gap: 10,
         }}
       >
-        <div
-          style={{
-            width: 72,
-            height: 72,
-            margin: "0 auto",
-            display: "grid",
-            placeItems: "center",
-            borderRadius: "var(--r-xl)",
-            background:
-              "linear-gradient(180deg, var(--gold-hi), var(--gold))",
-            color: "var(--ink-000)",
-            fontFamily: "var(--f-sansc)",
-            fontSize: 32,
-            fontWeight: 700,
-            boxShadow:
-              "0 8px 22px rgba(var(--gold-glow), 0.35), inset 0 1px 0 rgba(255,255,255,0.35)",
-          }}
-        >
-          M
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <WalletLogo size={72} />
         </div>
         <h1
           style={{
