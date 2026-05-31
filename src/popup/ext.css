@@ -327,6 +327,10 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-act-row .dir { background:#f0f0f5; color:#404348; }
 .ext-act-row .dir.in { color: var(--ok); background: oklch(0.78 0.14 155 / 0.12); }
 .ext.light .ext-act-row .dir.in { background:#e8f5ec; color:#2a7a3f; }
+/* Outgoing + confirmed (successful send): icon glyph takes the theme accent
+   (var(--gold) is redefined per theme, so it recolors with the active theme).
+   Failed (red), incoming (green .dir.in), and pending (gold dot) are untouched. */
+.ext-act-row .dir.out.sent-ok { color: var(--gold); }
 .ext-act-row__main { overflow:hidden; }
 .ext-act-row__who { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; color: var(--fg-100); }
 .ext.light .ext-act-row__who { color:#1a1a24; }
