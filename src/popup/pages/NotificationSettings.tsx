@@ -11,10 +11,12 @@ import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
 import {
   bgGetBadgeWhenLocked,
+  bgGetIncomingEnabled,
   bgGetNotificationsOsEnabled,
   bgGetNotifyWhenLocked,
   bgGetShowDetails,
   bgSetBadgeWhenLocked,
+  bgSetIncomingEnabled,
   bgSetNotificationsOsEnabled,
   bgSetNotifyWhenLocked,
   bgSetShowDetails,
@@ -26,7 +28,7 @@ interface NotificationSettingsProps {
 
 // The Phase-5 master ("os") + three GAP-N1 toggles. The setter map keeps
 // handlePickNotif a one-liner; each value mirrors its bg wrapper's signature.
-type NotifKey = "os" | "details" | "notifyLocked" | "badgeLocked";
+type NotifKey = "os" | "details" | "notifyLocked" | "badgeLocked" | "incoming";
 const NOTIF_SETTERS: Record<
   NotifKey,
   (enabled: boolean) => Promise<
@@ -37,6 +39,7 @@ const NOTIF_SETTERS: Record<
   details: bgSetShowDetails,
   notifyLocked: bgSetNotifyWhenLocked,
   badgeLocked: bgSetBadgeWhenLocked,
+  incoming: bgSetIncomingEnabled,
 };
 
 export function NotificationSettings({ onBack }: NotificationSettingsProps) {
@@ -44,7 +47,7 @@ export function NotificationSettings({ onBack }: NotificationSettingsProps) {
   // (toast + badge) — the in-app record is always kept. Local-only.
   const [notifSettings, setNotifSettings] = useState<
     Record<NotifKey, boolean | null>
-  >({ os: null, details: null, notifyLocked: null, badgeLocked: null });
+  >({ os: null, details: null, notifyLocked: null, badgeLocked: null, incoming: null });
   const [savingNotif, setSavingNotif] = useState<NotifKey | null>(null);
 
   useEffect(() => {
@@ -52,11 +55,12 @@ export function NotificationSettings({ onBack }: NotificationSettingsProps) {
     void (async () => {
       // Fail-open default ON if the IPC failed / SW unreachable — mirrors the
       // SW-side fail-open read so the UI never misrepresents the flags.
-      const [os, details, notifyLocked, badgeLocked] = await Promise.all([
+      const [os, details, notifyLocked, badgeLocked, incoming] = await Promise.all([
         bgGetNotificationsOsEnabled(),
         bgGetShowDetails(),
         bgGetNotifyWhenLocked(),
         bgGetBadgeWhenLocked(),
+        bgGetIncomingEnabled(),
       ]);
       if (cancelled) return;
       setNotifSettings({
@@ -64,6 +68,7 @@ export function NotificationSettings({ onBack }: NotificationSettingsProps) {
         details: details.ok ? details.enabled : true,
         notifyLocked: notifyLocked.ok ? notifyLocked.enabled : true,
         badgeLocked: badgeLocked.ok ? badgeLocked.enabled : true,
+        incoming: incoming.ok ? incoming.enabled : true,
       });
     })();
     return () => {
@@ -122,6 +127,13 @@ export function NotificationSettings({ onBack }: NotificationSettingsProps) {
             value={notifSettings.badgeLocked}
             saving={savingNotif === "badgeLocked"}
             onPick={(v) => void handlePickNotif("badgeLocked", v)}
+          />
+          <NotifToggleRow
+            label="Incoming transfers"
+            description="Show a system notification when LYTH arrives. Detected while the wallet is open; the in-app record is always kept."
+            value={notifSettings.incoming}
+            saving={savingNotif === "incoming"}
+            onPick={(v) => void handlePickNotif("incoming", v)}
             last
           />
         </div>

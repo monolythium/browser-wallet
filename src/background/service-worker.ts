@@ -130,6 +130,7 @@ import {
 import {
   fireOsNotification,
   getBadgeWhenLocked,
+  getIncomingEnabled,
   getNotifyWhenLocked,
   getOsNotificationsEnabled,
   getShowDetails,
@@ -137,6 +138,7 @@ import {
   isWalletSurfaceOpen,
   refreshUnreadBadge,
   setBadgeWhenLocked,
+  setIncomingEnabled,
   setNotifyWhenLocked,
   setOsNotificationsEnabled,
   setShowDetails,
@@ -4597,6 +4599,9 @@ export async function detectAndNotifyIncoming(
       await setIncomingWatermark(addressLower, chainIdHex, baseline);
       return 0;
     }
+    // Item 7c — the incoming-transfer TOAST is gated by its own toggle (default
+    // on); the in-app record is always written regardless (§0.4).
+    const incomingToastEnabled = await getIncomingEnabled();
     let added = 0;
     let maxSeen = wm;
     for (const r of confirmed) {
@@ -4615,7 +4620,9 @@ export async function detectAndNotifyIncoming(
       });
       if (result.added && result.record !== null) {
         added++;
-        await fireOsNotification(result.record, { unlocked });
+        if (incomingToastEnabled) {
+          await fireOsNotification(result.record, { unlocked });
+        }
       }
       const anchor = {
         blockHeight: r.blockHeight,
@@ -8633,6 +8640,25 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         await setBadgeWhenLocked(p.enabled);
+        return { ok: true, enabled: p.enabled };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-get-incoming-enabled": {
+      try {
+        return { ok: true, enabled: await getIncomingEnabled() };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "notifications-set-incoming-enabled": {
+      const p = (message.payload ?? {}) as { enabled?: unknown };
+      if (typeof p.enabled !== "boolean") {
+        return { ok: false, reason: "enabled must be boolean" };
+      }
+      try {
+        await setIncomingEnabled(p.enabled);
         return { ok: true, enabled: p.enabled };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
