@@ -4125,6 +4125,55 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
     expect(hist.entries[0]!.status).toBe("confirmed");
   });
 
+  it("captures the native-receipt LYTH fee on a confirmed tx (feeLythoshi)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 77 };
+    // The eth receipt carries no fee — the LYTH fee comes from the native receipt.
+    rpcResponses["lyth_nativeReceipt"] = {
+      fee: { total_lythoshi: "600000" },
+      reverted: false,
+    };
+
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string; feeLythoshi?: string }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("confirmed");
+    expect(hist.entries[0]!.feeLythoshi).toBe("600000");
+  });
+
+  it("omits the fee on a failed tx and on a zero-fee confirmed tx (no-mock)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    // Failed tx — the fee fetch is skipped (status !== confirmed) even though a
+    // native receipt is seeded, so feeLythoshi stays absent.
+    const FAILED = "0x" + "c".repeat(64);
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: FAILED })] };
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 88 };
+    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "600000" } };
+    await pollPendingAndNotify();
+    // Confirmed but ZERO fee → omitted (no fake "0 LYTH").
+    const ZEROFEE = "0x" + "d".repeat(64);
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: ZEROFEE })] };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 89 };
+    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "0" } };
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string; txHash: string; feeLythoshi?: string }>;
+    };
+    const failed = hist.entries.find((e) => e.txHash === FAILED);
+    const zeroFee = hist.entries.find((e) => e.txHash === ZEROFEE);
+    expect(failed?.status).toBe("failed");
+    expect(failed && "feeLythoshi" in failed).toBe(false);
+    expect(zeroFee?.status).toBe("confirmed");
+    expect(zeroFee && "feeLythoshi" in zeroFee).toBe(false);
+  });
+
   it("wallet-activity-failed returns only the failed records for the scope (Activity-list source)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     // Record one CONFIRMED tx...

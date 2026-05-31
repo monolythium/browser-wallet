@@ -70,6 +70,10 @@ export interface RecordNotificationInput {
   kind: TxOpKind;
   amountDecimal: string;
   counterparty: string;
+  /** Total tx fee in lythoshi (decimal string) — set by the caller only for
+   *  confirmed self-paid txs with a non-zero fee (from
+   *  `lyth_nativeReceipt.fee.total_lythoshi`). Omitted otherwise. */
+  feeLythoshi?: string;
   /** GAP-N1 / polish C3 — presence at observe-time. `true` ⇒ a wallet
    *  surface was open when this record was created ⇒ store it already-read
    *  (no badge bump). Omitted/`false` ⇒ unread (the historical default).
@@ -115,6 +119,7 @@ export async function recordNotification(
       createdAtMs: Date.now(),
       read: input.read ?? false,
       schemaVersion: 0,
+      ...(input.feeLythoshi !== undefined ? { feeLythoshi: input.feeLythoshi } : {}),
     };
 
     const historyKey = notificationsHistoryKey(
