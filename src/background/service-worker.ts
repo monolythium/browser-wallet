@@ -1021,6 +1021,29 @@ async function pauseAutoLock(): Promise<void> {
   await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
 }
 
+/** Restore the unlocked session on-demand when the SW has just woken from
+ *  hibernation and the boot-time `tryRestoreFromSessionV4` hasn't run yet.
+ *  Without this, a `keystore-status` query that races SW boot reports a
+ *  false "locked" — and because the boot path then re-writes
+ *  SESSION_KEY_WALLET_LOCKED=false (a no-op when it was already false), the
+ *  popup gets no onChanged event to correct itself and stays stuck on the
+ *  Unlock screen even though the wallet is still within its auto-lock window.
+ *  Gated by the SAME deadline the boot path uses, so it never extends the
+ *  auto-lock contract: a passed deadline means the alarm already fired
+ *  triggerAutoLock (which clears the session MEK), so the restore no-ops. */
+async function ensureUnlockRestored(): Promise<void> {
+  if (isUnlockedV4()) return;
+  try {
+    const ses = await chrome.storage.session.get(SESSION_KEY_AUTO_LOCK_DEADLINE);
+    const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
+    if (typeof deadline === "number" && Date.now() < deadline) {
+      await tryRestoreFromSessionV4();
+    }
+  } catch {
+    // Best-effort — a restore failure leaves the wallet locked (fail-closed).
+  }
+}
+
 let openApprovalCount = 0;
 
 // Phase 11 Commit 2 — WS infrastructure module state.
@@ -4620,6 +4643,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true };
     }
     case "keystore-status": {
+      // If the SW just woke from hibernation, restore the unlocked session
+      // (within the auto-lock deadline) BEFORE answering so a status query
+      // racing SW boot doesn't report a false "locked" the popup can't
+      // recover from. See ensureUnlockRestored.
+      await ensureUnlockRestored();
       // v4 (ML-DSA-65) is the only vault format. A populated multi-vault
       // container (mono.vaults.v4) means "wallet present"; its absence means
       // "no wallet" → the popup routes to Welcome. The v2/v1 "vault format
