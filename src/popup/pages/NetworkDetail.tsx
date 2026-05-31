@@ -218,7 +218,7 @@ export function NetworkDetail({
             <>
               This is the active chain. Connected dApps will receive a{" "}
               <span style={{ fontFamily: "var(--f-mono)" }}>chainChanged</span>{" "}
-              event and the wallet will switch to Sprintnet.
+              event and the wallet will switch to Monolythium Testnet.
             </>
           ) : (
             <>
