@@ -28,11 +28,14 @@
 import {
   NOTIFICATION_HISTORY_CAP,
   appendCapped,
+  incomingWatermarkKey,
   notificationId,
   notificationsHistoryKey,
   notifiedSetKey,
   parseHistoryEnvelope,
+  parseIncomingWatermark,
   parseNotifiedSetEnvelope,
+  type IncomingWatermark,
   type NotificationRecord,
   type TxOpKind,
 } from "../shared/notifications.js";
@@ -150,6 +153,37 @@ export async function recordNotification(
     return { added: true, record };
   } catch {
     return { added: false, record: null };
+  }
+}
+
+/** Read the incoming-detection watermark for a scope (null when unset → the
+ *  caller establishes a baseline on first run). */
+export async function getIncomingWatermark(
+  addressLower: string,
+  chainIdHex: string,
+): Promise<IncomingWatermark | null> {
+  try {
+    return parseIncomingWatermark(
+      await readStorage(incomingWatermarkKey(addressLower, chainIdHex)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the incoming-detection watermark for a scope. Best-effort. */
+export async function setIncomingWatermark(
+  addressLower: string,
+  chainIdHex: string,
+  watermark: IncomingWatermark,
+): Promise<void> {
+  try {
+    await writeStorage({
+      [incomingWatermarkKey(addressLower, chainIdHex)]: watermark,
+    });
+  } catch {
+    // Best-effort — a watermark write failure just means a possible repeat
+    // check next cycle (dedupe-set still blocks a duplicate notification).
   }
 }
 

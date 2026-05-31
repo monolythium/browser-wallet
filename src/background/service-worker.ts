@@ -113,12 +113,14 @@ import {
 // recordNotification is intentionally NOT exposed via any IPC handler — §0.4
 // (only the wallet's own tracked-tx registry can emit notifications).
 import {
+  getIncomingWatermark,
   getUnread,
   listAllNotifications,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
   recordNotification,
+  setIncomingWatermark,
 } from "./notifications-store.js";
 // Phase 2 notifications — the OS toast + unread badge amplifier on top of
 // the Phase-1 records. Fired ONLY when recordNotification returns
@@ -142,7 +144,12 @@ import {
 // Phase 1.5 notifications — broadcast-time operation tag. The wallet-send-tx
 // handler reads p.opKind into a handler-local var (sanitized via isTxOpKind)
 // and threads it ONLY to persistPendingRowBackground — never to the signer.
-import { isTxOpKind, type TxOpKind } from "../shared/notifications.js";
+import {
+  anchorAfter,
+  isTxOpKind,
+  type IncomingWatermark,
+  type TxOpKind,
+} from "../shared/notifications.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
@@ -211,6 +218,7 @@ import {
   validateActivityCache,
   validatePendingActivityCache,
   type ActivityCache,
+  type ConfirmedRow,
   type PendingTxRow,
   type RawAddressActivity,
   type RawDelegationHistory,
@@ -4549,6 +4557,82 @@ async function fetchConfirmedFeeLythoshi(
   }
 }
 
+/** Highest activity anchor among a confirmed-row set (null when empty). */
+function maxConfirmedAnchor(confirmed: ConfirmedRow[]): IncomingWatermark | null {
+  let max: IncomingWatermark | null = null;
+  for (const r of confirmed) {
+    const a = { blockHeight: r.blockHeight, txIndex: r.txIndex, logIndex: r.logIndex };
+    if (max === null || anchorAfter(a, max)) max = a;
+  }
+  return max;
+}
+
+/** Item 7b — incoming-transfer detection (OPEN-SURFACE / UNLOCKED-ONLY).
+ *  Diffs the confirmed `tx_receive` rows (incoming LYTH the indexer already
+ *  surfaced) against the per-(addr,chain) watermark; records + toasts the new
+ *  ones; advances the watermark. On first run it ONLY establishes a baseline
+ *  (the current newest anchor) so a fresh/returning wallet never toasts its
+ *  history. Read-only + best-effort — nothing here touches signing/broadcast.
+ *  Option (a): no closed/locked poll, so this runs only when an open surface
+ *  drove the snapshot fetch (⇒ the wallet is unlocked, address available).
+ *  Incoming entries carry no tx hash, so the dedupe id is anchor-derived
+ *  (`in:<block>.<txIndex>.<logIndex>`). Returns the count recorded.
+ *  Exported for unit tests (driven against the in-memory chrome stub). */
+export async function detectAndNotifyIncoming(
+  addressLower: string,
+  chainIdHex: string,
+  confirmed: ConfirmedRow[],
+  surfaceOpen: boolean,
+  unlocked: boolean,
+): Promise<number> {
+  try {
+    const wm = await getIncomingWatermark(addressLower, chainIdHex);
+    if (wm === null) {
+      // Baseline — everything currently in view is history; no toasts. A
+      // negative sentinel when there's nothing yet so the first-ever incoming
+      // still notifies next cycle.
+      const baseline =
+        maxConfirmedAnchor(confirmed) ??
+        { blockHeight: -1, txIndex: -1, logIndex: -1 };
+      await setIncomingWatermark(addressLower, chainIdHex, baseline);
+      return 0;
+    }
+    let added = 0;
+    let maxSeen = wm;
+    for (const r of confirmed) {
+      if (r.kind !== "tx_receive") continue;
+      if (!anchorAfter(r, wm)) continue;
+      const result = await recordNotification({
+        addressLower,
+        chainIdHex,
+        txHash: `in:${r.blockHeight}.${r.txIndex}.${r.logIndex}`,
+        status: "confirmed",
+        blockNumber: r.blockHeight,
+        kind: "receive",
+        amountDecimal: r.amountDecimal ?? "0",
+        counterparty: r.counterparty ?? "",
+        read: surfaceOpen,
+      });
+      if (result.added && result.record !== null) {
+        added++;
+        await fireOsNotification(result.record, { unlocked });
+      }
+      const anchor = {
+        blockHeight: r.blockHeight,
+        txIndex: r.txIndex,
+        logIndex: r.logIndex,
+      };
+      if (anchorAfter(anchor, maxSeen)) maxSeen = anchor;
+    }
+    if (anchorAfter(maxSeen, wm)) {
+      await setIncomingWatermark(addressLower, chainIdHex, maxSeen);
+    }
+    return added;
+  } catch {
+    return 0;
+  }
+}
+
 /** GAP-N1 — headless background poll core. Enumerates every
  *  `mono.activity.pending.*` scope, asks the chain whether each KNOWN
  *  pending tx has reached a terminal state, and runs the SAME
@@ -7176,6 +7260,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   await fireOsNotification(result.record, { unlocked });
                 }
               }
+              // Item 7b — incoming-transfer detection (open-surface ⇒ unlocked).
+              // The snapshot is already fetched; diff its confirmed tx_receive
+              // rows against the per-scope watermark → record + toast new ones.
+              // Read-only; nothing here touches the signer. Option (a): no
+              // closed/locked poll.
+              const incomingAdded = await detectAndNotifyIncoming(
+                addressLower,
+                chainIdHex,
+                nextCache.confirmed,
+                surfaceOpen,
+                unlocked,
+              );
+              if (incomingAdded > 0) anyAdded = true;
               // Phase 2 — single badge refresh per batch. getUnread reads
               // chrome.storage so it sees every record this loop wrote;
               // one call covers both heuristic + status-RPC paths.
