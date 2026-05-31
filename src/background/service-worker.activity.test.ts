@@ -46,6 +46,8 @@ const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
 const mockFireOsNotification = vi.hoisted(() => vi.fn(async () => {}));
 const mockRefreshUnreadBadge = vi.hoisted(() => vi.fn(async () => {}));
 const mockInstallNotificationsClickListener = vi.hoisted(() => vi.fn(() => {}));
+// Item 7c — incoming-toast toggle. Default ON; the toggle-OFF test overrides.
+const mockGetIncomingEnabled = vi.hoisted(() => vi.fn(async () => true));
 // GAP-N1 C3 — presence probe. Default false (closed) so existing tests
 // record read:false (today's behavior); C3 tests override per-case.
 const mockIsWalletSurfaceOpen = vi.hoisted(() => vi.fn(async () => false));
@@ -54,6 +56,7 @@ vi.mock("./notifications-os.js", () => ({
   refreshUnreadBadge: mockRefreshUnreadBadge,
   installNotificationsClickListener: mockInstallNotificationsClickListener,
   isWalletSurfaceOpen: mockIsWalletSurfaceOpen,
+  getIncomingEnabled: mockGetIncomingEnabled,
 }));
 
 const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
@@ -620,6 +623,8 @@ beforeEach(() => {
   mockRefreshUnreadBadge.mockClear();
   mockIsWalletSurfaceOpen.mockClear();
   mockIsWalletSurfaceOpen.mockResolvedValue(false);
+  mockGetIncomingEnabled.mockClear();
+  mockGetIncomingEnabled.mockResolvedValue(true);
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
@@ -4439,6 +4444,19 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
     };
     const added = await detectAndNotifyIncoming(ADDR, CHAIN, [txSend] as never, true, true);
     expect(added).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+  });
+
+  it("incoming toggle OFF → record still written, but NO toast (Item 7c)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    mockGetIncomingEnabled.mockResolvedValue(false);
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    // The in-app record is always written (added counts it)…
+    expect(added).toBe(1);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(1);
+    // …but the toast is suppressed by the toggle.
     expect(mockFireOsNotification).not.toHaveBeenCalled();
   });
 });
