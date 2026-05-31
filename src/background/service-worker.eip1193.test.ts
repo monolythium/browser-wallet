@@ -108,7 +108,6 @@ vi.mock("./keystore-mldsa.js", () => ({
     address: DETERMINISTIC_ADDRESS,
     vaultId: "v1",
   })),
-  getStoredAddressV4: vi.fn(async () => DETERMINISTIC_ADDRESS),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
   isUnlockedV4: vi.fn(() => unlocked),
   lockV4: vi.fn(() => {
@@ -328,6 +327,17 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     const r = await dispatch("eth_accounts", [], origin);
     expect(r.error).toBeUndefined();
     expect(r.result).toEqual([DETERMINISTIC_ADDRESS]);
+  });
+
+  it("eth_accounts returns [] when locked, even for a connected origin (no address leak while locked)", async () => {
+    const origin = "https://locked-accounts.example";
+    await connectOrigin(origin);
+    // Lock the wallet — getUnlockedAddressV4() now returns null, so the
+    // address must never be resolved or returned to the dApp.
+    unlocked = false;
+    const r = await dispatch("eth_accounts", [], origin);
+    expect(r.error).toBeUndefined();
+    expect(r.result).toEqual([]);
   });
 
   // ---- 3. eth_blockNumber ----
