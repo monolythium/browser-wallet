@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Monolythium Browser Wallet",
   "short_name": "Monolythium",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Self-custodial wallet for Monolythium. Post-quantum ML-DSA-65 signing, encrypted mempool, native Rust/RISC-V contract calls.",
   "homepage_url": "https://monolythium.com",
   "action": {
@@ -18,18 +18,31 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/provider.ts"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content/provider.ts"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/bridge.ts"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content/bridge.ts"
+      ],
       "run_at": "document_start"
     }
   ],
-  "permissions": ["alarms", "storage", "sidePanel", "notifications"],
+  "permissions": [
+    "alarms",
+    "storage",
+    "sidePanel",
+    "notifications"
+  ],
   "icons": {
     "16": "icon-16.png",
     "48": "icon-48.png",
