@@ -4367,6 +4367,82 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
   });
 });
 
+// Item 7b — incoming-transfer detection (open-surface / unlocked-only).
+describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const wmKey = `mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`;
+  const histKey = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+  const rx = (block: number, over: Record<string, unknown> = {}) => ({
+    kind: "tx_receive" as const,
+    blockHeight: block,
+    txIndex: 0,
+    logIndex: 0,
+    counterparty: "0x" + "5".repeat(40),
+    amountDecimal: "1",
+    ...over,
+  });
+
+  it("first run only establishes a baseline — no toast, no history toast-storm", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    const added = await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [rx(100), rx(90)] as never,
+      true,
+      true,
+    );
+    expect(added).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(storageLocal[histKey]).toBeUndefined();
+    // Watermark pinned to the newest anchor in view.
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+  });
+
+  it("a new incoming above the watermark → one record + one toast; advances the watermark", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as {
+      entries: Array<{ kind: string; status: string; amountDecimal: string }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
+    expect(hist.entries[0]!.status).toBe("confirmed");
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 105 });
+  });
+
+  it("re-running with the same incoming does NOT re-notify (watermark + dedupe)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    // Same snapshot again — watermark is now 105, so nothing is new.
+    await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(1);
+  });
+
+  it("ignores outgoing rows — only tx_receive entries notify", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    const txSend = {
+      kind: "tx_send" as const,
+      blockHeight: 110,
+      txIndex: 0,
+      logIndex: 0,
+      counterparty: "0x" + "6".repeat(40),
+      amountDecimal: "2",
+    };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [txSend] as never, true, true);
+    expect(added).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+  });
+});
+
 // GAP-N1 C2 — the notif-poll alarm lifecycle + back-off. Drives the captured
 // onAlarm listener + the send-flow persist; the per-call RPC timeout is
 // covered in tx-mldsa.test.ts.

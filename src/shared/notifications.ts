@@ -178,6 +178,61 @@ export function notificationId(chainIdHex: string, txHash: string): string {
   return `${chainIdHex}:${txHash}`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Incoming-transfer watermark (Item 7b)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Per-(address, chain) high-water mark for incoming-transfer detection: the
+ *  newest activity anchor already accounted for. Only entries strictly after
+ *  it fire a notification — and the watermark is initialized to the current
+ *  newest anchor on first run, so a fresh/returning wallet never toasts its
+ *  entire history. */
+export interface IncomingWatermark {
+  blockHeight: number;
+  txIndex: number;
+  logIndex: number;
+}
+
+/** Per-(address, chain) incoming-watermark storage key. */
+export function incomingWatermarkKey(
+  addressLower: string,
+  chainIdHex: string,
+): string {
+  return `mono.notifications.incoming-watermark.${addressLower}.${chainIdHex}.v1`;
+}
+
+/** True when anchor `a` is strictly newer than watermark `b`
+ *  (lexicographic on blockHeight, then txIndex, then logIndex). */
+export function anchorAfter(
+  a: { blockHeight: number; txIndex: number; logIndex: number },
+  b: IncomingWatermark,
+): boolean {
+  if (a.blockHeight !== b.blockHeight) return a.blockHeight > b.blockHeight;
+  if (a.txIndex !== b.txIndex) return a.txIndex > b.txIndex;
+  return a.logIndex > b.logIndex;
+}
+
+/** Tolerant parse of a persisted watermark. Malformed / absent → null. */
+export function parseIncomingWatermark(raw: unknown): IncomingWatermark | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.blockHeight !== "number" ||
+    typeof r.txIndex !== "number" ||
+    typeof r.logIndex !== "number" ||
+    !Number.isFinite(r.blockHeight) ||
+    !Number.isFinite(r.txIndex) ||
+    !Number.isFinite(r.logIndex)
+  ) {
+    return null;
+  }
+  return {
+    blockHeight: r.blockHeight,
+    txIndex: r.txIndex,
+    logIndex: r.logIndex,
+  };
+}
+
 /** Insert a record newest-first and slice to the cap. Pure. */
 export function appendCapped(
   entries: NotificationRecord[],
