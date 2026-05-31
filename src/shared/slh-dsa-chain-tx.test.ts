@@ -170,7 +170,8 @@ describe("buildEmergencyKeyRegisterTx", () => {
     const tx = buildEmergencyKeyRegisterTx(pubkey);
     expect(tx.executionUnitLimitHex).toBe(EMERGENCY_KEY_REGISTER_GAS_LIMIT_HEX);
     // Pin the exact value so a future drift in the constant doesn't silently
-    // re-introduce an under-provisioned send.
-    expect(tx.executionUnitLimitHex).toBe("0x1d4c0");
+    // re-introduce an under-provisioned send. Aligned to the SDK 0.3.11 sane
+    // register/tx execution-unit-limit default (~200000 = 0x30D40).
+    expect(tx.executionUnitLimitHex).toBe("0x30D40");
   });
 });
