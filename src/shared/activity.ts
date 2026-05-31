@@ -700,9 +700,14 @@ export function delegationKeySet(
  *  3. Map address-activity rows, suppressing kind="delegation" entries
  *     whose anchor is already in the delegation-stream key-set.
  *  4. Sort merged confirmed list newest-first by (blockHeight, txIndex,
- *     logIndex). Within the merged list, an exact `(blockHeight, txIndex,
- *     logIndex)` collision is rare but possible — keep the first
- *     (delegation-history rows are pushed first, so they win).
+ *     logIndex). The dedupe key includes the row KIND: a SELF-transfer
+ *     (counterparty == the queried address) emits TWO activity entries at the
+ *     SAME `(blockHeight, txIndex, logIndex)` — native transfers all carry the
+ *     `logIndex = 0xFFFFFFFF` (u32::MAX) sentinel — one `direction:"in"` and
+ *     one `"out"`. Keying by kind keeps BOTH the `tx_send` + `tx_receive` rows
+ *     (so a self-send shows both legs) while still collapsing a genuine
+ *     same-kind duplicate (delegation-history rows are pushed first, so they
+ *     win over the activity-stream copy of the same event).
  *  5. Cap at ACTIVITY_ROLLING_WINDOW newest rows. */
 export function mergeIndexerSnapshot(
   fresh: {
@@ -717,14 +722,18 @@ export function mergeIndexerSnapshot(
 
   const merged: ConfirmedRow[] = [];
   const seen = new Set<string>();
+  // Key by anchor + kind so a self-transfer's in/out pair (identical anchor —
+  // native transfers share the u32::MAX logIndex sentinel) both survive, while
+  // a same-kind cross-stream duplicate still collapses to the first (richer
+  // delegation-history) copy.
   for (const r of delegationRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}`;
+    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);
   }
   for (const r of activityRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}`;
+    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);
