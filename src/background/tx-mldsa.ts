@@ -7,6 +7,7 @@
 
 import {
   buildEncryptedSubmission as sdkBuildEncryptedSubmission,
+  buildPlaintextSubmission as sdkBuildPlaintextSubmission,
   type EncryptionKey,
   type MempoolClass,
   type NativeEvmTxFields,
@@ -421,4 +422,94 @@ export async function submitEncryptedMlDsaTx(req: EthSendTxFields): Promise<{
     via,
     innerSighashHex: wrapped.innerSighashHex,
   };
+}
+
+// ----- Plaintext (default) submission path -----
+//
+// The live optional-encryption testnet runs with `encrypted_mempool_required
+// = false`, so the FUNCTIONAL inclusion path is the PLAINTEXT one: the wallet
+// signs the chain-side `SignedTransaction` (no Ferveo threshold-decrypt step)
+// and forwards the bincode bytes through `mesh_submitTx`. The encrypted
+// `lyth_submitEncrypted` path above engages the threshold-encrypted inclusion
+// pipeline, which is NOT live yet — so it stays behind a default-off PREVIEW
+// toggle, and plaintext is what every wallet flow submits by default.
+//
+// We do NOT route through the SDK's `submitTransactionWithPrivacy` /
+// `submitPlaintextTransaction` RpcClient helpers here: the wallet's
+// operator-iteration in `sprintnetJsonRpc` carries the GAP #11 genesis-hash
+// pin + multi-operator failover that protect every wallet RPC. Reusing it for
+// `mesh_submitTx` keeps the plaintext path under the same protections as the
+// encrypted path, while still using the SDK's `buildPlaintextSubmission` for
+// the protocol-critical sign + bincode serialization (the bytes are byte-for-
+// byte what `submitPlaintextTransaction` would send). We mirror the SDK's
+// node-echo validation: the node returns the canonical 32-byte native tx hash
+// on admission, and any mismatch is rejected loud so the wallet never trusts a
+// hash it did not derive itself.
+
+/** Build a PLAINTEXT submission — the opt-OUT-of-privacy counterpart to
+ *  `buildEncryptedSubmission`. Signs over the canonical chain-side sighash with
+ *  the unlocked ML-DSA-65 backend and bincode-serializes the result; never
+ *  engages the Ferveo threshold-decrypt pipeline. */
+export async function buildPlaintextSubmission(args: {
+  txReq: EthSendTxFields;
+}): Promise<{
+  signedTxWireHex: string;
+  innerSighashHex: string;
+  innerTxHashHex: string;
+  innerWireBytes: number;
+}> {
+  const backend = getUnlockedBackendV4();
+  if (backend === null) {
+    throw new Error("v3 wallet is locked");
+  }
+  return sdkBuildPlaintextSubmission({
+    backend,
+    tx: normalizeFields(args.txReq),
+  });
+}
+
+/** Submit a bincode-encoded chain-side `SignedTransaction` (`0x`-hex) through
+ *  the plaintext `mesh_submitTx` path and validate the node's echoed canonical
+ *  tx hash against the locally computed one. Mirrors the validation in the
+ *  SDK's `submitPlaintextTransaction`: the node echoes the 32-byte canonical
+ *  native tx hash on admission; any mismatch (or non-32-byte response) is
+ *  rejected so a wallet never trusts a hash it did not derive itself. */
+export async function broadcastPlaintextTransaction(
+  signedTxWireHex: string,
+  expectedTxHashHex: string,
+): Promise<{ txHash: string; via: string }> {
+  const { result, via } = await sprintnetJsonRpc<string>("mesh_submitTx", [
+    signedTxWireHex,
+  ]);
+  const echoed = typeof result === "string" ? result.toLowerCase() : "";
+  const expected = expectedTxHashHex.toLowerCase();
+  // A canonical tx hash is 32 bytes -> "0x" + 64 hex chars.
+  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
+    throw new Error(
+      `mesh_submitTx returned a non-canonical tx hash (${result}); refusing to trust it`,
+    );
+  }
+  if (echoed !== expected) {
+    throw new Error(
+      `mesh_submitTx echoed tx hash ${echoed} does not match locally computed ${expected}`,
+    );
+  }
+  return { txHash: expectedTxHashHex, via };
+}
+
+/** One-shot PLAINTEXT helper used by the service worker — the default tx path
+ *  on the live optional-encryption chain. `txHash` is the CANONICAL inner-tx
+ *  hash the chain indexes (`eth_getTransactionByHash` / `lyth_txStatus`
+ *  resolve it), validated against the node echo before it is surfaced. */
+export async function submitPlaintextMlDsaTx(req: EthSendTxFields): Promise<{
+  txHash: string;
+  via: string;
+  innerSighashHex: string;
+}> {
+  const built = await buildPlaintextSubmission({ txReq: req });
+  const { txHash, via } = await broadcastPlaintextTransaction(
+    built.signedTxWireHex,
+    built.innerTxHashHex,
+  );
+  return { txHash, via, innerSighashHex: built.innerSighashHex };
 }
