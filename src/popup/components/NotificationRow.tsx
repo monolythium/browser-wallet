@@ -12,6 +12,7 @@ import {
   type NotificationRecord,
   type TxOpKind,
 } from "../../shared/notifications";
+import { txTypeLabelForOpKind } from "../../shared/tx-type-label";
 import { relativeMs } from "./_detailModalParts";
 
 /** Middle-truncate any string (hash / bech32m / 0x) for compact display. */
@@ -67,6 +68,12 @@ export function NotificationRow({
   const title = notificationTitle(record.kind, record.status);
   const short = truncMiddle(bech32mDisplay(record.counterparty));
   const showAmount = !isZeroAmount(record.amountDecimal);
+  // Type-noun on the meta line (Outgoing transfer / Stake / …), before the
+  // amount · counterparty. Same vocabulary the Activity detail + rows use.
+  const typeNoun = txTypeLabelForOpKind(record.kind);
+  const metaText = showAmount
+    ? `${typeNoun} · ${record.amountDecimal} LYTH · ${short}`
+    : `${typeNoun} · ${short}`;
 
   return (
     <div
@@ -125,7 +132,7 @@ export function NotificationRow({
             whiteSpace: "nowrap",
           }}
         >
-          {showAmount ? `${record.amountDecimal} LYTH · ${short}` : short}
+          {metaText}
         </div>
       </div>
 
