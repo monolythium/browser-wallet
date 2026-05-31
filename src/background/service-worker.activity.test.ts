@@ -363,6 +363,7 @@ vi.mock("./keystore-mldsa.js", () => ({
     vaultId: "v1",
   })),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
+  tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
   unlockV4: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
   lockV4: vi.fn(() => {
