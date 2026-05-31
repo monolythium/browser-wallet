@@ -705,13 +705,34 @@ describe("reconcilePending", () => {
     expect(reconcilePending([pending], [confirmed])).toEqual([]);
   });
 
-  it("matches a bridged row by its inclusion block, not the stale broadcast anchor", () => {
-    // A receipt-confirmed (bridged) row carries confirmedBlockHeight (inclusion
-    // block). Reconcile against that, so a broadcast→inclusion gap wider than the
-    // window still matches the indexer's canonical row.
-    const pending = makePending({ broadcastBlockHeight: 1000, confirmedBlockHeight: 1400 });
-    const confirmed = makeTxSend({ blockHeight: 1400 }); // 400 from broadcast (>window), 0 from inclusion
-    expect(reconcilePending([pending], [confirmed])).toEqual([]);
+  it("matches a bridged row by exact (block, txIndex), kind-agnostic — incl. delegations", () => {
+    // A receipt-confirmed (bridged) row carries (confirmedBlockHeight,
+    // confirmedTxIndex). It matches the indexer's canonical row at that exact
+    // slot regardless of KIND — a delegate surfaces as a delegation row, NEVER
+    // a tx_send, so without this it would linger to the 30s alarm. (Note the
+    // module `to` + delegate row would never match the tx_send heuristic.)
+    const pending = makePending({
+      opKind: "delegate",
+      to: "0x" + "11".repeat(20),
+      broadcastBlockHeight: 1000,
+      confirmedBlockHeight: 1400,
+      confirmedTxIndex: 2,
+    });
+    const delegate: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 1400,
+      txIndex: 2,
+      logIndex: 0,
+      cluster: 1,
+      weightBps: 1000,
+    };
+    expect(reconcilePending([pending], [delegate])).toEqual([]);
+  });
+
+  it("keeps a bridged row when the indexer slot doesn't match (same block, different txIndex)", () => {
+    const pending = makePending({ confirmedBlockHeight: 1400, confirmedTxIndex: 2 });
+    const confirmed = makeTxSend({ blockHeight: 1400, txIndex: 5 });
+    expect(reconcilePending([pending], [confirmed])).toEqual([pending]);
   });
 
   it("matches pending and confirmed rows at 1-lythoshi precision", () => {
