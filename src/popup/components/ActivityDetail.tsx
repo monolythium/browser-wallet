@@ -29,6 +29,7 @@ import {
 import { monoscanTxUrl } from "../../shared/build-info";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { formatWeightBpsPercent } from "../../shared/staking";
+import { txTypeLabel } from "../../shared/tx-type-label";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity";
 import type { NameLabel } from "../../shared/name-resolution";
 import { bgGetBlockTxValue } from "../bg";
@@ -92,7 +93,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
   // ── Pending send ──
   if (row.kind === "pending_tx") {
     return (
-      <Modal open onClose={onClose} title="Pending send" showClose>
+      <Modal open onClose={onClose} title={txTypeLabel(row)} showClose>
         <div>
           <DRow label="Status" value="Pending" />
           <DRow label="Amount" value={`${row.amountDecimal} LYTH`} />
@@ -119,8 +120,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
   // ── Confirmed transfer (native send/receive + token) ──
   if (row.kind === "tx_send" || row.kind === "tx_receive" || row.kind === "token_transfer") {
     const isIn = row.kind === "tx_receive";
-    const title =
-      row.kind === "token_transfer" ? "Token transfer" : isIn ? "Received" : "Sent";
+    const title = txTypeLabel(row);
     const cp = row.counterparty;
     return (
       <Modal open onClose={onClose} title={title} showClose>
@@ -138,9 +138,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
               <DRow label="To" value={cp ? <CopyableAddress addr0x={cp} name={name} /> : "unknown"} />
             </>
           )}
-          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
-          <DRow label="Tx index" value={String(row.txIndex)} />
-          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
+          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
         </div>
       </Modal>
     );
@@ -148,8 +146,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
 
   // ── Delegation family ──
   if (row.kind === "delegate" || row.kind === "undelegate" || row.kind === "redelegate") {
-    const title =
-      row.kind === "undelegate" ? "Undelegation" : row.kind === "redelegate" ? "Redelegation" : "Delegation";
+    const title = txTypeLabel(row);
     return (
       <Modal open onClose={onClose} title={title} showClose>
         <div>
@@ -160,9 +157,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
           <DRow label="Weight" value={formatWeightBpsPercent(row.weightBps)} />
           <DRow label="Cluster" value={`${clusterName(row.cluster)} · #${row.cluster}`} />
           <DRow label="Delegator" value={<CopyableAddress addr0x={walletAddr} />} />
-          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
-          <DRow label="Tx index" value={String(row.txIndex)} />
-          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
+          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
         </div>
       </Modal>
     );
@@ -170,9 +165,8 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
 
   // ── rebalance / crossing_to_private — minimal honest view ──
   return (
-    <Modal open onClose={onClose} title="Activity" showClose>
+    <Modal open onClose={onClose} title={txTypeLabel(row)} showClose>
       <div>
-        <DRow label="Type" value={row.kind} />
         <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
         <DRow label="Tx index" value={String(row.txIndex)} />
         {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
