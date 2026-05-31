@@ -60,6 +60,12 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
         ? `${record.clusterName} · #${record.clusterId}`
         : `#${record.clusterId}`
       : null;
+  // Incoming transfers credit the wallet → the counterparty is the SENDER, so
+  // label it "From" (vs "To" for the wallet's own outgoing txs).
+  const counterpartyLabel = record.kind === "receive" ? "From" : "To";
+  // Incoming records carry an anchor-derived id, not a real 0x tx hash — only
+  // link Monoscan for a real hash (no broken link, no-mock).
+  const showMonoscan = record.txHash.startsWith("0x");
 
   return (
     <Modal open onClose={onClose} title={title} showClose>
@@ -73,9 +79,12 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
           // Delegation tx: the `to` is the delegation module — name the cluster
           // instead of the bare module address.
           <DRow label="Cluster" value={clusterText} />
-        ) : (
-          <DRow label="To" value={<CopyableAddress addr0x={record.counterparty} />} />
-        )}
+        ) : record.counterparty ? (
+          <DRow
+            label={counterpartyLabel}
+            value={<CopyableAddress addr0x={record.counterparty} />}
+          />
+        ) : null}
         {showBlock && (
           <DRow
             label="Block"
@@ -83,7 +92,7 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
           />
         )}
         <DRow label="Date" value={relativeMs(record.createdAtMs)} />
-        {record.txHash && <MonoscanTxButton hash={record.txHash} />}
+        {showMonoscan && <MonoscanTxButton hash={record.txHash} />}
       </div>
     </Modal>
   );
