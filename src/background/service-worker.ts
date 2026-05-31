@@ -76,7 +76,6 @@ import {
 import {
   isUnlockedV4,
   getUnlockedAddressV4,
-  hasVaultV4,
   getStoredAddressV4,
   lockV4,
   createVaultFromNewMnemonic,
@@ -1346,7 +1345,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // If wallet doesn't exist yet, surface a clear error so the dapp can
       // tell the user to onboard. We could also auto-open the popup at the
       // onboarding screen — left to next stage.
-      if (!(await hasVaultV4())) {
+      if (!(await hasContainerV4())) {
         return err(ERR_UNAUTHORIZED, "Monolythium Wallet has no vault — open the extension and complete onboarding first");
       }
       // Phase 4.0 Decision §9: already-connected origin + unlocked wallet
@@ -4653,7 +4652,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // 5 container (mono.vaults.v4) counts as "v4 present" for the
       // popup's gating purposes — both unlock through the same dispatcher
       // handler.
-      const v4Exists = (await hasVaultV4()) || (await hasContainerV4());
+      const v4Exists = await hasContainerV4();
       const v2Exists = await hasVault();
       const v1Exists = await hasLegacyVault();
       if (v4Exists) {
@@ -5073,7 +5072,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // derives MEK + wraps a fresh VEK over the migrated seed. Rate
       // limiting wraps both branches identically; every wrong-password
       // attempt counts against the shared SESSION_KEY_UNLOCK_FAIL_COUNT.
-      if ((await hasVaultV4()) || (await hasContainerV4())) {
+      if (await hasContainerV4()) {
         const ses = await chrome.storage.session.get([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -5137,27 +5136,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true };
     }
     case "keystore-create-new": {
-      // Strategy A — every new wallet from this point is v3 (ML-DSA-65).
-      // PQM-1 is the canonical recovery format: 24 BIP-39 words carrying
-      // the PQM-1 algo/version payload and 30 bytes of entropy.
+      // Every new wallet is v4 (ML-DSA-65). PQM-1 is the canonical recovery
+      // format: 24 BIP-39 words carrying the PQM-1 algo/version payload and
+      // 30 bytes of entropy. createVaultFromNewMnemonic commits straight into
+      // the multi-vault container (`mono.vaults.v4`) and leaves it unlocked,
+      // so the popup's VaultPicker reads a populated container with no
+      // migration round-trip.
       const p = message.payload as { password: string };
       try {
         const r = await createVaultFromNewMnemonic(p.password);
         await resetAutoLock();
-        // Build the multi-vault container immediately. createVaultFromNewMnemonic
-        // writes a v4 SINGLE-vault envelope (`mono.vault.v4`); the popup's
-        // VaultPicker reads the multi-vault CONTAINER (`mono.vaults.v4`),
-        // which is built by migrateLegacyToContainerV4 — historically called
-        // only from unlockContainerV4. Without this, fresh installs landed on
-        // home with the chip disabled and the literal tooltip "Wallets appear
-        // after first unlock", until the user lock/unlocked. Best-effort: on
-        // failure the existing unlock-time migration still recovers, so we
-        // don't fail the create.
-        try {
-          await unlockContainerV4(p.password);
-        } catch {
-          // Will migrate on the next unlock — non-fatal.
-        }
         return { ok: true, mnemonic: r.mnemonic, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -5168,14 +5156,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const r = await createVaultFromMnemonic(p.password, p.mnemonic);
         await resetAutoLock();
-        // Build the multi-vault container immediately — see the longer note
-        // on `keystore-create-new` above. Best-effort: a failure here is
-        // recovered by the existing migration inside unlockContainerV4.
-        try {
-          await unlockContainerV4(p.password);
-        } catch {
-          // Will migrate on the next unlock — non-fatal.
-        }
         return { ok: true, address: r.address };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -6827,7 +6807,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Phase 5: either a legacy single envelope OR a container counts;
       // unlockContainerV4 sets `unlocked` to the active vault's backend
       // either way, so getUnlockedAddressV4() returns the right address.
-      if (!(await hasVaultV4()) && !(await hasContainerV4())) {
+      if (!(await hasContainerV4())) {
         return { ok: false, reason: "no v3 vault" };
       }
       if (!isUnlockedV4()) {
