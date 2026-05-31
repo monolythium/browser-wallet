@@ -4072,9 +4072,8 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
   it("failed pending → recorded as FAILED, never confirmed (#5117)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
-    // lyth_txStatus does NOT report a failed tx as "found" (indexer surfaces
-    // only confirmed) → falls through to the receipt, whose status is the
-    // authoritative verdict.
+    // not_found → falls through to the receipt, whose status bit is the
+    // authoritative verdict (0 ⇒ failed).
     rpcResponses["lyth_txStatus"] = { status: "not_found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: 0, block_number: 123 };
 
@@ -4086,6 +4085,44 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
     expect(hist.entries).toHaveLength(1);
     expect(hist.entries[0]!.status).toBe("failed");
     expect(hist.entries[0]!.status).not.toBe("confirmed");
+  });
+
+  it("found-but-reverted tx → recorded as FAILED via the receipt status bit (found != confirmed)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    // The chain reports a reverted tx as "found" — it WAS included in a block;
+    // inclusion is not success. The receipt status bit (0x0) is authoritative,
+    // so the row must be recorded FAILED, not "confirmed" (the bug that toasted
+    // "Staked" for a reverted stake).
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 456 };
+
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string; blockNumber: number | null }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("failed");
+    expect(hist.entries[0]!.blockNumber).toBe(456);
+  });
+
+  it("found tx with no available receipt → inclusion stands as confirmed (back-compat)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    // found + receipt unavailable (null) → can't read a status bit; a
+    // not-yet-available receipt can't reveal a revert, so the indexer's
+    // inclusion stands as confirmed (preserves the prior fast-path).
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("confirmed");
   });
 
   it("null receipt → kept (still pending), no record, no toast", async () => {
