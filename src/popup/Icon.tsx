@@ -312,31 +312,6 @@ export function Icon({ name, size = 16 }: IconProps) {
   }
 }
 
-interface SparkProps {
-  data: number[];
-  color?: string;
-  down?: boolean;
-}
-
-export function Spark({ data, color = "#7c7fff", down = false }: SparkProps) {
-  if (!data || data.length === 0) return null;
-  const w = 44;
-  const h = 16;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const xs = (i: number) => (i / (data.length - 1)) * w;
-  const ys = (v: number) => h - ((v - min) / (max - min || 1)) * (h - 2) - 1;
-  const d = data
-    .map((v, i) => `${i === 0 ? "M" : "L"}${xs(i).toFixed(1)} ${ys(v).toFixed(1)}`)
-    .join(" ");
-  const c = down ? "#ff8a9a" : color;
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-      <path d={d} fill="none" stroke={c} strokeWidth={1.3} strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 export function fmt(n: number | null | undefined, dp = 2): string {
   if (n == null) return "—";
   return n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });

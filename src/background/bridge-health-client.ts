@@ -26,9 +26,7 @@ import {
 } from "../shared/chain-readiness.js";
 import {
   bridgeDrainRemaining,
-  type BridgeCircuitBreakerFields,
   type BridgeDrainStatus,
-  type BridgeHealthRecord,
   type BridgeHealthResponse,
 } from "@monolythium/core-sdk";
 import { sprintnetJsonRpc } from "./tx-mldsa.js";
@@ -137,15 +135,6 @@ export async function readBridgeDrainStatus(
       isValid: isBridgeDrainStatus,
     },
   );
-}
-
-/** Pull the circuit-breaker posture off a bridge-health record. Thin
- *  accessor so the popup never has to reach into the SDK record shape
- *  directly. */
-export function circuitBreakerFor(
-  record: BridgeHealthRecord,
-): BridgeCircuitBreakerFields {
-  return record.circuitBreaker;
 }
 
 /** Compute the remaining drain headroom from raw cap + drained decimal
