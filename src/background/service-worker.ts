@@ -5985,6 +5985,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               `expires ${new Date(proposal.expiresAt).toISOString()}`,
           };
         }
+        // T3-03 — re-verify the collected approval SIGNATURES against the LIVE
+        // action digest before executing — not just the approvals[] COUNT.
+        // isExecutable only checks length; a local executor who edited
+        // proposal.action after collecting approvals would pass it, but the
+        // stored signatures (over the original action's digest) no longer cover
+        // the tampered action. verifyProposalApprovals re-hashes the live action
+        // and counts only signatures that still verify. Fail closed.
+        const { validApprovals } = verifyProposalApprovals(proposal, meta.signers);
+        if (validApprovals.size < meta.threshold) {
+          return {
+            ok: false,
+            reason:
+              `approval signatures do not verify against the action: ` +
+              `${validApprovals.size}/${meta.threshold} valid ` +
+              `(of ${proposal.approvals.length} recorded)`,
+          };
+        }
         // Capture the current active vault so we can restore it
         // after broadcasting via the multisig's keypair. Skipping
         // the restore would silently change which vault the popup
