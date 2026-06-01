@@ -1631,4 +1631,31 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
     },
     60_000,
   );
+
+  it(
+    "a fired lock clears the session MEK + rehydrate deadline; a subsequent restore refuses (#17)",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      await ks1.createVaultFromNewMnemonic("fired-lock-password");
+      // Unlocked → MEK + a future rehydrate deadline are mirrored to session.
+      expect(typeof session[MEK_KEY]).toBe("string");
+      expect(typeof session[DEADLINE_KEY]).toBe("number");
+
+      // A fired auto-lock invokes lockV4() (its keystore step), which clears the
+      // session MEK AND the rehydrate deadline via clearMekFromSessionV4 — so a
+      // within-cap restore after a fired auto-lock has nothing to re-unlock from.
+      ks1.lockV4();
+      await new Promise((r) => setTimeout(r, 10)); // fire-and-forget session clear
+
+      expect(session[MEK_KEY]).toBeUndefined();
+      expect(session[DEADLINE_KEY]).toBeUndefined();
+
+      // A subsequent SW boot refuses the password-less restore (fail closed).
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(false);
+      expect(ks2.isUnlockedV4()).toBe(false);
+    },
+    60_000,
+  );
 });
