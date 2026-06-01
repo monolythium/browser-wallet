@@ -1,4 +1,4 @@
-// Phase 7 — RedelegateForm. Move weight from one cluster to another in
+// RedelegateForm. Move weight from one cluster to another in
 // a single tx. Uses the `be79a2f` redelegation precompile method:
 //
 //   redelegate(uint32 srcCluster, uint32 dstCluster, uint16 weightBps)

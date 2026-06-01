@@ -1,8 +1,8 @@
 // ClusterPicker. Renders the cluster directory with the metadata a
 // delegator needs to choose informed: APR, health, regions, member
 // count, Foundation badge. APR is the real `lyth_clusterApr` value
-// (PING #7) off `cluster.aprBps`; reputation renders "—" until the
-// chain surfaces a per-cluster reputation reader (PING #11) — the
+// off `cluster.aprBps`; reputation renders "—" until the
+// chain surfaces a per-cluster reputation reader — the
 // wallet refuses to display synthesised values as chain truth (issue #1).
 //
 // Two interaction patterns:
@@ -30,9 +30,9 @@ interface ClusterPickerProps {
   /** Currently-selected cluster id, or null when nothing is selected. */
   selectedClusterId: number | null;
   /** Called when a row is tapped — the parent advances to the stake-
-   *  form step or, in autovote mode (Commit 3), records the toggle. */
+   *  form step or, in autovote mode, records the toggle. */
   onSelect: (clusterId: number) => void;
-  /** Phase 11 Commit 6 — when supplied, the expanded row gets a
+  /** When supplied, the expanded row gets a
    *  "View details" link that navigates to the dedicated cluster-detail
    *  page. Optional so consumers that don't have a navigation surface
    *  (e.g. autovote picker, multisig flows) opt out cleanly. */
@@ -82,8 +82,8 @@ export function ClusterPicker({
           });
     return filtered.sort((a, b) => {
       // APR sort reads the real `lyth_clusterApr` value off
-      // `cluster.aprBps` (PING #7). Reputation sort stays dropped — no
-      // chain per-cluster reputation reader yet (PING #11).
+      // `cluster.aprBps`. Reputation sort stays dropped — no
+      // chain per-cluster reputation reader yet.
       switch (sortMode) {
         case "apr": {
           const aa = a.aprBps ?? 0;
@@ -118,8 +118,8 @@ export function ClusterPicker({
           onChange={(e) => setSortMode(e.target.value as SortMode)}
           style={sortSelectStyle}
         >
-          {/* APR sorts on the real lyth_clusterApr value (PING #7).
-              Reputation sort stays dropped — no chain reader (PING #11). */}
+          {/* APR sorts on the real lyth_clusterApr value.
+              Reputation sort stays dropped — no chain reader. */}
           <option value="apr">APR</option>
           <option value="decentralization">Decentralization</option>
         </select>
@@ -169,7 +169,7 @@ interface ClusterRowProps {
   expanded: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
-  /** Phase 11 Commit 6 — optional "View details →" link. When provided,
+  /** Optional "View details →" link. When provided,
    *  the expanded row footer renders a button that calls this with the
    *  cluster row, surfacing the dedicated cluster-detail page. */
   onShowDetails?: () => void;
@@ -183,9 +183,9 @@ function ClusterRow({
   onToggleExpand,
   onShowDetails,
 }: ClusterRowProps) {
-  // APR is the real chain value (`lyth_clusterApr` → `cluster.aprBps`,
-  // PING #7); `null` (failed/absent call) renders "—". Reputation stays
-  // null ("—") — no per-cluster reputation reader yet (PING #11); the
+  // APR is the real chain value (`lyth_clusterApr` → `cluster.aprBps`);
+  // `null` (failed/absent call) renders "—". Reputation stays
+  // null ("—") — no per-cluster reputation reader yet; the
   // synthesised mock was dropped in v0.1.1 (issue #1).
   const aprBps = cluster.aprBps ?? null;
   const reputation: number | null = null;
@@ -347,7 +347,7 @@ function ClusterRow({
             rendered on the dedicated cluster-detail page — open via
             "View details" below.
           </div>
-          {/* Phase 11 Commit 6 — link to dedicated cluster-detail page
+          {/* Link to dedicated cluster-detail page
               for the full operator slate, delegator demand, and your
               history with this cluster. */}
           {onShowDetails && (

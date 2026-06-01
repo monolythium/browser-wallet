@@ -1,4 +1,4 @@
-// Reactive read of the Phase 4.4 activity cache. Mirrors useApprovalQueue.ts
+// Reactive read of the activity cache. Mirrors useApprovalQueue.ts
 // for the chrome.storage.onChanged subscription pattern + App.tsx:220-225
 // balanceTokenRef for race protection.
 //
@@ -77,14 +77,14 @@ export function useActivity(
   const refresh = useCallback(async () => {
     if (!addr || !chainIdHex) return;
     if (!addr.startsWith("0x")) return;
-    // Round 3.5 — skip the IPC + cache write when the address is one
+    // Skip the IPC + cache write when the address is one
     // of the popup demo-data sentinels. The popup's initial state seeds
     // `acc = ACCOUNTS[0]` whose addr is `0xa9f2…0001`; the
     // `wallet-active-account` IPC then replaces it with the real
     // unlocked vault address. Without this guard the brief demo-state
     // window fires a real `wallet-activity-get` IPC, which writes
     // `mono.activity.<demo-addr>.<chainId>` into chrome.storage —
-    // confirmed in the 2026-05-26 storage dump. Guarding here is the
+    // confirmed in a storage dump. Guarding here is the
     // cheapest defense (no IPC, no cache); the SW boot also runs a
     // one-shot migration to remove pre-existing sentinel cache keys.
     if (isDemoAddrSentinel(addr)) return;
@@ -173,7 +173,7 @@ export function useActivity(
   // App level (src/popup/App.tsx, PENDING_REPOLL_MS) so it runs on EVERY screen
   // while the popup is open, not just the Activity tab. That poll drives the
   // SW reconcile; the cache/pending state here stays live via the onChanged
-  // listener above (and the GAP-N1 alarm still covers the closed-surface case).
+  // listener above (and the background alarm still covers the closed-surface case).
 
   if (!addr || !chainIdHex || !addr.startsWith("0x")) return EMPTY;
   return { cache, pending, failed, loading, errors, refresh };

@@ -1,4 +1,4 @@
-// Phase 11 Commit 9 — ErrorBoundary.
+// ErrorBoundary.
 //
 // React component-tree error boundary. A render-time throw inside any
 // page would otherwise unmount the whole popup with a blank screen;

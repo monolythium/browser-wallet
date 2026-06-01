@@ -1,4 +1,4 @@
-// Phase 9 Commit 6 — useFeature hook.
+// useFeature hook.
 //
 // Returns the current enabled state of a two-tier UX feature flag
 // and keeps the value in sync via the `chrome.storage` change
