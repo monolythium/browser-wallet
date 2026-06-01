@@ -1,4 +1,4 @@
-// Phase 8 — N-of-M multisig types + pure helpers (§28.5 Q70 + Q75).
+// N-of-M multisig types + pure helpers (§28.5 Q70 + Q75).
 //
 // What this module owns
 // =====================
@@ -9,7 +9,7 @@
 // container persistence); the IPC dispatch lives in service-worker.ts;
 // the UI lives in popup/.
 //
-// On-chain reality (investigation 2026-05-16)
+// On-chain reality
 // ===========================================
 // mono-core @ce93d83 has NO general-purpose user-multisig precompile.
 // The `0x110x` block is allocated end-to-end (emergency-key, VRF,
@@ -96,7 +96,7 @@ const GOV_HASH_DOMAIN = "mono-wallet-multisig-gov-v1";
  *   - `"external"` — the signer's secret is held outside this wallet.
  *                 Only the pubkey + address are stored; approvals
  *                 arrive via the shared-proposal import path
- *                 (Commit 7). Cannot be auto-signed by this wallet.
+ *                 via the shared-proposal import path. Cannot be auto-signed by this wallet.
  */
 export interface MultisigSigner {
   /** Stable id used by proposals to reference this signer. Generated
@@ -121,7 +121,7 @@ export interface MultisigSigner {
 }
 
 /** Metadata embedded inside a multisig vault record. The vault itself
- *  is still a VaultRecordV4 with a wrappedKey + envelope (Phase 5
+ *  is still a VaultRecordV4 with a wrappedKey + envelope (the vault
  *  layer); this block carries the M-of-N policy + proposal queues.
  *
  *  The vault's own keypair (the one decrypted from its envelope) is
@@ -242,7 +242,7 @@ export interface GovernanceProposal {
  *  undefined when the roster is all-external (the wallet cannot
  *  propose locally and must surface "no local signer available" UX).
  *
- *  Commit 4 introduces a multi-self-signer picker; the v1 default
+ *  A multi-self-signer picker may be introduced later; the v1 default
  *  "first match" suffices for the common one-self-signer case. */
 export function pickFirstSelfSigner(
   signers: readonly MultisigSigner[],
@@ -504,7 +504,7 @@ export function applyGovernance(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Cross-signer coordination (Commit 7)
+// Cross-signer coordination
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Schema-bound envelope wrapping a serialized proposal blob. The

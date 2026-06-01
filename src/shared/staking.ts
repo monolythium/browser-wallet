@@ -1,13 +1,13 @@
-// Phase 7 — staking data types shared between the SW staking-client and the
+// Staking data types shared between the SW staking-client and the
 // popup-side bg wrappers + UI. These mirror the SDK bindings emitted by
-// mono-core-sdk @0fd8a79 (Phase 7.1 uplift) but live here in the wallet so:
+// mono-core-sdk @0fd8a79 but live here in the wallet so:
 //
 //   1. The IPC boundary doesn't need to import the SDK at the popup edge
 //      (the SDK pulls in a large dependency surface; the popup just wants
 //      typed JSON).
 //   2. We can mark fields the chain doesn't yet emit with explicit GAP
 //      comments and provide mock-fallback shapes without polluting the SDK.
-//   3. The autovote algorithm (src/shared/autovote.ts, Phase 7 commit 3)
+//   3. The autovote algorithm (src/shared/autovote.ts)
 //      sees one source of truth for the cluster metadata it consumes.
 //
 // Each type is annotated with the SDK binding it mirrors and the whitepaper
@@ -59,10 +59,10 @@ export interface ClusterDirectoryEntry {
   /** Numeric cluster id used by every chain-side delegation precompile. */
   clusterId: number;
   /** §22.4 cluster-name-registry display name (e.g. `halcyon.cluster.mono`).
-   *  chain GAP — see `_dev-notes/browser-wallet/active-nayiem-pings.md`
-   *  PING #8 (cluster name registry). No `lyth_resolveName` /
+   *  chain GAP — no chain-side cluster-name reader yet.
+   *  (cluster name registry). No `lyth_resolveName` /
    *  `lyth_clusterName` reader exists in mono-core protocore.rs as of
-   *  HEAD f7236197 (2026-05-27). Wallet displays mock names from
+   *  HEAD f7236197. Wallet displays mock names from
    *  `MOCK_CLUSTERS[*].name` below; replace with a real lookup when the
    *  chain ships the primitive. */
   name: string | null;
@@ -152,8 +152,8 @@ export interface ClusterMember {
   blsPubkey: string;
   /** Operator membership state inside this cluster. Free-form string on
    *  the wire (`ClusterMemberResponse.state` is `string` in SDK 0.3.9 —
-   *  no formal enum yet, PING #11). Live `lyth_clusterStatus(0)` probes
-   *  against op-1 (`178.105.15.216`, height ~87828, 2026-05-27) return a
+   *  no formal enum yet). Live `lyth_clusterStatus(0)` probes
+   *  against op-1 (`178.105.15.216`, height ~87828) return a
    *  mix of these tokens:
    *
    *  - `"active"`  — currently signing.
@@ -163,14 +163,14 @@ export interface ClusterMember {
    *  - `"jailed"`  — in an active jail period.
    *  - `"offline"` — slashed / ejected.
    *
-   *  PING #11 tracks the long-term ask for a formal enum on the SDK type
+   *  The long-term ask is a formal enum on the SDK type
    *  plus an explicit `standbyCount` aggregate on `ClusterStatusResponse`.
    *
    *  The wallet renders the token pass-through. `StateChip`
    *  (`ClusterDetail.tsx`) maps `"active"`/`"jailed"`/`"offline"`
    *  explicitly; `"standby"` and any future token fall through to the
    *  neutral muted-fg dot (a dedicated standby treatment is a flagged
-   *  PING #11 UX follow-up). */
+   *  UX follow-up). */
   state: string;
 }
 
@@ -198,7 +198,7 @@ export interface WalletOperatorInfo {
 }
 
 /** Cluster-level service-tier offerings derived from per-operator
- *  `lyth_getServiceProbe` results (R16 Task B). The cluster is treated
+ *  `lyth_getServiceProbe` results. The cluster is treated
  *  as offering a tier when at least one member operator probes
  *  reachable for that tier ("any-true" aggregation).
  *
@@ -206,7 +206,7 @@ export interface WalletOperatorInfo {
  *  `NODE_REGISTRY_CAPABILITIES` but Broadcaster, WebSocket, LightClient,
  *  and PublicAPI are operator-internal and skipped here.
  *
- *  PING #11 — the long-term fix is a `ClusterDirectoryEntry.serviceTiers:
+ *  The long-term fix is a `ClusterDirectoryEntry.serviceTiers:
  *  string[]` aggregate field on the chain side; once shipped, the wallet
  *  can drop per-operator probing for this surface entirely. */
 export interface ClusterServiceTiers {
@@ -286,7 +286,7 @@ export interface DelegationCap {
    *  "disabled" — the chain encodes disabled as `u32::MAX`. */
   capBps: number | null;
   /** Height of the most recent milestone that changed the cap (used by
-   *  §23.7 auto-rebalance hook in Phase 7.1). */
+   *  §23.7 auto-rebalance hook). */
   lastChangedAtHeight: string;
 }
 
@@ -440,7 +440,7 @@ export type StakingResult<T> =
 //
 // MOCK — verify against live chain when Sprintnet back
 // ────────────────────────────────────────────────────
-// The Sprintnet cluster set is offline at Phase 7 phase-start (Nayiem
+// The Sprintnet cluster set may be offline (Ferveo wiring still in
 // deploying Ferveo wiring after CI iteration). The wallet's read paths
 // fall through to these fixtures when every active operator fails the
 // genesis-pin trust check or returns a transport-level error.
@@ -449,7 +449,7 @@ export type StakingResult<T> =
 // architecture (10 operators per cluster, 7-of-10 threshold, mixed
 // region diversity, mixed entity flags including Foundation clusters
 // per §30.5) so the UI renders the realistic shape rather than empty
-// state. The autovote algorithm (Phase 7 commit 3) gets exercised
+// state. The autovote algorithm gets exercised
 // against this shape directly in tests.
 
 export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
@@ -525,7 +525,7 @@ export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
  *  `lyth_clusterApr(clusterId)` (mono-core `253cac0b`, live since
  *  v0.0.11-testnet). The Stake-page APR cells read the real value off
  *  `ClusterDirectoryEntry.aprBps` (populated by the directory fanout in
- *  `staking-client.ts::readClusterApr`). PING #7 is resolved for the
+ *  `staking-client.ts::readClusterApr`). The chain-reader path is in place for the
  *  display path.
  *
  *  This table is NOT yet deletable: it still feeds (1) the autovote
@@ -556,35 +556,34 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 11 chain investigation — 2026-05-16
+// Chain investigation
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Re-audit of mono-core HEAD `ce93d83` + mono-core-sdk @0fd8a79 status:
 //
 //   ✅ `lyth_addressActivityKind` (chain d77e4fc / SDK exposes
 //      `RpcClient.lythAddressActivityKind`) — REPLACES the P4.4
-//      heuristic empty-state. GAP #17 closes in Phase 11 Commit 3.
+//      heuristic empty-state.
 //
 //   ✅ `lyth_indexerStatus` returning `IndexerStatus | null` (chain
 //      94cf845 / SDK `RpcClient.lythIndexerStatus`) — supports
-//      activity-feed pagination + archive-redirect. GAP #18 closes
-//      in Phase 11 Commit 4.
+//      activity-feed pagination + archive-redirect.
 //
 //   ✅ `lyth_subscribe` / `lyth_unsubscribe` (chain 0aaa5fc / SDK
 //      `RpcClient.lythSubscribe`/`lythUnsubscribe`) — note: these
-//      are WebSocket-only on the chain side. The Phase 11 Commit 2
+//      are WebSocket-only on the chain side. The
 //      WS-client wires them with graceful HTTP-fallback.
 //
 //   ⚠️ `lyth_operatorCapabilities` (chain 017cab9 / SDK
 //      `RpcClient.lythOperatorCapabilities`) — risk-preview field
-//      shape evolving; the Phase 11 Commit 5 wire-up renders the
+//      shape evolving; the wire-up renders the
 //      stable subset (latency / version / uptime) and uses
 //      `withChainFallback` to keep the operators page rendering when
 //      the chain method 404s.
 //
 //   ⚠️ `7160636` registry public service probe runner — chain ships
 //      it, but the SDK at 0fd8a79 doesn't yet have a typed helper.
-//      Phase 11 Commit 5 calls via `lyth_publicServiceProbe` direct
+//      The wallet calls via `lyth_publicServiceProbe` direct
 //      RPC behind `withChainFallback`.
 //
 //   ✅ `lyth_pendingRewards` — wallet calls the direct RPC first and
@@ -600,7 +599,7 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //      stays the wallet's authoritative APR source.
 //
 //   ❌ `lyth_namingRegistry` (§22.8) — STILL no chain reader. Cluster
-//      names display `cluster-<id>` until Nayiem wires the resolver.
+//      names display `cluster-<id>` until the chain wires the resolver.
 //
 // The above is the binding wallet-side view; Sprintnet deploy status
 // of each method is checked at runtime via `withChainFallback` rather
