@@ -219,6 +219,8 @@ function installChromeStub(): void {
       },
       onInstalled: { addListener: vi.fn() },
       getURL: (path: string) => `chrome-extension://test-id/${path}`,
+      // T2-02 — the router authenticates sender.id against this.
+      id: "test-id",
     },
     tabs: {
       query: (_filter: unknown, cb: (tabs: Array<{ id: number }>) => void) => {
@@ -248,7 +250,7 @@ function dispatch(method: string, params: unknown[] = [], origin = "https://dapp
       args: { method, params },
       origin,
     };
-    const handled = handler(envelope, undefined, resolve);
+    const handled = handler(envelope, { id: "test-id" }, resolve);
     if (handled !== true) {
       // The SUT returns true to keep sendResponse alive across async work.
       // If it returned false/undefined we'd never get a response.
@@ -265,9 +267,13 @@ function popupDispatch<T = unknown>(op: string, payload?: unknown): Promise<T> {
   if (!handler) throw new Error("service worker did not register onMessage listener");
   return new Promise((resolve) => {
     const envelope = { kind: "popup", op, payload } as unknown;
-    const handled = handler(envelope, undefined, (response: unknown) => {
-      resolve(response as T);
-    });
+    const handled = handler(
+      envelope,
+      { id: "test-id", url: "chrome-extension://test-id/src/popup/index.html" },
+      (response: unknown) => {
+        resolve(response as T);
+      },
+    );
     if (handled !== true) {
       resolve({ ok: false, reason: "handler did not signal async response" } as T);
     }
