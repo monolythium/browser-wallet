@@ -85,14 +85,14 @@ interface SendProps {
    *  fee-suggestion fetch. */
   chainId: string;
   onBack: () => void;
-  /** Phase 8 — when set, the active vault is a multisig vault and Send
+  /** When set, the active vault is a multisig vault and Send
    *  routes the submit to `bgMultisigPropose` instead of `bgWalletSendTx`.
    *  The form layout stays the same; only the CTA copy + submit path
    *  change. The App-side detection (read `kind === "multisig"` from
-   *  the vault summary) lands in Commit 6; absent prop = unchanged
+   *  the vault summary) is handled App-side; absent prop = unchanged
    *  single-vault behavior. */
   multisigVaultId?: string;
-  /** Phase 9 — when set (and `multisigVaultId` is NOT set), Send
+  /** When set (and `multisigVaultId` is NOT set), Send
    *  consults the per-vault passkey policy and shows the appropriate
    *  unlock-mode badge on the preview screen. Below-limit txs that
    *  evaluate to `passkey-ok` trigger the WebAuthn ceremony on
@@ -155,7 +155,7 @@ export function Send({
   // confirm. The state + wiring are in place so flipping the toggle live
   // later is a one-line change (drop `disabled`).
   const [privateTx, setPrivateTx] = useState(false);
-  // Round 13 TASK 2 — Contacts picker. pickerOpen drives the modal;
+  // Contacts picker. pickerOpen drives the modal;
   // selectedContact holds the chosen contact so the preview screen can
   // render its name above the address. selectedContact clears when
   // the user manually edits `to` (so a pasted-then-edited address
@@ -169,14 +169,14 @@ export function Send({
   const [feeError, setFeeError] = useState<string | null>(null);
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
 
-  // Round 7 TASK 6 — pre-load contacts so the post-send save-recipient
+  // Pre-load contacts so the post-send save-recipient
   // prompt can hand the AddContactModal an `existing` map for
   // duplicate-detection without an extra IPC round-trip.
   const { contacts: contactsMap } = useContacts();
   // Result state — written by handleConfirm.
   const [txHash, setTxHash] = useState<string | null>(null);
   const [hashCopied, setHashCopied] = useState(false);
-  // Round 7 TASK 6 — when a send to a non-contact recipient succeeds,
+  // When a send to a non-contact recipient succeeds,
   // capture the recipient 0x address here so the success view can
   // render an "Add to contacts" prompt with the address pre-seeded.
   // null in three cases: send not yet finished, recipient already in
@@ -286,7 +286,7 @@ export function Send({
     try {
       const text = await navigator.clipboard.readText();
       setTo(text.trim());
-      // Round 13 TASK 2 — pasting a different address clears the
+      // Pasting a different address clears the
       // previously-picked contact so its name doesn't carry over.
       setSelectedContact(null);
     } catch {
@@ -294,14 +294,14 @@ export function Send({
     }
   };
 
-  // Round 13 TASK 2 — Contacts picker selection. Setting `to` triggers
+  // Contacts picker selection. Setting `to` triggers
   // recipient re-parse via the existing useMemo at line ~216.
   const handleContactPicked = (contact: ContactRecord) => {
     setTo(contact.bech32m);
     setSelectedContact(contact);
   };
 
-  // Round 13 TASK 2 — clear selectedContact when user manually edits
+  // Clear selectedContact when user manually edits
   // the address field after picking from contacts. Without this, the
   // preview screen would render the stale contact name next to a
   // different address.
@@ -311,7 +311,7 @@ export function Send({
     }
   }, [to, selectedContact]);
 
-  // Round 13 TASK 2 — derive a "displayed contact" from selectedContact
+  // Derive a "displayed contact" from selectedContact
   // OR from a known-address lookup against the contacts map. Covers
   // both flows: user picked from the modal AND user typed/pasted an
   // address that happens to be saved.
@@ -373,8 +373,8 @@ export function Send({
       if (multisigVaultId !== undefined) {
         // Multisig path — create a proposal rather than broadcasting
         // a tx. Other signers approve via the Pending dashboard
-        // (Commit 4); once the threshold is reached the executor
-        // submits the underlying tx (Commit 4 too).
+        // once the threshold is reached the executor
+        // submits the underlying tx.
         const r = await bgMultisigPropose({
           vaultId: multisigVaultId,
           action: {
@@ -388,7 +388,7 @@ export function Send({
           // Reuse the txHash state slot to carry the proposalId
           // through to the success view — the UI distinguishes via
           // `multisigVaultId !== undefined`. Cleaner separation lands
-          // in Commit 6 alongside the dedicated multisig success
+          // alongside the dedicated multisig success
           // view + Pending dashboard link.
           setTxHash(r.proposalId);
           setStep("success");
@@ -482,7 +482,7 @@ export function Send({
     // assertion cannot be replayed for a different tx via the same
     // wallet. We hash the wire-format strings — close enough for the
     // local-presence-check the wallet uses today; the future
-    // chain-side passkey precompile (Phase 9.1) will use the chain's
+    // chain-side passkey precompile will use the chain's
     // canonical txHash for the same binding.
     const txDigest =
       needsPasskey && effectiveAddr0x !== null && amountLythoshi !== null
@@ -636,7 +636,7 @@ export function Send({
             >
               Paste
             </button>
-            {/* Round 13 TASK 2 — Contacts picker entry. Square icon
+            {/* Contacts picker entry. Square icon
                button to keep the row compact; the address-book glyph
                (Icon name="book") matches the hamburger-menu Contacts
                entry so the affordance is recognisable. */}
@@ -659,7 +659,7 @@ export function Send({
           {parsedRecipient.error && (
             <div style={inlineError}>{parsedRecipient.error}</div>
           )}
-          {/* Phase 11 Commit 7 — bech32m typo suggestion. When the user
+          {/* bech32m typo suggestion. When the user
               types a mono1... address that fails checksum but a single-
               character substitution produces a valid one, surface the
               candidate as a clickable hint. Click sets it as the new
@@ -995,7 +995,7 @@ export function Send({
         </button>
       </div>
 
-      {/* Round 13 TASK 2 — Contacts picker modal. Renders into a portal
+      {/* Contacts picker modal. Renders into a portal
          (Modal primitive) so its overlay covers the full popup
          viewport regardless of the Send form's scroll state. */}
       <ContactsPickerModal
@@ -1075,7 +1075,7 @@ const fromHint: CSSProperties = {
   fontSize: 10,
   color: "var(--fg-500)",
   marginTop: 8,
-  // Round 6 TASK 5 — bech32m address is now rendered full (no
+  // bech32m address is rendered full (no
   // shortAddr truncation). Allow wrap if it doesn't fit on one
   // line at the current popup width; truncation would violate the
   // "no ellipsis" rule.
@@ -1400,7 +1400,7 @@ const TLD_HINT: Record<MonoNameParse["tld"], string> = {
   system: "system",
 };
 
-// ---- Recipient familiarity (phase 6 phishing protection) ----
+// ---- Recipient familiarity (phishing protection) ----
 
 type Familiarity = "unknown" | "new" | "seen";
 
@@ -1560,12 +1560,12 @@ interface PreviewViewProps {
    *  header, "Submit as proposal" CTA, multisig-aware warning copy.
    *  Default behavior (single-vault send) is unchanged when false. */
   isMultisig?: boolean;
-  /** Phase 9 — passkey policy decision for the current tx. When
+  /** Passkey policy decision for the current tx. When
    *  present and the decision is `passkey-ok`, render a "passkey
    *  unlock" badge above the warning card so the user knows which
    *  unlock path the Confirm CTA will trigger. */
   passkeyDecision?: BgPasskeyDecision | null;
-  /** Round 13 TASK 2 — recipient's matching contact entry (if any).
+  /** Recipient's matching contact entry (if any).
    *  Set either because the user explicitly picked from the contacts
    *  modal, OR because the typed/pasted address happens to match a
    *  saved contact. The "To" summary row renders the contact name
@@ -1581,7 +1581,7 @@ interface PreviewViewProps {
   finalityPosture?: string;
 }
 
-/** Phase 9 — preview-screen badge that tells the user which unlock
+/** Preview-screen badge that tells the user which unlock
  *  the Confirm CTA will trigger.
  *
  *  passkey-ok       → green "Passkey unlock" pill
@@ -1654,7 +1654,7 @@ function PasskeyDecisionBadge({
   );
 }
 
-/** Phase 11.5 Commit 2 — "Hooks that will run" section on the Send
+/** "Hooks that will run" section on the Send
  *  preview screen. Lazy-fetches the chain's pre-tx hook preview
  *  (`lyth_previewTransactionHooks`, mono-core @dd05511) when the
  *  preview mounts.
@@ -1936,7 +1936,7 @@ function PreviewView({
       <div className="ext-body">
         <div className="ext-card" style={{ padding: 14 }}>
           <SummaryRow label="From" value={bech32mDisplay(fromAddr)} mono />
-          {/* Round 13 TASK 2 — when the recipient maps to a saved
+          {/* When the recipient maps to a saved
              contact (either via the picker or because the typed
              address is known), show the contact name above the
              bech32m. Otherwise fall back to the bare address row. */}
@@ -2089,7 +2089,7 @@ function PreviewView({
 
 interface SummaryRowProps {
   label: string;
-  /** Round 13 TASK 2 — accept ReactNode (was `string`) so the "To"
+  /** Accept ReactNode (was `string`) so the "To"
    *  row can render a contact name above its bech32m address when
    *  the recipient is a saved contact. String callers continue to
    *  work unchanged. */
@@ -2680,7 +2680,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewP
   );
 }
 
-/** Phase 11 Commit 7 — bech32m typo suggestion hint.
+/** bech32m typo suggestion hint.
  *
  *  When the user typed something that fails parsing AND the typo
  *  classifier finds a 1-edit fix, render an inline "Did you mean

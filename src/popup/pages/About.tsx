@@ -2,7 +2,7 @@
 // genesis-hash display, external links, and §28.5 differentiation
 // pitch.
 //
-// Phase 6 commit 4. Pure read-only screen — no writes, no IPC beyond
+// Pure read-only screen — no writes, no IPC beyond
 // the operator-health probe.
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
@@ -56,7 +56,7 @@ import { CHAIN_RETURNS_LEGACY_WEI } from "../../shared/chain-units";
 
 interface AboutProps {
   onBack: () => void;
-  /** Phase 8 — passed when the active vault is a multisig vault.
+  /** Passed when the active vault is a multisig vault.
    *  Surfaces a §28.5-aligned card explaining the wallet's M-of-N
    *  security model + roster summary + chain-GAP caveat. */
   multisig?: {
@@ -66,7 +66,7 @@ interface AboutProps {
     pendingCount: number;
     onOpenGovernance: () => void;
   };
-  /** Phase 9 — when set, surfaces a §28.5 Q29+Q30+Q31 status card
+  /** When set, surfaces a §28.5 Q29+Q30+Q31 status card
    *  showing how many passkeys are registered, the policy state, and
    *  which two-tier features are active. */
   phase9?: {
@@ -74,7 +74,7 @@ interface AboutProps {
     onOpenSecurity: () => void;
     onOpenFeatures: () => void;
   };
-  /** Phase 10 — when set, surfaces a §30.1 backup status card with
+  /** When set, surfaces a §30.1 backup status card with
    *  the active vault's backup state + a cross-vault "N of M"
    *  aggregate so the user can see at a glance how many of their
    *  vaults have a registered emergency-recovery key. */
@@ -256,7 +256,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
   const healthyCount = operators?.filter((o) => o.ok).length ?? 0;
   const trustedCount = operators?.filter((o) => o.trustedGenesis).length ?? 0;
   const totalCount = operators?.length ?? 0;
-  // Phase 7.1 — capability aggregate. Counts operators reporting each
+  // Capability aggregate. Counts operators reporting each
   // surface as "available". Surfaces the "n/m support X" header summary
   // when at least one operator returned capability info; absent when
   // every operator is on a pre-uplift binary.
@@ -266,7 +266,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
       : summariseOperatorCapabilities(operators);
   // The displayed registry genesis hash is the live GitHub value when
   // the fetch succeeded, the SDK-bundled snapshot otherwise. The
-  // build-time `SPRINTNET_GENESIS_HASH` pin still gates GAP #11 in
+  // build-time `SPRINTNET_GENESIS_HASH` pin still gates the genesis check in
   // networks.ts — this is purely display + drift detection.
   const displayedRegistryGenesis =
     liveRegistryGenesis ?? SDK_REGISTRY_GENESIS_HASH;
@@ -387,7 +387,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           />
         </div>
 
-        {/* Phase 8 — Multisig vault context card. Renders only when
+        {/* Multisig vault context card. Renders only when
             the active vault is a multisig vault. Aligns with §28.5
             mandatory multisig surface; flags the chain-GAP off-band
             coordination model explicitly. */}
@@ -998,7 +998,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           </div>
         </div>
 
-        {/* Phase 11 Commit 5 — Operator risk legend. Decodes the chips
+        {/* Operator risk legend. Decodes the chips
             rendered on operator rows above. */}
         <OperatorRiskLegendCard />
 
@@ -1159,7 +1159,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
   // Untrusted (forked) operators are RPC-skipped regardless of liveness,
   // so they get the danger border even when the probe succeeded.
   const dangerBorder = !trusted || !ok;
-  // Phase 11 Commit 5 — derive risk badges from probe data.
+  // Derive risk badges from probe data.
   const riskBadges = classifyOperatorRisk({
     ok: row.ok,
     trustedGenesis: row.trustedGenesis,
@@ -1167,8 +1167,8 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
     indexerHeight: row.indexerHeight,
     indexerLatest: row.indexerLatest,
     latencyMs: row.ok ? row.latencyMs : null,
-    // Phase 11 chain GAP — `lyth_pendingOperatorChanges` (or whatever
-    // chain commit 017cab9 ends up calling it) is not in the SDK at
+    // Chain gap — `lyth_pendingOperatorChanges` (or whatever
+    // the chain ends up calling it) is not in the SDK yet.
     // @0fd8a79. Once a reader lands, surface `pendingChange` here.
     // The classifier already supports the field; surfaces a "pending"
     // badge with chain-supplied severity when present.
@@ -1276,7 +1276,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
                 #{parseHex(row.blockHex)}
               </div>
             )}
-            {/* Phase 7.1 — indexer lag readout when the operator reports
+            {/* Indexer lag readout when the operator reports
                 an indexer height. Lag = latest - current (one-way; the
                 indexer can't be ahead of the chain). */}
             {row.indexerHeight !== null && (
@@ -1299,7 +1299,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           <div>{row.reason}</div>
         )}
       </div>
-      {/* Phase 11 Commit 5 — operator risk badges (derived from probe
+      {/* Operator risk badges (derived from probe
           data via classifyOperatorRisk). Spans the full row when any
           risk badge applies; absent for healthy operators. */}
       {riskBadges.length > 0 && (
@@ -1319,7 +1319,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           ))}
         </div>
       )}
-      {/* Phase 7.1 — per-operator capability badge strip. Spans all 3
+      {/* Per-operator capability badge strip. Spans all 3
           columns when present; absent when the operator's response had
           no capabilities or returned an error for `lyth_operatorCapabilities`. */}
       {row.capabilities !== null &&
@@ -1364,7 +1364,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
   );
 }
 
-/** Phase 11 Commit 5 — render a single risk badge as a coloured chip
+/** Render a single risk badge as a coloured chip
  *  with a hover tooltip explaining what tripped it. Severity drives
  *  the colour (info = blue, warn = amber, err = red). */
 function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
@@ -1407,7 +1407,7 @@ function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
   );
 }
 
-/** Phase 11 Commit 5 — Operator-risk legend card rendered on the About
+/** Operator-risk legend card rendered on the About
  *  page below the operator probe list. One-line explanation per risk
  *  kind so the user can decode the badges from the probe rows above.
  *  Static (no chain reads); content tracks OPERATOR_RISK_LEGEND. */

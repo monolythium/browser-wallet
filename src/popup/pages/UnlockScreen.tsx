@@ -21,13 +21,13 @@ interface UnlockScreenProps {
    * down so the unlock screen can show the same status banner the rest of
    * the approval flow renders. Omitted in normal-popup locked mode. */
   chain?: ChainEntry;
-  /** Round 11 TASK 6 — "Forgot your password?" → "Import wallet" path.
+  /** "Forgot your password?" → "Import wallet" path.
    *  Caller routes to the existing ForgotPassword screen which handles
    *  the wipe + re-import flow. Omit (along with onForgotReset) to hide
    *  the Forgot link entirely — used by the approval-window unlock
    *  prompt where forgot-password isn't an appropriate escape hatch. */
   onForgotImport?: () => void;
-  /** Round 11 TASK 7 — "I don't know my Phrase" path. Caller routes to
+  /** "I don't know my Phrase" path. Caller routes to
    *  the post-wipe landing (Welcome). This component fires the wipe
    *  IPC itself; the callback only handles the screen change. */
   onForgotReset?: () => void;
@@ -51,7 +51,7 @@ export function UnlockScreen({
   const [secondsRemaining, setSecondsRemaining] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
-  // Round 11 TASK 6 + 7 — modal stack. forgotOpen is the entry modal
+  // Modal stack. forgotOpen is the entry modal
   // (Import / I don't know my Phrase). idkOpen is the stronger
   // "Yes, reset wallet" confirmation reached from the I-don't-know
   // button. Only one is rendered at a time.
@@ -291,7 +291,7 @@ export function UnlockScreen({
           </div>
         )}
 
-        {/* Round 11 TASK 6 — Forgot password? entry. Hidden in the
+        {/* Forgot password? entry. Hidden in the
            approval-window unlock prompt (no callbacks passed). */}
         {showForgotLink && (
           <button
@@ -328,7 +328,7 @@ export function UnlockScreen({
         </button>
       </div>
 
-      {/* Round 11 TASK 6 — Forgot password entry modal. Two options:
+      {/* Forgot password entry modal. Two options:
          Import wallet (routes to the existing ForgotPassword screen
          which handles wipe + re-import) or I don't know my Phrase
          (opens the stronger reset confirm below). */}
@@ -405,7 +405,7 @@ export function UnlockScreen({
         </div>
       </Modal>
 
-      {/* Round 11 TASK 7 — strong "Don't have your recovery phrase?"
+      {/* Strong "Don't have your recovery phrase?"
          confirmation. The Yes button fires bgKeystoreWipeUnauth which
          clears the encrypted vault container + every per-vault
          setup-state record. After success the parent's onForgotReset
