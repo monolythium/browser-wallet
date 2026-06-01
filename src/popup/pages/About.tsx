@@ -1237,7 +1237,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
               title={
                 row.observedGenesis !== null
                   ? `observed genesis: ${row.observedGenesis}`
-                  : "operator did not return a genesis block"
+                  : "operator did not return chain-genesis metadata"
               }
             >
               untrusted chain

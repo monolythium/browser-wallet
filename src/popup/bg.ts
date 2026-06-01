@@ -1324,7 +1324,7 @@ export async function bgOperatorsSet(
 /** Per-operator health row surfaced by `sprintnet-operators-health`. `ok`
  *  is true when the operator responded with both a `net_version` and a
  *  `eth_blockNumber` within the probe budget; `trustedGenesis` is true
- *  when the operator's block 0 hash matches the wallet's pinned
+ *  when the operator's chain genesis matches the wallet's pinned
  *  SPRINTNET_GENESIS_HASH (Phase 6 GAP #11 — orphan-fork defense). The
  *  two are orthogonal: an operator can be live but on a forked chain
  *  (ok=true, trustedGenesis=false) — RPC dispatch still excludes it,
@@ -1333,10 +1333,10 @@ export interface OperatorHealthRowCommon {
   name: string;
   region: string;
   rpc: string;
-  /** True iff block-0 hash matches the wallet's pinned genesis. */
+  /** True iff the operator's chain genesis matches the wallet pin. */
   trustedGenesis: boolean;
-  /** Block-0 hash returned by `eth_getBlockByNumber("0x0", false)`;
-   *  null when the probe failed or the response was malformed. */
+  /** Observed genesis identity or fallback block-0 hash; null when the
+   *  probe shape is unsupported or malformed. */
   observedGenesis: string | null;
   /** Phase 7.1 — operator-surface availability from
    *  `lyth_operatorCapabilities` (SDK commit 0f483b8). Keys are surface

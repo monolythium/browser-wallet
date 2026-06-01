@@ -11,7 +11,10 @@ import {
   mergeOperatorOverride,
   type OperatorEntry,
 } from "../shared/operators.js";
-import { SPRINTNET_GENESIS_HASH } from "../shared/build-info.js";
+import {
+  SPRINTNET_BLOCK0_HASH,
+  SPRINTNET_GENESIS_HASH,
+} from "../shared/build-info.js";
 
 /** Monolythium Testnet (L1 testnet) chain id, exposed as 0x-quantity hex. */
 export const SPRINTNET_CHAIN_ID_HEX =
@@ -241,10 +244,10 @@ export async function probeFirstAliveOperator(
  * restarts.
  */
 interface GenesisCacheEntry {
-  /** `true` when block 0's hash equals SPRINTNET_GENESIS_HASH. */
+  /** `true` when the operator's chain identity matches the wallet pin. */
   ok: boolean;
-  /** Observed hash from `eth_getBlockByNumber("0x0", false)`. `null`
-   *  when the probe failed (transport error, malformed response). */
+  /** Observed genesis identity or fallback block-0 hash. `null` when the
+   *  operator does not expose either probe shape. */
   observed: string | null;
   checkedAt: number;
 }
@@ -252,11 +255,17 @@ interface GenesisCacheEntry {
 const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
 
 /**
- * Verify an operator's block-0 hash matches SPRINTNET_GENESIS_HASH.
+ * Verify an operator's chain genesis identity matches SPRINTNET_GENESIS_HASH.
  * Returns true on match (or cache-hit "true"); false on mismatch,
  * unreachable, or malformed response. Result is cached forever (see
  * cache docstring). The cached false is the load-bearing behavior:
  * one mismatch and we never route RPC to that operator again.
+ *
+ * Preferred probe: `lyth_chainStats.genesisHash`, which is the chain
+ * identity hash used by the registry and p2p binding. Fallback probe:
+ * block-0's EVM header hash, compared against SPRINTNET_BLOCK0_HASH. The
+ * two pins are separate because protocore does not define them as the
+ * same hash.
  *
  * Used by:
  *  - probeFirstAliveOperator (defense-in-depth against orphan fork)
@@ -298,55 +307,96 @@ async function probeOperatorGenesis(
   timeoutMs: number,
 ): Promise<GenesisCacheEntry> {
   const now = Date.now();
+
+  const stats = await rpcCall(rpc, timeoutMs, "lyth_chainStats", []);
+  if (stats.ok) {
+    const result = readObject(stats.body, "result");
+    const observed = normaliseHash(result?.genesisHash);
+    if (observed !== null) {
+      return {
+        ok: observed === SPRINTNET_GENESIS_HASH.toLowerCase(),
+        observed,
+        checkedAt: now,
+      };
+    }
+  }
+
+  const block0 = await rpcCall(rpc, timeoutMs, "eth_getBlockByNumber", [
+    "0x0",
+    false,
+  ]);
+  if (!block0.ok) {
+    return { ok: false, observed: null, checkedAt: now };
+  }
+  const body = block0.body as {
+    result?: { hash?: unknown } | null;
+  };
+  // GAP #11 — older operator binaries did not expose block 0 via
+  // eth_getBlockByNumber("0x0", false). That remains "probe not
+  // supported" instead of orphan-fork evidence; newer binaries are
+  // verified against SPRINTNET_BLOCK0_HASH.
+  if (body?.result == null) {
+    console.info(
+      "[probe] genesis probes unsupported on operator (ok=true, pin skipped):",
+      rpc,
+    );
+    return { ok: true, observed: null, checkedAt: now };
+  }
+  const observed = normaliseHash(body.result.hash);
+  if (observed === null) {
+    return { ok: false, observed: null, checkedAt: now };
+  }
+  return {
+    ok: observed === SPRINTNET_BLOCK0_HASH.toLowerCase(),
+    observed,
+    checkedAt: now,
+  };
+}
+
+async function rpcCall(
+  rpc: string,
+  timeoutMs: number,
+  method: string,
+  params: unknown[],
+): Promise<{ ok: true; body: unknown } | { ok: false }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     const res = await fetch(rpc, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
-        method: "eth_getBlockByNumber",
-        params: ["0x0", false],
+        method,
+        params,
       }),
       signal: ctrl.signal,
     });
-    clearTimeout(timer);
     if (!res.ok) {
-      return { ok: false, observed: null, checkedAt: now };
+      return { ok: false };
     }
-    const body = (await res.json()) as {
-      result?: { hash?: string } | null;
-    };
-    // GAP #11 — operator binaries that don't expose block 0 via
-    // eth_getBlockByNumber("0x0", false) (verified empirically on
-    // protocore/v2/0.1.0 binary a27eec62, 2026-05-25: all 6
-    // foundation operators return {"result": null} for this call)
-    // are treated as "probe-not-supported, trust passes" rather than
-    // as orphan-fork evidence. The pin still binds for any operator
-    // that DOES return a block 0 hash — a mismatched hash remains
-    // rejected by the observed-vs-pin compare below. observed stays
-    // null so the About page can surface "block 0 unavailable" rather
-    // than a fake hash.
-    if (body?.result == null) {
-      console.info(
-        "[probe] block 0 unservable on operator (ok=true, pin skipped):",
-        rpc,
-      );
-      return { ok: true, observed: null, checkedAt: now };
-    }
-    const observed =
-      typeof body.result.hash === "string" ? body.result.hash.toLowerCase() : null;
-    if (observed === null) {
-      return { ok: false, observed: null, checkedAt: now };
-    }
-    return {
-      ok: observed === SPRINTNET_GENESIS_HASH.toLowerCase(),
-      observed,
-      checkedAt: now,
-    };
+    return { ok: true, body: await res.json() };
   } catch {
-    return { ok: false, observed: null, checkedAt: now };
+    return { ok: false };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+function readObject(
+  input: unknown,
+  key: string,
+): Record<string, unknown> | null {
+  if (typeof input !== "object" || input === null) return null;
+  const value = (input as Record<string, unknown>)[key];
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normaliseHash(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  if (!/^0[xX][0-9a-fA-F]{64}$/.test(input)) return null;
+  return input.toLowerCase();
 }
