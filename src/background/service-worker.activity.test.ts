@@ -357,6 +357,14 @@ vi.mock("./networks.js", () => ({
 // `computeTypedDataDigest` helper now lives in ./typed-data.js (pure, no
 // chrome dependency) and runs for real — no mock needed.
 let unlocked = true;
+// T1-04(a) passkey-cap gate controls. Default INERT (no active passkey
+// vault) so every existing send test behaves exactly as before the gate.
+let activePasskeyVaultId: string | null = null;
+let passkeyStateForTest: unknown = {
+  policy: { enabled: false, mode: "per-tx", limitWei: 0n },
+  credentials: [],
+};
+let correctElevatedPassword = "correct-horse-battery-staple";
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
@@ -366,6 +374,12 @@ vi.mock("./keystore-mldsa.js", () => ({
     vaultId: "v1",
   })),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
+  // T1-04(a) passkey-cap gate seams. Default-inert (null active vault).
+  getActiveVaultIdV4: vi.fn(() => activePasskeyVaultId),
+  readPasskeyStateV4: vi.fn(async () => passkeyStateForTest),
+  verifyContainerPasswordV4: vi.fn(
+    async (pw: string) => pw === correctElevatedPassword,
+  ),
   tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
   unlockV4: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
@@ -637,6 +651,13 @@ beforeEach(() => {
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   unlocked = true;
+  // Reset the passkey-cap gate to inert unless a test opts in.
+  activePasskeyVaultId = null;
+  passkeyStateForTest = {
+    policy: { enabled: false, mode: "per-tx", limitWei: 0n },
+    credentials: [],
+  };
+  correctElevatedPassword = "correct-horse-battery-staple";
   storageLocal = {};
   storageSession = {};
   alarmCreateCalls.length = 0;
@@ -4675,4 +4696,121 @@ describe("notification settings IPC — boolean validation at the boundary", () 
       expect(r.reason).toContain("boolean");
     });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T1-04(a) — passkey spending cap enforced at the SW signing boundary.
+// The gate is INERT unless a test opts in via activePasskeyVaultId +
+// passkeyStateForTest (default null/disabled — see the keystore mock).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
+  const LIMIT_LYTHOSHI = 10_000_000_000n; // 100 LYTH (1 LYTH = 1e8 lythoshi)
+  const OVER = "0x" + (LIMIT_LYTHOSHI * 2n).toString(16); // 200 LYTH
+  const UNDER = "0x" + (LIMIT_LYTHOSHI / 2n).toString(16); // 50 LYTH
+
+  function enablePerTxCap() {
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "per-tx", limitWei: LIMIT_LYTHOSHI },
+      credentials: [{ credentialId: "c1" }],
+    };
+  }
+
+  function seedNonceAndFee() {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+
+  it("over-limit value send with NO password → passkeyElevation:required, no broadcast", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("over-limit value send with the CORRECT password is SW-verified and broadcasts", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "correct-horse-battery-staple",
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("over-limit value send with a WRONG password → passkeyElevation:wrong_password, no broadcast", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "nope",
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("wrong_password");
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("under-limit value send broadcasts with no elevation required", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean; passkeyElevation?: string };
+    expect(r.ok).toBe(true);
+    expect(r.passkeyElevation).toBeUndefined();
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("policy disabled → gate inert, over-limit value send broadcasts", async () => {
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: false, mode: "per-tx", limitWei: LIMIT_LYTHOSHI },
+      credentials: [{ credentialId: "c1" }],
+    };
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("data (contract-call) send bypasses the value-only cap even when over-limit", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001001",
+      valueWeiHex: OVER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
 });
