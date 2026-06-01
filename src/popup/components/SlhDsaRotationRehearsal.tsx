@@ -1,4 +1,4 @@
-// Phase 10 Commit 8 — read-only G3 rotation rehearsal.
+// Read-only G3 rotation rehearsal.
 //
 // Surfaces as a small explainer block inside the Settings →
 // Security backup card (when the active vault has a registered
@@ -7,11 +7,11 @@
 // abstract — they know exactly what they'd do with it on
 // break-day.
 //
-// This is **read-only** in Phase 10. The actual
+// This is **read-only** today. The actual
 // `emergency-key.rotate` precompile call lands in a future phase
-// (Phase 10.2) when the G3 declaration framework matures on
+// (a future phase) when the G3 declaration framework matures on
 // Sprintnet. Today the chain side has the registration slot live
-// + non-gateable (per Commit 1's investigation), but the
+// + non-gateable (per prior investigation), but the
 // rotation-flow runbook + G3 declaration plumbing are still TBD
 // per the whitepaper §30.2 + §30.2.1 framework.
 

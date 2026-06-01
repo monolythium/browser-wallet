@@ -1,4 +1,4 @@
-// Pending-row body: wallet-synthesized row from the Phase 4.4 Send
+// Pending-row body: wallet-synthesized row from the Send
 // broadcast hook (commit 8). Shown above confirmed rows until the
 // indexer surfaces the matching tx_send (heuristic match in commit 1)
 // or the 5-minute PENDING_TTL_MS backstop fires.

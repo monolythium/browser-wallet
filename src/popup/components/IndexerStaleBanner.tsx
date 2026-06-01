@@ -7,7 +7,7 @@
 // preference. Persisting dismissal across sessions would hide a real
 // degradation from a user who came back hours later.
 //
-// Phase 11 Commit 4 — extended with two new banner classes:
+// Extended with two new banner classes:
 //   - schemaDrift   → "wallet needs update — indexer schema is newer"
 //   - retentionHint → archive-redirect hint when the indexer rolling
 //                      window starts after the user's earliest tx.
@@ -21,12 +21,12 @@ export interface IndexerStaleBannerProps {
    *  is a controlled component — it renders only when `stale` is true
    *  AND the user hasn't dismissed it in this session. */
   stale: boolean;
-  /** Phase 11 Commit 4 — chain's schemaVersion exceeds the wallet's
+  /** Chain's schemaVersion exceeds the wallet's
    *  known version. Optional; defaults to false. When true, a second
    *  banner row renders below the stale row (or alone) prompting the
    *  user to update. */
   schemaDrift?: boolean;
-  /** Phase 11 Commit 4 — optional archive-redirect hint from the chain
+  /** Optional archive-redirect hint from the chain
    *  indexer. When non-null, a third banner row renders. The string is
    *  rendered verbatim — chain authors the user-facing copy. */
   archiveRedirect?: string | null;

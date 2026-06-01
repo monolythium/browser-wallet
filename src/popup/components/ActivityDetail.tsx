@@ -64,7 +64,7 @@ function isSelfPaid(row: ActivityRowType): boolean {
 
 // `truncMiddle`, `relativeMs`, `DRow`, `MonoscanTxButton`, and
 // `CopyableAddress` live in `./_detailModalParts.tsx` (extracted in
-// Phase 3/4 C4 so the `NotificationDetail` modal can share the same
+// so the `NotificationDetail` modal can share the same
 // primitives without duplicating them). Behavior is byte-identical to
 // the prior inlined versions — the existing activity tests pin this.
 

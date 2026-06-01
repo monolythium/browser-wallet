@@ -1,4 +1,4 @@
-// Phase 9 Commit 7 — OnboardingHintBar.
+// OnboardingHintBar.
 //
 // One-time post-onboarding hint card shown on Home when:
 //   1. The active vault has no registered passkey, AND

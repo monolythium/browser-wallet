@@ -1,4 +1,4 @@
-// Phase 10 Commit 3 — SlhDsaBackupRevealModal.
+// SlhDsaBackupRevealModal.
 //
 // Drives the §30.1 cold-storage reveal flow inside the popup window.
 // Two distinct entry modes:
@@ -20,11 +20,11 @@
 //
 // Hold-to-reveal: the user must press-and-hold the reveal button for
 // 1.5 seconds before the mnemonic appears. Same defensive UX as
-// Phase 3.5's RevealPhrase. Pinned at this duration so a brief
+// the RevealPhrase surface. Pinned at this duration so a brief
 // accidental tap (e.g. fat-fingered) does not flash the seed. The
 // timer cancels cleanly on mouseup / pointerup / blur.
 //
-// Clipboard: copying auto-clears after 60 seconds. Per Phase 3.5's
+// Clipboard: copying auto-clears after 60 seconds. Per the
 // convention, we overwrite the clipboard with an empty string so a
 // later paste in another window can't recover the mnemonic.
 
@@ -46,7 +46,7 @@ import {
 const HOLD_REVEAL_MS = 1_500;
 
 /** Auto-clear delay after a successful clipboard copy. Mirrors
- *  Phase 3.5's RevealPhrase (60 s — long enough for the user to
+ *  the RevealPhrase surface (60 s — long enough for the user to
  *  paste into a password manager, short enough that an unattended
  *  popup doesn't sit with the seed in the buffer). */
 const CLIPBOARD_AUTO_CLEAR_MS = 60_000;
@@ -173,7 +173,7 @@ export function SlhDsaBackupRevealModal({
         clearTimeout(clipboardTimerRef.current);
       }
       clipboardTimerRef.current = setTimeout(() => {
-        // Auto-clear: overwrite with an empty string. Same Phase 3.5
+        // Auto-clear: overwrite with an empty string. Same
         // RevealPhrase discipline — best-effort; clipboard.writeText
         // can fail under focus-loss, swallow the rejection.
         void navigator.clipboard.writeText("").catch(() => {});
@@ -313,7 +313,7 @@ export function SlhDsaBackupRevealModal({
             </button>
           ) : (
             <>
-              {/* Round 11 TASK 4 — this modal has its own 60 s ghost
+              {/* This modal has its own 60 s ghost
                  copy button below. Hide MnemonicGrid's default 30 s
                  copy to avoid two copy buttons with different timer
                  semantics. */}

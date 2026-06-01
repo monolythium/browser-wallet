@@ -1,4 +1,4 @@
-// Phase 11 Commit 9 — LoadingState primitive.
+// LoadingState primitive.
 //
 // Lightweight one-line loading state. Existing surfaces use bespoke
 // "Loading…" copy in inconsistent styles; this primitive standardises
