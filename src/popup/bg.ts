@@ -66,14 +66,6 @@ export interface KeystoreStatus {
   algo: SignAlgo;
 }
 
-export type ApprovalKind =
-  | "connect"
-  | "personal_sign"
-  | "typed_sign"
-  | "send_tx"
-  | "switch_chain"
-  | "add_chain";
-
 export interface SendTxView {
   /** Hex execution-unit limit. */
   executionUnitLimitHex: string | null;

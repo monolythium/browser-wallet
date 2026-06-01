@@ -1,6 +1,5 @@
 export const AUTO_LOCK_MINUTES_DEFAULT = 15;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
-export type AutoLockMinutes = (typeof AUTO_LOCK_OPTIONS)[number];
 
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
