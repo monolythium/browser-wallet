@@ -88,9 +88,9 @@ export async function sprintnetJsonRpc<T>(
   let totalOperators = 0;
   for (const v of getActiveOperators()) {
     totalOperators++;
-    // GAP #11: genesis-hash pin. Operators whose block 0 doesn't match
-    // SPRINTNET_GENESIS_HASH are skipped — they're either on a fork or
-    // a different chain entirely, and routing any request to them
+    // GAP #11: genesis-hash pin. Operators whose chain identity doesn't
+    // match SPRINTNET_GENESIS_HASH are skipped — they're either on a fork
+    // or a different chain entirely, and routing any request to them
     // leaks reads / writes onto an untrusted ledger.
     if (!(await verifyOperatorGenesis(v.rpc))) {
       untrustedCount++;
@@ -149,7 +149,7 @@ export async function sprintnetJsonRpc<T>(
   // per-operator status the user can act on.
   if (untrustedCount > 0 && untrustedCount === totalOperators) {
     throw new Error(
-      `Chain genesis mismatch — all ${totalOperators} operators reported untrusted block 0. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See About → Operators.`,
+      `Chain genesis mismatch — all ${totalOperators} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See About → Operators.`,
     );
   }
   throw lastTransportErr ?? new Error("no Sprintnet operator reachable");
@@ -234,7 +234,7 @@ export async function sprintnetMaxBalanceConsensus(
   }
 
   const probes = operators.map(async (op) => {
-    // GAP #11: skip operators whose block 0 doesn't match our pin.
+    // GAP #11: skip operators whose chain identity doesn't match our pin.
     // Treated as a "failing" entry so the consensus result still
     // reports the skipped operator's name and reason — distinct from
     // a network error, and visible in the SW console balance log.

@@ -24,7 +24,7 @@ export const SDK_PACKAGE_VERSION: string =
 
 /** Expected Sprintnet genesis hash — the wallet's authoritative pin for
  *  GAP #11 (orphan-fork defense). Operator probes that return a
- *  different hash for block 0 are marked "untrusted chain" and skipped
+ *  different chain genesis hash are marked "untrusted chain" and skipped
  *  by every RPC-dispatch path (balance, fee, send, indexer).
  *
  *  Mirrors the SDK chain-registry snapshot (see
@@ -33,16 +33,22 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value tracks mono-core commit `f7236197` (2026-05-27 fresh
- *  genesis cut, v0.0.6-testnet rollout). The live chain has since
- *  regenesised several times (mono-core `b7ebf657` → genesis
- *  `0x8085c869…`, the value `lyth_chainStats` reports today), and SDK
- *  0.3.9 bundles a different intermediate snapshot (`0xad64…`). Bumping
- *  this security pin is a human-reviewer decision; the About-page drift
- *  banner surfaces the mismatch and the live-registry fetch shows the
- *  current GitHub-registry value alongside it. */
+ *  Current value tracks chain-registry commit `a82df06` / protocore
+ *  v0.0.25-testnet (2026-06-01), where `lyth_chainStats.genesisHash`
+ *  reports the registry identity hash below. Bumping this security pin is
+ *  a human-reviewer decision; the About-page drift banner surfaces the
+ *  mismatch and the live-registry fetch shows the current GitHub-registry
+ *  value alongside it. */
 export const SPRINTNET_GENESIS_HASH =
-  "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c";
+  "0xe67cf82131fc63e335ce61afeae53299283eaa3a692830a618911aa840245031";
+
+/** Current block-0 header hash for the same chain. This is intentionally
+ *  separate from SPRINTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
+ *  exposes the chain identity hash used by the registry / p2p binding,
+ *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
+ *  header hash. They are not the same value on protocore v0.0.25. */
+export const SPRINTNET_BLOCK0_HASH =
+  "0x5c9b9859ef036e2dac514a5b4cc45bb3686078f69bb4c5e413d238c5202aac6b";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from SPRINTNET_GENESIS_HASH so the
