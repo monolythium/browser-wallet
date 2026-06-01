@@ -30,7 +30,7 @@ vi.mock("./networks.js", () => ({
 // hash. Only the runtime export (buildEncryptedSubmission) is mocked; the
 // other crypto imports in tx-mldsa.ts are type-only and erased.
 const CANONICAL_TX_HASH =
-  "0x36467a4360a4225ea31c348d0583e505a3d2f15b46a6d0a791163d2060e868c3";
+  CANONICAL_INNER_TX_HASH;
 const ENVELOPE_SUBMISSION_HASH =
   "0x7bcde98eb1820654644c07e33627f772ba9df56b189508af97c26c82268d1ba4";
 
@@ -64,6 +64,7 @@ import {
   submitPlaintextMlDsaTx,
   broadcastPlaintextTransaction,
 } from "./tx-mldsa.js";
+import { CANONICAL_INNER_TX_HASH } from "../shared/__fixtures__/golden.js";
 
 describe("sprintnetJsonRpc — method/via/code stamping", () => {
   const originalFetch = globalThis.fetch;
