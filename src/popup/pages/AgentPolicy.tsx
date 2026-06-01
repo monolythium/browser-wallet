@@ -704,12 +704,57 @@ function ReviewView({
   onPhraseSaved: (v: boolean) => void;
   onConfirm: () => void;
 }) {
+  // T3-01 (§25 WYSIWYS) — render a signed root only when it is actually set
+  // (non-empty, non-zero), shortened for legibility.
+  const rootRow = (label: string, v: string) => {
+    const t = v.trim();
+    if (t === "" || /^0x0+$/i.test(t)) return null;
+    return (
+      <SummaryRow label={label} value={`${t.slice(0, 10)}…${t.slice(-6)}`} mono />
+    );
+  };
+  const pad2 = (h: string) => String(h).trim().padStart(2, "0");
   return (
     <>
       <div className="ext-card" style={{ padding: 12 }}>
         <div style={cardTitle}>Agent sub-account</div>
         <SummaryRow label="Address" value={shortAddr(claim.subAccountBech32m)} mono />
         <SummaryRow label="Submits to" value={shortAddr(claim.to)} mono />
+      </div>
+
+      {/* T3-01 — the principal signs these policy terms into the claim; show
+          every one of them before the Fund & register confirm. Additive
+          display only — does not change the signed payload. */}
+      <div className="ext-card" style={{ padding: 12 }}>
+        <div style={cardTitle}>Policy terms (signed)</div>
+        {form.perTxCapLyth.trim() !== "" && (
+          <SummaryRow label="Per-tx cap" value={`${form.perTxCapLyth.trim()} LYTH`} />
+        )}
+        {form.dailyCapLyth.trim() !== "" && (
+          <SummaryRow label="Daily cap" value={`${form.dailyCapLyth.trim()} LYTH`} />
+        )}
+        {form.weeklyCapLyth.trim() !== "" && (
+          <SummaryRow label="Weekly cap" value={`${form.weeklyCapLyth.trim()} LYTH`} />
+        )}
+        {form.monthlyCapLyth.trim() !== "" && (
+          <SummaryRow
+            label="Monthly cap"
+            value={`${form.monthlyCapLyth.trim()} LYTH`}
+          />
+        )}
+        {rootRow("Allow-list root", form.allowRoot)}
+        {rootRow("Deny-list root", form.denyRoot)}
+        {rootRow("Category root", form.categoryAllowRoot)}
+        {form.windowEnabled && (
+          <SummaryRow
+            label="Time window"
+            value={`${pad2(form.windowStartHour)}:00–${pad2(form.windowEndHour)}:00`}
+          />
+        )}
+        <SummaryRow
+          label="Expires"
+          value={form.expiryDate.trim() !== "" ? form.expiryDate.trim() : "Never"}
+        />
       </div>
 
       <div
