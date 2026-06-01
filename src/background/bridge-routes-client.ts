@@ -69,10 +69,6 @@ export function normaliseBridgeRoutesResponse(
   };
 }
 
-export function isBridgeRoutesResponse(input: unknown): boolean {
-  return normaliseBridgeRoutesResponse(input) !== null;
-}
-
 export async function readBridgeRoutes(): Promise<
   ChainOutcome<WalletBridgeRoutesCatalogue>
 > {
