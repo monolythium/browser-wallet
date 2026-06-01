@@ -2,7 +2,7 @@
  * Password strength validation utilities.
  *
  * Requirements:
- * - Minimum 8 characters
+ * - Minimum 12 characters
  * - At least 1 uppercase letter
  * - At least 1 lowercase letter
  * - At least 1 number
@@ -21,7 +21,7 @@ const SPECIAL_CHAR_REGEX = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/;
 /** Validate each individual password requirement */
 export function validatePassword(password: string): PasswordRequirement[] {
   return [
-    { key: "minLength", met: password.length >= 8 },
+    { key: "minLength", met: password.length >= 12 },
     { key: "uppercase", met: /[A-Z]/.test(password) },
     { key: "lowercase", met: /[a-z]/.test(password) },
     { key: "number", met: /[0-9]/.test(password) },
