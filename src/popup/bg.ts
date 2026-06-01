@@ -2523,7 +2523,7 @@ export async function bgGetUnread(): Promise<
   return send("notifications-get-unread");
 }
 
-/** Polish C2 — flip ONE record's `read` flag to true by its full id.
+/** Flip ONE record's `read` flag to true by its full id.
  *  Returns `flipped:true` when the record was found and was previously
  *  unread; `flipped:false` for an already-read or unknown id (no-op).
  *  The SW also fires a best-effort `refreshUnreadBadge()` on a flip, so
