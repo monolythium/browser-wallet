@@ -1,4 +1,4 @@
-// Phase 1 — `notifications-store` round-trip coverage.
+// `notifications-store` round-trip coverage.
 //
 // We stub `chrome.storage.local` with an in-memory record (the same
 // pattern used by `keystore.test.ts`) so the real `recordNotification`
@@ -297,7 +297,7 @@ describe("notifications-store", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // Phase 3 — global inbox helpers (listAllNotifications +
+  // Global inbox helpers (listAllNotifications +
   // markAllNotificationsRead). The Notifications page reads via these.
   // ───────────────────────────────────────────────────────────────────────
 
@@ -496,7 +496,7 @@ describe("notifications-store", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // GAP-N1 C3 — presence-aware read at insert. `input.read` defaults false
+  // Presence-aware read at insert. `input.read` defaults false
   // (today's behavior); `true` ⇒ the record lands already-read (no unread).
   // ───────────────────────────────────────────────────────────────────────
 

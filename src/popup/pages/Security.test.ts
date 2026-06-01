@@ -1,4 +1,4 @@
-// Phase 9 Commit 3 — pure-helper tests for the Security page.
+// Pure-helper tests for the Security page.
 //
 // Validate the lythoshi/LYTH conversion helpers + slider-stop mapping.
 // The React rendering of Security itself is not snapshot-tested

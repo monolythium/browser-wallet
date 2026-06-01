@@ -1,4 +1,4 @@
-// Phase 2 — OS toast + badge + click-handler coverage. Stubs
+// OS toast + badge + click-handler coverage. Stubs
 // `chrome.notifications`, `chrome.action`, `chrome.tabs`, and
 // `chrome.storage.local` (the same in-memory pattern as keystore.test.ts
 // + notifications-store.test.ts) so the real fireOsNotification /
@@ -335,12 +335,12 @@ describe("installNotificationsClickListener", () => {
   });
 });
 
-// Phase 5 — user-facing OS-toast toggle. The flag (default true) gates
+// User-facing OS-toast toggle. The flag (default true) gates
 // ONLY chrome.notifications.create. The in-app notification history and
 // the toolbar unread badge keep running on the hook side regardless,
 // because both are owned by the SW chokepoint (recordNotification +
 // refreshUnreadBadge), not by fireOsNotification.
-describe("Phase 5 — OS-toast flag (mono.notifications.os-enabled.v1)", () => {
+describe("OS-toast flag (mono.notifications.os-enabled.v1)", () => {
   let captures: ChromeStubCaptures;
 
   beforeEach(() => {
@@ -427,10 +427,10 @@ describe("Phase 5 — OS-toast flag (mono.notifications.os-enabled.v1)", () => {
   });
 });
 
-// GAP-N1 C3 — the real presence probe (chrome.runtime.getContexts). Defaults
+// The real presence probe (chrome.runtime.getContexts). Defaults
 // FALSE on any error / missing API so an unrecognized environment behaves as
 // "closed" (badge accumulates; unread is never silently muted).
-describe("isWalletSurfaceOpen — GAP-N1 C3 presence probe", () => {
+describe("isWalletSurfaceOpen — presence probe", () => {
   beforeEach(() => {
     installChromeStub();
     vi.resetModules();
@@ -481,9 +481,9 @@ describe("isWalletSurfaceOpen — GAP-N1 C3 presence probe", () => {
   });
 });
 
-// GAP-N1 settings — the three new notification toggles. Same default-true,
+// The three new notification toggles. Same default-true,
 // fail-open semantics as the Phase-5 os-enabled flag.
-describe("GAP-N1 settings — show-details / notify-when-locked / badge-when-locked", () => {
+describe("notification settings — show-details / notify-when-locked / badge-when-locked", () => {
   beforeEach(() => {
     installChromeStub();
     vi.resetModules();
@@ -542,11 +542,11 @@ describe("GAP-N1 settings — show-details / notify-when-locked / badge-when-loc
   });
 });
 
-// GAP-N1 C2 — the gating itself: fireOsNotification's lock gate + show-details
+// The gating itself: fireOsNotification's lock gate + show-details
 // body branch, and refreshUnreadBadge's badge-when-locked hold. `unlocked` is
 // passed in (gate-only). The in-app record write is separate (recordNotification
 // takes no settings — covered in notifications-store.test.ts).
-describe("GAP-N1 C2 — toast + badge gating on the new settings", () => {
+describe("toast + badge gating on the new settings", () => {
   let captures: ChromeStubCaptures;
 
   beforeEach(() => {
