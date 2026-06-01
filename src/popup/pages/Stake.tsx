@@ -1,9 +1,9 @@
-// Phase 7 — Stake page. Top-level orchestrator for the cluster
+// Stake page. Top-level orchestrator for the cluster
 // directory → form → preview → submitting → success | error flow.
 //
 // Replaces the legacy placeholder Stake exported from components.tsx
 // (which was a static four-button strategy mock with no chain wiring).
-// AutovoteSelector + the four-button §23.9 path lands in Commit 3 as
+// AutovoteSelector + the four-button §23.9 path is
 // an alternative entry into the same submit step.
 //
 // Chain wiring: the form's Continue → preview → Confirm flow encodes a
@@ -89,12 +89,12 @@ type Step =
 type Action = "delegate" | "undelegate" | "redelegate" | "claim";
 
 /** Top-level interaction mode. `"manual"` = single-cluster pick →
- *  stake form path (commit 2). The four autovote modes route through
- *  AutovotePreview before submitting; for commit 3 only the first
+ *  stake form path. The four autovote modes route through
+ *  AutovotePreview before submitting; only the first
  *  allocation submits (full batch lands as a follow-up). */
 type EntryMode = "manual" | AutovoteMode;
 
-// R18 — sessionStorage persistence so a round-trip through ClusterDetail
+// sessionStorage persistence so a round-trip through ClusterDetail
 // restores the user's prior selection + step (App.tsx routes Stake and
 // ClusterDetail as sibling screens, so Stake unmounts on navigation).
 // Cleared by App.tsx when the user explicitly leaves Stake via onBack.
@@ -202,7 +202,7 @@ interface StakeProps {
    *  Resets to manual delegate on mount when omitted. */
   initialAction?: "delegate" | "undelegate" | "redelegate";
   initialClusterId?: number;
-  /** Phase 11 Commit 6 — when supplied, the ClusterPicker rows expose
+  /** When supplied, the ClusterPicker rows expose
    *  a "View details →" affordance that calls this with the directory
    *  entry. App navigates to the dedicated cluster-detail screen. */
   onShowClusterDetail?: (
@@ -219,7 +219,7 @@ export function Stake({
   onShowClusterDetail,
   onBack,
 }: StakeProps) {
-  // R18 — restore prior Stake state when the user returns from a sibling
+  // Restore prior Stake state when the user returns from a sibling
   // screen (ClusterDetail). Deep-link props always win over the restored
   // value so Delegations → "Unstake" still pre-positions correctly.
   const savedState = loadStakeState();
@@ -261,7 +261,7 @@ export function Stake({
     | null
   >(null);
 
-  // Phase 9 — §28.5 Q29 TRADING_INTERFACE flag gates the advanced
+  // §28.5 Q29 TRADING_INTERFACE flag gates the advanced
   // reward analytics surface (per-cluster breakdown inside RewardCard).
   // Default OFF → users see only the total + claim button.
   const tradingInterfaceOn = useFeature("TRADING_INTERFACE");
@@ -296,7 +296,7 @@ export function Stake({
     via: string | null;
   } | null>(null);
 
-  // R18 — persist key form / selection state on every change so a
+  // Persist key form / selection state on every change so a
   // round-trip through ClusterDetail returns the user to the same
   // place. App.tsx clears the key on explicit Stake exit.
   useEffect(() => {
@@ -492,7 +492,7 @@ export function Stake({
           );
         }
         // The delegation precompile's execution-unit budget isn't measured yet
-        // (chain GAP — needs Nayiem). Use a generous overhead-aware
+        // (chain GAP — execution-unit budget not yet measured on-chain). Use a generous overhead-aware
         // estimate; redelegate carries one extra arg so we bump the
         // budget slightly for that path.
         executionUnitLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
@@ -806,10 +806,10 @@ export function Stake({
                 onProceed={() => {
                   if (autovotePlan === null) return;
                   if (autovotePlan.allocations.length === 0) return;
-                  // Commit 3 ships a single-tx submit of the FIRST
+                  // Single-tx submit of the FIRST
                   // allocation. Multi-allocation batching lands in a
                   // follow-up so the same `bgWalletSendTx` envelope
-                  // path keeps the audit shape simple for Phase 7.
+                  // path keeps the audit shape simple.
                   const first = autovotePlan.allocations[0]!;
                   setSelectedClusterId(first.cluster);
                   setAmountStr(

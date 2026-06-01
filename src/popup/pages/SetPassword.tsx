@@ -21,7 +21,7 @@ export function SetPassword({
 }: SetPasswordProps) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  // Round 11 TASK 8 — required acknowledgement before the wallet
+  // Required acknowledgement before the wallet
   // password can be created. Mirrors MetaMask's pattern: an explicit
   // tick that the user understands the wallet is non-custodial and a
   // forgotten password can NOT be recovered by Monolythium. Continue
@@ -91,7 +91,7 @@ export function SetPassword({
           confirmPassword={confirm}
         />
 
-        {/* Round 11 TASK 8 — acknowledgement gate. The entire row is a
+        {/* Acknowledgement gate. The entire row is a
            label so a tap anywhere on the box toggles the checkbox. */}
         <label
           style={{
