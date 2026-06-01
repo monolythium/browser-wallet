@@ -60,4 +60,3 @@ chrome.runtime.onMessage.addListener((message: { kind: string; event?: string; p
   window.postMessage(ev, "*");
 });
 
-console.log("Monolythium Wallet: bridge content script ready");
