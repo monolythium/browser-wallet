@@ -3,7 +3,7 @@
 // via + code onto the thrown error) and transport-level failures
 // (which propagate unstamped after exhausting the operator list).
 //
-// The popup's method-aware ErrorView in Send.tsx (Phase 4.3.1)
+// The popup's method-aware ErrorView in Send.tsx
 // depends on the body.error branch carrying the method that threw;
 // these tests are the regression-catcher that pins that contract.
 
@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // would drive which operator name lands in err.via; mocking lets the
 // assertion be exact regardless of future default-list edits.
 // verifyOperatorGenesis is stubbed to always-true: this suite tests
-// the RPC dispatch error-stamping, not the GAP #11 genesis-pin path
+// the RPC dispatch error-stamping, not the genesis-pin path
 // (covered separately via verifyOperatorGenesis unit tests).
 // vi.mock is hoisted above the static import below.
 vi.mock("./networks.js", () => ({
@@ -24,7 +24,7 @@ vi.mock("./networks.js", () => ({
   verifyOperatorGenesis: async () => true,
 }));
 
-// Canonical-hash threading (C1) needs the SDK submission builder + keystore
+// Canonical-hash threading needs the SDK submission builder + keystore
 // stubbed: the wallet must surface the SDK's `innerTxHashHex` (the canonical
 // inner-tx hash the chain indexes), NOT the `lyth_submitEncrypted` envelope
 // hash. Only the runtime export (buildEncryptedSubmission) is mocked; the
@@ -131,7 +131,7 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
   });
 });
 
-describe("sprintnetJsonRpc — GAP-N1 per-call timeout (opts.timeoutMs)", () => {
+describe("sprintnetJsonRpc — per-call timeout (opts.timeoutMs)", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -175,7 +175,7 @@ describe("sprintnetJsonRpc — GAP-N1 per-call timeout (opts.timeoutMs)", () => 
   });
 });
 
-describe("submitEncryptedMlDsaTx — canonical hash threading (C1)", () => {
+describe("submitEncryptedMlDsaTx — canonical hash threading", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
     globalThis.fetch = originalFetch;

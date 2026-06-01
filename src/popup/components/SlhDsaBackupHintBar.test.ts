@@ -1,5 +1,5 @@
-// Phase 10 Commit 5 — pure-helper tests for the SLH-DSA backup hint
-// bar. Mirrors the Phase 9 hint-bar tests' posture — the React
+// Pure-helper tests for the SLH-DSA backup hint
+// bar. Mirrors the prior hint-bar tests' posture — the React
 // rendering is manually verified in the dev popup; the
 // `shouldShowHint` decision function is the pure seam that gets
 // CI coverage.

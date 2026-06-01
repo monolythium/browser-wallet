@@ -57,8 +57,8 @@ describe("DELEGATION_PRECOMPILE", () => {
 
 // Golden vectors: the wallet's encoders must equal the SDK encoders
 // byte-for-byte, and carry the chain-canonical selector (keccak256 of
-// the mono-core `abi.rs` signature). Regression guard against the R20
-// drift — pre-R20 the wallet emitted `delegate(uint256,uint256)`
+// the mono-core `abi.rs` signature). Regression guard against the selector
+// drift — the wallet previously emitted `delegate(uint256,uint256)`
 // (0xd9a34952), which the live 0x100a precompile rejected as an unknown
 // selector. These vectors confirm we now emit the chain-canonical
 // `delegate(uint32,uint16)` (0x662337de) via SDK 0.3.9.

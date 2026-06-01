@@ -1,4 +1,4 @@
-// Phase 7 commit 1 — staking-client read-path tests.
+// staking-client read-path tests.
 //
 // Three property classes pinned here:
 //   1. Happy path: a well-formed RPC response normalises into the
@@ -8,7 +8,7 @@
 //   2. Sprintnet-offline behaviour:
 //      - readClusterDirectory propagates `ok: false` (no MOCK_CLUSTERS
 //        fallback — per `_dev-notes/_principles/no-mock-fallbacks.md`,
-//        R18);
+//        the no-mock-fallbacks principle);
 //      - readDelegations / readDelegationHistory / readClusterDelegators
 //        still return `ok: true, data: { rows: [] }` because empty is
 //        a legitimate chain response;
@@ -143,7 +143,7 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[1]?.entity).toBe("independent");
     expect(r.data.clusters[0]?.regions).toEqual(["fsn1", "nbg1"]);
     expect(r.data.clusters[0]?.health).toBe("healthy");
-    // PING #7 — the directory fanout stitches the chain-observed APR onto
+    // The directory fanout stitches the chain-observed APR onto
     // each row. aprBps: 0 is a legitimate "no rewards in window" value.
     expect(r.data.clusters[0]?.aprBps).toBe(820);
     expect(r.data.clusters[1]?.aprBps).toBe(0);
@@ -296,7 +296,7 @@ describe("readClusterDirectory", () => {
     expect(r.reason).toMatch(/malformed/);
   });
 
-  // R17 — chain vocabulary for `aggregateHealth` is `"ok" | "degraded" |
+  // Chain vocabulary for `aggregateHealth` is `"ok" | "degraded" |
   // "halted"` (verified against mono-core
   // `crates/core/runtime/src/providers.rs:6848-6854`). Pin the mapping
   // so a future stale-wallet vs current-chain drift surfaces as a test
@@ -359,9 +359,9 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[0]?.regions).toEqual([]);
   });
 
-  // Phase 7.1 — wire-contract anchor. Constructs the exact SDK-shape
+  // Wire-contract anchor. Constructs the exact SDK-shape
   // `ClusterDirectoryPageResponse` (post-normalisation) and verifies the
-  // wallet's parser handles it. If Nayiem rotates a field name on the
+  // wallet's parser handles it. If the chain rotates a field name on the
   // chain side and the SDK re-exports the new shape, this fixture's
   // type annotation forces a compile error here before the wallet
   // ships against a stale contract.
@@ -395,7 +395,7 @@ describe("readClusterDirectory", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readClusterApr — PING #7 (mono-core 253cac0b, live v0.0.11-testnet)
+// readClusterApr (mono-core 253cac0b, live v0.0.11-testnet)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("readClusterApr", () => {
@@ -548,7 +548,7 @@ describe("readClusterStatus", () => {
     expect(r.ok).toBe(false);
   });
 
-  // R18 — chain returns null for both scores until aggregation lands.
+  // Chain returns null for both scores until aggregation lands.
   // Wallet must thread null straight through so the popup hides the
   // rows entirely (per no-mock-fallback principle).
   it("preserves null reputationScore + livenessScore from chain", async () => {
@@ -578,7 +578,7 @@ describe("readClusterStatus", () => {
     expect(r.data.livenessScore).toBeNull();
   });
 
-  // Phase 7.1 — wire-contract anchor for cluster status. Same rationale
+  // Wire-contract anchor for cluster status. Same rationale
   // as the directory anchor above: constructs the strict SDK shape with
   // bigints for epoch / round / lastUpdateHeight and verifies the
   // wallet's parser stringifies them faithfully for IPC.
@@ -614,7 +614,7 @@ describe("readClusterStatus", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readOperatorInfo (R16 Task A)
+// readOperatorInfo
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("readOperatorInfo", () => {
@@ -699,7 +699,7 @@ describe("readOperatorInfo", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readClusterServiceTiers (R16 Task B)
+// readClusterServiceTiers
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("readClusterServiceTiers", () => {
@@ -872,7 +872,7 @@ describe("readDelegationCap", () => {
     expect(r.data.capBps).toBe(5000);
   });
 
-  // Phase 7.1 — wire-contract anchor mirroring the cluster directory's
+  // Wire-contract anchor mirroring the cluster directory's
   // typed fixture pattern. Constructs the strict SDK-shape envelope (cap
   // + bigint heights + bigint block number) and verifies the wallet
   // stringifies cleanly for IPC.
@@ -894,7 +894,7 @@ describe("readDelegationCap", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readClusterDelegators (Phase 7.1 — newly activated co-delegator reader)
+// readClusterDelegators (newly activated co-delegator reader)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("readClusterDelegators", () => {
@@ -991,7 +991,7 @@ describe("readPendingRewards", () => {
     });
 
     const r = await readPendingRewards(wallet, [{ cluster: 999, weightBps: 1000 }]);
-    // R17 — chain validates wallet param as bech32m; wallet converts before send.
+    // Chain validates wallet param as bech32m; wallet converts before send.
     expect(mockedRpc).toHaveBeenCalledWith("lyth_pendingRewards", [
       userAddressForNativeRpc(wallet),
     ]);
@@ -1188,7 +1188,7 @@ describe("readRedemptionQueue", () => {
     });
 
     const r = await readRedemptionQueue(wallet);
-    // R17 — chain validates wallet param as bech32m; wallet converts before send.
+    // Chain validates wallet param as bech32m; wallet converts before send.
     expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [
       userAddressForNativeRpc(wallet),
     ]);
@@ -1285,7 +1285,7 @@ describe("readRedemptionQueue", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readDelegationHistory (Phase 7.1 — newly activated per-wallet timeline)
+// readDelegationHistory (newly activated per-wallet timeline)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("readDelegationHistory", () => {
@@ -1336,7 +1336,7 @@ describe("readDelegationHistory", () => {
       return { via: "operator-1", result: [] };
     });
     await readDelegationHistory(wallet, 25, "cursor-page-2");
-    // R17 — bech32m conversion applied before RPC send.
+    // bech32m conversion applied before RPC send.
     expect(receivedParams).toEqual([
       userAddressForNativeRpc(wallet),
       25,
@@ -1391,7 +1391,7 @@ describe("readDelegationHistory", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// R17 — bech32m wallet-param conversion regression
+// bech32m wallet-param conversion regression
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Chain validates `wallet` strictly as bech32m on every wallet-keyed
@@ -1402,7 +1402,7 @@ describe("readDelegationHistory", () => {
 // passing to sprintnetJsonRpc. This block pins the conversion at each
 // site so any future regression surfaces as a test failure.
 
-describe("R17 bech32m wallet-param conversion (regression)", () => {
+describe("bech32m wallet-param conversion (regression)", () => {
   // SDK's addressToTypedBech32("user", 0xhex) emits a "mono1..." prefix.
   // We don't pin the full bech32m string (the SDK's helper is the
   // canonical encoder) — just that the param passed to the RPC layer

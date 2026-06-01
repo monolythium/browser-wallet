@@ -38,7 +38,7 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
 const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
-// Phase 2 — mock the OS notification + badge layer so existing tests
+// Mock the OS notification + badge layer so existing tests
 // don't have to stub chrome.notifications + chrome.action. The Phase-2
 // behavior (toast / badge / click) is unit-tested in notifications-os.test.ts;
 // this mock just keeps the SW import graph happy and lets the dedupe test
@@ -48,7 +48,7 @@ const mockRefreshUnreadBadge = vi.hoisted(() => vi.fn(async () => {}));
 const mockInstallNotificationsClickListener = vi.hoisted(() => vi.fn(() => {}));
 // Item 7c — incoming-toast toggle. Default ON; the toggle-OFF test overrides.
 const mockGetIncomingEnabled = vi.hoisted(() => vi.fn(async () => true));
-// GAP-N1 C3 — presence probe. Default false (closed) so existing tests
+// Presence probe. Default false (closed) so existing tests
 // record read:false (today's behavior); C3 tests override per-case.
 const mockIsWalletSurfaceOpen = vi.hoisted(() => vi.fn(async () => false));
 vi.mock("./notifications-os.js", () => ({
@@ -96,7 +96,7 @@ interface CapturedRpcCall {
   params: unknown[];
 }
 const rpcCalls: CapturedRpcCall[] = [];
-// Capture of submitEncryptedMlDsaTx argument objects — used by the Phase 1.5
+// Capture of submitEncryptedMlDsaTx argument objects — used by the
 // metadata-only invariant test (assert opKind never reaches the signer).
 const submitMlDsaCalls: Record<string, unknown>[] = [];
 let rpcResponses: Record<string, unknown> = {};
@@ -425,7 +425,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
     ],
-    // GAP #11: shared/build-info.ts reads TESTNET_69420.genesis_hash at
+    // shared/build-info.ts reads TESTNET_69420.genesis_hash at
     // module init; stub just the fields the wallet actually reads.
     TESTNET_69420: {
       chain_id: 69420,
@@ -455,7 +455,7 @@ const onChangedListeners: Array<
 > = [];
 let storageLocal: Record<string, unknown> = {};
 let storageSession: Record<string, unknown> = {};
-// GAP-N1 — capture chrome.alarms listeners + create/clear calls so the
+// Capture chrome.alarms listeners + create/clear calls so the
 // notif-poll alarm lifecycle is testable. Listeners are registered once at
 // SW import (beforeAll) and persist; the call arrays reset per test.
 const capturedAlarmListeners: Array<(alarm: { name: string }) => void> = [];
@@ -1615,12 +1615,12 @@ describe("wallet-activity-get", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Phase 1 notifications — post-write microtask hook fires one
+  // Notifications — post-write microtask hook fires one
   // NotificationRecord per tracked-tx terminal transition. The §0.2 invariant
   // ("status from the real on-chain receipt, never optimism") is the most
   // load-bearing assertion: a `status:0` receipt MUST be stored as
   // `status:"failed"`, never coerced to confirmed. TTL-evicted rows must
-  // never fire. See _dev-notes/.../2026-05-30_notifications-phase1-plan.md.
+  // never fire.
   // ───────────────────────────────────────────────────────────────────────────
 
   /** Drain the microtask + storage stub callback queues. The hook is a
@@ -1762,7 +1762,7 @@ describe("wallet-activity-get", () => {
     expect(hist).toBeDefined();
     expect(hist!.entries).toHaveLength(1);
     // THE invariant: a status:0 receipt is stored as "failed", not coerced
-    // to "confirmed". This is the MetaMask #5117 hazard Phase 2's toast
+    // to "confirmed". This is the MetaMask #5117 hazard the OS toast
     // would otherwise reproduce.
     expect(hist!.entries[0]?.status).toBe("failed");
     expect(hist!.entries[0]?.kind).toBe("contract_call");
@@ -1848,7 +1848,7 @@ describe("wallet-activity-get", () => {
     const ids = (storageLocal[NOTIF_NOTIFIED_KEY] as { ids: string[] }).ids;
     expect(ids).toHaveLength(1);
     expect(ids[0]).toBe(`${TESTNET_CHAIN_ID_HEX}:${txHash}`);
-    // Phase 2 — the OS toast fires ONLY on added:true, so two snapshots
+    // The OS toast fires ONLY on added:true, so two snapshots
     // of the same tx produce exactly ONE fireOsNotification call (no
     // double toast). The badge refresh runs once per snapshot batch
     // that added something — only the first snapshot adds, so only one
@@ -1857,7 +1857,7 @@ describe("wallet-activity-get", () => {
     expect(mockRefreshUnreadBadge).toHaveBeenCalledTimes(1);
   });
 
-  it("hook prefers row.opKind over the coarse fallback (Phase 1.5 — kind:'delegate' carried through)", async () => {
+  it("hook prefers row.opKind over the coarse fallback (kind:'delegate' carried through)", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "not_found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 555 };
@@ -2310,7 +2310,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // Phase 1.5 — opKind tagging. opKind is pending-row metadata only; it
+  // opKind tagging. opKind is pending-row metadata only; it
   // must NEVER reach submitEncryptedMlDsaTx's argument object (the signed
   // tx bytes / ML-DSA-65 signature / encrypted envelope / nonce / fee /
   // gas must be identical with or without opKind).
@@ -4147,12 +4147,12 @@ describe("wallet-tx-fee", () => {
   });
 });
 
-// GAP-N1 C1 — the headless poll-core. Drives `pollPendingAndNotify`
+// The headless poll-core. Drives `pollPendingAndNotify`
 // directly against the in-memory chrome stub: seeds a pending row, seeds
 // the receipt RPC, and asserts detect→record→toast→badge + write-back.
 // `recordNotification` is the REAL store (notifications-store.js is NOT
 // mocked); `fireOsNotification`/`refreshUnreadBadge` are the hoisted mocks.
-describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
+describe("pollPendingAndNotify — headless poll-core", () => {
   const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
   const CHAIN = TESTNET_CHAIN_ID_HEX;
   const pendingKey = (addr: string, chain: string) =>
@@ -4505,10 +4505,10 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
   });
 });
 
-// GAP-N1 C2 — the notif-poll alarm lifecycle + back-off. Drives the captured
+// The notif-poll alarm lifecycle + back-off. Drives the captured
 // onAlarm listener + the send-flow persist; the per-call RPC timeout is
 // covered in tx-mldsa.test.ts.
-describe("GAP-N1 C2 — notif-poll alarm lifecycle + back-off", () => {
+describe("notif-poll alarm lifecycle + back-off", () => {
   const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
   const CHAIN = TESTNET_CHAIN_ID_HEX;
   const pk = (addr: string, chain: string) =>
@@ -4595,11 +4595,11 @@ describe("GAP-N1 C2 — notif-poll alarm lifecycle + back-off", () => {
   });
 });
 
-// GAP-N1 C3 — presence-aware read on the poll path (isWalletSurfaceOpen is
+// Presence-aware read on the poll path (isWalletSurfaceOpen is
 // the hoisted mock here; its real getContexts probe is unit-tested in
 // notifications-os.test.ts). Confirms: closed → read:false → unread; open →
 // read:true → no unread; the toast fires in BOTH (presence never gates it).
-describe("GAP-N1 C3 — presence-aware read (poll path)", () => {
+describe("presence-aware read (poll path)", () => {
   const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
   const CHAIN = TESTNET_CHAIN_ID_HEX;
   const pk = `mono.activity.pending.${ADDR}.${CHAIN}`;

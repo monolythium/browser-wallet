@@ -1,6 +1,6 @@
-// keystore-mldsa Phase 5 multi-vault layer tests.
+// keystore-mldsa multi-vault layer tests.
 //
-// Covers the additive surface from Phase 5 Commit 1:
+// Covers the additive multi-vault surface:
 //   - VEK wrap/unwrap round-trip under a MEK
 //   - sealVaultEnvelopeV4 / openVaultEnvelopeV4 round-trip
 //   - Legacy mono.vault.v4 → mono.vaults.v4 migration round-trip
@@ -57,7 +57,7 @@ function installChromeStub(): { storage: StorageMap } {
   return { storage };
 }
 
-describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
+describe("keystore-mldsa v4-multi", () => {
   let storage: StorageMap;
 
   beforeEach(() => {
@@ -206,7 +206,7 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
       const password = "multi-vault-password";
 
       // Build a two-vault container directly via the helpers (the
-      // user-facing add-vault flow lands in Phase 5 Commit 2/4; this
+      // user-facing add-vault flow lands separately; this
       // test exercises the schema itself).
       const {
         generateMasterKdfParamsV4,
@@ -298,7 +298,7 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
   );
 });
 
-describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
+describe("keystore-mldsa v4-multi state machine", () => {
   let storage: StorageMap;
 
   beforeEach(() => {
@@ -383,7 +383,7 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
       expect(after.length).toBe(2);
       expect(after[1]!.label).toBe("Wallet 2");
       expect(after[1]!.addr).toBe(added.address);
-      // Round 3.5 — addVaultFreshV4 now auto-switches the active vault
+      // addVaultFreshV4 auto-switches the active vault
       // to the newly-created record. The previous design left active
       // unchanged but the popup never wired the follow-up vault-select
       // call, so users saw the old address persist after creating a
@@ -396,7 +396,7 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
   );
 
   it(
-    "addVaultFreshV4 auto-switches active across multiple appends (Round 3.5)",
+    "addVaultFreshV4 auto-switches active across multiple appends",
     async () => {
       const ks = await import("./keystore-mldsa.js");
       const password = "auto-switch-password";
@@ -529,10 +529,10 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 8 Commit 1 — multisig vault storage round-trip
+// multisig vault storage round-trip
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
+describe("keystore-mldsa multisig vault", () => {
   let storage: StorageMap;
 
   beforeEach(() => {
@@ -933,7 +933,7 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
   );
 });
 
-describe("keystore-mldsa passkey state (Phase 9 Commit 1)", () => {
+describe("keystore-mldsa passkey state", () => {
   beforeEach(() => {
     installChromeStub();
     vi.resetModules();
@@ -1063,7 +1063,7 @@ describe("keystore-mldsa passkey state (Phase 9 Commit 1)", () => {
   );
 });
 
-describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
+describe("keystore-mldsa passkey BigInt round-trip", () => {
   // The base `installChromeStub` keeps stored objects as live JS
   // references, so BigInt values survive a set / get round-trip in
   // the test environment but DO NOT in real Chrome (some Chrome
@@ -1332,7 +1332,7 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
   );
 });
 
-describe("keystore-mldsa SLH-DSA backup CRUD (Phase 10 Commit 1)", () => {
+describe("keystore-mldsa SLH-DSA backup CRUD", () => {
   beforeEach(() => {
     installChromeStub();
     vi.resetModules();

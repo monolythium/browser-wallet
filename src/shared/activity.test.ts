@@ -697,7 +697,7 @@ describe("mapAddressActivityToRows", () => {
     expect(rows[1]?.kind).toBe("crossing_to_private");
   });
 
-  it("drops swap / staking / unknown kinds (out of Phase 4.4 surface)", () => {
+  it("drops swap / staking / unknown kinds (out of supported surface)", () => {
     const rows = mapAddressActivityToRows(
       [
         makeActivity({ kind: "swap" }),
@@ -1076,7 +1076,7 @@ describe("mergeIndexerSnapshot", () => {
 
   it("DEDUPE: when both streams surface the same on-chain delegation event, DelegationHistoryRecord wins", () => {
     // This is the central correctness test for the activity-vs-delegation
-    // dedupe pinned in the Phase 4.4 plan. The activity-stream entry at
+    // dedupe. The activity-stream entry at
     // (100, 0, 0) MUST be suppressed; only the rich delegation-history
     // row appears, with `toCluster: 9` (which the activity stream cannot
     // surface).

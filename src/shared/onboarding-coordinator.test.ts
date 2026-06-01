@@ -1,4 +1,4 @@
-// Phase 11 Commit 8 — onboarding coordinator + setup-health tests.
+// onboarding coordinator + setup-health tests.
 
 import { describe, expect, it } from "vitest";
 import {
