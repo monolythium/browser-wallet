@@ -454,7 +454,13 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
 });
 
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
-import { ALARM_NOTIF_POLL } from "../shared/constants.js";
+import {
+  ALARM_AUTO_LOCK,
+  ALARM_NOTIF_POLL,
+  SESSION_KEY_AUTO_LOCK_DEADLINE,
+  SESSION_KEY_MEK_REHYDRATE_DEADLINE,
+  SESSION_KEY_MEK_V4,
+} from "../shared/constants.js";
 import {
   DETERMINISTIC_TEST_ADDRESS,
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
@@ -2852,6 +2858,33 @@ describe("dApp eth_sendTransaction fee clamp (T4-04 a1)", () => {
     expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gasPrice: CEILING_HEX }),
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// auto-lock alarm — fail-closed session clear (#17)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("fired auto-lock clears the session-MEK rehydrate cap (#17)", () => {
+  it("a fired auto-lock alarm clears the session MEK + rehydrate deadline (no silent re-unlock)", async () => {
+    // Simulate an unlocked session whose auto-lock deadline has just elapsed:
+    // the MEK and a LIVE rehydrate cap are mirrored to session storage (as a
+    // real unlock would leave them).
+    storageSession[SESSION_KEY_MEK_V4] = "seeded-mek-b64";
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() - 1; // elapsed
+    storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE] = Date.now() + 60_000;
+
+    // Deliver the auto-lock alarm the OS scheduler fires at the deadline. The
+    // onAlarm handler re-reads the (elapsed) deadline and runs triggerAutoLock.
+    for (const fire of capturedAlarmListeners) fire({ name: ALARM_AUTO_LOCK });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // triggerAutoLock cleared the MEK AND the rehydrate cap, so a subsequent SW
+    // boot has nothing to rehydrate from — a fired auto-lock can NEVER silently
+    // re-unlock. (mekRehydrateExpiredV4 also fails closed on the absent key.)
+    expect(storageSession[SESSION_KEY_MEK_V4]).toBeUndefined();
+    expect(storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE]).toBeUndefined();
+    expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBeUndefined();
   });
 });
 
