@@ -155,7 +155,7 @@ type OnMessageHandler = (
 ) => boolean | undefined;
 
 let capturedOnMessage: OnMessageHandler | null = null;
-const broadcastEvents: Array<{ event: string; payload: unknown }> = [];
+const broadcastEvents: Array<{ tabId?: number; event: string; payload: unknown }> = [];
 const chromeStorage: Record<string, unknown> = {};
 const chromeStorageSession: Record<string, unknown> = {};
 
@@ -227,9 +227,9 @@ function installChromeStub(): void {
         // Synthetic tab so the broadcast loop reaches `sendMessage` once.
         cb([{ id: 1 }]);
       },
-      sendMessage: (_id: number, message: { kind: string; event: string; payload: unknown }) => {
+      sendMessage: (tabId: number, message: { kind: string; event: string; payload: unknown }) => {
         if (message?.kind === "event") {
-          broadcastEvents.push({ event: message.event, payload: message.payload });
+          broadcastEvents.push({ tabId, event: message.event, payload: message.payload });
         }
         return Promise.resolve();
       },
@@ -765,6 +765,53 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       }
       // Clean up.
       await popupDispatch("sprintnet-operators-set", { operators: null });
+    });
+  });
+
+  // ---- T2-01 / T2-03 — provider event origin scoping ----
+  describe("provider event origin scoping (T2-01 / T2-03)", () => {
+    function rpcFromTab(method: string, origin: string, tabId: number): Promise<unknown> {
+      return new Promise((resolve) => {
+        const ret = capturedOnMessage!(
+          {
+            kind: "rpc",
+            id: Math.random().toString(36).slice(2),
+            args: { method, params: [] },
+            origin,
+          },
+          { id: "test-id", tab: { id: tabId } },
+          resolve as (r: unknown) => void,
+        );
+        if (ret !== true) resolve(undefined);
+      });
+    }
+
+    it("account-carrying events reach only connected-origin tabs", async () => {
+      // Tab 2 / origin B talks to the SW but never connects.
+      await rpcFromTab("eth_chainId", "https://unconnected.example", 2);
+      broadcastEvents.length = 0;
+      // Tab 1 / origin A connects → broadcasts accountsChanged + connect.
+      await rpcFromTab("eth_requestAccounts", "https://connected.example", 1);
+      const accountEvents = broadcastEvents.filter(
+        (e) => e.event === "accountsChanged" || e.event === "connect",
+      );
+      expect(accountEvents.length).toBeGreaterThan(0);
+      // Only the connected tab (1) received them; the unconnected tab (2) did not.
+      expect(accountEvents.every((e) => e.tabId === 1)).toBe(true);
+      expect(accountEvents.some((e) => e.tabId === 2)).toBe(false);
+    });
+
+    it("revoke-origin emits a scoped accountsChanged:[] disconnect to that origin's tab", async () => {
+      await rpcFromTab("eth_requestAccounts", "https://revoke-me.example", 3);
+      broadcastEvents.length = 0;
+      await popupDispatch("revoke-origin", { origin: "https://revoke-me.example" });
+      const disconnects = broadcastEvents.filter(
+        (e) =>
+          e.event === "accountsChanged" &&
+          Array.isArray(e.payload) &&
+          (e.payload as unknown[]).length === 0,
+      );
+      expect(disconnects.some((e) => e.tabId === 3)).toBe(true);
     });
   });
 });
