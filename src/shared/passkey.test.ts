@@ -1,8 +1,8 @@
-// Phase 9 — unit tests for the passkey policy pure helpers.
+// Unit tests for the passkey policy pure helpers.
 //
 // Every test here pins time, fakes credentials, and never touches
 // `navigator.credentials` or `chrome.storage`. The WebAuthn round-trip
-// is tested at the IPC layer (Commit 2+); this file validates the
+// is tested at the IPC layer separately; this file validates the
 // pure logic that backs the IPC boundary.
 
 import { describe, it, expect } from "vitest";

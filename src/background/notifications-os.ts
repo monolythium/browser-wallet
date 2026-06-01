@@ -1,4 +1,4 @@
-// Phase 2 — OS toast + unread badge layer on top of the Phase-1
+// OS toast + unread badge layer on top of the
 // notifications core.
 //
 // What this module owns
@@ -7,7 +7,7 @@
 // call. Every helper is internally try/catch'd: an OS-deny / disabled-
 // notification / API-quirk error MUST swallow silently — the Phase-1
 // history record + the badge readback are still authoritative on disk,
-// and a popup-side UI surface (Phase 3) reads them. The OS toast is a
+// and a popup-side UI surface reads them. The OS toast is a
 // notification *amplifier*, not the system of record.
 //
 //   - `fireOsNotification(record)` — calls `chrome.notifications.create`
@@ -52,7 +52,7 @@ const NOTIFICATION_ICON_URL = "icon-48.png";
  *  attention-red used elsewhere (`var(--err)` family ≈ `#dc5050`). */
 const BADGE_BG_COLOR = "#dc5050";
 
-/** Phase 5 — user-facing toggle key. The flag gates ONLY the OS toast
+/** User-facing toggle key. The flag gates ONLY the OS toast
  *  (chrome.notifications.create). The in-app notification history record
  *  AND the unread badge run regardless — the notifications center stays
  *  the durable record (§0.4). Default true (absent ⇒ on); fail-open on a
@@ -96,7 +96,7 @@ export async function setOsNotificationsEnabled(
   }
 }
 
-// GAP-N1 settings — three additional user-facing notification toggles, all
+// Settings — three additional user-facing notification toggles, all
 // default ON (absent ⇒ true) and fail-open (a read error ⇒ true) exactly like
 // the Phase-5 os-enabled flag. Local-only. They gate only the on-screen
 // surfaces (the OS toast + the toolbar badge), NEVER the in-app history record
@@ -104,6 +104,7 @@ export async function setOsNotificationsEnabled(
 const SHOW_DETAILS_KEY = "mono.notifications.show-details.v1";
 const NOTIFY_WHEN_LOCKED_KEY = "mono.notifications.notify-when-locked.v1";
 const BADGE_WHEN_LOCKED_KEY = "mono.notifications.badge-when-locked.v1";
+const INCOMING_ENABLED_KEY = "mono.notifications.incoming-enabled.v1";
 
 /** Default-true, fail-open boolean setting read (mirrors the os-enabled
  *  semantics: absent key ⇒ true; a chrome.storage error ⇒ true, so a
@@ -158,7 +159,14 @@ export const getBadgeWhenLocked = (): Promise<boolean> =>
 export const setBadgeWhenLocked = (enabled: boolean): Promise<void> =>
   setBoolSetting(BADGE_WHEN_LOCKED_KEY, enabled);
 
-/** GAP-N1 / polish C3 — true when at least one POPUP or SIDE_PANEL wallet
+/** "Incoming transfers" (Item 7c) — when off, no OS toast fires for an
+ *  incoming LYTH transfer (the in-app record is still kept). Default true. */
+export const getIncomingEnabled = (): Promise<boolean> =>
+  getBoolSetting(INCOMING_ENABLED_KEY);
+export const setIncomingEnabled = (enabled: boolean): Promise<void> =>
+  setBoolSetting(INCOMING_ENABLED_KEY, enabled);
+
+/** True when at least one POPUP or SIDE_PANEL wallet
  *  surface is currently open. Used at notification-record time to set the
  *  `read` flag: a surface open at observe-time means the user is present
  *  (record as read, no badge bump); closed ⇒ accumulate unread. Defaults
@@ -225,7 +233,7 @@ export function notificationBody(record: NotificationRecord): string {
  *  user disabled / quota / unsupported environment) is swallowed
  *  internally so it can never break the SW snapshot path.
  *
- *  Phase 5 — gated by the user-facing OS-enabled flag: when off, the
+ *  Gated by the user-facing OS-enabled flag: when off, the
  *  toast is skipped entirely (history + badge still run on the caller
  *  side; the notifications center remains the durable record). */
 export async function fireOsNotification(

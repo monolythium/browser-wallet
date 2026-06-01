@@ -1,4 +1,4 @@
-// Phase 11 Commit 4 — shared types + validator for the chain's
+// Shared types + validator for the chain's
 // `lyth_indexerStatus` response. Lives at shared/ because the popup
 // uses these types (via bgWalletIndexerStatus) and the SW uses the
 // validator. Keeping both in one file means the wire-shape contract
@@ -10,7 +10,6 @@
 //   - b02033b — live indexer snapshots in the projection layer
 //   - a097622 — canonical receipts in the indexer (consumed indirectly
 //                through the existing activity feed)
-// Closes GAP #18.
 
 /** Wallet-side mirror of the chain's IndexerRetentionStatus. */
 export interface IndexerRetentionInfo {
@@ -34,7 +33,7 @@ export interface IndexerStatusValidated {
 /** The schema version this wallet build was tested against. Bump when
  *  shipping parsers for a newer chain schema.
  *
- *  R17 — bumped from 1 -> 6. Live probe against mono-core HEAD
+ *  Bumped from 1 -> 6. Live probe against mono-core HEAD
  *  `2705ce0f` (operator 178.105.15.216:8545) returned
  *  `lyth_indexerStatus.schemaVersion = 6`. The wallet's activity-feed
  *  parsers are additive (unknown fields silently dropped — see the

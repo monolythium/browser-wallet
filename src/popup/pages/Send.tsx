@@ -29,6 +29,7 @@ import type { ContactRecord } from "../bg";
 import { useContacts } from "../hooks/useContacts";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
+import { Modal } from "../components/Modal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
 import {
@@ -85,14 +86,14 @@ interface SendProps {
    *  fee-suggestion fetch. */
   chainId: string;
   onBack: () => void;
-  /** Phase 8 — when set, the active vault is a multisig vault and Send
+  /** When set, the active vault is a multisig vault and Send
    *  routes the submit to `bgMultisigPropose` instead of `bgWalletSendTx`.
    *  The form layout stays the same; only the CTA copy + submit path
    *  change. The App-side detection (read `kind === "multisig"` from
-   *  the vault summary) lands in Commit 6; absent prop = unchanged
+   *  the vault summary) is handled App-side; absent prop = unchanged
    *  single-vault behavior. */
   multisigVaultId?: string;
-  /** Phase 9 — when set (and `multisigVaultId` is NOT set), Send
+  /** When set (and `multisigVaultId` is NOT set), Send
    *  consults the per-vault passkey policy and shows the appropriate
    *  unlock-mode badge on the preview screen. Below-limit txs that
    *  evaluate to `passkey-ok` trigger the WebAuthn ceremony on
@@ -140,6 +141,12 @@ export function Send({
   const [step, setStep] = useState<Step>("form");
   const [passkeyDecision, setPasskeyDecision] = useState<BgPasskeyDecision | null>(null);
   const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
+  // T1-04(a) — over-limit passkey send requires an account-password re-auth
+  // (SW-verified). These drive the elevated-password modal.
+  const [elevatedOpen, setElevatedOpen] = useState(false);
+  const [elevatedPw, setElevatedPw] = useState("");
+  const [elevatedErr, setElevatedErr] = useState<string | null>(null);
+  const [elevatedBusy, setElevatedBusy] = useState(false);
 
   // Form state — single source of truth so preview and "Try again" can
   // round-trip without prop drilling.
@@ -155,7 +162,7 @@ export function Send({
   // confirm. The state + wiring are in place so flipping the toggle live
   // later is a one-line change (drop `disabled`).
   const [privateTx, setPrivateTx] = useState(false);
-  // Round 13 TASK 2 — Contacts picker. pickerOpen drives the modal;
+  // Contacts picker. pickerOpen drives the modal;
   // selectedContact holds the chosen contact so the preview screen can
   // render its name above the address. selectedContact clears when
   // the user manually edits `to` (so a pasted-then-edited address
@@ -168,15 +175,22 @@ export function Send({
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
+  // T4-03 (Item C): the lowest cross-operator balance, used ONLY by the spend
+  // gate (Max + insufficient-funds) so a single inflating operator can't enable
+  // an unaffordable Max. Equals balanceLythoshi under the default single
+  // operator. DISPLAY stays on balanceLythoshi (a lagging operator under-reports).
+  const [spendGuardLythoshi, setSpendGuardLythoshi] = useState<bigint | null>(
+    null,
+  );
 
-  // Round 7 TASK 6 — pre-load contacts so the post-send save-recipient
+  // Pre-load contacts so the post-send save-recipient
   // prompt can hand the AddContactModal an `existing` map for
   // duplicate-detection without an extra IPC round-trip.
   const { contacts: contactsMap } = useContacts();
   // Result state — written by handleConfirm.
   const [txHash, setTxHash] = useState<string | null>(null);
   const [hashCopied, setHashCopied] = useState(false);
-  // Round 7 TASK 6 — when a send to a non-contact recipient succeeds,
+  // When a send to a non-contact recipient succeeds,
   // capture the recipient 0x address here so the success view can
   // render an "Add to contacts" prompt with the address pre-seeded.
   // null in three cases: send not yet finished, recipient already in
@@ -220,6 +234,7 @@ export function Send({
       if (!r.ok) return;
       try {
         setBalanceLythoshi(BigInt(r.balanceHex));
+        setSpendGuardLythoshi(BigInt(r.spendGuardHex));
       } catch {
         // Malformed hex — leave null; "Max" stays disabled.
       }
@@ -268,11 +283,16 @@ export function Send({
   // (amount + fee) <= balance. If balance hasn't loaded we can't safely
   // gate, so we allow the user through with a warning hint instead of
   // silently blocking — the SW would surface insufficient-funds on send.
+  // T4-03 (Item C): gate against the spend guard (lowest cross-operator
+  // balance), not the displayed MAX, so an inflated balance can't pass the
+  // affordability check. Falls back to the display balance until the guard
+  // loads.
+  const spendGateLythoshi = spendGuardLythoshi ?? balanceLythoshi;
   const insufficientFunds =
     amountLythoshi !== null &&
     estimatedFeeLythoshi !== null &&
-    balanceLythoshi !== null &&
-    amountLythoshi + estimatedFeeLythoshi > balanceLythoshi;
+    spendGateLythoshi !== null &&
+    amountLythoshi + estimatedFeeLythoshi > spendGateLythoshi;
 
   const canContinue =
     effectiveAddr0x !== null &&
@@ -286,7 +306,7 @@ export function Send({
     try {
       const text = await navigator.clipboard.readText();
       setTo(text.trim());
-      // Round 13 TASK 2 — pasting a different address clears the
+      // Pasting a different address clears the
       // previously-picked contact so its name doesn't carry over.
       setSelectedContact(null);
     } catch {
@@ -294,14 +314,14 @@ export function Send({
     }
   };
 
-  // Round 13 TASK 2 — Contacts picker selection. Setting `to` triggers
+  // Contacts picker selection. Setting `to` triggers
   // recipient re-parse via the existing useMemo at line ~216.
   const handleContactPicked = (contact: ContactRecord) => {
     setTo(contact.bech32m);
     setSelectedContact(contact);
   };
 
-  // Round 13 TASK 2 — clear selectedContact when user manually edits
+  // Clear selectedContact when user manually edits
   // the address field after picking from contacts. Without this, the
   // preview screen would render the stale contact name next to a
   // different address.
@@ -311,7 +331,7 @@ export function Send({
     }
   }, [to, selectedContact]);
 
-  // Round 13 TASK 2 — derive a "displayed contact" from selectedContact
+  // Derive a "displayed contact" from selectedContact
   // OR from a known-address lookup against the contacts map. Covers
   // both flows: user picked from the modal AND user typed/pasted an
   // address that happens to be saved.
@@ -330,8 +350,12 @@ export function Send({
   const recipientRegisteredName = useRegisteredName(effectiveAddr0x);
 
   const handleMax = () => {
-    if (balanceLythoshi === null || estimatedFeeLythoshi === null) return;
-    const maxLythoshi = balanceLythoshi - estimatedFeeLythoshi;
+    // T4-03 (Item C): Max is computed against the spend guard (lowest
+    // cross-operator balance), not the displayed MAX, so it can never exceed
+    // affordable funds.
+    const maxBasis = spendGuardLythoshi ?? balanceLythoshi;
+    if (maxBasis === null || estimatedFeeLythoshi === null) return;
+    const maxLythoshi = maxBasis - estimatedFeeLythoshi;
     if (maxLythoshi <= 0n) {
       setAmountStr("0");
       return;
@@ -362,10 +386,16 @@ export function Send({
     setStep("preview");
   };
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (opts?: {
+    elevatedPassword?: string;
+    viaElevated?: boolean;
+  }) => {
     if (amountLythoshi === null) return;
     if (effectiveAddr0x === null) return; // form button is gated; defensive
-    setStep("sending");
+    // For the elevated (over-limit re-auth) path keep the preview + modal
+    // mounted with an in-modal busy state; the "sending" screen only takes
+    // over once verification has passed.
+    if (!opts?.viaElevated) setStep("sending");
     setSubmitError(null);
     setTxHash(null);
     try {
@@ -373,8 +403,8 @@ export function Send({
       if (multisigVaultId !== undefined) {
         // Multisig path — create a proposal rather than broadcasting
         // a tx. Other signers approve via the Pending dashboard
-        // (Commit 4); once the threshold is reached the executor
-        // submits the underlying tx (Commit 4 too).
+        // once the threshold is reached the executor
+        // submits the underlying tx.
         const r = await bgMultisigPropose({
           vaultId: multisigVaultId,
           action: {
@@ -388,7 +418,7 @@ export function Send({
           // Reuse the txHash state slot to carry the proposalId
           // through to the success view — the UI distinguishes via
           // `multisigVaultId !== undefined`. Cleaner separation lands
-          // in Commit 6 alongside the dedicated multisig success
+          // alongside the dedicated multisig success
           // view + Pending dashboard link.
           setTxHash(r.proposalId);
           setStep("success");
@@ -403,6 +433,36 @@ export function Send({
         }
         return;
       }
+      // T4-04 (b1): bind the EXACT fee the preview displayed — including the
+      // Slow/Fast tier multiplier — so the SW signs it instead of re-reading
+      // the operator. maxFeePerGas = base + tier-scaled tip; the tip is the
+      // tier-scaled value the user saw. Omitted when the fee never resolved
+      // (SW falls back to suggestFee).
+      let signedFee:
+        | {
+            maxFeePerGasHex: string;
+            maxPriorityFeePerGasHex: string;
+            executionUnitLimitHex: string;
+          }
+        | undefined;
+      if (feeSuggestion) {
+        const base = parseNativeHexQuantity(
+          feeSuggestion.basePricePerExecutionUnitLythoshiHex,
+        );
+        const tip = parseNativeHexQuantity(
+          feeSuggestion.priorityPricePerExecutionUnitLythoshiHex,
+        );
+        if (base !== null && tip !== null) {
+          const scaledTip = scaleByBps(tip, tierMultiplierBps);
+          signedFee = {
+            maxFeePerGasHex: "0x" + (base + scaledTip).toString(16),
+            maxPriorityFeePerGasHex: "0x" + scaledTip.toString(16),
+            executionUnitLimitHex:
+              feeSuggestion.executionUnitLimitHex ??
+              FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+          };
+        }
+      }
       const r = await bgWalletSendTx({
         to: effectiveAddr0x,
         valueWeiHex: valueLythoshiHex,
@@ -413,8 +473,15 @@ export function Send({
         // threshold-encrypted inclusion pipeline is not live yet); passed
         // explicitly so the submit path is honest about which path it takes.
         private: privateTx,
+        // T1-04(a) — present only on the over-limit re-auth path; the SW
+        // verifies it before signing.
+        ...(opts?.elevatedPassword
+          ? { elevatedPassword: opts.elevatedPassword }
+          : {}),
+        ...(signedFee ? { signedFee } : {}),
       });
       if (r.ok) {
+        if (opts?.viaElevated) setElevatedOpen(false);
         setTxHash(r.result.txHash);
         // Record passkey-unlocked txs against the daily-cap ledger.
         // The SW prunes on read; this fire-and-forget call appends.
@@ -434,7 +501,23 @@ export function Send({
         // CX4 — the "Add to contacts" affordance now lives inline on the
         // receipt's To row (shown when the recipient is neither a saved
         // contact nor a registered name), so no auto-popup fires here.
+      } else if (r.passkeyElevation) {
+        // Over-limit passkey send: surface the password re-auth in the
+        // elevated modal rather than the error screen. "required" can also
+        // reach here on the non-elevated path if the popup's evaluate
+        // disagreed with the SW — opening the modal is the safe net.
+        setElevatedOpen(true);
+        setElevatedBusy(false);
+        setElevatedErr(
+          r.passkeyElevation === "rate_limited"
+            ? `Too many attempts. Try again in ${r.secondsRemaining ?? "a few"}s.`
+            : r.passkeyElevation === "wrong_password"
+              ? "Incorrect password."
+              : null,
+        );
+        if (!opts?.viaElevated) setStep("preview");
       } else {
+        if (opts?.viaElevated) setElevatedOpen(false);
         setSubmitError({
           message: r.reason ?? "send failed",
           code: typeof r.code === "number" ? r.code : null,
@@ -444,6 +527,7 @@ export function Send({
         setStep("error");
       }
     } catch (e) {
+      if (opts?.viaElevated) setElevatedOpen(false);
       setSubmitError({
         message: (e as Error).message ?? "send failed",
         code: null,
@@ -452,6 +536,13 @@ export function Send({
       });
       setStep("error");
     }
+  };
+
+  const submitElevated = async () => {
+    if (elevatedBusy || elevatedPw.length === 0) return;
+    setElevatedBusy(true);
+    setElevatedErr(null);
+    await handleConfirm({ elevatedPassword: elevatedPw, viaElevated: true });
   };
 
   const handleCopyHash = async () => {
@@ -472,6 +563,12 @@ export function Send({
     const onPreviewConfirm = () => {
       if (needsPasskey) {
         setPasskeyModalOpen(true);
+      } else if (passkeyDecision?.kind === "over-limit") {
+        // T1-04(a) — above the passkey cap: require an account-password
+        // re-auth (the SW enforces this regardless; the modal collects it).
+        setElevatedErr(null);
+        setElevatedPw("");
+        setElevatedOpen(true);
       } else {
         void handleConfirm();
       }
@@ -482,7 +579,7 @@ export function Send({
     // assertion cannot be replayed for a different tx via the same
     // wallet. We hash the wire-format strings — close enough for the
     // local-presence-check the wallet uses today; the future
-    // chain-side passkey precompile (Phase 9.1) will use the chain's
+    // chain-side passkey precompile will use the chain's
     // canonical txHash for the same binding.
     const txDigest =
       needsPasskey && effectiveAddr0x !== null && amountLythoshi !== null
@@ -522,6 +619,95 @@ export function Send({
             }}
           />
         )}
+        <Modal
+          open={elevatedOpen}
+          onClose={() => {
+            if (!elevatedBusy) setElevatedOpen(false);
+          }}
+          showClose
+          titleAccent="rgba(242,180,65,1)"
+          title="Password required"
+        >
+          <div
+            style={{ fontSize: 11, color: "var(--fg-300)", lineHeight: 1.5 }}
+          >
+            This amount is above your passkey spending limit. Enter your account
+            password to authorize it.
+          </div>
+          <input
+            type="password"
+            autoFocus
+            value={elevatedPw}
+            onChange={(e) => {
+              setElevatedPw(e.target.value);
+              if (elevatedErr) setElevatedErr(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submitElevated();
+            }}
+            placeholder="Account password"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "9px 10px",
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              color: "var(--fg-100)",
+              fontSize: 12,
+            }}
+          />
+          {elevatedErr && (
+            <div style={{ color: "rgba(255,107,107,1)", fontSize: 10.5 }}>
+              {elevatedErr}
+            </div>
+          )}
+          <div
+            style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                if (!elevatedBusy) setElevatedOpen(false);
+              }}
+              disabled={elevatedBusy}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.14)",
+                color: "var(--fg-200)",
+                fontSize: 11.5,
+                cursor: elevatedBusy ? "default" : "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void submitElevated()}
+              disabled={elevatedBusy || elevatedPw.length === 0}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                background:
+                  elevatedBusy || elevatedPw.length === 0
+                    ? "rgba(126,227,193,0.25)"
+                    : "rgba(126,227,193,0.9)",
+                border: "none",
+                color: "#0c0d10",
+                fontWeight: 600,
+                fontSize: 11.5,
+                cursor:
+                  elevatedBusy || elevatedPw.length === 0
+                    ? "default"
+                    : "pointer",
+              }}
+            >
+              {elevatedBusy ? "Confirming…" : "Confirm send"}
+            </button>
+          </div>
+        </Modal>
       </>
     );
   }
@@ -636,7 +822,7 @@ export function Send({
             >
               Paste
             </button>
-            {/* Round 13 TASK 2 — Contacts picker entry. Square icon
+            {/* Contacts picker entry. Square icon
                button to keep the row compact; the address-book glyph
                (Icon name="book") matches the hamburger-menu Contacts
                entry so the affordance is recognisable. */}
@@ -659,7 +845,7 @@ export function Send({
           {parsedRecipient.error && (
             <div style={inlineError}>{parsedRecipient.error}</div>
           )}
-          {/* Phase 11 Commit 7 — bech32m typo suggestion. When the user
+          {/* bech32m typo suggestion. When the user
               types a mono1... address that fails checksum but a single-
               character substitution produces a valid one, surface the
               candidate as a clickable hint. Click sets it as the new
@@ -995,7 +1181,7 @@ export function Send({
         </button>
       </div>
 
-      {/* Round 13 TASK 2 — Contacts picker modal. Renders into a portal
+      {/* Contacts picker modal. Renders into a portal
          (Modal primitive) so its overlay covers the full popup
          viewport regardless of the Send form's scroll state. */}
       <ContactsPickerModal
@@ -1075,7 +1261,7 @@ const fromHint: CSSProperties = {
   fontSize: 10,
   color: "var(--fg-500)",
   marginTop: 8,
-  // Round 6 TASK 5 — bech32m address is now rendered full (no
+  // bech32m address is rendered full (no
   // shortAddr truncation). Allow wrap if it doesn't fit on one
   // line at the current popup width; truncation would violate the
   // "no ellipsis" rule.
@@ -1400,7 +1586,7 @@ const TLD_HINT: Record<MonoNameParse["tld"], string> = {
   system: "system",
 };
 
-// ---- Recipient familiarity (phase 6 phishing protection) ----
+// ---- Recipient familiarity (phishing protection) ----
 
 type Familiarity = "unknown" | "new" | "seen";
 
@@ -1560,12 +1746,12 @@ interface PreviewViewProps {
    *  header, "Submit as proposal" CTA, multisig-aware warning copy.
    *  Default behavior (single-vault send) is unchanged when false. */
   isMultisig?: boolean;
-  /** Phase 9 — passkey policy decision for the current tx. When
+  /** Passkey policy decision for the current tx. When
    *  present and the decision is `passkey-ok`, render a "passkey
    *  unlock" badge above the warning card so the user knows which
    *  unlock path the Confirm CTA will trigger. */
   passkeyDecision?: BgPasskeyDecision | null;
-  /** Round 13 TASK 2 — recipient's matching contact entry (if any).
+  /** Recipient's matching contact entry (if any).
    *  Set either because the user explicitly picked from the contacts
    *  modal, OR because the typed/pasted address happens to match a
    *  saved contact. The "To" summary row renders the contact name
@@ -1581,7 +1767,7 @@ interface PreviewViewProps {
   finalityPosture?: string;
 }
 
-/** Phase 9 — preview-screen badge that tells the user which unlock
+/** Preview-screen badge that tells the user which unlock
  *  the Confirm CTA will trigger.
  *
  *  passkey-ok       → green "Passkey unlock" pill
@@ -1654,7 +1840,7 @@ function PasskeyDecisionBadge({
   );
 }
 
-/** Phase 11.5 Commit 2 — "Hooks that will run" section on the Send
+/** "Hooks that will run" section on the Send
  *  preview screen. Lazy-fetches the chain's pre-tx hook preview
  *  (`lyth_previewTransactionHooks`, mono-core @dd05511) when the
  *  preview mounts.
@@ -1936,7 +2122,7 @@ function PreviewView({
       <div className="ext-body">
         <div className="ext-card" style={{ padding: 14 }}>
           <SummaryRow label="From" value={bech32mDisplay(fromAddr)} mono />
-          {/* Round 13 TASK 2 — when the recipient maps to a saved
+          {/* When the recipient maps to a saved
              contact (either via the picker or because the typed
              address is known), show the contact name above the
              bech32m. Otherwise fall back to the bare address row. */}
@@ -2089,7 +2275,7 @@ function PreviewView({
 
 interface SummaryRowProps {
   label: string;
-  /** Round 13 TASK 2 — accept ReactNode (was `string`) so the "To"
+  /** Accept ReactNode (was `string`) so the "To"
    *  row can render a contact name above its bech32m address when
    *  the recipient is a saved contact. String callers continue to
    *  work unchanged. */
@@ -2680,7 +2866,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewP
   );
 }
 
-/** Phase 11 Commit 7 — bech32m typo suggestion hint.
+/** bech32m typo suggestion hint.
  *
  *  When the user typed something that fails parsing AND the typo
  *  classifier finds a 1-edit fix, render an inline "Did you mean

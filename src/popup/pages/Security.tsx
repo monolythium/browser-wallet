@@ -1,4 +1,4 @@
-// Phase 9 Commit 3 — Security page.
+// Security page.
 //
 // Surfaces the §28.5 Q30 + Q31 passkey policy: list of registered
 // credentials, register-new CTA, policy editor with limit slider +
@@ -38,7 +38,7 @@ export interface SecurityProps {
   /** Vault address — surfaced inside the WebAuthn user block during
    *  registration. */
   vaultAddress: string;
-  /** Active chain id (hex). Threaded through to the Phase 10 backup
+  /** Active chain id (hex). Threaded through to the SLH-DSA backup
    *  card so its on-chain registration submit knows which chain to
    *  target. */
   chainIdHex: string;
@@ -406,7 +406,7 @@ export function Security({
           </button>
         </div>
 
-        {/* Phase 10 — SLH-DSA emergency backup card */}
+        {/* SLH-DSA emergency backup card */}
         <SlhDsaBackupCard
           vaultId={vaultId}
           vaultAddressLabel={vaultAddress}

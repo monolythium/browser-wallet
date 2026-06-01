@@ -1,4 +1,4 @@
-// Phase 1 — pure types + key builders + caps for the notifications feature.
+// Pure types + key builders + caps for the notifications feature.
 //
 // What this module owns
 // =====================
@@ -10,7 +10,7 @@
 //
 // The `chrome.storage.local` round-trip lives in
 // `src/background/notifications-store.ts`. The SW chokepoint hook (the
-// only caller of `recordNotification` in Phase 1, per §0.4) lives in
+// only caller of `recordNotification`, per §0.4) lives in
 // `src/background/service-worker.ts`.
 //
 // §0 invariants this module helps uphold
@@ -49,6 +49,7 @@ export const NOTIFICATION_HISTORY_CAP = 50;
  *  Phase-1 records on disk + any caller that omits `opKind`). */
 export type TxOpKind =
   | "send"
+  | "receive"
   | "delegate"
   | "undelegate"
   | "redelegate"
@@ -65,6 +66,7 @@ export type TxOpKind =
 export function isTxOpKind(v: unknown): v is TxOpKind {
   return (
     v === "send" ||
+    v === "receive" ||
     v === "delegate" ||
     v === "undelegate" ||
     v === "redelegate" ||
@@ -78,7 +80,7 @@ export function isTxOpKind(v: unknown): v is TxOpKind {
 
 /** One persisted notification — the row a Phase-3 list / detail-popup
  *  renders, and the row Phase-2's `chrome.notifications.create` derives
- *  its title + body from. Phase 1 only fills this shape; nothing reads
+ *  its title + body from. This shape is filled but not yet read back
  *  it back yet outside of unit tests. */
 export interface NotificationRecord {
   /** `${chainIdHex}:${txHash}` — also the dedupe-set membership key. */
@@ -111,11 +113,27 @@ export interface NotificationRecord {
    *  pending-row (what the user intended to send to, or the precompile
    *  address for contract calls). */
   counterparty: string;
+  /** Total tx fee in lythoshi (decimal string), captured at the confirmed
+   *  terminal transition from `lyth_nativeReceipt.fee.total_lythoshi`
+   *  (lythoshi, NOT wei). OPTIONAL + only set for confirmed self-paid txs
+   *  with a non-zero fee: failed/reverted/pruned txs have no native receipt,
+   *  and a zero-fee (near-zero-gas testnet) tx leaves it unset. Display
+   *  formats it as `- <amount> LYTH`; absent ⇒ no fee line (no-mock).
+   *  Migration-safe: records written before this field just omit it. */
+  feeLythoshi?: string;
+  /** Cluster a delegation tx (delegate / undelegate / redelegate) targeted,
+   *  captured at send time from the pending row. `clusterId` is the numeric
+   *  directory id; `clusterName` is the directory display name when known.
+   *  There is NO `monok1` cluster address in the data model, so the detail
+   *  surfaces name + #id (or just #id). Both optional; absent on non-delegation
+   *  kinds + legacy records. */
+  clusterId?: number;
+  clusterName?: string;
   /** Epoch ms at the moment the SW observed the terminal transition.
    *  This is the notification's fire-time — distinct from the
    *  pending-row's `broadcastedAtMs` (which is broadcast time). */
   createdAtMs: number;
-  /** Read state. `false` on insert; Phase 3's `markAllRead` flips
+  /** Read state. `false` on insert; `markAllRead` flips
    *  per-scope. */
   read: boolean;
   /** Bump on shape change. */
@@ -160,6 +178,61 @@ export function notificationId(chainIdHex: string, txHash: string): string {
   return `${chainIdHex}:${txHash}`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Incoming-transfer watermark (Item 7b)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Per-(address, chain) high-water mark for incoming-transfer detection: the
+ *  newest activity anchor already accounted for. Only entries strictly after
+ *  it fire a notification — and the watermark is initialized to the current
+ *  newest anchor on first run, so a fresh/returning wallet never toasts its
+ *  entire history. */
+export interface IncomingWatermark {
+  blockHeight: number;
+  txIndex: number;
+  logIndex: number;
+}
+
+/** Per-(address, chain) incoming-watermark storage key. */
+export function incomingWatermarkKey(
+  addressLower: string,
+  chainIdHex: string,
+): string {
+  return `mono.notifications.incoming-watermark.${addressLower}.${chainIdHex}.v1`;
+}
+
+/** True when anchor `a` is strictly newer than watermark `b`
+ *  (lexicographic on blockHeight, then txIndex, then logIndex). */
+export function anchorAfter(
+  a: { blockHeight: number; txIndex: number; logIndex: number },
+  b: IncomingWatermark,
+): boolean {
+  if (a.blockHeight !== b.blockHeight) return a.blockHeight > b.blockHeight;
+  if (a.txIndex !== b.txIndex) return a.txIndex > b.txIndex;
+  return a.logIndex > b.logIndex;
+}
+
+/** Tolerant parse of a persisted watermark. Malformed / absent → null. */
+export function parseIncomingWatermark(raw: unknown): IncomingWatermark | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.blockHeight !== "number" ||
+    typeof r.txIndex !== "number" ||
+    typeof r.logIndex !== "number" ||
+    !Number.isFinite(r.blockHeight) ||
+    !Number.isFinite(r.txIndex) ||
+    !Number.isFinite(r.logIndex)
+  ) {
+    return null;
+  }
+  return {
+    blockHeight: r.blockHeight,
+    txIndex: r.txIndex,
+    logIndex: r.logIndex,
+  };
+}
+
 /** Insert a record newest-first and slice to the cap. Pure. */
 export function appendCapped(
   entries: NotificationRecord[],
@@ -178,7 +251,7 @@ function asNotificationKind(v: unknown): TxOpKind | undefined {
   return isTxOpKind(v) ? v : undefined;
 }
 
-/** Friendly title strings for each operation kind × status. Phase 2's
+/** Friendly title strings for each operation kind × status. The
  *  OS toast and Phase 3's notification-center row both call
  *  {@link notificationTitle} (the helper below) so the wording stays
  *  centralized here — no magic strings at the consumer sites. */
@@ -187,6 +260,9 @@ export const NOTIFICATION_LABELS: Record<
   { confirmed: string; failed: string }
 > = {
   send: { confirmed: "Sent", failed: "Send failed" },
+  // Incoming transfers only fire on confirmation; the "failed" string is unused
+  // (an inbound transfer the wallet didn't send has no failed state for us).
+  receive: { confirmed: "Received", failed: "Received" },
   delegate: { confirmed: "Staked", failed: "Stake failed" },
   undelegate: { confirmed: "Unstaked", failed: "Unstake failed" },
   redelegate: { confirmed: "Restaked", failed: "Restake failed" },
@@ -209,7 +285,7 @@ export const NOTIFICATION_LABELS: Record<
   },
 };
 
-/** Render the friendly title for a notification. Used by Phase 2's toast
+/** Render the friendly title for a notification. Used by the OS toast
  *  (`chrome.notifications.create` title) and Phase 3's row title. */
 export function notificationTitle(
   kind: TxOpKind,
@@ -239,6 +315,21 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
         ? r.blockNumber
         : undefined;
   if (blockNumber === undefined) return null;
+  // Optional fee — tolerate absent (legacy) + ignore a malformed value rather
+  // than rejecting the whole record (the fee is non-essential metadata).
+  const feeLythoshi =
+    typeof r.feeLythoshi === "string" && /^[0-9]+$/.test(r.feeLythoshi)
+      ? r.feeLythoshi
+      : undefined;
+  // Optional cluster metadata — tolerate absent + ignore malformed.
+  const clusterId =
+    typeof r.clusterId === "number" && Number.isFinite(r.clusterId)
+      ? r.clusterId
+      : undefined;
+  const clusterName =
+    typeof r.clusterName === "string" && r.clusterName.length > 0
+      ? r.clusterName
+      : undefined;
   return {
     id: r.id,
     txHash: r.txHash,
@@ -250,6 +341,9 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     createdAtMs: r.createdAtMs,
     read: r.read,
     schemaVersion: 0,
+    ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+    ...(clusterId !== undefined ? { clusterId } : {}),
+    ...(clusterName !== undefined ? { clusterName } : {}),
   };
 }
 

@@ -218,4 +218,3 @@ const announce = () => {
 window.addEventListener("eip6963:requestProvider", announce);
 announce();
 
-console.log("Monolythium Wallet: EIP-1193 provider attached");

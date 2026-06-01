@@ -1,6 +1,6 @@
-// Phase 11 Commit 9 — EmptyState primitive.
+// EmptyState primitive.
 //
-// Across Phase 4-10 the wallet accumulated ad-hoc empty-state copy:
+// Earlier the wallet accumulated ad-hoc empty-state copy:
 // each page invented its own padding, text-align, font size, colour.
 // This primitive collapses those variations into one component so the
 // visual rhythm of the wallet stays predictable across surfaces.

@@ -1,4 +1,4 @@
-// Phase 9 Commit 4 — PasskeySignModal.
+// PasskeySignModal.
 //
 // Runs `navigator.credentials.get()` with a tx-hash-bound challenge
 // when the Send flow's policy evaluation says `passkey-ok`. The modal

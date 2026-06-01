@@ -1,4 +1,4 @@
-// Phase 8 Commit 2 — MultisigCreateModal pure-helper tests.
+// MultisigCreateModal pure-helper tests.
 //
 // These exercise the conversion + validation seam between the
 // modal's in-flight DraftSigner shape and the canonical MultisigSigner

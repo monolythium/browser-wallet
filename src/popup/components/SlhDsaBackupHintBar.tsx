@@ -1,4 +1,4 @@
-// Phase 10 Commit 5 — SlhDsaBackupHintBar.
+// SlhDsaBackupHintBar.
 //
 // Periodic, non-blocking hint surfaced on Home when:
 //   - The active vault has no completed §30.1 backup (per
@@ -9,7 +9,7 @@
 //   - At least `HINT_BAR_RESURFACE_MS` (30 days) has passed since
 //     the last "dismiss for now" tap (or this is the first show).
 //
-// Design notes — mirrors Phase 9 OnboardingHintBar pattern:
+// Design notes — mirrors the OnboardingHintBar pattern:
 //  - Non-modal. Forced modals for genuinely-optional features are
 //    pushy UX; an accent bar at the top of Home preserves the
 //    user's normal flow.
@@ -44,7 +44,7 @@ interface HintStateRecord {
    *  NOT reset this — it's per-vault-permanent.
    *
    *  Re-enabling would require a future "Reset backup prompts"
-   *  setting; not in Phase 10 scope. */
+   *  setting; out of scope for now. */
   neverShowAgain: boolean;
 }
 
@@ -195,7 +195,7 @@ const hintCard: CSSProperties = {
   padding: "10px 12px",
   marginBottom: 8,
   borderRadius: 10,
-  // Distinct accent colour from the Phase 9 passkey hint bar (which
+  // Distinct accent colour from the passkey hint bar (which
   // uses the gold palette) so a user with both hints in their
   // history can visually distinguish them.
   border: "1px solid rgba(124,127,255,0.4)",

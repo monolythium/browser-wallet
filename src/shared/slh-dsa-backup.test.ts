@@ -1,6 +1,6 @@
-// Phase 10 Commit 1 — pure-helper tests for the SLH-DSA backup data
+// Pure-helper tests for the SLH-DSA backup data
 // model. No `@noble/post-quantum`, no `chrome.storage`, no IPC — those
-// land in Commit 2+ tests. This file pins the shape contract +
+// land in separate tests. This file pins the shape contract +
 // storage-round-trip resilience that downstream commits will depend on.
 
 import { describe, expect, it } from "vitest";
@@ -166,7 +166,7 @@ describe("cloneBackupForRead", () => {
   });
 
   it("returns null for a corrupt record (so the read path heals)", () => {
-    // Mirrors the Phase 9 hotfix discipline — a bad on-disk record
+    // Mirrors the heal-on-corrupt-record discipline — a bad on-disk record
     // shouldn't crash the IPC, just present as "not configured".
     expect(
       cloneBackupForRead(fakeBackup({ publicKey: "g".repeat(64) })),

@@ -6,7 +6,7 @@
 
 
 *, *::before, *::after { box-sizing: border-box; }
-/* Round 6 TASK 1 — popup edge polish, take three. Round 4 set body
+/* Popup edge polish. Earlier work set body
    bg to var(--ink-000) (a solid color) but .ext applies a linear
    gradient that ends at var(--ink-050) at the bottom. The 3-unit
    brightness mismatch was invisible at the top rounded corners but
@@ -98,10 +98,10 @@ body::-webkit-scrollbar,
     0 30px 80px -10px rgba(0,0,0,0.7);
   position:relative; overflow:hidden; isolation:isolate;
   display:flex; flex-direction:column;
-  /* Round 7 TASK 1 — ROOT CAUSE for the persistent "dark gap" at the
+  /* ROOT CAUSE for the persistent "dark gap" at the
      rounded corners (Rounds 4, 5, 6 all attempted to fix but missed
      the actual cause). The body bg was mirrored onto the .ext linear-
-     gradient in Round 6 so corner negative space matches at every
+     gradient earlier so corner negative space matches at every
      y-coordinate; the seam still appeared because .ext layered three
      radial gold-glow blooms (top-right, bottom-left, bottom-center)
      ON TOP of that linear-gradient. Body has no blooms. At the 20 px
@@ -120,10 +120,10 @@ body::-webkit-scrollbar,
   background:
     linear-gradient(180deg, var(--ink-000) 0%, var(--ink-100) 50%, var(--ink-050) 100%);
 }
-/* Round 4 TASK 4 — sidepanel mode stretches the .ext frame to the
+/* Sidepanel mode stretches the .ext frame to the
    panel viewport, drops the rounded card border (the panel chrome
    has its own edge) and the drop-shadow (no longer floating).
-   Round 5 TASK 1 — also cap inner content blocks at ~520 px and
+   Also cap inner content blocks at ~520 px and
    center them so a 600-800 px wide panel doesn't stretch a single
    wallet chip into an ugly horizontal banner. The .ext background
    gradient continues to fill the full panel width either side of
@@ -184,7 +184,7 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-att .sep { color:#bfc1ca; }
 
 /* --- Top row: glass strip with account chip + settings --- */
-/* Round 9 TASK 5 — wallet-card vertical padding reduced 16 → 10 px
+/* Wallet-card vertical padding reduced 16 → 10 px
    so the algo-placeholder + name-row + address-row stack reads as
    a tighter card. The chip itself (.ext-acc) is unchanged; only
    the container's top/bottom breathing room is reduced. */
@@ -209,8 +209,8 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-iconbtn { color:#404348; background:#fff; border:1px solid #e0e0e7; }
 .ext.light .ext-iconbtn:hover { background:#f4f4f7; }
 
-/* Scroll body — the ONLY scrollable surface in popup mode. Round 5
-   TASK 2 adds explicit overflow-x:hidden so a wide modal or long
+/* Scroll body — the ONLY scrollable surface in popup mode.
+   Explicit overflow-x:hidden so a wide modal or long
    inline string can't trigger a horizontal scrollbar that would
    render alongside the vertical one and look like two scrollbars
    on the right edge. */
@@ -327,6 +327,10 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-act-row .dir { background:#f0f0f5; color:#404348; }
 .ext-act-row .dir.in { color: var(--ok); background: oklch(0.78 0.14 155 / 0.12); }
 .ext.light .ext-act-row .dir.in { background:#e8f5ec; color:#2a7a3f; }
+/* Outgoing + confirmed (successful send): icon glyph takes the theme accent
+   (var(--gold) is redefined per theme, so it recolors with the active theme).
+   Failed (red), incoming (green .dir.in), and pending (gold dot) are untouched. */
+.ext-act-row .dir.out.sent-ok { color: var(--gold); }
 .ext-act-row__main { overflow:hidden; }
 .ext-act-row__who { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; color: var(--fg-100); }
 .ext.light .ext-act-row__who { color:#1a1a24; }
@@ -340,7 +344,7 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-act-row__right .amt.opaque { color: var(--fg-400); font-size:11.5px; font-family: var(--f-sans); font-style:italic; }
 .ext-act-row__right .sym { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:2px; letter-spacing:0.04em; }
 
-/* Phase 3 notifications — unread indicator. A small blue dot pinned to
+/* Notifications — unread indicator. A small blue dot pinned to
    the bottom-left of a notification row, visible only on rows whose
    record.read === false. The wallet's existing "blue" attention color
    is `oklch(0.78 0.14 240)` (used elsewhere for the private-denom hint
@@ -357,7 +361,7 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   pointer-events: none;
 }
 
-/* Phase 4.4 — pending-row indicator (commit 12: spin animation deferred
+/* Pending-row indicator (spin animation deferred
    here from commit 11 per the CSS-reuse constraint). The dot sits in the
    icon slot's top-right corner; the rotating ring gives a "work in
    progress" cue distinct from the static row chrome. Single keyframe
@@ -365,7 +369,7 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 @keyframes ext-pending-spin {
   to { transform: rotate(360deg); }
 }
-/* Phase 11 Commit 9 — InlineSpinner pulse for the LoadingState primitive.
+/* InlineSpinner pulse for the LoadingState primitive.
    Three dots fading in/out at staggered phases. */
 @keyframes ext-spinner-pulse {
   0%, 80%, 100% { opacity: 0.2; }
@@ -383,7 +387,7 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   animation: ext-pending-spin 1.2s linear infinite;
 }
 
-/* Phase 4.4 — indexer-staleness banner (§28.2.1). Yellow warn-tinted
+/* Indexer-staleness banner (§28.2.1). Yellow warn-tinted
    surface above the activity list. Dismiss button is per-session
    (component-level useState, not persisted to chrome.storage). */
 .ext-indexer-stale {

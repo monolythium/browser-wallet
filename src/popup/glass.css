@@ -17,12 +17,12 @@
    overflow, and scrollbar styling live in ext.css (single source of
    truth).
 
-   Round 4 TASK 4 — main.tsx stamps data-mode on <html> at boot.
+   main.tsx stamps data-mode on <html> at boot.
    Popup keeps the historical fixed frame; sidepanel stretches to
    fill whatever Chrome assigned the panel. .ext itself reads the
    same attribute (see ext.css) to drop its fixed 380×620 frame in
    sidepanel mode. */
-/* Round 8 TASK 1 Phase C + hotfix — ROOT CAUSE of the 5-round popup
+/* ROOT CAUSE of the popup
    corner gap mystery + the 100vh-collapse regression on top.
 
    Phase C (commit 6c486d5): diagnostic CSS identified TWO problems:
@@ -60,7 +60,7 @@ html[data-mode="popup"] #root {
   background:
     linear-gradient(180deg, var(--ink-000) 0%, var(--ink-100) 50%, var(--ink-050) 100%);
 }
-/* Round 10 TASK 1 — popup corners go SQUARE. After 6+ rounds of trying
+/* Popup corners go SQUARE. After much iteration trying
    to keep rounded corners while eliminating the persistent dark gap
    along the rounded edge (Rounds 4–9 each found a new contributing
    factor and patched it), user opted to drop the rounded corners in
@@ -87,8 +87,8 @@ html[data-mode="sidepanel"] #root {
   overflow: hidden;
 }
 
-/* Round 5 TASK 2 — restore rounded corners on .ext in popup mode.
-   Round 4 forced border-radius:0 / box-shadow:none unconditionally
+/* Restore rounded corners on .ext in popup mode.
+   An earlier rule forced border-radius:0 / box-shadow:none unconditionally
    (carry-over from an old popup-frame approach). Chrome's outer popup
    frame is rectangular and can't be rounded, but the inner .ext card
    IS rounded — and with the body bg matching the gradient endpoints
@@ -97,13 +97,13 @@ html[data-mode="sidepanel"] #root {
    straight edges (.ext fills the full panel chrome there). */
 html[data-mode="sidepanel"] .ext { border-radius: 0; box-shadow: none; }
 
-/* Round 8 TASK 3 — fullscreen mode (wallet in a regular Chrome tab,
+/* Fullscreen mode (wallet in a regular Chrome tab,
    opened via chrome.tabs.create with ?mode=fullscreen). The wallet
    centers itself in a centered column on the larger viewport so
    line-lengths stay readable; outside the column, body bg fills the
    surrounding tab space.
 
-   Round 10 TASK 6 — MetaMask-style fullscreen layout. Max-width bumped
+   MetaMask-style fullscreen layout. Max-width bumped
    480 → 720 px so the wallet card has the desktop comfort MetaMask's
    fullscreen mode reads as. #root becomes a flex column so the brand
    wordmark (rendered by App.tsx only in fullscreen) sits centered
@@ -116,7 +116,7 @@ html[data-mode="fullscreen"] body {
   overflow: auto;
   background: var(--ink-000);
 }
-/* Round 12 TASK 6 — bottom padding reduced 96 → 24 px now that the
+/* Bottom padding reduced 96 → 24 px now that the
    footer is in normal flow inside .ext (no longer position:fixed
    overlay). Extra 72 px of empty space below the card was a
    leftover from clearing the fixed footer. */
@@ -135,7 +135,7 @@ html[data-mode="fullscreen"] #root {
   align-items: stretch;
   padding: 0 16px;
 }
-/* Round 10 TASK 6 — brand wordmark above the wallet card. Rendered
+/* Brand wordmark above the wallet card. Rendered
    conditionally by App.tsx when data-mode="fullscreen". Subtle, no
    logo SVG yet — plain text wordmark with letter-spacing tuned to
    match the wallet's title chrome. */
@@ -160,7 +160,7 @@ html[data-mode="fullscreen"] .ext {
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 30px 80px -10px rgba(0, 0, 0, 0.7);
 }
-/* Round 10 TASK 6 — wider scroll body in fullscreen with more
+/* Wider scroll body in fullscreen with more
    breathing room between sections. Padding bumped 14 → 20 so cards
    don't crowd the wider 720 px column. */
 html[data-mode="fullscreen"] .ext-body {

@@ -1,4 +1,4 @@
-// Phase 11.5 Commit 2 — chain reader for `lyth_previewTransactionHooks`
+// Chain reader for `lyth_previewTransactionHooks`
 // (MS-CORE-0009 / mono-core @13fb4ceb).
 //
 // The chain handler at protocore.rs:576 takes a CallRequest (the same

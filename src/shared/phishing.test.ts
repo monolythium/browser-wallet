@@ -1,4 +1,4 @@
-// Phase 6 — phishing heuristics. Pure-function coverage; the UI plumbing
+// Phishing heuristics. Pure-function coverage; the UI plumbing
 // (ReqConnect / ReqPersonalSignReal) consumes the returned warnings
 // verbatim, so we pin the codes and severities here.
 
