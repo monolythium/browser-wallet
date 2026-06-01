@@ -1,4 +1,4 @@
-// Phase 11 Commit 7 — Send-page error classifier.
+// Send-page error classifier.
 //
 // The Send.tsx error state previously stored a generic
 // `{ message, code, method, via }` and rendered `message` verbatim.
@@ -183,7 +183,7 @@ export function classifySendError(
     };
   }
 
-  // Spending-policy block (Phase 9 + future Phase 12 §24.10).
+  // Spending-policy block (§24.10).
   if (
     lower.includes("spending policy") ||
     lower.includes("spending-policy") ||

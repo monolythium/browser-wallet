@@ -1,4 +1,4 @@
-// Phase 1 — pure types + key builders + caps for the notifications feature.
+// Pure types + key builders + caps for the notifications feature.
 //
 // What this module owns
 // =====================
@@ -10,7 +10,7 @@
 //
 // The `chrome.storage.local` round-trip lives in
 // `src/background/notifications-store.ts`. The SW chokepoint hook (the
-// only caller of `recordNotification` in Phase 1, per §0.4) lives in
+// only caller of `recordNotification`, per §0.4) lives in
 // `src/background/service-worker.ts`.
 //
 // §0 invariants this module helps uphold
@@ -80,7 +80,7 @@ export function isTxOpKind(v: unknown): v is TxOpKind {
 
 /** One persisted notification — the row a Phase-3 list / detail-popup
  *  renders, and the row Phase-2's `chrome.notifications.create` derives
- *  its title + body from. Phase 1 only fills this shape; nothing reads
+ *  its title + body from. This shape is filled but not yet read back
  *  it back yet outside of unit tests. */
 export interface NotificationRecord {
   /** `${chainIdHex}:${txHash}` — also the dedupe-set membership key. */
@@ -133,7 +133,7 @@ export interface NotificationRecord {
    *  This is the notification's fire-time — distinct from the
    *  pending-row's `broadcastedAtMs` (which is broadcast time). */
   createdAtMs: number;
-  /** Read state. `false` on insert; Phase 3's `markAllRead` flips
+  /** Read state. `false` on insert; `markAllRead` flips
    *  per-scope. */
   read: boolean;
   /** Bump on shape change. */
@@ -251,7 +251,7 @@ function asNotificationKind(v: unknown): TxOpKind | undefined {
   return isTxOpKind(v) ? v : undefined;
 }
 
-/** Friendly title strings for each operation kind × status. Phase 2's
+/** Friendly title strings for each operation kind × status. The
  *  OS toast and Phase 3's notification-center row both call
  *  {@link notificationTitle} (the helper below) so the wording stays
  *  centralized here — no magic strings at the consumer sites. */
@@ -285,7 +285,7 @@ export const NOTIFICATION_LABELS: Record<
   },
 };
 
-/** Render the friendly title for a notification. Used by Phase 2's toast
+/** Render the friendly title for a notification. Used by the OS toast
  *  (`chrome.notifications.create` title) and Phase 3's row title. */
 export function notificationTitle(
   kind: TxOpKind,
