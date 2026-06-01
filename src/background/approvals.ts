@@ -216,18 +216,33 @@ export function enqueue(request: ApprovalReq): Promise<ApprovalDecision> {
   times.push(now);
   recentEnqueuesByOrigin.set(request.origin, times);
 
-  // T4-06 (2) — dedup: an identical pending request (same kind + origin) reuses
-  // the open window rather than spawning a second one; the new caller's promise
-  // resolves with the same user decision.
-  for (const entry of pending.values()) {
-    if (
-      entry.approval.request.kind === request.kind &&
-      entry.approval.request.origin === request.origin
-    ) {
-      if (entry.windowId != null) void focusApproval(entry.approval.id);
-      return new Promise((resolve) => {
-        entry.resolvers.push(resolve);
-      });
+  // T4-06 (2) — dedup, restricted to idempotent `connect` ONLY (C7 fix).
+  //
+  // A pending `connect` from the same origin reuses the open window: `connect`
+  // carries no consent-relevant payload (its full identity IS kind+origin), and
+  // double-executing it is harmless — it merely re-returns the account list.
+  //
+  // Every payload-bearing kind (send_tx, personal_sign, typed_sign,
+  // switch_chain, add_chain) is DELIBERATELY excluded: the dedup collapses the
+  // approval *window*, but each request's continuation independently signs and
+  // submits its OWN payload. Collapsing a send/sign would therefore either sign
+  // an UNSEEN distinct request (the user approves tx#1 and an unrendered tx#2
+  // resolves approved — confused deputy), or, for byte-identical requests,
+  // double-submit N on-chain txs off ONE consent. So such kinds each get their
+  // OWN window and their OWN decision per request and can never take this
+  // branch. The window-bomb is still bounded by the rate-limit (above) and the
+  // concurrency cap (below), which don't need dedup to collapse distinct work.
+  if (request.kind === "connect") {
+    for (const entry of pending.values()) {
+      if (
+        entry.approval.request.kind === "connect" &&
+        entry.approval.request.origin === request.origin
+      ) {
+        if (entry.windowId != null) void focusApproval(entry.approval.id);
+        return new Promise((resolve) => {
+          entry.resolvers.push(resolve);
+        });
+      }
     }
   }
 
