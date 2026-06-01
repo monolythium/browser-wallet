@@ -15,11 +15,11 @@
 //     addr: "0x...",                               // ADR-0038 BLAKE3 address bytes
 //   }
 //
-// v4 strict (Phase 3.5): mnemonic fields are MANDATORY, not optional.
+// v4 strict: mnemonic fields are MANDATORY, not optional.
 // Every v4 vault carries an encrypted mnemonic so Settings → Show
 // recovery phrase always works. The seed-only vault-creation paths
 // from earlier builds (v3) are gone; they survive transitionally as
-// stub-throwing exports until Phase 3.5 Commit C removes them entirely.
+// stub-throwing exports, slated for removal once the v3 paths are fully retired.
 //
 // v3→v4 migration is silent: the storage key was bumped from
 // "mono.vault.v3" to "mono.vault.v4", so any old v3 entry on disk is
@@ -34,7 +34,7 @@
 // + 20-byte address, plus a persisted mnemonic. v2 vaults are NOT
 // auto-upgraded — the user re-imports their seed (or generates fresh).
 //
-// v4-multi (Phase 5): a parallel storage entry under
+// v4-multi: a parallel storage entry under
 // chrome.storage.local["mono.vaults.v4"] holds a VaultsContainerV4 —
 // the multi-vault layer described in whitepaper §21.2.1 ("Power users
 // wanting multiple accounts ... use the keystore format with a wallet
@@ -48,11 +48,11 @@
 //
 // Migration from the legacy single envelope ("mono.vault.v4") to the
 // container ("mono.vaults.v4") is opportunistic, lazy, and runs inside
-// the unlock handler the first time after the Phase 5 upgrade. The
+// the unlock handler the first time after the v4-multi upgrade. The
 // legacy entry is left in place for one release cycle as rollback
-// safety; later phases drop it. Commit 1 of Phase 5 lands the schema +
+// safety; a later release drops it. This module lands the schema +
 // helpers + migration function only — wiring into the existing unlock
-// path is Commit 2.
+// path is wired separately by the unlock handler.
 //
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
@@ -121,7 +121,7 @@ const AEAD_ID = "xchacha20-poly1305" as const;
 
 const SUBKEY_LEN = 32; // XChaCha20-Poly1305 expects a 256-bit key.
 
-// ---- v4-multi container constants (Phase 5) ----
+// ---- v4-multi container constants ----
 
 const VAULTS_CONTAINER_KEY_V4 = "mono.vaults.v4";
 const VEK_LEN = 32;
@@ -157,7 +157,7 @@ let unlocked: UnlockedState | null = null;
 let mekCache: Uint8Array | null = null;
 let activeContainerVaultId: string | null = null;
 
-// ---- Session-rehydrate (Round 4 TASK 2) ----
+// ---- Session-rehydrate ----
 //
 // MV3 service workers hibernate after ~30 s of inactivity. Without
 // a cross-hibernation mechanism, the in-memory `unlocked` and
@@ -265,7 +265,7 @@ export async function tryRestoreFromSessionV4(): Promise<
   return { ok: true, address: state.address, vaultId: active.id };
 }
 
-// ---- v4-multi container types (Phase 5) ----
+// ---- v4-multi container types ----
 
 /** Argon2id parameters for the master encryption key. One set per
  *  container, shared across all vaults — the same MEK unwraps every
@@ -299,12 +299,12 @@ interface SealedSeedRecordV4 {
 }
 
 /** One vault inside a VaultsContainerV4. The label is user-editable
- *  (Phase 5 commit 3 wires the rename UI); createdAt anchors stable
+ *  (the rename UI is wired separately); createdAt anchors stable
  *  ordering when the container is rendered.
  *
- *  Phase 8 added the `kind` discriminant. `"single"` is the legacy
+ *  The `kind` discriminant was added later. `"single"` is the legacy
  *  shape — one mnemonic, one ML-DSA-65 keypair, one address. Vault
- *  records persisted before Phase 8 carry no `kind` field on disk and
+ *  records persisted before the discriminant existed carry no `kind` field on disk and
  *  are treated as `"single"` by every read path. `"multisig"` records
  *  reuse the same wrappedKey + envelope (the multisig vault has its
  *  own ML-DSA-65 keypair that submits executed proposals on-chain)
@@ -323,7 +323,7 @@ interface VaultRecordV4 {
   /** M-of-N committee + proposal queues for `kind === "multisig"`.
    *  Must be present on multisig records, absent on single records. */
   multisig?: MultisigVaultMeta;
-  /** Phase 9 — optional per-vault passkey state. Absent on legacy
+  /** Optional per-vault passkey state. Absent on legacy
    *  vaults and on vaults that haven't run passkey registration; read
    *  paths treat absence as "no passkey configured" (policy disabled,
    *  no credentials). The actual WebAuthn key material lives in the
@@ -331,7 +331,7 @@ interface VaultRecordV4 {
    *  user-edited names + policy thresholds. See `shared/passkey.ts`
    *  for the rationale and the on-chain GAP analysis. */
   passkey?: VaultPasskeyState;
-  /** Phase 10 — optional per-vault SLH-DSA emergency backup record.
+  /** Optional per-vault SLH-DSA emergency backup record.
    *  Absent on every vault until the user opts into the §30.1 flow.
    *  Read paths treat absence as "not set up". When present, the
    *  encrypted secret-key material is XChaCha20-Poly1305-sealed under
@@ -373,7 +373,7 @@ function base64ToBytes(s: string): Uint8Array {
 }
 
 
-// ---- v4-multi crypto helpers (Phase 5) ----
+// ---- v4-multi crypto helpers ----
 
 /** Fresh argon2id parameters for a new container. Reuses the same
  *  cost knobs the single-vault layer uses (64 MiB / t=3 / p=1) so the
@@ -526,7 +526,7 @@ function openVaultEnvelopeV4(
   }
 }
 
-// ---- v4-multi container storage (Phase 5) ----
+// ---- v4-multi container storage ----
 
 function isVaultsContainerV4(raw: unknown): raw is VaultsContainerV4 {
   if (!raw || typeof raw !== "object") return false;
@@ -561,7 +561,7 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
   if (!isVaultsContainerV4(raw)) {
     throw new Error("v4 vaults container is unrecognised — refusing to read");
   }
-  // Phase 9 hotfix: normalise the per-vault passkey state back to the
+  // Normalise the per-vault passkey state back to the
   // in-memory (bigint-typed) shape. On disk the passkey policy is
   // stored as decimal strings (see `passkeyStateForStorage`); rest of
   // the code expects bigints. `clonePasskeyState` tolerates either
@@ -572,16 +572,16 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
   return {
     ...raw,
     vaults: raw.vaults.map((v) => {
-      // Phase 9 hotfix — passkey BigInt normalisation
+      // passkey BigInt normalisation
       let out = v.passkey
         ? { ...v, passkey: clonePasskeyState(v.passkey) }
         : v;
-      // Phase 10 — SLH-DSA backup defensive read. The on-disk shape
+      // SLH-DSA backup defensive read. The on-disk shape
       // is already plain JSON (no BigInts to recover), but pushing
       // every read through `cloneBackupForRead` strips unknown fields
       // + fails closed on a corrupt record (returns `null`, which
       // the read paths treat as "no backup configured"). The same
-      // defence-in-depth posture as the Phase 9 passkey path.
+      // defence-in-depth posture as the passkey path.
       if (out.slhDsaBackup) {
         const restored = cloneBackupForRead(out.slhDsaBackup);
         if (restored !== null) {
@@ -602,7 +602,7 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
 async function saveVaultsContainerV4(
   container: VaultsContainerV4,
 ): Promise<void> {
-  // Phase 9 hotfix: chrome.storage.local doesn't reliably preserve
+  // chrome.storage.local doesn't reliably preserve
   // BigInt values across the persistence boundary — on some Chrome
   // versions the bigint fields get stripped silently, leaving e.g.
   // `policy.limitWei: undefined` on the next read, which then crashes
@@ -626,13 +626,13 @@ async function saveVaultsContainerV4(
   });
 }
 
-// ---- v4-multi public API (Phase 5 Commit 2) ----
+// ---- v4-multi public API ----
 
 /** Summary projection over a VaultRecordV4 — what the popup needs to
  *  render the vault picker. Excludes the wrappedKey / envelope (key
  *  material stays inside the keystore).
  *
- *  Phase 8 added the multisig fields (`kind`, `signerCount`,
+ *  The multisig fields (`kind`, `signerCount`,
  *  `threshold`, `pendingCount`) so the picker can render a multisig
  *  badge + "M-of-N · K pending" without a second IPC roundtrip. The
  *  full signer roster + proposal queue is read separately via the
@@ -777,7 +777,7 @@ export async function selectActiveVaultV4(
  *  container exists (so the popup can branch on "still single-vault
  *  legacy" during the migration window).
  *
- *  Phase 8 — the multisig summary fields are populated from the
+ *  The multisig summary fields are populated from the
  *  per-vault `multisig` block. Pending count counts both tx and
  *  governance proposals in `pending` status (the popup surfaces a
  *  combined number; the per-page views render the two queues
@@ -852,7 +852,7 @@ export async function addVaultFreshV4(label?: string): Promise<{
   }
 }
 
-/** Round 13 TASK 1 — generate a fresh PQM-1 mnemonic WITHOUT
+/** Generate a fresh PQM-1 mnemonic WITHOUT
  *  persisting any vault. The popup uses this for the in-app multi-
  *  step new-wallet flow (show phrase → verify phrase → commit). The
  *  returned mnemonic lives in popup-side React state until the user
@@ -1064,7 +1064,7 @@ function cloneGovernanceAction(
   return { ...a };
 }
 
-// ---- Passkey per-vault state (Phase 9) ----
+// ---- Passkey per-vault state ----
 
 /** Read a vault's passkey state. Returns an empty (disabled, no
  *  credentials) state when the vault is unknown or has never
@@ -1131,10 +1131,10 @@ export async function setPasskeyPolicyV4(
   return clonePasskeyState(next);
 }
 
-// ---- Phase 10 SLH-DSA backup CRUD ----
+// ---- SLH-DSA backup CRUD ----
 //
 // The keygen + secret-key encryption lives in
-// `src/background/slh-dsa-keygen.ts` (Phase 10 Commit 2). These
+// `src/background/slh-dsa-keygen.ts`. These
 // helpers are the storage seam — they accept an already-prepared
 // `SlhDsaBackup` record and persist / read it through the same
 // container the rest of the vault state lives in. Read paths return
@@ -1157,7 +1157,7 @@ export async function readSlhDsaBackupV4(
 }
 
 /** Replace the SLH-DSA backup record atomically. Caller is the
- *  keygen path (Commit 2) — by the time we get here the secret key
+ *  keygen path — by the time we get here the secret key
  *  has already been VEK-wrapped + the user has gone through the
  *  reveal-modal flow. Throws on unknown vault id; the caller never
  *  catches it because the only call site is the SW IPC handler
@@ -1386,7 +1386,7 @@ export async function setSlhDsaRegistrationStatusV4(
 /** Defensive copy so callers can't mutate stored state by holding a
  *  reference to the returned record.
  *
- *  Phase 9 hotfix: also tolerates the JSON-safe form policy may be in
+ *  Also tolerates the JSON-safe form policy may be in
  *  after a chrome.storage round-trip. `BigInt` values do not survive
  *  the chrome.storage persistence boundary reliably across all Chrome
  *  versions — some strip the field silently, leaving `policy.limitWei`
@@ -1512,7 +1512,7 @@ function passkeyStateForStorage(s: VaultPasskeyState): StoredPasskeyState {
  *  addresses, appends, saves. Validates the optional caller-supplied
  *  label with the same rules as {@link renameVaultV4}; falls back to
  *  `"Wallet N"` (where N is the post-append vault count) when the
- *  caller passes no label. (Round 5 TASK 4 — the UI surface uses
+ *  caller passes no label. (The UI surface uses
  *  "Wallet" everywhere; the data-structure name stays "vault" for
  *  diff continuity with storage keys, IPC ops, and types.) Optional
  *  `extra` block attaches multisig metadata for the multisig path. */
@@ -1537,7 +1537,7 @@ async function appendVaultRecord(
     if (trimmed.length > 32) throw new Error("label must be 1-32 characters");
     label = trimmed;
   } else {
-    // Round 5 TASK 4 — default label uses the user-facing "Wallet"
+    // Default label uses the user-facing "Wallet"
     // terminology. Existing records named "Vault N" by the previous
     // generator keep their stored labels (rename is the only way to
     // change them); only the default for new records changes.
@@ -1568,12 +1568,12 @@ async function appendVaultRecord(
     record.multisig = extra.multisig;
   }
   container.vaults.push(record);
-  // Round 3.5 — auto-switch the active vault to the just-added record.
+  // Auto-switch the active vault to the just-added record.
   // Previous design left the active vault unchanged and required the
   // caller to invoke `vault-select` separately to switch; the popup's
   // VaultAddModal didn't, so users saw the old vault's address after
   // creating a new one and reported it as a "fresh vault shows same
-  // address" bug (Round 3.5 storage dump 2026-05-26 confirmed two
+  // address" bug (a storage dump confirmed two
   // distinct addresses on disk; only the UI was stuck on the prior
   // active vault). Persist the new active vault id alongside the
   // append, and update the in-memory `unlocked` state from the live
@@ -1909,7 +1909,7 @@ function bytesToHex(b: Uint8Array): string {
   return s;
 }
 
-// ---- test-only exports (Phase 5) ----
+// ---- test-only exports ----
 //
 // Mirrors the `__internal` pattern in keystore.ts — lets the vitest
 // suite reach into the multi-vault helpers without exposing them on

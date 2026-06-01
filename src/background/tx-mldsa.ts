@@ -74,7 +74,7 @@ export async function sprintnetJsonRpc<T>(
   opts?: { timeoutMs?: number },
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
-  // Round 13 TASK 3 — track genesis-pin failures separately so the
+  // Track genesis-pin failures separately so the
   // aggregate error message is informative when ALL operators are
   // rejected for untrusted genesis. Previously the user saw the
   // last-tried operator's error ("operator-1: untrusted genesis"),
@@ -88,7 +88,7 @@ export async function sprintnetJsonRpc<T>(
   let totalOperators = 0;
   for (const v of getActiveOperators()) {
     totalOperators++;
-    // GAP #11: genesis-hash pin. Operators whose block 0 doesn't match
+    // Genesis-hash pin (orphan-fork defense). Operators whose block 0 doesn't match
     // SPRINTNET_GENESIS_HASH are skipped — they're either on a fork or
     // a different chain entirely, and routing any request to them
     // leaks reads / writes onto an untrusted ledger.
@@ -98,7 +98,7 @@ export async function sprintnetJsonRpc<T>(
       continue;
     }
     let res: Response;
-    // GAP-N1 — optional per-call timeout (mirrors the balance-probe
+    // Optional per-call timeout (mirrors the balance-probe
     // AbortController pattern below). Default (no timeoutMs) is unchanged:
     // no AbortController, no signal — every existing caller is byte-identical.
     const ctrl = opts?.timeoutMs ? new AbortController() : null;
@@ -143,7 +143,7 @@ export async function sprintnetJsonRpc<T>(
     }
     return { result: body.result, via: v.name };
   }
-  // Round 13 TASK 3 — if EVERY operator failed the genesis pin check,
+  // If EVERY operator failed the genesis pin check,
   // surface a clearer aggregate error instead of the last-operator's
   // raw "name: untrusted genesis" message. See About → Operators for
   // per-operator status the user can act on.
@@ -179,14 +179,14 @@ const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
  *    @ mono-core-sdk 0fd8a79.
  *  Strict shape: `{ value, state_root, block_number, proof? }`.
  *
- *  Wire-vs-binding case mismatch (intentional, observed Phase 7.1): the
+ *  Wire-vs-binding case mismatch (intentional, observed against live operators): the
  *  chain serializer emits camelCase (`stateRoot`, `blockNumber`) even
  *  though the ts-rs binding annotates snake_case. The wallet's parser
  *  only reads `.value`, so the case mismatch doesn't affect balance
  *  reads — but downstream callers that need the proof envelope's other
  *  fields should consult the live wire form, not the binding annotations.
  *
- *  Resilience posture (Phase 7.1 commit 7): keep the dual-shape accept —
+ *  Resilience posture: keep the dual-shape accept —
  *  rejecting only when neither `value: 0x…` nor plain `0x…` is present.
  *  Operators on a future binary that drops the envelope wrapper in
  *  favour of bare hex (or vice versa) keep working without a wallet
@@ -214,7 +214,7 @@ function parseBalanceFromRpcResult(result: unknown): string | null {
  * binary rollout. The single-operator-with-failover pattern in
  * `sprintnetJsonRpc` latches onto the first responder, which for
  * balance reads can be a stale `0x0` envelope that hides the correct
- * value reported by other operators (observed 2026-05-15:
+ * value reported by other operators (observed in the field:
  * 192.0.2.1 returned `0x0` for a freshly funded address while
  * other operators returned the correct `0x16345785d8a0000`).
  *
@@ -234,7 +234,7 @@ export async function sprintnetMaxBalanceConsensus(
   }
 
   const probes = operators.map(async (op) => {
-    // GAP #11: skip operators whose block 0 doesn't match our pin.
+    // Genesis-hash pin: skip operators whose block 0 doesn't match our pin.
     // Treated as a "failing" entry so the consensus result still
     // reports the skipped operator's name and reason — distinct from
     // a network error, and visible in the SW console balance log.
@@ -436,7 +436,7 @@ export async function submitEncryptedMlDsaTx(req: EthSendTxFields): Promise<{
 //
 // We do NOT route through the SDK's `submitTransactionWithPrivacy` /
 // `submitPlaintextTransaction` RpcClient helpers here: the wallet's
-// operator-iteration in `sprintnetJsonRpc` carries the GAP #11 genesis-hash
+// operator-iteration in `sprintnetJsonRpc` carries the genesis-hash
 // pin + multi-operator failover that protect every wallet RPC. Reusing it for
 // `mesh_submitTx` keeps the plaintext path under the same protections as the
 // encrypted path, while still using the SDK's `buildPlaintextSubmission` for
