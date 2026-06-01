@@ -129,19 +129,19 @@ interface ChainStatusBannerProps {
    *  renders as a non-clickable pill without the caret, matching the
    *  visual weight of the interactive version. */
   onOpenNetworks?: () => void;
-  /** Round 5 TASK 3 — the settings cog migrated from the .ext-top
+  /** The settings cog migrated from the .ext-top
    *  row into the status banner so the wallet chip below it can
    *  claim the full popup width for the renamed-from-top-bar wallet
    *  label + full-line bech32m address. Omit in approval contexts. */
   onSettings?: () => void;
-  /** Round 6 TASK 2 — connected-sites shortcut. Renders a globe
+  /** Connected-sites shortcut. Renders a globe
    *  button to the right of `onSettings` when provided. Omit in
    *  approval contexts. */
   onConnectedSites?: () => void;
   /** Notifications polish C1 — bell entry to the global notifications
    *  page. Renders between Connected sites and the hamburger, with an
    *  optional small unread dot driven by `unreadCount`. The page itself
-   *  was added in Phase 3; the bell is a top-bar entry so the inbox is
+   *  was added with the Notifications page; the bell is a top-bar entry so the inbox is
    *  reachable without opening the hamburger menu. */
   onNotifications?: () => void;
   /** Polish C1 — when > 0, paints a small blue dot on the bell glyph
@@ -149,7 +149,7 @@ interface ChainStatusBannerProps {
    *  Caller is expected to fetch this via `bgGetUnread()` and refresh
    *  it on storage change so the dot stays in sync. */
   unreadCount?: number;
-  /** Round 7 TASK 4 — hamburger menu shortcut (was Round 6's lock
+  /** Hamburger menu shortcut (was the prior lock
    *  button before the MainMenu screen took over the lock surface).
    *  Renders a 3-line hamburger icon on the far right when provided;
    *  caller routes to the MainMenu screen. */
@@ -212,7 +212,7 @@ export function ChainStatusBanner({
     const intervalId = setInterval(tick, HEALTH_TICK_MS);
     document.addEventListener("visibilitychange", visHandler);
 
-    // Phase 11 Commit 2 — opportunistic WS upgrade. Ask the SW to
+    // Opportunistic WS upgrade. Ask the SW to
     // subscribe to `newHeads`; when chain pushes a new head, the SW
     // writes the block hex to chrome.storage.session under the key
     // below. We watch that key here and update the banner without
@@ -279,8 +279,8 @@ export function ChainStatusBanner({
 
   const containerStyle: CSSProperties = {
     fontFamily: "var(--f-mono)",
-    // Round 9 TASK 3 — bump text + button sizing so the contents fit
-    // the allocated bar height (Round 7 made the bar 44 px-ish but
+    // Bump text + button sizing so the contents fit
+    // the allocated bar height (the bar became 44 px-ish but
     // buttons/text stayed at the original 9.5 px / 22 px sizes that
     // looked undersized in the taller bar). Text 9.5 → 10.5; button
     // bump happens at BannerActionButton (see below).
@@ -298,7 +298,7 @@ export function ChainStatusBanner({
   // Pill chip styling shared between the interactive (with caret) and
   // read-only (no caret) variants. Read-only is used inside the approval
   // window, where switching chains mid-approval would be unsafe.
-  // Round 9 TASK 3 — slightly larger padding + subtle bg lift so the
+  // Slightly larger padding + subtle bg lift so the
   // network selector reads as a clearly tappable pill.
   // Polish C1 — trim 2 px of horizontal padding + 1 px of caret gap so
   // the new bell + hamburger fit comfortably on the right cluster
@@ -330,7 +330,7 @@ export function ChainStatusBanner({
     <span style={chipStyle}>{network.name.toUpperCase()}</span>
   );
 
-  // Round 6 TASK 2 — operator name (live/stalled) and offline reason
+  // Operator name (live/stalled) and offline reason
   // text dropped from the banner. They were noisy filler that
   // competed with the new action-button cluster on the right.
   // `operator` is still polled (the variable is read elsewhere for
@@ -437,7 +437,7 @@ export function ChainStatusBanner({
   );
 }
 
-// Round 6 TASK 2 — small icon-button used inside ChainStatusBanner's
+// Small icon-button used inside ChainStatusBanner's
 // right-aligned action cluster. Sized to fit the 5 px / 14 px banner
 // padding without growing the banner height. The hover bg lift is
 // the only affordance — chips below this row supply explicit borders.
@@ -466,8 +466,8 @@ function BannerActionButton({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        // Round 9 TASK 3 — bump 24×22 → 32×30 to match the taller
-        // banner row from Round 7. Round corners also grow to 7 to
+        // Bump 24×22 → 32×30 to match the taller
+        // banner row. Round corners also grow to 7 to
         // match the new chunk. The glyph inside grows 13 → 16 too.
         width: 32,
         height: 30,
@@ -512,14 +512,14 @@ function BannerActionButton({
 // ---- Top row: brand + account + settings ----
 //
 // The active chain selector lives in the status bar (`ChainStatusBanner`)
-// directly above this row. Top kept the chain chip until Phase 4.1.2,
+// directly above this row. Top kept the chain chip until the full bech32m address landed,
 // when the full bech32m address landed in the account chip and needed
 // the freed horizontal width to render in 1-2 lines instead of 3-4.
 interface TopProps {
   account: Account;
   onOpenAccounts: () => void;
   onSettings: () => void;
-  /** Round 13 TASK 1 — VaultPicker's "New wallet" dropdown entry
+  /** VaultPicker's "New wallet" dropdown entry
    *  dispatches here instead of opening the legacy single-page modal.
    *  Threaded through Home for App-level routing to NewWalletFlow. */
   onNewWalletFlow?: () => void;
@@ -529,14 +529,14 @@ interface TopProps {
   onVaultComplete?: () => void;
 }
 
-// Phase 5 Commit 3: chip replaced with <VaultPicker /> (multi-vault
+// Chip replaced with <VaultPicker /> (multi-vault
 // dropdown). `onOpenAccounts` is preserved on TopProps for caller
 // compatibility but no longer consumed here — the legacy Accounts
 // screen navigation is vestigial since BIP-32/44 HD derivation was
 // removed. Full deletion of the prop chain (HomeProps + App.tsx)
-// is a Phase 8 cleanup.
+// is a future cleanup.
 //
-// Round 5 TASK 3 — `onSettings` is also no longer consumed: the cog
+// `onSettings` is also no longer consumed: the cog
 // migrated to ChainStatusBanner above this row so the VaultPicker
 // chip can claim the full popup width for the wallet name + full
 // bech32m address. Prop kept for caller-compat shim; the routing
@@ -545,7 +545,7 @@ interface TopProps {
 //
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
-// live inside the chip itself (Round 4 design).
+// live inside the chip itself (earlier design).
 export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
@@ -1112,13 +1112,13 @@ function MrcHolderSummary({
 
 // ---- Activity list ----
 //
-// Phase 4.4 wired the Activity tab body to live indexer data via three
+// The Activity tab body is wired to live indexer data via three
 // hooks (useActivity / useNameResolution / useIndexerStatus). The
 // implementation lives in src/popup/components/ActivityList.tsx — see
 // there for the kind dispatch + IndexerStaleBanner + empty/error/stale
-// state copy. The pre-Phase-4.4 inline list (+ its formatActivityTitle
+// state copy. The former inline list (+ its formatActivityTitle
 // / formatActivityAmount / shortHex helpers) was removed in commit
-// 13/13 of the Phase 4.4 ship.
+// removed when the ActivityList component landed.
 
 function shortHex(value: string): string {
   return value.length > 26 ? `${value.slice(0, 14)}…${value.slice(-8)}` : value;
@@ -1624,12 +1624,12 @@ interface HomeProps {
   onOpenSend?: () => void;
   onOpenStake?: () => void;
   onOpenBridge?: () => void;
-  /** Phase 9 Commit 7 — slot rendered at the top of the Home body
+  /** Slot rendered at the top of the Home body
    *  for the post-onboarding hint bar (OnboardingHintBar). Optional
    *  so test harnesses + callers without the route wired still
    *  render. */
   topSlot?: ReactNode;
-  /** Round 13 TASK 1 — threaded to VaultPicker so the "New wallet"
+  /** Threaded to VaultPicker so the "New wallet"
    *  dropdown entry routes to App's NewWalletFlow screen instead of
    *  opening the legacy single-page VaultAddModal fresh mode. */
   onNewWalletFlow?: () => void;
@@ -1786,7 +1786,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
         <PendingShelf />
 
         {/* Tabs */}
-        {/* Phase 11 Commit 10 — ARIA tablist + tab + tabpanel pattern.
+        {/* ARIA tablist + tab + tabpanel pattern.
             Screen readers announce "Tab Assets, 1 of 3, selected" when
             focused; keyboard arrow navigation between tabs comes for
             free from native browser button behaviour + the role hint. */}
@@ -1836,13 +1836,13 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
           )}
         </div>
 
-        {/* Round 8 TASK 4 — "view first-run onboarding" debug button
+        {/* "view first-run onboarding" debug button
            removed. The unified onboarding hint bar at the top of Home
            already nudges users into onboarding tasks (passkey, SLH-DSA
            backup, feature discovery) when relevant; a manual re-entry
            button was clutter on a finished wallet. */}
 
-        {/* Round 13 — Footer now flows as the LAST element INSIDE the
+        {/* Footer now flows as the LAST element INSIDE the
            .ext-body scroll container instead of being a frame-pinned
            sibling. A UI review found the always-visible frame-pinned
            strip too persistent; the footer should read as the end of the
@@ -1920,7 +1920,7 @@ export function Accounts({ current, onBack, onPick }: AccountsProps) {
   );
 }
 
-// Stake page moved to src/popup/pages/Stake.tsx (Phase 7 commit 2).
+// Stake page moved to src/popup/pages/Stake.tsx.
 // The placeholder static-strategy mock that used to live here was
 // replaced by the cluster picker + amount form orchestrator. Routing
 // still goes through App.tsx's "stake" screen → ./pages/Stake.
@@ -2742,7 +2742,7 @@ function BridgeDisclosureSection({
   );
 }
 
-// (Send page lives at ./pages/Send.tsx since Phase 3.)
+// (Send page lives at ./pages/Send.tsx.)
 
 // ---- Networks picker ----
 interface NetworksProps {

@@ -1,4 +1,4 @@
-// Phase 11 Commit 8 — SetupHealthChip.
+// SetupHealthChip.
 //
 // Compact chip rendered on Home (above the hint bar) that shows the
 // user's overall wallet-setup progress: "3 of 4 wallet features

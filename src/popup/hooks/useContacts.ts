@@ -1,4 +1,4 @@
-// Round 7 TASK 5 — Contacts reactive read.
+// Contacts reactive read.
 //
 // Mirrors useConnectedSites: initial chrome.storage.local.get, then a
 // chrome.storage.onChanged listener that pushes incremental updates so

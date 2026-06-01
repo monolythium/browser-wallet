@@ -1,18 +1,18 @@
-// Phase 5 Commit 3 — multi-vault selector. Replaces the legacy active-
+// Multi-vault selector. Replaces the legacy active-
 // account chip in the popup header.
 //
 // Whitepaper §21.2.1: "Power users wanting multiple accounts ... use the
 // keystore format with a wallet that manages many keystores." The
-// container surface from Commit 2 (bgVaultsList / bgVaultSelect /
+// container surface (bgVaultsList / bgVaultSelect /
 // bgVaultRename) is what this picker consumes.
 //
 // Anchored dropdown opens below the chip. Click outside or press Escape
 // to dismiss. Per-row rename via the Modal primitive — Modal handles
 // its own Escape, and the dropdown's Escape listener is gated off
 // while the rename modal is open so the two don't double-fire. The
-// same gating applies while the VaultAddModal is open (Commit 4).
+// same gating applies while the VaultAddModal is open.
 //
-// Phase 5.0.1 — dropdown is rendered via createPortal into document.body
+// Dropdown is rendered via createPortal into document.body
 // and anchored via the chip's getBoundingClientRect. The previous
 // position:absolute / zIndex:100 implementation rendered behind the
 // AVAILABLE LYTH balance card because the popup's `.ext-card` containers
@@ -28,14 +28,14 @@
 // unlock" tooltip. Same disabled treatment during the brief pre-fetch
 // loading tick before the first bgVaultsList resolves.
 //
-// Phase 5 Commit 4: dropdown footer CTAs open a two-mode VaultAddModal
+// Dropdown footer CTAs open a two-mode VaultAddModal
 // (fresh / import) via `addMode` state. Each CTA closes the dropdown
 // before flipping `addMode`, so the modal lands cleanly atop the
 // header instead of overlapping the dropdown panel.
 //
 // TODO: VaultPicker test coverage — popup-side React test infra
 // (@testing-library/react + jsdom) doesn't exist in this codebase yet.
-// Coverage planned in a Phase 8 hardening pass alongside other popup
+// Coverage planned in a future hardening pass alongside other popup
 // component tests.
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -65,7 +65,7 @@ export interface VaultPickerProps {
    *  active vault's `label` from `bgVaultsList()` is the single source of
    *  truth, with a neutral em-dash placeholder during the pre-fetch tick. */
   activeAccount: Account;
-  /** Round 13 TASK 1 — when provided, the dropdown's "New wallet"
+  /** When provided, the dropdown's "New wallet"
    *  CTA dispatches to this callback (typically App-level
    *  navigateTo("new-wallet-flow")) instead of opening the legacy
    *  single-page VaultAddModal fresh mode. Import + multisig
@@ -149,7 +149,7 @@ export function VaultPicker({
   }, [open, recomputeAnchor]);
 
   // Click-outside dismissal — bind only while the dropdown is open.
-  // The dropdown is portal'd into document.body (Phase 5.0.1), so
+  // The dropdown is portal'd into document.body, so
   // the chip wrapper alone is no longer enough to recognise an
   // in-bounds click — we have to also consult the portal subtree.
   // The Modal primitive renders via createPortal too, but the
@@ -220,7 +220,7 @@ export function VaultPicker({
 
   const handleAddFresh = () => {
     setOpen(false);
-    // Round 13 TASK 1 — when the parent wired the new multi-step
+    // When the parent wired the new multi-step
     // flow, dispatch there instead of opening the legacy modal.
     // Falls back to the modal when no callback is provided (e.g.
     // test harnesses without the routing wired).
@@ -260,7 +260,7 @@ export function VaultPicker({
       ? vaults.find((v) => v.id === renameId) ?? null
       : null;
 
-  // Round 5 TASK 3 — top-bar redesign v2. Round 4 truncated the
+  // Top-bar redesign. The previous layout truncated the
   // bech32m address to 12+12 chars with shortAddr; users reported
   // they wanted the full 43-char bech32m visible on a single line.
   // 12 px JetBrains Mono fits 43 chars in ~310 px (well within the
