@@ -175,6 +175,13 @@ export function Send({
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
+  // T4-03 (Item C): the lowest cross-operator balance, used ONLY by the spend
+  // gate (Max + insufficient-funds) so a single inflating operator can't enable
+  // an unaffordable Max. Equals balanceLythoshi under the default single
+  // operator. DISPLAY stays on balanceLythoshi (a lagging operator under-reports).
+  const [spendGuardLythoshi, setSpendGuardLythoshi] = useState<bigint | null>(
+    null,
+  );
 
   // Pre-load contacts so the post-send save-recipient
   // prompt can hand the AddContactModal an `existing` map for
@@ -227,6 +234,7 @@ export function Send({
       if (!r.ok) return;
       try {
         setBalanceLythoshi(BigInt(r.balanceHex));
+        setSpendGuardLythoshi(BigInt(r.spendGuardHex));
       } catch {
         // Malformed hex — leave null; "Max" stays disabled.
       }
@@ -275,11 +283,16 @@ export function Send({
   // (amount + fee) <= balance. If balance hasn't loaded we can't safely
   // gate, so we allow the user through with a warning hint instead of
   // silently blocking — the SW would surface insufficient-funds on send.
+  // T4-03 (Item C): gate against the spend guard (lowest cross-operator
+  // balance), not the displayed MAX, so an inflated balance can't pass the
+  // affordability check. Falls back to the display balance until the guard
+  // loads.
+  const spendGateLythoshi = spendGuardLythoshi ?? balanceLythoshi;
   const insufficientFunds =
     amountLythoshi !== null &&
     estimatedFeeLythoshi !== null &&
-    balanceLythoshi !== null &&
-    amountLythoshi + estimatedFeeLythoshi > balanceLythoshi;
+    spendGateLythoshi !== null &&
+    amountLythoshi + estimatedFeeLythoshi > spendGateLythoshi;
 
   const canContinue =
     effectiveAddr0x !== null &&
@@ -337,8 +350,12 @@ export function Send({
   const recipientRegisteredName = useRegisteredName(effectiveAddr0x);
 
   const handleMax = () => {
-    if (balanceLythoshi === null || estimatedFeeLythoshi === null) return;
-    const maxLythoshi = balanceLythoshi - estimatedFeeLythoshi;
+    // T4-03 (Item C): Max is computed against the spend guard (lowest
+    // cross-operator balance), not the displayed MAX, so it can never exceed
+    // affordable funds.
+    const maxBasis = spendGuardLythoshi ?? balanceLythoshi;
+    if (maxBasis === null || estimatedFeeLythoshi === null) return;
+    const maxLythoshi = maxBasis - estimatedFeeLythoshi;
     if (maxLythoshi <= 0n) {
       setAmountStr("0");
       return;
