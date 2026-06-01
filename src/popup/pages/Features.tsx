@@ -1,4 +1,4 @@
-// Phase 9 Commit 5 — Features page.
+// Features page.
 //
 // Surfaces the §28.5 Q29 two-tier UX toggles:
 //   TRADING_INTERFACE — advanced staking analytics + spot CLOB surfaces

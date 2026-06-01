@@ -1,10 +1,10 @@
-// Round 7 TASK 5c — Contacts (address book) page.
+// Contacts (address book) page.
 //
 // Renders the persisted contacts map (keyed by lowercase 0x address)
 // as a list sorted most-recently-used-first. Empty state, add modal,
 // inline rename, remove. Reads via useContacts (chrome.storage.onChanged
 // subscribed) so any SW-side mutation (add / remove / rename, or the
-// Round 7 TASK 6 post-send prompt) live-updates this list.
+// post-send prompt) live-updates this list.
 
 import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
@@ -278,7 +278,7 @@ interface AddContactModalProps {
   existing: Record<string, ContactRecord>;
   onClose: () => void;
   /** Optional seed values — used by the post-send "save recipient"
-   *  flow in Round 7 TASK 6 to pre-fill the address and skip the
+   *  flow in the post-send "save recipient" path to pre-fill the address and skip the
    *  address input. */
   seedAddress?: string;
   seedName?: string;

@@ -2,7 +2,7 @@
 // user-added. Tapping any row in the Networks list routes here; the
 // detail page is where Activate / Edit / Delete actions live.
 //
-// Phase 4.3 design contract:
+// Design contract:
 // - Builtin chains (Sprintnet) render metadata + [Activate] only — no
 //   Edit/Delete affordances. The check for `chain.builtin` is the single
 //   visibility gate; the SW's chain-edit / chain-delete ops also reject

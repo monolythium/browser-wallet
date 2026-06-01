@@ -5,21 +5,21 @@ import { Icon } from "../Icon";
 interface VerifyPhraseProps {
   mnemonic: string;
   onVerified: () => void;
-  /** Round 12 TASK 1 — back button is optional. During first-setup
+  /** Back button is optional. During first-setup
    *  onboarding the parent intentionally omits onBack so the user
    *  can't bypass verification by tapping back into the show-phrase
    *  step (which itself has no back to home anymore). */
   onBack?: () => void;
 }
 
-// Round 13.5 — number of slots to hide. Round 11 originally set this
-// to 6 (vs Round 10's 3-word picker) for a stronger random-guess
-// rejection. Round 13.5 reduces it back to 3 at user request: 6 felt
+// Number of slots to hide. This was originally set
+// to 6 (vs an earlier 3-word picker) for a stronger random-guess
+// rejection. It was reduced back to 3 at user request: 6 felt
 // like friction during onboarding when most users will actually write
 // down the phrase, and the guarantee survives at 3 because the bank
 // still draws from BIP-39 distractors not just the 6 hidden words.
 // With 3 hidden + 3 distractors (bank size 6), random-guess odds
-// across 3 ordered fills land at 6P3 = 1/120 — better than Round 10's
+// across 3 ordered fills land at 6P3 = 1/120 — better than the earlier
 // 1/6^3 (= 1/216 only because that picker re-used the same 6 options
 // per position; this verify lets the user re-arrange freely).
 const HIDDEN_COUNT = 3;
@@ -100,7 +100,7 @@ export function VerifyPhrase({
   onBack,
 }: VerifyPhraseProps) {
   const words = useMemo(() => mnemonic.trim().split(/\s+/), [mnemonic]);
-  // Round 12 TASK 3 — challenge held in state (no longer once-only)
+  // Challenge held in state (no longer once-only)
   // because Try Again rebuilds it with a fresh set of hidden positions
   // + fresh distractors.
   const [challenge, setChallenge] = useState<Challenge>(() =>
@@ -108,7 +108,7 @@ export function VerifyPhrase({
   );
   const [slots, setSlots] = useState<Slot[]>(challenge.slots);
   const [bank, setBank] = useState<string[]>(challenge.bank);
-  // Round 12 TASK 3 — validation is deferred to the Continue click.
+  // Validation is deferred to the Continue click.
   // While `attempted` is false, no per-slot error styling appears
   // (slots show only neutral filled/empty states). On Continue with
   // a wrong arrangement, attempted flips true and the "Not quite
@@ -190,7 +190,7 @@ export function VerifyPhrase({
       </div>
 
       {attempted && !allCorrect ? (
-        // Round 12 TASK 3 — "Not quite right" full-screen error state.
+        // "Not quite right" full-screen error state.
         // Replaces the previous inline per-slot red styling so the
         // user gets one clear failure surface (matches MetaMask's
         // verify flow). Try Again regenerates the challenge with a
@@ -288,7 +288,7 @@ export function VerifyPhrase({
                 const isHidden = challenge.hiddenIdxSet.has(slot.index);
                 const isEmpty = slot.filled === null;
 
-                // Round 12 TASK 3 — no per-slot wrong styling during
+                // No per-slot wrong styling during
                 // placement. Slots show only neutral states:
                 // - pre-filled (non-hidden): static, word blurred
                 // - hidden + empty: dashed accent border, awaiting fill
@@ -349,7 +349,7 @@ export function VerifyPhrase({
                     <span
                       style={{
                         flex: 1,
-                        // Round 12 TASK 3 — blur the pre-filled words
+                        // Blur the pre-filled words
                         // (5 px is enough to make them unreadable
                         // while keeping the slot visually "filled"
                         // — same pattern MetaMask uses). user-select

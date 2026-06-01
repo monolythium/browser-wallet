@@ -1,9 +1,9 @@
-// Round 13 TASK 1 — in-app new wallet flow.
+// In-app new wallet flow.
 //
 // Composed of the same ShowPhrase + VerifyPhrase components the
 // first-setup onboarding renders, but in a SEPARATE navigation
 // context: every step here has back/cancel allowed (unlike onboarding,
-// where Round 12 TASK 1 hides the back button on those two screens to
+// where onboarding hides the back button on those two screens to
 // prevent the user from escaping to home before verification). The
 // two flows share the components, not the navigation logic — so
 // changes to back-protection on the onboarding side don't ripple into
@@ -86,7 +86,7 @@ export function NewWalletFlow({ onCancel, onComplete }: NewWalletFlowProps) {
         setStep("error");
         return;
       }
-      // Round 13 TASK 1 — switch the active vault to the newly-
+      // Switch the active vault to the newly-
       // created one so the user lands on home with the new wallet
       // selected. bgVaultAddImport doesn't auto-switch.
       const selR = await bgVaultSelect(r.vaultId);
