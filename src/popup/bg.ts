@@ -922,6 +922,10 @@ export async function bgWalletSendTx(args: {
    *  Send screen keeps the corresponding "Private (preview)" toggle
    *  default-off + disabled so this is never `true` from the UI today. */
   private?: boolean;
+  /** T1-04(a) — account password supplied to clear an over-limit passkey
+   *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
+   *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */
+  elevatedPassword?: string;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -930,6 +934,11 @@ export async function bgWalletSendTx(args: {
       code?: number;
       method?: string;
       via?: string;
+      /** Set when the per-vault passkey cap blocked the send. "required" =
+       *  no/empty password supplied; "wrong_password"/"rate_limited" = a
+       *  supplied password failed the SW-side re-auth. */
+      passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+      secondsRemaining?: number;
     }
 > {
   type Reply =
@@ -940,6 +949,8 @@ export async function bgWalletSendTx(args: {
         code?: number;
         method?: string;
         via?: string;
+        passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+        secondsRemaining?: number;
       };
   const { executionUnitLimitHex, ...rest } = args;
   const r = await send<Reply>("wallet-send-tx", {
