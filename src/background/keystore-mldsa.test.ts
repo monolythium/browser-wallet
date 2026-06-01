@@ -344,6 +344,34 @@ describe("keystore-mldsa v4-multi state machine", () => {
   );
 
   it(
+    "verifyContainerPasswordV4 confirms the right password and rejects a wrong one without mutating unlock state (T1-04a)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "verify-password-correct";
+      await ks.createVaultFromNewMnemonic(password);
+
+      // Correct password verifies true. Verification is side-effect free —
+      // it does NOT change the unlocked/active state in either direction.
+      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect(ks.isUnlockedV4()).toBe(true);
+      expect(ks.getActiveVaultIdV4()).not.toBeNull();
+
+      // Wrong password verifies false (AEAD fails closed), never throws.
+      expect(await ks.verifyContainerPasswordV4("wrong-password")).toBe(false);
+
+      // Works while LOCKED too (re-derives the MEK from disk) and does not
+      // unlock the wallet as a side effect.
+      ks.lockV4();
+      expect(ks.isUnlockedV4()).toBe(false);
+      expect(ks.getActiveVaultIdV4()).toBeNull();
+      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect(ks.isUnlockedV4()).toBe(false);
+      expect(ks.getUnlockedAddressV4()).toBeNull();
+    },
+    60_000,
+  );
+
+  it(
     "listVaultsV4 returns null before create and one summary after create",
     async () => {
       const ks = await import("./keystore-mldsa.js");
