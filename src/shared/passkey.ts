@@ -90,14 +90,6 @@ export const MAX_PASSKEY_LIMIT_LYTHOSHI = 10_000n * LYTHOSHI_PER_LYTH;
  *  five normal-sized txs at the default per-tx limit. */
 export const DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI = 500n * LYTHOSHI_PER_LYTH;
 
-/** Compatibility aliases for IPC/storage surfaces that still expose
- *  `limitWei` / `dailyCapWei` field names. Values are v4.1 lythoshi. */
-export const DEFAULT_PASSKEY_LIMIT_WEI = DEFAULT_PASSKEY_LIMIT_LYTHOSHI;
-export const MIN_PASSKEY_LIMIT_WEI = MIN_PASSKEY_LIMIT_LYTHOSHI;
-export const MAX_PASSKEY_LIMIT_WEI = MAX_PASSKEY_LIMIT_LYTHOSHI;
-export const DEFAULT_PASSKEY_DAILY_CAP_WEI =
-  DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI;
-
 /** Domain tag mixed into every passkey challenge hash. Keeps WebAuthn
  *  assertions over wallet challenges cryptographically separate from
  *  any other challenge the same authenticator might sign. */
