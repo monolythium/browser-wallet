@@ -697,6 +697,28 @@ describe("verifyProposalApprovals + verifyGovernanceApprovals (signature filter)
     expect(r.validApprovals.size).toBe(0);
   });
 
+  it("execute gate (T3-03): approvals[].length can pass the count check while no signature verifies", () => {
+    // Mimics a tampered action: the approvals[] array still has >= threshold
+    // entries (so the old length-only isExecutable check passes) but the stored
+    // signatures no longer cover the live action digest, so verifyProposalApprovals
+    // returns fewer valid approvals than the threshold → execute must fail closed.
+    const signers = [
+      makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+      makeSigner({ id: "s-b", address: fakeAddress(0x02) }),
+    ];
+    const threshold = 2;
+    const p = makeProposal({
+      id: "p-tampered",
+      approvals: [
+        { signerId: "ghost-1", signature: "0x" + "ab".repeat(3309), signedAt: 1 },
+        { signerId: "ghost-2", signature: "0x" + "cd".repeat(3309), signedAt: 2 },
+      ],
+    });
+    expect(p.approvals.length).toBeGreaterThanOrEqual(threshold); // count check would pass
+    const { validApprovals } = verifyProposalApprovals(p, signers);
+    expect(validApprovals.size).toBeLessThan(threshold); // signature check fails closed
+  });
+
   it("drops governance approvals with malformed signature length", () => {
     const signers = [
       makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
