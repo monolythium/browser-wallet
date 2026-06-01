@@ -1,4 +1,4 @@
-// Phase 4.4 — typed activity-cache schema, row-kind union, and pure helpers
+// Typed activity-cache schema, row-kind union, and pure helpers
 // shared between the service worker (which fetches + caches indexer data and
 // writes synthetic pending rows on Send broadcast) and the popup (which reads
 // the cache via chrome.storage.onChanged + IPC).
@@ -561,7 +561,7 @@ export function mapDelegationHistoryToRows(
  *  of (blockHeight, txIndex, logIndex) keys already represented in the
  *  delegation-history stream so this mapper can suppress duplicates.
  *  Unknown / unsupported kinds (swap, staking, etc.) are dropped — they're
- *  not part of Phase 4.4's render surface. */
+ *  not part of the current render surface. */
 export function mapAddressActivityToRows(
   entries: RawAddressActivity[],
   delegationKeys: Set<string>,
@@ -611,7 +611,7 @@ export function mapAddressActivityToRows(
     }
 
     if (e.kind === "delegation") {
-      // Dedupe per the Phase 4.4 plan: when the delegation-history stream
+      // Dedupe: when the delegation-history stream
       // already has this anchor, drop the activity-stream copy (richer
       // fields live on the history-stream row). Otherwise produce a
       // fallback row from subKind.
@@ -672,7 +672,7 @@ export function mapAddressActivityToRows(
       continue;
     }
 
-    // Other kinds (swap, staking, future unknowns) — not part of Phase 4.4
+    // Other kinds (swap, staking, future unknowns) — not part of the current
     // render surface. Drop silently to keep the union closed; future phases
     // extend the switch + the row union together.
   }

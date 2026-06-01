@@ -10,7 +10,7 @@
 // (delegate(uint32,uint16) 0x662337de, undelegate(uint32) 0x914f3ca8,
 // redelegate(uint32,uint32,uint16) 0xa06ac18f, claim()). The wallet
 // previously hand-rolled stale `uint256` signatures that the live
-// precompile rejected as unknown-selector — R20 fixed that by routing
+// precompile rejected as unknown-selector — this was fixed by routing
 // through the SDK. staking-tx.test.ts pins the encoders to the SDK
 // output + the chain selectors as golden vectors.
 //
