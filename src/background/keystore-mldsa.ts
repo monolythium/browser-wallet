@@ -103,7 +103,11 @@ import {
   prepareSlhDsaBackup,
   recoverBackupMnemonic,
 } from "./slh-dsa-keygen.js";
-import { SESSION_KEY_MEK_V4 } from "../shared/constants.js";
+import {
+  SESSION_KEY_MEK_V4,
+  SESSION_KEY_MEK_REHYDRATE_DEADLINE,
+  MEK_REHYDRATE_MAX_MINUTES,
+} from "../shared/constants.js";
 
 const VAULT_KEY_V4 = "mono.vault.v4";
 
@@ -195,15 +199,42 @@ async function persistMekToSessionV4(mek: Uint8Array): Promise<void> {
   if (!sessionAreaAvailable()) return;
   const b64 = bytesToBase64(mek);
   return new Promise((resolve) => {
-    chrome.storage.session.set({ [SESSION_KEY_MEK_V4]: b64 }, () => resolve());
+    // T1-03 (Item B): write the MEK together with its rehydrate deadline so a
+    // session MEK always carries a validity bound (refreshed on activity by the
+    // SW's resetAutoLock). tryRestoreFromSessionV4 fails closed past the cap.
+    chrome.storage.session.set(
+      {
+        [SESSION_KEY_MEK_V4]: b64,
+        [SESSION_KEY_MEK_REHYDRATE_DEADLINE]:
+          Date.now() + MEK_REHYDRATE_MAX_MINUTES * 60_000,
+      },
+      () => resolve(),
+    );
   });
 }
 
 async function clearMekFromSessionV4(): Promise<void> {
   if (!sessionAreaAvailable()) return;
   return new Promise((resolve) => {
-    chrome.storage.session.remove(SESSION_KEY_MEK_V4, () => resolve());
+    chrome.storage.session.remove(
+      [SESSION_KEY_MEK_V4, SESSION_KEY_MEK_REHYDRATE_DEADLINE],
+      () => resolve(),
+    );
   });
+}
+
+/** T1-03 (Item B): true when the session-MEK rehydrate cap has lapsed (or was
+ *  never written), i.e. the password-less restore window is closed. Fails
+ *  closed: an absent deadline is treated as expired. */
+async function mekRehydrateExpiredV4(): Promise<boolean> {
+  if (!sessionAreaAvailable()) return true;
+  const deadline = await new Promise<unknown>((resolve) => {
+    chrome.storage.session.get([SESSION_KEY_MEK_REHYDRATE_DEADLINE], (res) => {
+      resolve(res?.[SESSION_KEY_MEK_REHYDRATE_DEADLINE] ?? null);
+    });
+  });
+  if (typeof deadline !== "number") return true;
+  return Date.now() >= deadline;
 }
 
 async function loadMekFromSessionV4(): Promise<Uint8Array | null> {
@@ -238,6 +269,14 @@ export async function tryRestoreFromSessionV4(): Promise<
   }
   const mek = await loadMekFromSessionV4();
   if (!mek) return { ok: false };
+  // T1-03 (Item B): refuse a password-less restore once the rehydrate cap has
+  // lapsed (5 min since last activity), and wipe the session MEK so the wallet
+  // stays locked until the user re-enters their password.
+  if (await mekRehydrateExpiredV4()) {
+    mek.fill(0);
+    await clearMekFromSessionV4();
+    return { ok: false };
+  }
   const container = await loadVaultsContainerV4();
   if (!container) {
     mek.fill(0);
