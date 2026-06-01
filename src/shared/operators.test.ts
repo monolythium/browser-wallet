@@ -93,10 +93,10 @@ describe("mergeOperatorOverride", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 11 Commit 12 — optional wsRpc field
+// optional wsRpc field
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("validateOperatorList — wsRpc field (Phase 11 Commit 12)", () => {
+describe("validateOperatorList — wsRpc field", () => {
   it("accepts entries with valid ws:// wsRpc", () => {
     const r = validateOperatorList([
       {

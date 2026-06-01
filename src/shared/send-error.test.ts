@@ -1,4 +1,4 @@
-// Phase 11 Commit 7 — Send-error classifier tests.
+// Send-error classifier tests.
 
 import { describe, expect, it } from "vitest";
 import { classifySendError } from "./send-error.js";

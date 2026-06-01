@@ -3,7 +3,7 @@
 // The wallet's request-router lives in `service-worker.ts:handleRpc` and is
 // the integration seam between the in-page `window.ethereum` provider and the
 // SDK's `RpcClient` (from `@monolythium/core-sdk` root export, replacing the
-// retired `MonolythiumProvider` ethers shim in R14). This suite is a hard
+// retired `MonolythiumProvider` ethers shim). This suite is a hard
 // test gate against drift in that router.
 //
 // Strategy:
@@ -66,7 +66,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
     ],
-    // GAP #11: shared/build-info.ts pulls TESTNET_69420 from the SDK to
+    // shared/build-info.ts pulls TESTNET_69420 from the SDK to
     // surface the registry's genesis on the About page; stub just the
     // genesis_hash + chain_id fields we read at module-init time.
     TESTNET_69420: {
@@ -124,7 +124,7 @@ vi.mock("./keystore-mldsa.js", () => ({
     mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
   })),
   wipeVaultV4: vi.fn(async () => undefined),
-  // Phase 4.1 Commit H: personal_sign + eth_signTypedData_v4 now route to
+  // personal_sign + eth_signTypedData_v4 route to
   // the v4 ML-DSA backend when the v4 keystore is unlocked. Tests stub the
   // sign output to a deterministic byte pattern — the SW just hex-encodes
   // whatever the keystore returns.
@@ -255,7 +255,7 @@ function dispatch(method: string, params: unknown[] = [], origin = "https://dapp
 
 // Popup IPC dispatcher — same captured listener, but the envelope shape is
 // `{ kind: "popup", op, payload }`, used by Settings / Networks / Send and
-// the new Phase 4.3 chain-add-manual / chain-edit / chain-delete ops.
+// the chain-add-manual / chain-edit / chain-delete ops.
 function popupDispatch<T = unknown>(op: string, payload?: unknown): Promise<T> {
   const handler = capturedOnMessage;
   if (!handler) throw new Error("service worker did not register onMessage listener");
@@ -512,7 +512,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(rpcCalls.map((c) => c.method)).not.toContain("eth_estimateGas");
   });
 
-  // ---- Phase 4.3 — popup-IPC chain management ops ----
+  // ---- popup-IPC chain management ops ----
   describe("popup-IPC chain management", () => {
     const FOREIGN_CHAIN = "0x1234";
 
@@ -678,7 +678,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     });
   });
 
-  // ---- Phase 4.3 Change 2 — Sprintnet operator override ----
+  // ---- Sprintnet operator override ----
   describe("popup-IPC operator override", () => {
     interface OperatorWire { name: string; region: string; rpc: string; }
 

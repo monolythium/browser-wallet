@@ -32,7 +32,7 @@ import {
 // crypto-heavy. 120 s matches keystore-mldsa's keygen tier.
 vi.setConfig({ testTimeout: 120_000 });
 
-/** Deterministic 32-byte entropy fixture — matches Phase 10's
+/** Deterministic 32-byte entropy fixture — matches the
  *  documented `SLH_DSA_BACKUP_ENTROPY_BYTES`. */
 function fixtureEntropy(seedByte: number): Uint8Array {
   const buf = new Uint8Array(SLH_DSA_BACKUP_ENTROPY_BYTES);

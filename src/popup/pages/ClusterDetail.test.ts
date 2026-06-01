@@ -1,4 +1,4 @@
-// Phase 11 Commit 6 — ClusterDetail page logic tests.
+// ClusterDetail page logic tests.
 //
 // The page itself is React; the filter logic it applies to delegation
 // history is pure and worth testing in isolation. Mirrors the inline
