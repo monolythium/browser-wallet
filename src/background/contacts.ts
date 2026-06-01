@@ -1,4 +1,4 @@
-// Round 7 TASK 5 — Contacts (address book) backend.
+// Contacts (address book) backend.
 //
 // Keyed by lowercase 0x address. Value is a ContactRecord with the user-
 // editable name, the bech32m display form (cached for read paths that

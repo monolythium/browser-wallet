@@ -1,4 +1,4 @@
-// Phase 1 — `chrome.storage.local`-backed notification store.
+// `chrome.storage.local`-backed notification store.
 //
 // What this module owns
 // =====================
@@ -12,16 +12,16 @@
 //     `service-worker.ts`) can NEVER propagate an error back into the
 //     activity-snapshot response path.
 //   - `listNotifications(addr, chain)` — newest-first read of the
-//     per-scope history. Phase 3's Notifications page reads this.
+//     per-scope history. The Notifications page reads this.
 //   - `markAllRead(addr, chain)` — flip every entry's `read` to `true`
-//     in a scope. Phase 3 wires the "Mark all as read" CTA here.
+//     in a scope. The "Mark all as read" CTA wires here.
 //   - `getUnread()` — derived global count across all
 //     `mono.notifications.history.*` keys (no separate counter key, no
-//     desync risk). Phase 2 calls this to drive
+//     desync risk). The toolbar badge path calls this to drive
 //     `chrome.action.setBadgeText`.
 //
 // §0.4 — `recordNotification` is NOT exported through any IPC handler in
-// Phase 1. The wallet-only invariant is enforced by keeping the call
+// The wallet-only invariant is enforced by keeping the call
 // site to a single SW chokepoint that iterates the wallet's own pending
 // rows; no dapp / page / popup path can synthesize a notification.
 
@@ -67,7 +67,7 @@ export interface RecordNotificationInput {
   txHash: string;
   status: "confirmed" | "failed";
   blockNumber: number | null;
-  /** Phase 1.5 — full TxOpKind union. The Phase-1 coarse literals
+  /** Full TxOpKind union. The earlier coarse literals
    *  ("send", "contract_call") remain valid and are the fallbacks the
    *  hook uses when the pending row carries no broadcast-time `opKind`. */
   kind: TxOpKind;
@@ -81,7 +81,7 @@ export interface RecordNotificationInput {
    *  name), threaded from the pending row. Omitted on non-delegation kinds. */
   clusterId?: number;
   clusterName?: string;
-  /** GAP-N1 / polish C3 — presence at observe-time. `true` ⇒ a wallet
+  /** Presence at observe-time. `true` ⇒ a wallet
    *  surface was open when this record was created ⇒ store it already-read
    *  (no badge bump). Omitted/`false` ⇒ unread (the historical default).
    *  Set by the caller via `isWalletSurfaceOpen()`. */
@@ -231,9 +231,9 @@ export async function markAllRead(
 }
 
 /** GLOBAL inbox read — every `mono.notifications.history.*` envelope's
- *  entries, merged + sorted newest-first. Phase 3 reads this from the
+ *  entries, merged + sorted newest-first. The Notifications page reads this from the
  *  popup-side Notifications page so the user sees one unified list
- *  across all vaults / addresses (matches Phase 2's toolbar badge
+ *  across all vaults / addresses (matches the toolbar badge
  *  which also aggregates globally via `getUnread()`). Per-active-wallet
  *  scoping is a future refinement; today the badge + page agree. */
 export async function listAllNotifications(): Promise<NotificationRecord[]> {
@@ -291,8 +291,8 @@ export async function markNotificationRead(
 
 /** GLOBAL mark-all-read — flip every record across every scope's history
  *  to `read: true`. Returns the number of records that changed
- *  (already-read records do not count). Phase 3 wires the
- *  "Mark all as read" CTA here, and Phase 2's badge clears on the next
+ *  (already-read records do not count). The Notifications page wires the
+ *  "Mark all as read" CTA here, and the toolbar badge clears on the next
  *  `refreshUnreadBadge()`. Best-effort: a scope that fails to write
  *  doesn't prevent the others from succeeding. */
 export async function markAllNotificationsRead(): Promise<{ flipped: number }> {
