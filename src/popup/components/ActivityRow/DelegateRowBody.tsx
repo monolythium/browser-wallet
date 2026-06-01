@@ -1,19 +1,17 @@
-// Delegate row. Cluster id rendered as `C-NNN.cluster.mono` per the
-// §22.8 hierarchical naming convention — the literal cluster name
-// (e.g. "halcyon.cluster.mono") arrives when the indexer ships
-// hierarchical resolution; until then we use the `C-NNN` placeholder
-// matching the existing Home stake-cluster display convention.
+// Delegate row. Shows the real *.cluster.mono name the wallet captured at send
+// time (threaded onto the confirmed row by applyCapturedClusterNames) when
+// known, else an honest `Cluster #<id>` (clusterLabel) — never a fabricated
+// name. Indexer-sourced (non-originated) stakes carry only the numeric id
+// (§C: no cluster name / reverse-resolver in mono-core) → they show
+// `Cluster #<id>` until a chain name source exists.
 
 import { Icon } from "../../Icon.js";
+import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { DelegateRow } from "../../../shared/activity.js";
-import { formatWeightBpsPercent } from "../../../shared/staking.js";
+import { clusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
 
 export interface DelegateRowBodyProps {
   row: DelegateRow;
-}
-
-function clusterName(id: number): string {
-  return `C-${String(id + 1).padStart(3, "0")}.cluster.mono`;
 }
 
 export function DelegateRowBody({ row }: DelegateRowBodyProps) {
@@ -27,12 +25,12 @@ export function DelegateRowBody({ row }: DelegateRowBodyProps) {
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
-          Delegated to {clusterName(row.cluster)}
+          Delegated to {clusterLabel(row.cluster, row.clusterName)}
         </div>
         <div className="ext-act-row__meta">
-          <span>block {row.blockHeight.toLocaleString("en-US")}</span>
+          <span>{txTypeLabel(row)}</span>
           <span>·</span>
-          <span>tx {row.txIndex}</span>
+          <span>block {row.blockHeight.toLocaleString("en-US")}</span>
         </div>
       </div>
       <div className="ext-act-row__right">

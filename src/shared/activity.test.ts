@@ -18,6 +18,8 @@ import {
   mapAddressActivityToRows,
   delegationKeySet,
   mergeIndexerSnapshot,
+  applyCapturedClusterNames,
+  mergeActivityNewestFirst,
   evictExpiredPending,
   reconcilePending,
   NATIVE_LYTH_TOKEN_ID,
@@ -181,6 +183,49 @@ describe("validateActivityRow", () => {
     const undel = { ...del, kind: "undelegate" };
     expect(validateActivityRow(del)).toEqual(del);
     expect(validateActivityRow(undel)).toEqual(undel);
+  });
+
+  it("round-trips an optional clusterName on delegate / undelegate / redelegate rows", () => {
+    const del = {
+      kind: "delegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 0,
+      weightBps: 1234,
+      clusterName: "halcyon.cluster.mono",
+    };
+    expect(validateActivityRow(del)).toEqual(del);
+    const redel = {
+      kind: "redelegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 3,
+      toCluster: 9,
+      weightBps: 500,
+      clusterName: "salt.cluster.mono",
+    };
+    expect(validateActivityRow(redel)).toEqual(redel);
+  });
+
+  it("drops a malformed/empty clusterName rather than rejecting the delegation row", () => {
+    const bad = {
+      kind: "delegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 0,
+      weightBps: 1234,
+      clusterName: "",
+    };
+    const got = validateActivityRow(bad);
+    expect(got).not.toBeNull();
+    expect("clusterName" in (got as object)).toBe(false);
+    const badType = { ...bad, clusterName: 42 as unknown as string };
+    const got2 = validateActivityRow(badType);
+    expect(got2).not.toBeNull();
+    expect("clusterName" in (got2 as object)).toBe(false);
   });
 
   it("accepts delegate with null weightBps (activity-stream fallback)", () => {
@@ -392,6 +437,85 @@ describe("mapDelegationHistoryToRows", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// applyCapturedClusterNames — thread the send-time cluster name onto the
+// confirmed indexer row (the indexer carries only the numeric id, §C).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("applyCapturedClusterNames", () => {
+  const delRow = (over: Partial<DelegateRow> = {}): DelegateRow => ({
+    kind: "delegate",
+    blockHeight: 100,
+    txIndex: 2,
+    logIndex: 0,
+    cluster: 0,
+    weightBps: 5000,
+    ...over,
+  });
+  const pendingNamed = (over: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xdead",
+    to: "0x100a",
+    amountDecimal: "1",
+    broadcastedAtMs: 1,
+    broadcastBlockHeight: 100,
+    via: "operator-1",
+    confirmedBlockHeight: 100,
+    confirmedTxIndex: 2,
+    clusterName: "halcyon.cluster.mono",
+    clusterId: 0,
+    ...over,
+  });
+
+  it("threads the captured name from a bridged pending row onto the confirmed delegate row (cluster 0)", () => {
+    const out = applyCapturedClusterNames([delRow({ cluster: 0 })], {
+      pending: [pendingNamed()],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBe("halcyon.cluster.mono");
+    expect((out[0] as DelegateRow).cluster).toBe(0);
+  });
+
+  it("keeps the name sticky from prevConfirmed after the pending row is gone", () => {
+    const prev = [delRow({ clusterName: "salt.cluster.mono" })];
+    const out = applyCapturedClusterNames([delRow()], { confirmed: prev });
+    expect((out[0] as DelegateRow).clusterName).toBe("salt.cluster.mono");
+  });
+
+  it("prefers the already-named prevConfirmed copy over a pending capture", () => {
+    const out = applyCapturedClusterNames([delRow()], {
+      confirmed: [delRow({ clusterName: "polar.cluster.mono" })],
+      pending: [pendingNamed({ clusterName: "halcyon.cluster.mono" })],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBe("polar.cluster.mono");
+  });
+
+  it("leaves a row WITHOUT a matching source unnamed (honest #id fallback at render)", () => {
+    const out = applyCapturedClusterNames([delRow({ cluster: 0 })], {
+      pending: [pendingNamed({ confirmedTxIndex: 99 })], // slot mismatch
+    });
+    expect((out[0] as DelegateRow).clusterName).toBeUndefined();
+  });
+
+  it("never overwrites an existing clusterName", () => {
+    const out = applyCapturedClusterNames([delRow({ clusterName: "real.cluster.mono" })], {
+      pending: [pendingNamed({ clusterName: "other.cluster.mono" })],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBe("real.cluster.mono");
+  });
+
+  it("matches by exact (blockHeight, txIndex) slot, not by cluster id", () => {
+    const out = applyCapturedClusterNames([delRow({ blockHeight: 200 })], {
+      pending: [pendingNamed({ confirmedBlockHeight: 999 })],
+    });
+    expect((out[0] as DelegateRow).clusterName).toBeUndefined();
+  });
+
+  it("is a no-op when no prior sources are supplied", () => {
+    const rows = [delRow()];
+    expect(applyCapturedClusterNames(rows, {})).toBe(rows);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // mapAddressActivityToRows — dedupe vs delegation stream + fallback shaping
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -573,7 +697,7 @@ describe("mapAddressActivityToRows", () => {
     expect(rows[1]?.kind).toBe("crossing_to_private");
   });
 
-  it("drops swap / staking / unknown kinds (out of Phase 4.4 surface)", () => {
+  it("drops swap / staking / unknown kinds (out of supported surface)", () => {
     const rows = mapAddressActivityToRows(
       [
         makeActivity({ kind: "swap" }),
@@ -689,6 +813,51 @@ describe("reconcilePending", () => {
     expect(reconcilePending([pending], [confirmed])).toEqual([]);
   });
 
+  it("matches an indexer bech32m counterparty against a 0x pending `to` (the linger bug)", () => {
+    // The indexer returns counterparty as bech32m; a pending row's `to` is the
+    // 0x EVM address it was broadcast with. They must normalize to the same 0x —
+    // otherwise reconcilePending never matched + the row lingered to the alarm.
+    const pending = makePending({
+      to: "0x01029862840d227ee9e76a845c8cbb80ba1d7d23",
+      broadcastBlockHeight: 1000,
+    });
+    const confirmed = makeTxSend({
+      counterparty: "mono1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46",
+      blockHeight: 1005,
+    });
+    expect(reconcilePending([pending], [confirmed])).toEqual([]);
+  });
+
+  it("matches a bridged row by exact (block, txIndex), kind-agnostic — incl. delegations", () => {
+    // A receipt-confirmed (bridged) row carries (confirmedBlockHeight,
+    // confirmedTxIndex). It matches the indexer's canonical row at that exact
+    // slot regardless of KIND — a delegate surfaces as a delegation row, NEVER
+    // a tx_send, so without this it would linger to the 30s alarm. (Note the
+    // module `to` + delegate row would never match the tx_send heuristic.)
+    const pending = makePending({
+      opKind: "delegate",
+      to: "0x" + "11".repeat(20),
+      broadcastBlockHeight: 1000,
+      confirmedBlockHeight: 1400,
+      confirmedTxIndex: 2,
+    });
+    const delegate: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 1400,
+      txIndex: 2,
+      logIndex: 0,
+      cluster: 1,
+      weightBps: 1000,
+    };
+    expect(reconcilePending([pending], [delegate])).toEqual([]);
+  });
+
+  it("keeps a bridged row when the indexer slot doesn't match (same block, different txIndex)", () => {
+    const pending = makePending({ confirmedBlockHeight: 1400, confirmedTxIndex: 2 });
+    const confirmed = makeTxSend({ blockHeight: 1400, txIndex: 5 });
+    expect(reconcilePending([pending], [confirmed])).toEqual([pending]);
+  });
+
   it("matches pending and confirmed rows at 1-lythoshi precision", () => {
     const pending = makePending({ amountDecimal: "0.00000001" });
     const confirmed = makeTxSend({
@@ -759,6 +928,70 @@ describe("mergeIndexerSnapshot", () => {
     expect(r.lastFetchedAtMs).toBe(1_700_000_000_000);
   });
 
+  it("threads a captured cluster name (from prior.pending) onto the confirmed delegate row; leaves an un-sourced row unnamed", () => {
+    const r = mergeIndexerSnapshot(
+      {
+        activity: [],
+        delegation: [
+          {
+            blockHeight: 150,
+            txIndex: 2,
+            logIndex: 0,
+            wallet: "0xself",
+            cluster: 0, // the real, 0-indexed cluster the user delegated to
+            toCluster: null,
+            kind: "delegated",
+            weightBps: 5000,
+            walletTotalBps: null,
+          },
+        ],
+      },
+      1,
+      {
+        pending: [
+          {
+            kind: "pending_tx",
+            txHash: "0xdead",
+            to: "0x100a",
+            amountDecimal: "1",
+            broadcastedAtMs: 1,
+            broadcastBlockHeight: 150,
+            via: "operator-1",
+            confirmedBlockHeight: 150,
+            confirmedTxIndex: 2,
+            clusterId: 0,
+            clusterName: "halcyon.cluster.mono",
+          },
+        ],
+      },
+    );
+    const del = r.confirmed.find((c) => c.kind === "delegate") as DelegateRow;
+    expect(del.cluster).toBe(0);
+    expect(del.clusterName).toBe("halcyon.cluster.mono");
+
+    // No prior → the same confirmed row stays unnamed (honest #id fallback).
+    const bare = mergeIndexerSnapshot(
+      {
+        activity: [],
+        delegation: [
+          {
+            blockHeight: 150,
+            txIndex: 2,
+            logIndex: 0,
+            wallet: "0xself",
+            cluster: 0,
+            toCluster: null,
+            kind: "delegated",
+            weightBps: 5000,
+            walletTotalBps: null,
+          },
+        ],
+      },
+      1,
+    );
+    expect((bare.confirmed[0] as DelegateRow).clusterName).toBeUndefined();
+  });
+
   it("interleaves activity + delegation streams, newest first", () => {
     const r = mergeIndexerSnapshot(
       {
@@ -813,9 +1046,37 @@ describe("mergeIndexerSnapshot", () => {
     ]);
   });
 
+  it("SELF-TRANSFER: keeps BOTH the out + in legs (same anchor, u32::MAX logIndex)", () => {
+    // The indexer emits two entries for a self-send at the SAME
+    // (blockHeight, txIndex, logIndex) — native transfers share the
+    // logIndex=0xFFFFFFFF sentinel. Both must survive the dedupe.
+    const SELF = "mono1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46";
+    const leg = (direction: "in" | "out") => ({
+      blockHeight: 107461,
+      txIndex: 0,
+      logIndex: 4294967295,
+      kind: "transfer" as const,
+      direction,
+      counterparty: SELF,
+      tokenId: "0x" + "00".repeat(32),
+      amount: "12000000",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    });
+    const r = mergeIndexerSnapshot({ activity: [leg("in"), leg("out")], delegation: [] }, 1);
+    const kinds = r.confirmed.map((c) => c.kind).sort();
+    expect(kinds).toEqual(["tx_receive", "tx_send"]);
+    // Both legs carry the same amount + the self counterparty.
+    for (const c of r.confirmed) {
+      expect((c as { amountDecimal: string | null }).amountDecimal).toBe("0.12");
+      expect((c as { counterparty: string | null }).counterparty).toBe(SELF);
+    }
+  });
+
   it("DEDUPE: when both streams surface the same on-chain delegation event, DelegationHistoryRecord wins", () => {
     // This is the central correctness test for the activity-vs-delegation
-    // dedupe pinned in the Phase 4.4 plan. The activity-stream entry at
+    // dedupe. The activity-stream entry at
     // (100, 0, 0) MUST be suppressed; only the rich delegation-history
     // row appears, with `toCluster: 9` (which the activity stream cannot
     // surface).
@@ -979,5 +1240,84 @@ describe("isNativeLythTokenId", () => {
   it("treats a real non-zero token id as NOT native", () => {
     expect(isNativeLythTokenId("0x" + "11".repeat(32))).toBe(false);
     expect(isNativeLythTokenId("0xdeadbeef")).toBe(false);
+  });
+});
+
+describe("mergeActivityNewestFirst", () => {
+  const pending = (over: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xp",
+    to: "0x2",
+    amountDecimal: "1",
+    broadcastedAtMs: 1000,
+    broadcastBlockHeight: null,
+    via: "op",
+    ...over,
+  });
+  const confirmed = (over: Partial<TxSendRow> = {}): TxSendRow => ({
+    kind: "tx_send",
+    blockHeight: 100,
+    txIndex: 0,
+    logIndex: 0,
+    counterparty: "0x3",
+    amountDecimal: "1",
+    ...over,
+  });
+  const failed = (over: Record<string, unknown> = {}) =>
+    ({
+      id: "c:0xf",
+      txHash: "0xf",
+      status: "failed",
+      blockNumber: null,
+      kind: "delegate",
+      amountDecimal: "1",
+      counterparty: "0x4",
+      createdAtMs: 2000,
+      read: false,
+      schemaVersion: 0,
+      ...over,
+    }) as Parameters<typeof mergeActivityNewestFirst>[2][number];
+
+  it("interleaves a failed row chronologically instead of pinning it on top", () => {
+    // failed at 23s-ago (block 41269) must sit BELOW a newer pending (7s ago,
+    // not yet anchored) — the bug was failed-always-on-top.
+    const now = 100_000;
+    const out = mergeActivityNewestFirst(
+      [pending({ txHash: "0xnew", broadcastedAtMs: now - 7_000 })],
+      [],
+      [failed({ txHash: "0xold", blockNumber: 41269, createdAtMs: now - 23_000 })],
+    );
+    expect(out.map((i) => (i.tag === "row" ? "pending" : "failed"))).toEqual([
+      "pending",
+      "failed",
+    ]);
+  });
+
+  it("orders by block desc, with unanchored (null-block) rows floating to top", () => {
+    const out = mergeActivityNewestFirst(
+      [pending({ txHash: "0xp", broadcastBlockHeight: null, broadcastedAtMs: 5000 })],
+      [confirmed({ blockHeight: 200 }), confirmed({ blockHeight: 100 })],
+      [failed({ txHash: "0xf", blockNumber: 150, createdAtMs: 1 })],
+    );
+    const blocks = out.map((i) =>
+      i.tag === "row"
+        ? i.row.kind === "pending_tx"
+          ? "pending"
+          : (i.row as TxSendRow).blockHeight
+        : "failed150",
+    );
+    // null-block pending first, then 200, then failed@150, then 100.
+    expect(blocks).toEqual(["pending", 200, "failed150", 100]);
+  });
+
+  it("does not NaN when two rows are both unanchored (Infinity===Infinity → ms tie-break)", () => {
+    const out = mergeActivityNewestFirst(
+      [pending({ txHash: "0xa", broadcastBlockHeight: null, broadcastedAtMs: 10 })],
+      [],
+      [failed({ txHash: "0xb", blockNumber: null, createdAtMs: 20 })],
+    );
+    // Both block=Infinity → newer ms (failed@20) first.
+    expect(out[0]!.tag === "failed").toBe(true);
+    expect(out[1]!.tag === "row").toBe(true);
   });
 });

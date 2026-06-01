@@ -1,4 +1,4 @@
-// Phase 11 Commit 3 — AddressActivityKind normaliser tests.
+// AddressActivityKind normaliser tests.
 //
 // The chain emits a typed `lyth_addressActivityKind` response (chain
 // commit d77e4fc, SDK @0fd8a79 typed binding). The wallet's normaliser

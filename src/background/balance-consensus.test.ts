@@ -18,7 +18,7 @@ const OPERATORS = [
 
 vi.mock("./networks.js", () => ({
   getActiveOperators: () => OPERATORS,
-  // GAP #11 genesis-pin: stub to always-true so this suite tests the
+  // genesis-pin: stub to always-true so this suite tests the
   // consensus shape, not the genesis check (covered separately).
   verifyOperatorGenesis: async () => true,
 }));
@@ -101,23 +101,26 @@ describe("sprintnetMaxBalanceConsensus", () => {
   it("returns MAX when one operator reports the correct balance and others lag", async () => {
     installFetchPerUrl({
       "http://op-a.test": async () => envelopeResponse("0x0"),
-      "http://op-b.test": async () => envelopeResponse("0x16345785d8a0000"), // 0.1 LYTH
+      "http://op-b.test": async () => envelopeResponse("0x989680"), // 0.1 LYTH
       "http://op-c.test": async () => envelopeResponse("0x0"),
     });
     const r = await sprintnetMaxBalanceConsensus("0xabc");
-    expect(r.balanceHex).toBe("0x16345785d8a0000");
+    expect(r.balanceHex).toBe("0x989680");
+    // T4-03: the spend guard is the LOWEST contributing balance (the two
+    // lagging 0x0 operators), so an inflated Max can't pass the spend gate.
+    expect(r.spendGuardHex).toBe("0x0");
     expect(r.contributing).toHaveLength(3);
     expect(r.failing).toHaveLength(0);
   });
 
   it("returns the unanimous value when all operators agree", async () => {
     installFetchPerUrl({
-      "http://op-a.test": async () => envelopeResponse("0x16345785d8a0000"),
-      "http://op-b.test": async () => envelopeResponse("0x16345785d8a0000"),
-      "http://op-c.test": async () => envelopeResponse("0x16345785d8a0000"),
+      "http://op-a.test": async () => envelopeResponse("0x989680"),
+      "http://op-b.test": async () => envelopeResponse("0x989680"),
+      "http://op-c.test": async () => envelopeResponse("0x989680"),
     });
     const r = await sprintnetMaxBalanceConsensus("0xabc");
-    expect(r.balanceHex).toBe("0x16345785d8a0000");
+    expect(r.balanceHex).toBe("0x989680");
     expect(r.contributing).toHaveLength(3);
     expect(r.failing).toHaveLength(0);
   });
@@ -145,7 +148,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-c.test": async () => ({ ok: false, status: 503, json: async () => ({}) }),
     });
     await expect(sprintnetMaxBalanceConsensus("0xabc")).rejects.toThrow(
-      /all 3 Sprintnet operators failed/,
+      /all 3 Monolythium Testnet operators failed/,
     );
   });
 
@@ -176,7 +179,35 @@ describe("sprintnetMaxBalanceConsensus", () => {
     expect(r.balanceHex).toBe("0x5");
   });
 
-  // Phase 7.1 commit 7 — SDK contract anchor. The strict
+  it("drops an operator whose balance exceeds total supply (T4-03 sanity bound)", async () => {
+    // op-a reports an impossible balance (1e18 lythoshi ~ 50x total supply);
+    // it must be dropped to `failing`, never win the MAX or skew the guard.
+    installFetchPerUrl({
+      "http://op-a.test": async () => envelopeResponse("0xde0b6b3a7640000"), // 1e18
+      "http://op-b.test": async () => envelopeResponse("0x5"),
+      "http://op-c.test": async () => envelopeResponse("0x3"),
+    });
+    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    expect(r.balanceHex).toBe("0x5"); // the real max, not the absurd value
+    expect(r.spendGuardHex).toBe("0x3"); // lowest real
+    expect(r.contributing.map((c) => c.name).sort()).toEqual(["op-b", "op-c"]);
+    expect(r.failing).toHaveLength(1);
+    expect(r.failing[0]?.name).toBe("op-a");
+    expect(r.failing[0]?.reason).toContain("exceeds total supply");
+  });
+
+  it("spendGuardHex is the lowest contributing balance, balanceHex the highest", async () => {
+    installFetchPerUrl({
+      "http://op-a.test": async () => envelopeResponse("0x9"),
+      "http://op-b.test": async () => envelopeResponse("0x2"),
+      "http://op-c.test": async () => envelopeResponse("0x7"),
+    });
+    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    expect(r.balanceHex).toBe("0x9");
+    expect(r.spendGuardHex).toBe("0x2");
+  });
+
+  // SDK contract anchor. The strict
   // AccountProofResponse binding (mono-core-sdk @0fd8a79) annotates
   // `state_root`/`block_number` in snake_case, but the chain serializer
   // emits camelCase on the wire (`stateRoot`, `blockNumber`). The

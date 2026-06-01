@@ -1,4 +1,4 @@
-// Phase 5 Commit 4 — VaultAddModal. Two-mode modal driven by an
+// VaultAddModal. Two-mode modal driven by an
 // `initialMode` prop ("fresh" | "import"); the picker decides which
 // mode to enter from the dropdown footer CTAs and the modal skips the
 // mode-picker screen entirely.
@@ -34,7 +34,7 @@
 //      "This mnemonic is already imported"; the user can edit and
 //      retry without losing modal state.
 //
-// Out of scope (per Commit 4 brief):
+// Out of scope:
 //   - mode picker screen (initialMode prop)
 //   - mnemonic strength scoring
 //   - QR scan
@@ -123,7 +123,7 @@ function VaultAddBody({
   onClose,
   onComplete,
 }: VaultAddBodyProps) {
-  // Round 5 TASK 4 — the default label uses the user-facing "Wallet"
+  // The default label uses the user-facing "Wallet"
   // terminology; the keystore container still keeps the "vault" lexicon
   // internally (storage keys, function names, types).
   const defaultLabel = `Wallet ${vaultsCount + 1}`;

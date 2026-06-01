@@ -947,7 +947,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           {state.via ? ` via ${state.via}` : ""}.
         </div>
         <div style={submitMeta}>Native receipt evidence is checked after inclusion.</div>
-        <div style={submitMeta}>Validator finality is not established here.</div>
+        <div style={submitMeta}>Anchor-level (BLS) finality is not established here.</div>
       </div>
     );
   }
@@ -1070,7 +1070,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
             : finalityVerification?.status === "mismatch"
               ? "Receipt self-check and BLS round-certificate material are shown; wallet-side BLS finality verification did not pass."
               : "Receipt self-check and parsed BLS round-certificate material are shown; wallet-side BLS finality verification is not configured here."
-          : "Transcript self-consistency only; validator finality is not established here."}
+          : "Transcript self-consistency only; anchor-level (BLS) finality is not established here."}
       </div>
     </div>
   );
@@ -1144,7 +1144,7 @@ function MrvNoEvmReceiptProofTranscriptDetails({
       <div style={submitMeta}>
         Source: {sourceText}.{" "}
         {proof.finalityEvidence === null
-          ? "Validator finality is not established here."
+          ? "Anchor-level (BLS) finality is not established here."
           : "BLS round-certificate material is present."}
       </div>
       {proof.archiveProof !== null && (
@@ -1193,7 +1193,7 @@ function MrvNoEvmReceiptProofTranscriptDetails({
             <>
               <div style={submitMeta}>
                 Snapshot archive signature digest material is present; this is
-                not validator finality, and archive signature verification is
+                not anchor-level (BLS) finality, and archive signature verification is
                 reported separately.
               </div>
               <ReceiptProofHashRow

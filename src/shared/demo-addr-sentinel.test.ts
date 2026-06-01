@@ -40,7 +40,7 @@ describe("demo-addr-sentinel", () => {
   });
 
   it("isDemoAddrSentinel rejects real-shaped addresses", () => {
-    // 2026-05-26 storage dump active vault addr — must not be flagged.
+    // Real storage-dump active vault addr — must not be flagged.
     expect(
       isDemoAddrSentinel("0x01029862840d227ee9e76a845c8cbb80ba1d7d23"),
     ).toBe(false);

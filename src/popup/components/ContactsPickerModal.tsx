@@ -1,7 +1,7 @@
-// Round 13 TASK 2 — Contacts picker for the Send recipient field.
+// Contacts picker for the Send recipient field.
 //
 // Modal shown when the user taps the address-book icon next to the
-// Paste button on Send. Lists saved contacts (Round 7 infrastructure)
+// Paste button on Send. Lists saved contacts (from the contacts store)
 // sorted MRU; clicking a row fills the recipient and closes the
 // modal. Search input filters by name OR bech32m address.
 //

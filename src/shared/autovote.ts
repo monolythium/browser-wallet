@@ -1,4 +1,4 @@
-// Phase 7 — §23.9 four-button autovote algorithm.
+// §23.9 four-button autovote algorithm.
 //
 // The whitepaper mandates four named modes plus per-user entropy so two
 // delegators picking the same mode don't end up at the same cluster set:

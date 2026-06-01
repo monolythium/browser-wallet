@@ -1,17 +1,17 @@
-// Phase 10 Commit 2 — SLH-DSA-SHA2-128s key generation + cold-storage
+// SLH-DSA-SHA2-128s key generation + cold-storage
 // preparation.
 //
 // What this module owns
 // =====================
 // The keygen + VEK-wrap path for the §30.1 emergency-backup-key
 // surface. Pure module — no `chrome.storage`, no IPC. The SW IPC
-// handler (Phase 10 Commit 2 wiring inside service-worker.ts) calls
+// handler (wiring inside service-worker.ts) calls
 // `prepareSlhDsaBackup` with the vault's already-unwrapped VEK, then
 // hands the returned `{ backup, mnemonic }` to:
 //
 //   1. `writeSlhDsaBackupV4(vaultId, backup)` — persists the
-//      encrypted secret + pubkey + status fields (Commit 1 CRUD).
-//   2. The popup-side reveal modal (Commit 3), which shows the
+//      encrypted secret + pubkey + status fields (the backup CRUD seam).
+//   2. The popup-side reveal modal, which shows the
 //      24-word `mnemonic` for the user to write down. The SW NEVER
 //      persists the mnemonic — only the user's cold-storage copy
 //      survives a wallet wipe.
@@ -41,7 +41,7 @@
 //
 // Storage AEAD → XChaCha20-Poly1305 with a fresh 24-byte nonce per
 // record, keyed by the vault's VEK (reused from the primary
-// envelope, established in Phase 5). The VEK never leaves this
+// envelope, established by the v4-multi layer). The VEK never leaves this
 // module's caller's stack — caller passes it in, this module never
 // holds it past the function return.
 //
@@ -155,7 +155,7 @@ export function deriveSlhDsaSeed(entropy: Uint8Array): Uint8Array {
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Build a 24-word BIP-39 phrase from the supplied entropy. Exported
- *  for the test seam and for the re-export flow (Commit 6) that
+ *  for the test seam and for the re-export flow that
  *  re-derives the mnemonic from the stored encrypted secret. */
 export function entropyToBackupMnemonic(entropy: Uint8Array): string {
   if (entropy.length !== SLH_DSA_BACKUP_ENTROPY_BYTES) {
@@ -168,7 +168,7 @@ export function entropyToBackupMnemonic(entropy: Uint8Array): string {
 }
 
 /** Inverse of [`entropyToBackupMnemonic`]. Used by the eventual G3
- *  rotation flow (Phase 10.2 deferred); exported here so the
+ *  rotation flow (deferred); exported here so the
  *  derivation seam is testable end-to-end today. Throws on bad
  *  mnemonic (wrong word count, unknown word, bad BIP-39 checksum). */
 export function backupMnemonicToEntropy(mnemonic: string): Uint8Array {
@@ -222,7 +222,7 @@ export function wrapSlhDsaSecret(
 }
 
 /** Encrypt the 32-byte BIP-39 entropy under the vault's VEK. Only
- *  needed for the Re-export flow (Commit 6) — without this slot the
+ *  needed for the Re-export flow — without this slot the
  *  wallet would have to generate a fresh SLH-DSA keypair on every
  *  re-export, invalidating any prior on-chain registration. */
 export function wrapBackupEntropy(
@@ -240,8 +240,8 @@ export function wrapBackupEntropy(
 /** Inverse of [`wrapSlhDsaSecret`]. Throws on AEAD failure (wrong
  *  VEK, tampered ciphertext, mismatched nonce). The returned buffer
  *  MUST be zeroed by the caller after the rotation use is complete.
- *  Phase 10 does not invoke this on a routine path — rotation is
- *  Phase 10.2 — but the helper is here so the unit tests can pin a
+ *  Nothing invokes this on a routine path today — rotation is
+ *  deferred — but the helper is here so the unit tests can pin a
  *  full encrypt/decrypt round-trip without waiting for the future
  *  rotation flow. */
 export function unwrapSlhDsaSecret(
@@ -259,7 +259,7 @@ export function unwrapSlhDsaSecret(
 }
 
 /** Inverse of [`wrapBackupEntropy`]. Used by the Settings → Security
- *  Re-export flow (Commit 6) to recover the original 32-byte BIP-39
+ *  Re-export flow to recover the original 32-byte BIP-39
  *  entropy so the popup can re-derive the 24-word mnemonic without
  *  generating a new keypair. Throws on AEAD failure (wrong VEK,
  *  tampered ciphertext). */
@@ -385,7 +385,7 @@ export function prepareSlhDsaBackup(args: {
 
 /** Re-derive the 24-word mnemonic from a stored backup record by
  *  decrypting the entropy slot. Used by the Settings → Security
- *  Re-export flow (Commit 6) — the user already password-unlocked,
+ *  Re-export flow — the user already password-unlocked,
  *  the caller already unwrapped the VEK; we just decrypt + re-encode.
  *  Throws on AEAD failure (wrong VEK / tampered ciphertext) and on
  *  any malformed entropy length. */
@@ -410,7 +410,7 @@ export function recoverBackupMnemonic(
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Decode a stored hex pubkey back to raw bytes. Used by the chain
- *  registration path (Commit 4) to feed the precompile's `bytes`
+ *  registration path to feed the precompile's `bytes`
  *  argument. Validates length so a corrupt record can't slip past. */
 export function decodeBackupPublicKey(hexPubkey: string): Uint8Array {
   const bytes = hexToBytes(hexPubkey);

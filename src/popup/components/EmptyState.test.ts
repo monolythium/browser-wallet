@@ -1,4 +1,4 @@
-// Phase 11 Commit 9 — EmptyState + LoadingState primitive tests.
+// EmptyState + LoadingState primitive tests.
 //
 // We don't run React rendering in vitest (no jsdom/JSDOM-aware setup
 // today). Instead, validate that the modules export the expected names

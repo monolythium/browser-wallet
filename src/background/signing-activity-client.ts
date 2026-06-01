@@ -1,4 +1,4 @@
-// Phase 11.5 Commit 3 — chain reader for `lyth_signingActivity`
+// Chain reader for `lyth_signingActivity`
 // (MD-CORE-0004 / mono-core @dd05511).
 //
 // The chain handler at protocore.rs:3003 takes

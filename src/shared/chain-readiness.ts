@@ -1,6 +1,6 @@
-// Phase 11 — Chain-readiness scaffolding.
+// Chain-readiness scaffolding.
 //
-// The wallet's chain-reader story since Phase 7.1 has been "wrap every
+// The wallet's chain-reader story has historically been "wrap every
 // `lyth_*` call in a try/catch and fall back to a hand-coded mock when
 // the call throws". That works, but the per-call duplication is
 // significant and the "this is mocked because chain offline" vs "this is

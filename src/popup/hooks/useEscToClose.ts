@@ -1,4 +1,4 @@
-// Phase 11 Commit 10 — Esc-to-close hook.
+// Esc-to-close hook.
 //
 // Modal/sheet components have inconsistent Esc-to-close behaviour
 // across the codebase. This hook standardises the pattern: pass an

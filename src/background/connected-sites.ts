@@ -69,11 +69,6 @@ export async function removeConnectedSite(origin: string): Promise<void> {
   });
 }
 
-export async function listConnectedOrigins(): Promise<string[]> {
-  const sites = await loadConnectedSites();
-  return Object.keys(sites);
-}
-
 export async function clearAllConnectedSites(): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.set({ [STORAGE_KEY_CONNECTED_SITES]: {} }, () =>
