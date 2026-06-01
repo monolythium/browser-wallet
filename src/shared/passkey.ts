@@ -1,4 +1,4 @@
-// Phase 9 — Passkey policy types + pure helpers (§28.5 Q30 + Q31).
+// Passkey policy types + pure helpers (§28.5 Q30 + Q31).
 //
 // What this module owns
 // =====================
@@ -10,7 +10,7 @@
 // existing envelope); the WebAuthn IPC dispatch lives in
 // service-worker.ts; the UI lives in popup/.
 //
-// On-chain reality (investigation 2026-05-16)
+// On-chain reality
 // ===========================================
 // mono-core @ce93d83 has NO passkey precompile. The chain SDK
 // (`mono-core-sdk @0fd8a79`) exposes a `WebAuthnP256` algorithm tag in
@@ -21,7 +21,7 @@
 // every classical signature payload including WebAuthn. Today the
 // chain accepts ML-DSA-65 only.
 //
-// Consequence: Phase 9 passkey is a **local unlock gate** for the
+// Consequence: the passkey is a **local unlock gate** for the
 // primary ML-DSA-65 vault key. WebAuthn's `navigator.credentials.get()`
 // signs over a challenge derived from the proposal hash; if the
 // authenticator asserts successfully the wallet decrypts the vault's
@@ -40,9 +40,13 @@
 // ====================
 // §28.5 Q30 — default passkey limit ~$500 per tx, user-configurable.
 // §28.5 Q31 — passkey unlocks signing for txs under the limit; primary
-//             key (password unlock) required above the limit; no chain-
-//             side enforcement in v1 — wallet enforces policy at the
-//             IPC boundary.
+//             key (password unlock) required above the limit. v1 enforces
+//             the per-tx/daily cap LOCALLY at the SW signing boundary
+//             (wallet-send-tx) for value-only transfers, as defense-in-
+//             depth: an over-limit send is rejected unless an SW-VERIFIED
+//             password re-auth is supplied. This is NOT cryptographic
+//             passkey authorization and there is NO chain-side enforcement
+//             until the chain ships a passkey precompile.
 // §28.5     — single binary, multisig + passkey + two-tier UX coexist
 //             on one wallet; passkey is per-vault metadata.
 
@@ -64,7 +68,7 @@ export const LYTHOSHI_PER_LYTH = 100_000_000n;
 /** Default per-tx passkey limit, in lythoshi. §28.5 Q30 anchors this to
  *  "~$500"; in the absence of a LYTH/USD oracle in the wallet today
  *  (chain GAP), we hardcode 100 LYTH as a stand-in. The limit is
- *  user-configurable from the Security page (Commit 3).
+ *  user-configurable from the Security page.
  *
  *  100 LYTH = 100 * 100_000_000 lythoshi = 10_000_000_000n
  *
@@ -89,14 +93,6 @@ export const MAX_PASSKEY_LIMIT_LYTHOSHI = 10_000n * LYTHOSHI_PER_LYTH;
 /** Default daily cap when `dailyCap` mode is enabled. 500 LYTH —
  *  five normal-sized txs at the default per-tx limit. */
 export const DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI = 500n * LYTHOSHI_PER_LYTH;
-
-/** Compatibility aliases for IPC/storage surfaces that still expose
- *  `limitWei` / `dailyCapWei` field names. Values are v4.1 lythoshi. */
-export const DEFAULT_PASSKEY_LIMIT_WEI = DEFAULT_PASSKEY_LIMIT_LYTHOSHI;
-export const MIN_PASSKEY_LIMIT_WEI = MIN_PASSKEY_LIMIT_LYTHOSHI;
-export const MAX_PASSKEY_LIMIT_WEI = MAX_PASSKEY_LIMIT_LYTHOSHI;
-export const DEFAULT_PASSKEY_DAILY_CAP_WEI =
-  DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI;
 
 /** Domain tag mixed into every passkey challenge hash. Keeps WebAuthn
  *  assertions over wallet challenges cryptographically separate from

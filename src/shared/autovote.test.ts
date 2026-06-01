@@ -1,4 +1,4 @@
-// Phase 7 commit 3 — autovote algorithm tests.
+// autovote algorithm tests.
 //
 // Whitepaper §23.9 mandates four behavioural properties that the test
 // suite pins explicitly:

@@ -1,4 +1,5 @@
 import { Icon } from "../../Icon.js";
+import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { renderCounterparty } from "../ActivityRow.js";
 import type { TokenTransferRow } from "../../../shared/activity.js";
 import type { NameLabel } from "../../../shared/name-resolution.js";
@@ -29,9 +30,9 @@ export function TokenTransferRowBody({ row, counterpartyLabel }: TokenTransferRo
           {renderCounterparty(row.counterparty, counterpartyLabel)}
         </div>
         <div className="ext-act-row__meta">
-          <span>block {row.blockHeight.toLocaleString("en-US")}</span>
+          <span>{txTypeLabel(row)}</span>
           <span>·</span>
-          <span>tx {row.txIndex}</span>
+          <span>block {row.blockHeight.toLocaleString("en-US")}</span>
         </div>
       </div>
       <div className="ext-act-row__right">

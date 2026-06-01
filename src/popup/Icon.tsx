@@ -98,7 +98,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "settings":
-      // Round 7 TASK 3 — proper gear/cog glyph (Feather-Icons-style).
+      // Proper gear/cog glyph (Feather-Icons-style).
       // Replaces the prior 4-spoke radial that didn't read as "gear"
       // at the 13 px top-bar size. Same 8-tooth shape MetaMask uses.
       return (
@@ -216,7 +216,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "menu":
-      // Round 7 TASK 4 — hamburger (3 horizontal lines) for the top-bar
+      // Hamburger (3 horizontal lines) for the top-bar
       // menu trigger that replaces the previous lock button.
       return (
         <svg {...props}>
@@ -226,7 +226,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "book":
-      // Round 7 TASK 5/4 — address book (Contacts menu item).
+      // Address book (Contacts menu item).
       return (
         <svg {...props}>
           <path d="M4 4h14a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V4z" />
@@ -242,7 +242,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "multisig":
-      // Round 7 TASK 7 — three overlapping circles for the multi-signer
+      // Three overlapping circles for the multi-signer
       // / multisig wallet menu item. Reads as "group of signers."
       return (
         <svg {...props}>
@@ -252,7 +252,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "display":
-      // Round 7 TASK 4 — display / window-mode toggle icon. Renders
+      // Display / window-mode toggle icon. Renders
       // as a monitor outline.
       return (
         <svg {...props}>
@@ -262,7 +262,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "expand":
-      // Round 8 TASK 3 — open-in-new-tab / fullscreen glyph
+      // Open-in-new-tab / fullscreen glyph
       // (Feather-style external-link with arrow + frame).
       return (
         <svg {...props}>
@@ -272,7 +272,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "copy":
-      // Round 11 TASK 4 — Feather-style two-rectangle clipboard glyph.
+      // Feather-style two-rectangle clipboard glyph.
       return (
         <svg {...props}>
           <rect x="9" y="9" width="13" height="13" rx="2" />
@@ -280,7 +280,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "trash":
-      // Round 11 TASK 3 — Feather-style trash glyph for the
+      // Feather-style trash glyph for the
       // hamburger-menu "Reset wallet" destructive entry.
       return (
         <svg {...props}>
@@ -298,7 +298,7 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "bell":
-      // Phase 3 — Notifications row in the hamburger menu + future header
+      // Notifications row in the hamburger menu + future header
       // glyph. Bell silhouette + clapper line; matches the stroke-only
       // pattern of every other glyph (currentColor + strokeWidth 1.8).
       return (
@@ -310,31 +310,6 @@ export function Icon({ name, size = 16 }: IconProps) {
     default:
       return null;
   }
-}
-
-interface SparkProps {
-  data: number[];
-  color?: string;
-  down?: boolean;
-}
-
-export function Spark({ data, color = "#7c7fff", down = false }: SparkProps) {
-  if (!data || data.length === 0) return null;
-  const w = 44;
-  const h = 16;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const xs = (i: number) => (i / (data.length - 1)) * w;
-  const ys = (v: number) => h - ((v - min) / (max - min || 1)) * (h - 2) - 1;
-  const d = data
-    .map((v, i) => `${i === 0 ? "M" : "L"}${xs(i).toFixed(1)} ${ys(v).toFixed(1)}`)
-    .join(" ");
-  const c = down ? "#ff8a9a" : color;
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-      <path d={d} fill="none" stroke={c} strokeWidth={1.3} strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 export function fmt(n: number | null | undefined, dp = 2): string {

@@ -1,4 +1,4 @@
-// Round 13 SECURITY ADDENDUM — popup-side PQM-1 mnemonic generator
+// SECURITY ADDENDUM — popup-side PQM-1 mnemonic generator
 // for the FIRST-SETUP onboarding flow.
 //
 // Why generate on the popup side? The first-setup security model

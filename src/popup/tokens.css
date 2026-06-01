@@ -84,7 +84,7 @@
   --algo-ed25519: #b8aaff;
   --algo-passkey: #7ee3c1;
 
-  /* ---------- Phase 4.4 — AddressLabelRecord.category palette ----------
+  /* ---------- AddressLabelRecord.category palette ----------
      Indexer pragmatic taxonomy surfaced by lyth_getAddressLabel today
      (foundation / exchange / bridge / treasury / contract / operator),
      plus §22.8 TLD categories (human / agent / cluster / system) that

@@ -8,7 +8,7 @@ import { Icon } from "../Icon";
 
 interface MnemonicGridProps {
   mnemonic: string;
-  /** Round 11 TASK 4 — show a Copy-to-clipboard button below the grid
+  /** Show a Copy-to-clipboard button below the grid
    *  with 30 s auto-clear. Default true. Pass false on surfaces that
    *  have their own copy button (e.g. the SLH-DSA backup reveal modal
    *  uses a 60 s timer + ghost button variant we don't double here). */
@@ -23,7 +23,7 @@ const FEEDBACK_RESET_MS = 3_000;
  * RevealPhrase (Settings → Show recovery phrase). Splits on whitespace
  * internally; callers pass the raw mnemonic string.
  *
- * Round 11 TASK 4 — word font 12 → 15 px monospace for readability, and
+ * Word font 12 → 15 px monospace for readability, and
  * an optional Copy-to-clipboard button below the grid. The clipboard
  * format mirrors the on-screen layout ("1.word 2.word ... 24.word")
  * and auto-clears 30 s after copy via the shared clipboard helper.

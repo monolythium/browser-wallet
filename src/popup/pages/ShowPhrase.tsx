@@ -4,7 +4,7 @@ import { MnemonicGrid } from "../components/MnemonicGrid";
 interface ShowPhraseProps {
   mnemonic: string;
   onConfirmed: () => void;
-  /** Round 12 TASK 1 — back button is optional. During first-setup
+  /** Back button is optional. During first-setup
    *  onboarding the parent intentionally omits onBack so the user
    *  can't bypass the verify-phrase step by tapping back into home.
    *  When omitted, the back chevron is hidden and a spacer keeps the
@@ -38,9 +38,9 @@ export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
         <div style={{ width: 36 }} />
       </div>
 
-      {/* Round 12 TASK 2 — content moved into .ext-body so the screen
+      {/* Content moved into .ext-body so the screen
          scrolls when the 15 px-mono grid + copy button + warning
-         exceed the popup viewport. Without scroll, the Round 11
+         exceed the popup viewport. Without scroll, the
          font-size bump pushed the Continue button (in .req-foot)
          below the visible area and the user couldn't reach it. */}
       <div

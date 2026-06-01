@@ -1,4 +1,4 @@
-// Phase 11 Commit 3 — typed AddressActivityKind discriminator.
+// Typed AddressActivityKind discriminator.
 //
 // Replaces the P4.4 heuristic empty-state ("no rows → must be empty,
 // render generic CTA"). The chain now emits `lyth_addressActivityKind`
@@ -12,15 +12,15 @@
 //   - "pruned"            → "older activity has been pruned; showing
 //                            recent N transactions" + retention info
 //   - "private"           → "private activity needs meta-address —
-//                            coming in Phase 12" placeholder
+//                            (forthcoming)" placeholder
 //   - <unknown string>    → forward-compatible "history unavailable"
 //
-// Closes GAP #17 (memory line 26's deferred chain-side reader has now
+// The chain-side activity-kind reader (previously deferred) has now
 // shipped + landed in SDK @0fd8a79).
 //
 // Whitepaper alignment:
 //   §22.5  — agent precompile (zkML proof verification) — `kind = "private"`
-//            is the placeholder until Phase 12 wires meta-addresses.
+//            is the placeholder until meta-addresses are wired.
 //   §25.4  — Rule 9 (privacy denomination caller-origin guard) — private
 //            activity is fundamentally opaque to the public indexer.
 //   §30.5  — Foundation cluster transparency surface — "indexer_disabled"

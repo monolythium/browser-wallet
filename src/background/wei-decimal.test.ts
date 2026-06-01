@@ -1,6 +1,6 @@
 // Golden conversion test for pending-row amountDecimal.
 //
-// The Phase 4.4 pending-row reconciliation contract in
+// The pending-row reconciliation contract in
 // shared/activity.ts:reconcilePending matches a pending row against
 // a confirmed tx_send by exact string equality on `amountDecimal`.
 // The SW receives the IPC compatibility field `valueWeiHex`, but for

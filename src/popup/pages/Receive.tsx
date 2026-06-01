@@ -15,7 +15,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
   // Whitepaper §22.7 mandates bech32m display. The QR encodes the bech32m
   // form (canonical Monolythium); the address row below renders the
   // same string at 14 px mono so it (not the QR) is the screen's
-  // primary visual element — see Round 5 TASK 6.
+  // primary visual element.
   const qrPayload = bech32mDisplay(account.addr);
   const [copied, setCopied] = useState(false);
   const handleCopy = (e: ReactMouseEvent) => {
@@ -63,7 +63,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
           >
             Your address
           </div>
-          {/* Round 5 TASK 6 — QR dropped from 224 to 176 px so the
+          {/* QR dropped from 224 to 176 px so the
               address row below it has visual prominence. Address card
               padding and font size grow accordingly so the actual
               text (not the pixel grid) is the takeaway. */}
@@ -87,7 +87,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
               marginSize={2}
             />
           </div>
-          {/* Round 6 TASK 4 — address now strictly single-line. Round 5
+          {/* Address now strictly single-line. The earlier layout
               used wordBreak:break-all which wrapped a 43-char bech32m
               onto two lines in popup mode. Now nowrap + tighter
               padding + 24 px copy button gives the address ~274 px of

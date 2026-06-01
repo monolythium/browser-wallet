@@ -1,4 +1,4 @@
-// Phase 9 — Two-tier UX feature toggles (§28.5 Q29).
+// Two-tier UX feature toggles (§28.5 Q29).
 //
 // What this module owns
 // =====================
@@ -121,7 +121,7 @@ export function isFeatureEnabled(
 }
 
 /** Human-readable label + tagline for each flag. Used by Features
- *  page (Commit 5) and by any disabled-surface "Enable in Settings"
+ *  page and by any disabled-surface "Enable in Settings"
  *  affordance. Kept here so the labels travel with the enum. */
 export interface FeatureMeta {
   label: string;

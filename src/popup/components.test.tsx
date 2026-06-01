@@ -1162,7 +1162,7 @@ describe("bridge route disclosure display", () => {
     );
 
     expect(html).toContain("No SDK-ranked bridge route is selectable");
-    expect(html).toContain("no SDK-ranked bridge route satisfies the v4.1 disclosure floor");
+    expect(html).toContain("no SDK-ranked bridge route satisfies the disclosure floor");
     expect(html).toContain("No transfer intent is constructed until an SDK-shaped route is selected.");
     expect(html).toContain("quote preview requires an SDK-selected route");
     expect(html).not.toContain("transfer amount missing or zero");

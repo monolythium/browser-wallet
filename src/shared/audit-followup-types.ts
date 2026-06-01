@@ -1,6 +1,6 @@
-// Phase 11.5 — Audit follow-up: typed response shapes for new lyth_*
+// Audit follow-up: typed response shapes for new lyth_*
 // reader methods landed on mono-core @dd05511 (sync log
-// docs/chain-sync-log.md entry 2026-05-16T14:20Z).
+// docs/chain-sync-log.md).
 //
 // The TS SDK at mono-core-sdk @0fd8a79 did NOT move and exposes no
 // typed wrappers for any of these methods yet, so the wallet calls
@@ -18,7 +18,7 @@
 // CHAIN GAP TRACKER
 // =================
 //
-// Follow-up RPCs investigated for Phase 11.5:
+// Follow-up RPCs investigated:
 //
 // 1. **Delegation reward claim ledger** — the wallet now calls
 //    `lyth_pendingRewards` directly in `staking-client.ts`. Typed SDK
@@ -29,7 +29,7 @@
 //    handler (`protocore.rs:3660`) comments that the indexer
 //    adapter "powers a future `lyth_setAddressLabel` admin RPC",
 //    but the write path is not wired. Wallet's address-book write
-//    flow (Phase 11.5 Commit 6 originally proposed) is deferred.
+//    flow (originally proposed) is deferred.
 //
 // Remaining deferred items will be re-evaluated at the next chain sync.
 //

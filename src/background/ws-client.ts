@@ -1,4 +1,4 @@
-// Phase 11 Commit 2 — WebSocket subscription manager.
+// WebSocket subscription manager.
 //
 // Chain commit 0aaa5fc shipped `lyth_subscribe` / `lyth_unsubscribe`
 // over WebSocket transport. The SDK at @0fd8a79 exposes
@@ -73,7 +73,7 @@ export function httpUrlToWss(url: string): string {
   return url;
 }
 
-/** Phase 11 Commit 12 — operator-aware WS URL derivation.
+/** Operator-aware WS URL derivation.
  *
  *  Precedence:
  *    1. `operator.wsRpc` explicit override (set by SDK registry or
@@ -114,7 +114,7 @@ function backoffMs(attempt: number): number {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 11 Commit 12 — per-URL failure cache.
+// Per-URL failure cache.
 //
 // When a WS handshake fails (303, 404, network refusal, etc.) before
 // the connection ever opens, we mark the URL as known-down for TTL
@@ -179,7 +179,7 @@ export class WsClient {
   private subscriptionIdToChannel = new Map<string, string>();
   /** Status-change listeners. */
   private statusListeners = new Set<(s: WsStatus) => void>();
-  /** Phase 11 Commit 12 — tracks whether the current WS connection EVER
+  /** Tracks whether the current WS connection EVER
    *  fired `onopen`. A close without a preceding open means the handshake
    *  failed (303 redirect, 404, etc.) — we apply MAX_HANDSHAKE_ATTEMPTS
    *  before marking the URL down + falling to polling. After a successful
@@ -296,7 +296,7 @@ export class WsClient {
     // re-subscribing every channel). v1 picks the first operator and
     // reconnects on drop; multi-operator WS failover is post-mainnet.
     //
-    // Phase 11 Commit 12 — `deriveWsUrl` knows about the `wsRpc`
+    // `deriveWsUrl` knows about the `wsRpc`
     // override + the :8546 Geth convention. Previously we used the
     // naive `httpUrlToWss` which kept the HTTP port, causing 303
     // handshake-failure spam against Sprintnet operators.
@@ -396,7 +396,7 @@ export class WsClient {
 
   private onClose(): void {
     this.ws = null;
-    // Phase 11 Commit 12 — a close without a preceding open is a
+    // A close without a preceding open is a
     // handshake failure (the most common cause is HTTP 303 redirect or
     // 404 against a port that doesn't serve WS — e.g. Geth on :8545
     // refusing upgrades). Tighter retry budget + URL-cache poisoning so

@@ -1,4 +1,4 @@
-// Phase 11 Commit 2 — WS-client tests.
+// WS-client tests.
 //
 // The WsClient is a lifecycle manager over an injected WebSocket
 // factory. Tests use a fake WebSocket implementation that records all
@@ -62,7 +62,7 @@ class FakeWebSocket {
 beforeEach(() => {
   FakeWebSocket.resetSingleton();
   __resetWsClient();
-  // Phase 11 Commit 12 — the module-scoped failure cache leaks state
+  // The module-scoped failure cache leaks state
   // across tests if not reset. A prior test that exercised handshake
   // failure would mark the URL down + the next test's ensureConnection
   // would short-circuit to "unavailable" without ever creating a WS.
@@ -306,7 +306,7 @@ describe("WsClient factory unavailable", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 11 Commit 12 — deriveWsUrl
+// deriveWsUrl
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("deriveWsUrl — operator-aware URL derivation", () => {
@@ -368,7 +368,7 @@ describe("deriveWsUrl — operator-aware URL derivation", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 11 Commit 12 — failure cache
+// failure cache
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("WS failure cache (per-URL TTL)", () => {
@@ -402,7 +402,7 @@ describe("WS failure cache (per-URL TTL)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 11 Commit 12 — handshake-failure tighter retry budget
+// handshake-failure tighter retry budget
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("WsClient handshake-failure retry budget", () => {
