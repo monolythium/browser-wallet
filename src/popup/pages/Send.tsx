@@ -29,6 +29,7 @@ import type { ContactRecord } from "../bg";
 import { useContacts } from "../hooks/useContacts";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
+import { Modal } from "../components/Modal";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
 import {
@@ -140,6 +141,12 @@ export function Send({
   const [step, setStep] = useState<Step>("form");
   const [passkeyDecision, setPasskeyDecision] = useState<BgPasskeyDecision | null>(null);
   const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
+  // T1-04(a) — over-limit passkey send requires an account-password re-auth
+  // (SW-verified). These drive the elevated-password modal.
+  const [elevatedOpen, setElevatedOpen] = useState(false);
+  const [elevatedPw, setElevatedPw] = useState("");
+  const [elevatedErr, setElevatedErr] = useState<string | null>(null);
+  const [elevatedBusy, setElevatedBusy] = useState(false);
 
   // Form state — single source of truth so preview and "Try again" can
   // round-trip without prop drilling.
@@ -362,10 +369,16 @@ export function Send({
     setStep("preview");
   };
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (opts?: {
+    elevatedPassword?: string;
+    viaElevated?: boolean;
+  }) => {
     if (amountLythoshi === null) return;
     if (effectiveAddr0x === null) return; // form button is gated; defensive
-    setStep("sending");
+    // For the elevated (over-limit re-auth) path keep the preview + modal
+    // mounted with an in-modal busy state; the "sending" screen only takes
+    // over once verification has passed.
+    if (!opts?.viaElevated) setStep("sending");
     setSubmitError(null);
     setTxHash(null);
     try {
@@ -413,8 +426,14 @@ export function Send({
         // threshold-encrypted inclusion pipeline is not live yet); passed
         // explicitly so the submit path is honest about which path it takes.
         private: privateTx,
+        // T1-04(a) — present only on the over-limit re-auth path; the SW
+        // verifies it before signing.
+        ...(opts?.elevatedPassword
+          ? { elevatedPassword: opts.elevatedPassword }
+          : {}),
       });
       if (r.ok) {
+        if (opts?.viaElevated) setElevatedOpen(false);
         setTxHash(r.result.txHash);
         // Record passkey-unlocked txs against the daily-cap ledger.
         // The SW prunes on read; this fire-and-forget call appends.
@@ -434,7 +453,23 @@ export function Send({
         // CX4 — the "Add to contacts" affordance now lives inline on the
         // receipt's To row (shown when the recipient is neither a saved
         // contact nor a registered name), so no auto-popup fires here.
+      } else if (r.passkeyElevation) {
+        // Over-limit passkey send: surface the password re-auth in the
+        // elevated modal rather than the error screen. "required" can also
+        // reach here on the non-elevated path if the popup's evaluate
+        // disagreed with the SW — opening the modal is the safe net.
+        setElevatedOpen(true);
+        setElevatedBusy(false);
+        setElevatedErr(
+          r.passkeyElevation === "rate_limited"
+            ? `Too many attempts. Try again in ${r.secondsRemaining ?? "a few"}s.`
+            : r.passkeyElevation === "wrong_password"
+              ? "Incorrect password."
+              : null,
+        );
+        if (!opts?.viaElevated) setStep("preview");
       } else {
+        if (opts?.viaElevated) setElevatedOpen(false);
         setSubmitError({
           message: r.reason ?? "send failed",
           code: typeof r.code === "number" ? r.code : null,
@@ -444,6 +479,7 @@ export function Send({
         setStep("error");
       }
     } catch (e) {
+      if (opts?.viaElevated) setElevatedOpen(false);
       setSubmitError({
         message: (e as Error).message ?? "send failed",
         code: null,
@@ -452,6 +488,13 @@ export function Send({
       });
       setStep("error");
     }
+  };
+
+  const submitElevated = async () => {
+    if (elevatedBusy || elevatedPw.length === 0) return;
+    setElevatedBusy(true);
+    setElevatedErr(null);
+    await handleConfirm({ elevatedPassword: elevatedPw, viaElevated: true });
   };
 
   const handleCopyHash = async () => {
@@ -472,6 +515,12 @@ export function Send({
     const onPreviewConfirm = () => {
       if (needsPasskey) {
         setPasskeyModalOpen(true);
+      } else if (passkeyDecision?.kind === "over-limit") {
+        // T1-04(a) — above the passkey cap: require an account-password
+        // re-auth (the SW enforces this regardless; the modal collects it).
+        setElevatedErr(null);
+        setElevatedPw("");
+        setElevatedOpen(true);
       } else {
         void handleConfirm();
       }
@@ -522,6 +571,95 @@ export function Send({
             }}
           />
         )}
+        <Modal
+          open={elevatedOpen}
+          onClose={() => {
+            if (!elevatedBusy) setElevatedOpen(false);
+          }}
+          showClose
+          titleAccent="rgba(242,180,65,1)"
+          title="Password required"
+        >
+          <div
+            style={{ fontSize: 11, color: "var(--fg-300)", lineHeight: 1.5 }}
+          >
+            This amount is above your passkey spending limit. Enter your account
+            password to authorize it.
+          </div>
+          <input
+            type="password"
+            autoFocus
+            value={elevatedPw}
+            onChange={(e) => {
+              setElevatedPw(e.target.value);
+              if (elevatedErr) setElevatedErr(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submitElevated();
+            }}
+            placeholder="Account password"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "9px 10px",
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              color: "var(--fg-100)",
+              fontSize: 12,
+            }}
+          />
+          {elevatedErr && (
+            <div style={{ color: "rgba(255,107,107,1)", fontSize: 10.5 }}>
+              {elevatedErr}
+            </div>
+          )}
+          <div
+            style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                if (!elevatedBusy) setElevatedOpen(false);
+              }}
+              disabled={elevatedBusy}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.14)",
+                color: "var(--fg-200)",
+                fontSize: 11.5,
+                cursor: elevatedBusy ? "default" : "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void submitElevated()}
+              disabled={elevatedBusy || elevatedPw.length === 0}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                background:
+                  elevatedBusy || elevatedPw.length === 0
+                    ? "rgba(126,227,193,0.25)"
+                    : "rgba(126,227,193,0.9)",
+                border: "none",
+                color: "#0c0d10",
+                fontWeight: 600,
+                fontSize: 11.5,
+                cursor:
+                  elevatedBusy || elevatedPw.length === 0
+                    ? "default"
+                    : "pointer",
+              }}
+            >
+              {elevatedBusy ? "Confirming…" : "Confirm send"}
+            </button>
+          </div>
+        </Modal>
       </>
     );
   }

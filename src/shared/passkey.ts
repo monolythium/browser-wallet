@@ -40,9 +40,13 @@
 // ====================
 // §28.5 Q30 — default passkey limit ~$500 per tx, user-configurable.
 // §28.5 Q31 — passkey unlocks signing for txs under the limit; primary
-//             key (password unlock) required above the limit; no chain-
-//             side enforcement in v1 — wallet enforces policy at the
-//             IPC boundary.
+//             key (password unlock) required above the limit. v1 enforces
+//             the per-tx/daily cap LOCALLY at the SW signing boundary
+//             (wallet-send-tx) for value-only transfers, as defense-in-
+//             depth: an over-limit send is rejected unless an SW-VERIFIED
+//             password re-auth is supplied. This is NOT cryptographic
+//             passkey authorization and there is NO chain-side enforcement
+//             until the chain ships a passkey precompile.
 // §28.5     — single binary, multisig + passkey + two-tier UX coexist
 //             on one wallet; passkey is per-vault metadata.
 

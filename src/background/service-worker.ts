@@ -65,6 +65,8 @@ import { computeTypedDataDigest } from "./typed-data.js";
 import {
   isUnlockedV4,
   getUnlockedAddressV4,
+  getActiveVaultIdV4,
+  verifyContainerPasswordV4,
   lockV4,
   createVaultFromNewMnemonic,
   createVaultFromMnemonic,
@@ -6496,11 +6498,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true };
     }
     case "passkey-set-policy": {
-      // Replace the policy atomically. The wallet enforces the
-      // resulting threshold at signing time. There is NO
-      // chain-side enforcement today — see the chain-GAP note in
-      // shared/passkey.ts. The validator inside the shared module
-      // rejects bogus inputs; bad payloads round-trip a typed reason.
+      // Replace the policy atomically. The wallet now enforces the
+      // resulting per-tx/daily cap LOCALLY at the SW signing boundary
+      // (wallet-send-tx) for value-only transfers as defense-in-depth: an
+      // over-limit send requires an SW-VERIFIED password re-auth. This is
+      // NOT cryptographic passkey authorization, and there is NO chain-side
+      // enforcement until the chain ships a passkey precompile — see the
+      // chain-GAP note in shared/passkey.ts. The validator inside the shared
+      // module rejects bogus inputs; bad payloads round-trip a typed reason.
       const p = (message.payload ?? {}) as {
         vaultId?: string;
         policy?: unknown;
@@ -8412,6 +8417,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // an encrypted tx that will not confirm. Anything non-boolean is
         // treated as the safe plaintext default.
         private?: unknown;
+        // T1-04(a) — elevated re-auth for an over-limit passkey send. When
+        // the per-vault passkey cap would reject this value-only transfer,
+        // the popup re-submits with the account password here; the SW
+        // VERIFIES it (verifyContainerPasswordV4) before signing. A plain
+        // boolean would be forgeable by the local IPC actor this gate
+        // targets, so the proof is the password itself, SW-checked.
+        elevatedPassword?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -8469,6 +8481,97 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const fromAddr = getUnlockedAddressV4();
       if (!fromAddr) {
         return { ok: false, reason: "wallet has no unlocked address" };
+      }
+      // T1-04(a): LOCAL defense-in-depth enforcement of the per-vault passkey
+      // spending cap on VALUE-ONLY transfers (data sends are out of policy
+      // scope). Until now the cap was advisory (popup amber badge only);
+      // enforce it here so the displayed limit is a real block. An over-limit
+      // send requires an SW-VERIFIED password re-auth — NOT a popup-asserted
+      // flag, which the already-unlocked local IPC actor this gate targets
+      // could forge. This is local defense-in-depth, NOT cryptographic passkey
+      // authorization (that needs the chain precompile).
+      if (p.data === undefined) {
+        const activeVaultId = getActiveVaultIdV4();
+        if (activeVaultId) {
+          const pkState = await readPasskeyStateV4(activeVaultId);
+          if (pkState.policy.enabled && pkState.credentials.length > 0) {
+            let pkValue: bigint;
+            try {
+              pkValue = BigInt(p.valueWeiHex);
+            } catch {
+              return { ok: false, reason: "valueWeiHex is not a hex bigint" };
+            }
+            const decision = evaluatePasskeyPolicy({
+              state: pkState,
+              valueWei: pkValue,
+              recentUsage: passkeyUsage.get(activeVaultId) ?? [],
+              now: Date.now(),
+            });
+            if (decision.kind === "over-limit") {
+              const human =
+                decision.mode === "per-tx"
+                  ? "amount exceeds the per-tx passkey limit — password unlock required"
+                  : "amount exceeds the daily passkey cap — password unlock required";
+              if (
+                typeof p.elevatedPassword !== "string" ||
+                p.elevatedPassword.length === 0
+              ) {
+                return {
+                  ok: false,
+                  passkeyElevation: "required" as const,
+                  reason: human,
+                };
+              }
+              // SW-verified elevated re-auth. Share the brute-force lockout
+              // counters with unlock/export-seed/reset so the send path can't
+              // become an unthrottled password oracle (the Argon2id cost is a
+              // further natural throttle).
+              const ses = await chrome.storage.session.get([
+                SESSION_KEY_UNLOCK_FAIL_COUNT,
+                SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+              ]);
+              let failCount =
+                typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+                  ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+                  : 0;
+              let lockoutUntil =
+                typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+                  ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+                  : 0;
+              const nowMs = Date.now();
+              if (lockoutUntil > nowMs) {
+                return {
+                  ok: false,
+                  passkeyElevation: "rate_limited" as const,
+                  reason: "rate_limited",
+                  secondsRemaining: Math.ceil((lockoutUntil - nowMs) / 1000),
+                };
+              }
+              const verified = await verifyContainerPasswordV4(
+                p.elevatedPassword,
+              );
+              if (!verified) {
+                failCount += 1;
+                const ms = lockoutMsFor(failCount);
+                if (ms > 0) lockoutUntil = Date.now() + ms;
+                await chrome.storage.session.set({
+                  [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+                  [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+                });
+                return {
+                  ok: false,
+                  passkeyElevation: "wrong_password" as const,
+                  reason: "wrong_password",
+                  secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+                };
+              }
+              await chrome.storage.session.remove([
+                SESSION_KEY_UNLOCK_FAIL_COUNT,
+                SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+              ]);
+            }
+          }
+        }
       }
       try {
         const nonceHex = await sprintnetTransactionCountHex(fromAddr);
