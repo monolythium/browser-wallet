@@ -4088,6 +4088,19 @@ function readUint256(body: string, slot: number): bigint | null {
   }
 }
 
+// T3-04 — human names for the encrypted-mempool class the dApp can declare
+// (signed into the envelope AAD). Surfaced on the approval so a non-default
+// lane isn't hidden from the user.
+const MEMPOOL_CLASS_NAMES: Record<number, string> = {
+  0: "Transfer",
+  1: "ContractCall",
+  2: "PrivacyOp",
+  3: "CLOBOp",
+  4: "AgentOp",
+  5: "FoundationOp",
+  6: "RWAOp",
+};
+
 // ---- send_tx approval ----
 interface ReqSendTxProps {
   request: SendTxRequest;
@@ -4187,6 +4200,22 @@ export function ReqSendTx({
           <span className="k">Nonce</span>
           <span className="v">{view.nonce ?? "—"}</span>
         </div>
+        {(() => {
+          // T3-04 — show the mempool lane the dApp declared (signed into the
+          // envelope AAD) so a non-default class (PrivacyOp / FoundationOp / …)
+          // isn't hidden from the user. Only rendered when the dApp set it.
+          const cls = tx.mempoolClass ?? tx.class;
+          if (cls === undefined) return null;
+          const name = MEMPOOL_CLASS_NAMES[cls] ?? `class ${cls}`;
+          return (
+            <div className="req-kv">
+              <span className="k">Mempool class</span>
+              <span className="v">
+                {name} <span style={{ color: "var(--fg-500)" }}>({cls})</span>
+              </span>
+            </div>
+          );
+        })()}
       </div>
 
       {hasCalldata && (
