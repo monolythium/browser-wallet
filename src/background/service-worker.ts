@@ -1386,7 +1386,32 @@ function acceptSignedFee(signedFee: unknown): {
   }
 }
 
+// T2-01 — tab→origin map so account-carrying provider events can be scoped to
+// connected origins WITHOUT the "tabs" permission (reading a tab's URL would
+// need it and triggers a "read your browsing history" store warning). Populated
+// from the bridge-stamped origin on each rpc message (see the onMessage rpc
+// branch); entries self-clean on send failure (tab closed). RESIDUAL: a tab
+// that navigates from a connected origin to a different origin keeps its stale
+// mapping until its next rpc — a complete fix needs a navigation listener or
+// the "tabs" permission (flagged in the audit report).
+const tabOriginById = new Map<number, string>();
+
 function broadcastEvent(event: string, payload: unknown): void {
+  // T2-01 — account-carrying events (the wallet address) go ONLY to connected
+  // origins. chainChanged and other non-address events keep the broadcast-to-
+  // all path: they leak nothing, and scoping them would expose the navigation-
+  // staleness residual on a non-sensitive event for no benefit.
+  if (event === "accountsChanged" || event === "connect") {
+    for (const [tabId, origin] of tabOriginById) {
+      if (!session.connectedOrigins.has(origin)) continue;
+      chrome.tabs
+        .sendMessage(tabId, { kind: "event", event, payload })
+        .catch(() => {
+          tabOriginById.delete(tabId);
+        });
+    }
+    return;
+  }
   chrome.tabs.query({}, (tabs) => {
     for (const t of tabs) {
       if (t.id == null) continue;
@@ -1395,6 +1420,19 @@ function broadcastEvent(event: string, payload: unknown): void {
       });
     }
   });
+}
+
+// T2-03 — EIP-1193 disconnect: a scoped accountsChanged:[] to one origin's tabs
+// so a revoked dApp learns it lost access instead of keeping a stale account.
+function broadcastDisconnect(origin: string): void {
+  for (const [tabId, o] of tabOriginById) {
+    if (o !== origin) continue;
+    chrome.tabs
+      .sendMessage(tabId, { kind: "event", event: "accountsChanged", payload: [] })
+      .catch(() => {
+        tabOriginById.delete(tabId);
+      });
+  }
 }
 
 // ---- RPC dispatch ----
@@ -4885,11 +4923,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!p?.origin) return { ok: false };
       await removeConnectedSite(p.origin);
       session.connectedOrigins.delete(p.origin);
+      // T2-03 — tell the dApp it lost access (EIP-1193 accountsChanged:[]).
+      broadcastDisconnect(p.origin);
       return { ok: true };
     }
     case "revoke-all-origins": {
+      const revoked = [...session.connectedOrigins];
       await clearAllConnectedSites();
       session.connectedOrigins.clear();
+      // T2-03 — disconnect every previously-connected dApp.
+      for (const origin of revoked) broadcastDisconnect(origin);
       return { ok: true };
     }
     case "keystore-status": {
@@ -8954,6 +8997,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   }
   if (m?.kind === "rpc") {
     const rpc = message as RpcMessage;
+    // T2-01 — remember which tab speaks for which origin so account-carrying
+    // events can be scoped to connected origins (no "tabs" permission needed;
+    // the origin is the one the content bridge stamped on this message).
+    const tabId = sender.tab?.id;
+    if (typeof tabId === "number" && typeof rpc.origin === "string") {
+      tabOriginById.set(tabId, rpc.origin);
+    }
     handleRpc(rpc)
       .then(sendResponse)
       .catch((e) => sendResponse({ error: { code: -32603, message: String(e) } }));
