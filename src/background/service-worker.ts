@@ -713,9 +713,6 @@ async function purgeDemoAddrCacheKeys(): Promise<void> {
   await new Promise<void>((resolve) => {
     chrome.storage.local.remove(toRemove, () => resolve());
   });
-  console.log(
-    `[wallet] purged ${toRemove.length} demo-addr activity cache key(s) leaked during popup-boot race (Round 3.5 cleanup)`,
-  );
 }
 
 async function persistUserChains(): Promise<void> {
@@ -767,7 +764,6 @@ const session: SessionState = {
   autoLockMinutes: AUTO_LOCK_MINUTES_DEFAULT,
 };
 
-console.log("[Monolythium Wallet] service worker boot");
 // Hydrate user-added chains and the persisted active chain id as soon as
 // the worker spins up. Service-worker hibernation → we re-read on every
 // boot. The active-chain hydration runs after user-chains so a stored id
@@ -8776,7 +8772,6 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("[Monolythium Wallet] service worker installed");
 });
 
 if (chrome.windows?.onRemoved) {
