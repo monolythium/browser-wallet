@@ -3,7 +3,7 @@
 // The wallet ships a build-time `SPRINTNET_GENESIS_HASH` pin used by
 // `networks.ts` for the GAP #11 orphan-fork defense — that stays
 // compile-time-anchored because it's a security decision (an operator
-// returning a different block-0 hash is treated as untrusted and
+// returning a different chain genesis hash is treated as untrusted and
 // skipped). What we DO want dynamic is the *displayed* registry
 // genesis: instead of showing the SDK-bundled snapshot of
 // `TESTNET_69420.genesis_hash` (which lags every SDK rebuild), the

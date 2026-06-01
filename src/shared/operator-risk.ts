@@ -105,7 +105,7 @@ export function classifyOperatorRisk(
       kind: "untrusted-genesis",
       label: "untrusted",
       tooltip:
-        "Operator's block-0 hash doesn't match the wallet's pinned genesis. " +
+        "Operator's chain genesis doesn't match the wallet's pinned genesis. " +
         "RPC dispatch excludes this operator.",
       severity: "err",
     });
@@ -190,7 +190,7 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
     kind: "untrusted-genesis",
     label: "Untrusted genesis",
     body:
-      "Operator's block-0 hash doesn't match the wallet's pinned " +
+      "Operator's chain genesis doesn't match the wallet's pinned " +
       "Sprintnet genesis. The wallet's RPC dispatcher excludes operators " +
       "with mismatched genesis (GAP #11 orphan-fork defense).",
   },

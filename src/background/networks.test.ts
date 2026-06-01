@@ -21,7 +21,10 @@ import {
   snapshotGenesisCache,
   verifyOperatorGenesis,
 } from "./networks.js";
-import { SPRINTNET_GENESIS_HASH } from "../shared/build-info.js";
+import {
+  SPRINTNET_BLOCK0_HASH,
+  SPRINTNET_GENESIS_HASH,
+} from "../shared/build-info.js";
 
 describe("SPRINTNET_OPERATOR_RPCS_DEFAULTS", () => {
   it("has at least one SDK-sourced endpoint", () => {
@@ -54,9 +57,21 @@ describe("verifyOperatorGenesis", () => {
     globalThis.fetch = originalFetch;
   });
 
-  function installFetch(handler: () => Promise<unknown>) {
-    globalThis.fetch = vi.fn(async () => {
-      const body = await handler();
+  function installFetch(
+    handler: (request: {
+      method: string;
+      params: unknown[];
+    }) => Promise<unknown>,
+  ) {
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const payload = JSON.parse(String(init?.body ?? "{}")) as {
+        method?: unknown;
+        params?: unknown;
+      };
+      const body = await handler({
+        method: typeof payload.method === "string" ? payload.method : "",
+        params: Array.isArray(payload.params) ? payload.params : [],
+      });
       return {
         ok: true,
         status: 200,
@@ -65,11 +80,15 @@ describe("verifyOperatorGenesis", () => {
     }) as unknown as typeof fetch;
   }
 
-  it("returns true when block 0's hash matches SPRINTNET_GENESIS_HASH", async () => {
+  function unsupportedStats() {
+    return { jsonrpc: "2.0", id: 1, error: { message: "method not found" } };
+  }
+
+  it("returns true when lyth_chainStats genesisHash matches SPRINTNET_GENESIS_HASH", async () => {
     installFetch(async () => ({
       jsonrpc: "2.0",
       id: 1,
-      result: { hash: SPRINTNET_GENESIS_HASH },
+      result: { genesisHash: SPRINTNET_GENESIS_HASH },
     }));
     const ok = await verifyOperatorGenesis(RPC);
     expect(ok).toBe(true);
@@ -79,13 +98,13 @@ describe("verifyOperatorGenesis", () => {
     );
   });
 
-  it("returns false on a hash mismatch and caches that result", async () => {
+  it("returns false on a lyth_chainStats hash mismatch and caches that result", async () => {
     const forked =
       "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     installFetch(async () => ({
       jsonrpc: "2.0",
       id: 1,
-      result: { hash: forked },
+      result: { genesisHash: forked },
     }));
     const ok = await verifyOperatorGenesis(RPC);
     expect(ok).toBe(false);
@@ -93,15 +112,40 @@ describe("verifyOperatorGenesis", () => {
     expect(snapshotGenesisCache().get(RPC)?.observed).toBe(forked);
   });
 
-  it("returns true (probe-not-supported) when result is null (operator binary doesn't serve block 0)", async () => {
-    installFetch(async () => ({ jsonrpc: "2.0", id: 1, result: null }));
+  it("falls back to block 0 when lyth_chainStats is unavailable", async () => {
+    installFetch(async ({ method }) =>
+      method === "lyth_chainStats"
+        ? unsupportedStats()
+        : {
+            jsonrpc: "2.0",
+            id: 1,
+            result: { hash: SPRINTNET_BLOCK0_HASH },
+          },
+    );
+    const ok = await verifyOperatorGenesis(RPC);
+    expect(ok).toBe(true);
+    expect(snapshotGenesisCache().get(RPC)?.observed).toBe(
+      SPRINTNET_BLOCK0_HASH,
+    );
+  });
+
+  it("returns true (probe-not-supported) when fallback block 0 result is null", async () => {
+    installFetch(async ({ method }) =>
+      method === "lyth_chainStats"
+        ? unsupportedStats()
+        : { jsonrpc: "2.0", id: 1, result: null },
+    );
     expect(await verifyOperatorGenesis(RPC)).toBe(true);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
     expect(snapshotGenesisCache().get(RPC)?.ok).toBe(true);
   });
 
-  it("returns false on a genuinely malformed response (result exists but no hash field)", async () => {
-    installFetch(async () => ({ jsonrpc: "2.0", id: 1, result: {} }));
+  it("returns false on a malformed fallback response (result exists but no hash field)", async () => {
+    installFetch(async ({ method }) =>
+      method === "lyth_chainStats"
+        ? unsupportedStats()
+        : { jsonrpc: "2.0", id: 1, result: {} },
+    );
     expect(await verifyOperatorGenesis(RPC)).toBe(false);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
   });
@@ -121,7 +165,7 @@ describe("verifyOperatorGenesis", () => {
       json: async () => ({
         jsonrpc: "2.0",
         id: 1,
-        result: { hash: SPRINTNET_GENESIS_HASH },
+        result: { genesisHash: SPRINTNET_GENESIS_HASH },
       }),
     }));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
@@ -138,7 +182,7 @@ describe("verifyOperatorGenesis", () => {
       json: async () => ({
         jsonrpc: "2.0",
         id: 1,
-        result: { hash: SPRINTNET_GENESIS_HASH },
+        result: { genesisHash: SPRINTNET_GENESIS_HASH },
       }),
     }));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
@@ -152,7 +196,7 @@ describe("verifyOperatorGenesis", () => {
     installFetch(async () => ({
       jsonrpc: "2.0",
       id: 1,
-      result: { hash: SPRINTNET_GENESIS_HASH },
+      result: { genesisHash: SPRINTNET_GENESIS_HASH },
     }));
     await verifyOperatorGenesis(RPC);
     expect(snapshotGenesisCache().size).toBeGreaterThan(0);
@@ -164,7 +208,7 @@ describe("verifyOperatorGenesis", () => {
     installFetch(async () => ({
       jsonrpc: "2.0",
       id: 1,
-      result: { hash: SPRINTNET_GENESIS_HASH.toUpperCase() },
+      result: { genesisHash: SPRINTNET_GENESIS_HASH.toUpperCase() },
     }));
     expect(await verifyOperatorGenesis(RPC)).toBe(true);
   });

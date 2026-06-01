@@ -4880,7 +4880,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // in parallel (net_version + eth_blockNumber) and surfaces the
       // genesis-hash verification result (GAP #11). The inner
       // verifyOperatorGenesis call uses its own forever-cache, so
-      // repeated About-page opens don't re-probe block 0; this
+      // repeated About-page opens don't re-probe chain identity; this
       // handler itself isn't cached because the latency / block-tip
       // numbers should be fresh on every screen open.
       const ops = getActiveOperators();
