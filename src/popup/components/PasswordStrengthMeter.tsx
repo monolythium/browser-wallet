@@ -10,7 +10,7 @@ interface PasswordStrengthMeterProps {
 }
 
 const REQUIREMENT_LABELS: Record<string, string> = {
-  minLength: "At least 8 characters",
+  minLength: "At least 12 characters",
   uppercase: "Uppercase letter",
   lowercase: "Lowercase letter",
   number: "Number",
