@@ -24,6 +24,12 @@ function installChrome() {
 }
 
 const connect = (origin: string) => ({ kind: "connect" as const, origin });
+const personalSign = (origin: string, message: string, address = "0xabc") => ({
+  kind: "personal_sign" as const,
+  origin,
+  message,
+  address,
+});
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
 beforeEach(() => {
@@ -45,6 +51,43 @@ describe("approvals — window-bomb guards (T4-06)", () => {
     expect(a.listPending().length).toBe(1);
     const id = a.listPending()[0]!.id;
     a.resolve(id, { ok: true });
+    expect(await p1).toEqual({ ok: true });
+    expect(await p2).toEqual({ ok: true });
+  });
+
+  it("dedup is payload-aware: two DISTINCT personal_sign messages get separate windows", async () => {
+    const a = await import("./approvals.js");
+    const p1 = a.enqueue(personalSign("https://a.example", "hello"));
+    const p2 = a.enqueue(personalSign("https://a.example", "goodbye"));
+    await tick();
+    // Distinct payloads must NOT collapse — one user decision cannot sign both.
+    expect(createCalls).toBe(2);
+    expect(a.listPending().length).toBe(2);
+    // Resolving the first window must not resolve the second caller.
+    const first = a
+      .listPending()
+      .find((x) => x.request.kind === "personal_sign" && x.request.message === "hello")!;
+    a.resolve(first.id, { ok: true });
+    expect(await p1).toEqual({ ok: true });
+    let p2Settled = false;
+    void p2.then(() => {
+      p2Settled = true;
+    });
+    await tick();
+    expect(p2Settled).toBe(false);
+    const second = a.listPending()[0]!;
+    a.resolve(second.id, { ok: false, reason: "user rejected" });
+    expect(await p2).toEqual({ ok: false, reason: "user rejected" });
+  });
+
+  it("dedup still collapses IDENTICAL personal_sign requests onto one window", async () => {
+    const a = await import("./approvals.js");
+    const p1 = a.enqueue(personalSign("https://a.example", "same"));
+    const p2 = a.enqueue(personalSign("https://a.example", "same"));
+    await tick();
+    expect(createCalls).toBe(1);
+    expect(a.listPending().length).toBe(1);
+    a.resolve(a.listPending()[0]!.id, { ok: true });
     expect(await p1).toEqual({ ok: true });
     expect(await p2).toEqual({ ok: true });
   });
