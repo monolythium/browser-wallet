@@ -1,4 +1,4 @@
-// Phase 11.5 Commit 7 — chain reader for `lyth_upcomingDuties`
+// Chain reader for `lyth_upcomingDuties`
 // (MD-CORE-0005 / mono-core @dd05511, ref 026d925a deterministic
 // upcoming-duties surface + 02a26cf0 committee context attach).
 //

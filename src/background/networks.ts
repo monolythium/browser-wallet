@@ -40,7 +40,7 @@ export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
  * Broadcast paths iterate this list and use the first responder. Registry
  * order is intentional and refreshed by bumping the SDK package.
  *
- * Phase 4.3 Change 2: this is the *defaults* list. Power users can
+ * This is the *defaults* list. Power users can
  * override via chrome.storage.local["mono.operators.override"]. RPC
  * dispatch uses `getActiveOperators()` which merges the override with
  * these defaults at lookup time.
@@ -54,7 +54,7 @@ export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
     name: `operator-${i + 1}`,
     region: endpoint.region ?? "unknown",
     rpc: endpoint.url,
-    // Phase 11 Commit 12 — pull SDK's ws_url through when present so the
+    // Pull SDK's ws_url through when present so the
     // WS client can subscribe without per-operator auto-discovery. When
     // absent, deriveWsUrl in ws-client.ts falls back to the :8546 Geth
     // convention.
@@ -192,7 +192,7 @@ export function chainRequiresMlDsa(chainIdHex: string): boolean {
  * chain id (regenesis-with-different-id case — operator should be told
  * to reconfigure).
  *
- * Phase 6 GAP #11: operators with a mismatched genesis hash (orphan-
+ * Operators with a mismatched genesis hash (orphan-
  * fork attack surface) are also skipped. The genesis check is cached
  * forever in-memory per RPC URL — genesis is immutable per chain, so a
  * one-time probe per operator suffices for the SW lifetime.
@@ -221,7 +221,7 @@ export async function probeFirstAliveOperator(
       const body = (await res.json()) as { result?: string };
       const reportedChainId = Number(body?.result ?? 0);
       if (reportedChainId !== expectedChainIdDec) continue;
-      // Genesis check (GAP #11). On mismatch the operator is excluded
+      // Genesis check. On mismatch the operator is excluded
       // from RPC dispatch for the rest of the SW lifetime.
       const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
       if (!genesisOk) continue;
@@ -319,9 +319,9 @@ async function probeOperatorGenesis(
     const body = (await res.json()) as {
       result?: { hash?: string } | null;
     };
-    // GAP #11 — operator binaries that don't expose block 0 via
+    // Operator binaries that don't expose block 0 via
     // eth_getBlockByNumber("0x0", false) (verified empirically on
-    // protocore/v2/0.1.0 binary a27eec62, 2026-05-25: all 6
+    // protocore/v2/0.1.0 binary a27eec62: all 6
     // foundation operators return {"result": null} for this call)
     // are treated as "probe-not-supported, trust passes" rather than
     // as orphan-fork evidence. The pin still binds for any operator

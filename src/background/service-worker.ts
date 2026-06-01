@@ -73,7 +73,7 @@ import {
   personalSignV4,
   signTypedDataV4FromV4,
   getUnlockedPublicKeyV4,
-  // Phase 5 multi-vault surface (Commit 2).
+  // Multi-vault surface.
   hasContainerV4,
   unlockContainerV4,
   selectActiveVaultV4,
@@ -83,18 +83,18 @@ import {
   addVaultImportV4,
   generateFreshMnemonicV4,
   wipeContainerV4,
-  // Phase 8 multisig surface (Commit 1).
+  // Multisig surface.
   addVaultMultisigV4,
   readMultisigMetaV4,
   writeMultisigMetaV4,
   getVaultPubkeyV4,
   signWithVaultV4,
-  // Phase 9 passkey surface (Commit 1).
+  // Passkey surface.
   readPasskeyStateV4,
   addPasskeyCredentialV4,
   removePasskeyCredentialV4,
   setPasskeyPolicyV4,
-  // Phase 10 SLH-DSA emergency-backup surface (Commit 1+2+4).
+  // SLH-DSA emergency-backup surface.
   // `writeSlhDsaBackupV4` is not used directly by any IPC — the
   // SW writes through the higher-level helpers (`generateSlhDsaBackupV4`,
   // `confirmSlhDsaColdStorageV4`, `setSlhDsaRegistrationStatusV4`)
@@ -105,10 +105,10 @@ import {
   recoverSlhDsaMnemonicV4,
   confirmSlhDsaColdStorageV4,
   setSlhDsaRegistrationStatusV4,
-  // Round 4 TASK 2 — session-rehydrate across MV3 SW hibernation.
+  // Session-rehydrate across MV3 SW hibernation.
   tryRestoreFromSessionV4,
 } from "./keystore-mldsa.js";
-// Phase 1 notifications — the chokepoint hook in wallet-indexer-snapshot
+// Notifications — the chokepoint hook in wallet-indexer-snapshot
 // calls this to record one notification per tracked-tx terminal transition.
 // recordNotification is intentionally NOT exposed via any IPC handler — §0.4
 // (only the wallet's own tracked-tx registry can emit notifications).
@@ -122,7 +122,7 @@ import {
   recordNotification,
   setIncomingWatermark,
 } from "./notifications-store.js";
-// Phase 2 notifications — the OS toast + unread badge amplifier on top of
+// Notifications — the OS toast + unread badge amplifier on top of
 // the Phase-1 records. Fired ONLY when recordNotification returns
 // added:true (i.e. a new terminal transition for one of the wallet's own
 // tracked txs); best-effort, so OS-deny / quota / unsupported environment
@@ -143,7 +143,7 @@ import {
   setOsNotificationsEnabled,
   setShowDetails,
 } from "./notifications-os.js";
-// Phase 1.5 notifications — broadcast-time operation tag. The wallet-send-tx
+// Notifications — broadcast-time operation tag. The wallet-send-tx
 // handler reads p.opKind into a handler-local var (sanitized via isTxOpKind)
 // and threads it ONLY to persistPendingRowBackground — never to the signer.
 import {
@@ -679,7 +679,7 @@ async function loadUserChains(): Promise<void> {
 }
 
 /**
- * Round 3.5 — one-shot SW-boot cleanup.
+ * One-shot SW-boot cleanup.
  *
  * Removes any `mono.activity.<sentinel>.*` and
  * `mono.activity.pending.<sentinel>.*` storage keys that landed under
@@ -773,7 +773,7 @@ console.log("[Monolythium Wallet] service worker boot");
 // boot. The active-chain hydration runs after user-chains so a stored id
 // pointing at a user-added chain resolves cleanly via lookupChain.
 void (async () => {
-  // Round 4 TASK 2 — try session-rehydrate first. MV3 SW hibernates
+  // Try session-rehydrate first. MV3 SW hibernates
   // after ~30 s idle and drops the in-memory ML-DSA backend held by
   // keystore-mldsa.ts. Pre-rehydrate, every SW restart force-locked
   // the user; post-rehydrate, we read the MEK from chrome.storage.session
@@ -834,7 +834,7 @@ void (async () => {
   await purgeDemoAddrCacheKeys();
   session.chainId = await loadActiveChainId();
 
-  // GAP-N1 — re-arm the poll if a tx was left pending across an SW restart /
+  // Re-arm the poll if a tx was left pending across an SW restart /
   // extension reload (periodic alarms survive hibernation but a reload clears
   // them), so away-confirmations are still observed.
   if (await hasAnyPendingTx()) {
@@ -859,7 +859,7 @@ void (async () => {
     session.autoLockMinutes = m;
   }
 
-  // Round 4 TASK 4 — bind the action-icon click to side-panel or popup
+  // Bind the action-icon click to side-panel or popup
   // per the user's stored preference. Re-applies on every SW boot
   // because chrome.sidePanel.setPanelBehavior + chrome.action.setPopup
   // are session-scoped: SW hibernation drops them and a fresh boot
@@ -868,7 +868,7 @@ void (async () => {
   await applyUiOpenMode(await readStoredUiOpenMode());
 })();
 
-/** Round 4 TASK 4 — read the persisted UI open mode, falling back to
+/** Read the persisted UI open mode, falling back to
  *  the default when no preference is stored or the stored value is
  *  malformed (defensive against forward-incompatible writes). */
 async function readStoredUiOpenMode(): Promise<UiOpenMode> {
@@ -883,7 +883,7 @@ async function readStoredUiOpenMode(): Promise<UiOpenMode> {
   return UI_OPEN_MODE_DEFAULT;
 }
 
-/** Round 4 TASK 4 — set Chrome to open either the side-panel or the
+/** Set Chrome to open either the side-panel or the
  *  popup when the user clicks the extension icon. Side-panel mode
  *  sets `openPanelOnActionClick: true` AND clears the action popup so
  *  the side-panel actually wins the click (Chrome falls back to the
@@ -935,8 +935,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
  * Pre-populate the WS down-cache for any operator whose WS URL is
  * derived via the legacy `:8545 → :8546` fallback (i.e. the SDK chain
  * registry did not pin an explicit `ws_url`). Sprintnet operators on
- * binary commit 5aead0f0 (V4-LIVE-0008, 2026-05-18) do not expose port
- * 8546 — PowerShell TCP probe 2026-05-25 confirmed timeout on all six.
+ * binary commit 5aead0f0 (V4-LIVE-0008) do not expose port
+ * 8546 — a PowerShell TCP probe confirmed timeout on all six.
  *
  * Marking these URLs down before any `new WebSocket()` call suppresses
  * the browser-level `WebSocket connection to '...' failed:
@@ -975,7 +975,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
   void loadOperatorOverride().then(prefillUnknownWsEndpointsDown);
   cachedOperator = null;
-  // GAP #11: a fresh override list may add an operator that was never
+  // Genesis-pin trust: a fresh override list may add an operator that was never
   // probed for genesis; drop the cache so the next dispatch re-probes
   // and the About-page health view reflects fresh trust state.
   clearGenesisCache();
@@ -1006,7 +1006,7 @@ async function resetAutoLock(): Promise<void> {
 }
 
 async function triggerAutoLock(): Promise<void> {
-  // Round 4 TASK 2 — clear the session-cached MEK + deadline FIRST,
+  // Clear the session-cached MEK + deadline FIRST,
   // before lockV4()'s fire-and-forget clearMekFromSessionV4 runs, so a
   // crash mid-sequence can't leave a usable MEK + valid deadline in
   // chrome.storage.session that the next SW boot would rehydrate from.
@@ -1057,7 +1057,7 @@ async function ensureUnlockRestored(): Promise<void> {
 
 let openApprovalCount = 0;
 
-// Phase 11 Commit 2 — WS infrastructure module state.
+// WS infrastructure module state.
 //
 // `wsNewHeadsListenerInstalled` is set on first `ws-subscribe-new-heads`
 // IPC so subsequent calls don't install a second listener (which would
@@ -1119,7 +1119,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   })();
 });
 
-// ---- GAP-N1 — notification poll alarm ----
+// ---- notification poll alarm ----
 //
 // A periodic alarm that runs `pollPendingAndNotify` while any tx is pending,
 // so an away-confirmation (a tx that confirms while every wallet surface is
@@ -1372,7 +1372,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!(await hasContainerV4())) {
         return err(ERR_UNAUTHORIZED, "Monolythium Wallet has no vault — open the extension and complete onboarding first");
       }
-      // Phase 4.0 Decision §9: already-connected origin + unlocked wallet
+      // Decision §9: already-connected origin + unlocked wallet
       // resolves silently. Locked or unconnected falls through to approval.
       // No accountsChanged/connect re-emit — dApp is already connected.
       if (session.connectedOrigins.has(origin) && isUnlockedV4()) {
@@ -2108,7 +2108,7 @@ function serializePasskeyState(s: {
   credentials: PasskeyCredential[];
   policy: PasskeyPolicy;
 }): SerializedPasskeyState {
-  // Phase 9 hotfix: defensive against a degraded in-memory shape.
+  // Defensive against a degraded in-memory shape.
   // BigInt fields can be `undefined` if the policy was loaded from
   // chrome.storage on a Chrome version that didn't preserve bigints
   // (the durable fix lives in keystore-mldsa.ts; this is a belt-and-
@@ -3909,7 +3909,7 @@ async function fetchIndexerSnapshot(
   _chainIdHex: string,
   options: FetchIndexerSnapshotOptions,
 ): Promise<IndexerSnapshotRaw> {
-  // R17 — chain validates wallet/address params strictly as bech32m
+  // Chain validates wallet/address params strictly as bech32m
   // on every user-keyed lyth_* read (verified live:
   // lyth_getAddressActivity("0x...") -> -32602 wallet must be mono
   // bech32m). Convert once at the top of the snapshot fetch and reuse
@@ -4094,7 +4094,7 @@ function validateRawDelegationList(input: unknown[]): RawDelegationHistory[] {
   return out;
 }
 
-// Phase 7.1 — helpers for the operators-health enrichment. The batched
+// Helpers for the operators-health enrichment. The batched
 // probe receives lyth_operatorCapabilities + lyth_indexerStatus alongside
 // the existing net_version + eth_blockNumber pair; these helpers parse
 // each subresult defensively so a single bad operator surface doesn't
@@ -4332,7 +4332,7 @@ async function persistPendingRowBackground(args: {
   to: string;
   valueWeiHex: string;
   via: string;
-  /** Phase 1.5 — broadcast-time operation tag for the notifications hook.
+  /** Broadcast-time operation tag for the notifications hook.
    *  Pure pending-row metadata; the upstream handler ensures it never
    *  reaches `submitEncryptedMlDsaTx`. */
   opKind?: TxOpKind;
@@ -4384,7 +4384,7 @@ async function persistPendingRowBackground(args: {
         () => resolve(),
       );
     });
-    // GAP-N1 — a pending row now exists → arm the headless poll so this tx's
+    // A pending row now exists → arm the headless poll so this tx's
     // terminal transition is observed (toast + badge) even if every wallet
     // surface is closed before it confirms. Idempotent; lock-independent.
     void ensureNotifPollAlarm();
@@ -4409,7 +4409,7 @@ async function persistPendingRowBackground(args: {
   }
 }
 
-/** Terminal-state classifier for one pending row — see Phase 1 notifications
+/** Terminal-state classifier for one pending row — see notifications
  *  plan §P2. Carries the genuine confirmed/failed bit + receipt blockNumber
  *  through to the snapshot hook so notifications can fire honestly (the
  *  MetaMask #5117 hazard: never show a failed tx as confirmed). */
@@ -4447,7 +4447,7 @@ function parseReceiptBlockTx(result: {
   };
 }
 
-/** Deterministic pending→terminal classification (C4 + Phase 1 notifications).
+/** Deterministic pending→terminal classification.
  *  Once a tx carries its canonical hash (`submitEncryptedMlDsaTx` surfaces
  *  `innerTxHashHex`), the chain can be asked directly instead of relying solely
  *  on the counterparty+amount heuristic. Returns:
@@ -4474,7 +4474,7 @@ async function dropConfirmedPendingByHash(
 ): Promise<{
   kept: PendingTxRow[];
   terminal: TerminalPendingTx[];
-  /** GAP-N1 — count of rows whose classification RPC threw (timeout /
+  /** Count of rows whose classification RPC threw (timeout /
    *  transport / all-operators-down). Additive: the popup chokepoint
    *  caller destructures only `{ kept, terminal }` and ignores this, so its
    *  behavior is unchanged. The poll-core uses it to drive the all-fail
@@ -4660,7 +4660,7 @@ export async function detectAndNotifyIncoming(
   }
 }
 
-/** GAP-N1 — headless background poll core. Enumerates every
+/** Headless background poll core. Enumerates every
  *  `mono.activity.pending.*` scope, asks the chain whether each KNOWN
  *  pending tx has reached a terminal state, and runs the SAME
  *  detect→record→toast→badge sequence the popup chokepoint runs — but
@@ -5060,7 +5060,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "sprintnet-operators-health": {
       // About-page operator-table source. Probes every active operator
       // in parallel (net_version + eth_blockNumber) and surfaces the
-      // genesis-hash verification result (GAP #11). The inner
+      // genesis-hash verification result. The inner
       // verifyOperatorGenesis call uses its own forever-cache, so
       // repeated About-page opens don't re-probe block 0; this
       // handler itself isn't cached because the latency / block-tip
@@ -5080,7 +5080,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           const timer = setTimeout(() => ctrl.abort(), PROBE_BUDGET_MS);
           try {
             const startedAt = Date.now();
-            // Phase 7.1 — batched probe extended with capability + indexer
+            // Batched probe extended with capability + indexer
             // surfaces (SDK commits 0f483b8 + service-probe helpers). The
             // capability/indexer responses may be missing on operators
             // running pre-uplift binaries; the parse below treats their
@@ -5172,9 +5172,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, operators: results };
     }
     case "sprintnet-runtime-provenance": {
-      // Phase 7.1 — About-page runtime card. Calls `lyth_runtimeProvenance`
+      // About-page runtime card. Calls `lyth_runtimeProvenance`
       // (SDK commit f67cf0e) via the existing operator-iteration path so
-      // the genesis-pin trust check (GAP #11) still applies. Returns a
+      // the genesis-pin trust check still applies. Returns a
       // subset of `RuntimeProvenanceResponse` — only fields the About
       // card renders. On chain-offline returns `{ ok: false, reason }`;
       // the About page falls back to a placeholder.
@@ -5279,7 +5279,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
           ]);
           await resetAutoLock();
-          // GAP-N1 settings — surface any unread that was HELD while locked
+          // Surface any unread that was HELD while locked
           // ("Unread badge while locked" off) now that the user unlocked.
           void refreshUnreadBadge({ unlocked: true });
           return { ok: true, address: r.address };
@@ -5430,7 +5430,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       // Password verified — wipe both legacy single-vault entry and the
-      // multi-vault container, then broadcast lock. Phase 5 doubles the
+      // multi-vault container, then broadcast lock. The multi-vault path doubles the
       // wipe surface; either entry left behind would let a reset user
       // re-unlock with their old password.
       await wipeVaultV4();
@@ -5461,7 +5461,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await chrome.storage.session.set({
         [SESSION_KEY_LAST_WIPE_UNAUTH_AT]: now,
       });
-      // Phase 5: same dual-wipe as keystore-reset — legacy entry plus
+      // Same dual-wipe as keystore-reset — legacy entry plus
       // the multi-vault container. Forgot-password → Reset & Import
       // must leave no recoverable key material on disk.
       await wipeVaultV4();
@@ -5519,7 +5519,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "vault-add-fresh": {
       // Requires an unlocked container (MEK cached). Generates a fresh
       // PQM-1 mnemonic and appends a new VaultRecordV4. Auto-switches
-      // the active vault to the newly-created one (Round 3.5 — the
+      // the active vault to the newly-created one (the
       // previous design left active unchanged and required a separate
       // `vault-select`; the popup didn't, so users saw the old vault's
       // address persist after creating a new one). `accountsChanged`
@@ -5527,7 +5527,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       //
       // `label` is optional; the keystore helper validates 1-32 chars
       // when supplied and falls back to its own "Vault N" auto-label
-      // otherwise. Phase 5 Commit 4: VaultAddModal threads a
+      // otherwise. VaultAddModal threads a
       // user-edited label through this slot.
       const p = (message.payload ?? {}) as { label?: string };
       const label = typeof p.label === "string" ? p.label : undefined;
@@ -5546,7 +5546,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "vault-generate-fresh-mnemonic": {
-      // Round 13 TASK 1 — ephemeral mnemonic generation for the in-app
+      // Ephemeral mnemonic generation for the in-app
       // multi-step new-wallet flow. Returns the mnemonic WITHOUT
       // persisting any vault; the popup holds it in React state for
       // the show-phrase + verify-phrase steps and commits via
@@ -5576,7 +5576,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "vault-add-multisig": {
-      // Phase 8 Commit 2 — create a multisig vault inside the
+      // Create a multisig vault inside the
       // container. Requires an unlocked container (MEK cached). The
       // caller passes the N signer pubkeys + threshold + optional
       // label; the keystore helper validates the roster + threshold,
@@ -5619,7 +5619,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "vault-pubkey": {
-      // Phase 8 Commit 2 — read a vault's 1952-byte ML-DSA-65 pubkey
+      // Read a vault's 1952-byte ML-DSA-65 pubkey
       // as 0x-prefixed hex. Requires unlocked container; used by the
       // MultisigCreateModal to populate self-signer entries without
       // forcing the user to switch the active vault.
@@ -5654,9 +5654,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "multisig-propose": {
-      // Phase 8 Commit 3 — create a tx proposal inside a multisig
+      // Create a tx proposal inside a multisig
       // vault's meta. The proposer is the first self-signer in the
-      // roster (Commit 4 adds a picker when multiple self-signers
+      // roster (a picker is shown when multiple self-signers
       // exist). The proposer's vault key signs the canonical
       // proposal hash; the signature lands in `approvals[0]` so the
       // M-of-N count is honest from creation.
@@ -5754,7 +5754,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "multisig-sign":
     case "multisig-reject": {
-      // Phase 8 Commit 4 — add this wallet's signature to a pending
+      // Add this wallet's signature to a pending
       // proposal as either approval (`multisig-sign`) or rejection
       // (`multisig-reject`). The signer is the first local self-
       // signer who has NOT already voted on this proposal; v1
@@ -5836,7 +5836,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "multisig-execute": {
-      // Phase 8 Commit 4 — broadcast a proposal that has collected
+      // Broadcast a proposal that has collected
       // its threshold of approvals. The submitter is the multisig
       // vault's own keypair (the "executor"). The proposal's
       // approvals[] array is the off-chain audit trail; the chain
@@ -5960,7 +5960,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "multisig-propose-governance": {
-      // Phase 8 Commit 5 — propose a signer-set change (add /
+      // Propose a signer-set change (add /
       // remove / replace) or a threshold change. Same M-of-current-
       // signers approval rule as tx proposals, but lives in a
       // separate queue (meta.governance) with a longer TTL and
@@ -6124,7 +6124,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "multisig-export-proposal": {
-      // Phase 8 Commit 7 — serialize a proposal (tx or governance)
+      // Serialize a proposal (tx or governance)
       // into a base64-encoded JSON blob suitable for out-of-band
       // sharing (paste into chat / email / QR code). The blob carries
       // the full proposal record including current approvals/
@@ -6167,7 +6167,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "multisig-import-proposal": {
-      // Phase 8 Commit 7 — accept a base64 blob from another signer's
+      // Accept a base64 blob from another signer's
       // wallet. Verifies every signature in the incoming proposal
       // against the local signer roster (pubkeys + hashTxProposal /
       // hashGovernanceProposal). If the proposal id already exists
@@ -6344,7 +6344,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     // ────────────────────────────────────────────────────────────────
-    // Phase 9 — passkey IPCs (§28.5 Q30 + Q31)
+    // Passkey IPCs (§28.5 Q30 + Q31)
     // ────────────────────────────────────────────────────────────────
     case "passkey-get-state": {
       // Read the per-vault passkey state — credentials + policy.
@@ -6501,7 +6501,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "passkey-set-policy": {
       // Replace the policy atomically. The wallet enforces the
-      // resulting threshold at signing time (Commit 4). There is NO
+      // resulting threshold at signing time. There is NO
       // chain-side enforcement today — see the chain-GAP note in
       // shared/passkey.ts. The validator inside the shared module
       // rejects bogus inputs; bad payloads round-trip a typed reason.
@@ -6528,7 +6528,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     // ────────────────────────────────────────────────────────────────
-    // Phase 9 — two-tier UX feature toggle IPCs (§28.5 Q29)
+    // Two-tier UX feature toggle IPCs (§28.5 Q29)
     // ────────────────────────────────────────────────────────────────
     case "two-tier-get-state": {
       try {
@@ -6560,7 +6560,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     // ────────────────────────────────────────────────────────────────
-    // Phase 10 — SLH-DSA emergency-backup IPCs (§30.1)
+    // SLH-DSA emergency-backup IPCs (§30.1)
     // ────────────────────────────────────────────────────────────────
     case "slh-dsa-backup-get": {
       // Returns the persisted backup record for the target vault, or
@@ -6599,7 +6599,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "slh-dsa-backup-recover-mnemonic": {
-      // Re-export flow (Commit 6 wiring). Requires the container to
+      // Re-export flow. Requires the container to
       // be unlocked. Decrypts the stored entropy slot + re-derives
       // the 24-word mnemonic. The wallet does not regenerate the
       // keypair — the same pubkey + secret + chain-registration
@@ -6675,7 +6675,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "slh-dsa-backup-poll-receipt": {
       // Light wrapper around `eth_getTransactionReceipt` used by the
-      // Settings → Security page (Commit 6) to flip a `pending`
+      // Settings → Security page to flip a `pending`
       // backup to `registered` (status=0x1) or `registration-failed`
       // (status=0x0) once a registration tx lands. Returns the
       // receipt's `status` + `blockNumber` if available, or `null`
@@ -6722,7 +6722,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "slh-dsa-backup-clear": {
       // Escape hatch for users who want to abandon the local
       // record and regenerate. Surfaces an explicit warning UX in
-      // Commit 6 because a prior on-chain registration becomes
+      // because a prior on-chain registration becomes
       // irrecoverable for this vault address (the precompile is
       // one-time-per-address).
       const p = (message.payload ?? {}) as { vaultId?: string };
@@ -6775,7 +6775,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await applyUiOpenMode(p.mode as UiOpenMode);
       return { ok: true, mode: p.mode };
     }
-    // Round 7 TASK 5 — Contacts CRUD. All 5 ops are in
+    // Contacts CRUD. All 5 ops are in
     // AUTO_LOCK_EXEMPT_OPS so management activity doesn't bump the
     // user-active deadline; the user "did something" signal comes
     // from the send / sign / unlock paths, not from labelling.
@@ -6988,7 +6988,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Stays scoped to v3 — the legacy v2 keystore goes through the
       // existing demo-data path until the Networks list switch lands.
       //
-      // Phase 5: either a legacy single envelope OR a container counts;
+      // Either a legacy single envelope OR a container counts;
       // unlockContainerV4 sets `unlocked` to the active vault's backend
       // either way, so getUnlockedAddressV4() returns the right address.
       if (!(await hasContainerV4())) {
@@ -7036,7 +7036,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   .join(", ")})`
               : "";
           // Sprintnet operators now run the lythoshi-native binary
-          // `dc919df8` (2026-05-29): `eth_getBalance` is reported directly
+          // `dc919df8`: `eth_getBalance` is reported directly
           // in 8-decimal lythoshi, which is exactly what the wallet's
           // display path (`formatNativeLythAmount`) expects. The boundary
           // helper below is therefore an identity passthrough — it is
@@ -7064,7 +7064,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-indexer-snapshot": {
       // Existing consumer (popup Home) shape: passes `unknown[]` through
-      // verbatim, no caching. Phase 4.4 added `wallet-activity-get` which
+      // verbatim, no caching. `wallet-activity-get` layers caching + dedupe on top of the same fetch path; this case is preserved bit-for-bit for backward compatibility.
       // layers caching + dedupe on top of the same fetch path. This case
       // is preserved bit-for-bit for backward compatibility until commit
       // 13 swaps Home over to the new pipeline.
@@ -7094,7 +7094,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       };
     }
     case "wallet-activity-get": {
-      // Phase 4.4 read-through cache. Hits chrome.storage.local first;
+      // Read-through cache. Hits chrome.storage.local first;
       // if the cache is fresher than CACHE_STALENESS_MS, returns it
       // without an RPC round-trip. Otherwise re-fetches via
       // fetchIndexerSnapshot, validates raw RPC shapes against the
@@ -7117,7 +7117,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "activity-get is only wired for Monolythium Testnet today" };
       }
-      // Round 3.5 — defense in depth: refuse activity fetches for popup
+      // Defense in depth: refuse activity fetches for popup
       // demo-data sentinel addresses so no cache row lands keyed by
       // them even if a caller (legacy code path, dapp, future bug) tries
       // to ask. Popup useActivity hook also guards at the call site.
@@ -7223,7 +7223,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         });
       const nextPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
-      // Phase 1 notifications hook — post-write microtask. The hook records
+      // Notifications hook — post-write microtask. The hook records
       // one notification per row that just reached a TERMINAL state (the
       // confirmed/failed bit from the indexer reconcile or the receipt-RPC
       // classifier above) and explicitly DOES NOT record TTL-evicted rows.
@@ -7270,7 +7270,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   txHash: row.txHash,
                   status: "confirmed",
                   blockNumber: match ? match.blockHeight : null,
-                  // Phase 1.5 — prefer the broadcast-time tag if the
+                  // Prefer the broadcast-time tag if the
                   // popup supplied one; otherwise fall back to the
                   // coarse "send" (Phase-1 behavior — the heuristic
                   // match path is by definition a tx_send).
@@ -7284,7 +7284,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                     ? { clusterName: row.clusterName }
                     : {}),
                 });
-                // Phase 2 — fire OS toast ONLY when this snapshot produced
+                // Fire OS toast ONLY when this snapshot produced
                 // a NEW record (the dedupe set blocks already-notified
                 // txs). §0.4 honored: every toast derives from a
                 // wallet-own tracked-tx transition.
@@ -7306,7 +7306,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   txHash: t.row.txHash,
                   status: t.status,
                   blockNumber: t.blockNumber,
-                  // Phase 1.5 — prefer the broadcast-time tag; otherwise
+                  // Prefer the broadcast-time tag; otherwise
                   // fall back to the coarse "contract_call" (Phase-1
                   // behavior — the status-RPC path catches every
                   // non-tx_send tracked tx).
@@ -7340,7 +7340,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 unlocked,
               );
               if (incomingAdded > 0) anyAdded = true;
-              // Phase 2 — single badge refresh per batch. getUnread reads
+              // Single badge refresh per batch. getUnread reads
               // chrome.storage so it sees every record this loop wrote;
               // one call covers both heuristic + status-RPC paths.
               if (anyAdded) {
@@ -7378,8 +7378,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-activity-kind": {
-      // Phase 11 Commit 3 — typed AddressActivityKind probe (chain
-      // commit d77e4fc, GAP #17 closes here).
+      // Typed AddressActivityKind probe (chain
+      // commit d77e4fc).
       //
       // The popup uses this to pick the right empty-state UX:
       // not_found vs indexer_disabled vs pruned vs private all have
@@ -7437,7 +7437,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-resolve-names": {
-      // Phase 4.4 batched name resolution. The de facto naming source on
+      // Batched name resolution. The de facto naming source on
       // Sprintnet is `lyth_getAddressLabel` (per the §22.8 GAP-OPEN
       // decision); resolveName-style hierarchical names land later
       // without a wallet code change.
@@ -7560,7 +7560,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, resolved };
     }
     case "wallet-indexer-status": {
-      // Phase 4.4 — drives the §28.2.1 indexer-staleness banner.
+      // Drives the §28.2.1 indexer-staleness banner.
       // Calls `lyth_indexerStatus`, validates the wire shape, returns
       // { stale, lagBlocks, currentHeight, latestHeight }. Stale is
       // true when the lag exceeds INDEXER_LAG_STALE_THRESHOLD.
@@ -7625,7 +7625,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             ? 0
             : Math.max(0, validated.latestHeight - validated.currentHeight);
         const stale = lagBlocks > INDEXER_LAG_STALE_THRESHOLD;
-        // Phase 11 Commit 4 — schema drift detection. Chain reports a
+        // Schema drift detection. Chain reports a
         // higher schemaVersion than the wallet build was tested against;
         // surface a hint so users know their parsers may miss new fields.
         // Doesn't break anything — strict additive parsers (which the
@@ -7960,7 +7960,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-preview-transaction-hooks": {
-      // Phase 11.5 Commit 2 — call lyth_previewTransactionHooks
+      // Call lyth_previewTransactionHooks
       // (MS-CORE-0009) so the Send preview can show "Hooks that
       // will run" before the user signs. Falls back to mock-not-
       // deployed on -32601, in which case the popup hides the
@@ -8073,7 +8073,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, outcome };
     }
     case "chain-signing-activity": {
-      // Phase 11.5 Commit 3 — call lyth_signingActivity (MD-CORE-0004)
+      // Call lyth_signingActivity (MD-CORE-0004)
       // for a sampled authority. Returns ChainOutcome<OperatorSigningActivity>.
       // Defaults: authorityIndex 0, limit 20. Falls back to mock-not-deployed
       // on -32601 so older operators don't break the Operators page.
@@ -8087,7 +8087,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, outcome };
     }
     case "chain-operator-risk": {
-      // Phase 11.5 Commit 5 — call lyth_operatorRisk (MD-CORE-0006)
+      // Call lyth_operatorRisk (MD-CORE-0006)
       // for a sampled authority. Returns ChainOutcome<OperatorRiskWire>
       // with miss-rate / headroom / jail status. Defaults:
       // authorityIndex 0, windowRounds 200 (chain clamps at 1000).
@@ -8102,7 +8102,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, outcome };
     }
     case "chain-upcoming-duties": {
-      // Phase 11.5 Commit 7 — call lyth_upcomingDuties (MD-CORE-0005)
+      // Call lyth_upcomingDuties (MD-CORE-0005)
       // for a sampled authority. Returns ChainOutcome<UpcomingDuties>
       // with attestation window + committee context + keyRotation
       // boundary. Block-production + sync surfaces are typed-null on
@@ -8333,7 +8333,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       });
     }
     case "ws-status": {
-      // Phase 11 Commit 2 — WS-client status probe. The popup uses this
+      // WS-client status probe. The popup uses this
       // to decide whether to keep its existing polling cadence (default)
       // or drop to event-driven updates (when WS reports "connected").
       // No side effects: doesn't subscribe, doesn't open a connection.
@@ -8343,7 +8343,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, status };
     }
     case "ws-subscribe-new-heads": {
-      // Phase 11 Commit 2 — fire-and-forget subscribe to the chain's
+      // Fire-and-forget subscribe to the chain's
       // `newHeads` channel. The SW-singleton WsClient manages one
       // connection per SW lifetime; subsequent calls share it.
       //
@@ -8386,7 +8386,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         to?: string;
         valueWeiHex?: string;
         chainIdHex?: string;
-        // Phase 5 Commit 7 — optional contract-call fields. Omit
+        // Optional contract-call fields. Omit
         // both for native LYTH transfers and the handler behaves
         // exactly as it did before; supply them for NFT
         // safeTransferFrom and the data is forwarded verbatim into
@@ -8395,7 +8395,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         gasLimitHex?: string;
         mempoolClass?: unknown;
         class?: unknown;
-        // Phase 1.5 notifications — optional operation tag. METADATA
+        // Notifications — optional operation tag. METADATA
         // ONLY: this is never plumbed into submitEncryptedMlDsaTx; it
         // rides only into persistPendingRowBackground's pending-row
         // record so the notifications hook can label the resulting
@@ -8437,7 +8437,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       ) {
         return { ok: false, reason: "gasLimitHex must be 0x-prefixed hex" };
       }
-      // Phase 1.5 notifications — tolerate but sanitize opKind. Absent stays
+      // Notifications — tolerate but sanitize opKind. Absent stays
       // absent (legacy/untagged path → coarse fallback at the hook). A known
       // literal rides through. An unknown / non-string value is coerced to
       // the fallback "contract_call" so a buggy caller produces a coarse-but-
@@ -8509,7 +8509,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const { txHash, via } = usePrivate
           ? await submitEncryptedMlDsaTx(txReq)
           : await submitPlaintextMlDsaTx(txReq);
-        // Phase 4.4 — fire-and-forget pending-row write. Unawaited so
+        // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are
         // swallowed inside the helper; a pending-write failure is
@@ -8557,7 +8557,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "notifications-list": {
-      // Phase 3 — global inbox: every `mono.notifications.history.*`
+      // Global inbox: every `mono.notifications.history.*`
       // entry merged + sorted newest-first. The popup's Notifications
       // page renders this verbatim. §0.4: no notification-creating IPC
       // is added — only reads + mark-as-read. `recordNotification` stays
@@ -8571,7 +8571,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "notifications-mark-all-read": {
-      // Phase 3 — flip every record across every scope's history to
+      // Flip every record across every scope's history to
       // read:true. Returns the count of records that changed; the
       // toolbar badge clears on the next `refreshUnreadBadge` call,
       // which we also fire here so the pip updates without waiting
@@ -8586,7 +8586,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "notifications-get-unread": {
-      // Phase 3 — global unread count for the MainMenu's bell-row pill
+      // Global unread count for the MainMenu's bell-row pill
       // (matches the toolbar badge). Derived from history; no separate
       // counter key.
       try {
@@ -8597,7 +8597,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "notifications-get-os-enabled": {
-      // Phase 5 — read the user-facing OS-toast toggle. Default true
+      // Read the user-facing OS-toast toggle. Default true
       // (absent ⇒ on). §0.4 still holds: this is read-only.
       try {
         const enabled = await getOsNotificationsEnabled();
@@ -8628,7 +8628,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "notifications-set-os-enabled": {
-      // Phase 5 — write the user-facing OS-toast toggle. Boolean
+      // Write the user-facing OS-toast toggle. Boolean
       // validated at the IPC boundary (anything non-boolean is rejected
       // before touching storage). Gates ONLY the OS toast; history +
       // badge keep running regardless on the chokepoint hook side, so
@@ -8644,7 +8644,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
-    // GAP-N1 settings — three additional boolean toggles, mirroring the
+    // Three additional boolean toggles, mirroring the
     // Phase-5 os-enabled get/set (boolean-validated at the boundary; default
     // true; local-only). Each gates an on-screen surface only — never the
     // in-app history record.
@@ -8729,7 +8729,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
   }
 }
 
-// ---- Phase 2 notifications — top-level listener registrations ----
+// ---- notifications — top-level listener registrations ----
 //
 // MV3 re-inits the SW per event; listeners added inside an async path can
 // be missed. Register `chrome.notifications.onClicked` here at module top
@@ -8745,7 +8745,7 @@ void refreshUnreadBadge({ unlocked: isUnlockedV4() });
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   const m = message as { kind?: string };
-  // Phase 5.0.1 — keepalive ping. The popup fires this on mount to
+  // Keepalive ping. The popup fires this on mount to
   // wake the SW out of MV3 idle before any real call goes out;
   // synchronous reply, no auth, no work, no auto-lock reset.
   // Anything that touches state belongs in the popup or rpc branch.
