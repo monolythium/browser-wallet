@@ -7100,17 +7100,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // V4-LIVE-0008 line operators reported 18-decimal wei, so this
           // divided by WEI_PER_LYTHOSHI to compensate.)
           const balanceHex = legacyChainBalanceHexToLythoshiHex(consensus.balanceHex);
-          console.log(
-            `[wallet] balance consensus: max=${consensus.balanceHex} (lythoshi=${balanceHex}) from ${consensus.contributing.length}/${total} operators${failSummary}`,
+          // T4-03 (Item C): the spend-gate value (lowest contributing balance).
+          const spendGuardHex = legacyChainBalanceHexToLythoshiHex(
+            consensus.spendGuardHex,
           );
-          return { ok: true, balanceHex };
+          console.log(
+            `[wallet] balance consensus: max=${consensus.balanceHex} (lythoshi=${balanceHex}) spendGuard=${consensus.spendGuardHex} from ${consensus.contributing.length}/${total} operators${failSummary}`,
+          );
+          return { ok: true, balanceHex, spendGuardHex };
         }
         const client = rpcClientFor(p.chainIdHex);
         const balanceHex = await rpcSend<string>(client, "eth_getBalance", [
           p.address,
           "latest",
         ]);
-        return { ok: true, balanceHex };
+        // Single-source chain: the spend guard is the same value.
+        return { ok: true, balanceHex, spendGuardHex: balanceHex };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
