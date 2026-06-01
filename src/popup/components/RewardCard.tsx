@@ -1,4 +1,4 @@
-// Phase 7 — RewardCard. Pending-rewards summary + per-cluster breakdown
+// RewardCard. Pending-rewards summary + per-cluster breakdown
 // + "Claim all" button.
 //
 // Data source: bgStakingPendingRewards reads `lyth_pendingRewards`
@@ -33,7 +33,7 @@ interface RewardCardProps {
   /** Disable the claim button while a previous claim is in flight or
    *  the wallet has zero accrued rewards. */
   claimDisabled: boolean;
-  /** Phase 9 — when `false`, hide the per-cluster breakdown +
+  /** When `false`, hide the per-cluster breakdown +
    *  effective-APR annotations ("advanced reward analytics" per
    *  §28.5 Q29's TRADING_INTERFACE flag). The total reward + claim
    *  button stay visible. Default `true` so existing call sites

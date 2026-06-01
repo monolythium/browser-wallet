@@ -1,5 +1,5 @@
 // Hook-driven Activity tab body. Replaces the inline ActivityList that
-// lived in components.tsx through Phase 4.3.
+// lived in components.tsx in the earlier monolithic layout.
 //
 // Hook integration order (per the plan):
 //   1. useActivity(addr, chain)        → cache + pending
@@ -102,12 +102,12 @@ function loadingSkeleton() {
   );
 }
 
-/** Phase 11 Commit 3 — kind-aware empty state. The chain emits a typed
+/** Kind-aware empty state. The chain emits a typed
  *  `lyth_addressActivityKind` (chain commit d77e4fc) discriminating
  *  not_found / indexer_disabled / pruned / private / unknown. Each gets
  *  its own copy so the user understands what's actually going on
  *  rather than seeing the generic "no transactions yet" for every
- *  reason history is unavailable. Closes GAP #17.
+ *  reason history is unavailable.
  *
  *  When `envelope` is null (probe in flight / chain unreachable), falls
  *  back to the historical generic empty state copy. */
@@ -212,7 +212,7 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
     chainIdHex,
   );
   const indexerStatus = useIndexerStatus(chainIdHex);
-  // Phase 11 Commit 3 — kind probe runs in parallel with the activity
+  // Kind probe runs in parallel with the activity
   // fetch. Used only by the empty-state branch — when rows arrive,
   // the envelope is irrelevant.
   const activityKind = useActivityKind(addr, chainIdHex);

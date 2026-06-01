@@ -1,4 +1,4 @@
-// Round 8 TASK 5 — Mono Labs branding footer.
+// Mono Labs branding footer.
 //
 // Displayed at the bottom of the Home screen (and any other surface
 // that opts in). Subtle small-text strip with a "Product of Mono
@@ -10,7 +10,7 @@
 // chrome.action popup vs side panel vs full-screen tab). Direct API
 // call routes through Chrome's tab manager in every surface.
 //
-// Round 13 — placement superseded. Rounds 8–12 all kept the footer as a
+// Placement superseded. The footer was previously kept as a
 // normal-flow flex SIBLING of .ext-body so the .ext flex column pinned it
 // to the bottom of the frame (always visible, regardless of scroll). A UI
 // review judged that frame-pinned strip too persistent: the footer should
@@ -41,8 +41,8 @@ function readWalletVersion(): string {
 }
 
 interface FooterProps {
-  /** Legacy from Round 10's position:fixed era. Now a no-op: the Footer
-   *  is always in normal flow — Round 13 places it as the last child
+  /** Legacy from the position:fixed era. Now a no-op: the Footer
+   *  is always in normal flow — placed as the last child
    *  inside .ext-body, so it scrolls with the home content. Prop retained
    *  so existing call sites don't break; can be removed once all callers
    *  drop it. */

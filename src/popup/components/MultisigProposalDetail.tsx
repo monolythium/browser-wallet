@@ -1,9 +1,9 @@
-// Phase 8 Commit 3 — MultisigProposalDetail.
+// MultisigProposalDetail.
 //
 // Renders one PendingProposal: action summary, who-approved /
 // who-rejected, expiry countdown, and the (M of N) progress bar.
-// The Approve / Reject CTAs land in Commit 4 — this component is
-// rendering-only at Commit 3, with a `mode="readonly"` placeholder
+// The Approve / Reject CTAs land later — this component is
+// rendering-only for now, with a `mode="readonly"` placeholder
 // so the proposal detail page mounts cleanly even before the co-
 // sign flow lands.
 //
