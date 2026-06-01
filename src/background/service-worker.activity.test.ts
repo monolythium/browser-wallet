@@ -2709,6 +2709,53 @@ describe("wallet-mrv-submit-plan", () => {
     expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
   });
 
+  it("clamps an absurd operator execution fee on the MRV native call to the sane ceiling (T4-04 a1)", async () => {
+    const origin = "https://mrv-clamp-call.example";
+    await dispatchRpc("eth_requestAccounts", [], origin);
+    enqueuedApprovals.length = 0;
+    submitMlDsaCalls.length = 0;
+    rpcResponses["lyth_getTransactionCount"] = 8;
+    // The operator quotes an execution-unit price 1000x above the sane ceiling
+    // (and a tip just as absurd); the wallet must NOT sign the inflated value.
+    const CEILING = 1_000_000_000_000_000n; // MAX_EXECUTION_UNIT_PRICE_LYTHOSHI
+    const CEILING_HEX = "0x" + CEILING.toString(16);
+    const ABSURD_HEX = "0x" + (CEILING * 1000n).toString(16);
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: ABSURD_HEX,
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: ABSURD_HEX,
+      source: "test",
+    };
+
+    const r = await dispatchRpc(
+      "monolythium_submitMrvNativeCall",
+      [{
+        contractAddress: CONTRACT_TYPED,
+        input: "0xaabbccdd",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        executionUnitLimitHex: "0x200000",
+        valueWeiHex: "0x2a",
+      }],
+      origin,
+    );
+
+    expect(r.error).toBeUndefined();
+    // The SIGNED fee is the ceiling, not the absurd quote; the tip is re-clamped
+    // to the (capped) max. Display == signed: the approval shows the same caps.
+    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: CEILING_HEX,
+        maxPriorityFeePerGas: CEILING_HEX,
+      }),
+    );
+    const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
+    expect(approval?.tx).toMatchObject({
+      maxFeePerGas: CEILING_HEX,
+      maxPriorityFeePerGas: CEILING_HEX,
+      gasPrice: CEILING_HEX,
+    });
+  });
+
   it("rejects raw MRV native call contract addresses at the dapp boundary", async () => {
     const origin = "https://mrv-provider-call.example";
     await dispatchRpc("eth_requestAccounts", [], origin);
@@ -2770,6 +2817,41 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.error?.message).toMatch(/exactly one transaction extension/);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
     expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// dApp eth_sendTransaction fee clamp (T4-04 a1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("dApp eth_sendTransaction fee clamp (T4-04 a1)", () => {
+  it("clamps an absurd dApp-supplied gasPrice to the sane ceiling before signing", async () => {
+    const origin = "https://ethsend-clamp.example";
+    await dispatchRpc("eth_requestAccounts", [], origin);
+    enqueuedApprovals.length = 0;
+    submitMlDsaCalls.length = 0;
+    const CEILING = 1_000_000_000_000_000n; // MAX_EXECUTION_UNIT_PRICE_LYTHOSHI
+    const CEILING_HEX = "0x" + CEILING.toString(16);
+    const ABSURD_HEX = "0x" + (CEILING * 1000n).toString(16);
+
+    const r = await dispatchRpc(
+      "eth_sendTransaction",
+      [{
+        to: "0x" + "cd".repeat(20),
+        value: "0x1",
+        nonce: "0x8",
+        gas: "0x5208",
+        gasPrice: ABSURD_HEX, // dApp-supplied absurd execution-unit price
+      }],
+      origin,
+    );
+
+    expect(r.error).toBeUndefined();
+    // The 1611-1619 clamp on the MLDSA encrypted submit path caps the signed
+    // execution-unit price (gasPrice) at the ceiling, not the absurd dApp quote.
+    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gasPrice: CEILING_HEX }),
+    );
   });
 });
 
