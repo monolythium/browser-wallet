@@ -15,6 +15,7 @@ import {
 } from "@monolythium/core-sdk/crypto";
 import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
 import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
+import { isWithinSaneBound } from "../shared/operator-bounds.js";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -161,8 +162,14 @@ export async function sprintnetJsonRpc<T>(
  * MAX across `contributing`.
  */
 export interface BalanceConsensusResult {
-  /** Max balance across responding operators, hex-quantity. */
+  /** Max balance across responding operators, hex-quantity. Used for the
+   *  DISPLAY balance (a lagging operator can only under-report, never over). */
   balanceHex: string;
+  /** LOWEST balance across responding operators, hex-quantity (T4-03, Item C).
+   *  Spend gates (Send Max / insufficient-funds) use this so a single
+   *  inflating operator cannot enable an unaffordable Max. Equals `balanceHex`
+   *  when only one operator contributed (the default single-operator config). */
+  spendGuardHex: string;
   /** Operators that returned a valid balance envelope. */
   contributing: ReadonlyArray<{ name: string; balanceHex: string }>;
   /** Operators that didn't contribute, with one-line reason each. */
@@ -171,6 +178,19 @@ export interface BalanceConsensusResult {
 
 /** Per-operator timeout for the parallel balance probe. */
 const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
+
+/**
+ * T4-03 (Item C) — absolute sane upper bound on a single-account balance, in
+ * lythoshi. The chain's genesis supply is 100,000,000 LYTH = 10^16 lythoshi
+ * (whitepaper §16.1), and the 8%/yr inflation cap means supply grows only
+ * slowly (burn trends it deflationary), so no single address can ever hold
+ * more than total supply. A generous 2x-supply ceiling is the "physically
+ * impossible" line: a reported balance above it can only come from a lying or
+ * buggy operator, so its entry is DROPPED rather than allowed to win the MAX
+ * reduce. A de-trust rail, NOT an economic claim. Shared sane-bound primitive
+ * with the fee ceiling (Item D) via `operator-bounds`.
+ */
+const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 20_000_000_000_000_000n; // 2 x 10^16
 
 /** Accept both the proof-envelope shape `{ value, blockNumber, proof,
  *  stateRoot }` and the plain hex-string shape; reject everything else.
@@ -295,11 +315,14 @@ export async function sprintnetMaxBalanceConsensus(
       continue;
     }
     try {
-      contributing.push({
-        name: r.name,
-        balanceHex: r.balanceHex,
-        value: BigInt(r.balanceHex),
-      });
+      const value = BigInt(r.balanceHex);
+      // T4-03 (Item C): drop a physically-impossible balance (above total
+      // supply) so a lying/inflating operator cannot win the MAX reduce.
+      if (!isWithinSaneBound(value, MAX_PLAUSIBLE_BALANCE_LYTHOSHI)) {
+        failing.push({ name: r.name, reason: "balance exceeds total supply" });
+        continue;
+      }
+      contributing.push({ name: r.name, balanceHex: r.balanceHex, value });
     } catch {
       failing.push({ name: r.name, reason: "invalid bigint hex" });
     }
@@ -313,12 +336,18 @@ export async function sprintnetMaxBalanceConsensus(
   }
 
   let max = contributing[0]!;
+  let min = contributing[0]!;
   for (let i = 1; i < contributing.length; i++) {
     if (contributing[i]!.value > max.value) max = contributing[i]!;
+    if (contributing[i]!.value < min.value) min = contributing[i]!;
   }
 
   return {
     balanceHex: max.balanceHex,
+    // T4-03 (Item C): the spend gate uses the LOWEST contributing balance so a
+    // single over-reporting operator cannot enable an unaffordable Max. Equals
+    // balanceHex under the default single operator.
+    spendGuardHex: min.balanceHex,
     contributing: contributing.map((c) => ({ name: c.name, balanceHex: c.balanceHex })),
     failing,
   };

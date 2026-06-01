@@ -121,6 +121,7 @@ vi.mock("./tx-mldsa.js", () => ({
   }),
   sprintnetMaxBalanceConsensus: vi.fn(async (_address: string) => ({
     balanceHex: "0x0",
+    spendGuardHex: "0x0",
     contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
     failing: [],
   })),

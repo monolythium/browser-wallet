@@ -367,7 +367,10 @@ export async function bgWalletActiveAccount(): Promise<
 export async function bgWalletBalance(
   address: string,
   chainIdHex: string,
-): Promise<{ ok: true; balanceHex: string } | { ok: false; reason?: string }> {
+): Promise<
+  | { ok: true; balanceHex: string; spendGuardHex: string }
+  | { ok: false; reason?: string }
+> {
   return send("wallet-balance", { address, chainIdHex });
 }
 
