@@ -1,4 +1,4 @@
-// Round 7 TASK 4 — MetaMask-style hamburger main menu.
+// MetaMask-style hamburger main menu.
 //
 // One screen, three logical sections:
 //   1. Quick action — "Switch to popup/sidebar" mode toggle.
@@ -8,7 +8,7 @@
 //
 // Routing lives in App.tsx via a screen-stack so back-navigation from
 // any sub-screen reached via this menu returns HERE, not to home. See
-// Round 7 TASK 4 acceptance notes.
+// returns HERE, not to home.
 
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -23,14 +23,14 @@ interface MainMenuProps {
   uiMode: UiOpenMode | null;
   onBack: () => void;
   onSwitchMode: () => void;
-  /** Round 8 TASK 3 — open the wallet in a regular Chrome tab via
+  /** Open the wallet in a regular Chrome tab via
    *  chrome.tabs.create with ?mode=fullscreen. Always available. */
   onOpenFullscreen: () => void;
   onContacts: () => void;
   onConnectedSites: () => void;
   onNetworks: () => void;
-  /** Optional — landing page for the Round 7 TASK 7 Multisig top-level
-   *  list. When omitted the menu item is hidden (TASK 4 ships TASK 7
+  /** Optional — landing page for the Multisig top-level
+   *  list. When omitted the menu item is hidden (Multisig is
    *  in a follow-up commit). */
   onMultisig?: () => void;
   /** Optional — §18.8 agent spending-policy management. When omitted
@@ -39,11 +39,11 @@ interface MainMenuProps {
   onSettings: () => void;
   onAbout: () => void;
   onLockWallet: () => void;
-  /** Round 11 TASK 3 — destructive reset entry at the very bottom of
+  /** Destructive reset entry at the very bottom of
    *  the menu. Reuses the existing ResetWallet screen (password reauth
    *  + DELETE confirm); the hamburger surface only navigates there. */
   onResetWallet: () => void;
-  /** Phase 3 notifications — open the Notifications page. When omitted
+  /** Notifications — open the Notifications page. When omitted
    *  the bell row is hidden (test harnesses / pre-wired callers). */
   onNotifications?: () => void;
 }
@@ -71,7 +71,7 @@ export function MainMenu({
         ? "Switch to sidebar"
         : "Switch to popup";
 
-  // Phase 3 — unread count for the bell row's pill. Fetched once on
+  // Unread count for the bell row's pill. Fetched once on
   // mount; the value is read-only here (mutation lives on the
   // Notifications page via "Mark all as read"). Stays `null` until the
   // IPC resolves so the pill doesn't flash a zero on every menu open.
@@ -188,7 +188,7 @@ export function MainMenu({
             onClick={onLockWallet}
             danger
           />
-          {/* Round 11 TASK 3 — destructive reset. Routes to the
+          {/* Destructive reset. Routes to the
              existing ResetWallet screen which already requires
              password reauth + a typed "DELETE" confirm before the
              wipe runs. The hamburger entry just navigates there; no
@@ -246,7 +246,7 @@ interface MenuItemProps {
   onClick: () => void;
   hasChevron?: boolean;
   danger?: boolean;
-  /** Phase 3 — optional content rendered BEFORE the chevron (e.g. an
+  /** Optional content rendered BEFORE the chevron (e.g. an
    *  unread-count pill on the bell row). */
   rightSlot?: ReactNode;
 }

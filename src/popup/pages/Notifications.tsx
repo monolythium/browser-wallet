@@ -1,4 +1,4 @@
-// Phase 3 — Notifications center.
+// Notifications center.
 //
 // Global inbox surface: reads every `mono.notifications.history.*`
 // envelope's entries (merged newest-first by SW-side
@@ -8,8 +8,8 @@
 // then re-fetches so the dots clear immediately and the toolbar pip
 // updates (the SW fires `refreshUnreadBadge` after the mark).
 //
-// Phase 4 (C5) wires the per-row ▸ expander → `NotificationDetail` popup.
-// Phase 5 may add a per-item read-on-view + a settings toggle.
+// The per-row ▸ expander opens the `NotificationDetail` popup.
+// A per-item read-on-view + a settings toggle may be added later.
 //
 // §0.4 holds: this page is READ-ONLY against the notifications store —
 // it never creates a notification. The store's write IPC surface is
