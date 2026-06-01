@@ -11,11 +11,12 @@ import {
   monoscanAddressUrl,
   SDK_PACKAGE_VERSION,
 } from "./build-info.js";
+import { CANONICAL_INNER_TX_HASH } from "./__fixtures__/golden.js";
 
 describe("monoscanTxUrl", () => {
   it("builds the hash-routed Monoscan tx URL", () => {
     const hash =
-      "0x36467a4360a4225ea31c348d0583e505a3d2f15b46a6d0a791163d2060e868c3";
+      CANONICAL_INNER_TX_HASH;
     expect(monoscanTxUrl(hash)).toBe(`${MONOSCAN_TX_BASE}${hash}`);
     expect(monoscanTxUrl(hash)).toBe(
       "https://monoscan.xyz/#/tx/0x36467a4360a4225ea31c348d0583e505a3d2f15b46a6d0a791163d2060e868c3",

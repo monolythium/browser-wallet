@@ -59,7 +59,7 @@ vi.mock("./notifications-os.js", () => ({
   getIncomingEnabled: mockGetIncomingEnabled,
 }));
 
-const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
+const DETERMINISTIC_ADDRESS = DETERMINISTIC_TEST_ADDRESS;
 const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
   "smartAccount",
   DETERMINISTIC_ADDRESS,
@@ -212,9 +212,9 @@ const NO_EVM_RECEIPT_PROOF = {
   blockHash: "0x" + "1".repeat(64),
   txHash: SUBMITTED_TX_HASH,
   receiptsRoot:
-    "0x73d29f250b2f46be15d1ad19c5dc039449e5236e47c9662266ca13b71ed84928",
+    NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   targetReceiptHash:
-    "0xe4cfff110d648eb1821542b3805ded1e3df86e85b26cc19021f55168ed1a2ede",
+    NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
   blockHeight: 100,
   txIndex: 1,
   receiptCount: 2,
@@ -429,6 +429,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     // module init; stub just the fields the wallet actually reads.
     TESTNET_69420: {
       chain_id: 69420,
+      // genesis_hash stub — mirrors __fixtures__ TESTNET_69420_GENESIS_HASH_STUB (inline: hoisted vi.mock factory).
       genesis_hash:
         "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c",
     },
@@ -437,6 +438,11 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
 
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import { ALARM_NOTIF_POLL } from "../shared/constants.js";
+import {
+  DETERMINISTIC_TEST_ADDRESS,
+  NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
+  NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
+} from "../shared/__fixtures__/golden.js";
 import { submitEncryptedMlDsaTx, submitPlaintextMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
