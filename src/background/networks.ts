@@ -35,6 +35,19 @@ export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
 /**
+ * T4-04 (Item D) — absolute sane upper bound on an operator-reported (or
+ * popup-supplied) per-execution-unit price, in lythoshi. A de-trust BACKSTOP,
+ * not an economic claim: the wallet signs the fee the user saw (T4-04 b1), but
+ * a malicious/MITM operator (or a tampered popup) could still supply an absurd
+ * `maxFeePerGas`; clamp it here so a single unit can never be priced above this
+ * physically-impossible line. 1e15 lythoshi/unit = 10,000,000 LYTH/unit — many
+ * orders of magnitude above any honest Sprintnet price, so a legitimate fee is
+ * never blocked, while a 1e30-style inflation is capped. Paired with the
+ * balance ceiling (Item C) via the shared `operator-bounds` helper.
+ */
+export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15
+
+/**
  * Monolythium Testnet operator RPC endpoints — sourced from the SDK-bundled chain
  * registry (`@monolythium/core-sdk` `getRpcEndpoints("testnet-69420")`).
  * Broadcast paths iterate this list and use the first responder. Registry
