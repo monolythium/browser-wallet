@@ -147,11 +147,22 @@ export type ApprovalDecision =
 
 interface PendingResolver {
   approval: PendingApproval;
-  resolve: (decision: ApprovalDecision) => void;
+  // T4-06 — one approval window can back several callers: a duplicate request
+  // (same kind + origin) attaches its resolver here instead of opening a second
+  // window. All resolve with the single user decision.
+  resolvers: Array<(decision: ApprovalDecision) => void>;
   windowId?: number;
 }
 
 const pending = new Map<string, PendingResolver>();
+
+// T4-06 — window-bomb DoS guards.
+/** Hard ceiling on concurrent approval windows. */
+const MAX_PENDING_APPROVALS = 5;
+/** Per-origin inbound rate limit on approval-requiring requests. */
+const ENQUEUE_RATE_WINDOW_MS = 10_000;
+const ENQUEUE_RATE_MAX_PER_ORIGIN = 8;
+const recentEnqueuesByOrigin = new Map<string, number[]>();
 
 function newId(): string {
   return (
@@ -187,13 +198,50 @@ async function openApprovalWindow(approvalId: string): Promise<number | undefine
  * Enqueue a request, open the approval window, and resolve when the user acts.
  */
 export function enqueue(request: ApprovalReq): Promise<ApprovalDecision> {
+  const now = Date.now();
+
+  // T4-06 (1) — per-origin rate limit. A hostile page can't flood the approval
+  // bus: more than ENQUEUE_RATE_MAX_PER_ORIGIN requests in the window are
+  // rejected outright (no window opened).
+  const times = (recentEnqueuesByOrigin.get(request.origin) ?? []).filter(
+    (t) => now - t < ENQUEUE_RATE_WINDOW_MS,
+  );
+  if (times.length >= ENQUEUE_RATE_MAX_PER_ORIGIN) {
+    recentEnqueuesByOrigin.set(request.origin, times);
+    return Promise.resolve({
+      ok: false,
+      reason: "too many requests — try again shortly",
+    });
+  }
+  times.push(now);
+  recentEnqueuesByOrigin.set(request.origin, times);
+
+  // T4-06 (2) — dedup: an identical pending request (same kind + origin) reuses
+  // the open window rather than spawning a second one; the new caller's promise
+  // resolves with the same user decision.
+  for (const entry of pending.values()) {
+    if (
+      entry.approval.request.kind === request.kind &&
+      entry.approval.request.origin === request.origin
+    ) {
+      if (entry.windowId != null) void focusApproval(entry.approval.id);
+      return new Promise((resolve) => {
+        entry.resolvers.push(resolve);
+      });
+    }
+  }
+
+  // T4-06 (3) — hard ceiling on concurrent approval windows.
+  if (pending.size >= MAX_PENDING_APPROVALS) {
+    return Promise.resolve({
+      ok: false,
+      reason: "too many pending approvals — resolve the open ones first",
+    });
+  }
+
   return new Promise((resolve) => {
-    const approval: PendingApproval = {
-      id: newId(),
-      request,
-      createdAt: Date.now(),
-    };
-    pending.set(approval.id, { approval, resolve });
+    const approval: PendingApproval = { id: newId(), request, createdAt: now };
+    pending.set(approval.id, { approval, resolvers: [resolve] });
     void persistPending();
     void openApprovalWindow(approval.id).then((winId) => {
       const entry = pending.get(approval.id);
@@ -223,7 +271,7 @@ export function resolve(id: string, decision: ApprovalDecision): boolean {
       /* user might already have closed it */
     });
   }
-  entry.resolve(decision);
+  for (const r of entry.resolvers) r(decision);
   return true;
 }
 
@@ -253,7 +301,9 @@ export function rejectByWindow(windowId: number): void {
     if (entry.windowId === windowId) {
       pending.delete(id);
       void persistPending();
-      entry.resolve({ ok: false, reason: "user closed approval window" });
+      for (const r of entry.resolvers) {
+        r({ ok: false, reason: "user closed approval window" });
+      }
     }
   }
 }
