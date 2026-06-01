@@ -1,4 +1,4 @@
-// Phase 6 — about-page metadata. Holds the version + commit constants
+// About-page metadata. Holds the version + commit constants
 // that aren't readable at runtime (the wallet's own manifest version is,
 // via chrome.runtime.getManifest, but the SDK and Sprintnet chain
 // identifiers aren't). Update these in lockstep with the corresponding
@@ -23,7 +23,7 @@ export const SDK_PACKAGE_VERSION: string =
     : "unknown";
 
 /** Expected Sprintnet genesis hash — the wallet's authoritative pin for
- *  GAP #11 (orphan-fork defense). Operator probes that return a
+ *  orphan-fork defense. Operator probes that return a
  *  different hash for block 0 are marked "untrusted chain" and skipped
  *  by every RPC-dispatch path (balance, fee, send, indexer).
  *

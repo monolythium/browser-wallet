@@ -1,4 +1,4 @@
-// Phase 9 — Passkey policy types + pure helpers (§28.5 Q30 + Q31).
+// Passkey policy types + pure helpers (§28.5 Q30 + Q31).
 //
 // What this module owns
 // =====================
@@ -10,7 +10,7 @@
 // existing envelope); the WebAuthn IPC dispatch lives in
 // service-worker.ts; the UI lives in popup/.
 //
-// On-chain reality (investigation 2026-05-16)
+// On-chain reality
 // ===========================================
 // mono-core @ce93d83 has NO passkey precompile. The chain SDK
 // (`mono-core-sdk @0fd8a79`) exposes a `WebAuthnP256` algorithm tag in
@@ -21,7 +21,7 @@
 // every classical signature payload including WebAuthn. Today the
 // chain accepts ML-DSA-65 only.
 //
-// Consequence: Phase 9 passkey is a **local unlock gate** for the
+// Consequence: the passkey is a **local unlock gate** for the
 // primary ML-DSA-65 vault key. WebAuthn's `navigator.credentials.get()`
 // signs over a challenge derived from the proposal hash; if the
 // authenticator asserts successfully the wallet decrypts the vault's
@@ -64,7 +64,7 @@ export const LYTHOSHI_PER_LYTH = 100_000_000n;
 /** Default per-tx passkey limit, in lythoshi. §28.5 Q30 anchors this to
  *  "~$500"; in the absence of a LYTH/USD oracle in the wallet today
  *  (chain GAP), we hardcode 100 LYTH as a stand-in. The limit is
- *  user-configurable from the Security page (Commit 3).
+ *  user-configurable from the Security page.
  *
  *  100 LYTH = 100 * 100_000_000 lythoshi = 10_000_000_000n
  *

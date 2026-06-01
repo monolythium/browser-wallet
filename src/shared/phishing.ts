@@ -1,4 +1,4 @@
-// Phase 6 — phishing heuristics for approval screens.
+// Phishing heuristics for approval screens.
 //
 // Two pure surfaces:
 //   - detectOriginWarnings: applied to dApp `origin` strings on connect /

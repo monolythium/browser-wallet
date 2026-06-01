@@ -1,4 +1,4 @@
-// Phase 10 — SLH-DSA emergency-backup data model + pure helpers
+// SLH-DSA emergency-backup data model + pure helpers
 // (§30.1 + §21.7 + §28.5 emergency-key registration prompt).
 //
 // What this module owns
@@ -7,7 +7,7 @@
 // No `chrome.storage`, no `@noble/post-quantum`, no module-scope state —
 // every helper here is deterministic and testable in vitest. The
 // keygen + chrome.storage round-trip lives in src/background/
-// slh-dsa-keygen.ts (Phase 10 Commit 2); the IPC dispatch lives in
+// slh-dsa-keygen.ts; the IPC dispatch lives in
 // service-worker.ts; the UI lives in popup/.
 //
 // CHAIN GAP TRACKER
@@ -17,7 +17,7 @@
 //    `PQM1_V1_MLDSA65_DOMAIN_TAG = "monolythium.pqm1.v1.mldsa65"`
 //    exists. The wallet adopts a wallet-side domain tag
 //    `"monolythium.slh-dsa-backup.v1"` for SHAKE256 expansion from
-//    32-byte BIP-39 entropy → 48-byte SLH-DSA seed. If Nayiem
+//    32-byte BIP-39 entropy → 48-byte SLH-DSA seed. If a chain-side
 //    canonicalizes a chain-side PQM-1 SLH-DSA branch later, this
 //    derivation can flip to that path without breaking existing
 //    on-chain registrations (the registered public key remains
@@ -26,11 +26,11 @@
 // 2. Sprintnet operational endpoint availability — separate from the
 //    precompile being live. The precompile itself is live and
 //    non-gateable per `mono-core/crates/core/runtime/src/precompiles.rs:43`.
-//    Phase 10 wires registration; if the Sprintnet RPC is offline at
+//    The wallet wires registration; if the Sprintnet RPC is offline at
 //    user attempt-time, the IPC surfaces a typed error.
 //    `// TODO: chain GAP — operational, not feature`
 //
-// Chain-side investigation findings (verified 2026-05-16)
+// Chain-side investigation findings
 // =======================================================
 // Source: `mono-core` HEAD `ce93d83`, crate
 // `crates/precompiles/system/emergency-key-registry/`.
@@ -58,7 +58,7 @@
 //    SLH-DSA-SHA2-128s is the only currently-eligible variant.
 //
 // `@noble/post-quantum @0.6.1` is already a direct dependency
-// (Phase 8 multisig); we reuse it for `slh_dsa_sha2_128s` instead of
+// (already a multisig dependency); we reuse it for `slh_dsa_sha2_128s` instead of
 // adding a new crypto dep.
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -147,7 +147,7 @@ export type BackupRegistrationStatus =
 /** Per-vault backup record. Lives inside `VaultRecordV4.slhDsaBackup`,
  *  absent on vaults that haven't generated a backup yet.
  *
- *  Storage discipline (Phase 9 hotfix learnings):
+ *  Storage discipline:
  *   - Numeric fields are plain `number` — no BigInt anywhere in this
  *     shape, so chrome.storage round-trip is JSON-safe out of the box.
  *   - `encryptedPrivateKey` is the VEK-wrapped 64-byte secret key,
@@ -286,13 +286,13 @@ export function validateBackupShape(b: unknown): BackupValidationError | null {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Storage serialization (Phase 9 hotfix discipline — JSON-safe always)
+// Storage serialization (JSON-safe always)
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Defensive clone used at every read path that returns a backup to
  *  a caller. Strips any unrecognised fields, normalises types,
  *  fills in defaults for missing-but-required fields. Mirrors the
- *  Phase 9 `clonePasskeyState` discipline.
+ *  the `clonePasskeyState` discipline.
  *
  *  Returns `null` when the input is too broken to recover — the
  *  caller treats this as "no backup configured for this vault". */
@@ -328,7 +328,7 @@ export function cloneBackupForRead(raw: unknown): SlhDsaBackup | null {
 }
 
 /** Defensive clone before writing to chrome.storage. Plain-JSON
- *  shape — no BigInt, no Uint8Array, no Date object. Phase 9
+ *  shape — no BigInt, no Uint8Array, no Date object. A prior
  *  hotfix burned in the lesson: BigInt values do not survive
  *  chrome.storage round-trips on all Chrome builds. This shape is
  *  already plain JSON, but the clone is here so any future field
