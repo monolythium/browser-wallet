@@ -20,11 +20,15 @@
 //     or chrome.windows; both modules expose deterministic stubs.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DETERMINISTIC_TEST_ADDRESS,
+  TESTNET_69420_GENESIS_HASH_STUB,
+} from "../shared/__fixtures__/golden.js";
 
 // ---- Constants from the SDK we're asserting against ----
 const TESTNET_CHAIN_ID_BIGINT = 69420n;
 const TESTNET_CHAIN_ID_HEX = "0x" + TESTNET_CHAIN_ID_BIGINT.toString(16).toUpperCase(); // 0x10F2C
-const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
+const DETERMINISTIC_ADDRESS = DETERMINISTIC_TEST_ADDRESS;
 const DETERMINISTIC_SIG_BYTES = new Uint8Array(65).fill(0xab);
 DETERMINISTIC_SIG_BYTES[64] = 27; // valid recovery id
 const DETERMINISTIC_SIG_HEX = "0x" + Array.from(DETERMINISTIC_SIG_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -72,7 +76,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     TESTNET_69420: {
       chain_id: 69420,
       genesis_hash:
-        "0xe868b8f0c671499d77d5b56404e87fc3c541c5f4777a0b1b03191a0e056f047c",
+        TESTNET_69420_GENESIS_HASH_STUB,
     },
   };
 });
