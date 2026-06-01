@@ -579,6 +579,8 @@ import {
   LOCKOUT_THRESHOLDS,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
   SESSION_KEY_MEK_V4,
+  SESSION_KEY_MEK_REHYDRATE_DEADLINE,
+  MEK_REHYDRATE_MAX_MINUTES,
   SESSION_KEY_UNLOCK_FAIL_COUNT,
   SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
   SESSION_KEY_WALLET_LOCKED,
@@ -999,9 +1001,17 @@ async function resetAutoLock(): Promise<void> {
     await chrome.storage.session.set({
       [SESSION_KEY_AUTO_LOCK_DEADLINE]: deadline,
       [SESSION_KEY_WALLET_LOCKED]: false,
+      // T1-03 (Item B): slide the session-MEK rehydrate cap forward on every
+      // genuine user action so the password-less window is "5 min since last
+      // activity", not 5 min since unlock.
+      [SESSION_KEY_MEK_REHYDRATE_DEADLINE]:
+        Date.now() + MEK_REHYDRATE_MAX_MINUTES * 60_000,
     });
   } else {
-    await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+    await chrome.storage.session.remove([
+      SESSION_KEY_AUTO_LOCK_DEADLINE,
+      SESSION_KEY_MEK_REHYDRATE_DEADLINE,
+    ]);
   }
 }
 
@@ -1016,6 +1026,9 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.storage.session.remove([
     SESSION_KEY_AUTO_LOCK_DEADLINE,
     SESSION_KEY_MEK_V4,
+    // T1-03 (Item B): also clear the rehydrate cap so a fired auto-lock leaves
+    // no stale deadline that a later boot could mistake for a live window.
+    SESSION_KEY_MEK_REHYDRATE_DEADLINE,
   ]);
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
