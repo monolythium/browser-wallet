@@ -1,4 +1,4 @@
-// Phase 10 Commit 6 — Settings → Security backup card.
+// Settings → Security backup card.
 //
 // Encapsulates the full §30.1 backup lifecycle UX inside one
 // component:
@@ -12,7 +12,7 @@
 //   - confirm + clear with a destructive-action explainer
 //
 // Lives as a separate component so the existing Security page
-// keeps its Phase 9 passkey card uncluttered.
+// keeps its passkey card uncluttered.
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -185,7 +185,7 @@ export function SlhDsaBackupCard({
 
       {loadErr && <div style={errBox}>Could not load: {loadErr}</div>}
 
-      {/* Phase 11 Commit 11 — `BackupStateRow` always renders so the user
+      {/* `BackupStateRow` always renders so the user
           sees the current state pill even for a fresh vault (label =
           "Not set up"). Previously the entire action area was wrapped
           in `{backup && ...}`, which hid the primary CTA when backup
@@ -436,7 +436,7 @@ export function SlhDsaBackupCard({
         </>
       )}
 
-      {/* Phase 11 Commit 11 — G3 rotation rehearsal (§30.2) demoted to
+      {/* G3 rotation rehearsal (§30.2) demoted to
           a collapsed-by-default reference block that surfaces for ALL
           states, including fresh vaults. The user wanted to read about
           the emergency-rotation flow BEFORE committing to setup, which
@@ -463,7 +463,7 @@ export function SlhDsaBackupCard({
 }
 
 function BackupStateRow({ backup }: { backup: SlhDsaBackup | null }) {
-  // Phase 11 Commit 11 — null-safe state row. backupStatusLabel already
+  // Null-safe state row. backupStatusLabel already
   // returns "Not set up" for null/undefined; this row renders the same
   // pill shape so the layout doesn't shift between "not set up" and
   // "locally generated" states.

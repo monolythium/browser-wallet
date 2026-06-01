@@ -1,10 +1,9 @@
 export const AUTO_LOCK_MINUTES_DEFAULT = 15;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
-export type AutoLockMinutes = (typeof AUTO_LOCK_OPTIONS)[number];
 
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
-/** GAP-N1 — periodic poll that runs `pollPendingAndNotify` while any tx is
+/** Periodic poll that runs `pollPendingAndNotify` while any tx is
  *  pending, so a transaction confirming while every wallet surface is closed
  *  still toasts + badges at confirm time. Self-limiting: created when the
  *  pending set becomes non-empty, cleared when it empties. */
@@ -19,11 +18,11 @@ export const STORAGE_KEY_CONNECTED_SITES = "mono.connected-sites";
 // chrome.storage.onChanged listener so vault-create / vault-import /
 // vault-select propagate to the UI without IPC plumbing.
 export const STORAGE_KEY_VAULTS_CONTAINER_V4 = "mono.vaults.v4";
-// Round 7 TASK 5 — Contacts (address book). Keyed by lowercase 0x
+// Contacts (address book). Keyed by lowercase 0x
 // address; value is a ContactRecord (see src/background/contacts.ts).
 // Mirrored to the popup via chrome.storage.onChanged.
 export const STORAGE_KEY_CONTACTS = "mono.contacts.v1";
-// Round 4 TASK 4 — UI open mode. The SW reads this on boot + on every
+// UI open mode. The SW reads this on boot + on every
 // chrome.storage.onChanged event to bind action-icon click to either
 // the side-panel or the popup. Default "sidepanel" matches modern
 // wallet UX (MetaMask Flask, Phantom, Rabby).
@@ -37,13 +36,23 @@ export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
 export const SESSION_KEY_WALLET_LOCKED = "walletLocked";
 export const SESSION_KEY_UNLOCK_FAIL_COUNT = "unlockFailCount";
 export const SESSION_KEY_UNLOCK_LOCKOUT_UNTIL = "unlockLockoutUntil";
-// Round 4 TASK 2 — MEK (master encryption key) cache for cross-SW-
+// MEK (master encryption key) cache for cross-SW-
 // hibernation rehydrate. chrome.storage.session is in-memory only and
 // cleared on browser restart, so this never persists to disk. On SW
 // reboot, keystore-mldsa.ts reads this back and unwraps the active
 // vault without prompting for the password. Cleared on lock /
 // auto-lock fire / wipe.
 export const SESSION_KEY_MEK_V4 = "mono.session.mek.v4";
+// T1-03 (Item B) — hard cap on the password-less session-MEK rehydrate window,
+// independent of the (user-configurable, up to 60 min) auto-lock window. The
+// deadline is written when the MEK is persisted AND refreshed on every genuine
+// user action (resetAutoLock), so the window slides to "MEK_REHYDRATE_MAX_MINUTES
+// since last activity". Once past it, tryRestoreFromSessionV4 refuses and wipes
+// the session MEK, forcing a fresh password unlock. Bounds the local/evil-maid
+// re-unlock window without retyping the password during continuous use.
+export const SESSION_KEY_MEK_REHYDRATE_DEADLINE =
+  "mono.session.mek.rehydrate.deadline";
+export const MEK_REHYDRATE_MAX_MINUTES = 5;
 
 // Highest threshold first so lockoutMsFor() returns the longest matching window.
 export const LOCKOUT_THRESHOLDS = [
@@ -59,8 +68,8 @@ export const LOCKOUT_THRESHOLDS = [
 // keepalives) OR if the handler itself calls resetAutoLock()
 // explicitly (keystore-* ops self-manage).
 //
-// Round 12 TASK 5 — the regression the user reported as "autolock
-// broken again": Round 7 + Round 11 added revoke-* and contacts-add/
+// Fixes the regression where actively clicking Revoke or editing contacts
+// did not extend the auto-lock deadline: an earlier change added revoke-* and contacts-add/
 // remove/rename to this set with the rationale "labelling shouldn't
 // bump." That rationale was wrong from a user-perspective POV: when
 // the user is actively clicking Revoke on Connected Sites or editing
@@ -94,24 +103,24 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "wallet-indexer-snapshot",
   "sprintnet-operators-get",
   "sprintnet-operators-health",
-  // Phase 11 Commit 2 — WS infra polls are passive: status reads and
+  // WS infra polls are passive: status reads and
   // fire-and-forget subscribe don't represent user activity.
   "ws-status",
   "ws-subscribe-new-heads",
-  // Phase 11 Commit 3 — AddressActivityKind probe is passive metadata
+  // AddressActivityKind probe is passive metadata
   // (used by the activity feed to render empty-state context).
   "wallet-activity-kind",
   "list-pending",
   "get-pending",
   "focus-approval",
   // ConnectedSites: list is the passive surface mount; revoke ops
-  // are USER ACTIONS — Round 12 moved them OUT of exempt.
+  // are USER ACTIONS — they are excluded from the exempt set.
   "list-connected-sites",
-  // Round 12 TASK 5 — contacts-list + contacts-check stay exempt
+  // contacts-list + contacts-check stay exempt
   // (read-only surface mounts: contact list rendering, address-book
   // lookup during send-tx address resolution). contacts-add /
-  // contacts-rename / contacts-remove are USER ACTIONS — Round 12
-  // moved them OUT of exempt.
+  // contacts-rename / contacts-remove are USER ACTIONS and are
+  // excluded from the exempt set.
   "contacts-list",
   "contacts-check",
   "keystore-unlock",

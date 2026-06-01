@@ -1,6 +1,6 @@
-// Phase 11 Commit 6 — Cluster-detail panel.
+// Cluster-detail panel.
 //
-// Phase 7.1 wired three chain readers behind the staking-client surface
+// The staking-client surface wired three chain readers
 // but only one UI consumer (StakeForm's ClusterPicker, which renders an
 // inline expand-row). This page assembles all of the data on a single
 // dedicated screen:
@@ -368,7 +368,7 @@ function DiversityBar({
 }
 
 function ClusterStatusCard({ status }: { status: ClusterStatus }) {
-  // R16 Task A — per-operator info (self-bond + lifecycle) fetched
+  // Per-operator info (self-bond + lifecycle) fetched
   // lazily after the cluster's member list arrives. Cache is
   // component-local; remounting the panel re-fetches. Per-operator
   // bond is unique and not mock-fallbacked — failed fetches render
@@ -377,10 +377,9 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
     () => new Map(),
   );
 
-  // R16 Task B — cluster-level service-tier aggregation across member
-  // operators (any-true semantics per
-  // _dev-notes/browser-wallet/active-nayiem-pings.md PING #11). If
-  // chain ships ClusterDirectoryEntry.serviceTiers as an aggregate
+  // Cluster-level service-tier aggregation across member
+  // operators (any-true semantics).
+  // If chain ships ClusterDirectoryEntry.serviceTiers as an aggregate
   // field, this whole probe fan-out drops to a single directory read.
   const [serviceTiers, setServiceTiers] = useState<ClusterServiceTiers | null>(
     null,
@@ -434,7 +433,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
         label="Last update height"
         value={status.lastUpdateHeight}
       />
-      {/* R18 — chain-real reputation + liveness scores (§14 + §28.3).
+      {/* Chain-real reputation + liveness scores (§14 + §28.3).
           Currently null on Sprintnet testnet; rows hidden until chain
           populates non-null. Per no-mock-fallback principle, no
           synthesized placeholder. */}
@@ -503,7 +502,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
                   fontSize: 10,
                   flexShrink: 0,
                 }}
-                title="Operator self-bond (V4.1-BOND-0001 5,000 LYTH floor)"
+                title="Operator self-bond (5,000 LYTH chain-enforced floor)"
               >
                 {formatBondLyth(operatorInfo.get(m.operatorId))}
               </span>
@@ -532,7 +531,7 @@ function formatBondLyth(info: WalletOperatorInfo | undefined): string {
   return `${whole.toLocaleString()} L`;
 }
 
-/** R16 Task B — small horizontal badge row for cluster-level service
+/** Small horizontal badge row for cluster-level service
  *  tier aggregates. Active tiers light up; inactive tiers render as
  *  muted dots so the row's width stays stable across clusters. */
 function ServiceTierBadgeRow({ tiers }: { tiers: ClusterServiceTiers }) {
@@ -585,9 +584,9 @@ function ServiceTierBadgeRow({ tiers }: { tiers: ClusterServiceTiers }) {
  *  previous wallet-internal mapping (`"live"` / `"lagging"` /
  *  `"maintenance"`) never matched chain output, so every active operator
  *  rendered as the red default. `"active"`/`"jailed"`/`"offline"` map to
- *  distinct colours; `"standby"` and anything chain adds later (PING #11
- *  — formal enum) fall through to the muted-fg dot rather than the
- *  alarming red. A dedicated standby colour is a flagged PING #11 UX
+ *  distinct colours; `"standby"` and anything chain adds later
+ *  fall through to the muted-fg dot rather than the
+ *  alarming red. A dedicated standby colour is a flagged UX
  *  follow-up. */
 function StateChip({ state }: { state: string }) {
   const colour =

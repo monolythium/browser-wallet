@@ -1,4 +1,4 @@
-// Phase 11 Commit 5 — operator risk classification.
+// Operator risk classification.
 //
 // Chain commit 017cab9 ("Operator pending-change risk previews")
 // shipped server-side preview computation; the SDK at @0fd8a79 doesn't
@@ -7,10 +7,10 @@
 // `lyth_publicServiceProbe` reader would surface.
 //
 // Until those readers land in the SDK, the wallet derives risk flags
-// from the data the per-operator probe already collects (Phase 7.1):
+// from the data the per-operator probe already collects:
 // genesis verification, capability surface, indexer lag, latency, error
 // state. This module is the single classification surface; the About
-// page renders the badges, the cluster detail page (Commit 6) renders
+// page renders the badges, the cluster detail page renders
 // the same badges, and the legend in About explains them.
 //
 // Whitepaper alignment:
@@ -24,7 +24,7 @@
 //              from the About-page legend).
 
 /** Possible risk classes. Each maps to a one-line "why this matters"
- *  in the About-page legend (Commit 5 ships the legend; the wallet
+ *  in the About-page legend (the wallet
  *  surfaces the badges throughout). */
 export type OperatorRiskKind =
   | "untrusted-genesis"
@@ -66,7 +66,7 @@ export interface OperatorRiskInput {
   } | null;
 }
 
-/** Threshold for "high latency" — Phase 7.1 probe budget is 4 s, so
+/** Threshold for "high latency" — the probe budget is 4 s, so
  *  3 s + is the warning band. */
 export const HIGH_LATENCY_MS = 3000;
 
@@ -191,8 +191,8 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
     label: "Untrusted genesis",
     body:
       "Operator's chain genesis doesn't match the wallet's pinned " +
-      "Sprintnet genesis. The wallet's RPC dispatcher excludes operators " +
-      "with mismatched genesis (GAP #11 orphan-fork defense).",
+      "Monolythium Testnet genesis. The wallet's RPC dispatcher excludes operators " +
+      "with mismatched genesis (orphan-fork defense).",
   },
   {
     kind: "transport-error",

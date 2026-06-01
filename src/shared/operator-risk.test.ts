@@ -1,4 +1,4 @@
-// Phase 11 Commit 5 — operator-risk classifier tests.
+// operator-risk classifier tests.
 
 import { describe, expect, it } from "vitest";
 import {

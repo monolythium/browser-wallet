@@ -21,33 +21,33 @@ interface SettingsProps {
   /** Routes to the RevealPhrase page. v4 strict guarantees every vault
    *  is revealable, so this is always wired. */
   onShowPhrase: () => void;
-  /** Routes to the ConnectedSites page (Phase 4.2.2). */
+  /** Routes to the ConnectedSites page. */
   onShowConnectedSites: () => void;
   /** Routes to the ResetWallet page (destructive). */
   onResetWallet: () => void;
-  /** Routes to the Sprintnet operators sub-page (Phase 4.3). */
+  /** Routes to the Sprintnet operators sub-page. */
   onOpenOperators: () => void;
   /** Routes to the NotificationSettings sub-page (the four notification
    *  toggles, relocated behind "Manage notifications"). */
   onOpenNotificationSettings: () => void;
   /** Routes to the MRV native contract plan preview surface. */
   onOpenMrvNative: () => void;
-  /** Routes to the About page (Phase 6 commit 4) — version stack,
+  /** Routes to the About page — version stack,
    *  operator health, genesis hash, §28.5 differentiation pitch. */
   onOpenAbout: () => void;
-  /** Routes to the Delegations dashboard (Phase 7 commit 6) — active
+  /** Routes to the Delegations dashboard — active
    *  stake breakdown, pending rewards, unstake / redelegate / claim
    *  actions per §23. */
   onOpenDelegations: () => void;
-  /** Phase 9 commit 3 — routes to the Security page (passkey policy
+  /** Routes to the Security page (passkey policy
    *  authoring per §28.5 Q30+Q31). Optional so legacy callers / non-
    *  ML-DSA states render without it; when present, Settings shows
    *  the "Passkey policy" card. */
   onOpenSecurity?: () => void;
-  /** Phase 9 commit 5 — routes to the Features page (two-tier UX
+  /** Routes to the Features page (two-tier UX
    *  toggles per §28.5 Q29). Optional for the same reasons. */
   onOpenFeatures?: () => void;
-  /** Phase 8 — passed only when the active vault is a multisig vault.
+  /** Passed only when the active vault is a multisig vault.
    *  When set, Settings renders the Multisig card with M-of-N pill +
    *  pending count + entry points to the Pending dashboard and
    *  Governance pages. */
@@ -62,7 +62,7 @@ interface SettingsProps {
 
 const ALGO_LABEL: Record<SignAlgo, string> = {
   mldsa: "ML-DSA-65 (post-quantum)",
-  slhdsa: "SLH-DSA-128s (post-quantum)",
+  slhdsa: "SLH-DSA-SHA2-128s (post-quantum)",
   secp256k1: "secp256k1 (legacy)",
 };
 
@@ -96,7 +96,7 @@ export function Settings({
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
   const [savingAutoLock, setSavingAutoLock] = useState(false);
 
-  // Round 4 TASK 4 — UI open mode preference.
+  // UI open mode preference.
   const [uiMode, setUiMode] = useState<UiOpenMode | null>(null);
   const [savingUiMode, setSavingUiMode] = useState(false);
   const [uiModePending, setUiModePending] = useState(false);
@@ -105,7 +105,7 @@ export function Settings({
   // localStorage by applyTheme). "monolythium" renders the native palette.
   const [themeId, setThemeId] = useState<string>(readTheme);
 
-  // Round 6 TASK 6 — Account section inline copy state.
+  // Account section inline copy state.
   const [addrCopied, setAddrCopied] = useState(false);
   const handleAddrCopy = (e: ReactMouseEvent) => {
     e.stopPropagation();
@@ -184,7 +184,7 @@ export function Settings({
       </div>
 
       <div className="ext-body">
-        {/* Round 6 TASK 6 — Account section compacted. Row gap was 8 px
+        {/* Account section compacted. Row gap was 8 px
             with the address+copy on two stacked rows (RevealableAddressBlock
             renders the AddressLine + a separate copy button below). Now
             the address sits inline with a copy button (single row),
@@ -296,7 +296,7 @@ export function Settings({
           </div>
         </div>
 
-        {/* Round 6 TASK 7 — section order: Account, Multisig (conditional),
+        {/* Section order: Account, Multisig (conditional),
            Staking, Security, Developer tools, Network operators, About.
            Multisig kept in slot 2 (account-adjacent) since the spec didn't
            mention it but its content is logically about access control on
@@ -544,7 +544,7 @@ export function Settings({
             })}
           </div>
 
-          {/* Round 4 TASK 4 — Window mode toggle. Persists via
+          {/* Window mode toggle. Persists via
              bgSetUiOpenMode; SW re-binds chrome.action / chrome.sidePanel
              immediately. The hint below appears after a successful switch
              since the current surface keeps its open mode until next
@@ -805,7 +805,7 @@ export function Settings({
             }}
           >
             Preview MRV native contract deploy and call transaction plans with
-            v4.1 execution-unit and lythoshi fee fields.
+            execution-unit and lythoshi fee fields.
           </div>
           <button
             onClick={onOpenMrvNative}

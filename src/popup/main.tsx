@@ -2,7 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { applyTheme, readTheme } from "./theme";
 
-// Round 5 TASK 1 — runtime mode discriminator. Round 4's heuristic
+// Runtime mode discriminator. The earlier viewport heuristic
 // (h > 700 || w > 460) failed on shorter browser windows: a 720-pixel
 // browser opens the side panel at ~700 px tall, falling under the
 // height threshold AND under the width threshold, so detection
@@ -19,7 +19,7 @@ import { applyTheme, readTheme } from "./theme";
 // CSS branches on the stamped attribute:
 //   html[data-mode="popup"]     → fixed 380×620 frame
 //   html[data-mode="sidepanel"] → 100% width / 100vh, fills the panel
-// Round 8 TASK 3 — adds "fullscreen" as a third surface. Opened via
+// Adds "fullscreen" as a third surface. Opened via
 // chrome.tabs.create with ?mode=fullscreen so the same React app
 // runs in a regular Chrome tab. CSS branches on data-mode the same
 // way as popup / sidepanel.
@@ -35,7 +35,7 @@ function detectMode(): "popup" | "sidepanel" | "fullscreen" {
     // heuristic below.
   }
   // Fallback: anything taller than the popup's 620 px ceiling is the
-  // side panel. Tighter than the Round 4 threshold so shorter
+  // side panel. Tighter than the earlier threshold so shorter
   // browsers (~720 px tall) still get the right mode.
   if (window.innerHeight > 640) return "sidepanel";
   return "popup";

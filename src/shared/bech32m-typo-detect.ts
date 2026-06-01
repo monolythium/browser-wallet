@@ -1,4 +1,4 @@
-// Phase 11 Commit 7 — bech32m typo detection.
+// bech32m typo detection.
 //
 // A user copying a `mono1...` address from a chat or QR can introduce
 // a single-character typo. The full address fails bech32m checksum

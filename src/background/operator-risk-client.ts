@@ -1,21 +1,21 @@
-// Phase 11.5 Commit 5 — chain reader for `lyth_operatorRisk`
+// Chain reader for `lyth_operatorRisk`
 // (MD-CORE-0006 / mono-core @dd05511, ref 017cab9 operator
 // pending-change risk previews).
 //
-// Scope swap from the original Phase 11.5 task (which named
+// Scope swap from the original task (which named
 // `lyth_getServiceProbe`):
 //
 //   lyth_getServiceProbe(peerId: [u8;32], serviceMask: u32) requires
 //   a 32-byte node-registry peer id per row. The wallet's Operators
 //   page surfaces RPC URLs; there is no peerId attached to them and
 //   resolving one would mean chaining lyth_listProviders or
-//   lyth_peerSummary per row, which is out of scope for Phase 11.5.
+//   lyth_peerSummary per row, which is out of scope here.
 //
 //   lyth_operatorRisk is the sibling MD-CORE-0006 surface (same
 //   commit family — 017cab9) that delivers the same intent — "real
 //   chain-side operator health" — without needing a separate peerId
 //   resolution. It is keyed on consensus authority index (u16), so
-//   it slots into the same pattern as Commit 3's signing-activity
+//   it slots into the same pattern as the signing-activity
 //   reader. The chain-wide single-authority sample is documented
 //   in the popup's card title so users don't misread it as per-RPC
 //   attribution.

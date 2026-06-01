@@ -11,6 +11,7 @@
 /// renders "to private space" rather than a counterparty.
 
 import { Icon } from "../../Icon.js";
+import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { CrossingToPrivateRow } from "../../../shared/activity.js";
 
 export interface CrossingToPrivateRowBodyProps {
@@ -44,9 +45,9 @@ export function CrossingToPrivateRowBody({ row }: CrossingToPrivateRowBodyProps)
           Sent {row.amountDecimal ?? "?"} LYTH to private space
         </div>
         <div className="ext-act-row__meta">
-          <span>block {row.blockHeight.toLocaleString("en-US")}</span>
+          <span>{txTypeLabel(row)}</span>
           <span>·</span>
-          <span>tx {row.txIndex}</span>
+          <span>block {row.blockHeight.toLocaleString("en-US")}</span>
           <span>·</span>
           <span>crossing</span>
         </div>

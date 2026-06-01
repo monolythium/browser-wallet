@@ -1,4 +1,4 @@
-// Phase 7 — AutovoteSelector. Renders the §23.9 four-button taxonomy
+// AutovoteSelector. Renders the §23.9 four-button taxonomy
 // as a 2×2 grid of mode pills with active-mode indicator + per-mode
 // description tooltip. The whitepaper calls out the default-UI
 // commitment: "the chain rewards diversification, and the wallet should

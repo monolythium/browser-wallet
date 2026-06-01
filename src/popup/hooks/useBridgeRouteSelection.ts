@@ -217,7 +217,7 @@ function bridgeRouteChoiceBlockedReasons(
     return ["no SDK-shaped bridge route disclosures supplied"];
   }
   if (selected === null) {
-    return ["no SDK-ranked bridge route satisfies the v4.1 disclosure floor"];
+    return ["no SDK-ranked bridge route satisfies the disclosure floor"];
   }
   return [];
 }

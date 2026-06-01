@@ -38,7 +38,7 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
 const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
-// Phase 2 — mock the OS notification + badge layer so existing tests
+// Mock the OS notification + badge layer so existing tests
 // don't have to stub chrome.notifications + chrome.action. The Phase-2
 // behavior (toast / badge / click) is unit-tested in notifications-os.test.ts;
 // this mock just keeps the SW import graph happy and lets the dedupe test
@@ -46,7 +46,9 @@ const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
 const mockFireOsNotification = vi.hoisted(() => vi.fn(async () => {}));
 const mockRefreshUnreadBadge = vi.hoisted(() => vi.fn(async () => {}));
 const mockInstallNotificationsClickListener = vi.hoisted(() => vi.fn(() => {}));
-// GAP-N1 C3 — presence probe. Default false (closed) so existing tests
+// Item 7c — incoming-toast toggle. Default ON; the toggle-OFF test overrides.
+const mockGetIncomingEnabled = vi.hoisted(() => vi.fn(async () => true));
+// Presence probe. Default false (closed) so existing tests
 // record read:false (today's behavior); C3 tests override per-case.
 const mockIsWalletSurfaceOpen = vi.hoisted(() => vi.fn(async () => false));
 vi.mock("./notifications-os.js", () => ({
@@ -54,9 +56,10 @@ vi.mock("./notifications-os.js", () => ({
   refreshUnreadBadge: mockRefreshUnreadBadge,
   installNotificationsClickListener: mockInstallNotificationsClickListener,
   isWalletSurfaceOpen: mockIsWalletSurfaceOpen,
+  getIncomingEnabled: mockGetIncomingEnabled,
 }));
 
-const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
+const DETERMINISTIC_ADDRESS = DETERMINISTIC_TEST_ADDRESS;
 const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
   "smartAccount",
   DETERMINISTIC_ADDRESS,
@@ -93,7 +96,7 @@ interface CapturedRpcCall {
   params: unknown[];
 }
 const rpcCalls: CapturedRpcCall[] = [];
-// Capture of submitEncryptedMlDsaTx argument objects — used by the Phase 1.5
+// Capture of submitEncryptedMlDsaTx argument objects — used by the
 // metadata-only invariant test (assert opKind never reaches the signer).
 const submitMlDsaCalls: Record<string, unknown>[] = [];
 let rpcResponses: Record<string, unknown> = {};
@@ -118,6 +121,7 @@ vi.mock("./tx-mldsa.js", () => ({
   }),
   sprintnetMaxBalanceConsensus: vi.fn(async (_address: string) => ({
     balanceHex: "0x0",
+    spendGuardHex: "0x0",
     contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
     failing: [],
   })),
@@ -209,9 +213,9 @@ const NO_EVM_RECEIPT_PROOF = {
   blockHash: "0x" + "1".repeat(64),
   txHash: SUBMITTED_TX_HASH,
   receiptsRoot:
-    "0x73d29f250b2f46be15d1ad19c5dc039449e5236e47c9662266ca13b71ed84928",
+    NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   targetReceiptHash:
-    "0xe4cfff110d648eb1821542b3805ded1e3df86e85b26cc19021f55168ed1a2ede",
+    NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
   blockHeight: 100,
   txIndex: 1,
   receiptCount: 2,
@@ -333,6 +337,8 @@ vi.mock("./networks.js", () => ({
     chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase(),
   ),
   SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
+  // T4-04 fee ceiling — real value so the clamp tests are meaningful.
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: 1_000_000_000_000_000n,
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
   BUILTIN_CHAINS: [
     {
@@ -350,27 +356,34 @@ vi.mock("./networks.js", () => ({
   getActiveOperators: vi.fn(() => []),
 }));
 
-// Keystore (v2 + v4) — fixed unlocked address, never actually signs.
+// Keystore (v4) — fixed unlocked address, never actually signs. The
+// `computeTypedDataDigest` helper now lives in ./typed-data.js (pure, no
+// chrome dependency) and runs for real — no mock needed.
 let unlocked = true;
-vi.mock("./keystore.js", () => ({
-  hasVault: vi.fn(async () => true),
-  hasLegacyVault: vi.fn(async () => false),
-  getStoredAddress: vi.fn(async () => DETERMINISTIC_ADDRESS),
-  getUnlockedAddress: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
-  isUnlocked: vi.fn(() => unlocked),
-  lock: vi.fn(() => {
-    unlocked = false;
-  }),
-  unlock: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
-  personalSign: vi.fn(() => new Uint8Array(65)),
-  signTypedDataV4: vi.fn(() => new Uint8Array(65)),
-  computeTypedDataDigest: vi.fn(() => new Uint8Array(32)),
-}));
+// T1-04(a) passkey-cap gate controls. Default INERT (no active passkey
+// vault) so every existing send test behaves exactly as before the gate.
+let activePasskeyVaultId: string | null = null;
+let passkeyStateForTest: unknown = {
+  policy: { enabled: false, mode: "per-tx", limitWei: 0n },
+  credentials: [],
+};
+let correctElevatedPassword = "correct-horse-battery-staple";
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
-  getStoredAddressV4: vi.fn(async () => DETERMINISTIC_ADDRESS),
+  hasContainerV4: vi.fn(async () => true),
+  unlockContainerV4: vi.fn(async () => ({
+    address: DETERMINISTIC_ADDRESS,
+    vaultId: "v1",
+  })),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
+  // T1-04(a) passkey-cap gate seams. Default-inert (null active vault).
+  getActiveVaultIdV4: vi.fn(() => activePasskeyVaultId),
+  readPasskeyStateV4: vi.fn(async () => passkeyStateForTest),
+  verifyContainerPasswordV4: vi.fn(
+    async (pw: string) => pw === correctElevatedPassword,
+  ),
+  tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
   unlockV4: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
   lockV4: vi.fn(() => {
@@ -429,10 +442,11 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
     ],
-    // GAP #11: shared/build-info.ts reads TESTNET_69420.genesis_hash at
+    // shared/build-info.ts reads TESTNET_69420.genesis_hash at
     // module init; stub just the fields the wallet actually reads.
     TESTNET_69420: {
       chain_id: 69420,
+      // genesis_hash stub — mirrors __fixtures__ TESTNET_69420_GENESIS_HASH_STUB (inline: hoisted vi.mock factory).
       genesis_hash:
         "0xe67cf82131fc63e335ce61afeae53299283eaa3a692830a618911aa840245031",
     },
@@ -441,6 +455,11 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
 
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import { ALARM_NOTIF_POLL } from "../shared/constants.js";
+import {
+  DETERMINISTIC_TEST_ADDRESS,
+  NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
+  NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
+} from "../shared/__fixtures__/golden.js";
 import { submitEncryptedMlDsaTx, submitPlaintextMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -459,7 +478,7 @@ const onChangedListeners: Array<
 > = [];
 let storageLocal: Record<string, unknown> = {};
 let storageSession: Record<string, unknown> = {};
-// GAP-N1 — capture chrome.alarms listeners + create/clear calls so the
+// Capture chrome.alarms listeners + create/clear calls so the
 // notif-poll alarm lifecycle is testable. Listeners are registered once at
 // SW import (beforeAll) and persist; the call arrays reset per test.
 const capturedAlarmListeners: Array<(alarm: { name: string }) => void> = [];
@@ -544,6 +563,8 @@ function installChromeStub(): void {
       },
       onInstalled: { addListener: vi.fn() },
       getURL: (p: string) => `chrome-extension://test/${p}`,
+      // T2-02 — the router authenticates sender.id against this.
+      id: "test",
     },
     tabs: {
       query: (_f: unknown, cb: (tabs: unknown[]) => void) => {
@@ -585,7 +606,11 @@ interface RpcEnvelope {
 async function dispatchPopup(envelope: PopupEnvelope): Promise<unknown> {
   if (!capturedOnMessage) throw new Error("SW did not register onMessage handler");
   return new Promise((resolve) => {
-    capturedOnMessage!(envelope, {}, resolve);
+    capturedOnMessage!(
+      envelope,
+      { id: "test", url: "chrome-extension://test/src/popup/index.html" },
+      resolve,
+    );
   });
 }
 
@@ -602,7 +627,7 @@ async function dispatchRpc(
       args: { method, params },
       origin,
     };
-    const handled = capturedOnMessage!(envelope, {}, (response: unknown) => {
+    const handled = capturedOnMessage!(envelope, { id: "test" }, (response: unknown) => {
       resolve(response as { result?: unknown; error?: { code: number; message: string } });
     });
     if (handled !== true) {
@@ -627,12 +652,21 @@ beforeEach(() => {
   mockRefreshUnreadBadge.mockClear();
   mockIsWalletSurfaceOpen.mockClear();
   mockIsWalletSurfaceOpen.mockResolvedValue(false);
+  mockGetIncomingEnabled.mockClear();
+  mockGetIncomingEnabled.mockResolvedValue(true);
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   unlocked = true;
+  // Reset the passkey-cap gate to inert unless a test opts in.
+  activePasskeyVaultId = null;
+  passkeyStateForTest = {
+    policy: { enabled: false, mode: "per-tx", limitWei: 0n },
+    credentials: [],
+  };
+  correctElevatedPassword = "correct-horse-battery-staple";
   storageLocal = {};
   storageSession = {};
   alarmCreateCalls.length = 0;
@@ -645,6 +679,36 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// keystore-status — locked address privacy (top-tier)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("keystore-status address privacy", () => {
+  it("returns the active address when unlocked", async () => {
+    unlocked = true;
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-status" })) as {
+      hasVault: boolean;
+      unlocked: boolean;
+      address: string | null;
+    };
+    expect(r.hasVault).toBe(true);
+    expect(r.unlocked).toBe(true);
+    expect(r.address).toBe(DETERMINISTIC_ADDRESS);
+  });
+
+  it("returns a null address when locked (never resolves the address while locked)", async () => {
+    unlocked = false;
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-status" })) as {
+      hasVault: boolean;
+      unlocked: boolean;
+      address: string | null;
+    };
+    expect(r.hasVault).toBe(true);
+    expect(r.unlocked).toBe(false);
+    expect(r.address).toBeNull();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1300,7 +1364,7 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: "0x1" },
     })) as { ok: false; reason?: string };
     expect(r.ok).toBe(false);
-    expect(r.reason).toContain("Sprintnet");
+    expect(r.reason).toContain("Monolythium Testnet");
   });
 
   it("first call: fetches, validates, merges, persists", async () => {
@@ -1436,7 +1500,12 @@ describe("wallet-activity-get", () => {
     };
   }
 
-  it("evicts a pending row when lyth_txStatus reports the canonical hash found", async () => {
+  it("BRIDGE: keeps a receipt-confirmed pending row visible when the indexer hasn't surfaced it yet (no vanish)", async () => {
+    // The receipt confirms (lyth_txStatus found) but the indexer's success
+    // stream hasn't indexed the activity row in this snapshot. Dropping it now
+    // would make the tx vanish (pending gone, confirmed not yet indexed) — so
+    // it's bridged: kept in pending (still rendered, poll still alive) until
+    // the indexer surfaces the canonical confirmed row (next test).
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
     seedPending("0x" + "ab".repeat(32));
@@ -1446,7 +1515,45 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     })) as { ok: true; pending: unknown[] };
     expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+  });
+
+  it("BRIDGE: drops the bridged row once the indexer surfaces the canonical tx_send", async () => {
+    // Indexer now returns the matching tx_send (out, 0.01 LYTH = 1_000_000
+    // lythoshi, to 0xrecipient, at the broadcast anchor) → reconcilePending
+    // drops the pending row and the real confirmed row renders. No duplicate.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 100,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "out",
+        counterparty: "0xrecipient",
+        tokenId: null,
+        amount: "1000000",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 100 };
+    seedPending("0x" + "ab".repeat(32));
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      pending: unknown[];
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
     expect(r.pending).toHaveLength(0);
+    expect(r.cache.confirmed.some((c) => c.kind === "tx_send")).toBe(true);
   });
 
   it("keeps a pending row when lyth_txStatus is not_found and no receipt (graceful)", async () => {
@@ -1483,7 +1590,7 @@ describe("wallet-activity-get", () => {
     });
   }
 
-  it("F1: with a FRESH cache + pending, bypasses the short-circuit and clears a confirmed pending", async () => {
+  it("F1: with a FRESH cache + pending, bypasses the short-circuit + re-fetches; a receipt-confirmed row is bridged until the indexer surfaces it", async () => {
     await primeFreshCache();
     const callsAfterPrime = rpcCalls.length;
     // Cache is fresh (<30s). Seed a pending row + a 'found' status.
@@ -1496,10 +1603,11 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     })) as { ok: true; pending: unknown[] };
     expect(r.ok).toBe(true);
-    // Reconciled despite the fresh cache → the short-circuit was bypassed.
-    expect(r.pending).toHaveLength(0);
-    // And it actually re-fetched (did not serve from cache).
+    // It actually re-fetched (did not serve from the fresh cache) → F1 bypass.
     expect(rpcCalls.length).toBeGreaterThan(callsAfterPrime);
+    // Confirmed via the receipt but not yet in the (empty) indexer snapshot →
+    // bridged (kept visible), not vanished.
+    expect(r.pending).toHaveLength(1);
   });
 
   it("F1: with a FRESH cache + pending, a status:0 receipt records 'failed' — never confirmed (#5117)", async () => {
@@ -1543,12 +1651,12 @@ describe("wallet-activity-get", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Phase 1 notifications — post-write microtask hook fires one
+  // Notifications — post-write microtask hook fires one
   // NotificationRecord per tracked-tx terminal transition. The §0.2 invariant
   // ("status from the real on-chain receipt, never optimism") is the most
   // load-bearing assertion: a `status:0` receipt MUST be stored as
   // `status:"failed"`, never coerced to confirmed. TTL-evicted rows must
-  // never fire. See _dev-notes/.../2026-05-30_notifications-phase1-plan.md.
+  // never fire.
   // ───────────────────────────────────────────────────────────────────────────
 
   /** Drain the microtask + storage stub callback queues. The hook is a
@@ -1690,7 +1798,7 @@ describe("wallet-activity-get", () => {
     expect(hist).toBeDefined();
     expect(hist!.entries).toHaveLength(1);
     // THE invariant: a status:0 receipt is stored as "failed", not coerced
-    // to "confirmed". This is the MetaMask #5117 hazard Phase 2's toast
+    // to "confirmed". This is the MetaMask #5117 hazard the OS toast
     // would otherwise reproduce.
     expect(hist!.entries[0]?.status).toBe("failed");
     expect(hist!.entries[0]?.kind).toBe("contract_call");
@@ -1776,7 +1884,7 @@ describe("wallet-activity-get", () => {
     const ids = (storageLocal[NOTIF_NOTIFIED_KEY] as { ids: string[] }).ids;
     expect(ids).toHaveLength(1);
     expect(ids[0]).toBe(`${TESTNET_CHAIN_ID_HEX}:${txHash}`);
-    // Phase 2 — the OS toast fires ONLY on added:true, so two snapshots
+    // The OS toast fires ONLY on added:true, so two snapshots
     // of the same tx produce exactly ONE fireOsNotification call (no
     // double toast). The badge refresh runs once per snapshot batch
     // that added something — only the first snapshot adds, so only one
@@ -1785,7 +1893,7 @@ describe("wallet-activity-get", () => {
     expect(mockRefreshUnreadBadge).toHaveBeenCalledTimes(1);
   });
 
-  it("hook prefers row.opKind over the coarse fallback (Phase 1.5 — kind:'delegate' carried through)", async () => {
+  it("hook prefers row.opKind over the coarse fallback (kind:'delegate' carried through)", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "not_found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 555 };
@@ -2238,7 +2346,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // Phase 1.5 — opKind tagging. opKind is pending-row metadata only; it
+  // opKind tagging. opKind is pending-row metadata only; it
   // must NEVER reach submitEncryptedMlDsaTx's argument object (the signed
   // tx bytes / ML-DSA-65 signature / encrypted envelope / nonce / fee /
   // gas must be identical with or without opKind).
@@ -2354,6 +2462,55 @@ describe("wallet-send-tx pending-row prepend", () => {
     const withoutOp = submitMlDsaCalls[0]!;
     expect(withoutOp).toBeDefined();
     expect(withoutOp).toEqual(withOp);
+  });
+
+  it("cluster metadata rides through to the pending row; malformed values dropped", async () => {
+    storageLocal = {};
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      opKind: "delegate",
+      clusterId: 1,
+      clusterName: "halcyon.cluster.mono",
+    });
+    const persisted = storageLocal[PENDING_KEY] as {
+      pending: Array<{ clusterId?: number; clusterName?: string }>;
+    };
+    expect(persisted.pending[0]?.clusterId).toBe(1);
+    expect(persisted.pending[0]?.clusterName).toBe("halcyon.cluster.mono");
+
+    // Malformed cluster fields are dropped (defense in depth).
+    storageLocal = {};
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      clusterId: "nope" as unknown as number,
+      clusterName: 42 as unknown as string,
+    });
+    const p2 = storageLocal[PENDING_KEY] as {
+      pending: Array<Record<string, unknown>>;
+    };
+    expect("clusterId" in p2.pending[0]!).toBe(false);
+    expect("clusterName" in p2.pending[0]!).toBe(false);
+  });
+
+  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitEncryptedMlDsaTx", async () => {
+    submitMlDsaCalls.length = 0;
+    storageLocal = {};
+    await dispatchSend({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      opKind: "delegate",
+      clusterId: 3,
+      clusterName: "polar.cluster.mono",
+    });
+    const arg = submitMlDsaCalls[0]!;
+    expect(arg).toBeDefined();
+    expect("clusterId" in arg).toBe(false);
+    expect("clusterName" in arg).toBe(false);
   });
 });
 
@@ -3997,12 +4154,41 @@ describe("get-block-tx-value", () => {
   });
 });
 
-// GAP-N1 C1 — the headless poll-core. Drives `pollPendingAndNotify`
+// C3 — wallet-tx-fee: on-demand native-receipt LYTH fee for the activity-detail
+// popup (indexer rows have no persisted fee).
+describe("wallet-tx-fee", () => {
+  it("returns the native-receipt fee (lythoshi) for a tx", async () => {
+    rpcResponses["lyth_nativeReceipt"] = {
+      fee: { total_lythoshi: "600000" },
+      reverted: false,
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "1".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.ok).toBe(true);
+    expect(r.feeLythoshi).toBe("600000");
+  });
+
+  it("returns null when the native receipt is unavailable / zero (honest-absence)", async () => {
+    // No seeded lyth_nativeReceipt → the mock throws -32601 → best-effort null.
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "2".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.ok).toBe(true);
+    expect(r.feeLythoshi).toBeNull();
+  });
+});
+
+// The headless poll-core. Drives `pollPendingAndNotify`
 // directly against the in-memory chrome stub: seeds a pending row, seeds
 // the receipt RPC, and asserts detect→record→toast→badge + write-back.
 // `recordNotification` is the REAL store (notifications-store.js is NOT
 // mocked); `fireOsNotification`/`refreshUnreadBadge` are the hoisted mocks.
-describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
+describe("pollPendingAndNotify — headless poll-core", () => {
   const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
   const CHAIN = TESTNET_CHAIN_ID_HEX;
   const pendingKey = (addr: string, chain: string) =>
@@ -4049,9 +4235,8 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
   it("failed pending → recorded as FAILED, never confirmed (#5117)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
-    // lyth_txStatus does NOT report a failed tx as "found" (indexer surfaces
-    // only confirmed) → falls through to the receipt, whose status is the
-    // authoritative verdict.
+    // not_found → falls through to the receipt, whose status bit is the
+    // authoritative verdict (0 ⇒ failed).
     rpcResponses["lyth_txStatus"] = { status: "not_found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: 0, block_number: 123 };
 
@@ -4063,6 +4248,125 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
     expect(hist.entries).toHaveLength(1);
     expect(hist.entries[0]!.status).toBe("failed");
     expect(hist.entries[0]!.status).not.toBe("confirmed");
+  });
+
+  it("found-but-reverted tx → recorded as FAILED via the receipt status bit (found != confirmed)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    // The chain reports a reverted tx as "found" — it WAS included in a block;
+    // inclusion is not success. The receipt status bit (0x0) is authoritative,
+    // so the row must be recorded FAILED, not "confirmed" (the bug that toasted
+    // "Staked" for a reverted stake).
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 456 };
+
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string; blockNumber: number | null }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("failed");
+    expect(hist.entries[0]!.blockNumber).toBe(456);
+  });
+
+  it("found tx with no available receipt → inclusion stands as confirmed (back-compat)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    // found + receipt unavailable (null) → can't read a status bit; a
+    // not-yet-available receipt can't reveal a revert, so the indexer's
+    // inclusion stands as confirmed (preserves the prior fast-path).
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("confirmed");
+  });
+
+  it("captures the native-receipt LYTH fee on a confirmed tx (feeLythoshi)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 77 };
+    // The eth receipt carries no fee — the LYTH fee comes from the native receipt.
+    rpcResponses["lyth_nativeReceipt"] = {
+      fee: { total_lythoshi: "600000" },
+      reverted: false,
+    };
+
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string; feeLythoshi?: string }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.status).toBe("confirmed");
+    expect(hist.entries[0]!.feeLythoshi).toBe("600000");
+  });
+
+  it("omits the fee on a failed tx and on a zero-fee confirmed tx (no-mock)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    // Failed tx — the fee fetch is skipped (status !== confirmed) even though a
+    // native receipt is seeded, so feeLythoshi stays absent.
+    const FAILED = "0x" + "c".repeat(64);
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: FAILED })] };
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 88 };
+    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "600000" } };
+    await pollPendingAndNotify();
+    // Confirmed but ZERO fee → omitted (no fake "0 LYTH").
+    const ZEROFEE = "0x" + "d".repeat(64);
+    storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: ZEROFEE })] };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 89 };
+    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "0" } };
+    await pollPendingAndNotify();
+
+    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
+      entries: Array<{ status: string; txHash: string; feeLythoshi?: string }>;
+    };
+    const failed = hist.entries.find((e) => e.txHash === FAILED);
+    const zeroFee = hist.entries.find((e) => e.txHash === ZEROFEE);
+    expect(failed?.status).toBe("failed");
+    expect(failed && "feeLythoshi" in failed).toBe(false);
+    expect(zeroFee?.status).toBe("confirmed");
+    expect(zeroFee && "feeLythoshi" in zeroFee).toBe(false);
+  });
+
+  it("wallet-activity-failed returns only the failed records for the scope (Activity-list source)", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    // Record one CONFIRMED tx...
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [pendingRow({ txHash: "0x" + "a".repeat(64) })],
+    };
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 50 };
+    await pollPendingAndNotify();
+    // ...and one FAILED tx (reverted receipt).
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [pendingRow({ txHash: "0x" + "b".repeat(64) })],
+    };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 99 };
+    await pollPendingAndNotify();
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-failed",
+      payload: { address: ADDR, chainIdHex: CHAIN },
+    })) as {
+      ok: true;
+      failed: Array<{ status: string; txHash: string; blockNumber: number | null }>;
+    };
+    expect(r.ok).toBe(true);
+    // Only the failed tx — the confirmed one is excluded.
+    expect(r.failed).toHaveLength(1);
+    expect(r.failed[0]!.status).toBe("failed");
+    expect(r.failed[0]!.txHash).toBe("0x" + "b".repeat(64));
+    expect(r.failed[0]!.blockNumber).toBe(99);
   });
 
   it("null receipt → kept (still pending), no record, no toast", async () => {
@@ -4148,10 +4452,99 @@ describe("pollPendingAndNotify — GAP-N1 headless poll-core", () => {
   });
 });
 
-// GAP-N1 C2 — the notif-poll alarm lifecycle + back-off. Drives the captured
+// Item 7b — incoming-transfer detection (open-surface / unlocked-only).
+describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const wmKey = `mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`;
+  const histKey = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+  const rx = (block: number, over: Record<string, unknown> = {}) => ({
+    kind: "tx_receive" as const,
+    blockHeight: block,
+    txIndex: 0,
+    logIndex: 0,
+    counterparty: "0x" + "5".repeat(40),
+    amountDecimal: "1",
+    ...over,
+  });
+
+  it("first run only establishes a baseline — no toast, no history toast-storm", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    const added = await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [rx(100), rx(90)] as never,
+      true,
+      true,
+    );
+    expect(added).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(storageLocal[histKey]).toBeUndefined();
+    // Watermark pinned to the newest anchor in view.
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+  });
+
+  it("a new incoming above the watermark → one record + one toast; advances the watermark", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as {
+      entries: Array<{ kind: string; status: string; amountDecimal: string }>;
+    };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
+    expect(hist.entries[0]!.status).toBe("confirmed");
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 105 });
+  });
+
+  it("re-running with the same incoming does NOT re-notify (watermark + dedupe)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    // Same snapshot again — watermark is now 105, so nothing is new.
+    await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(1);
+  });
+
+  it("ignores outgoing rows — only tx_receive entries notify", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    const txSend = {
+      kind: "tx_send" as const,
+      blockHeight: 110,
+      txIndex: 0,
+      logIndex: 0,
+      counterparty: "0x" + "6".repeat(40),
+      amountDecimal: "2",
+    };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [txSend] as never, true, true);
+    expect(added).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+  });
+
+  it("incoming toggle OFF → record still written, but NO toast (Item 7c)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    mockGetIncomingEnabled.mockResolvedValue(false);
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0 };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [rx(105)] as never, true, true);
+    // The in-app record is always written (added counts it)…
+    expect(added).toBe(1);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(1);
+    // …but the toast is suppressed by the toggle.
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+  });
+});
+
+// The notif-poll alarm lifecycle + back-off. Drives the captured
 // onAlarm listener + the send-flow persist; the per-call RPC timeout is
 // covered in tx-mldsa.test.ts.
-describe("GAP-N1 C2 — notif-poll alarm lifecycle + back-off", () => {
+describe("notif-poll alarm lifecycle + back-off", () => {
   const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
   const CHAIN = TESTNET_CHAIN_ID_HEX;
   const pk = (addr: string, chain: string) =>
@@ -4238,11 +4631,11 @@ describe("GAP-N1 C2 — notif-poll alarm lifecycle + back-off", () => {
   });
 });
 
-// GAP-N1 C3 — presence-aware read on the poll path (isWalletSurfaceOpen is
+// Presence-aware read on the poll path (isWalletSurfaceOpen is
 // the hoisted mock here; its real getContexts probe is unit-tested in
 // notifications-os.test.ts). Confirms: closed → read:false → unread; open →
 // read:true → no unread; the toast fires in BOTH (presence never gates it).
-describe("GAP-N1 C3 — presence-aware read (poll path)", () => {
+describe("presence-aware read (poll path)", () => {
   const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
   const CHAIN = TESTNET_CHAIN_ID_HEX;
   const pk = `mono.activity.pending.${ADDR}.${CHAIN}`;
@@ -4312,4 +4705,244 @@ describe("notification settings IPC — boolean validation at the boundary", () 
       expect(r.reason).toContain("boolean");
     });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T1-04(a) — passkey spending cap enforced at the SW signing boundary.
+// The gate is INERT unless a test opts in via activePasskeyVaultId +
+// passkeyStateForTest (default null/disabled — see the keystore mock).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
+  const LIMIT_LYTHOSHI = 10_000_000_000n; // 100 LYTH (1 LYTH = 1e8 lythoshi)
+  const OVER = "0x" + (LIMIT_LYTHOSHI * 2n).toString(16); // 200 LYTH
+  const UNDER = "0x" + (LIMIT_LYTHOSHI / 2n).toString(16); // 50 LYTH
+
+  function enablePerTxCap() {
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "per-tx", limitWei: LIMIT_LYTHOSHI },
+      credentials: [{ credentialId: "c1" }],
+    };
+  }
+
+  function seedNonceAndFee() {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+
+  it("over-limit value send with NO password → passkeyElevation:required, no broadcast", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("over-limit value send with the CORRECT password is SW-verified and broadcasts", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "correct-horse-battery-staple",
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("over-limit value send with a WRONG password → passkeyElevation:wrong_password, no broadcast", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "nope",
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("wrong_password");
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("under-limit value send broadcasts with no elevation required", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean; passkeyElevation?: string };
+    expect(r.ok).toBe(true);
+    expect(r.passkeyElevation).toBeUndefined();
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("policy disabled → gate inert, over-limit value send broadcasts", async () => {
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: false, mode: "per-tx", limitWei: LIMIT_LYTHOSHI },
+      credentials: [{ credentialId: "c1" }],
+    };
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("data (contract-call) send bypasses the value-only cap even when over-limit", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001001",
+      valueWeiHex: OVER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T4-04 (Item D) — fee binding + sane ceiling on wallet-send-tx.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
+  const CEILING = 1_000_000_000_000_000n; // matches the networks mock
+  const CEILING_HEX = "0x" + CEILING.toString(16);
+
+  function seedOperatorFee(executionUnitPriceLythoshi: string, priorityTipLythoshi: string) {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi,
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi,
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+
+  it("signs the popup-supplied signedFee verbatim instead of re-reading the operator (b1)", async () => {
+    // The operator re-read would yield 0x9999; the popup bound 0x2710. The
+    // SW must sign the BOUND value, never the re-read.
+    seedOperatorFee("0x9999", "0x9998");
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: "0x5208",
+      },
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: "0x2710",
+        maxPriorityFeePerGas: "0x270f",
+        gas: "0x5208",
+      }),
+    );
+  });
+
+  it("clamps an absurd signedFee maxFeePerGas (and tip) to the sane ceiling (a1)", async () => {
+    seedOperatorFee("0x9999", "0x9998");
+    const absurd = "0x" + (CEILING * 1000n).toString(16);
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: absurd,
+        maxPriorityFeePerGasHex: absurd,
+        executionUnitLimitHex: "0x5208",
+      },
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: CEILING_HEX,
+        // tip clamped to <= maxFeePerGas (== ceiling).
+        maxPriorityFeePerGas: CEILING_HEX,
+      }),
+    );
+  });
+
+  it("clamps an absurd operator fee to the ceiling even without signedFee (a1 fallback)", async () => {
+    const absurd = "0x" + (CEILING * 1000n).toString(16);
+    seedOperatorFee(absurd, absurd);
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ maxFeePerGas: CEILING_HEX }),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T2-02 — SW router sender authentication (fail-closed).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("SW router sender authentication (T2-02)", () => {
+  it("rejects any message from a foreign extension id", () => {
+    let responded = false;
+    const ret = capturedOnMessage!(
+      { kind: "rpc", id: "x", args: { method: "eth_chainId", params: [] }, origin: "https://dapp.example" },
+      { id: "someone-else" },
+      () => {
+        responded = true;
+      },
+    );
+    expect(ret).toBe(false);
+    expect(responded).toBe(false);
+  });
+
+  it("rejects a popup op from a non-popup sender (e.g. a content script)", () => {
+    let responded = false;
+    const ret = capturedOnMessage!(
+      { kind: "popup", op: "keystore-status" },
+      // correct extension id, but a web-page url, not a popup document
+      { id: "test", url: "https://evil.example/page" },
+      () => {
+        responded = true;
+      },
+    );
+    expect(ret).toBe(false);
+    expect(responded).toBe(false);
+  });
+
+  it("accepts a popup op from a genuine popup sender", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-status",
+    })) as { hasVault?: boolean };
+    // A real response object came back (the request was not rejected).
+    expect(r).toBeDefined();
+    expect(typeof r).toBe("object");
+  });
 });

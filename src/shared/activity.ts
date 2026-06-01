@@ -1,4 +1,4 @@
-// Phase 4.4 — typed activity-cache schema, row-kind union, and pure helpers
+// Typed activity-cache schema, row-kind union, and pure helpers
 // shared between the service worker (which fetches + caches indexer data and
 // writes synthetic pending rows on Send broadcast) and the popup (which reads
 // the cache via chrome.storage.onChanged + IPC).
@@ -28,8 +28,9 @@
 //   §25.4  — CrossingToPrivateRow defined but never client-synthesized; only
 //            renders when the indexer emits the kind on Sprintnet.
 
+import { bech32mToAddress } from "./bech32m.js";
 import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
-import { isTxOpKind, type TxOpKind } from "./notifications.js";
+import { isTxOpKind, type NotificationRecord, type TxOpKind } from "./notifications.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -46,12 +47,16 @@ export const PENDING_TTL_MS = 5 * 60 * 1000;
 
 /** Heuristic match window for pending-row reconciliation: when a confirmed
  *  entry's blockHeight falls within ±this many blocks of the pending row's
- *  anchor and counterparty + amount + direction match, treat the pair as
- *  the same on-chain event and evict the pending row. ±10 at 3-second
- *  block cadence is ±30 seconds — wider than the gap between broadcast and
- *  block landing, narrower than a typical "user sends another identical tx"
- *  interval. */
-export const PENDING_MATCH_BLOCK_WINDOW = 10;
+ *  anchor and counterparty + amount match, treat the pair as the same on-chain
+ *  event and evict the pending row. Sprintnet produces BLS fast blocks
+ *  ~0.3 s apart (measured), so the gap between the broadcast anchor and the
+ *  inclusion block — plus the indexer's materialization delay before the row
+ *  is queryable — spans many more blocks than the old ±10 (≈3 s here) allowed,
+ *  which left a receipt-confirmed pending row unmatched (and lingering until
+ *  the 30 s alarm). ±300 ≈ ±90 s of blocks: comfortably covers broadcast →
+ *  indexed while staying far narrower than a "user re-sends the identical
+ *  amount to the same address" interval. */
+export const PENDING_MATCH_BLOCK_WINDOW = 300;
 
 /** Indexer sentinel for native LYTH (`Hash::ZERO`, indexer commit 3537b135).
  *  A transfer carrying this tokenId is native LYTH, not an MRC-20 token. */
@@ -105,6 +110,27 @@ export interface PendingTxRow {
    *  unknown literal arriving at the validator is coerced to the
    *  fallback `"contract_call"`. */
   opKind?: TxOpKind;
+  /** Cluster targeted by a delegation tx (delegate / undelegate / redelegate),
+   *  captured from the Stake send flow PURELY as notification metadata — never
+   *  part of the signed tx. `clusterId` is the numeric directory id; there is
+   *  no `monok1` cluster address in the data model, so `clusterName` carries
+   *  the directory display name when known. Both optional + absent on
+   *  non-delegation sends and legacy rows. */
+  clusterId?: number;
+  clusterName?: string;
+  /** Set once the tx is confirmed via the real-time receipt (the inclusion
+   *  block from `eth_getTransactionReceipt`) but BEFORE the indexer has
+   *  surfaced the canonical confirmed row. Presence flips the row's render
+   *  from "Pending" to a confirmed send, so a confirm shows at chain speed
+   *  instead of sitting on "Pending" through the indexer's materialization
+   *  delay. The row is dropped (replaced by the indexer's canonical row) once
+   *  reconcilePending matches it; this field is the precise match anchor. */
+  confirmedBlockHeight?: number;
+  /** Receipt `tx_index` of the confirmed tx — paired with confirmedBlockHeight
+   *  it pins the exact inclusion slot, so reconcilePending can match the
+   *  indexer's canonical row by (block, txIndex) for ANY kind (transfer OR
+   *  delegate / undelegate / redelegate), not just `tx_send`. */
+  confirmedTxIndex?: number;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -145,12 +171,22 @@ export interface DelegateRow extends ConfirmedAnchor {
   kind: "delegate";
   cluster: number;
   weightBps: number | null;
+  /** Real `*.cluster.mono` name the wallet captured at send time (threaded
+   *  off the matching pending row by `applyCapturedClusterNames`). The indexer
+   *  stream carries only the numeric `cluster` id (§C — no name field, no
+   *  reverse-resolver in mono-core), so this is the ONLY source of a real name
+   *  for a confirmed row, and only for txs THIS wallet originated. Absent for
+   *  non-originated (indexer-only) stakes → render falls back to `Cluster #id`.
+   *  Never fabricated. */
+  clusterName?: string;
 }
 
 export interface UndelegateRow extends ConfirmedAnchor {
   kind: "undelegate";
   cluster: number;
   weightBps: number | null;
+  /** Send-time `*.cluster.mono` name; see DelegateRow.clusterName. */
+  clusterName?: string;
 }
 
 /** Redelegate carries source + destination cluster. When the row is mapped
@@ -161,6 +197,10 @@ export interface RedelegateRow extends ConfirmedAnchor {
   cluster: number;                     // source
   toCluster: number | null;            // destination (null only on activity-stream fallback)
   weightBps: number | null;
+  /** Send-time name of the SOURCE `cluster` (redelegate captures the source per
+   *  commit 7dbb4ea); see DelegateRow.clusterName. The destination `toCluster`
+   *  has no captured name. */
+  clusterName?: string;
 }
 
 /** §23.7 auto-rebalance row — reserved for future cap-tightening events.
@@ -255,6 +295,21 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       if (r.opKind !== undefined) {
         opKind = isTxOpKind(r.opKind) ? r.opKind : "contract_call";
       }
+      // Cluster metadata (delegation sends). Optional; drop malformed values
+      // rather than rejecting the whole row — it's non-essential metadata.
+      const clusterId = isFiniteNumber(r.clusterId) ? r.clusterId : undefined;
+      const clusterName =
+        typeof r.clusterName === "string" && r.clusterName.length > 0
+          ? r.clusterName
+          : undefined;
+      // Receipt-confirmed-but-not-yet-indexed marker (the inclusion block + tx
+      // index — the precise, kind-agnostic match anchor against the indexer).
+      const confirmedBlockHeight = isFiniteNumber(r.confirmedBlockHeight)
+        ? r.confirmedBlockHeight
+        : undefined;
+      const confirmedTxIndex = isFiniteNumber(r.confirmedTxIndex)
+        ? r.confirmedTxIndex
+        : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -264,6 +319,10 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         broadcastBlockHeight: r.broadcastBlockHeight,
         via: r.via,
         ...(opKind !== undefined ? { opKind } : {}),
+        ...(clusterId !== undefined ? { clusterId } : {}),
+        ...(clusterName !== undefined ? { clusterName } : {}),
+        ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
+        ...(confirmedTxIndex !== undefined ? { confirmedTxIndex } : {}),
       };
     }
 
@@ -307,6 +366,13 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       if (!validateConfirmedAnchor(r)) return null;
       if (!isFiniteNumber(r.cluster)) return null;
       if (!isNumberOrNull(r.weightBps)) return null;
+      // Optional send-time cluster name (threaded onto confirmed rows by
+      // applyCapturedClusterNames, then round-tripped through the cache). Drop
+      // a malformed/empty value rather than rejecting the row — non-essential.
+      const clusterName =
+        typeof r.clusterName === "string" && r.clusterName.length > 0
+          ? r.clusterName
+          : undefined;
       return {
         kind: r.kind,
         blockHeight: r.blockHeight as number,
@@ -314,6 +380,7 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         logIndex: r.logIndex as number,
         cluster: r.cluster,
         weightBps: r.weightBps,
+        ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
 
@@ -322,6 +389,10 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       if (!isFiniteNumber(r.cluster)) return null;
       if (!isNumberOrNull(r.toCluster)) return null;
       if (!isNumberOrNull(r.weightBps)) return null;
+      const clusterName =
+        typeof r.clusterName === "string" && r.clusterName.length > 0
+          ? r.clusterName
+          : undefined;
       return {
         kind: "redelegate",
         blockHeight: r.blockHeight as number,
@@ -330,6 +401,7 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         cluster: r.cluster,
         toCluster: r.toCluster,
         weightBps: r.weightBps,
+        ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
 
@@ -489,7 +561,7 @@ export function mapDelegationHistoryToRows(
  *  of (blockHeight, txIndex, logIndex) keys already represented in the
  *  delegation-history stream so this mapper can suppress duplicates.
  *  Unknown / unsupported kinds (swap, staking, etc.) are dropped — they're
- *  not part of Phase 4.4's render surface. */
+ *  not part of the current render surface. */
 export function mapAddressActivityToRows(
   entries: RawAddressActivity[],
   delegationKeys: Set<string>,
@@ -539,7 +611,7 @@ export function mapAddressActivityToRows(
     }
 
     if (e.kind === "delegation") {
-      // Dedupe per the Phase 4.4 plan: when the delegation-history stream
+      // Dedupe: when the delegation-history stream
       // already has this anchor, drop the activity-stream copy (richer
       // fields live on the history-stream row). Otherwise produce a
       // fallback row from subKind.
@@ -600,7 +672,7 @@ export function mapAddressActivityToRows(
       continue;
     }
 
-    // Other kinds (swap, staking, future unknowns) — not part of Phase 4.4
+    // Other kinds (swap, staking, future unknowns) — not part of the current
     // render surface. Drop silently to keep the union closed; future phases
     // extend the switch + the row union together.
   }
@@ -638,14 +710,49 @@ export function evictExpiredPending(
  *     pending row's `broadcastBlockHeight` anchor. When the anchor is
  *     null (eth_blockNumber fetch failed), no heuristic match is possible
  *     and the TTL backstop is the sole eviction path. */
+/** Normalize an address for matching. The indexer returns a confirmed row's
+ *  counterparty as BECH32M (`mono…`), while a pending row's `to` is the 0x EVM
+ *  address it was broadcast with — so a raw string compare never matched and
+ *  reconcilePending never evicted a confirmed pending row (it lingered until
+ *  the 30 s alarm). Convert both to lowercase 0x before comparing; anything
+ *  unparseable falls back to its lowercased self. */
+function normalizeAddrForMatch(a: string): string {
+  if (a.startsWith("0x") || a.startsWith("0X")) return a.toLowerCase();
+  try {
+    return bech32mToAddress(a, null).toLowerCase();
+  } catch {
+    return a.toLowerCase();
+  }
+}
+
 function pendingMatchesConfirmed(
   pending: PendingTxRow,
   confirmed: ConfirmedRow,
 ): boolean {
+  // Bridged (receipt-confirmed) row with a precise inclusion slot: match the
+  // indexer's canonical row by exact (block, txIndex), regardless of KIND. A
+  // delegate / undelegate / redelegate (or claim) surfaces as a delegation row,
+  // NEVER a tx_send, so the counterparty/amount heuristic below could never
+  // retire it — it would linger until the 30 s alarm. The (block, txIndex)
+  // pair uniquely identifies the wallet's own tx in its activity stream.
+  if (
+    pending.confirmedBlockHeight !== undefined &&
+    pending.confirmedTxIndex !== undefined
+  ) {
+    return (
+      confirmed.blockHeight === pending.confirmedBlockHeight &&
+      confirmed.txIndex === pending.confirmedTxIndex
+    );
+  }
+  // Heuristic match for not-yet-confirmed rows (the indexer-first path):
+  // tx_send + counterparty + amount + block window.
   if (confirmed.kind !== "tx_send") return false;
   if (pending.broadcastBlockHeight === null) return false;
   if (confirmed.counterparty === null) return false;
-  if (confirmed.counterparty.toLowerCase() !== pending.to.toLowerCase()) {
+  if (
+    normalizeAddrForMatch(confirmed.counterparty) !==
+    normalizeAddrForMatch(pending.to)
+  ) {
     return false;
   }
   if (confirmed.amountDecimal !== pending.amountDecimal) return false;
@@ -676,6 +783,59 @@ export function delegationKeySet(
   return out;
 }
 
+/** True for the three delegation-family confirmed rows (the ones that carry an
+ *  optional captured cluster name). */
+function isDelegationRow(
+  r: ConfirmedRow,
+): r is DelegateRow | UndelegateRow | RedelegateRow {
+  return r.kind === "delegate" || r.kind === "undelegate" || r.kind === "redelegate";
+}
+
+/** Thread the real `*.cluster.mono` name a delegation tx captured at send time
+ *  onto its confirmed indexer row. The indexer stream has NO cluster name (§C:
+ *  `cluster` is a numeric id only, and mono-core ships no name-registry /
+ *  reverse-resolver), so without this a confirmed delegate/undelegate/redelegate
+ *  row loses the name its pending row held and the render falls back to a bare
+ *  `Cluster #id`. The confirmed cache is rebuilt from the indexer on every
+ *  non-fresh poll, so the name must be made STICKY across rebuilds — hence two
+ *  sources, `prevConfirmed` first:
+ *   - `prevConfirmed`: a delegation row at the same (blockHeight, txIndex) that
+ *     already carries a name (survives the rebuild after reconcilePending has
+ *     dropped the pending row).
+ *   - `pending`: a bridged pending row whose receipt slot
+ *     (confirmedBlockHeight, confirmedTxIndex) matches — the first-confirmation
+ *     capture, before any named cache exists.
+ *  Matched by the exact (blockHeight, txIndex) inclusion slot — the same key
+ *  pendingMatchesConfirmed uses (one tx = one slot = one delegation row).
+ *  METADATA-ONLY: never touches signed bytes. A confirmed row that already has
+ *  a name (e.g. the prevConfirmed copy carried in) is left untouched. */
+export function applyCapturedClusterNames(
+  confirmed: ConfirmedRow[],
+  prior: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
+): ConfirmedRow[] {
+  const pending = prior.pending ?? [];
+  const prevConfirmed = prior.confirmed ?? [];
+  if (pending.length === 0 && prevConfirmed.length === 0) return confirmed;
+  return confirmed.map((row) => {
+    if (!isDelegationRow(row) || row.clusterName !== undefined) return row;
+    const prevNamed = prevConfirmed.find(
+      (p): p is DelegateRow | UndelegateRow | RedelegateRow =>
+        isDelegationRow(p) &&
+        p.clusterName !== undefined &&
+        p.blockHeight === row.blockHeight &&
+        p.txIndex === row.txIndex,
+    );
+    const pendNamed = pending.find(
+      (p) =>
+        p.clusterName !== undefined &&
+        p.confirmedBlockHeight === row.blockHeight &&
+        p.confirmedTxIndex === row.txIndex,
+    );
+    const name = prevNamed?.clusterName ?? pendNamed?.clusterName;
+    return name !== undefined ? { ...row, clusterName: name } : row;
+  });
+}
+
 /** Merge a fresh indexer snapshot into the previous cache. Pure function:
  *
  *  1. Map delegation-history rows (canonical source — full richness).
@@ -683,16 +843,26 @@ export function delegationKeySet(
  *  3. Map address-activity rows, suppressing kind="delegation" entries
  *     whose anchor is already in the delegation-stream key-set.
  *  4. Sort merged confirmed list newest-first by (blockHeight, txIndex,
- *     logIndex). Within the merged list, an exact `(blockHeight, txIndex,
- *     logIndex)` collision is rare but possible — keep the first
- *     (delegation-history rows are pushed first, so they win).
- *  5. Cap at ACTIVITY_ROLLING_WINDOW newest rows. */
+ *     logIndex). The dedupe key includes the row KIND: a SELF-transfer
+ *     (counterparty == the queried address) emits TWO activity entries at the
+ *     SAME `(blockHeight, txIndex, logIndex)` — native transfers all carry the
+ *     `logIndex = 0xFFFFFFFF` (u32::MAX) sentinel — one `direction:"in"` and
+ *     one `"out"`. Keying by kind keeps BOTH the `tx_send` + `tx_receive` rows
+ *     (so a self-send shows both legs) while still collapsing a genuine
+ *     same-kind duplicate (delegation-history rows are pushed first, so they
+ *     win over the activity-stream copy of the same event).
+ *  5. Cap at ACTIVITY_ROLLING_WINDOW newest rows.
+ *  6. When `prior` is supplied, thread captured cluster names onto the
+ *     delegation rows (applyCapturedClusterNames) so an originated stake keeps
+ *     its real `*.cluster.mono` name after the indexer supersedes the pending
+ *     row. */
 export function mergeIndexerSnapshot(
   fresh: {
     activity: RawAddressActivity[];
     delegation: RawDelegationHistory[];
   },
   now: number,
+  prior?: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
 ): ActivityCache {
   const delegationRows = mapDelegationHistoryToRows(fresh.delegation);
   const keys = delegationKeySet(delegationRows);
@@ -700,20 +870,83 @@ export function mergeIndexerSnapshot(
 
   const merged: ConfirmedRow[] = [];
   const seen = new Set<string>();
+  // Key by anchor + kind so a self-transfer's in/out pair (identical anchor —
+  // native transfers share the u32::MAX logIndex sentinel) both survive, while
+  // a same-kind cross-stream duplicate still collapses to the first (richer
+  // delegation-history) copy.
   for (const r of delegationRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}`;
+    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);
   }
   for (const r of activityRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}`;
+    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);
   }
   merged.sort(compareConfirmedNewestFirst);
   const capped = merged.slice(0, ACTIVITY_ROLLING_WINDOW);
+  const named = prior ? applyCapturedClusterNames(capped, prior) : capped;
 
-  return { confirmed: capped, lastFetchedAtMs: now };
+  return { confirmed: named, lastFetchedAtMs: now };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unified Activity ordering (pending + confirmed + failed, newest-first)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A single rendered Activity entry, tagged by source: an indexer/pending
+ *  `ActivityRow` or a failed-tx `NotificationRecord` (failed txs aren't in the
+ *  success-only indexer stream — they come from the notification history). */
+export type MergedActivityItem =
+  | { tag: "row"; row: ActivityRow }
+  | { tag: "failed"; record: NotificationRecord };
+
+/** Newest-first recency for the unified list. All three sources expose a block
+ *  height — pending: the broadcast anchor; confirmed: `blockHeight`; failed:
+ *  the receipt `blockNumber`. A null/absent block means "not yet anchored"
+ *  (just-broadcast pending, or a `lyth_txStatus="found"` fast-path failed) →
+ *  it floats to the top (Infinity). The wall-clock `ms` is the secondary key
+ *  (pending: broadcast time; failed: createdAt); confirmed rows carry no
+ *  wall-clock, so they use 0 and stay block-ordered among themselves. */
+function mergedRecency(item: MergedActivityItem): { block: number; ms: number } {
+  if (item.tag === "failed") {
+    return { block: item.record.blockNumber ?? Infinity, ms: item.record.createdAtMs };
+  }
+  const row = item.row;
+  if (row.kind === "pending_tx") {
+    // A receipt-confirmed (bridged) row sorts by its real inclusion block so it
+    // interleaves with confirmed rows; a still-pending row floats to the top.
+    if (row.confirmedBlockHeight !== undefined) {
+      return { block: row.confirmedBlockHeight, ms: row.broadcastedAtMs };
+    }
+    return { block: row.broadcastBlockHeight ?? Infinity, ms: row.broadcastedAtMs };
+  }
+  return { block: row.blockHeight, ms: 0 };
+}
+
+/** Merge pending + confirmed + failed into ONE list sorted newest-first, the
+ *  same chronological intent the notification center uses (so a failed row no
+ *  longer pins above a newer pending row). Pure + stable: same-block confirmed
+ *  rows keep their incoming (blockHeight, txIndex, logIndex) order. Two
+ *  unanchored rows (block === Infinity) fall through to the ms tie-break —
+ *  Infinity === Infinity, so the comparator never produces NaN. */
+export function mergeActivityNewestFirst(
+  pending: PendingTxRow[],
+  confirmed: ConfirmedRow[],
+  failed: NotificationRecord[],
+): MergedActivityItem[] {
+  const items: MergedActivityItem[] = [
+    ...pending.map((row): MergedActivityItem => ({ tag: "row", row })),
+    ...confirmed.map((row): MergedActivityItem => ({ tag: "row", row })),
+    ...failed.map((record): MergedActivityItem => ({ tag: "failed", record })),
+  ];
+  return items.sort((a, b) => {
+    const ra = mergedRecency(a);
+    const rb = mergedRecency(b);
+    if (ra.block !== rb.block) return rb.block - ra.block;
+    return rb.ms - ra.ms;
+  });
 }

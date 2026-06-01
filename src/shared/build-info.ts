@@ -1,4 +1,4 @@
-// Phase 6 — about-page metadata. Holds the version + commit constants
+// About-page metadata. Holds the version + commit constants
 // that aren't readable at runtime (the wallet's own manifest version is,
 // via chrome.runtime.getManifest, but the SDK and Sprintnet chain
 // identifiers aren't). Update these in lockstep with the corresponding
@@ -73,7 +73,7 @@ export const SPRINTNET_CHAIN_ID_HEX: string =
 export function finalityPostureFor(chainIdHex: string): string {
   const normalised = chainIdHex.toLowerCase();
   if (normalised === SPRINTNET_CHAIN_ID_HEX.toLowerCase()) {
-    return "Anchor-level (LythiumDAG-BFT)";
+    return "Anchor-level (Starfish-C)";
   }
   return "Depends on destination chain";
 }

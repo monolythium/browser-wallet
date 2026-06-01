@@ -1,11 +1,11 @@
-// Round 7 TASK 7 — Multisig wallets top-level list.
+// Multisig wallets top-level list.
 //
 // Reached from the MainMenu's "Multisig wallets" item. Displays all
 // vaults filtered by kind === "multisig" with their M-of-N pill and
 // pending-proposal count. Tapping a row switches the active vault to
-// that multisig and routes to its Pending dashboard (existing Phase 8
+// that multisig and routes to its Pending dashboard (existing
 // screen). "Create new multisig wallet" CTA reuses the existing
-// MultisigCreateModal (Phase 8) — no new creation flow.
+// MultisigCreateModal — no new creation flow.
 
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";

@@ -1,4 +1,4 @@
-// Phase 1 — `notifications-store` round-trip coverage.
+// `notifications-store` round-trip coverage.
 //
 // We stub `chrome.storage.local` with an in-memory record (the same
 // pattern used by `keystore.test.ts`) so the real `recordNotification`
@@ -64,6 +64,9 @@ function baseInput(overrides: {
   status?: "confirmed" | "failed";
   kind?: "send" | "contract_call";
   blockNumber?: number | null;
+  feeLythoshi?: string;
+  clusterId?: number;
+  clusterName?: string;
 } = {}) {
   return {
     addressLower: ADDR_A,
@@ -107,6 +110,39 @@ describe("notifications-store", () => {
         ids: string[];
       }).ids,
     ).toContain(`${CHAIN_A}:${HASH_1}`);
+  });
+
+  it("persists + round-trips an optional feeLythoshi; absent stays absent", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    // With a fee → stored + read back verbatim.
+    await recordNotification(baseInput({ txHash: HASH_1, feeLythoshi: "600000" }));
+    // Without a fee → the field is omitted (no fake "0").
+    await recordNotification(baseInput({ txHash: HASH_2 }));
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    const withFee = list.find((r) => r.txHash === HASH_1);
+    const noFee = list.find((r) => r.txHash === HASH_2);
+    expect(withFee?.feeLythoshi).toBe("600000");
+    expect(noFee).toBeDefined();
+    expect("feeLythoshi" in (noFee as object)).toBe(false);
+  });
+
+  it("persists + round-trips optional cluster metadata; absent stays absent", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ txHash: HASH_1, clusterId: 1, clusterName: "halcyon.cluster.mono" }),
+    );
+    await recordNotification(baseInput({ txHash: HASH_2 }));
+    const list = await listNotifications(ADDR_A, CHAIN_A);
+    const withCluster = list.find((r) => r.txHash === HASH_1);
+    const noCluster = list.find((r) => r.txHash === HASH_2);
+    expect(withCluster?.clusterId).toBe(1);
+    expect(withCluster?.clusterName).toBe("halcyon.cluster.mono");
+    expect("clusterId" in (noCluster as object)).toBe(false);
+    expect("clusterName" in (noCluster as object)).toBe(false);
   });
 
   it("dedupes — a second call with the same (addr, chain, txHash) is a no-op", async () => {
@@ -261,7 +297,7 @@ describe("notifications-store", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // Phase 3 — global inbox helpers (listAllNotifications +
+  // Global inbox helpers (listAllNotifications +
   // markAllNotificationsRead). The Notifications page reads via these.
   // ───────────────────────────────────────────────────────────────────────
 
@@ -346,7 +382,7 @@ describe("notifications-store", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // Polish C2 — per-record click-to-mark-read. Wired from the
+  // Per-record click-to-mark-read. Wired from the
   // Notifications page when the user opens a notification's detail.
   // ───────────────────────────────────────────────────────────────────────
 
@@ -460,7 +496,7 @@ describe("notifications-store", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // GAP-N1 C3 — presence-aware read at insert. `input.read` defaults false
+  // Presence-aware read at insert. `input.read` defaults false
   // (today's behavior); `true` ⇒ the record lands already-read (no unread).
   // ───────────────────────────────────────────────────────────────────────
 

@@ -3,7 +3,7 @@
 // The wallet's request-router lives in `service-worker.ts:handleRpc` and is
 // the integration seam between the in-page `window.ethereum` provider and the
 // SDK's `RpcClient` (from `@monolythium/core-sdk` root export, replacing the
-// retired `MonolythiumProvider` ethers shim in R14). This suite is a hard
+// retired `MonolythiumProvider` ethers shim). This suite is a hard
 // test gate against drift in that router.
 //
 // Strategy:
@@ -20,11 +20,15 @@
 //     or chrome.windows; both modules expose deterministic stubs.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DETERMINISTIC_TEST_ADDRESS,
+  TESTNET_69420_GENESIS_HASH_STUB,
+} from "../shared/__fixtures__/golden.js";
 
 // ---- Constants from the SDK we're asserting against ----
 const TESTNET_CHAIN_ID_BIGINT = 69420n;
 const TESTNET_CHAIN_ID_HEX = "0x" + TESTNET_CHAIN_ID_BIGINT.toString(16).toUpperCase(); // 0x10F2C
-const DETERMINISTIC_ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
+const DETERMINISTIC_ADDRESS = DETERMINISTIC_TEST_ADDRESS;
 const DETERMINISTIC_SIG_BYTES = new Uint8Array(65).fill(0xab);
 DETERMINISTIC_SIG_BYTES[64] = 27; // valid recovery id
 const DETERMINISTIC_SIG_HEX = "0x" + Array.from(DETERMINISTIC_SIG_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -66,13 +70,13 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
     ],
-    // GAP #11: shared/build-info.ts pulls TESTNET_69420 from the SDK to
+    // shared/build-info.ts pulls TESTNET_69420 from the SDK to
     // surface the registry's genesis on the About page; stub just the
     // genesis_hash + chain_id fields we read at module-init time.
     TESTNET_69420: {
       chain_id: 69420,
       genesis_hash:
-        "0xe67cf82131fc63e335ce61afeae53299283eaa3a692830a618911aa840245031",
+        TESTNET_69420_GENESIS_HASH_STUB,
     },
   };
 });
@@ -95,36 +99,21 @@ vi.mock("./approvals.js", () => ({
 
 // Keystore mock — deterministic signing, always unlocked unless a test flips it.
 // The dApp request path (handleRpc / buildSendTxView) consults the v4 keystore
-// through the v4 keystore; the v2 helpers stay imported only for the
-// popup-IPC keystore-status migration-display branch. The two mocks share
-// `unlocked` / `vaultExists` flags so tests can flip both code paths.
+// (mocked below). `computeTypedDataDigest` is the real pure helper from
+// ./typed-data.js (no chrome dependency, deterministic), so it needs no mock.
+// `unlocked` / `vaultExists` let tests flip the v4 mock's lock / has-vault state.
 let unlocked = true;
 let vaultExists = true;
 
-vi.mock("./keystore.js", () => ({
-  hasVault: vi.fn(async () => vaultExists),
-  hasLegacyVault: vi.fn(async () => false),
-  getStoredAddress: vi.fn(async () => DETERMINISTIC_ADDRESS),
-  getUnlockedAddress: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
-  isUnlocked: vi.fn(() => unlocked),
-  lock: vi.fn(() => {
-    unlocked = false;
-  }),
-  unlock: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
-  createVaultFromNewMnemonic: vi.fn(async () => ({
-    mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-    address: DETERMINISTIC_ADDRESS,
-  })),
-  createVaultFromMnemonic: vi.fn(async () => ({ address: DETERMINISTIC_ADDRESS })),
-  personalSign: vi.fn(async () => DETERMINISTIC_SIG_BYTES),
-  signTypedDataV4: vi.fn(async () => DETERMINISTIC_SIG_BYTES),
-  computeTypedDataDigest: vi.fn(() => new Uint8Array(32).fill(0x42)),
-}));
-
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => vaultExists),
-  getStoredAddressV4: vi.fn(async () => DETERMINISTIC_ADDRESS),
+  hasContainerV4: vi.fn(async () => vaultExists),
+  unlockContainerV4: vi.fn(async () => ({
+    address: DETERMINISTIC_ADDRESS,
+    vaultId: "v1",
+  })),
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
+  tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
   lockV4: vi.fn(() => {
     unlocked = false;
@@ -139,7 +128,7 @@ vi.mock("./keystore-mldsa.js", () => ({
     mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
   })),
   wipeVaultV4: vi.fn(async () => undefined),
-  // Phase 4.1 Commit H: personal_sign + eth_signTypedData_v4 now route to
+  // personal_sign + eth_signTypedData_v4 route to
   // the v4 ML-DSA backend when the v4 keystore is unlocked. Tests stub the
   // sign output to a deterministic byte pattern — the SW just hex-encodes
   // whatever the keystore returns.
@@ -166,7 +155,7 @@ type OnMessageHandler = (
 ) => boolean | undefined;
 
 let capturedOnMessage: OnMessageHandler | null = null;
-const broadcastEvents: Array<{ event: string; payload: unknown }> = [];
+const broadcastEvents: Array<{ tabId?: number; event: string; payload: unknown }> = [];
 const chromeStorage: Record<string, unknown> = {};
 const chromeStorageSession: Record<string, unknown> = {};
 
@@ -230,15 +219,17 @@ function installChromeStub(): void {
       },
       onInstalled: { addListener: vi.fn() },
       getURL: (path: string) => `chrome-extension://test-id/${path}`,
+      // T2-02 — the router authenticates sender.id against this.
+      id: "test-id",
     },
     tabs: {
       query: (_filter: unknown, cb: (tabs: Array<{ id: number }>) => void) => {
         // Synthetic tab so the broadcast loop reaches `sendMessage` once.
         cb([{ id: 1 }]);
       },
-      sendMessage: (_id: number, message: { kind: string; event: string; payload: unknown }) => {
+      sendMessage: (tabId: number, message: { kind: string; event: string; payload: unknown }) => {
         if (message?.kind === "event") {
-          broadcastEvents.push({ event: message.event, payload: message.payload });
+          broadcastEvents.push({ tabId, event: message.event, payload: message.payload });
         }
         return Promise.resolve();
       },
@@ -259,7 +250,7 @@ function dispatch(method: string, params: unknown[] = [], origin = "https://dapp
       args: { method, params },
       origin,
     };
-    const handled = handler(envelope, undefined, resolve);
+    const handled = handler(envelope, { id: "test-id" }, resolve);
     if (handled !== true) {
       // The SUT returns true to keep sendResponse alive across async work.
       // If it returned false/undefined we'd never get a response.
@@ -270,15 +261,19 @@ function dispatch(method: string, params: unknown[] = [], origin = "https://dapp
 
 // Popup IPC dispatcher — same captured listener, but the envelope shape is
 // `{ kind: "popup", op, payload }`, used by Settings / Networks / Send and
-// the new Phase 4.3 chain-add-manual / chain-edit / chain-delete ops.
+// the chain-add-manual / chain-edit / chain-delete ops.
 function popupDispatch<T = unknown>(op: string, payload?: unknown): Promise<T> {
   const handler = capturedOnMessage;
   if (!handler) throw new Error("service worker did not register onMessage listener");
   return new Promise((resolve) => {
     const envelope = { kind: "popup", op, payload } as unknown;
-    const handled = handler(envelope, undefined, (response: unknown) => {
-      resolve(response as T);
-    });
+    const handled = handler(
+      envelope,
+      { id: "test-id", url: "chrome-extension://test-id/src/popup/index.html" },
+      (response: unknown) => {
+        resolve(response as T);
+      },
+    );
     if (handled !== true) {
       resolve({ ok: false, reason: "handler did not signal async response" } as T);
     }
@@ -345,6 +340,17 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(r.result).toEqual([DETERMINISTIC_ADDRESS]);
   });
 
+  it("eth_accounts returns [] when locked, even for a connected origin (no address leak while locked)", async () => {
+    const origin = "https://locked-accounts.example";
+    await connectOrigin(origin);
+    // Lock the wallet — getUnlockedAddressV4() now returns null, so the
+    // address must never be resolved or returned to the dApp.
+    unlocked = false;
+    const r = await dispatch("eth_accounts", [], origin);
+    expect(r.error).toBeUndefined();
+    expect(r.result).toEqual([]);
+  });
+
   // ---- 3. eth_blockNumber ----
   it("eth_blockNumber routes through RpcClient with no params and returns hex", async () => {
     // The dispatcher does not have a hard-coded eth_blockNumber path, so it
@@ -382,7 +388,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
 
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4200);
-    expect(r.error?.message).toMatch(/native encrypted Sprintnet sends/);
+    expect(r.error?.message).toMatch(/native encrypted Monolythium Testnet sends/);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
     const methods = rpcCalls.map((c) => c.method);
     expect(methods).not.toContain("eth_getTransactionCount");
@@ -516,7 +522,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(rpcCalls.map((c) => c.method)).not.toContain("eth_estimateGas");
   });
 
-  // ---- Phase 4.3 — popup-IPC chain management ops ----
+  // ---- popup-IPC chain management ops ----
   describe("popup-IPC chain management", () => {
     const FOREIGN_CHAIN = "0x1234";
 
@@ -682,7 +688,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     });
   });
 
-  // ---- Phase 4.3 Change 2 — Sprintnet operator override ----
+  // ---- Sprintnet operator override ----
   describe("popup-IPC operator override", () => {
     interface OperatorWire { name: string; region: string; rpc: string; }
 
@@ -759,6 +765,53 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       }
       // Clean up.
       await popupDispatch("sprintnet-operators-set", { operators: null });
+    });
+  });
+
+  // ---- T2-01 / T2-03 — provider event origin scoping ----
+  describe("provider event origin scoping (T2-01 / T2-03)", () => {
+    function rpcFromTab(method: string, origin: string, tabId: number): Promise<unknown> {
+      return new Promise((resolve) => {
+        const ret = capturedOnMessage!(
+          {
+            kind: "rpc",
+            id: Math.random().toString(36).slice(2),
+            args: { method, params: [] },
+            origin,
+          },
+          { id: "test-id", tab: { id: tabId } },
+          resolve as (r: unknown) => void,
+        );
+        if (ret !== true) resolve(undefined);
+      });
+    }
+
+    it("account-carrying events reach only connected-origin tabs", async () => {
+      // Tab 2 / origin B talks to the SW but never connects.
+      await rpcFromTab("eth_chainId", "https://unconnected.example", 2);
+      broadcastEvents.length = 0;
+      // Tab 1 / origin A connects → broadcasts accountsChanged + connect.
+      await rpcFromTab("eth_requestAccounts", "https://connected.example", 1);
+      const accountEvents = broadcastEvents.filter(
+        (e) => e.event === "accountsChanged" || e.event === "connect",
+      );
+      expect(accountEvents.length).toBeGreaterThan(0);
+      // Only the connected tab (1) received them; the unconnected tab (2) did not.
+      expect(accountEvents.every((e) => e.tabId === 1)).toBe(true);
+      expect(accountEvents.some((e) => e.tabId === 2)).toBe(false);
+    });
+
+    it("revoke-origin emits a scoped accountsChanged:[] disconnect to that origin's tab", async () => {
+      await rpcFromTab("eth_requestAccounts", "https://revoke-me.example", 3);
+      broadcastEvents.length = 0;
+      await popupDispatch("revoke-origin", { origin: "https://revoke-me.example" });
+      const disconnects = broadcastEvents.filter(
+        (e) =>
+          e.event === "accountsChanged" &&
+          Array.isArray(e.payload) &&
+          (e.payload as unknown[]).length === 0,
+      );
+      expect(disconnects.some((e) => e.tabId === 3)).toBe(true);
     });
   });
 });

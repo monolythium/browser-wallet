@@ -1,4 +1,4 @@
-// Phase 8 Commit 5 — pure-helper tests for MultisigGovernance.tsx.
+// Pure-helper tests for MultisigGovernance.tsx.
 
 import { describe, expect, it } from "vitest";
 import {

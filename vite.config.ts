@@ -25,14 +25,18 @@ function readInstalledSdkVersion(): string {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), crx({ manifest })],
   define: {
     __SDK_INSTALLED_VERSION__: JSON.stringify(readInstalledSdkVersion()),
   },
   build: {
     target: "es2022",
-    sourcemap: true,
+    // T1-02 — do NOT ship source maps in the published (production) extension:
+    // they un-minify the SW/keystore logic for anyone who downloads the .crx.
+    // Dev/test builds keep maps for debuggability. `pnpm build` runs with the
+    // default "production" mode, so the shipped artifact carries no .map files.
+    sourcemap: mode !== "production",
     // Round 4 TASK 7 — split heavy vendor groups into their own
     // chunks so the popup bundle (which used to land at ~714 kB)
     // stops tripping rollup's 500 kB warning. Browser extensions
@@ -67,4 +71,4 @@ export default defineConfig({
       port: 5173,
     },
   },
-});
+}));

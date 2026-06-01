@@ -31,7 +31,7 @@ export interface ModalProps {
   children: ReactNode;
 }
 
-// Phase 11 Commit 10 — stable id for the modal title so the dialog
+// Stable id for the modal title so the dialog
 // element can reference it via aria-labelledby. Counter increments
 // per Modal instance to keep ids unique across multiple open modals.
 let modalIdCounter = 0;
@@ -50,7 +50,7 @@ export function Modal({ open, onClose, title, titleAccent, showClose, children }
 
   const stopPropagation = (e: MouseEvent) => e.stopPropagation();
 
-  // Phase 11 Commit 10 — aria-labelledby points at the title so screen
+  // aria-labelledby points at the title so screen
   // readers announce the modal heading on focus. Each instance gets a
   // unique id to support multiple simultaneous modals (rare but legal).
   const titleId = `ext-modal-title-${++modalIdCounter}`;
