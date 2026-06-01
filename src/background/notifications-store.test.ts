@@ -382,7 +382,7 @@ describe("notifications-store", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // Polish C2 — per-record click-to-mark-read. Wired from the
+  // Per-record click-to-mark-read. Wired from the
   // Notifications page when the user opens a notification's detail.
   // ───────────────────────────────────────────────────────────────────────
 

@@ -52,7 +52,7 @@ export function Notifications({ onBack }: NotificationsProps) {
     setMarking(false);
   }, [refresh]);
 
-  // Polish C2 — opening a record's detail also marks JUST that record
+  // Opening a record's detail also marks JUST that record
   // read. The SW fires refreshUnreadBadge on a successful flip; here we
   // optimistically update the local list so the row's blue dot clears
   // before the chrome.storage.onChanged callback rolls around (the

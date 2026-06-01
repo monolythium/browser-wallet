@@ -8603,7 +8603,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "notifications-mark-read": {
-      // Polish C2 — flip ONE record's read flag to true. The id payload
+      // Flip ONE record's read flag to true. The id payload
       // is validated as a non-empty string at the IPC boundary so the
       // store helper never sees garbage. Fires refreshUnreadBadge on a
       // successful flip so the toolbar badge updates without waiting
