@@ -926,6 +926,14 @@ export async function bgWalletSendTx(args: {
    *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
    *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */
   elevatedPassword?: string;
+  /** T4-04(b1) — the EXACT fee the Send preview displayed (base + tier-scaled
+   *  tip + unit limit), so the SW signs it verbatim instead of re-reading the
+   *  operator. Omit on non-Send callers to keep the suggestFee fallback. */
+  signedFee?: {
+    maxFeePerGasHex: string;
+    maxPriorityFeePerGasHex: string;
+    executionUnitLimitHex: string;
+  };
 }): Promise<
   { ok: true; result: SendTxResult }
   | {

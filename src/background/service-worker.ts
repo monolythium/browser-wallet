@@ -198,6 +198,7 @@ import { keccak_256, shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
   SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
@@ -209,6 +210,7 @@ import {
   snapshotGenesisCache,
   clearGenesisCache,
 } from "./networks.js";
+import { clampToSaneBound } from "../shared/operator-bounds.js";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
   validateOperatorList,
@@ -1331,6 +1333,46 @@ function rpcQuantityToHex(value: number | string | bigint, field: string): strin
   return `0x${parsed.toString(16)}`;
 }
 
+/**
+ * T4-04 (Item D, b1) — accept a popup-supplied `signedFee`: the EXACT fee the
+ * Send preview displayed (base + tier-scaled tip, and the unit limit). When
+ * present the SW signs THIS instead of a second `suggestFee` operator read,
+ * closing both the display-vs-sign double-read and the Slow/Fast tier-multiplier
+ * desync. Every field is re-validated through `rpcQuantityToHex` (rejects
+ * negatives/garbage). Returns null when absent or malformed (caller falls back
+ * to `suggestFee`). The ceiling clamp is applied by the caller, not here.
+ */
+function acceptSignedFee(signedFee: unknown): {
+  maxFeePerGasHex: string;
+  maxPriorityFeePerGasHex: string;
+  executionUnitLimitHex: string;
+} | null {
+  if (signedFee == null || typeof signedFee !== "object") return null;
+  const f = signedFee as Record<string, unknown>;
+  if (
+    typeof f.maxFeePerGasHex !== "string" ||
+    typeof f.maxPriorityFeePerGasHex !== "string" ||
+    typeof f.executionUnitLimitHex !== "string"
+  ) {
+    return null;
+  }
+  try {
+    return {
+      maxFeePerGasHex: rpcQuantityToHex(f.maxFeePerGasHex, "signedFee.maxFeePerGas"),
+      maxPriorityFeePerGasHex: rpcQuantityToHex(
+        f.maxPriorityFeePerGasHex,
+        "signedFee.maxPriorityFeePerGas",
+      ),
+      executionUnitLimitHex: rpcQuantityToHex(
+        f.executionUnitLimitHex,
+        "signedFee.executionUnitLimit",
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function broadcastEvent(event: string, payload: unknown): void {
   chrome.tabs.query({}, (tabs) => {
     for (const t of tabs) {
@@ -1510,9 +1552,19 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           const nonceHex =
             txReq.nonce ?? view.nonce ??
             await sprintnetTransactionCountHex(fromAddr);
-          const executionUnitPriceHex =
+          // Prefer the price captured into `view` at approval time over a
+          // fresh read, then clamp to the sane ceiling (T4-04 D3) so a
+          // malicious/MITM operator cannot inflate the fee signed into the
+          // encrypted envelope on the dApp path either.
+          const rawExecutionUnitPriceHex =
             txReq.gasPrice ?? view.pricePerExecutionUnitLythoshiHex ??
             await sprintnetExecutionUnitPriceHex();
+          const executionUnitPriceHex =
+            "0x" +
+            clampToSaneBound(
+              BigInt(rawExecutionUnitPriceHex),
+              MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+            ).toString(16);
           // Sprintnet's mempool intrinsic execution-unit floor is above what
           // the compatibility estimate reports. Honour an explicit dapp
           // execution-unit hint if provided; otherwise use the wallet's
@@ -8424,6 +8476,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // boolean would be forgeable by the local IPC actor this gate
         // targets, so the proof is the password itself, SW-checked.
         elevatedPassword?: unknown;
+        // T4-04 (Item D, b1) — the EXACT fee the popup preview displayed
+        // (base + tier-scaled tip + unit limit). When present the SW signs
+        // this verbatim (after rpcQuantityToHex validation + a sane-ceiling
+        // clamp) instead of re-reading the operator, closing the display-vs-
+        // sign double-read and the Slow/Fast tier-multiplier desync.
+        signedFee?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -8576,19 +8634,35 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       try {
         const nonceHex = await sprintnetTransactionCountHex(fromAddr);
         const fee = await suggestFee(p.chainIdHex);
+        // T4-04 (Item D, b1): if the popup bound the exact fee it displayed,
+        // sign THAT instead of a second operator read (closes the display-vs-
+        // sign double-read + the Slow/Fast tier-multiplier desync). Absent /
+        // malformed → fall back to suggestFee (legacy callers, e.g. Stake).
+        const bound = acceptSignedFee(p.signedFee);
         // Sprintnet's mempool enforces an intrinsic execution-unit floor
         // that the compatibility estimate does not reflect. Native transfers
         // use the pre-resolved hex from suggestFee; contract calls carry
         // their caller-supplied estimate because the hint is sized for native
         // transfers only.
-        const gasHex = p.gasLimitHex ?? fee.gasLimit ?? "0x5208";
+        const gasHex =
+          p.gasLimitHex ?? bound?.executionUnitLimitHex ?? fee.gasLimit ?? "0x5208";
+        // T4-04 (Item D, a1): clamp the per-execution-unit price to a sane
+        // ceiling so a malicious/MITM operator (or a tampered popup) cannot
+        // sign an absurd maxFeePerGas. Applies to BOTH the bound fee and the
+        // suggestFee fallback.
+        const maxFeePerGas =
+          "0x" +
+          clampToSaneBound(
+            BigInt(bound?.maxFeePerGasHex ?? fee.maxFeePerGas),
+            MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+          ).toString(16);
         // SDK 0.3.11 sane fee defaults: the priority tip never exceeds the
         // max execution-unit price the wallet is willing to pay. A tip above
         // the ceiling would be silently re-clamped chain-side; clamp here so
         // the displayed fee and the submitted fee agree.
         const maxPriorityFeePerGas = clampPriorityTipToMaxFee(
-          fee.maxPriorityFeePerGas,
-          fee.maxFeePerGas,
+          bound?.maxPriorityFeePerGasHex ?? fee.maxPriorityFeePerGas,
+          maxFeePerGas,
         );
         const txReq: EthSendTxFields = {
           to: p.to,
@@ -8597,7 +8671,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(mempoolClass !== undefined ? { mempoolClass } : {}),
           gas: gasHex,
           nonce: nonceHex,
-          maxFeePerGas: fee.maxFeePerGas,
+          maxFeePerGas,
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };

@@ -416,6 +416,36 @@ export function Send({
         }
         return;
       }
+      // T4-04 (b1): bind the EXACT fee the preview displayed — including the
+      // Slow/Fast tier multiplier — so the SW signs it instead of re-reading
+      // the operator. maxFeePerGas = base + tier-scaled tip; the tip is the
+      // tier-scaled value the user saw. Omitted when the fee never resolved
+      // (SW falls back to suggestFee).
+      let signedFee:
+        | {
+            maxFeePerGasHex: string;
+            maxPriorityFeePerGasHex: string;
+            executionUnitLimitHex: string;
+          }
+        | undefined;
+      if (feeSuggestion) {
+        const base = parseNativeHexQuantity(
+          feeSuggestion.basePricePerExecutionUnitLythoshiHex,
+        );
+        const tip = parseNativeHexQuantity(
+          feeSuggestion.priorityPricePerExecutionUnitLythoshiHex,
+        );
+        if (base !== null && tip !== null) {
+          const scaledTip = scaleByBps(tip, tierMultiplierBps);
+          signedFee = {
+            maxFeePerGasHex: "0x" + (base + scaledTip).toString(16),
+            maxPriorityFeePerGasHex: "0x" + scaledTip.toString(16),
+            executionUnitLimitHex:
+              feeSuggestion.executionUnitLimitHex ??
+              FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+          };
+        }
+      }
       const r = await bgWalletSendTx({
         to: effectiveAddr0x,
         valueWeiHex: valueLythoshiHex,
@@ -431,6 +461,7 @@ export function Send({
         ...(opts?.elevatedPassword
           ? { elevatedPassword: opts.elevatedPassword }
           : {}),
+        ...(signedFee ? { signedFee } : {}),
       });
       if (r.ok) {
         if (opts?.viaElevated) setElevatedOpen(false);
