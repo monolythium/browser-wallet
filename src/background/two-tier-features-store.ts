@@ -1,4 +1,4 @@
-// Phase 9 — chrome.storage round-trip for two-tier UX feature toggles.
+// chrome.storage round-trip for two-tier UX feature toggles.
 //
 // Single namespace at `chrome.storage.local["mono.two-tier-features.v1"]`.
 // Read paths fan out across components (`useFeature(flag)` is hot), so
