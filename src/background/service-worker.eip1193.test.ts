@@ -786,6 +786,16 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       });
     }
 
+    // Drive the content-script origin-announce (kind: "announce"), the message
+    // the bridge sends on load. Synchronous branch — no async response.
+    function announceFromTab(origin: string, tabId: number, senderId = "test-id"): void {
+      capturedOnMessage!(
+        { kind: "announce", origin },
+        { id: senderId, tab: { id: tabId } },
+        () => {},
+      );
+    }
+
     it("account-carrying events reach only connected-origin tabs", async () => {
       // Tab 2 / origin B talks to the SW but never connects.
       await rpcFromTab("eth_chainId", "https://unconnected.example", 2);
@@ -812,6 +822,54 @@ describe("EIP-1193 conformance — service-worker request router", () => {
           (e.payload as unknown[]).length === 0,
       );
       expect(disconnects.some((e) => e.tabId === 3)).toBe(true);
+    });
+
+    it("a tab that announces a now-unconnected origin stops receiving account events (C6 navigation residual closed)", async () => {
+      // Two tabs each connect a distinct origin.
+      await rpcFromTab("eth_requestAccounts", "https://stay.example", 10);
+      await rpcFromTab("eth_requestAccounts", "https://leave.example", 11);
+
+      // A fresh connect (new origin/tab) fans an accountsChanged broadcast out
+      // across the whole tabId->origin map — the only path that re-emits (a
+      // repeat connect from an already-connected origin resolves silently).
+      // Baseline: both connected tabs receive it (the address WOULD reach tab 11
+      // here — the pre-fix behaviour while its mapping is still connected).
+      broadcastEvents.length = 0;
+      await rpcFromTab("eth_requestAccounts", "https://baseline-trigger.example", 12);
+      let acct = broadcastEvents.filter((e) => e.event === "accountsChanged");
+      expect(acct.some((e) => e.tabId === 10)).toBe(true);
+      expect(acct.some((e) => e.tabId === 11)).toBe(true);
+
+      // Tab 11 navigates to an origin that never connected. Its bridge announces
+      // the new origin on load, flipping the tabId->origin map immediately —
+      // before tab 11 issues any rpc on the new page.
+      announceFromTab("https://now-unconnected.example", 11);
+
+      // Re-broadcast via another fresh connect: the still-connected tab 10 keeps
+      // the address; the navigated tab 11 no longer receives it. The
+      // stale-until-next-rpc window is closed at the content-script load instant.
+      broadcastEvents.length = 0;
+      await rpcFromTab("eth_requestAccounts", "https://second-trigger.example", 13);
+      acct = broadcastEvents.filter((e) => e.event === "accountsChanged");
+      expect(acct.some((e) => e.tabId === 10)).toBe(true);
+      expect(acct.some((e) => e.tabId === 11)).toBe(false);
+    });
+
+    it("an announce from a foreign extension id is ignored (C5 sender-id gate intact)", async () => {
+      // Tab 20 connects a genuine origin.
+      await rpcFromTab("eth_requestAccounts", "https://genuine.example", 20);
+      // A foreign-id sender tries to flip tab 20's mapping to an unconnected
+      // origin. The shared `sender.id === runtime.id` gate must drop it before
+      // the announce branch runs, leaving the map untouched.
+      announceFromTab("https://attacker.example", 20, "evil-ext-id");
+      // Fan an accountsChanged broadcast out via a fresh connect and confirm
+      // tab 20 still receives it → the poison announce was rejected (had it
+      // flipped tab 20 to the unconnected attacker origin, tab 20 would now be
+      // skipped). C5 sender-id gate not weakened.
+      broadcastEvents.length = 0;
+      await rpcFromTab("eth_requestAccounts", "https://foreign-trigger.example", 21);
+      const acct = broadcastEvents.filter((e) => e.event === "accountsChanged");
+      expect(acct.some((e) => e.tabId === 20)).toBe(true);
     });
   });
 });

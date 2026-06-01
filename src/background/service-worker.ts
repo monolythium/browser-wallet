@@ -1390,10 +1390,11 @@ function acceptSignedFee(signedFee: unknown): {
 // connected origins WITHOUT the "tabs" permission (reading a tab's URL would
 // need it and triggers a "read your browsing history" store warning). Populated
 // from the bridge-stamped origin on each rpc message (see the onMessage rpc
-// branch); entries self-clean on send failure (tab closed). RESIDUAL: a tab
-// that navigates from a connected origin to a different origin keeps its stale
-// mapping until its next rpc — a complete fix needs a navigation listener or
-// the "tabs" permission (flagged in the audit report).
+// branch) AND from the content-script origin-announce sent on load (the
+// onMessage "announce" branch); entries self-clean on send failure (tab closed).
+// The announce flips the entry the instant a new page loads, so the former
+// "stale until the tab's next rpc" residual on cross-origin navigation now
+// closes at the content-script load instant — still permission-free.
 const tabOriginById = new Map<number, string>();
 
 function broadcastEvent(event: string, payload: unknown): void {
@@ -9010,6 +9011,24 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   // Anything that touches state belongs in the popup or rpc branch.
   if (m?.kind === "ping") {
     sendResponse({ ok: true });
+    return false;
+  }
+  if (m?.kind === "announce") {
+    // T2-01 residual close — the content-script bridge announces its origin on
+    // load (document_start), BEFORE its first rpc. Refresh the SAME tabId->origin
+    // map the rpc branch maintains so a cross-origin navigation flips the entry
+    // the instant the new page loads, not at the tab's next rpc. This shrinks
+    // the stale-mapping window to the content-script load instant — without the
+    // "tabs"/"webNavigation" permission. Gated by `sender.id === runtime.id`
+    // above (C5); deliberately NOT routed through the popup-URL branch — a
+    // content script's `sender.url` is the page URL, which that branch correctly
+    // rejects. The announced origin is trusted exactly as the rpc-stamped origin
+    // (same ISOLATED-world source, the per-dApp authz key) — no new trust surface.
+    const ann = message as { origin?: unknown };
+    const annTabId = sender.tab?.id;
+    if (typeof annTabId === "number" && typeof ann.origin === "string") {
+      tabOriginById.set(annTabId, ann.origin);
+    }
     return false;
   }
   if (m?.kind === "rpc") {
