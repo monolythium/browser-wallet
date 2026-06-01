@@ -1543,3 +1543,92 @@ describe("keystore-mldsa SLH-DSA backup CRUD", () => {
     180_000,
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T1-03 (Item B) — session-MEK rehydrate cap. Needs a chrome stub WITH a
+// storage.session area (the v4-multi stub above is local-only, so the session
+// path no-ops there).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
+  let local: StorageMap;
+  let session: StorageMap;
+
+  function area(store: StorageMap) {
+    return {
+      get: (keys: string[], cb: (res: Record<string, unknown>) => void) => {
+        const out: Record<string, unknown> = {};
+        for (const k of keys) if (k in store) out[k] = store[k];
+        queueMicrotask(() => cb(out));
+      },
+      set: (entries: Record<string, unknown>, cb: () => void) => {
+        for (const [k, v] of Object.entries(entries)) store[k] = v;
+        queueMicrotask(() => cb());
+      },
+      remove: (keys: string[] | string, cb?: () => void) => {
+        const arr = Array.isArray(keys) ? keys : [keys];
+        for (const k of arr) delete store[k];
+        if (cb) queueMicrotask(() => cb());
+      },
+    };
+  }
+
+  beforeEach(() => {
+    local = {};
+    session = {};
+    (globalThis as { chrome?: unknown }).chrome = {
+      storage: { local: area(local), session: area(session) },
+    };
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  const MEK_KEY = "mono.session.mek.v4";
+  const DEADLINE_KEY = "mono.session.mek.rehydrate.deadline";
+
+  it(
+    "rehydrates within the cap and refuses + wipes the session MEK once past it",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      await ks1.createVaultFromNewMnemonic("rehydrate-cap-password");
+      // MEK + a FUTURE rehydrate deadline are mirrored to session.
+      expect(typeof session[MEK_KEY]).toBe("string");
+      expect(typeof session[DEADLINE_KEY]).toBe("number");
+      expect(session[DEADLINE_KEY] as number).toBeGreaterThan(Date.now());
+
+      // Simulate an SW restart: fresh module state (locked), session intact.
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      expect(ks2.isUnlockedV4()).toBe(false);
+      // Within the cap → silent rehydrate succeeds.
+      expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(true);
+      expect(ks2.isUnlockedV4()).toBe(true);
+
+      // Expire the cap, restart again → restore refused + session MEK wiped.
+      session[DEADLINE_KEY] = Date.now() - 1;
+      vi.resetModules();
+      const ks3 = await import("./keystore-mldsa.js");
+      expect((await ks3.tryRestoreFromSessionV4()).ok).toBe(false);
+      expect(ks3.isUnlockedV4()).toBe(false);
+      expect(session[MEK_KEY]).toBeUndefined();
+    },
+    60_000,
+  );
+
+  it(
+    "treats an absent rehydrate deadline as expired (fail closed)",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      await ks1.createVaultFromNewMnemonic("rehydrate-absent-password");
+      // Drop ONLY the deadline, keep the MEK (a pre-upgrade session shape).
+      delete session[DEADLINE_KEY];
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(false);
+      expect(session[MEK_KEY]).toBeUndefined();
+    },
+    60_000,
+  );
+});
