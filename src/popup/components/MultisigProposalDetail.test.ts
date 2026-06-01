@@ -1,4 +1,4 @@
-// Phase 8 Commit 3 — pure-helper tests for MultisigProposalDetail.
+// Pure-helper tests for MultisigProposalDetail.
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";

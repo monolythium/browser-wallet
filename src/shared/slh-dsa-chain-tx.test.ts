@@ -1,4 +1,4 @@
-// Phase 10 Commit 4 — calldata encoder tests.
+// calldata encoder tests.
 //
 // These tests pin the on-the-wire byte layout against the chain
 // side's `mono-core/crates/precompiles/system/emergency-key-registry/`

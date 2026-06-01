@@ -1,4 +1,4 @@
-// Unit coverage for the Monoscan tx-URL builder (C5). The wallet links a tx
+// Unit coverage for the Monoscan tx-URL builder. The wallet links a tx
 // to Monoscan only when it knows the canonical hash (its own sent txs); the
 // builder itself is a pure string join, pinned here so the route shape can't
 // drift from the explorer's hash-routed SPA path.

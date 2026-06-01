@@ -1,4 +1,4 @@
-// R18 — sessionStorage round-trip for Stake form / selection state.
+// sessionStorage round-trip for Stake form / selection state.
 //
 // Stake and ClusterDetail are sibling screens in App.tsx's `screen`
 // enum; navigating between them unmounts Stake. The persistence

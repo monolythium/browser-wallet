@@ -1,4 +1,4 @@
-// Phase 11 Commit 11 — SlhDsaBackupCard render-contract tests.
+// SlhDsaBackupCard render-contract tests.
 //
 // The bug fixed by this commit: a null `backup` (fresh vault that has
 // never opted into §30.1) caused the entire action area — including
@@ -116,7 +116,7 @@ describe("SlhDsaBackupCard — null-backup (fresh vault) render", () => {
   });
 
   it("renders the G3 rehearsal reference (collapsed by default)", () => {
-    // Phase 11 Commit 11 — rehearsal moved out of `createdAt > 0`
+    // Rehearsal moved out of `createdAt > 0`
     // branch so fresh-vault users can read about the rotation flow
     // BEFORE committing to setup.
     expect(showRehearsalReference(FRESH_VAULT_BACKUP)).toBe(true);
