@@ -1,6 +1,6 @@
-// Phase 11 Commit 4 — IndexerStatus validator tests.
+// IndexerStatus validator tests.
 //
-// Closes GAP #18 — the wire shape now carries schemaVersion (chain
+// The wire shape now carries schemaVersion (chain
 // 9d59c3f) + an optional retention envelope (chain 94cf845). Wallet
 // translates both into a chrome.storage-safe JSON shape and exposes
 // schema-drift detection via `isSchemaDrift`.

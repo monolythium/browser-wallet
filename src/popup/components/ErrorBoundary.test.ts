@@ -1,4 +1,4 @@
-// Phase 11 Commit 9 — ErrorBoundary tests.
+// ErrorBoundary tests.
 //
 // React class-component error boundaries cannot be reasonably exercised
 // without a renderer. We validate the static `getDerivedStateFromError`

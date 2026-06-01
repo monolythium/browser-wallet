@@ -1,4 +1,4 @@
-// Phase 9 — unit tests for the two-tier UX feature toggle state machine.
+// Unit tests for the two-tier UX feature toggle state machine.
 
 import { describe, it, expect } from "vitest";
 import {

@@ -1,4 +1,4 @@
-// Phase 8 Commit 1 — pure-helper tests for shared/multisig.ts.
+// Pure-helper tests for shared/multisig.ts.
 
 import { describe, expect, it } from "vitest";
 

@@ -1,6 +1,6 @@
-// Phase 10 Commit 3 — pure-helper tests for the SLH-DSA backup
+// Pure-helper tests for the SLH-DSA backup
 // reveal modal. The modal's React state machine is not snapshot-
-// tested (same posture as Phase 9's PasskeyRegisterModal +
+// tested (same posture as the PasskeyRegisterModal +
 // PasskeySignModal); the manual verification happens in the dev
 // popup. This file pins the only piece of pure logic the modal
 // exports — `buildDownloadText` — so the downloaded backup file's

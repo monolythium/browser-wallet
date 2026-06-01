@@ -18,7 +18,7 @@ const OPERATORS = [
 
 vi.mock("./networks.js", () => ({
   getActiveOperators: () => OPERATORS,
-  // GAP #11 genesis-pin: stub to always-true so this suite tests the
+  // genesis-pin: stub to always-true so this suite tests the
   // consensus shape, not the genesis check (covered separately).
   verifyOperatorGenesis: async () => true,
 }));
@@ -176,7 +176,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
     expect(r.balanceHex).toBe("0x5");
   });
 
-  // Phase 7.1 commit 7 — SDK contract anchor. The strict
+  // SDK contract anchor. The strict
   // AccountProofResponse binding (mono-core-sdk @0fd8a79) annotates
   // `state_root`/`block_number` in snake_case, but the chain serializer
   // emits camelCase on the wire (`stateRoot`, `blockNumber`). The
