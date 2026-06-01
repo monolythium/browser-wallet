@@ -26,7 +26,7 @@ interface NotificationSettingsProps {
   onBack: () => void;
 }
 
-// The Phase-5 master ("os") + three GAP-N1 toggles. The setter map keeps
+// The OS master ("os") toggle + three locked/incoming toggles. The setter map keeps
 // handlePickNotif a one-liner; each value mirrors its bg wrapper's signature.
 type NotifKey = "os" | "details" | "notifyLocked" | "badgeLocked" | "incoming";
 const NOTIF_SETTERS: Record<

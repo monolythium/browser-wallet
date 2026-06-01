@@ -492,7 +492,7 @@ function sameOperators(
   return true;
 }
 
-/** Phase 11.5 Commit 3 — chain-wide signing-health sample. Calls
+/** Chain-wide signing-health sample. Calls
  *  `lyth_signingActivity` (MD-CORE-0004) for the canonical first
  *  authority slot, renders a single-line status pill + signer count
  *  + a reservedStatuses footnote when the chain reports subsystems
@@ -632,7 +632,7 @@ function SigningHealthLive({ activity }: { activity: OperatorSigningActivity }) 
   );
 }
 
-/** Phase 11.5 Commit 5 — chain-wide authority-risk snapshot. Calls
+/** Chain-wide authority-risk snapshot. Calls
  *  `lyth_operatorRisk` (MD-CORE-0006 / 017cab9) for the canonical
  *  first authority slot, renders a single-row "miss rate × headroom
  *  × jail" tier card. Hidden on any mock-* outcome so older
@@ -760,7 +760,7 @@ function AuthorityRiskLive({ risk }: { risk: OperatorRiskWire }) {
   );
 }
 
-/** Phase 11.5 Commit 7 — chain-wide upcoming-duties snapshot. Calls
+/** Chain-wide upcoming-duties snapshot. Calls
  *  `lyth_upcomingDuties` (MD-CORE-0005) for the canonical first
  *  authority slot, renders a compact card showing attestation
  *  window + key-rotation epoch boundary + committee context. Hidden
