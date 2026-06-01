@@ -24,7 +24,7 @@ export interface ContactRecord {
   name: string;
   /** Created-at timestamp (ms). */
   addedAt: number;
-  /** Last-used timestamp (ms). Bumped by updateContactLastUsed when the
+  /** Last-used timestamp (ms). Bumped when the
    *  user sends to this contact. Sort key for the contact list (most
    *  recently used first). */
   lastUsedAt?: number;
@@ -95,17 +95,6 @@ export async function renameContact(
   const existing = map[key];
   if (!existing) return;
   existing.name = newName;
-  await saveContacts(map);
-}
-
-export async function updateContactLastUsed(
-  addressLower: string,
-): Promise<void> {
-  const map = await loadContacts();
-  const key = addressLower.toLowerCase();
-  const existing = map[key];
-  if (!existing) return;
-  existing.lastUsedAt = Date.now();
   await saveContacts(map);
 }
 
