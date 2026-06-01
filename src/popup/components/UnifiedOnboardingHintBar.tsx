@@ -1,4 +1,4 @@
-// Phase 11 Commit 8 — UnifiedOnboardingHintBar.
+// UnifiedOnboardingHintBar.
 //
 // Replaces the two-stack of OnboardingHintBar + SlhDsaBackupHintBar on
 // Home with a single coordinator-driven wrapper. The coordinator

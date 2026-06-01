@@ -1,4 +1,4 @@
-// Phase 7 commit 6 — Delegations dashboard. Read-only summary of the
+// Delegations dashboard. Read-only summary of the
 // user's active stake + pending rewards, with per-row "Manage" CTAs
 // that route back into the Stake page's existing unstake / redelegate
 // flows.
@@ -50,7 +50,7 @@ interface DelegationsProps {
   onRedelegate: (clusterId: number) => void;
   /** Route to the Stake page in stake-more mode. */
   onStakeMore: () => void;
-  /** Phase 11 Commit 6 — route to the cluster-detail panel for a
+  /** Route to the cluster-detail panel for a
    *  specific cluster. */
   onShowClusterDetail?: (cluster: ClusterDirectoryEntry) => void;
 }

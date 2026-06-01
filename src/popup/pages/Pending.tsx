@@ -1,4 +1,4 @@
-// Phase 8 Commit 4 — Pending multisig proposals dashboard.
+// Pending multisig proposals dashboard.
 //
 // Shows the proposal queue for a single multisig vault: each row is a
 // MultisigProposalDetail card plus Sign / Reject / Execute CTAs. The

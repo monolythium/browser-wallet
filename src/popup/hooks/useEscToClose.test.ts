@@ -1,4 +1,4 @@
-// Phase 11 Commit 10 — useEscToClose hook tests.
+// useEscToClose hook tests.
 //
 // Without a DOM-aware test environment (no jsdom in vitest setup) we
 // cannot exercise the document-listener wire-up directly. The tests

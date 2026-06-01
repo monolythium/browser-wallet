@@ -1,6 +1,6 @@
-// keystore-mldsa Phase 5 multi-vault layer tests.
+// keystore-mldsa multi-vault layer tests.
 //
-// Covers the additive surface from Phase 5 Commit 1:
+// Covers the additive multi-vault surface:
 //   - VEK wrap/unwrap round-trip under a MEK
 //   - sealVaultEnvelopeV4 / openVaultEnvelopeV4 round-trip
 //   - Legacy mono.vault.v4 → mono.vaults.v4 migration round-trip
@@ -57,7 +57,7 @@ function installChromeStub(): { storage: StorageMap } {
   return { storage };
 }
 
-describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
+describe("keystore-mldsa v4-multi", () => {
   let storage: StorageMap;
 
   beforeEach(() => {
@@ -153,75 +153,48 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
   );
 
   it(
-    "migrates legacy mono.vault.v4 to mono.vaults.v4 container; same seed + mnemonic recoverable",
+    "createVaultFromNewMnemonic commits straight into the mono.vaults.v4 container; seed + mnemonic recoverable",
     async () => {
       const ks = await import("./keystore-mldsa.js");
 
-      // Create a legacy single-vault entry by going through the
-      // existing v4 onboarding path. The legacy entry now lives at
-      // mono.vault.v4 in our stub storage.
-      const password = "migration-password";
-      const { mnemonic: legacyMnemonic, address: legacyAddress } =
+      const password = "create-container-password";
+      const { mnemonic, address } =
         await ks.createVaultFromNewMnemonic(password);
-      expect(storage["mono.vault.v4"]).toBeDefined();
-      expect(storage["mono.vaults.v4"]).toBeUndefined();
+      // Phase A: create writes the CONTAINER, not the legacy single-vault key.
+      expect(storage["mono.vaults.v4"]).toBeDefined();
+      expect(storage["mono.vault.v4"]).toBeUndefined();
 
       const {
-        migrateLegacyToContainerV4,
         openVaultEnvelopeV4,
         unwrapVekV4,
         deriveMekV4,
+        loadVaultsContainerV4,
       } = ks.__internalV4Multi;
-
-      const container = await migrateLegacyToContainerV4(password);
-      expect(container).not.toBeNull();
-      const c = container!;
+      const c = (await loadVaultsContainerV4())!;
       expect(c.vaults.length).toBe(1);
       expect(c.activeVaultId).toBe(c.vaults[0]!.id);
       expect(c.vaults[0]!.label).toBe("Wallet 1");
-      expect(c.vaults[0]!.addr).toBe(legacyAddress);
-      // Legacy entry preserved (rollback safety).
-      expect(storage["mono.vault.v4"]).toBeDefined();
-      // Container persisted.
-      expect(storage["mono.vaults.v4"]).toBeDefined();
+      expect(c.vaults[0]!.addr).toBe(address);
 
       // Re-derive MEK, unwrap VEK, open envelope → mnemonic matches.
       const mek = await deriveMekV4(password, c.masterKdf);
       const vek = unwrapVekV4(mek, c.vaults[0]!.wrappedKey);
       const opened = openVaultEnvelopeV4(vek, c.vaults[0]!.envelope);
-      expect(opened.mnemonic).toBe(legacyMnemonic);
+      expect(opened.mnemonic).toBe(mnemonic);
       expect(opened.seed.length).toBe(32);
     },
     60_000,
   );
 
   it(
-    "migration is idempotent: second call returns null (container already exists)",
+    "createVaultFromNewMnemonic refuses to overwrite an existing container",
     async () => {
       const ks = await import("./keystore-mldsa.js");
-      const password = "idempotence-password";
+      const password = "no-overwrite-password";
       await ks.createVaultFromNewMnemonic(password);
-
-      const { migrateLegacyToContainerV4 } = ks.__internalV4Multi;
-      const first = await migrateLegacyToContainerV4(password);
-      expect(first).not.toBeNull();
-      const second = await migrateLegacyToContainerV4(password);
-      expect(second).toBeNull();
-    },
-    60_000,
-  );
-
-  it(
-    "migration with wrong password throws 'wrong password'",
-    async () => {
-      const ks = await import("./keystore-mldsa.js");
-      await ks.createVaultFromNewMnemonic("right-password");
-      const { migrateLegacyToContainerV4 } = ks.__internalV4Multi;
       await expect(
-        migrateLegacyToContainerV4("wrong-password"),
-      ).rejects.toThrow(/wrong password/i);
-      // Container was NOT created on failure.
-      expect(storage["mono.vaults.v4"]).toBeUndefined();
+        ks.createVaultFromNewMnemonic(password),
+      ).rejects.toThrow(/already exists/i);
     },
     60_000,
   );
@@ -233,7 +206,7 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
       const password = "multi-vault-password";
 
       // Build a two-vault container directly via the helpers (the
-      // user-facing add-vault flow lands in Phase 5 Commit 2/4; this
+      // user-facing add-vault flow lands separately; this
       // test exercises the schema itself).
       const {
         generateMasterKdfParamsV4,
@@ -313,17 +286,11 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
   );
 
   it(
-    "container key and legacy key are independent",
+    "fresh install has neither the legacy key nor a container",
     async () => {
       const ks = await import("./keystore-mldsa.js");
-      // Fresh install: no legacy, no container.
-      const { loadVaultsContainerV4, migrateLegacyToContainerV4 } =
-        ks.__internalV4Multi;
-      expect(await ks.hasVaultV4()).toBe(false);
+      const { loadVaultsContainerV4 } = ks.__internalV4Multi;
       expect(await loadVaultsContainerV4()).toBeNull();
-      // Migration on a fresh install is a no-op.
-      const noop = await migrateLegacyToContainerV4("any-password");
-      expect(noop).toBeNull();
       expect(storage["mono.vault.v4"]).toBeUndefined();
       expect(storage["mono.vaults.v4"]).toBeUndefined();
     },
@@ -331,7 +298,7 @@ describe("keystore-mldsa v4-multi (Phase 5 Commit 1)", () => {
   );
 });
 
-describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
+describe("keystore-mldsa v4-multi state machine", () => {
   let storage: StorageMap;
 
   beforeEach(() => {
@@ -344,24 +311,29 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
   });
 
   it(
-    "unlockContainerV4 migrates the legacy entry on first call and loads the active backend",
+    "create commits the container directly + leaves it unlocked; unlockContainerV4 reloads the active backend",
     async () => {
       const ks = await import("./keystore-mldsa.js");
       const password = "vault-unlock-password";
-      const { address: legacyAddress } =
-        await ks.createVaultFromNewMnemonic(password);
-      expect(storage["mono.vault.v4"]).toBeDefined();
-      expect(storage["mono.vaults.v4"]).toBeUndefined();
-
-      // First container unlock — migration runs, MEK is cached, active
-      // vault's backend is loaded.
-      const r = await ks.unlockContainerV4(password);
-      expect(r.address).toBe(legacyAddress);
-      expect(typeof r.vaultId).toBe("string");
+      const { address } = await ks.createVaultFromNewMnemonic(password);
+      // Phase A: create writes the container directly (no legacy single-vault
+      // key) and leaves it unlocked.
       expect(storage["mono.vaults.v4"]).toBeDefined();
-      expect(storage["mono.vault.v4"]).toBeDefined(); // legacy preserved
+      expect(storage["mono.vault.v4"]).toBeUndefined();
       expect(ks.isUnlockedV4()).toBe(true);
-      expect(ks.getUnlockedAddressV4()).toBe(legacyAddress);
+      expect(ks.getUnlockedAddressV4()).toBe(address);
+
+      // Lock, then unlock through the container path — MEK is re-derived,
+      // active vault's backend is reloaded.
+      ks.lockV4();
+      expect(ks.isUnlockedV4()).toBe(false);
+      // Top-tier address privacy: no address is resolvable while locked.
+      expect(ks.getUnlockedAddressV4()).toBeNull();
+      const r = await ks.unlockContainerV4(password);
+      expect(r.address).toBe(address);
+      expect(typeof r.vaultId).toBe("string");
+      expect(ks.isUnlockedV4()).toBe(true);
+      expect(ks.getUnlockedAddressV4()).toBe(address);
 
       // Wrong password rejects.
       ks.lockV4();
@@ -372,17 +344,43 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
   );
 
   it(
-    "listVaultsV4 returns null pre-migration and one summary post-migration",
+    "verifyContainerPasswordV4 confirms the right password and rejects a wrong one without mutating unlock state (T1-04a)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "verify-password-correct";
+      await ks.createVaultFromNewMnemonic(password);
+
+      // Correct password verifies true. Verification is side-effect free —
+      // it does NOT change the unlocked/active state in either direction.
+      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect(ks.isUnlockedV4()).toBe(true);
+      expect(ks.getActiveVaultIdV4()).not.toBeNull();
+
+      // Wrong password verifies false (AEAD fails closed), never throws.
+      expect(await ks.verifyContainerPasswordV4("wrong-password")).toBe(false);
+
+      // Works while LOCKED too (re-derives the MEK from disk) and does not
+      // unlock the wallet as a side effect.
+      ks.lockV4();
+      expect(ks.isUnlockedV4()).toBe(false);
+      expect(ks.getActiveVaultIdV4()).toBeNull();
+      expect(await ks.verifyContainerPasswordV4(password)).toBe(true);
+      expect(ks.isUnlockedV4()).toBe(false);
+      expect(ks.getUnlockedAddressV4()).toBeNull();
+    },
+    60_000,
+  );
+
+  it(
+    "listVaultsV4 returns null before create and one summary after create",
     async () => {
       const ks = await import("./keystore-mldsa.js");
       expect(await ks.listVaultsV4()).toBeNull();
 
       const password = "list-password";
       const { address } = await ks.createVaultFromNewMnemonic(password);
-      // listVaultsV4 still null until migration runs.
-      expect(await ks.listVaultsV4()).toBeNull();
-
-      await ks.unlockContainerV4(password);
+      // create commits the container directly, so the summary is available
+      // immediately — no unlock/migration round-trip needed.
       const list = await ks.listVaultsV4();
       expect(list).not.toBeNull();
       expect(list!.length).toBe(1);
@@ -413,7 +411,7 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
       expect(after.length).toBe(2);
       expect(after[1]!.label).toBe("Wallet 2");
       expect(after[1]!.addr).toBe(added.address);
-      // Round 3.5 — addVaultFreshV4 now auto-switches the active vault
+      // addVaultFreshV4 auto-switches the active vault
       // to the newly-created record. The previous design left active
       // unchanged but the popup never wired the follow-up vault-select
       // call, so users saw the old address persist after creating a
@@ -426,7 +424,7 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
   );
 
   it(
-    "addVaultFreshV4 auto-switches active across multiple appends (Round 3.5)",
+    "addVaultFreshV4 auto-switches active across multiple appends",
     async () => {
       const ks = await import("./keystore-mldsa.js");
       const password = "auto-switch-password";
@@ -515,13 +513,12 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
       const ks = await import("./keystore-mldsa.js");
       const password = "rename-password";
       await ks.createVaultFromNewMnemonic(password);
-      // Migrate without unlocking the unit under test — rename is supposed
-      // to work pre-unlock. We need the container on disk, so trigger
-      // migration via the internal helper.
-      const { migrateLegacyToContainerV4 } = ks.__internalV4Multi;
-      const container = await migrateLegacyToContainerV4(password);
-      expect(container).not.toBeNull();
-      const vaultId = container!.vaults[0]!.id;
+      // createVaultFromNewMnemonic commits the container on disk directly, so
+      // it is already present. Read the vault id from the list — rename is
+      // supposed to work pre-unlock (labels are non-sensitive metadata).
+      const list0 = (await ks.listVaultsV4())!;
+      expect(list0.length).toBe(1);
+      const vaultId = list0[0]!.id;
 
       // Lock keeps the MEK out of memory; rename still works.
       ks.lockV4();
@@ -560,10 +557,10 @@ describe("keystore-mldsa v4-multi state machine (Phase 5 Commit 2)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 8 Commit 1 — multisig vault storage round-trip
+// multisig vault storage round-trip
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
+describe("keystore-mldsa multisig vault", () => {
   let storage: StorageMap;
 
   beforeEach(() => {
@@ -764,7 +761,9 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
       const ks = await import("./keystore-mldsa.js");
       const password = "ms-locked-password";
       await ks.createVaultFromNewMnemonic(password);
-      // Do NOT unlock the container.
+      // create now leaves the container unlocked; lock it to exercise the
+      // locked-container guard.
+      ks.lockV4();
 
       await expect(
         ks.addVaultMultisigV4({
@@ -829,8 +828,9 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
       const ks = await import("./keystore-mldsa.js");
       const password = "ms-sign-gate-password";
       await ks.createVaultFromNewMnemonic(password);
+      // create leaves the container unlocked; lock it to exercise the guard.
+      ks.lockV4();
 
-      // No unlock yet.
       await expect(
         ks.signWithVaultV4("any", new Uint8Array(32)),
       ).rejects.toThrow(/locked/);
@@ -961,7 +961,7 @@ describe("keystore-mldsa multisig vault (Phase 8 Commit 1)", () => {
   );
 });
 
-describe("keystore-mldsa passkey state (Phase 9 Commit 1)", () => {
+describe("keystore-mldsa passkey state", () => {
   beforeEach(() => {
     installChromeStub();
     vi.resetModules();
@@ -1091,7 +1091,7 @@ describe("keystore-mldsa passkey state (Phase 9 Commit 1)", () => {
   );
 });
 
-describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
+describe("keystore-mldsa passkey BigInt round-trip", () => {
   // The base `installChromeStub` keeps stored objects as live JS
   // references, so BigInt values survive a set / get round-trip in
   // the test environment but DO NOT in real Chrome (some Chrome
@@ -1360,7 +1360,7 @@ describe("keystore-mldsa passkey BigInt round-trip (Phase 9 hotfix)", () => {
   );
 });
 
-describe("keystore-mldsa SLH-DSA backup CRUD (Phase 10 Commit 1)", () => {
+describe("keystore-mldsa SLH-DSA backup CRUD", () => {
   beforeEach(() => {
     installChromeStub();
     vi.resetModules();
@@ -1541,5 +1541,94 @@ describe("keystore-mldsa SLH-DSA backup CRUD (Phase 10 Commit 1)", () => {
       expect(reread).toBeNull();
     },
     180_000,
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T1-03 (Item B) — session-MEK rehydrate cap. Needs a chrome stub WITH a
+// storage.session area (the v4-multi stub above is local-only, so the session
+// path no-ops there).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
+  let local: StorageMap;
+  let session: StorageMap;
+
+  function area(store: StorageMap) {
+    return {
+      get: (keys: string[], cb: (res: Record<string, unknown>) => void) => {
+        const out: Record<string, unknown> = {};
+        for (const k of keys) if (k in store) out[k] = store[k];
+        queueMicrotask(() => cb(out));
+      },
+      set: (entries: Record<string, unknown>, cb: () => void) => {
+        for (const [k, v] of Object.entries(entries)) store[k] = v;
+        queueMicrotask(() => cb());
+      },
+      remove: (keys: string[] | string, cb?: () => void) => {
+        const arr = Array.isArray(keys) ? keys : [keys];
+        for (const k of arr) delete store[k];
+        if (cb) queueMicrotask(() => cb());
+      },
+    };
+  }
+
+  beforeEach(() => {
+    local = {};
+    session = {};
+    (globalThis as { chrome?: unknown }).chrome = {
+      storage: { local: area(local), session: area(session) },
+    };
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  const MEK_KEY = "mono.session.mek.v4";
+  const DEADLINE_KEY = "mono.session.mek.rehydrate.deadline";
+
+  it(
+    "rehydrates within the cap and refuses + wipes the session MEK once past it",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      await ks1.createVaultFromNewMnemonic("rehydrate-cap-password");
+      // MEK + a FUTURE rehydrate deadline are mirrored to session.
+      expect(typeof session[MEK_KEY]).toBe("string");
+      expect(typeof session[DEADLINE_KEY]).toBe("number");
+      expect(session[DEADLINE_KEY] as number).toBeGreaterThan(Date.now());
+
+      // Simulate an SW restart: fresh module state (locked), session intact.
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      expect(ks2.isUnlockedV4()).toBe(false);
+      // Within the cap → silent rehydrate succeeds.
+      expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(true);
+      expect(ks2.isUnlockedV4()).toBe(true);
+
+      // Expire the cap, restart again → restore refused + session MEK wiped.
+      session[DEADLINE_KEY] = Date.now() - 1;
+      vi.resetModules();
+      const ks3 = await import("./keystore-mldsa.js");
+      expect((await ks3.tryRestoreFromSessionV4()).ok).toBe(false);
+      expect(ks3.isUnlockedV4()).toBe(false);
+      expect(session[MEK_KEY]).toBeUndefined();
+    },
+    60_000,
+  );
+
+  it(
+    "treats an absent rehydrate deadline as expired (fail closed)",
+    async () => {
+      const ks1 = await import("./keystore-mldsa.js");
+      await ks1.createVaultFromNewMnemonic("rehydrate-absent-password");
+      // Drop ONLY the deadline, keep the MEK (a pre-upgrade session shape).
+      delete session[DEADLINE_KEY];
+      vi.resetModules();
+      const ks2 = await import("./keystore-mldsa.js");
+      expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(false);
+      expect(session[MEK_KEY]).toBeUndefined();
+    },
+    60_000,
   );
 });

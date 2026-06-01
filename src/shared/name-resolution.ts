@@ -1,4 +1,4 @@
-// Phase 4.4 — fallback-aware name cache shared between the service worker
+// Fallback-aware name cache shared between the service worker
 // (which calls `lyth_getAddressLabel` per counterparty and persists results)
 // and the popup (which reads the cache via chrome.storage.onChanged + IPC).
 //
@@ -7,7 +7,7 @@
 //   { address, category, displayName, updatedAtBlock }
 // with `category` in the indexer's pragmatic taxonomy: foundation, exchange,
 // bridge, treasury, contract, operator. This is the de facto naming source
-// for Phase 4.4; §22.8's TLD-hierarchical scheme (.mono / .agent / .cluster
+// today; §22.8's TLD-hierarchical scheme (.mono / .agent / .cluster
 // / .contract / .system) is not yet emitted by the indexer. The binding shape
 // is the same when §22.8 lands — swap-in only.
 //

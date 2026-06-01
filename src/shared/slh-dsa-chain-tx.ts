@@ -1,4 +1,4 @@
-// Phase 10 Commit 4 — calldata encoder + tx-shape builder for the
+// Calldata encoder + tx-shape builder for the
 // emergency-key-registry precompile (`0x1100`).
 //
 // What this module owns

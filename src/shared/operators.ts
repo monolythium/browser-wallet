@@ -4,7 +4,7 @@
 //
 // Sprintnet has 6 hardcoded default operator RPCs (see networks.ts:
 // SPRINTNET_OPERATOR_RPCS_DEFAULTS; the original operator-1 was dropped
-// per the 2026-05-11 regenesis, see that file's docstring). Power users
+// per the regenesis, see that file's docstring). Power users
 // can override that list with their own operator nodes; the override is
 // persisted to chrome.storage.local and merged at lookup time. Absence
 // of the key (or null value) means "use the defaults".
@@ -21,7 +21,7 @@ export const STORAGE_KEY_OPERATOR_OVERRIDE = "mono.operators.override";
  * in networks.ts so the merge function can flip between defaults and override
  * without per-call shape adapters.
  *
- * Phase 11 Commit 12 — optional `wsRpc` field. When present, the WS client
+ * Optional `wsRpc` field. When present, the WS client
  * uses it verbatim. When absent, the client derives a wss:// URL from `rpc`
  * (Geth/Erigon convention is HTTP on :8545, WS on :8546). The override is
  * additive — existing operator records without the field continue to work
@@ -74,7 +74,7 @@ export function validateOperatorList(input: unknown): OperatorEntry[] | null {
     } catch {
       return null;
     }
-    // Phase 11 Commit 12 — wsRpc is optional. When present it must parse
+    // wsRpc is optional. When present it must parse
     // as a URL and use the ws:// / wss:// scheme; malformed values
     // invalidate the whole entry (caller falls back to defaults).
     let wsRpc: string | undefined;

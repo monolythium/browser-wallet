@@ -1,5 +1,5 @@
 // Hook-driven Activity tab body. Replaces the inline ActivityList that
-// lived in components.tsx through Phase 4.3.
+// lived in components.tsx in the earlier monolithic layout.
 //
 // Hook integration order (per the plan):
 //   1. useActivity(addr, chain)        → cache + pending
@@ -17,9 +17,15 @@ import { useIndexerStatus } from "../hooks/useIndexerStatus.js";
 import { ActivityRow } from "./ActivityRow.js";
 import { ActivityDetail } from "./ActivityDetail.js";
 import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
-import type { ActivityRow as ActivityRowType } from "../../shared/activity.js";
+import {
+  mergeActivityNewestFirst,
+  type ActivityRow as ActivityRowType,
+} from "../../shared/activity.js";
 import type { WalletActivityKindEnvelope } from "../../shared/activity-kind.js";
 import type { NameLabel } from "../../shared/name-resolution.js";
+import { type NotificationRecord } from "../../shared/notifications.js";
+import { NotificationRow } from "./NotificationRow.js";
+import { NotificationDetail } from "./NotificationDetail.js";
 
 export interface ActivityListProps {
   /** Unlocked account address (0x form). Null while the wallet boots
@@ -96,12 +102,12 @@ function loadingSkeleton() {
   );
 }
 
-/** Phase 11 Commit 3 — kind-aware empty state. The chain emits a typed
+/** Kind-aware empty state. The chain emits a typed
  *  `lyth_addressActivityKind` (chain commit d77e4fc) discriminating
  *  not_found / indexer_disabled / pruned / private / unknown. Each gets
  *  its own copy so the user understands what's actually going on
  *  rather than seeing the generic "no transactions yet" for every
- *  reason history is unavailable. Closes GAP #17.
+ *  reason history is unavailable.
  *
  *  When `envelope` is null (probe in flight / chain unreachable), falls
  *  back to the historical generic empty state copy. */
@@ -201,12 +207,12 @@ function errorState(onRetry: () => void) {
 }
 
 export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
-  const { cache, pending, loading, errors, refresh } = useActivity(
+  const { cache, pending, failed, loading, errors, refresh } = useActivity(
     addr,
     chainIdHex,
   );
   const indexerStatus = useIndexerStatus(chainIdHex);
-  // Phase 11 Commit 3 — kind probe runs in parallel with the activity
+  // Kind probe runs in parallel with the activity
   // fetch. Used only by the empty-state branch — when rows arrive,
   // the envelope is irrelevant.
   const activityKind = useActivityKind(addr, chainIdHex);
@@ -216,6 +222,13 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
     row: ActivityRowType;
     label: NameLabel | undefined;
   } | null>(null);
+  // Failed tx tapped → open the shared NotificationDetail popup (same
+  // Status / Amount / To / Block / Date / View-on-Monoscan view the
+  // notification center uses). Separate state since failed rows are
+  // NotificationRecords, not ActivityRowType.
+  const [selectedFailed, setSelectedFailed] = useState<NotificationRecord | null>(
+    null,
+  );
 
   // Derive counterparty addresses for name resolution. Pulls from both
   // confirmed rows and pending rows so a Pending row's recipient also
@@ -238,12 +251,17 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
 
   const { labels } = useNameResolution(counterpartyAddrs, chainIdHex);
 
-  // Composite list: pending first (newest broadcasts at top), then
-  // confirmed (already newest-first per mergeIndexerSnapshot).
+  // Single chronological list (newest-first), pending + confirmed + failed
+  // interleaved — failed rows no longer pin to the top. `rows` (pending +
+  // confirmed) is kept for the loading/empty/error guards below.
   const rows: ActivityRowType[] = useMemo(() => {
     if (!cache) return [...pending];
     return [...pending, ...cache.confirmed];
   }, [cache, pending]);
+  const merged = useMemo(
+    () => mergeActivityNewestFirst(pending, cache?.confirmed ?? [], failed),
+    [pending, cache, failed],
+  );
 
   const hasIndexerError = !!errors.ipc || !!errors.addressActivity;
 
@@ -262,23 +280,45 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
           />
         )}
       {(() => {
-        // Loading: first fetch hasn't returned AND cache is null.
-        if (loading && cache === null && pending.length === 0) {
+        // Loading: first fetch hasn't returned AND nothing to show yet.
+        if (
+          loading &&
+          cache === null &&
+          pending.length === 0 &&
+          failed.length === 0
+        ) {
           return loadingSkeleton();
         }
-        // IPC failure / total indexer outage with no cache to fall back to.
-        if (hasIndexerError && rows.length === 0) {
+        // IPC failure / total indexer outage with nothing to fall back to.
+        if (hasIndexerError && rows.length === 0 && failed.length === 0) {
           return errorState(() => void refresh());
         }
         // Empty state. The kind probe (useActivityKind) discriminates
         // not_found / indexer_disabled / pruned / private / unknown
         // so the user sees context-aware copy rather than the historical
         // generic "no transactions yet" for every absence reason.
-        if (rows.length === 0) return emptyState(activityKind.envelope);
-        // Live rows.
+        if (rows.length === 0 && failed.length === 0) {
+          return emptyState(activityKind.envelope);
+        }
+        // Live rows — pending + confirmed + failed merged into ONE list sorted
+        // strictly newest-first (mergeActivityNewestFirst). Failed rows come
+        // from the notification history (not the success-only indexer stream)
+        // and render via NotificationRow; the rest via ActivityRow.
         return (
           <div>
-            {rows.map((row) => {
+            {merged.map((item) => {
+              if (item.tag === "failed") {
+                const rec = item.record;
+                return (
+                  <NotificationRow
+                    key={`failed-${rec.txHash}`}
+                    record={rec}
+                    showUnread={false}
+                    onOpen={() => setSelectedFailed(rec)}
+                  />
+                );
+              }
+              const row = item.row;
               const cp = counterpartyOf(row);
               const label = cp ? labels.get(cp) : undefined;
               const key =
@@ -312,6 +352,12 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
           label={selected.label}
           walletAddr={addr}
           onClose={() => setSelected(null)}
+        />
+      )}
+      {selectedFailed && (
+        <NotificationDetail
+          record={selectedFailed}
+          onClose={() => setSelectedFailed(null)}
         />
       )}
     </>

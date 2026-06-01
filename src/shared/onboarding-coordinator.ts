@@ -1,6 +1,6 @@
-// Phase 11 Commit 8 — onboarding hint coordinator + setup health.
+// Onboarding hint coordinator + setup health.
 //
-// Phase 9 added the passkey hint bar; Phase 10 added the SLH-DSA backup
+// The passkey hint bar and the SLH-DSA backup hint bar each render
 // hint bar. Both render independently — without coordination they stack
 // (Home shows two yellow bars + steals two rows of vertical space).
 // This module is the single source of truth for which hint surfaces +

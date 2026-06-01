@@ -1,4 +1,4 @@
-// Phase 8 Commit 5 — MultisigGovernance.
+// MultisigGovernance.
 //
 // Renders the current signer roster + threshold, surfaces governance
 // proposals (add/remove/replace signer + change threshold), and wires

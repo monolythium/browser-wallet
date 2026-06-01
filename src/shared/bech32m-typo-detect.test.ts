@@ -1,4 +1,4 @@
-// Phase 11 Commit 7 — bech32m typo detection tests.
+// bech32m typo detection tests.
 
 import { describe, expect, it } from "vitest";
 import { addressToBech32m } from "./bech32m.js";

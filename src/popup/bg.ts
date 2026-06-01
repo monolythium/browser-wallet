@@ -66,14 +66,6 @@ export interface KeystoreStatus {
   algo: SignAlgo;
 }
 
-export type ApprovalKind =
-  | "connect"
-  | "personal_sign"
-  | "typed_sign"
-  | "send_tx"
-  | "switch_chain"
-  | "add_chain";
-
 export interface SendTxView {
   /** Hex execution-unit limit. */
   executionUnitLimitHex: string | null;
@@ -191,7 +183,7 @@ export interface ChainEntry {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-/** Phase 5.0.1 — error-message fragments that indicate the SW was
+/** Error-message fragments that indicate the SW was
  *  idle/asleep when sendMessage fired. Chrome MV3 wakes the worker
  *  on demand, but the wake race can drop the first message; the
  *  retry path below catches these classes. */
@@ -375,7 +367,10 @@ export async function bgWalletActiveAccount(): Promise<
 export async function bgWalletBalance(
   address: string,
   chainIdHex: string,
-): Promise<{ ok: true; balanceHex: string } | { ok: false; reason?: string }> {
+): Promise<
+  | { ok: true; balanceHex: string; spendGuardHex: string }
+  | { ok: false; reason?: string }
+> {
   return send("wallet-balance", { address, chainIdHex });
 }
 
@@ -391,6 +386,20 @@ export async function bgGetBlockTxValue(
   | { ok: false; reason?: string }
 > {
   return send("get-block-tx-value", { blockHeight, txIndex });
+}
+
+/** Best-effort total tx fee in lythoshi for a confirmed self-paid tx, read
+ *  from the native receipt (`lyth_nativeReceipt.fee.total_lythoshi`). Used by
+ *  the activity-detail popup, which has no persisted fee field (indexer-sourced
+ *  rows). `feeLythoshi` is null when the fee is zero / the native receipt is
+ *  unavailable (failed / reverted / pruned). LYTH not wei. */
+export async function bgWalletTxFee(
+  txHash: string,
+): Promise<
+  | { ok: true; feeLythoshi: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-tx-fee", { txHash });
 }
 
 export interface WalletAddressLabel {
@@ -446,7 +455,7 @@ export async function bgWalletIndexerSnapshot(
   return send("wallet-indexer-snapshot", { address, chainIdHex });
 }
 
-// Phase 4.4 — cached, kind-dispatched activity feed (Layer 2 in the plan).
+// Cached, kind-dispatched activity feed (Layer 2 in the plan).
 // Re-exports the wallet-internal cache and pending-row types from
 // shared/activity.ts so callers don't need to import from two paths.
 export type {
@@ -471,12 +480,28 @@ export async function bgWalletActivityGet(
   return send("wallet-activity-get", { address, chainIdHex });
 }
 
-// Phase 4.4 — batched name resolution via lyth_getAddressLabel.
+/** Failed txs for (address, chain), sourced from the notification history
+ *  (the indexer activity stream is success-only). Newest-first. Drives the
+ *  red "<Type> failed" rows in the Activity list. */
+export async function bgWalletActivityFailed(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      failed: import("../shared/notifications.js").NotificationRecord[];
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-failed", { address, chainIdHex });
+}
+
+// Batched name resolution via lyth_getAddressLabel.
 // Re-export the wallet-internal label types so popup callers don't
 // need to reach into shared/.
 export type { NameLabel, NameLabelRecord } from "../shared/name-resolution.js";
 
-/** Phase 11 Commit 3 — typed AddressActivityKind probe (GAP #17 closes).
+/** Typed AddressActivityKind probe.
  *  Returns one of {found, not_found, indexer_disabled, pruned, private,
  *  unknown} so the activity feed can pick the right empty-state UX.
  *  Never errors at this layer — the SW collapses transport failures
@@ -504,14 +529,14 @@ export async function bgWalletResolveNames(
   return send("wallet-resolve-names", { addresses, chainIdHex });
 }
 
-// Phase 4.4 — indexer-status polling for the §28.2.1 staleness banner.
+// Indexer-status polling for the §28.2.1 staleness banner.
 // All success-path fields nullable: when the method is unavailable or
 // the response is malformed, the handler returns the defensive
 // { stale: false, lagBlocks: null, currentHeight: null, latestHeight: null }
 // rather than surfacing a false-positive stale flag to the user.
 //
-// Phase 11 Commit 4 — extended with schemaVersion + schemaDrift +
-// retention envelope (chain commits 9d59c3f + 94cf845). Closes GAP #18.
+// Extended with schemaVersion + schemaDrift +
+// retention envelope (chain commits 9d59c3f + 94cf845).
 export interface IndexerRetentionView {
   /** True when the indexer also serves a deep archive. */
   archive: boolean;
@@ -619,7 +644,7 @@ export async function bgWalletFeeSuggestion(
   };
 }
 
-/** Phase 11.5 Commit 2 — pre-tx hook preview. Calls
+/** Pre-tx hook preview. Calls
  *  `lyth_previewTransactionHooks` (mono-core @dd05511 / MS-CORE-0009).
  *  Returns a typed `ChainOutcome<TransactionHookPreview>` whose `kind`
  *  the Send preview branches on:
@@ -691,7 +716,7 @@ export type NativeAgentStateOutcome =
     import("../shared/native-agent-state.js").NativeAgentStateResponse | null
   >;
 
-/** Phase 11.5 Commit 3 — chain-wide signing-activity sample. Calls
+/** Chain-wide signing-activity sample. Calls
  *  `lyth_signingActivity` (mono-core @dd05511 / MD-CORE-0004) for a
  *  single authority slot (default 0) over a small window (default 20
  *  entries). Returns a `ChainOutcome<OperatorSigningActivity>` whose
@@ -720,7 +745,7 @@ export type ChainSigningActivityOutcome =
     import("../shared/audit-followup-types.js").OperatorSigningActivity
   >;
 
-/** Phase 11.5 Commit 5 — chain-wide operator-risk snapshot. Calls
+/** Chain-wide operator-risk snapshot. Calls
  *  `lyth_operatorRisk` (mono-core @dd05511 / MD-CORE-0006, paired
  *  with 017cab9 operator pending-change risk previews) for a single
  *  authority slot (default 0) over a 200-round window (default).
@@ -750,7 +775,7 @@ export type ChainOperatorRiskOutcome =
     import("../shared/audit-followup-types.js").OperatorRiskWire
   >;
 
-/** Phase 11.5 Commit 7 — chain-wide upcoming-duties snapshot. Calls
+/** Chain-wide upcoming-duties snapshot. Calls
  *  `lyth_upcomingDuties` (mono-core @dd05511 / MD-CORE-0005) for a
  *  single authority slot (default 0) over a 1000-round horizon
  *  (chain max). Returns a `ChainOutcome<UpcomingDuties>` whose
@@ -826,7 +851,7 @@ export async function bgWalletChainBlockNumber(): Promise<
   return send("wallet-chain-block-number");
 }
 
-/** Phase 11 Commit 2 — WS-client status probe. Returns the SW-singleton
+/** WS-client status probe. Returns the SW-singleton
  *  WsClient's current connection state so the popup can prefer event-
  *  driven updates over polling when WS is connected. Status values:
  *    - "disconnected" — no live socket (boot state or transient drop)
@@ -846,7 +871,7 @@ export async function bgWsStatus(): Promise<
   return send("ws-status");
 }
 
-/** Phase 11 Commit 2 — fire-and-forget subscribe to chain `newHeads`.
+/** Fire-and-forget subscribe to chain `newHeads`.
  *  After the first call, the SW writes the latest block hex to
  *  chrome.storage.session under `mono.ws.lastBlockHex` every time a
  *  head arrives. ChainStatusBanner watches that key for live updates
@@ -878,13 +903,20 @@ export async function bgWalletSendTx(args: {
   mempoolClass?: number;
   /** Phase-1.5 — optional operation tag forwarded to the pending-row
    *  record so the notifications hook can label the resulting
-   *  NotificationRecord with a friendly title (Phase 2 toast + Phase 3
+   *  NotificationRecord with a friendly title (OS toast + in-app
    *  UI). PENDING-ROW METADATA ONLY: the SW never plumbs this into
    *  `submitEncryptedMlDsaTx`'s argument object — the signed tx bytes,
    *  the ML-DSA-65 signature, the encrypted envelope, the nonce, the
    *  fee, and the gas are unchanged whether this is set or not. Omit
    *  for the coarse `"send"` / `"contract_call"` fallback. */
   opKind?: TxOpKind;
+  /** Cluster a delegation send (delegate / undelegate / redelegate) targets.
+   *  PENDING-ROW METADATA ONLY (same invariant as opKind) — forwarded to the
+   *  pending row + notification record so the detail can name the cluster
+   *  (the tx `to` is the delegation module, not the cluster). Never reaches
+   *  the signer. Omit for non-delegation sends. */
+  clusterId?: number;
+  clusterName?: string;
   /** SDK 0.3.11 optional-encryption toggle. DEFAULT (omitted / false) =
    *  the PLAINTEXT `mesh_submitTx` path, which is the functional
    *  inclusion path on the live chain (`encrypted_mempool_required =
@@ -893,6 +925,18 @@ export async function bgWalletSendTx(args: {
    *  Send screen keeps the corresponding "Private (preview)" toggle
    *  default-off + disabled so this is never `true` from the UI today. */
   private?: boolean;
+  /** T1-04(a) — account password supplied to clear an over-limit passkey
+   *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
+   *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */
+  elevatedPassword?: string;
+  /** T4-04(b1) — the EXACT fee the Send preview displayed (base + tier-scaled
+   *  tip + unit limit), so the SW signs it verbatim instead of re-reading the
+   *  operator. Omit on non-Send callers to keep the suggestFee fallback. */
+  signedFee?: {
+    maxFeePerGasHex: string;
+    maxPriorityFeePerGasHex: string;
+    executionUnitLimitHex: string;
+  };
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -901,6 +945,11 @@ export async function bgWalletSendTx(args: {
       code?: number;
       method?: string;
       via?: string;
+      /** Set when the per-vault passkey cap blocked the send. "required" =
+       *  no/empty password supplied; "wrong_password"/"rate_limited" = a
+       *  supplied password failed the SW-side re-auth. */
+      passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+      secondsRemaining?: number;
     }
 > {
   type Reply =
@@ -911,6 +960,8 @@ export async function bgWalletSendTx(args: {
         code?: number;
         method?: string;
         via?: string;
+        passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+        secondsRemaining?: number;
       };
   const { executionUnitLimitHex, ...rest } = args;
   const r = await send<Reply>("wallet-send-tx", {
@@ -1338,14 +1389,14 @@ export interface OperatorHealthRowCommon {
   /** Observed genesis identity or fallback block-0 hash; null when the
    *  probe shape is unsupported or malformed. */
   observedGenesis: string | null;
-  /** Phase 7.1 — operator-surface availability from
+  /** Operator-surface availability from
    *  `lyth_operatorCapabilities` (SDK commit 0f483b8). Keys are surface
    *  names ("ferveo", "streams", "indexer", "prover", "websocket", etc.);
    *  values are the chain-reported status string. `null` when the
    *  capability probe failed or the operator doesn't expose the method
    *  — RPC dispatch is not gated on this; it's a display-only hint. */
   capabilities: Record<string, string> | null;
-  /** Phase 7.1 — indexer height summary from `lyth_indexerStatus`. `null`
+  /** Indexer height summary from `lyth_indexerStatus`. `null`
    *  when the operator's indexer is disabled or the probe failed.
    *  Surfaces as a "indexer #N (lag N)" line under the row. */
   indexerHeight: number | null;
@@ -1375,9 +1426,9 @@ export async function bgOperatorsHealth(): Promise<{
   return send("sprintnet-operators-health");
 }
 
-/** Phase 7.1 — runtime provenance for the About page. Subset of
+/** Runtime provenance for the About page. Subset of
  *  `RuntimeProvenanceResponse` (SDK commit f67cf0e), pulled once at
- *  About-card mount via the existing operator-iteration path (GAP #11
+ *  About-card mount via the existing operator-iteration path (genesis
  *  trust still applies). `null` on every chain-offline / malformed
  *  response — the About page renders a placeholder rather than failing
  *  to mount. */
@@ -1414,7 +1465,7 @@ export async function bgSetAutoLockMinutes(
   return send("set-auto-lock-minutes", { minutes });
 }
 
-// Round 4 TASK 4 — UI open mode (side-panel vs popup). The SW reads
+// UI open mode (side-panel vs popup). The SW reads
 // the persisted choice on boot and binds the action-icon click via
 // chrome.sidePanel.setPanelBehavior + chrome.action.setPopup.
 
@@ -1436,7 +1487,7 @@ export async function bgSetUiOpenMode(
   return send("set-ui-open-mode", { mode });
 }
 
-// ---- Round 7 TASK 5 — Contacts (address book) ----
+// ---- Contacts (address book) ----
 //
 // SW persists the map under STORAGE_KEY_CONTACTS; useContacts subscribes
 // to chrome.storage.onChanged for live updates. Keys are lowercase 0x
@@ -1490,9 +1541,9 @@ export async function bgContactsCheck(address: string): Promise<boolean> {
   return r.ok && r.known;
 }
 
-// ---- Phase 5 multi-vault container surface ----
+// ---- Multi-vault container surface ----
 //
-// The popup vault picker (VaultPicker component, Commit 3) reads these
+// The popup vault picker (VaultPicker component) reads these
 // to render the list + switch active vault. Add/rename land via the
 // same channel. Whitepaper §21.2.1 endorses the "wallet that manages
 // many keystores" pattern that backs this surface.
@@ -1506,14 +1557,14 @@ export interface VaultSummary {
   addr: string;
   createdAt: number;
   isActive: boolean;
-  /** Phase 8 — "single" for legacy single-key vaults, "multisig" for
+  /** "single" for legacy single-key vaults, "multisig" for
    *  vaults created via {@link bgVaultAddMultisig}. */
   kind: "single" | "multisig";
-  /** Phase 8 — N in M-of-N (0 for single vaults). */
+  /** N in M-of-N (0 for single vaults). */
   signerCount: number;
-  /** Phase 8 — M in M-of-N (0 for single vaults). */
+  /** M in M-of-N (0 for single vaults). */
   threshold: number;
-  /** Phase 8 — count of pending tx + governance proposals (0 for
+  /** Count of pending tx + governance proposals (0 for
    *  single vaults). The picker surfaces "M-of-N · K pending" pill. */
   pendingCount: number;
 }
@@ -1579,7 +1630,7 @@ export async function bgVaultAddFresh(
 }
 
 /**
- * Round 13 TASK 1 — generate a fresh PQM-1 mnemonic for the in-app
+ * Generate a fresh PQM-1 mnemonic for the in-app
  * multi-step new-wallet flow. The SW returns the mnemonic without
  * persisting any vault; the popup holds it in React state through
  * the show-phrase + verify-phrase steps and commits via
@@ -1667,7 +1718,7 @@ export async function bgVaultPubkey(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 8 Commit 3 — proposal creation surface
+// Proposal creation surface
 // ─────────────────────────────────────────────────────────────────────
 //
 // `bgMultisigPropose` creates a new transaction proposal inside a
@@ -1835,7 +1886,7 @@ export async function bgMultisigExecuteGovernance(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 8 Commit 7 — cross-signer coordination
+// Cross-signer coordination
 // ─────────────────────────────────────────────────────────────────────
 //
 // Multisig signers commonly live on different machines (one per
@@ -1879,7 +1930,7 @@ export async function bgMultisigImportProposal(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 7 — staking + delegation reads (§23 whitepaper)
+// Staking + delegation reads (§23 whitepaper)
 // ─────────────────────────────────────────────────────────────────────
 //
 // Every wrapper returns a `StakingResult<T>` envelope (see
@@ -1952,7 +2003,7 @@ export async function bgStakingClusterDiversity(
   return send("staking-cluster-diversity", { clusterId });
 }
 
-/** Read per-operator info via `lyth_operatorInfo` — R16 Task A.
+/** Read per-operator info via `lyth_operatorInfo`.
  *  Used by ClusterDetail to render per-operator self-bond next to each
  *  member in the operator slate. The return shape is per-operator
  *  unique and not mock-fallbacked; callers render a placeholder when
@@ -1963,7 +2014,7 @@ export async function bgStakingOperatorInfo(
   return send("staking-operator-info", { operatorId });
 }
 
-/** Read cluster-level service-tier offerings — R16 Task B. Aggregates
+/** Read cluster-level service-tier offerings. Aggregates
  *  per-operator `lyth_getServiceProbe` results across the cluster's
  *  member operators. Caller passes the member operatorId list (typically
  *  `clusterStatus.members.map(m => m.operatorId)`). Returns `anyReachable:
@@ -2171,7 +2222,7 @@ export async function bgBuildSpendingPolicyClaim(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Phase 9 — passkey + two-tier IPC helpers
+// Passkey + two-tier IPC helpers
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Wire-format passkey policy. `bigint` does not survive
@@ -2286,7 +2337,7 @@ export async function bgTwoTierSetFeature(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Phase 10 — SLH-DSA emergency-backup IPC helpers (§30.1)
+// SLH-DSA emergency-backup IPC helpers (§30.1)
 // ────────────────────────────────────────────────────────────────────────────
 
 import type { SlhDsaBackup } from "../shared/slh-dsa-backup.js";
@@ -2406,7 +2457,7 @@ import { decodeBackupPublicKeyHex } from "../shared/slh-dsa-backup.js";
  *      chain reason verbatim. The user can retry from Settings.
  *
  *  Receipt polling (pending → registered | registration-failed) is
- *  the Settings page's responsibility (Commit 6 wires it). */
+ *  the Settings page's responsibility. */
 export async function bgSlhDsaBackupSubmitRegistration(args: {
   vaultId: string;
   publicKeyHex: string;
@@ -2458,7 +2509,7 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 3 notifications — read-only popup surface. The SW is the only
+// Notifications — read-only popup surface. The SW is the only
 // thing that can WRITE a notification (§0.4 — recordNotification is not
 // exported via any IPC). The popup can only LIST, MARK-AS-READ, and GET
 // the unread count.
@@ -2467,7 +2518,7 @@ export async function bgSlhDsaBackupSubmitRegistration(args: {
 export type { NotificationRecord, TxOpKind } from "../shared/notifications.js";
 
 /** Global inbox — every `mono.notifications.history.*` envelope's entries,
- *  merged + sorted newest-first by `createdAtMs`. Phase 3's Notifications
+ *  merged + sorted newest-first by `createdAtMs`. The Notifications
  *  page renders this. */
 export async function bgListNotifications(): Promise<
   | { ok: true; records: import("../shared/notifications.js").NotificationRecord[] }
@@ -2494,7 +2545,7 @@ export async function bgGetUnread(): Promise<
   return send("notifications-get-unread");
 }
 
-/** Polish C2 — flip ONE record's `read` flag to true by its full id.
+/** Flip ONE record's `read` flag to true by its full id.
  *  Returns `flipped:true` when the record was found and was previously
  *  unread; `flipped:false` for an already-read or unknown id (no-op).
  *  The SW also fires a best-effort `refreshUnreadBadge()` on a flip, so
@@ -2507,7 +2558,7 @@ export async function bgMarkNotificationRead(
   return send("notifications-mark-read", { id });
 }
 
-/** Phase 5 — read the user-facing OS-toast toggle. Default `true`
+/** Read the user-facing OS-toast toggle. Default `true`
  *  (absent ⇒ on). The flag gates ONLY the OS toast; the in-app
  *  notification history and the toolbar unread badge keep working
  *  regardless. */
@@ -2517,7 +2568,7 @@ export async function bgGetNotificationsOsEnabled(): Promise<
   return send("notifications-get-os-enabled");
 }
 
-/** Phase 5 — write the user-facing OS-toast toggle. Boolean validated
+/** Write the user-facing OS-toast toggle. Boolean validated
  *  at the IPC boundary. */
 export async function bgSetNotificationsOsEnabled(
   enabled: boolean,
@@ -2527,8 +2578,8 @@ export async function bgSetNotificationsOsEnabled(
   return send("notifications-set-os-enabled", { enabled });
 }
 
-// GAP-N1 settings — three additional notification toggles (default true).
-// Each mirrors the Phase-5 get/set wrapper; all gate on-screen surfaces only.
+// Three additional notification toggles (default true).
+// Each mirrors the get/set wrapper above; all gate on-screen surfaces only.
 
 /** "Show transaction details" — off ⇒ generic toast body (no amount/address). */
 export async function bgGetShowDetails(): Promise<
@@ -2564,4 +2615,16 @@ export async function bgSetBadgeWhenLocked(
   enabled: boolean,
 ): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
   return send("notifications-set-badge-when-locked", { enabled });
+}
+
+/** "Incoming transfers" — off ⇒ no toast when LYTH arrives (record still kept). */
+export async function bgGetIncomingEnabled(): Promise<
+  { ok: true; enabled: boolean } | { ok: false; reason?: string }
+> {
+  return send("notifications-get-incoming-enabled");
+}
+export async function bgSetIncomingEnabled(
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean } | { ok: false; reason?: string }> {
+  return send("notifications-set-incoming-enabled", { enabled });
 }

@@ -1,6 +1,6 @@
-// Phase 7 — staking-client. SW-side RPC wrappers for the §23 delegation
+// staking-client. SW-side RPC wrappers for the §23 delegation
 // surface. Every read goes through `sprintnetJsonRpc` so the existing
-// operator-iteration + genesis-pin trust path (GAP #11) defends every
+// operator-iteration + genesis-pin trust path defends every
 // staking read against orphan-fork operators.
 //
 // Each read returns a `StakingResult<T>` envelope:
@@ -19,7 +19,7 @@
 // The SW IPC dispatchers (service-worker.ts case "staking-*") consume
 // the envelopes verbatim.
 //
-// Phase 7.1 — wire contract anchored to SDK. The `Raw*` types below are
+// Wire contract anchored to SDK. The `Raw*` types below are
 // the wire form (everything optional + JSON-serialised bigints as string
 // | number); the SDK exports the strict normalised shapes referenced in
 // each block's `// SDK contract:` annotation. Aligning the cast targets
@@ -55,8 +55,8 @@ import {
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
 
 // SDK-contract anchors live in `staking-client.test.ts` as typed fixtures
-// (`const sdkShape: ClusterDirectoryPageResponse = ...`). When Nayiem
-// rotates a chain-side field name and the SDK re-exports the new shape,
+// (`const sdkShape: ClusterDirectoryPageResponse = ...`). When the
+// chain-side field name rotates and the SDK re-exports the new shape,
 // those fixtures fail to typecheck before the wallet ships against a
 // stale contract. The `Raw*` types below are the loosened wire form
 // (optional everywhere, bigint admitted as string | number) so a
@@ -131,7 +131,7 @@ function clampDiversityScore(raw: unknown): number | null {
 }
 
 /** Map chain's `aggregateHealth` token vocabulary onto the wallet's
- *  `ClusterHealth` enum. Verified 2026-05-27 against mono-core
+ *  `ClusterHealth` enum. Verified against mono-core
  *  `crates/core/runtime/src/providers.rs:6848-6854, 6905-6911` —
  *  the chain emits exactly three values:
  *
@@ -143,7 +143,7 @@ function clampDiversityScore(raw: unknown): number | null {
  *                    Maps to `"offline"` (the closest wallet enum value).
  *
  *  Anything else (including the wallet's own legacy `"healthy"` /
- *  `"offline"` tokens left over from pre-R17 code) falls through to
+ *  `"offline"` tokens left over from earlier code) falls through to
  *  `"unknown"` rather than mis-rendering. */
 function normaliseHealth(raw: unknown): ClusterHealth {
   if (raw === "ok" || raw === "healthy") return "healthy";
@@ -283,7 +283,7 @@ export async function readClusterDirectory(
     // entity flag goes null rather than fail-the-whole-directory.
     const entityByCluster = new Map<number, string>();
     // Best-effort: fan out per-cluster `lyth_clusterApr` so each row carries
-    // its observed APR (PING #7, mono-core `253cac0b`). Failures are silent —
+    // its observed APR (mono-core `253cac0b`). Failures are silent —
     // aprBps goes null and the UI renders `—` rather than fail the directory.
     const aprByCluster = new Map<number, number>();
     // Best-effort: fan out per-cluster `lyth_getClusterDiversity` (§25.1,
@@ -442,7 +442,7 @@ export async function readClusterStatus(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Operator info — per-operator self-bond + lifecycle (R16 Task A)
+// Operator info — per-operator self-bond + lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 
 // SDK contract: OperatorInfoResponse from `lyth_operatorInfo`. Wire form
@@ -461,7 +461,7 @@ interface RawOperatorInfo {
 }
 
 /** Read per-operator info (self-bond, commission, lifecycle) via
- *  `lyth_operatorInfo`. Wired in R16 Task A for the ClusterDetail
+ *  `lyth_operatorInfo`. Wired for the ClusterDetail
  *  per-operator self-bond display (v4.1 §23.3 V4.1-BOND-0001 5,000 LYTH
  *  chain-enforced floor). Returns `ok: false` on RPC error — per-operator
  *  bond is unique and not mockable; the popup renders `bonded: —` for
@@ -507,7 +507,7 @@ export async function readOperatorInfo(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cluster service tiers — per-operator probe aggregation (R16 Task B)
+// Cluster service tiers — per-operator probe aggregation
 // ─────────────────────────────────────────────────────────────────────────────
 
 // SDK contract: ServiceProbeResponse from `lyth_getServiceProbe(peerId,
@@ -519,7 +519,7 @@ export async function readOperatorInfo(
 // NODE_REGISTRY_CAPABILITIES). Operator-internal bits — Broadcaster,
 // WebSocket, LightClient, PublicAPI — skipped for v1.
 //
-// PING #11: long-term fix is a `ClusterDirectoryEntry.serviceTiers:
+// Long-term fix is a `ClusterDirectoryEntry.serviceTiers:
 // string[]` aggregate field on the chain side; once shipped, this whole
 // per-operator-fan-out loop drops to a single directory read.
 interface UserFacingTier {
@@ -635,7 +635,7 @@ export async function readDelegations(
 ): Promise<StakingResult<DelegationsView>> {
   try {
     // Chain validates `wallet` strictly as bech32m on every wallet-keyed
-    // lyth_* read (R17 — verified live: lyth_getDelegations("0x...")
+    // lyth_* read (verified live: lyth_getDelegations("0x...")
     // returns -32602 "wallet must be mono bech32m").
     const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawDelegationsResponse>(
@@ -788,7 +788,7 @@ export async function readDelegationHistory(
   cursor?: string,
 ): Promise<StakingResult<DelegationHistoryView>> {
   try {
-    // R17 — bech32m for wallet param (chain rejects 0x).
+    // bech32m for wallet param (chain rejects 0x).
     const walletForChain = userAddressForNativeRpc(wallet);
     const params: unknown[] =
       cursor === undefined
@@ -1127,7 +1127,7 @@ export async function readPendingRewards(
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
   try {
-    // R17 — bech32m for wallet param (chain rejects 0x).
+    // bech32m for wallet param (chain rejects 0x).
     const walletForChain = userAddressForNativeRpc(wallet);
     const { result, via } = await sprintnetJsonRpc<RawPendingRewardsResponse>(
       "lyth_pendingRewards",
@@ -1201,7 +1201,7 @@ export async function readRedemptionQueue(
   wallet: string,
 ): Promise<StakingResult<RedemptionQueueView>> {
   try {
-    // R17 — bech32m for wallet param (chain rejects 0x; this was the
+    // bech32m for wallet param (chain rejects 0x; this was the
     // user-reported "wallet must be mono bech32m" error on the
     // redemption-queue surface).
     const walletForChain = userAddressForNativeRpc(wallet);

@@ -15,6 +15,7 @@ import {
 } from "@monolythium/core-sdk/crypto";
 import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
 import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
+import { isWithinSaneBound } from "../shared/operator-bounds.js";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -74,7 +75,7 @@ export async function sprintnetJsonRpc<T>(
   opts?: { timeoutMs?: number },
 ): Promise<{ result: T; via: string }> {
   let lastTransportErr: Error | null = null;
-  // Round 13 TASK 3 — track genesis-pin failures separately so the
+  // Track genesis-pin failures separately so the
   // aggregate error message is informative when ALL operators are
   // rejected for untrusted genesis. Previously the user saw the
   // last-tried operator's error ("operator-1: untrusted genesis"),
@@ -98,7 +99,7 @@ export async function sprintnetJsonRpc<T>(
       continue;
     }
     let res: Response;
-    // GAP-N1 — optional per-call timeout (mirrors the balance-probe
+    // Optional per-call timeout (mirrors the balance-probe
     // AbortController pattern below). Default (no timeoutMs) is unchanged:
     // no AbortController, no signal — every existing caller is byte-identical.
     const ctrl = opts?.timeoutMs ? new AbortController() : null;
@@ -143,7 +144,7 @@ export async function sprintnetJsonRpc<T>(
     }
     return { result: body.result, via: v.name };
   }
-  // Round 13 TASK 3 — if EVERY operator failed the genesis pin check,
+  // If EVERY operator failed the genesis pin check,
   // surface a clearer aggregate error instead of the last-operator's
   // raw "name: untrusted genesis" message. See About → Operators for
   // per-operator status the user can act on.
@@ -152,7 +153,7 @@ export async function sprintnetJsonRpc<T>(
       `Chain genesis mismatch — all ${totalOperators} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See About → Operators.`,
     );
   }
-  throw lastTransportErr ?? new Error("no Sprintnet operator reachable");
+  throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
 }
 
 /**
@@ -161,8 +162,14 @@ export async function sprintnetJsonRpc<T>(
  * MAX across `contributing`.
  */
 export interface BalanceConsensusResult {
-  /** Max balance across responding operators, hex-quantity. */
+  /** Max balance across responding operators, hex-quantity. Used for the
+   *  DISPLAY balance (a lagging operator can only under-report, never over). */
   balanceHex: string;
+  /** LOWEST balance across responding operators, hex-quantity (T4-03, Item C).
+   *  Spend gates (Send Max / insufficient-funds) use this so a single
+   *  inflating operator cannot enable an unaffordable Max. Equals `balanceHex`
+   *  when only one operator contributed (the default single-operator config). */
+  spendGuardHex: string;
   /** Operators that returned a valid balance envelope. */
   contributing: ReadonlyArray<{ name: string; balanceHex: string }>;
   /** Operators that didn't contribute, with one-line reason each. */
@@ -172,6 +179,19 @@ export interface BalanceConsensusResult {
 /** Per-operator timeout for the parallel balance probe. */
 const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
 
+/**
+ * T4-03 (Item C) — absolute sane upper bound on a single-account balance, in
+ * lythoshi. The chain's genesis supply is 100,000,000 LYTH = 10^16 lythoshi
+ * (whitepaper §16.1), and the 8%/yr inflation cap means supply grows only
+ * slowly (burn trends it deflationary), so no single address can ever hold
+ * more than total supply. A generous 2x-supply ceiling is the "physically
+ * impossible" line: a reported balance above it can only come from a lying or
+ * buggy operator, so its entry is DROPPED rather than allowed to win the MAX
+ * reduce. A de-trust rail, NOT an economic claim. Shared sane-bound primitive
+ * with the fee ceiling (Item D) via `operator-bounds`.
+ */
+const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 20_000_000_000_000_000n; // 2 x 10^16
+
 /** Accept both the proof-envelope shape `{ value, blockNumber, proof,
  *  stateRoot }` and the plain hex-string shape; reject everything else.
  *
@@ -179,14 +199,14 @@ const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
  *    @ mono-core-sdk 0fd8a79.
  *  Strict shape: `{ value, state_root, block_number, proof? }`.
  *
- *  Wire-vs-binding case mismatch (intentional, observed Phase 7.1): the
+ *  Wire-vs-binding case mismatch (intentional, observed against live operators): the
  *  chain serializer emits camelCase (`stateRoot`, `blockNumber`) even
  *  though the ts-rs binding annotates snake_case. The wallet's parser
  *  only reads `.value`, so the case mismatch doesn't affect balance
  *  reads — but downstream callers that need the proof envelope's other
  *  fields should consult the live wire form, not the binding annotations.
  *
- *  Resilience posture (Phase 7.1 commit 7): keep the dual-shape accept —
+ *  Resilience posture: keep the dual-shape accept —
  *  rejecting only when neither `value: 0x…` nor plain `0x…` is present.
  *  Operators on a future binary that drops the envelope wrapper in
  *  favour of bare hex (or vice versa) keep working without a wallet
@@ -214,7 +234,7 @@ function parseBalanceFromRpcResult(result: unknown): string | null {
  * binary rollout. The single-operator-with-failover pattern in
  * `sprintnetJsonRpc` latches onto the first responder, which for
  * balance reads can be a stale `0x0` envelope that hides the correct
- * value reported by other operators (observed 2026-05-15:
+ * value reported by other operators (observed in the field:
  * 192.0.2.1 returned `0x0` for a freshly funded address while
  * other operators returned the correct `0x16345785d8a0000`).
  *
@@ -230,7 +250,7 @@ export async function sprintnetMaxBalanceConsensus(
 ): Promise<BalanceConsensusResult> {
   const operators = getActiveOperators();
   if (operators.length === 0) {
-    throw new Error("no Sprintnet operators configured");
+    throw new Error("no Monolythium Testnet operators configured");
   }
 
   const probes = operators.map(async (op) => {
@@ -295,11 +315,14 @@ export async function sprintnetMaxBalanceConsensus(
       continue;
     }
     try {
-      contributing.push({
-        name: r.name,
-        balanceHex: r.balanceHex,
-        value: BigInt(r.balanceHex),
-      });
+      const value = BigInt(r.balanceHex);
+      // T4-03 (Item C): drop a physically-impossible balance (above total
+      // supply) so a lying/inflating operator cannot win the MAX reduce.
+      if (!isWithinSaneBound(value, MAX_PLAUSIBLE_BALANCE_LYTHOSHI)) {
+        failing.push({ name: r.name, reason: "balance exceeds total supply" });
+        continue;
+      }
+      contributing.push({ name: r.name, balanceHex: r.balanceHex, value });
     } catch {
       failing.push({ name: r.name, reason: "invalid bigint hex" });
     }
@@ -308,17 +331,23 @@ export async function sprintnetMaxBalanceConsensus(
   if (contributing.length === 0) {
     const summary = failing.map((f) => `${f.name}: ${f.reason}`).join("; ");
     throw new Error(
-      `all ${operators.length} Sprintnet operators failed eth_getBalance: ${summary}`,
+      `all ${operators.length} Monolythium Testnet operators failed eth_getBalance: ${summary}`,
     );
   }
 
   let max = contributing[0]!;
+  let min = contributing[0]!;
   for (let i = 1; i < contributing.length; i++) {
     if (contributing[i]!.value > max.value) max = contributing[i]!;
+    if (contributing[i]!.value < min.value) min = contributing[i]!;
   }
 
   return {
     balanceHex: max.balanceHex,
+    // T4-03 (Item C): the spend gate uses the LOWEST contributing balance so a
+    // single over-reporting operator cannot enable an unaffordable Max. Equals
+    // balanceHex under the default single operator.
+    spendGuardHex: min.balanceHex,
     contributing: contributing.map((c) => ({ name: c.name, balanceHex: c.balanceHex })),
     failing,
   };
@@ -436,7 +465,7 @@ export async function submitEncryptedMlDsaTx(req: EthSendTxFields): Promise<{
 //
 // We do NOT route through the SDK's `submitTransactionWithPrivacy` /
 // `submitPlaintextTransaction` RpcClient helpers here: the wallet's
-// operator-iteration in `sprintnetJsonRpc` carries the GAP #11 genesis-hash
+// operator-iteration in `sprintnetJsonRpc` carries the genesis-hash
 // pin + multi-operator failover that protect every wallet RPC. Reusing it for
 // `mesh_submitTx` keeps the plaintext path under the same protections as the
 // encrypted path, while still using the SDK's `buildPlaintextSubmission` for

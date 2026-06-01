@@ -38,12 +38,25 @@ export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
 /**
+ * T4-04 (Item D) — absolute sane upper bound on an operator-reported (or
+ * popup-supplied) per-execution-unit price, in lythoshi. A de-trust BACKSTOP,
+ * not an economic claim: the wallet signs the fee the user saw (T4-04 b1), but
+ * a malicious/MITM operator (or a tampered popup) could still supply an absurd
+ * `maxFeePerGas`; clamp it here so a single unit can never be priced above this
+ * physically-impossible line. 1e15 lythoshi/unit = 10,000,000 LYTH/unit — many
+ * orders of magnitude above any honest Sprintnet price, so a legitimate fee is
+ * never blocked, while a 1e30-style inflation is capped. Paired with the
+ * balance ceiling (Item C) via the shared `operator-bounds` helper.
+ */
+export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15
+
+/**
  * Monolythium Testnet operator RPC endpoints — sourced from the SDK-bundled chain
  * registry (`@monolythium/core-sdk` `getRpcEndpoints("testnet-69420")`).
  * Broadcast paths iterate this list and use the first responder. Registry
  * order is intentional and refreshed by bumping the SDK package.
  *
- * Phase 4.3 Change 2: this is the *defaults* list. Power users can
+ * This is the *defaults* list. Power users can
  * override via chrome.storage.local["mono.operators.override"]. RPC
  * dispatch uses `getActiveOperators()` which merges the override with
  * these defaults at lookup time.
@@ -57,7 +70,7 @@ export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
     name: `operator-${i + 1}`,
     region: endpoint.region ?? "unknown",
     rpc: endpoint.url,
-    // Phase 11 Commit 12 — pull SDK's ws_url through when present so the
+    // Pull SDK's ws_url through when present so the
     // WS client can subscribe without per-operator auto-discovery. When
     // absent, deriveWsUrl in ws-client.ts falls back to the :8546 Geth
     // convention.
@@ -195,7 +208,7 @@ export function chainRequiresMlDsa(chainIdHex: string): boolean {
  * chain id (regenesis-with-different-id case — operator should be told
  * to reconfigure).
  *
- * Phase 6 GAP #11: operators with a mismatched genesis hash (orphan-
+ * Operators with a mismatched genesis hash (orphan-
  * fork attack surface) are also skipped. The genesis check is cached
  * forever in-memory per RPC URL — genesis is immutable per chain, so a
  * one-time probe per operator suffices for the SW lifetime.
@@ -224,7 +237,7 @@ export async function probeFirstAliveOperator(
       const body = (await res.json()) as { result?: string };
       const reportedChainId = Number(body?.result ?? 0);
       if (reportedChainId !== expectedChainIdDec) continue;
-      // Genesis check (GAP #11). On mismatch the operator is excluded
+      // Genesis check. On mismatch the operator is excluded
       // from RPC dispatch for the rest of the SW lifetime.
       const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
       if (!genesisOk) continue;

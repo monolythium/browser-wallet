@@ -10,6 +10,10 @@ import {
   type MrvNativeFormValues,
   type NativeMarketReplayReadinessState,
 } from "./MrvNative.js";
+import {
+  NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
+  NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
+} from "../../shared/__fixtures__/golden.js";
 import type {
   WalletMrvNoEvmArchiveVerification,
   WalletMrvNoEvmFinalityEvidence,
@@ -75,9 +79,9 @@ const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   blockHash: `0x${"1".repeat(64)}`,
   txHash: SUBMITTED_TX_HASH,
   receiptsRoot:
-    "0x73d29f250b2f46be15d1ad19c5dc039449e5236e47c9662266ca13b71ed84928",
+    NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   targetReceiptHash:
-    "0xe4cfff110d648eb1821542b3805ded1e3df86e85b26cc19021f55168ed1a2ede",
+    NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
   blockHeight: 100,
   txIndex: 1,
   receiptCount: 2,
@@ -458,7 +462,7 @@ describe("MrvNative", () => {
     );
     expect(pollingHtml).toContain("Receipt status: waiting for inclusion");
     expect(pollingHtml).toContain("eth_getTransactionReceipt");
-    expect(pollingHtml).toContain("Validator finality is not established here");
+    expect(pollingHtml).toContain("Anchor-level (BLS) finality is not established here");
 
     const includedHtml = renderToStaticMarkup(
       <MrvNativePlanPreview
@@ -722,7 +726,7 @@ describe("MrvNative", () => {
       "Snapshot archive signature digest material is present",
     );
     expect(digestArchiveHtml).toContain(
-      "not validator finality, and archive signature verification is reported separately",
+      "not anchor-level (BLS) finality, and archive signature verification is reported separately",
     );
     expect(digestArchiveHtml).toContain("Archive signature digest");
     expect(digestArchiveHtml).toContain(ARCHIVE_SIGNATURE_DIGEST);

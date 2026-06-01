@@ -378,7 +378,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         <div style={{ width: 36 }} />
       </div>
 
-      {/* Round 12 TASK 4 — wrap reveal contents in .ext-body so the
+      {/* Wrap reveal contents in .ext-body so the
          screen scrolls when MnemonicGrid's 15 px-mono words + copy
          button + the auto-hide chip overflow the popup viewport. */}
       <div
@@ -422,7 +422,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           </div>
         </div>
 
-        {/* Round 12 TASK 4 — Copy button moved ABOVE the reveal-toggle
+        {/* Copy button moved ABOVE the reveal-toggle
            wrapper. Previously RevealPhrase rendered TWO copy buttons:
            one inside MnemonicGrid (default-on, embedded under the
            grid words) and one below MnemonicGrid (RevealPhrase's own
@@ -492,7 +492,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
               }}
               aria-hidden={!revealed}
             >
-              {/* Round 12 TASK 4 — disable MnemonicGrid's built-in
+              {/* Disable MnemonicGrid's built-in
                  copy button. It sat inside this pointerEvents:none
                  wrapper so clicks bubbled to toggleReveal() instead
                  of copying — the user reported it as "broken".

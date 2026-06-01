@@ -1,4 +1,4 @@
-// Phase 3/4 — per-notification detail modal.
+// Per-notification detail modal.
 //
 // Mirrors `ActivityDetail`'s shape: a `<Modal showClose>` with a stack
 // of `DRow`s for the structured fields + a `MonoscanTxButton` CTA at
@@ -20,6 +20,7 @@ import {
   notificationTitle,
   type NotificationRecord,
 } from "../../shared/notifications";
+import { formatNativeLythAmount } from "../../shared/native-fee-display";
 
 export interface NotificationDetailProps {
   record: NotificationRecord;
@@ -42,6 +43,29 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
   const title = notificationTitle(record.kind, record.status);
   const showAmount = !isZeroAmount(record.amountDecimal);
   const showBlock = record.blockNumber !== null;
+  // Fee is captured (lythoshi) only for confirmed self-paid txs with a non-zero
+  // fee, so presence ⇒ show it as a debit. Absent ⇒ no fee line (no-mock).
+  const feeText =
+    record.feeLythoshi !== undefined &&
+    /^[0-9]+$/.test(record.feeLythoshi) &&
+    BigInt(record.feeLythoshi) > 0n
+      ? `- ${formatNativeLythAmount(BigInt(record.feeLythoshi))}`
+      : null;
+  // Cluster a delegation tx targeted — the tx `to` is the delegation module,
+  // so name the cluster explicitly. Real *.cluster.mono name when known, else
+  // the numeric id (there is no monok1 cluster address). Absent ⇒ no row.
+  const clusterText =
+    record.clusterId !== undefined
+      ? record.clusterName
+        ? `${record.clusterName} · #${record.clusterId}`
+        : `#${record.clusterId}`
+      : null;
+  // Incoming transfers credit the wallet → the counterparty is the SENDER, so
+  // label it "From" (vs "To" for the wallet's own outgoing txs).
+  const counterpartyLabel = record.kind === "receive" ? "From" : "To";
+  // Incoming records carry an anchor-derived id, not a real 0x tx hash — only
+  // link Monoscan for a real hash (no broken link, no-mock).
+  const showMonoscan = record.txHash.startsWith("0x");
 
   return (
     <Modal open onClose={onClose} title={title} showClose>
@@ -50,7 +74,17 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
         {showAmount && (
           <DRow label="Amount" value={`${record.amountDecimal} LYTH`} />
         )}
-        <DRow label="To" value={<CopyableAddress addr0x={record.counterparty} />} />
+        {feeText && <DRow label="Fee" value={feeText} />}
+        {clusterText ? (
+          // Delegation tx: the `to` is the delegation module — name the cluster
+          // instead of the bare module address.
+          <DRow label="Cluster" value={clusterText} />
+        ) : record.counterparty ? (
+          <DRow
+            label={counterpartyLabel}
+            value={<CopyableAddress addr0x={record.counterparty} />}
+          />
+        ) : null}
         {showBlock && (
           <DRow
             label="Block"
@@ -58,7 +92,7 @@ export function NotificationDetail({ record, onClose }: NotificationDetailProps)
           />
         )}
         <DRow label="Date" value={relativeMs(record.createdAtMs)} />
-        {record.txHash && <MonoscanTxButton hash={record.txHash} />}
+        {showMonoscan && <MonoscanTxButton hash={record.txHash} />}
       </div>
     </Modal>
   );

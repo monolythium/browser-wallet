@@ -1,4 +1,4 @@
-// Phase 8 Commit 4 — pure-helper tests for Pending.tsx.
+// Pure-helper tests for Pending.tsx.
 
 import { describe, expect, it } from "vitest";
 import { bucket } from "./Pending.js";

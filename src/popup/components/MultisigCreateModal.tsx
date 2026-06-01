@@ -1,4 +1,4 @@
-// Phase 8 Commit 2 — MultisigCreateModal.
+// MultisigCreateModal.
 //
 // Flow:
 //   1. password (only if locked)

@@ -13,7 +13,7 @@
 // Unknown messages fall through to the original `reason` so we never
 // drop information.
 //
-// Most common case in the wild (as of 2026-05-26): users importing
+// Most common case in the wild: users importing
 // the recovery phrase from the older Monolythium v1 (Cosmos) wallet,
 // or from MetaMask / a Cosmos wallet. Those phrases decode to 32
 // bytes of pure random entropy, so the first byte (the PQM-1 algo

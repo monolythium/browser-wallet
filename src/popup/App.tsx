@@ -19,6 +19,10 @@ import {
 } from "../shared/constants";
 import { hexLythoshiToLythNumber } from "../shared/native-amount";
 import {
+  activityPendingKey,
+  validatePendingActivityCache,
+} from "../shared/activity";
+import {
   CWS_LISTING_URL,
   STORAGE_KEY_WALLET_UPDATE,
   shouldCheckWalletUpdate,
@@ -187,14 +191,23 @@ const SPRINTNET_FALLBACK: ChainEntry = {
   name: "Monolythium Testnet",
   // Bootstrap-window rpc. Mirrors SPRINTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
-  // live endpoint. Updated to operator-2 on 2026-05-11 regenesis (operator-1's
-  // bls.key was destroyed; see networks.ts docstring).
+  // live endpoint. Points at operator-2 after the regenesis in which
+  // operator-1's bls.key was destroyed; see networks.ts docstring.
   rpc: "http://192.0.2.1:8545",
   builtin: true,
   official: true,
   active: true,
   nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
 };
+
+/** While a broadcast tx is still pending, reconcile this often (ms). The chain
+ *  produces BLS fast blocks well under a second, so a tx is typically included
+ *  within ~1s; poll at 1.5s so a confirm surfaces near the chain's real speed.
+ *  This poll lives at the App level (not the Activity tab) so it runs on EVERY
+ *  screen while the popup is open — a tx sent from Send/Home flips without
+ *  waiting for a tab change or the 30s background alarm. The SW only does the
+ *  heavy reconcile when a pending row exists, so each tick is cheap otherwise. */
+const PENDING_REPOLL_MS = 1_500;
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
@@ -204,7 +217,7 @@ export default function App() {
   // popup matches the pre-v5 experience exactly. Flip on via Settings →
   // Features.
   const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
-  // Round 7 TASK 4 — current UI open mode (popup vs sidepanel). The
+  // Current UI open mode (popup vs sidepanel). The
   // MainMenu's "Switch to ..." item reads this to label the toggle as
   // the OPPOSITE option. null while the SW IPC is in flight; modes
   // settle after the first bgGetUiOpenMode resolves.
@@ -220,7 +233,7 @@ export default function App() {
     };
   }, []);
 
-  // CX5 — wallet-version update check vs the Chrome Web Store. Rate-limited
+  // Wallet-version update check vs the Chrome Web Store. Rate-limited
   // to ~2×/day via a cached lastCheckAt; reflects the last-known verdict
   // immediately, then refreshes via chrome.runtime.requestUpdateCheck.
   // Honest-absence: dev/unpacked or throttled → no banner.
@@ -272,7 +285,7 @@ export default function App() {
     chrome.runtime.onUpdateAvailable.addListener(onUpd);
     return () => chrome.runtime.onUpdateAvailable.removeListener(onUpd);
   }, []);
-  // Round 7 TASK 4 — back-navigation stack. When user navigates via the
+  // Back-navigation stack. When user navigates via the
   // hamburger menu (main-menu → contacts), back from contacts should
   // return to main-menu, not home. Sub-screens entered from the home
   // top-bar or home tiles push their own predecessor (usually "home")
@@ -301,7 +314,7 @@ export default function App() {
   const [activeApproval, setActiveApproval] = useState<UiApproval | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  // Round 13 SECURITY — `generated` holds the in-flight first-setup
+  // SECURITY: `generated` holds the in-flight first-setup
   // mnemonic ONLY in popup React memory until verify-phrase succeeds.
   // Previously the vault container was persisted at the Set Password
   // step (via bgKeystoreCreateNew), so closing the popup between
@@ -314,7 +327,7 @@ export default function App() {
   // bound to the popup process lifetime; an SW restart can't corrupt
   // it (the SW has no copy until commit).
   const [generated, setGenerated] = useState<{ mnemonic: string } | null>(null);
-  // Round 13 SECURITY — first-setup password held in React state from
+  // SECURITY: first-setup password held in React state from
   // Set Password submit through Verify Phrase success. Cleared on
   // commit, on Welcome bounce-out, and on any abort path. NEVER
   // written to chrome.storage; the password hash + MEK derivation
@@ -342,7 +355,7 @@ export default function App() {
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
   // taps a row on the Networks list; cleared when they back out.
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
-  // Phase 7 — Delegations → Stake deeplink. When a Delegations-page
+  // Delegations → Stake deeplink. When a Delegations-page
   // "Unstake" / "Redelegate" CTA fires, App stores the action + the
   // source cluster so the Stake page can land directly on the form.
   // Cleared on Stake → home navigation.
@@ -350,7 +363,7 @@ export default function App() {
     action: "undelegate" | "redelegate";
     clusterId: number;
   } | null>(null);
-  // Phase 11 Commit 6 — selected cluster for the cluster-detail panel.
+  // Selected cluster for the cluster-detail panel.
   // Set when the user navigates from ClusterPicker or Delegations row
   // → cluster detail. The cluster directory row is held inline rather
   // than re-fetched: it's already in the parent's state from the
@@ -358,7 +371,7 @@ export default function App() {
   const [selectedCluster, setSelectedCluster] = useState<
     import("../shared/staking").ClusterDirectoryEntry | null
   >(null);
-  // R18 — track which screen opened ClusterDetail so the back button
+  // Track which screen opened ClusterDetail so the back button
   // returns the user to the originating page (Stake or Delegations),
   // not a hardcoded default. Cleared on unmount of cluster-detail.
   const [clusterDetailEntrySource, setClusterDetailEntrySource] =
@@ -410,7 +423,7 @@ export default function App() {
     }));
   };
 
-  // Phase 8 — track the active vault summary so we can detect when
+  // Track the active vault summary so we can detect when
   // the user is "on" a multisig vault (Send must propose, Settings
   // surfaces multisig section, Home pill renders M-of-N · K pending).
   const [activeVaultSummary, setActiveVaultSummary] =
@@ -468,7 +481,7 @@ export default function App() {
     }
   }, [acc.addr, activeChain.chainId]);
 
-  // Phase 4.4 — activity refresh trigger. Verbatim mirror of the
+  // Activity refresh trigger. Verbatim mirror of the
   // balance pattern above. The actual cache state lives inside
   // useActivity (src/popup/hooks/useActivity.ts) which is mounted by
   // the Activity tab body. This callback fires bgWalletActivityGet
@@ -488,7 +501,7 @@ export default function App() {
     void r;
   }, [acc.addr, activeChain.chainId]);
 
-  // Phase 5.0.1 — wake the SW out of MV3 idle BEFORE any real call
+  // Wake the SW out of MV3 idle BEFORE any real call
   // goes out. Without this, the first `bgKeystoreStatus()` below
   // (and the picker / chain banner mounts that follow) sometimes
   // race the SW boot and surface as "Unchecked runtime.lastError:
@@ -498,9 +511,9 @@ export default function App() {
     void bgPing();
   }, []);
 
-  // Polish C1 — drive the top-bar bell's small unread dot. The dot
-  // mirrors the global unread count (same source as Phase-2's toolbar
-  // badge and Phase-3's MainMenu pill). We fetch on mount + subscribe
+  // Drive the top-bar bell's small unread dot. The dot
+  // mirrors the global unread count (same source as the toolbar
+  // badge and the MainMenu pill). We fetch on mount + subscribe
   // to `chrome.storage.onChanged` for any `mono.notifications.history.*`
   // write so the dot updates in real time as new records land, the
   // user marks one read, or "Mark all as read" fires — no polling tick.
@@ -601,7 +614,7 @@ export default function App() {
         return;
       }
       if (areaName === "local") {
-        // Round 4 TASK 1 — vault container changes (create / import /
+        // Vault container changes (create / import /
         // select / rename) update `activeVaultId` and / or the vault
         // list in chrome.storage.local. The SW broadcasts
         // `accountsChanged` to tabs via chrome.tabs.sendMessage, but
@@ -619,6 +632,17 @@ export default function App() {
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
   }, [refreshKeystoreStatus]);
+
+  // Belt-and-braces lock→home: if any keystore refresh discovers the SW is
+  // unlocked while the popup is still on the lock screen — e.g. the SW
+  // restored its session after a hibernation race and there was no
+  // walletLocked=false onChanged to flip us (it was already false) — route to
+  // Home. Only flips FROM "locked", so it never disturbs onboarding/approval.
+  useEffect(() => {
+    if (keystore?.unlocked && screen === "locked") {
+      setScreen("home");
+    }
+  }, [keystore?.unlocked, screen]);
 
   // visibilitychange safety net — when the popup becomes visible again
   // (e.g. an approval window regaining focus), re-sync state in case the
@@ -658,12 +682,58 @@ export default function App() {
     void refreshBalance();
   }, [refreshBalance]);
 
-  // Phase 4.4 — dep-driven activity refresh. Same shape as the balance
+  // Dep-driven activity refresh. Same shape as the balance
   // effect above. When (acc.addr, activeChain.chainId) changes, the
   // useCallback identity flips and this effect re-fires.
   useEffect(() => {
     void refreshActivity();
   }, [refreshActivity]);
+
+  // Pending-tx detection — track whether the active (addr, chain) has any
+  // pending row, sourced from the same chrome.storage key the SW writes on
+  // broadcast. Seeded on mount/dep-change + kept live via onChanged so the
+  // poll below starts/stops the instant a pending row appears or terminalizes.
+  const [hasPendingTx, setHasPendingTx] = useState(false);
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) {
+      setHasPendingTx(false);
+      return;
+    }
+    const key = activityPendingKey(acc.addr.toLowerCase(), activeChain.chainId);
+    let cancelled = false;
+    const apply = (raw: unknown) => {
+      if (cancelled) return;
+      const v = validatePendingActivityCache(raw);
+      setHasPendingTx((v?.pending.length ?? 0) > 0);
+    };
+    chrome.storage.local.get([key], (res) => apply(res?.[key]));
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      if (key in changes) apply(changes[key]?.newValue);
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [acc.addr, activeChain.chainId]);
+
+  // App-wide pending reconcile poll — while a pending tx exists, reconcile
+  // every PENDING_REPOLL_MS (firing immediately, no first-tick wait) REGARDLESS
+  // of which screen is open, so the row flips to confirmed/failed at the chain's
+  // real speed even from Send/Home. The Activity tab + notification surfaces
+  // update reactively off the SW's storage writes. Stops when the set empties.
+  useEffect(() => {
+    if (!hasPendingTx) return;
+    void refreshActivity();
+    const id = setInterval(() => {
+      void refreshActivity();
+    }, PENDING_REPOLL_MS);
+    return () => clearInterval(id);
+  }, [hasPendingTx, refreshActivity]);
 
   // Refetch balance when the user lands on Home so in-popup navigations
   // (Send → Home, Networks → Home, etc.) reflect a balance that may have
@@ -676,7 +746,7 @@ export default function App() {
     }
   }, [screen, refreshBalance, refreshActivity]);
 
-  // Phase 8 — re-fetch the active vault summary whenever the user
+  // Re-fetch the active vault summary whenever the user
   // navigates. Cheap (one IPC) and covers the cases where the user
   // switches active vault via VaultPicker (which doesn't have a
   // parent-callback hook today). Multisig-aware screens depend on
@@ -744,7 +814,7 @@ export default function App() {
     setScreen("home");
   };
 
-  // Round 13 SECURITY — DEFERRED PERSISTENCE.
+  // SECURITY: DEFERRED PERSISTENCE.
   //
   // Previously this called bgKeystoreCreateNew which generated the
   // mnemonic AND persisted the vault server-side, returning the
@@ -783,7 +853,7 @@ export default function App() {
     setScreen("show-phrase");
   };
 
-  // Round 13 SECURITY — atomic commit on Verify Phrase success.
+  // SECURITY: atomic commit on Verify Phrase success.
   // Runs at the END of first-setup: the only place where the new
   // wallet container is written to chrome.storage. On success we
   // immediately clear the held password + mnemonic so the React
@@ -865,14 +935,14 @@ export default function App() {
     screen === "send" ||
     screen === "reveal-phrase" ||
     screen === "reset-wallet" ||
-    // Round 7 TASK 4 / 5 / 7 — banner shows on the new menu + contacts
+    // Banner shows on the new menu + contacts
     // + multisig-list screens so the chain-status indicator stays
     // continuous when the user navigates between menu sub-pages.
     screen === "main-menu" ||
     screen === "contacts" ||
     screen === "multisig-list";
 
-  // Round 10 TASK 6 — fullscreen brand wordmark. Read once at render
+  // Fullscreen brand wordmark. Read once at render
   // time; main.tsx stamps data-mode on <html> before createRoot.render
   // runs, so the attribute is guaranteed to be present here. The
   // wordmark renders as a sibling above .ext only in fullscreen so
@@ -892,7 +962,7 @@ export default function App() {
       {showBannerStrip && (
         <ChainStatusBanner
           network={activeChain}
-          // Round 12 TASK 7 — top-bar Networks entry pushes onto the
+          // Top-bar Networks entry pushes onto the
           // screen stack so back from Networks correctly returns to
           // home. Without this, the hamburger-menu Networks path also
           // landed on home (since the hardcoded "home" fallback
@@ -904,12 +974,12 @@ export default function App() {
             ? {
                 onSettings: () => navigateTo("settings"),
                 onConnectedSites: () => navigateTo("connected-sites"),
-                // Polish C1 — bell entry to the global notifications
+                // Bell entry to the global notifications
                 // page. Same destination as the MainMenu bell row;
                 // exposing it on the top bar so the inbox is reachable
                 // without opening the hamburger menu.
                 onNotifications: () => navigateTo("notifications"),
-                // Round 7 TASK 4 — top-bar lock-button replaced with the
+                // Top-bar lock-button replaced with the
                 // hamburger menu trigger. Lock moves into the MainMenu's
                 // bottom (danger) section.
                 onMenu: () => navigateTo("main-menu"),
@@ -953,7 +1023,7 @@ export default function App() {
         <Welcome
           onCreateNew={() => {
             setCreateError(null);
-            // Round 13 SECURITY — defensive clear of any in-flight
+            // SECURITY: defensive clear of any in-flight
             // first-setup state from a previous abandoned attempt.
             setGenerated(null);
             setPendingFirstSetupPassword(null);
@@ -962,13 +1032,13 @@ export default function App() {
           onImport={() => {
             setImportError(null);
             setPendingMnemonic(null);
-            // Round 13 SECURITY — same defensive clear when switching
+            // SECURITY: same defensive clear when switching
             // from a create attempt to import.
             setGenerated(null);
             setPendingFirstSetupPassword(null);
             setScreen("import");
           }}
-          // Round 11 TASK 6 — Welcome → ForgotPassword via navigateTo
+          // Welcome → ForgotPassword via navigateTo
           // so back returns to Welcome. The same ForgotPassword screen
           // is also reached from UnlockScreen's Forgot modal (which
           // pushes "locked"); navigateBack handles both pushers.
@@ -976,7 +1046,7 @@ export default function App() {
         />
       )}
 
-      {/* Round 11 TASK 6 — ForgotPassword's onBack flipped to
+      {/* ForgotPassword's onBack flipped to
          navigateBack so it pops the stack instead of hardcoding
          "welcome". Both entry paths (Welcome and the new UnlockScreen
          Forgot modal) now return to their pusher. */}
@@ -1001,7 +1071,7 @@ export default function App() {
         />
       )}
 
-      {/* Round 12 TASK 1 — onboarding security: ShowPhrase + VerifyPhrase
+      {/* Onboarding security: ShowPhrase + VerifyPhrase
          no longer receive an onBack callback during first-setup. Without
          the prop, both components hide their back chevron (replaced by
          a 36 px spacer to keep the title centered). User has to advance
@@ -1015,7 +1085,7 @@ export default function App() {
         />
       )}
 
-      {/* Round 13 SECURITY — Verify success triggers the atomic
+      {/* SECURITY: Verify success triggers the atomic
          commit (bgKeystoreCreateFromMnemonic) and only THEN routes
          home. Previously this just cleared state because the vault
          was already persisted at the Set Password step — now the
@@ -1051,7 +1121,7 @@ export default function App() {
         />
       )}
 
-      {/* Round 11 TASK 6 + 7 — UnlockScreen now hosts the Forgot
+      {/* UnlockScreen now hosts the Forgot
          password? entry point. The two callbacks route through the
          normal screen-stack: Import sends the user to the existing
          ForgotPassword screen (wipe + Reset & Import flow) via
@@ -1060,6 +1130,17 @@ export default function App() {
       {screen === "locked" && (
         <UnlockScreen
           address={keystore?.address ?? null}
+          onUnlocked={() => {
+            // Route to Home synchronously on a successful unlock instead of
+            // depending SOLELY on the cross-context walletLocked=false storage
+            // event. After an auto-lock + SW wake that event can fail to flip
+            // the popup's screen (the "unlocked but stuck on the lock screen
+            // until reopen" report); manual lock keeps the same warm popup/SW
+            // so it always delivered. resetAutoLock re-armed the alarm minutes
+            // out, so Home won't immediately re-lock.
+            setScreen("home");
+            void refreshKeystoreStatus();
+          }}
           onForgotImport={() => navigateTo("forgot-password")}
           onForgotReset={() => {
             void refreshKeystoreStatus();
@@ -1079,7 +1160,7 @@ export default function App() {
           onOpenSend={() => setScreen("send")}
           onOpenStake={() => setScreen("stake")}
           onOpenBridge={() => setScreen("bridge")}
-          // Round 13 TASK 1 — "New wallet" from the VaultPicker
+          // "New wallet" from the VaultPicker
           // dropdown routes through navigateTo so the screen stack
           // pushes "home" and NewWalletFlow's onCancel returns the
           // user back to home cleanly. The legacy single-page modal
@@ -1117,11 +1198,11 @@ export default function App() {
         />
       )}
 
-      {/* Round 12 TASK 7 — back from Networks now respects screenStack
+      {/* Back from Networks now respects screenStack
          so all entry pushers (top-bar pushes "home", hamburger menu
          pushes "main-menu") return to their pusher. The hardcoded
          "home" worked for the top-bar path but broke the hamburger
-         path (same pattern as Round 9 About + Round 11 Connected
+         path (same pattern as the About + Connected
          Sites). */}
       {screen === "networks" && (
         <Networks
@@ -1196,12 +1277,12 @@ export default function App() {
           address={keystore?.address ?? ""}
           algo={keystore?.algo ?? "secp256k1"}
           onShowPhrase={() => setScreen("reveal-phrase")}
-          // Round 11 TASK 1 — Settings → Connected Sites pushes onto
+          // Settings → Connected Sites pushes onto
           // the screen stack via navigateTo so back from Connected
           // Sites correctly returns to Settings (same fix-pattern as
-          // Round 9 TASK 2's Settings → About).
+          // the Settings → About entry).
           onShowConnectedSites={() => navigateTo("connected-sites")}
-          // Round 11 TASK 3 — Settings → Reset wallet now pushes the
+          // Settings → Reset wallet now pushes the
           // stack so back from ResetWallet returns to Settings. The
           // same ResetWallet screen is reached from the hamburger's
           // "Reset wallet" entry (which pushes "main-menu");
@@ -1210,7 +1291,7 @@ export default function App() {
           onOpenOperators={() => setScreen("operators")}
           onOpenNotificationSettings={() => setScreen("notification-settings")}
           onOpenMrvNative={() => setScreen("mrv-native")}
-          // Round 9 TASK 2 — Settings → About now pushes onto the
+          // Settings → About now pushes onto the
           // screen stack via navigateTo so About's onBack (which
           // uses navigateBack) returns to Settings. Without
           // navigateTo, the click would not push a stack entry and
@@ -1265,7 +1346,7 @@ export default function App() {
         />
       )}
 
-      {/* Round 7 TASK 4 — MainMenu (hamburger). Reached from the top-
+      {/* MainMenu (hamburger). Reached from the top-
          bar menu button on home. Each menu item uses navigateTo so
          the destination's onBack pops back here. */}
       {screen === "main-menu" && (
@@ -1273,7 +1354,7 @@ export default function App() {
           uiMode={uiMode}
           onBack={navigateBack}
           onOpenFullscreen={() => {
-            // Round 8 TASK 3 — open the wallet in a regular Chrome tab.
+            // Open the wallet in a regular Chrome tab.
             // The detectMode in main.tsx branches on ?mode=fullscreen
             // and the data-mode CSS centers the wallet in a 480 px
             // column. Close the current popup/sidepanel surface after
@@ -1289,7 +1370,7 @@ export default function App() {
               });
           }}
           onSwitchMode={() => {
-            // Round 8 TASK 2 — INSTANT switch (no manual icon click).
+            // INSTANT switch (no manual icon click).
             // The chrome.sidePanel.open / chrome.action.openPopup
             // calls require user-gesture context, so they fire
             // SYNCHRONOUSLY inside the click handler before any
@@ -1318,7 +1399,7 @@ export default function App() {
                 window.close();
               });
             } else {
-              // sidepanel → popup. Round 9 TASK 1 fix: the Round 8
+              // sidepanel → popup. The earlier
               // version voided chrome.action.openPopup but openPopup
               // was REJECTING silently because while the wallet is in
               // sidepanel mode the SW has set chrome.action.setPopup
@@ -1391,32 +1472,32 @@ export default function App() {
             // setScreen is belt-and-braces against IPC race.
             setScreen("locked");
           }}
-          // Round 11 TASK 3 — destructive reset reached from the
+          // Destructive reset reached from the
           // hamburger menu. navigateTo pushes "main-menu" so back from
           // ResetWallet (via navigateBack) returns to the menu instead
           // of skipping to home.
           onResetWallet={() => navigateTo("reset-wallet")}
-          // Phase 3 notifications — open the global inbox. navigateTo
+          // Notifications — open the global inbox. navigateTo
           // pushes "main-menu" so back from the Notifications page
           // returns to the menu.
           onNotifications={() => navigateTo("notifications")}
         />
       )}
 
-      {/* Round 7 TASK 5 — Contacts page. Reached from MainMenu;
+      {/* Contacts page. Reached from MainMenu;
          onBack via navigateBack to return to the menu. */}
       {screen === "contacts" && <Contacts onBack={navigateBack} />}
 
-      {/* Phase 3 — Notifications page. Global inbox; reached from the
+      {/* Notifications page. Global inbox; reached from the
          hamburger menu's bell row. onBack via navigateBack returns to
          the menu. */}
       {screen === "notifications" && <Notifications onBack={navigateBack} />}
 
-      {/* Round 13 TASK 1 — in-app new wallet flow. Reached from the
+      {/* In-app new wallet flow. Reached from the
          VaultPicker dropdown's "New wallet" entry (push "home" onto
          the screen stack). Onboarding's first-setup flow does NOT
          route here — it continues to use the App-level show-phrase
-         + verify-phrase screens directly (with their Round 12
+         + verify-phrase screens directly (with their
          back-protection intact). The two flows share the inner
          ShowPhrase + VerifyPhrase components but compose them in
          separate navigation contexts. */}
@@ -1436,14 +1517,14 @@ export default function App() {
         />
       )}
 
-      {/* Round 7 TASK 7 — Multisig wallets top-level list. Reached
+      {/* Multisig wallets top-level list. Reached
          from MainMenu. Tapping a row switches the active vault to
          that multisig and opens the existing Pending dashboard. */}
       {screen === "multisig-list" && (
         <MultisigList
           onBack={navigateBack}
           onOpenPending={() => {
-            // Route into the existing Phase 8 multisig-pending screen;
+            // Route into the existing multisig-pending screen;
             // the active-vault switch already happened inside the row
             // click handler before this fires.
             setScreen("multisig-pending");
@@ -1485,7 +1566,7 @@ export default function App() {
         <RevealPhrase onBack={() => setScreen("settings")} />
       )}
 
-      {/* Round 11 TASK 1 — back from Connected Sites was hardcoded to
+      {/* Back from Connected Sites was hardcoded to
          "settings", which broke the top-bar entry path (home → top-bar
          Connected Sites → back should return to home, not Settings).
          navigateBack pops the screen-stack so both entry paths work:
@@ -1495,7 +1576,7 @@ export default function App() {
         <ConnectedSites onBack={navigateBack} />
       )}
 
-      {/* Round 11 TASK 3 — ResetWallet's onBack was hardcoded to
+      {/* ResetWallet's onBack was hardcoded to
          "settings", which routed wrong when entered via the new
          hamburger-menu Reset wallet entry. navigateBack pops the
          screen stack so both entry paths (Settings → Reset and
@@ -1512,7 +1593,7 @@ export default function App() {
             setImportError(null);
             setGenerated(null);
             setPendingMnemonic(null);
-            // Round 13 SECURITY — clear any in-flight first-setup
+            // SECURITY: clear any in-flight first-setup
             // state on reset (defensive — reset-wallet from an
             // existing setup shouldn't have first-setup state, but
             // belt-and-braces against future flows).
@@ -1571,7 +1652,7 @@ export default function App() {
           onBack={() => {
             const wasDeepLinked = stakeDeepLink !== null;
             setStakeDeepLink(null);
-            // R18 — user is explicitly leaving Stake; clear the
+            // User is explicitly leaving Stake; clear the
             // persisted form / selection state so the next mount
             // starts fresh.
             clearStakeState();

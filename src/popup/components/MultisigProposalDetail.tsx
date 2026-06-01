@@ -1,9 +1,9 @@
-// Phase 8 Commit 3 — MultisigProposalDetail.
+// MultisigProposalDetail.
 //
 // Renders one PendingProposal: action summary, who-approved /
 // who-rejected, expiry countdown, and the (M of N) progress bar.
-// The Approve / Reject CTAs land in Commit 4 — this component is
-// rendering-only at Commit 3, with a `mode="readonly"` placeholder
+// The Approve / Reject CTAs land later — this component is
+// rendering-only for now, with a `mode="readonly"` placeholder
 // so the proposal detail page mounts cleanly even before the co-
 // sign flow lands.
 //
@@ -11,8 +11,10 @@
 // before executing. The wallet enforces M-of-N at the UI boundary;
 // chain enforcement is a GAP (see shared/multisig.ts module doc).
 
+import { useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
+import { decodeCalldata } from "../components";
 import { bech32mDisplay } from "../../shared/bech32m";
 import {
   isExecutable,
@@ -94,16 +96,90 @@ function ActionSummary({
       <Row label="Value">{formatLythoshiValue(valueLythoshiHex)}</Row>
       <Row label="Chain">{action.chainIdHex}</Row>
       {hasData && action.kind === "contract" && (
-        <Row label="Calldata">
-          <Mono>{shortenHex(action.data)}</Mono>
-        </Row>
+        <CalldataView data={action.data ?? "0x"} to={action.to} />
       )}
       {action.kind === "send" && action.data && action.data !== "0x" && (
-        <Row label="Calldata">
-          <Mono>{shortenHex(action.data)}</Mono>
-        </Row>
+        <CalldataView data={action.data} to={action.to} />
       )}
     </div>
+  );
+}
+
+// T3-02 — decode the embedded calldata for co-signers instead of showing
+// truncated opaque hex. Mirrors the dApp ReqSendTx view: function name +
+// decoded args, an explicit "Unrecognised calldata" warning for unknown
+// selectors, and a raw-bytes toggle. Display only — what is signed is the
+// proposal action, unchanged.
+function CalldataView({ data, to }: { data: string; to: string }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const decoded = decodeCalldata(data, to);
+  const dim: CSSProperties = { color: "var(--fg-500, #8a8f98)", marginLeft: 6 };
+  return (
+    <>
+      {decoded ? (
+        <>
+          <Row label="Function">
+            <Mono>
+              {decoded.name}
+              <span style={dim}>({decoded.selector})</span>
+            </Mono>
+          </Row>
+          {decoded.args.map((a) => (
+            <Row key={a.name} label={a.name}>
+              <Mono>
+                {a.value}
+                <span style={dim}>{a.type}</span>
+              </Mono>
+            </Row>
+          ))}
+        </>
+      ) : (
+        <div
+          style={{
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: "var(--warn, #f2b441)",
+            padding: "6px 8px",
+            border: "1px solid rgba(242,180,65,0.4)",
+            borderRadius: 6,
+            margin: "4px 0",
+          }}
+        >
+          <b>Unrecognised calldata.</b> Selector {data.slice(0, 10)} is not in
+          the wallet&apos;s decoder set — review the raw bytes before approving.
+        </div>
+      )}
+      <Row label="Calldata">
+        <button
+          type="button"
+          onClick={() => setShowRaw((v) => !v)}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "var(--accent, #7ee3c1)",
+            cursor: "pointer",
+            fontSize: 11,
+            padding: 0,
+          }}
+        >
+          {showRaw ? "hide" : "show"} raw
+        </button>
+      </Row>
+      {showRaw && (
+        <div
+          style={{
+            maxHeight: 120,
+            overflowY: "auto",
+            wordBreak: "break-all",
+            fontSize: 10.5,
+            color: "var(--fg-300)",
+            padding: "4px 0",
+          }}
+        >
+          <Mono>{data}</Mono>
+        </div>
+      )}
+    </>
   );
 }
 
