@@ -255,7 +255,7 @@ export async function listAllNotifications(): Promise<NotificationRecord[]> {
   }
 }
 
-/** Polish C2 — flip ONE record's `read` to `true` by its full id
+/** Flip ONE record's `read` to `true` by its full id
  *  (`${chainIdHex}:${txHash}`). Scans every `mono.notifications.history.*`
  *  envelope, locates the scope holding the id, and writes back only that
  *  scope. Returns `{ flipped: true }` when the record was found and was

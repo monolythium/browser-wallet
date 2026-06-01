@@ -138,13 +138,13 @@ interface ChainStatusBannerProps {
    *  button to the right of `onSettings` when provided. Omit in
    *  approval contexts. */
   onConnectedSites?: () => void;
-  /** Notifications polish C1 — bell entry to the global notifications
+  /** Bell entry to the global notifications
    *  page. Renders between Connected sites and the hamburger, with an
    *  optional small unread dot driven by `unreadCount`. The page itself
    *  was added with the Notifications page; the bell is a top-bar entry so the inbox is
    *  reachable without opening the hamburger menu. */
   onNotifications?: () => void;
-  /** Polish C1 — when > 0, paints a small blue dot on the bell glyph
+  /** When > 0, paints a small blue dot on the bell glyph
    *  (no number; the bell-row pill in MainMenu still shows the count).
    *  Caller is expected to fetch this via `bgGetUnread()` and refresh
    *  it on storage change so the dot stays in sync. */
@@ -300,7 +300,7 @@ export function ChainStatusBanner({
   // window, where switching chains mid-approval would be unsafe.
   // Slightly larger padding + subtle bg lift so the
   // network selector reads as a clearly tappable pill.
-  // Polish C1 — trim 2 px of horizontal padding + 1 px of caret gap so
+  // Trim 2 px of horizontal padding + 1 px of caret gap so
   // the new bell + hamburger fit comfortably on the right cluster
   // without crowding the network pill on narrower popup widths.
   const chipStyle: CSSProperties = {
@@ -450,7 +450,7 @@ function BannerActionButton({
   onClick: () => void;
   ariaLabel: string;
   icon: import("./Icon").IconName;
-  /** Polish C1 — when true, paints a small blue dot on the button's
+  /** When true, paints a small blue dot on the button's
    *  top-right corner (matches the `.ext-unread` hue used on rows in
    *  the Notifications page so the affordance reads consistently). */
   showDot?: boolean;
