@@ -1,4 +1,4 @@
-// Phase 3/4 — per-notification detail modal.
+// Per-notification detail modal.
 //
 // Mirrors `ActivityDetail`'s shape: a `<Modal showClose>` with a stack
 // of `DRow`s for the structured fields + a `MonoscanTxButton` CTA at

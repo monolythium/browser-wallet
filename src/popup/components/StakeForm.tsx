@@ -1,4 +1,4 @@
-// Phase 7 — StakeForm. Amount input + selected-cluster context +
+// StakeForm. Amount input + selected-cluster context +
 // cap-headroom check + Continue CTA. Dumb component: the parent
 // (Stake page) owns the cluster pick, the wallet balance, and the
 // chain submission.

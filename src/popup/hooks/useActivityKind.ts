@@ -1,4 +1,4 @@
-// Phase 11 Commit 3 — typed AddressActivityKind probe hook.
+// Typed AddressActivityKind probe hook.
 //
 // Mirrors useActivity / useIndexerStatus for the chrome.storage +
 // race-protection pattern, but the activity-kind read is one-shot per

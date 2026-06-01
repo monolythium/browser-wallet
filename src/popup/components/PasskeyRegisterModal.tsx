@@ -1,4 +1,4 @@
-// Phase 9 Commit 2 — PasskeyRegisterModal.
+// PasskeyRegisterModal.
 //
 // Drives the `navigator.credentials.create()` WebAuthn registration
 // inside the popup window context. MV3 service workers cannot invoke
