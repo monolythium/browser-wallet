@@ -8934,11 +8934,19 @@ void refreshUnreadBadge({ unlocked: isUnlockedV4() });
 
 // ---- message routing ----
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   const m = message as { kind?: string };
+  // T2-02 — fail-closed sender authentication. Reject any message that does
+  // not originate from THIS extension. `externally_connectable` is absent, so
+  // a web page cannot reach this router today; this verifies that invariant
+  // rather than assuming it (defense-in-depth). The bridge-stamped
+  // `message.origin` remains the per-dApp authorization key for rpc.
+  if (sender?.id !== chrome.runtime.id) {
+    return false;
+  }
   // Keepalive ping. The popup fires this on mount to
   // wake the SW out of MV3 idle before any real call goes out;
-  // synchronous reply, no auth, no work, no auto-lock reset.
+  // synchronous reply, no work, no auto-lock reset.
   // Anything that touches state belongs in the popup or rpc branch.
   if (m?.kind === "ping") {
     sendResponse({ ok: true });
@@ -8952,6 +8960,13 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     return true;
   }
   if (m?.kind === "popup") {
+    // Popup-internal ops (resolve / revoke / keystore / …) must come from a
+    // popup document, not a content script that merely shares this extension
+    // id. A compromised content script can reach the rpc branch (and is gated
+    // there by message.origin + per-op approval) but must NOT reach popup ops.
+    if (!sender.url?.startsWith(chrome.runtime.getURL("src/popup/"))) {
+      return false;
+    }
     handlePopup(message as PopupMessage)
       .then((reply) => {
         sendResponse(reply);
