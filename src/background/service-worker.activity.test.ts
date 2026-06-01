@@ -336,6 +336,8 @@ vi.mock("./networks.js", () => ({
     chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase(),
   ),
   SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
+  // T4-04 fee ceiling — real value so the clamp tests are meaningful.
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: 1_000_000_000_000_000n,
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
   BUILTIN_CHAINS: [
     {
@@ -4812,5 +4814,86 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: boolean };
     expect(r.ok).toBe(true);
     expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T4-04 (Item D) — fee binding + sane ceiling on wallet-send-tx.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
+  const CEILING = 1_000_000_000_000_000n; // matches the networks mock
+  const CEILING_HEX = "0x" + CEILING.toString(16);
+
+  function seedOperatorFee(executionUnitPriceLythoshi: string, priorityTipLythoshi: string) {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi,
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi,
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+
+  it("signs the popup-supplied signedFee verbatim instead of re-reading the operator (b1)", async () => {
+    // The operator re-read would yield 0x9999; the popup bound 0x2710. The
+    // SW must sign the BOUND value, never the re-read.
+    seedOperatorFee("0x9999", "0x9998");
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: "0x5208",
+      },
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: "0x2710",
+        maxPriorityFeePerGas: "0x270f",
+        gas: "0x5208",
+      }),
+    );
+  });
+
+  it("clamps an absurd signedFee maxFeePerGas (and tip) to the sane ceiling (a1)", async () => {
+    seedOperatorFee("0x9999", "0x9998");
+    const absurd = "0x" + (CEILING * 1000n).toString(16);
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: absurd,
+        maxPriorityFeePerGasHex: absurd,
+        executionUnitLimitHex: "0x5208",
+      },
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: CEILING_HEX,
+        // tip clamped to <= maxFeePerGas (== ceiling).
+        maxPriorityFeePerGas: CEILING_HEX,
+      }),
+    );
+  });
+
+  it("clamps an absurd operator fee to the ceiling even without signedFee (a1 fallback)", async () => {
+    const absurd = "0x" + (CEILING * 1000n).toString(16);
+    seedOperatorFee(absurd, absurd);
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ maxFeePerGas: CEILING_HEX }),
+    );
   });
 });
