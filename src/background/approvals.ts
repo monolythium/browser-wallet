@@ -18,14 +18,6 @@
 
 import { STORAGE_KEY_PENDING_APPROVALS } from "../shared/constants";
 
-export type ApprovalKind =
-  | "connect"
-  | "personal_sign"
-  | "typed_sign"
-  | "send_tx"
-  | "switch_chain"
-  | "add_chain";
-
 export interface ConnectApprovalReq {
   kind: "connect";
   origin: string;
