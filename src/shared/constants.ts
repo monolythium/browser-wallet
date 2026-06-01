@@ -43,6 +43,16 @@ export const SESSION_KEY_UNLOCK_LOCKOUT_UNTIL = "unlockLockoutUntil";
 // vault without prompting for the password. Cleared on lock /
 // auto-lock fire / wipe.
 export const SESSION_KEY_MEK_V4 = "mono.session.mek.v4";
+// T1-03 (Item B) — hard cap on the password-less session-MEK rehydrate window,
+// independent of the (user-configurable, up to 60 min) auto-lock window. The
+// deadline is written when the MEK is persisted AND refreshed on every genuine
+// user action (resetAutoLock), so the window slides to "MEK_REHYDRATE_MAX_MINUTES
+// since last activity". Once past it, tryRestoreFromSessionV4 refuses and wipes
+// the session MEK, forcing a fresh password unlock. Bounds the local/evil-maid
+// re-unlock window without retyping the password during continuous use.
+export const SESSION_KEY_MEK_REHYDRATE_DEADLINE =
+  "mono.session.mek.rehydrate.deadline";
+export const MEK_REHYDRATE_MAX_MINUTES = 5;
 
 // Highest threshold first so lockoutMsFor() returns the longest matching window.
 export const LOCKOUT_THRESHOLDS = [
