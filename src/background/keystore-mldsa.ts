@@ -1603,6 +1603,40 @@ export function getUnlockedAddressV4(): string | null {
   return unlocked?.address ?? null;
 }
 
+/** The active vault id while unlocked, else null. Lets the SW resolve the
+ *  per-vault passkey policy for the active vault without a popup-supplied
+ *  vaultId (`wallet-send-tx` carries none). Mirrors {@link getUnlockedAddressV4}'s
+ *  unlocked-only contract. */
+export function getActiveVaultIdV4(): string | null {
+  return unlocked ? activeContainerVaultId : null;
+}
+
+/** Verify a password against the active vault WITHOUT mutating unlock state:
+ *  re-derive the MEK and attempt to unwrap the active vault's VEK (AEAD fails
+ *  closed on a wrong password). Used by the SW to gate an over-limit passkey
+ *  send behind a REAL password re-auth (T1-04(a)) — an SW-side check, never a
+ *  popup-asserted flag (which the already-unlocked local actor this gate
+ *  targets could forge). Returns false (never throws) on any failure and
+ *  zeroes all derived secret material. */
+export async function verifyContainerPasswordV4(
+  password: string,
+): Promise<boolean> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return false;
+  const active = container.vaults.find((v) => v.id === container.activeVaultId);
+  if (!active) return false;
+  const mek = await deriveMekV4(password, container.masterKdf);
+  try {
+    const vek = unwrapVekV4(mek, active.wrappedKey);
+    vek.fill(0);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    mek.fill(0);
+  }
+}
+
 /** Lock — drop the in-memory backend reference. The backend's secret key
  * is held by the SDK in private fields; we cannot zero it deterministically,
  * but releasing the reference makes it eligible for GC.
