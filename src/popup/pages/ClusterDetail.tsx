@@ -378,9 +378,8 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
   );
 
   // Cluster-level service-tier aggregation across member
-  // operators (any-true semantics per
-  // operators (any-true semantics). If
-  // chain ships ClusterDirectoryEntry.serviceTiers as an aggregate
+  // operators (any-true semantics).
+  // If chain ships ClusterDirectoryEntry.serviceTiers as an aggregate
   // field, this whole probe fan-out drops to a single directory read.
   const [serviceTiers, setServiceTiers] = useState<ClusterServiceTiers | null>(
     null,
