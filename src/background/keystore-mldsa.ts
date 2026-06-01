@@ -1783,41 +1783,6 @@ export async function exportMnemonicV4(
 }
 
 
-/**
- * Sign + bincode-encode a Monolythium-native EVM transaction.
- * Returns the wire-ready 0x-prefixed hex string + tx hash + the raw
- * `bincode(SignedTransaction)` bytes (needed by the SDK encrypted-envelope
- * wrapper, which uses the raw bytes as the AEAD plaintext).
- */
-export async function signEvmTxV4(req: {
-  chainId: bigint;
-  nonce: bigint;
-  maxPriorityFeePerGas: bigint;
-  maxFeePerGas: bigint;
-  gasLimit: bigint;
-  to: Uint8Array | null;
-  value: bigint;
-  input?: Uint8Array;
-}): Promise<{
-  rawTxHex: string;
-  sighashHex: string;
-  wireBytes: number;
-  /** Raw `bincode(SignedTransaction)` bytes — same payload `rawTxHex` carries. */
-  bincodeBytes: Uint8Array;
-  /** Raw 32-byte sighash. */
-  sighashBytes: Uint8Array;
-}> {
-  if (!unlocked) throw new Error("v4 wallet is locked");
-  const result = unlocked.backend.signEvmTx(req);
-  return {
-    rawTxHex: "0x" + result.wireHex,
-    sighashHex: "0x" + bytesToHex(result.sighash),
-    wireBytes: result.wireBytes.length,
-    bincodeBytes: result.wireBytes,
-    sighashBytes: result.sighash,
-  };
-}
-
 /** Get the unlocked backend's 1952-byte public key — needed for monkey-patched
  * `eth_accounts` views that want to surface "this is the ML-DSA pubkey" along
  * with the address. */
@@ -1825,34 +1790,8 @@ export function getUnlockedPublicKeyV4(): Uint8Array | null {
   return unlocked?.backend.publicKey() ?? null;
 }
 
-/**
- * Raw 20-byte address from the unlocked backend — convenient when
- * building a `NonceAad` (which carries a `sender` byte array, not a
- * hex string). Returns null when the keystore is locked.
- */
-export function getUnlockedAddressBytesV4(): Uint8Array | null {
-  return unlocked?.backend.addressBytes() ?? null;
-}
-
 export function getUnlockedBackendV4(): MlDsa65Backend | null {
   return unlocked?.backend ?? null;
-}
-
-/**
- * Sign an arbitrary 32-byte digest with ML-DSA-65 — used by the
- * SDK encrypted-envelope outer signature, which signs
- * `keccak256(bincode(nonce_aad) || ciphertext || bincode(decryption_hint)
- * || sender_pubkey)`. Keeping the secret-key dereference inside this
- * module is what keeps secret-key dereferences scoped to the keystore.
- *
- * Throws `"v4 wallet is locked"` if the keystore isn't unlocked.
- */
-export function signOuterDigestV4(digest: Uint8Array): Uint8Array {
-  if (!unlocked) throw new Error("v4 wallet is locked");
-  if (digest.length !== 32) {
-    throw new Error(`outer digest must be 32 bytes, got ${digest.length}`);
-  }
-  return unlocked.backend.signPrehash(digest);
 }
 
 /**
