@@ -563,6 +563,8 @@ function installChromeStub(): void {
       },
       onInstalled: { addListener: vi.fn() },
       getURL: (p: string) => `chrome-extension://test/${p}`,
+      // T2-02 — the router authenticates sender.id against this.
+      id: "test",
     },
     tabs: {
       query: (_f: unknown, cb: (tabs: unknown[]) => void) => {
@@ -604,7 +606,11 @@ interface RpcEnvelope {
 async function dispatchPopup(envelope: PopupEnvelope): Promise<unknown> {
   if (!capturedOnMessage) throw new Error("SW did not register onMessage handler");
   return new Promise((resolve) => {
-    capturedOnMessage!(envelope, {}, resolve);
+    capturedOnMessage!(
+      envelope,
+      { id: "test", url: "chrome-extension://test/src/popup/index.html" },
+      resolve,
+    );
   });
 }
 
@@ -621,7 +627,7 @@ async function dispatchRpc(
       args: { method, params },
       origin,
     };
-    const handled = capturedOnMessage!(envelope, {}, (response: unknown) => {
+    const handled = capturedOnMessage!(envelope, { id: "test" }, (response: unknown) => {
       resolve(response as { result?: unknown; error?: { code: number; message: string } });
     });
     if (handled !== true) {
@@ -4896,5 +4902,47 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
     expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ maxFeePerGas: CEILING_HEX }),
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T2-02 — SW router sender authentication (fail-closed).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("SW router sender authentication (T2-02)", () => {
+  it("rejects any message from a foreign extension id", () => {
+    let responded = false;
+    const ret = capturedOnMessage!(
+      { kind: "rpc", id: "x", args: { method: "eth_chainId", params: [] }, origin: "https://dapp.example" },
+      { id: "someone-else" },
+      () => {
+        responded = true;
+      },
+    );
+    expect(ret).toBe(false);
+    expect(responded).toBe(false);
+  });
+
+  it("rejects a popup op from a non-popup sender (e.g. a content script)", () => {
+    let responded = false;
+    const ret = capturedOnMessage!(
+      { kind: "popup", op: "keystore-status" },
+      // correct extension id, but a web-page url, not a popup document
+      { id: "test", url: "https://evil.example/page" },
+      () => {
+        responded = true;
+      },
+    );
+    expect(ret).toBe(false);
+    expect(responded).toBe(false);
+  });
+
+  it("accepts a popup op from a genuine popup sender", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-status",
+    })) as { hasVault?: boolean };
+    // A real response object came back (the request was not rejected).
+    expect(r).toBeDefined();
+    expect(typeof r).toBe("object");
   });
 });
