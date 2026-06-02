@@ -558,15 +558,12 @@ export function Settings({
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
+                justifyContent: "center",
                 gap: 8,
               }}
             >
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Icon name="passkey" size={13} />
-                Passkey policy
-              </span>
-              <Icon name="chev" size={12} />
+              <Icon name="passkey" size={13} />
+              Passkey policy
             </button>
           )}
 
@@ -587,15 +584,12 @@ export function Settings({
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
+                justifyContent: "center",
                 gap: 8,
               }}
             >
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Icon name="shield" size={13} />
-                Features
-              </span>
-              <Icon name="chev" size={12} />
+              <Icon name="shield" size={13} />
+              Features
             </button>
           )}
 
