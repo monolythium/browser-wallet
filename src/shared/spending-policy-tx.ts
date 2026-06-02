@@ -45,6 +45,7 @@ import {
   decodeTimeWindow,
   type SpendingPolicyArgs,
 } from "@monolythium/core-sdk";
+import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 import { LYTHOSHI_PER_LYTH } from "./native-amount.js";
 
 /** Spending-policy precompile address — Whitepaper §18.8
@@ -52,8 +53,9 @@ import { LYTHOSHI_PER_LYTH } from "./native-amount.js";
  *  SDK so the wallet and chain can never drift on the address. */
 export const SPENDING_POLICY_PRECOMPILE = spendingPolicyAddressHex();
 
-/** Native LYTH decimal places (8). `1 LYTH = 10^8 lythoshi`. */
-const NATIVE_LYTH_DECIMALS = 8;
+// Native LYTH decimal places sourced from the SDK (single source of truth).
+// Chain migrated 8 → 18 decimals (1 lythoshi == 1 wei); SDK 0.3.15 carries
+// `NATIVE_LYTH_DECIMALS = 18` and `1 LYTH = 10^18 lythoshi`.
 
 /** Conservative execution-unit budget for the claim path. The calldata
  *  carries the sub-account's 1952-byte pubkey + 3309-byte signature
@@ -179,9 +181,9 @@ export interface SpendingPolicyForm {
 /**
  * Convert a decimal LYTH amount string to lythoshi (`bigint`).
  * Precision-safe — splits on `.` and builds the BigInt from integer +
- * zero-padded fractional parts so `0.00000001` (1 lythoshi) round-trips
- * exactly. Empty / "0" returns 0n ("no cap"). Throws on malformed input
- * or more than 8 decimal places (callers pre-validate).
+ * zero-padded fractional parts so `0.000000000000000001` (1 lythoshi)
+ * round-trips exactly. Empty / "0" returns 0n ("no cap"). Throws on
+ * malformed input or more than 18 decimal places (callers pre-validate).
  */
 export function lythToLythoshi(amountStr: string): bigint {
   const trimmed = amountStr.trim();
@@ -193,7 +195,7 @@ export function lythToLythoshi(amountStr: string): bigint {
   const intPart = dot < 0 ? trimmed : trimmed.slice(0, dot);
   const fracPartRaw = dot < 0 ? "" : trimmed.slice(dot + 1);
   if (fracPartRaw.length > NATIVE_LYTH_DECIMALS) {
-    throw new Error("amount has more than 8 decimal places");
+    throw new Error(`amount has more than ${NATIVE_LYTH_DECIMALS} decimal places`);
   }
   const fracPadded = (fracPartRaw + "0".repeat(NATIVE_LYTH_DECIMALS)).slice(
     0,

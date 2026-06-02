@@ -3,16 +3,18 @@ import {
   checkMrvStructuredFeeConformance,
   formatLyth,
   formatNativeReceiptFeeDisplay,
+  LYTHOSHI_PER_LYTH,
+  NATIVE_LYTH_DECIMALS,
   type NativeReceiptFee,
 } from "@monolythium/core-sdk";
 
-export const NATIVE_LYTH_DECIMALS = 8;
-// Verified 2026-05-27 against SDK 0.3.1: matches
-// @monolythium/core-sdk/dist/index.d.ts:1389 (LYTHOSHI_PER_LYTH = 100000000n)
-// + :1387-1388 (LYTH_DECIMALS / NATIVE_LYTH_DECIMALS both = 8). The v1 wire
-// format is 10^8 lythoshi per LYTH; the whitepaper §23.1 reading of 10^-18
-// is interpretive only — chain code wins per canon-hierarchy principle.
-export const LYTHOSHI_PER_LYTH = 100_000_000n;
+// Native LYTH precision sourced from the SDK (single source of truth) so the
+// wallet and chain can never drift on the decimal count. The chain migrated
+// 8 → 18 decimals (1 lythoshi == 1 wei); SDK 0.3.15 carries
+// `NATIVE_LYTH_DECIMALS = 18` and `LYTHOSHI_PER_LYTH = 10^18`. The wallet
+// re-exports them so existing call sites (Send.tsx etc.) keep importing them
+// from here.
+export { NATIVE_LYTH_DECIMALS, LYTHOSHI_PER_LYTH };
 export const FEE_MULTIPLIER_BPS_BASE = 10_000n;
 
 export type NativeFeeDisplaySource = "legacy-compat" | "structured";

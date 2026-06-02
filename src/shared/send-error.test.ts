@@ -61,14 +61,14 @@ describe("classifySendError — copy quality", () => {
 describe("classifySendError — insufficient-funds context enrichment", () => {
   it("includes balance + need + shortfall when context supplied", () => {
     const r = classifySendError("insufficient funds", {
-      // 1 LYTH = 100_000_000 lythoshi
-      walletBalanceLythoshiHex: "0x" + 100_000_000n.toString(16), // 1 LYTH
-      txValueLythoshiHex: "0x" + 300_000_000n.toString(16), // 3 LYTH
-      estimatedNetworkFeeLythoshiHex: "0x" + 1_000_000n.toString(16), // 0.01 LYTH
+      // Chain migrated 8 → 18 decimals: 1 LYTH = 10^18 lythoshi.
+      walletBalanceLythoshiHex: "0x" + 1_000_000_000_000_000_000n.toString(16), // 1 LYTH
+      txValueLythoshiHex: "0x" + 3_000_000_000_000_000_000n.toString(16), // 3 LYTH
+      estimatedNetworkFeeLythoshiHex: "0x" + 10_000_000_000_000_000n.toString(16), // 0.01 LYTH
     });
-    expect(r.body).toContain("1.00000000 LYTH");
-    expect(r.body).toContain("3.01000000 LYTH"); // total needed
-    expect(r.body).toContain("2.01000000 LYTH"); // shortfall
+    expect(r.body).toContain("1 LYTH");
+    expect(r.body).toContain("3.01 LYTH"); // total needed
+    expect(r.body).toContain("2.01 LYTH"); // shortfall
     expect(r.body).toContain("network fee");
     expect(r.body).not.toContain("gas");
   });
@@ -103,7 +103,8 @@ describe("classifySendError — insufficient-funds context enrichment", () => {
       walletBalanceLythoshiHex: "0x0",
       txValueLythoshiHex: "0x1",
     });
-    expect(r.body).toContain("0.00000001 LYTH");
+    // 1 lythoshi == 1 wei == 10^-18 LYTH after the 8 → 18 migration.
+    expect(r.body).toContain("0.000000000000000001 LYTH");
   });
 });
 
