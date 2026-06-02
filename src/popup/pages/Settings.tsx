@@ -295,11 +295,11 @@ export function Settings({
           </div>
         </div>
 
-        {/* Section order: Account, Multisig (conditional),
-           Staking, Security, Developer tools, Network operators, About.
-           Multisig kept in slot 2 (account-adjacent) since the spec didn't
-           mention it but its content is logically about access control on
-           the active vault. */}
+        {/* Section order: Account, Multisig (conditional), Security,
+           Notifications, Theme, Staking, Developer tools, Network operators,
+           About. Multisig kept in slot 2 (account-adjacent) since the spec
+           didn't mention it but its content is logically about access
+           control on the active vault. */}
         {multisig && (
           <div className="ext-card">
             <div className="ext-card__head">
@@ -371,45 +371,6 @@ export function Settings({
             </div>
           </div>
         )}
-
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Staking</h3>
-          </div>
-          <div
-            style={{
-              fontSize: 11.5,
-              color: "var(--fg-300)",
-              lineHeight: 1.5,
-              marginBottom: 10,
-            }}
-          >
-            View active delegations, pending rewards, and manage existing
-            positions across clusters.
-          </div>
-          <button
-            onClick={onOpenDelegations}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid var(--fg-700)",
-              background: "rgba(255,255,255,0.04)",
-              color: "var(--fg-100)",
-              fontFamily: "var(--f-sans)",
-              fontSize: 12.5,
-              fontWeight: 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <span>Delegations dashboard</span>
-            <Icon name="chev" size={12} />
-          </button>
-        </div>
 
         <div className="ext-card">
           <div className="ext-card__head">
@@ -754,6 +715,45 @@ export function Settings({
               <Icon name="contrast" size={13} />
               Appearance
             </span>
+            <Icon name="chev" size={12} />
+          </button>
+        </div>
+
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Staking</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            View active delegations, pending rewards, and manage existing
+            positions across clusters.
+          </div>
+          <button
+            onClick={onOpenDelegations}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>Delegations dashboard</span>
             <Icon name="chev" size={12} />
           </button>
         </div>
