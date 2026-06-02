@@ -4,9 +4,10 @@
 // shared/activity.ts:reconcilePending matches a pending row against
 // a confirmed tx_send by exact string equality on `amountDecimal`.
 // The SW receives the IPC compatibility field `valueWeiHex`, but for
-// native LYTH sends that field now carries v4.1 lythoshi. The helper
-// must therefore format 8 native decimals, or pending rows will fail
-// to match the indexer's confirmed decimal LYTH strings.
+// native LYTH sends that field now carries native lythoshi. The chain
+// migrated 8 → 18 decimals (1 lythoshi == 1 wei); the helper must
+// therefore format 18 native decimals, or pending rows will fail to
+// match the indexer's confirmed decimal LYTH strings.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -21,29 +22,33 @@ import { lythoshiDecimalToLythDecimal } from "../shared/lyth-units.js";
 // would lose precision if the helper downcast to Number.
 const FIXTURES: Array<{ lythoshi: bigint; expected: string; label: string }> = [
   { lythoshi: 0n, expected: "0", label: "zero" },
-  { lythoshi: 1n, expected: "0.00000001", label: "1 lythoshi" },
-  { lythoshi: 2_000_000n, expected: "0.02", label: "0.02 LYTH" },
-  { lythoshi: 10_000_000n, expected: "0.1", label: "0.1 LYTH" },
-  { lythoshi: 100_000_000n, expected: "1", label: "1 LYTH" },
   {
-    lythoshi: 123_456_789n,
+    lythoshi: 1n,
+    expected: "0.000000000000000001",
+    label: "1 lythoshi (smallest 18-decimal unit)",
+  },
+  { lythoshi: 20_000_000_000_000_000n, expected: "0.02", label: "0.02 LYTH" },
+  { lythoshi: 100_000_000_000_000_000n, expected: "0.1", label: "0.1 LYTH" },
+  { lythoshi: 1_000_000_000_000_000_000n, expected: "1", label: "1 LYTH" },
+  {
+    lythoshi: 1_234_567_890_000_000_000n,
     expected: "1.23456789",
-    label: "full 8-decimal fraction",
+    label: "8-decimal fraction in the 18-decimal domain",
   },
   {
-    lythoshi: 700_000_001n,
+    lythoshi: 7_000_000_010_000_000_000n,
     expected: "7.00000001",
-    label: "mixed integer + smallest fraction",
+    label: "mixed integer + fraction",
   },
   {
-    lythoshi: 10_000_000_000n,
+    lythoshi: 100_000_000_000_000_000_000n,
     expected: "100",
     label: "100 LYTH",
   },
   {
-    lythoshi: BigInt(Number.MAX_SAFE_INTEGER),
+    lythoshi: 90_071_992_547_409_910_000_000_000n,
     expected: "90071992.54740991",
-    label: "Number.MAX_SAFE_INTEGER lythoshi",
+    label: "large bigint beyond Number precision",
   },
 ];
 
@@ -57,7 +62,7 @@ describe("lythoshiHexToLythDecimal", () => {
   }
 
   it("keeps the deprecated wei-named export as a lythoshi compatibility wrapper", () => {
-    const valueWeiHex = "0x" + 10_000_000n.toString(16);
+    const valueWeiHex = "0x" + 100_000_000_000_000_000n.toString(16);
     expect(weiHexToLythDecimal(valueWeiHex)).toBe("0.1");
     expect(weiHexToLythDecimal(valueWeiHex)).toBe(
       lythoshiHexToLythDecimal(valueWeiHex),
@@ -71,8 +76,9 @@ describe("lythoshiHexToLythDecimal", () => {
   });
 
   it("accepts lowercase and uppercase hex digits identically", () => {
-    expect(lythoshiHexToLythDecimal("0x75bcd15")).toBe("1.23456789");
-    expect(lythoshiHexToLythDecimal("0x75BCD15")).toBe("1.23456789");
+    // 0x112210f4768db400 = 1_234_567_890_000_000_000 lythoshi = 1.23456789 LYTH.
+    expect(lythoshiHexToLythDecimal("0x112210f4768db400")).toBe("1.23456789");
+    expect(lythoshiHexToLythDecimal("0x112210F4768DB400")).toBe("1.23456789");
   });
 });
 

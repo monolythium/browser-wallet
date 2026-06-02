@@ -38,17 +38,17 @@ describe("chain-units (lythoshi-native wire; dc919df8)", () => {
     expect(legacyChainBalanceHexToLythoshiHex("0x2540be400")).toBe("0x2540be400");
   });
 
-  it("end-to-end: 0x2540be400 displays as 100 LYTH, NOT 0.00000001", () => {
-    // Regression guard for the wei-down-scale bug. The chain balance
-    // 0x2540be400 (= 10^10 lythoshi) passes through the boundary
-    // unchanged and the display helper renders 100 LYTH. Under the old
-    // legacy-wei path it would have been divided to 1 lythoshi and
-    // rendered as the (wrong) 0.00000001 LYTH.
-    const wireHex = "0x2540be400";
+  it("end-to-end: a 100-LYTH balance passes through and displays as 100 LYTH", () => {
+    // Regression guard for the wei-down-scale bug. The chain migrated to
+    // 18 decimals (1 lythoshi == 1 wei), so a 100-LYTH balance is now
+    // 100 * 10^18 lythoshi. The boundary passes it through unchanged and
+    // the display helper renders 100 LYTH. The compensation path stays a
+    // no-op identity now that the wire IS the lythoshi domain.
+    const oneHundredLyth = 100n * 1_000_000_000_000_000_000n;
+    const wireHex = "0x" + oneHundredLyth.toString(16);
     const lythoshi = BigInt(legacyChainBalanceHexToLythoshiHex(wireHex));
-    expect(lythoshi).toBe(10_000_000_000n);
+    expect(lythoshi).toBe(oneHundredLyth);
     expect(formatNativeLythAmount(lythoshi)).toBe("100 LYTH");
-    expect(formatNativeLythAmount(lythoshi)).not.toBe("0.00000001 LYTH");
   });
 
   it("legacyChainBalanceHexToLythoshiHex passes through 0x0", () => {

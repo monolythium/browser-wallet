@@ -30,6 +30,7 @@ import {
   MAX_PASSKEY_LIMIT_LYTHOSHI,
   MIN_PASSKEY_LIMIT_LYTHOSHI,
 } from "../../shared/passkey";
+import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface SecurityProps {
   onBack: () => void;
@@ -44,8 +45,8 @@ export interface SecurityProps {
   chainIdHex: string;
 }
 
-/** Convert lythoshi (decimal string) → LYTH (decimal string with ≤ 8 dp).
- *  Used for the slider readout and the policy summary card. Exported
+/** Convert lythoshi (decimal string) → LYTH (decimal string, trailing zeros
+ *  trimmed). Used for the slider readout and the policy summary card. Exported
  *  for the unit-test seam. */
 export function lythoshiStrToLythStr(lythoshiStr: string): string {
   try {
@@ -53,7 +54,7 @@ export function lythoshiStrToLythStr(lythoshiStr: string): string {
     const integer = lythoshi / LYTHOSHI_PER_LYTH;
     const fraction = lythoshi % LYTHOSHI_PER_LYTH;
     if (fraction === 0n) return integer.toString();
-    const fracStr = fraction.toString().padStart(8, "0");
+    const fracStr = fraction.toString().padStart(NATIVE_LYTH_DECIMALS, "0");
     const trimmed = fracStr.replace(/0+$/, "");
     return trimmed ? `${integer}.${trimmed}` : integer.toString();
   } catch {
@@ -65,7 +66,7 @@ export function lythoshiStrToLythStr(lythoshiStr: string): string {
  *  Exported for the unit-test seam. */
 export function lythToLythoshiStr(lyth: number): string {
   // Use bigint to avoid the float-imprecision footgun at large
-  // values. 1 LYTH = 100_000_000 lythoshi.
+  // values. 1 LYTH = 10^18 lythoshi (chain migrated 8 → 18 decimals).
   const whole = BigInt(Math.floor(lyth));
   return (whole * LYTHOSHI_PER_LYTH).toString();
 }

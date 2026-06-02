@@ -160,21 +160,23 @@ describe("validateToAddress — unknown / garbage", () => {
 });
 
 describe("native LYTH amount conversion — lythoshi precision", () => {
-  it("accepts and round-trips the smallest 8-decimal LYTH amount", () => {
-    expect(validateAmount("0.00000001")).toBeNull();
-    expect(lythToLythoshiHex("0.00000001")).toBe("0x1");
-    expect(lythoshiToLythString(1n)).toBe("0.00000001");
+  it("accepts and round-trips the smallest 18-decimal LYTH amount", () => {
+    // Chain migrated 8 → 18 decimals: 1 lythoshi == 1 wei == 10^-18 LYTH.
+    expect(validateAmount("0.000000000000000001")).toBeNull();
+    expect(lythToLythoshiHex("0.000000000000000001")).toBe("0x1");
+    expect(lythoshiToLythString(1n)).toBe("0.000000000000000001");
   });
 
   it("formats mixed whole/fractional lythoshi without trailing zeros", () => {
-    expect(lythToLythoshiHex("1.23456789")).toBe("0x75bcd15");
-    expect(lythoshiToLythString(123_456_789n)).toBe("1.23456789");
-    expect(lythoshiToLythString(100_000_000n)).toBe("1");
+    // 1.23456789 LYTH = 1.23456789 * 10^18 lythoshi.
+    expect(lythToLythoshiHex("1.23456789")).toBe("0x112210f4768db400");
+    expect(lythoshiToLythString(1_234_567_890_000_000_000n)).toBe("1.23456789");
+    expect(lythoshiToLythString(1_000_000_000_000_000_000n)).toBe("1");
   });
 
-  it("rejects 9-decimal native LYTH input", () => {
-    expect(validateAmount("0.000000001")).toBe(
-      "amount cannot have more than 8 decimal places",
+  it("rejects 19-decimal native LYTH input", () => {
+    expect(validateAmount("0.0000000000000000001")).toBe(
+      "amount cannot have more than 18 decimal places",
     );
   });
 });
@@ -229,8 +231,9 @@ describe("native LYTH fee display math", () => {
   });
 
   it("renders the default fee quote as one LYTH amount without gwei wording", () => {
+    // 80 lythoshi under the 18-decimal domain = 8 * 10^-17 LYTH.
     const text = formatNativeLythAmount(80n);
-    expect(text).toBe("0.0000008 LYTH");
+    expect(text).toBe("0.00000000000000008 LYTH");
     expect(text).not.toMatch(/gwei|lythoshi|execution unit/i);
   });
 });

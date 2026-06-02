@@ -23,6 +23,11 @@
 //            specifically — but nonce-too-low still happens on multi-
 //            tab sends)
 
+import {
+  LYTHOSHI_PER_LYTH,
+  NATIVE_LYTH_DECIMALS,
+} from "@monolythium/core-sdk";
+
 /** Discriminated error category. Defaults to "unknown" for messages
  *  the classifier doesn't recognise; the popup then renders the raw
  *  message verbatim (preserving the existing behaviour). */
@@ -226,8 +231,10 @@ export function classifySendError(
   };
 }
 
-const LYTHOSHI_PER_LYTH = 100_000_000n;
-const LYTHOSHI_DECIMALS = 8;
+// Native LYTH precision sourced from the SDK (single source of truth). Chain
+// migrated 8 → 18 decimals (1 lythoshi == 1 wei); SDK 0.3.15 carries
+// `LYTHOSHI_PER_LYTH = 10^18` and `NATIVE_LYTH_DECIMALS = 18`.
+const LYTHOSHI_DECIMALS = NATIVE_LYTH_DECIMALS;
 
 /** Format the insufficient-funds body. Adds an amount breakdown when
  *  the context supplies balance + value + network fee. */
@@ -246,8 +253,10 @@ function insufficientFundsBody(context?: SendErrorContext): string {
   const fmt = (lythoshi: bigint) => {
     const whole = lythoshi / LYTHOSHI_PER_LYTH;
     const frac = lythoshi % LYTHOSHI_PER_LYTH;
-    const fracStr = frac.toString().padStart(LYTHOSHI_DECIMALS, "0");
-    return `${whole}.${fracStr}`;
+    // Pad to full precision then trim trailing zeros so an 18-decimal
+    // domain doesn't render "1.000000000000000000".
+    const fracStr = frac.toString().padStart(LYTHOSHI_DECIMALS, "0").replace(/0+$/, "");
+    return fracStr.length === 0 ? whole.toString() : `${whole}.${fracStr}`;
   };
   let body =
     `You have ${fmt(balance)} LYTH but this transaction needs ${fmt(need)} LYTH`;

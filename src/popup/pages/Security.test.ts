@@ -18,26 +18,27 @@ import {
 } from "./Security.js";
 
 describe("lythoshiStrToLythStr", () => {
+  // Chain migrated 8 → 18 decimals: 1 LYTH = 10^18 lythoshi.
   it("round-trips 1 LYTH", () => {
-    expect(lythoshiStrToLythStr("100000000")).toBe("1");
+    expect(lythoshiStrToLythStr("1000000000000000000")).toBe("1");
   });
 
   it("round-trips 100 LYTH", () => {
-    expect(lythoshiStrToLythStr("10000000000")).toBe("100");
+    expect(lythoshiStrToLythStr("100000000000000000000")).toBe("100");
   });
 
-  it("renders fractional LYTH with 8-decimal native precision", () => {
+  it("renders fractional LYTH with 18-decimal native precision", () => {
     // 1.5 LYTH
-    expect(lythoshiStrToLythStr("150000000")).toBe("1.5");
+    expect(lythoshiStrToLythStr("1500000000000000000")).toBe("1.5");
     // 1 lythoshi — bottom of the slider isn't this granular but the
     // converter is, useful for the daily-cap readout
-    expect(lythoshiStrToLythStr("1")).toBe("0.00000001");
-    expect(lythoshiStrToLythStr("12345678")).toBe("0.12345678");
+    expect(lythoshiStrToLythStr("1")).toBe("0.000000000000000001");
+    expect(lythoshiStrToLythStr("123456780000000000")).toBe("0.12345678");
   });
 
   it("trims trailing zeros in the fractional part", () => {
     // 2.5000 LYTH → "2.5"
-    expect(lythoshiStrToLythStr("250000000")).toBe("2.5");
+    expect(lythoshiStrToLythStr("2500000000000000000")).toBe("2.5");
   });
 
   it("falls back to '?' on malformed input", () => {
@@ -46,19 +47,19 @@ describe("lythoshiStrToLythStr", () => {
 });
 
 describe("lythToLythoshiStr", () => {
-  it("multiplies by 100,000,000", () => {
-    expect(lythToLythoshiStr(1)).toBe("100000000");
-    expect(lythToLythoshiStr(100)).toBe("10000000000");
+  it("multiplies by 10^18", () => {
+    expect(lythToLythoshiStr(1)).toBe("1000000000000000000");
+    expect(lythToLythoshiStr(100)).toBe("100000000000000000000");
   });
 
   it("avoids float imprecision at large values", () => {
     // Naive float math could emit a non-integer suffix; BigInt keeps
     // slider outputs as exact lythoshi strings.
-    expect(lythToLythoshiStr(10_000)).toBe("1000000000000");
+    expect(lythToLythoshiStr(10_000)).toBe("10000000000000000000000");
   });
 
   it("floors fractional inputs (slider stops are integers anyway)", () => {
-    expect(lythToLythoshiStr(1.9)).toBe("100000000");
+    expect(lythToLythoshiStr(1.9)).toBe("1000000000000000000");
   });
 });
 

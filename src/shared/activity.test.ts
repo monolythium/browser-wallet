@@ -528,7 +528,7 @@ describe("mapAddressActivityToRows", () => {
     direction: "out",
     counterparty: "0xabc",
     tokenId: null,
-    amount: "100000000", // raw lythoshi = 1 LYTH (indexer wire is lythoshi)
+    amount: "1000000000000000000", // raw lythoshi = 1 LYTH (18-dec; indexer wire is lythoshi)
     cluster: null,
     weightBps: null,
     subKind: null,
@@ -544,23 +544,23 @@ describe("mapAddressActivityToRows", () => {
   });
 
   it("converts the indexer's raw lythoshi amount to decimal LYTH for tx_send rows", () => {
-    // The indexer wires amounts as raw lythoshi; 1_000_000 lythoshi = 0.01 LYTH
-    // (the 0.01-LYTH test transfer that previously rendered as "1000000").
+    // The indexer wires amounts as raw lythoshi (18-dec; 1 lythoshi == 1 wei);
+    // 10^16 lythoshi = 0.01 LYTH.
     const rows = mapAddressActivityToRows(
-      [makeActivity({ amount: "1000000" })],
+      [makeActivity({ amount: "10000000000000000" })],
       new Set(),
     );
     expect(rows).toHaveLength(1);
     expect((rows[0] as TxSendRow).amountDecimal).toBe("0.01");
   });
 
-  it("converts a 1-lythoshi receive to 0.00000001 LYTH (8-decimal floor)", () => {
+  it("converts a 1-lythoshi receive to 0.000000000000000001 LYTH (18-decimal floor)", () => {
     const rows = mapAddressActivityToRows(
       [makeActivity({ direction: "in", amount: "1" })],
       new Set(),
     );
     expect(rows).toHaveLength(1);
-    expect((rows[0] as TxSendRow).amountDecimal).toBe("0.00000001");
+    expect((rows[0] as TxSendRow).amountDecimal).toBe("0.000000000000000001");
   });
 
   it("maps transfer/in (no tokenId) → TxReceiveRow", () => {
@@ -1059,7 +1059,7 @@ describe("mergeIndexerSnapshot", () => {
       direction,
       counterparty: SELF,
       tokenId: "0x" + "00".repeat(32),
-      amount: "12000000",
+      amount: "120000000000000000", // 0.12 LYTH (18-dec)
       cluster: null,
       weightBps: null,
       subKind: null,
@@ -1183,7 +1183,7 @@ describe("mergeIndexerSnapshot", () => {
             direction: "out",
             counterparty: "0xabc",
             tokenId: null,
-            amount: "100000000",
+            amount: "1000000000000000000", // 1 LYTH (18-dec)
             cluster: null,
             weightBps: null,
             subKind: null,
@@ -1196,7 +1196,7 @@ describe("mergeIndexerSnapshot", () => {
             direction: "in",
             counterparty: "0xabc",
             tokenId: null,
-            amount: "200000000",
+            amount: "2000000000000000000", // 2 LYTH (18-dec)
             cluster: null,
             weightBps: null,
             subKind: null,
@@ -1209,7 +1209,7 @@ describe("mergeIndexerSnapshot", () => {
             direction: "in",
             counterparty: "0xabc",
             tokenId: null,
-            amount: "300000000",
+            amount: "3000000000000000000", // 3 LYTH (18-dec)
             cluster: null,
             weightBps: null,
             subKind: null,
