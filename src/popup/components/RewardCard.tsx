@@ -23,6 +23,13 @@ interface RewardCardProps {
   /** Compatibility reward fields are still named `*Wei` in
    *  PendingRewardsView; values rendered here are v4.1 lythoshi. */
   rewards: PendingRewardsView | null;
+  /** Set to the fetch-failure reason when the pending-rewards read returned
+   *  `ok: false` (a hard error — malformed/schema-mismatched response, or an
+   *  RPC error not classified as "method absent"). When set, the card renders
+   *  honest absence ("unavailable") instead of perpetual "Loading…" — and
+   *  NOT mock figures. `null` while genuinely loading or on success. The
+   *  method-absent `via: "mock"` path is separate (see `isMock`). */
+  error?: string | null;
   /** `true` when the SW returned fallback mock data. */
   isMock: boolean;
   clusters: ReadonlyArray<ClusterDirectoryEntry>;
@@ -44,6 +51,7 @@ interface RewardCardProps {
 
 export function RewardCard({
   rewards,
+  error = null,
   isMock,
   clusters,
   onClaim,
@@ -55,6 +63,18 @@ export function RewardCard({
     for (const c of clusters) m.set(c.clusterId, c);
     return m;
   }, [clusters]);
+
+  // Hard fetch failure (ok:false) → honest absence per no-mock-fallback:
+  // never perpetual "Loading…" and never illustrative mock figures. Takes
+  // precedence over the null/loading check so a stuck fetch can't hide it.
+  if (error != null) {
+    return (
+      <div className="ext-card" style={{ padding: 12 }}>
+        <div style={cardLabel}>Pending rewards</div>
+        <div style={errorBannerStyle}>Pending rewards unavailable.</div>
+      </div>
+    );
+  }
 
   if (rewards === null) {
     return (
@@ -278,6 +298,21 @@ const cardLabel: CSSProperties = {
   color: "var(--fg-400)",
   letterSpacing: "0.14em",
   textTransform: "uppercase",
+};
+
+// Mirrors RedemptionQueueCard's errorBannerStyle so the two staking-read
+// failure states read identically.
+const errorBannerStyle: CSSProperties = {
+  marginTop: 8,
+  padding: "8px 10px",
+  borderRadius: 8,
+  background: "rgba(220,80,80,0.08)",
+  border: "1px solid rgba(220,80,80,0.4)",
+  color: "var(--err)",
+  fontFamily: "var(--f-mono)",
+  fontSize: 10.5,
+  lineHeight: 1.5,
+  wordBreak: "break-word",
 };
 
 const mockBadgeStyle: CSSProperties = {
