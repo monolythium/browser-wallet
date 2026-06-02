@@ -90,8 +90,7 @@ type Action = "delegate" | "undelegate" | "redelegate" | "claim";
 
 /** Top-level interaction mode. `"manual"` = single-cluster pick →
  *  stake form path. The four autovote modes route through
- *  AutovotePreview before submitting; only the first
- *  allocation submits (full batch lands as a follow-up). */
+ *  AutovotePreview before submitting; only the first allocation submits. */
 type EntryMode = "manual" | AutovoteMode;
 
 // sessionStorage persistence so a round-trip through ClusterDetail
@@ -811,10 +810,8 @@ export function Stake({
                 onProceed={() => {
                   if (autovotePlan === null) return;
                   if (autovotePlan.allocations.length === 0) return;
-                  // Single-tx submit of the FIRST
-                  // allocation. Multi-allocation batching lands in a
-                  // follow-up so the same `bgWalletSendTx` envelope
-                  // path keeps the audit shape simple.
+                  // Single-tx submit of the FIRST allocation, through the
+                  // standard `bgWalletSendTx` envelope path.
                   const first = autovotePlan.allocations[0]!;
                   setSelectedClusterId(first.cluster);
                   setAmountStr(
@@ -2117,19 +2114,6 @@ function AutovotePlanCard({
             <Icon name="check" size={12} />
             Review first allocation
           </button>
-          <div
-            style={{
-              marginTop: 6,
-              fontFamily: "var(--f-mono)",
-              fontSize: 9,
-              color: "var(--fg-500)",
-              lineHeight: 1.5,
-              textAlign: "center",
-            }}
-          >
-            Submits one tx per allocation. Phase 7 ships the first; multi-tx
-            batching lands as a follow-up.
-          </div>
         </div>
       )}
     </div>
