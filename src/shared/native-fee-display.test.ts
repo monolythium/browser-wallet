@@ -15,7 +15,8 @@ describe("native fee display conformance", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.display.totalLythoshi).toBe(2_100_000n);
-    expect(result.display.defaultText).toBe("0.021 LYTH");
+    // 2_100_000 lythoshi under the 18-decimal domain.
+    expect(result.display.defaultText).toBe("0.0000000000021 LYTH");
     expect(result.display.defaultText).not.toMatch(/gas|gwei|wei|lythoshi/i);
   });
 
@@ -43,7 +44,8 @@ describe("native fee display conformance", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.display.totalLythoshi).toBe(50n);
-    expect(result.display.defaultText).toBe("0.0000005 LYTH");
+    // 50 lythoshi under the 18-decimal domain.
+    expect(result.display.defaultText).toBe("0.00000000000000005 LYTH");
   });
 
   it("accepts valid ADR-0039 structured fee objects", () => {
@@ -69,7 +71,8 @@ describe("native fee display conformance", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.display.source).toBe("structured");
-    expect(result.display.defaultText).toBe("1.23456789 LYTH");
+    // total_lythoshi "123456789" under the 18-decimal domain.
+    expect(result.display.defaultText).toBe("0.000000000123456789 LYTH");
     expect(result.display.detailTexts).toEqual([
       "cycles 21000, state I/O 0, total 123456789 lythoshi",
       "cycle price 5 lythoshi, state I/O price 0 lythoshi, priority tip 123351789 lythoshi",

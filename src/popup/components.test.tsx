@@ -74,11 +74,12 @@ function sdkBridgeRoute(
 }
 
 describe("ReqSendTx native fee helpers", () => {
-  it("formats native LYTH values with 8-decimal lythoshi precision", () => {
-    expect(formatLythoshiAmountHex("0x5f5e100")).toBe("1");
-    expect(formatLythoshiAmountHex("0x1")).toBe("0.00000001");
-    expect(formatLythoshiAmountHex("0x00bc614e")).toBe("0.12345678");
-    expect(lythoshiToLythString(123_456_789n)).toBe("1.23456789");
+  it("formats native LYTH values with 18-decimal lythoshi precision", () => {
+    // Chain migrated 8 → 18 decimals: 1 LYTH = 10^18 lythoshi (1 lythoshi == 1 wei).
+    expect(formatLythoshiAmountHex("0xde0b6b3a7640000")).toBe("1");
+    expect(formatLythoshiAmountHex("0x1")).toBe("0.000000000000000001");
+    expect(formatLythoshiAmountHex("0x1b69b498d037800")).toBe("0.12345678");
+    expect(lythoshiToLythString(1_234_567_890_000_000_000n)).toBe("1.23456789");
   });
 
   it("keeps execution-unit price as lythoshi, not gwei", () => {
@@ -98,7 +99,7 @@ describe("ReqSendTx native fee helpers", () => {
       lythoshiToLythString(
         computeNativeFeeLythoshi("0x5208", "0x64", "medium") ?? 0n,
       ),
-    ).toBe("0.021");
+    ).toBe("0.0000000000021");
   });
 
   it("returns null/placeholder for missing malformed fee inputs", () => {
@@ -143,7 +144,7 @@ describe("ReqSendTx native fee helpers", () => {
     );
 
     expect(html).toContain("Network fee");
-    expect(html).toContain("0.021 LYTH");
+    expect(html).toContain("0.0000000000021 LYTH");
     expect(html).not.toContain("Execution-unit limit");
     expect(html).not.toContain("Price / execution unit");
     expect(html).not.toContain("lythoshi");

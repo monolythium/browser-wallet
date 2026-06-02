@@ -13,6 +13,7 @@ import { useMemo } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { lythAmountToBps } from "../../shared/staking-tx";
+import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface RedelegateFormProps {
   /** Cluster the weight is moving from. Must have current weight. */
@@ -38,7 +39,8 @@ export interface RedelegateFormProps {
   onBack: () => void;
 }
 
-const NATIVE_LYTH_DECIMALS = 8;
+// Native LYTH precision sourced from the SDK (chain migrated 8 → 18 decimals;
+// 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
 const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
 
 export function lythToLythoshi(amountStr: string): bigint | null {

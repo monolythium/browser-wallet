@@ -54,13 +54,14 @@ describe("formatLythoshiValue", () => {
     expect(formatLythoshiValue("0x0")).toBe("0 LYTH");
   });
 
-  it("formats hex lythoshi as native LYTH with 8-decimal precision", () => {
-    expect(formatLythoshiValue("0x1")).toBe("0.00000001 LYTH");
-    expect(formatLythoshiValue("0xff")).toBe("0.00000255 LYTH");
-    expect(formatLythoshiValue("0x" + 100_000_000n.toString(16))).toBe(
+  it("formats hex lythoshi as native LYTH with 18-decimal precision", () => {
+    // Chain migrated 8 → 18 decimals: 1 lythoshi == 1 wei == 10^-18 LYTH.
+    expect(formatLythoshiValue("0x1")).toBe("0.000000000000000001 LYTH");
+    expect(formatLythoshiValue("0xff")).toBe("0.000000000000000255 LYTH");
+    expect(formatLythoshiValue("0x" + 1_000_000_000_000_000_000n.toString(16))).toBe(
       "1 LYTH",
     );
-    expect(formatLythoshiValue("0x" + 123_456_789n.toString(16))).toBe(
+    expect(formatLythoshiValue("0x" + 1_234_567_890_000_000_000n.toString(16))).toBe(
       "1.23456789 LYTH",
     );
   });
@@ -72,7 +73,7 @@ describe("formatLythoshiValue", () => {
 
 describe("MultisigProposalDetail value display", () => {
   const NOW = 1_700_000_000_000;
-  const ONE_LYTH_IN_LYTHOSHI_HEX = "0x" + 100_000_000n.toString(16);
+  const ONE_LYTH_IN_LYTHOSHI_HEX = "0x" + 1_000_000_000_000_000_000n.toString(16);
   const signers: MultisigSigner[] = [
     {
       id: "s-1",
@@ -124,7 +125,7 @@ describe("MultisigProposalDetail value display", () => {
     expect(html).toContain(">1 LYTH</div>");
     expect(html).not.toContain("Value (wei)");
     expect(html).not.toContain("valueWeiHex");
-    expect(html).not.toContain(">100000000</div>");
+    expect(html).not.toContain(">1000000000000000000</div>");
   });
 });
 

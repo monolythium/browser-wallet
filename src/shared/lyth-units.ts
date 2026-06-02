@@ -6,8 +6,16 @@
 // reconcilePending exact-string-equality match (shared/activity.ts) depends
 // on the two sides agreeing to the byte.
 
-export const LYTHOSHI_PER_LYTH = 100_000_000n;
-const LYTHOSHI_DECIMALS = 8;
+// Native LYTH precision sourced from the SDK (single source of truth) so the
+// wallet and chain never drift. Chain migrated 8 → 18 decimals
+// (1 lythoshi == 1 wei); SDK 0.3.15 carries `LYTHOSHI_PER_LYTH = 10^18`.
+import {
+  LYTHOSHI_PER_LYTH,
+  NATIVE_LYTH_DECIMALS,
+} from "@monolythium/core-sdk";
+
+export { LYTHOSHI_PER_LYTH };
+const LYTHOSHI_DECIMALS = NATIVE_LYTH_DECIMALS;
 
 /** Non-negative lythoshi bigint → decimal LYTH string. Trailing zeros are
  *  trimmed and the decimal point is omitted when the fractional part is zero.

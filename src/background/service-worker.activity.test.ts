@@ -1519,9 +1519,10 @@ describe("wallet-activity-get", () => {
   });
 
   it("BRIDGE: drops the bridged row once the indexer surfaces the canonical tx_send", async () => {
-    // Indexer now returns the matching tx_send (out, 0.01 LYTH = 1_000_000
-    // lythoshi, to 0xrecipient, at the broadcast anchor) → reconcilePending
-    // drops the pending row and the real confirmed row renders. No duplicate.
+    // Indexer now returns the matching tx_send (out, 0.01 LYTH = 10^16
+    // lythoshi at 18-dec, to 0xrecipient, at the broadcast anchor) →
+    // reconcilePending drops the pending row and the real confirmed row
+    // renders. No duplicate.
     rpcResponses["lyth_getTokenBalances"] = [];
     rpcResponses["lyth_getAddressLabel"] = null;
     rpcResponses["lyth_getDelegationHistory"] = [];
@@ -1534,7 +1535,7 @@ describe("wallet-activity-get", () => {
         direction: "out",
         counterparty: "0xrecipient",
         tokenId: null,
-        amount: "1000000",
+        amount: "10000000000000000",
         cluster: null,
         weightBps: null,
         subKind: null,
@@ -1706,10 +1707,10 @@ describe("wallet-activity-get", () => {
         direction: "out",
         counterparty: "0xdead",
         tokenId: null,
-        // Indexer emits raw lythoshi as a decimal string. 150_000_000
-        // lythoshi → "1.5" LYTH after lythoshiDecimalToLythDecimal,
+        // Indexer emits raw lythoshi as a decimal string. 1.5 * 10^18
+        // lythoshi → "1.5" LYTH after lythoshiDecimalToLythDecimal (18-dec),
         // matching the pending row's already-converted amountDecimal.
-        amount: "150000000",
+        amount: "1500000000000000000",
         cluster: null,
         weightBps: null,
         subKind: null,
@@ -2200,7 +2201,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       op: "wallet-send-tx",
       payload: {
         to: "0xrecipient",
-        valueWeiHex: "0x989680", // 0.1 LYTH in lythoshi
+        valueWeiHex: "0x16345785d8a0000", // 0.1 LYTH in lythoshi (18-dec)
         chainIdHex: TESTNET_CHAIN_ID_HEX,
       },
     })) as { ok: true; txHash: string };

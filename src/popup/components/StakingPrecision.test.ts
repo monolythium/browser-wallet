@@ -13,19 +13,20 @@ import {
   lythoshiToLyth as unstakeLythoshiToLyth,
 } from "./UnstakeForm.js";
 
-const LYTHOSHI_PER_LYTH = 100_000_000n;
+// Chain migrated 8 → 18 decimals (1 lythoshi == 1 wei): 1 LYTH = 10^18 lythoshi.
+const LYTHOSHI_PER_LYTH = 1_000_000_000_000_000_000n;
 
 describe("staking amount parsing at native lythoshi precision", () => {
-  it("parses whole and fractional LYTH into 8-decimal lythoshi", () => {
+  it("parses whole and fractional LYTH into 18-decimal lythoshi", () => {
     expect(stakeLythToLythoshi("1")).toBe(LYTHOSHI_PER_LYTH);
-    expect(stakeLythToLythoshi("0.00000001")).toBe(1n);
-    expect(stakeLythToLythoshi("1.23456789")).toBe(123_456_789n);
+    expect(stakeLythToLythoshi("0.000000000000000001")).toBe(1n);
+    expect(stakeLythToLythoshi("1.23456789")).toBe(1_234_567_890_000_000_000n);
   });
 
   it("rejects fractional precision beyond one lythoshi", () => {
-    expect(stakeLythToLythoshi("0.000000001")).toBeNull();
-    expect(unstakeLythToLythoshi("1.000000001")).toBeNull();
-    expect(redelegateLythToLythoshi("12.123456789")).toBeNull();
+    expect(stakeLythToLythoshi("0.0000000000000000001")).toBeNull();
+    expect(unstakeLythToLythoshi("1.0000000000000000001")).toBeNull();
+    expect(redelegateLythToLythoshi("12.1234567890000000001")).toBeNull();
   });
 
   it("rejects non-decimal amount strings", () => {
@@ -37,22 +38,22 @@ describe("staking amount parsing at native lythoshi precision", () => {
 
 describe("staking amount formatting at native lythoshi precision", () => {
   it("formats one lythoshi without truncating to legacy wei scale", () => {
-    expect(stakeLythoshiToLyth(1n, 8)).toBe("0.00000001");
-    expect(unstakeLythoshiToLyth(1n, 8)).toBe("0.00000001");
-    expect(redelegateLythoshiToLyth(1n, 8)).toBe("0.00000001");
+    expect(stakeLythoshiToLyth(1n, 18)).toBe("0.000000000000000001");
+    expect(unstakeLythoshiToLyth(1n, 18)).toBe("0.000000000000000001");
+    expect(redelegateLythoshiToLyth(1n, 18)).toBe("0.000000000000000001");
   });
 
-  it("formats max-style values with all 8 native decimals and trims zeros", () => {
-    expect(stakeLythoshiToLyth(123_456_789n, 8)).toBe("1.23456789");
-    expect(unstakeLythoshiToLyth(250_000_001n, 8)).toBe("2.50000001");
-    expect(redelegateLythoshiToLyth(100_000_000n, 8)).toBe("1");
+  it("formats max-style values with all 18 native decimals and trims zeros", () => {
+    expect(stakeLythoshiToLyth(1_234_567_890_000_000_000n, 18)).toBe("1.23456789");
+    expect(unstakeLythoshiToLyth(2_500_000_010_000_000_000n, 18)).toBe("2.50000001");
+    expect(redelegateLythoshiToLyth(1_000_000_000_000_000_000n, 18)).toBe("1");
   });
 });
 
 describe("reward formatting at native lythoshi precision", () => {
-  it("renders pending rewards using 8-decimal lythoshi units", () => {
-    expect(formatLythoshiAsLyth(1n, 8)).toBe("0.00000001");
-    expect(formatLythoshiAsLyth(123_456_789n, 8)).toBe("1.23456789");
-    expect(formatLythoshiAsLyth(0n, 8)).toBe("0");
+  it("renders pending rewards using 18-decimal lythoshi units", () => {
+    expect(formatLythoshiAsLyth(1n, 18)).toBe("0.000000000000000001");
+    expect(formatLythoshiAsLyth(1_234_567_890_000_000_000n, 18)).toBe("1.23456789");
+    expect(formatLythoshiAsLyth(0n, 18)).toBe("0");
   });
 });
