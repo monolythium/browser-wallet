@@ -80,9 +80,9 @@ export function Features({ onBack }: FeaturesProps) {
               marginBottom: 10,
             }}
           >
-            Hidden by default — the wallet ships with a minimal send / receive /
-            stake experience. Flip on the surfaces you want. Each setting is
-            persisted per-browser-profile.
+            The wallet ships with a minimal send / receive / stake experience.
+            Flip on the surfaces you want. Each setting is persisted
+            per-browser-profile.
           </div>
 
           {loadErr && (
