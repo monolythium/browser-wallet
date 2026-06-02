@@ -1474,6 +1474,9 @@ export default function App() {
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
           onSettings={() => navigateTo("settings")}
+          // Theme — opens the same Theme page the Settings "Theme" category
+          // routes to. navigateTo pushes "main-menu" so back returns here.
+          onTheme={() => navigateTo("theme")}
           onAbout={() => navigateTo("about")}
           onLockWallet={() => {
             void bgKeystoreLock();
