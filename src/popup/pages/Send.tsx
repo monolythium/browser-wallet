@@ -1666,7 +1666,7 @@ export function validateAmount(s: string): string | null {
   if (parseFloat(s) <= 0) return "amount must be greater than 0";
   const dot = s.indexOf(".");
   if (dot >= 0 && s.length - dot - 1 > NATIVE_LYTH_DECIMALS) {
-    return "amount cannot have more than 8 decimal places";
+    return `amount cannot have more than ${NATIVE_LYTH_DECIMALS} decimal places`;
   }
   return null;
 }
@@ -1676,7 +1676,7 @@ export function validateAmount(s: string): string | null {
 /**
  * Convert a decimal LYTH amount string to lythoshi (`0x` hex). Precision-safe —
  * splits on `.` and builds the BigInt from integer + zero-padded fractional
- * parts so `0.00000001` (1 lythoshi) round-trips exactly. Throws on
+ * parts so `0.000000000000000001` (1 lythoshi) round-trips exactly. Throws on
  * invalid input; callers should pre-validate via `validateAmount`.
  */
 export function lythToLythoshiHex(amountStr: string): string {
@@ -1688,7 +1688,7 @@ function safeLythToLythoshiBigInt(amountStr: string): bigint {
   const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
   const fracPartRaw = dot < 0 ? "" : amountStr.slice(dot + 1);
   if (fracPartRaw.length > NATIVE_LYTH_DECIMALS) {
-    throw new Error("amount has more than 8 decimal places");
+    throw new Error(`amount has more than ${NATIVE_LYTH_DECIMALS} decimal places`);
   }
   const fracPadded =
     (fracPartRaw + "0".repeat(NATIVE_LYTH_DECIMALS)).slice(

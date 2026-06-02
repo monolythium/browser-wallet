@@ -61,6 +61,7 @@ import {
 } from "../../shared/staking-tx";
 import {
   LYTHOSHI_PER_LYTH,
+  NATIVE_LYTH_DECIMALS,
   lythoshiToLythDecimal,
   parseHexQuantity,
 } from "../../shared/native-amount";
@@ -1591,8 +1592,6 @@ function ErrorView({ error, onRetry, onCancel }: ErrorViewProps) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers + styles
 // ─────────────────────────────────────────────────────────────────────────────
-
-const NATIVE_LYTH_DECIMALS = 8;
 
 export function parseLythAmountToLythoshi(s: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(s)) return null;

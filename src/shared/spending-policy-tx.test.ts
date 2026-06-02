@@ -185,14 +185,14 @@ describe("packTimeWindow / decodeTimeWindow", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LYTH → lythoshi (8 decimals)
+// LYTH → lythoshi (18 decimals; chain migrated 8 → 18, 1 lythoshi == 1 wei)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("lythToLythoshi", () => {
-  it("converts whole + fractional LYTH at 8 decimals", () => {
-    expect(lythToLythoshi("1")).toBe(100_000_000n);
-    expect(lythToLythoshi("0.00000001")).toBe(1n); // 1 lythoshi
-    expect(lythToLythoshi("12.5")).toBe(1_250_000_000n);
+  it("converts whole + fractional LYTH at 18 decimals", () => {
+    expect(lythToLythoshi("1")).toBe(1_000_000_000_000_000_000n);
+    expect(lythToLythoshi("0.000000000000000001")).toBe(1n); // 1 lythoshi
+    expect(lythToLythoshi("12.5")).toBe(12_500_000_000_000_000_000n);
   });
 
   it("treats empty / '0' as no cap (0n)", () => {
@@ -200,8 +200,8 @@ describe("lythToLythoshi", () => {
     expect(lythToLythoshi("0")).toBe(0n);
   });
 
-  it("rejects > 8 decimal places + malformed input", () => {
-    expect(() => lythToLythoshi("0.000000001")).toThrow();
+  it("rejects > 18 decimal places + malformed input", () => {
+    expect(() => lythToLythoshi("0.0000000000000000001")).toThrow();
     expect(() => lythToLythoshi("1.2.3")).toThrow();
     expect(() => lythToLythoshi("abc")).toThrow();
   });
@@ -216,10 +216,10 @@ describe("buildSpendingPolicyArgs", () => {
     const args = buildSpendingPolicyArgs(baseForm());
     expect(args.subAccount).toBe(SUB_ACCOUNT);
     expect(args.principal).toBe(PRINCIPAL);
-    expect(args.perTxCapLythoshi).toBe(1_000_000_000n); // 10 LYTH
-    expect(args.dailyCapLythoshi).toBe(10_000_000_000n); // 100 LYTH
-    expect(args.weeklyCapLythoshi).toBe(50_000_000_000n); // 500 LYTH
-    expect(args.monthlyCapLythoshi).toBe(200_000_000_000n); // 2000 LYTH
+    expect(args.perTxCapLythoshi).toBe(10_000_000_000_000_000_000n); // 10 LYTH
+    expect(args.dailyCapLythoshi).toBe(100_000_000_000_000_000_000n); // 100 LYTH
+    expect(args.weeklyCapLythoshi).toBe(500_000_000_000_000_000_000n); // 500 LYTH
+    expect(args.monthlyCapLythoshi).toBe(2_000_000_000_000_000_000_000n); // 2000 LYTH
     expect(args.allowRoot).toBe("0x" + "00".repeat(32));
     expect(args.denyRoot).toBe("0x" + "00".repeat(32));
     expect(args.categoryAllowRoot).toBe("0x" + "00".repeat(32));
