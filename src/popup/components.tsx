@@ -556,8 +556,11 @@ export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
           fontWeight: 600,
           letterSpacing: "0.12em",
           textTransform: "uppercase",
+          // Reads from the --fg-400 token directly (≈7.0:1 on the body
+          // surface). A prior `opacity: 0.75` dragged it to ~4.4:1 (sub-AA);
+          // removed so the label sits at its token tier. If a quieter step is
+          // ever wanted, drop to --fg-500 via token, not opacity.
           color: "var(--fg-400)",
-          opacity: 0.75,
           paddingLeft: 4,
         }}
       >
@@ -634,8 +637,16 @@ export function AssetList({ account, network, indexer }: AssetListProps) {
         </div>
       </div>
 
-      {/* LYTH-p — disabled (private denomination not active in this build) */}
-      <div className="ext-asset" style={{ opacity: 0.6, cursor: "default" }}>
+      {/* LYTH-p — disabled (private denomination not active in this build).
+          The "coming soon" state is carried by the priv (blue Ⓜ) icon, the
+          "—" amount, the default cursor, and the "private denomination"
+          subtitle copy — NOT by dimming. A prior row-wide `opacity: 0.6`
+          dragged the --fg-400 subtitle to ~3.1:1 (sub-AA); dropped so the
+          subtitle reads at its token tier (≈6.5:1). Kept at --fg-400 (not a
+          --fg-500 inline) on purpose: this row sits on the theme surface, and
+          an inline --fg-500 would override the `.ext.light .chain` rule with a
+          light-on-light value in the light theme. */}
+      <div className="ext-asset" style={{ cursor: "default" }}>
         <div className="ext-asset__ico priv">Ⓜ</div>
         <div className="ext-asset__main">
           <div className="sym" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -1582,7 +1593,12 @@ function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
           : "1px solid var(--fg-700)",
         background: active ? "var(--gold-bg)" : "transparent",
         cursor: disabled ? "default" : "pointer",
-        opacity: disabled ? 0.6 : 1,
+        // The disabled (Staked) chip used to dim its whole body to
+        // `opacity: 0.6`, which dragged the label to ~3.2:1 (sub-AA). The
+        // "not yet active" affordance is carried instead by the muted
+        // --fg-700 border + default cursor + absent onClick (above), so the
+        // label/value can sit at their full token tiers (--fg-400 ≈6.5:1,
+        // --fg-100 ≈15:1) and stay legible.
         transition: "background 160ms var(--e-out), border-color 160ms var(--e-out)",
       }}
     >
