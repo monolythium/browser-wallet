@@ -730,6 +730,16 @@ html[data-theme]:not([data-theme="light"]) {
   --fg-500: #788193;
 }
 
+/* Monolythium default (attr-less) only — NOT the shared rule above.
+   Same specificity as `html:not([data-theme])`, declared later, so it wins
+   for the default theme and leaves every other dark theme on #788193. Lifts
+   the most-muted tier from 4.55:1 (on the #151723 card) to ~4.83:1 so it
+   clears AA on the ELEVATED surface (#1b1e2c) too, where #788193 dipped just
+   under 4.5:1. Same cool indigo-gray hue; only lightness is raised. */
+html:not([data-theme]) {
+  --fg-500: #828b9d; /* was #788193 */
+}
+
 /* =====================================================
    Subtle body gradients for the remaining dark themes.
    Two soft radial blooms at low opacity over the base ink —
