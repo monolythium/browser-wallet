@@ -131,27 +131,24 @@ export interface FeatureMeta {
 export const FEATURE_META: Record<FeatureFlag, FeatureMeta> = {
   TRADING_INTERFACE: {
     label: "Trading interface",
-    tagline:
-      "Advanced staking analytics + spot CLOB surfaces (§14, §23). Hidden by default.",
+    tagline: "Advanced staking analytics + spot CLOB surfaces.",
   },
   MARKETPLACE: {
     label: "Marketplace",
-    tagline:
-      "Rich NFT detail + filters + agent-commerce listing surfaces (§24).",
+    tagline: "Rich NFT detail + filters + agent-commerce listing surfaces.",
   },
   AI_FEATURES: {
     label: "AI features",
-    tagline:
-      "MCP Copilot conversational assistant (§28.5, lands in a future phase).",
+    tagline: "MCP Copilot conversational assistant — lands in a future phase.",
   },
   REGISTRY: {
     label: "Name registry",
     tagline:
-      "Hierarchical name resolution + registration UI (§22.8 lookup + future register flow).",
+      "Hierarchical name resolution + registration UI — lookup available now, register flow in a future phase.",
   },
   AGENT_COMMERCE: {
     label: "Agent commerce (experimental)",
     tagline:
-      "Agent spending-policy sub-accounts (§18.8), bridge route risk disclosure (§20.2 / §25.2), and cluster roster-diversity scoring (§25.1). Experimental — hidden by default.",
+      "Agent spending-policy sub-accounts, bridge route risk disclosure, and cluster roster-diversity scoring. Experimental.",
   },
 };
