@@ -244,6 +244,9 @@ export function Stake({
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
+  // Set when the pending-rewards read returns ok:false (hard error). Drives
+  // RewardCard's honest-absence state instead of perpetual "Loading…".
+  const [rewardsError, setRewardsError] = useState<string | null>(null);
   const [redemptionQueue, setRedemptionQueue] =
     useState<RedemptionQueueView | null>(null);
   const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
@@ -348,6 +351,7 @@ export function Stake({
     setRedemptionQueue(null);
     setRedemptionQueueMock(false);
     setRedemptionQueueError(null);
+    setRewardsError(null);
     void (async () => {
       const [delR, capR, balR, seedR, queueR] = await Promise.all([
         bgStakingDelegations(account.addr),
@@ -378,10 +382,20 @@ export function Stake({
       // the SW returns mock-derived figures with `via: "mock"`.
       if (delR.ok) {
         const rewR = await bgStakingPendingRewards(account.addr, delR.data.rows);
-        if (!cancelled && rewR.ok) {
-          setRewards(rewR.data);
-          setRewardsMock(rewR.via === "mock");
+        if (!cancelled) {
+          if (rewR.ok) {
+            setRewards(rewR.data);
+            setRewardsMock(rewR.via === "mock");
+          } else {
+            // Hard ok:false (malformed / non-"method absent" RPC error) —
+            // surface honest absence instead of leaving the card on "Loading…".
+            setRewardsError(rewR.reason);
+          }
         }
+      } else if (!cancelled) {
+        // Delegations failed to load → pending rewards can't be keyed off the
+        // active set; show honest absence rather than perpetual loading.
+        setRewardsError(delR.reason);
       }
     })();
     return () => {
@@ -693,6 +707,7 @@ export function Stake({
             {delegations !== null && delegations.rows.length > 0 && (
               <RewardCard
                 rewards={rewards}
+                error={rewardsError}
                 isMock={rewardsMock}
                 clusters={clusters}
                 onClaim={() => void handleClaim()}
