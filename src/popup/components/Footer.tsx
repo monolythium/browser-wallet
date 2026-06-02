@@ -113,9 +113,15 @@ export function Footer(_props: FooterProps = {}) {
         Product of Mono Labs
       </a>
       <span style={{ opacity: 0.5 }}>·</span>
-      <span style={{ opacity: 0.85 }}>© 2026 All rights reserved</span>
+      {/* Footer text sits at its token tier, not behind an opacity dim: the
+          copyright at --fg-400 and the version one quiet step below at
+          --fg-500. The footer bg is the same dark translucent strip in every
+          theme, so both tokens read as light-on-dark (≥AA) regardless of the
+          active theme. (The "·" separators stay opacity-dimmed — decorative,
+          no contrast requirement.) */}
+      <span style={{ color: "var(--fg-400)" }}>© 2026 All rights reserved</span>
       <span style={{ opacity: 0.5 }}>·</span>
-      <span style={{ opacity: 0.7, fontFamily: "var(--f-mono)" }}>
+      <span style={{ color: "var(--fg-500)", fontFamily: "var(--f-mono)" }}>
         v{walletVersion}
       </span>
     </footer>
