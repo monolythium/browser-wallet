@@ -324,7 +324,7 @@ packages:
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
   '@monolythium/core-sdk@0.3.15':
-    resolution: {registry: 'https://registry.npmjs.org/', tarball: 'https://registry.npmjs.org/@monolythium/core-sdk/-/core-sdk-0.3.15.tgz'}
+    resolution: {integrity: sha512-XdNgxiYhc209X2mTrBsZD6vsrnIZK/StW+1Kg9FNo6TwPiZl/rKe1JNJzC1CMP+pwYDNorG+G2jEwxdW+DyS1w==}
     engines: {node: '>=22'}
 
   '@noble/ciphers@2.0.1':
