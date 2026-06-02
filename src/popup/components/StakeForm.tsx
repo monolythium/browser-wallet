@@ -20,6 +20,7 @@ import { useMemo } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { lythAmountToBps } from "../../shared/staking-tx";
+import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface StakeFormProps {
   /** Cluster the user is about to delegate to. */
@@ -45,7 +46,8 @@ export interface StakeFormProps {
   onBack: () => void;
 }
 
-const NATIVE_LYTH_DECIMALS = 8;
+// Native LYTH precision sourced from the SDK (chain migrated 8 → 18 decimals;
+// 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
 const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
 
 /** Decimal-LYTH-amount string → lythoshi bigint. Kept inline so

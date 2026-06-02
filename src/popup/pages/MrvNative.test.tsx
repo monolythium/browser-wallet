@@ -380,8 +380,9 @@ describe("MrvNative", () => {
         input: "0xaabbccdd",
         valueLythoshi: "42",
         executionUnitLimit: "2097152",
-        maxExecutionFeeLythoshi: "10000000",
-        priorityTipLythoshi: "5",
+        // Chain migrated 8 → 18 decimals (1 lythoshi == 1 wei): 0.1 LYTH.
+        maxExecutionFeeLythoshi: "100000000000000000",
+        priorityTipLythoshi: "50000000000", // 0.00000005 LYTH
         nonce: "8",
       },
       extension: { kind: 1, bodyHex: "0x02aabbccdd" },
@@ -390,23 +391,23 @@ describe("MrvNative", () => {
         nonce: "8",
         valueLythoshi: "42",
         executionUnitLimit: "2097152",
-        maxExecutionFeeLythoshi: "10000000",
-        priorityTipLythoshi: "5",
+        maxExecutionFeeLythoshi: "100000000000000000", // 0.1 LYTH
+        priorityTipLythoshi: "50000000000", // 0.00000005 LYTH
       },
       feePreview: {
-        totalLythoshi: "20971520000042",
+        totalLythoshi: "209715200000420000000000", // 209715.20000042 LYTH
         totalLyth: "209715.20000042",
         cyclesUsed: "2097152",
         executionUnitLimit: "2097152",
-        maxExecutionFeeLythoshi: "10000000",
-        priorityTipLythoshi: "5",
+        maxExecutionFeeLythoshi: "100000000000000000", // 0.1 LYTH
+        priorityTipLythoshi: "50000000000", // 0.00000005 LYTH
       },
       tx: {
         chainIdHex: "0x10f2c",
         nonceHex: "0x8",
         gasLimitHex: "0x200000",
-        maxFeePerGas: "0x989680",
-        maxPriorityFeePerGas: "0x5",
+        maxFeePerGas: "0x16345785d8a0000", // 0.1 LYTH lythoshi
+        maxPriorityFeePerGas: "0xba43b7400", // 0.00000005 LYTH lythoshi
         to: "0x2222222222222222222222222222222222222222",
         valueWeiHex: "0x2a",
         data: "0xaabbccdd",
@@ -422,8 +423,8 @@ describe("MrvNative", () => {
     expect(html).toContain("0.1 LYTH");
     expect(html).toContain("0.00000005 LYTH");
     expect(html).toContain("209,715.20000042 LYTH");
-    expect(html).not.toContain("10000000 lythoshi");
-    expect(html).not.toContain("20971520000042 lythoshi");
+    expect(html).not.toContain("100000000000000000 lythoshi");
+    expect(html).not.toContain("209715200000420000000000 lythoshi");
     expect(html).toContain("JSON-safe plan");
     expect(html).toContain("monoc1yg3");
   });

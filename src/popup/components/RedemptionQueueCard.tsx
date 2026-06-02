@@ -161,7 +161,7 @@ export function formatRedemptionQueueAmount(
 ): string | null {
   if (amountLythoshi === null) return null;
   if (!/^\d+$/.test(amountLythoshi)) return null;
-  return `${lythoshiToLythDecimal(BigInt(amountLythoshi), 8)} LYTH`;
+  return `${lythoshiToLythDecimal(BigInt(amountLythoshi))} LYTH`;
 }
 
 function TicketKv({ label, value }: { label: string; value: string }) {

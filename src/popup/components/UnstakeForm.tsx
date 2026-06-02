@@ -12,6 +12,7 @@
 import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
+import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface UnstakeFormProps {
   /** Cluster currently being unstaked from. */
@@ -20,14 +21,16 @@ export interface UnstakeFormProps {
    *  whole row is removed regardless of amount. */
   currentWeightBps: number;
   /** Compatibility prop name retained for existing callers. Value is
-   *  v4.1 native lythoshi, not 18-decimal EVM wei. Used to display
-   *  the LYTH amount the current weight represents. */
+   *  native lythoshi (now 18-decimal — 1 lythoshi == 1 wei after the
+   *  chain's 8 → 18 migration). Used to display the LYTH amount the
+   *  current weight represents. */
   balanceWei: bigint | null;
   onContinue: () => void;
   onBack: () => void;
 }
 
-const NATIVE_LYTH_DECIMALS = 8;
+// Native LYTH precision sourced from the SDK (chain migrated 8 → 18 decimals;
+// 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
 const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
 
 export function lythToLythoshi(amountStr: string): bigint | null {

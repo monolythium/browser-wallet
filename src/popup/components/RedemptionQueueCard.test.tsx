@@ -55,7 +55,7 @@ describe("RedemptionQueueCard", () => {
           ticket({
             index: 0,
             mature: true,
-            amountLythoshi: "100000000",
+            amountLythoshi: "1000000000000000000",
             amountWei: "0x5f5e100",
             createdHeight: "10",
             maturityHeight: "20",
@@ -118,7 +118,7 @@ describe("RedemptionQueueCard", () => {
           ticket({
             index: 0,
             mature: true,
-            amountLythoshi: "100000000",
+            amountLythoshi: "1000000000000000000",
             createdHeight: "10",
             maturityHeight: "20",
           }),
@@ -151,7 +151,7 @@ describe("RedemptionQueueCard", () => {
           ticket({
             index: 0,
             mature: true,
-            amountLythoshi: "100000000",
+            amountLythoshi: "1000000000000000000",
             createdHeight: "10",
             maturityHeight: "20",
           }),
@@ -215,8 +215,9 @@ describe("RedemptionQueueCard", () => {
 
 describe("redemption queue formatting helpers", () => {
   it("formats only real optional amount fields", () => {
-    expect(formatRedemptionQueueAmount("1")).toBe("0.00000001 LYTH");
-    expect(formatRedemptionQueueAmount("100000000")).toBe("1 LYTH");
+    // Chain migrated 8 → 18 decimals: 1 lythoshi == 1 wei, 1 LYTH = 10^18 lythoshi.
+    expect(formatRedemptionQueueAmount("1")).toBe("0.000000000000000001 LYTH");
+    expect(formatRedemptionQueueAmount("1000000000000000000")).toBe("1 LYTH");
     expect(formatRedemptionQueueAmount(null)).toBeNull();
     expect(formatRedemptionQueueAmount("not-a-quantity")).toBeNull();
   });
