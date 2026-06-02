@@ -13,6 +13,8 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { ExternalLink } from "../components/ExternalLink";
+import { monoscanTxUrl } from "../../shared/build-info";
 import { RedemptionQueueCard } from "../components/RedemptionQueueCard";
 import { RewardCard } from "../components/RewardCard";
 import {
@@ -309,11 +311,16 @@ export function Delegations({
           >
             {redemptionResult.ok ? (
               <>
-                Redemption submitted ·{" "}
-                <span style={{ color: "var(--fg-200)" }}>
-                  {redemptionResult.txHash.slice(0, 10)}…
-                  {redemptionResult.txHash.slice(-6)}
-                </span>
+                <div>Redemption submitted</div>
+                {/* Full tx hash + ↗ + Monoscan link — mirrors the
+                   emergency-recovery (SLH-DSA backup) result display. */}
+                <ExternalLink
+                  href={monoscanTxUrl(redemptionResult.txHash)}
+                  title={redemptionResult.txHash}
+                  style={{ color: "var(--fg-200)", marginTop: 4 }}
+                >
+                  {redemptionResult.txHash}
+                </ExternalLink>
               </>
             ) : (
               redemptionResult.reason
