@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "../Icon";
 import { MnemonicGrid } from "../components/MnemonicGrid";
 import { bgKeystoreExportSeed } from "../bg";
+import { formatPhraseForClipboard } from "../../lib/clipboard-with-clear";
 
 interface RevealPhraseProps {
   /** Returns to Settings. Called on Cancel, on auto-hide expiry, and after
@@ -130,7 +131,9 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
   const handleCopy = async () => {
     if (!mnemonic) return;
     try {
-      await navigator.clipboard.writeText(mnemonic);
+      // Bare words, no ordinals — shared with the onboarding grid via the
+      // single `formatPhraseForClipboard` join so the two can't drift.
+      await navigator.clipboard.writeText(formatPhraseForClipboard(mnemonic));
       setCopied(true);
       if (clipboardClearTimer.current !== null) {
         clearTimeout(clipboardClearTimer.current);
