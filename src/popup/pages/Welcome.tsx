@@ -57,8 +57,8 @@ export function Welcome({
             lineHeight: 1.5,
           }}
         >
-          ML-DSA-65 keys, ML-KEM-768 envelopes, encrypted from your browser
-          to the chain. Your phrase never leaves this device.
+          ML-DSA-65 keys, signed in your browser. Your phrase never
+          leaves this device.
         </p>
       </div>
 

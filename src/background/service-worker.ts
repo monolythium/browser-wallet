@@ -250,7 +250,6 @@ import {
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
-  submitEncryptedMlDsaTx,
   submitPlaintextMlDsaTx,
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
@@ -323,25 +322,7 @@ type EthSendTransactionRequest = {
   maxPriorityFeePerGas?: string;
   nonce?: string;
   chainId?: string;
-  mempoolClass?: unknown;
-  class?: unknown;
 };
-
-function mempoolClassOverride(
-  txReq: Pick<EthSendTransactionRequest, "mempoolClass" | "class">,
-): EthSendTxFields["mempoolClass"] | undefined {
-  const value = txReq.mempoolClass ?? txReq.class;
-  if (value === undefined) return undefined;
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value < 0 ||
-    value > 6
-  ) {
-    throw new Error("mempoolClass must be an integer in the range 0..6");
-  }
-  return value as EthSendTxFields["mempoolClass"];
-}
 
 interface WalletMrvNativeReceiptEvidence {
   schema: string | null;
@@ -1545,12 +1526,6 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
       const arr = Array.isArray(params) ? params : [];
       const txReq = (arr[0] as EthSendTransactionRequest | undefined) ?? {};
-      let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
-      try {
-        mempoolClass = mempoolClassOverride(txReq);
-      } catch (e) {
-        return err(-32602, (e as Error).message);
-      }
       if (!chainRequiresMlDsa(session.chainId)) {
         return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
       }
@@ -1573,7 +1548,6 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           : {}),
         ...(typeof txReq.nonce === "string" ? { nonce: txReq.nonce } : {}),
         ...(typeof txReq.chainId === "string" ? { chainId: txReq.chainId } : {}),
-        ...(mempoolClass !== undefined ? { mempoolClass } : {}),
       };
 
       const decision = await gatedEnqueue({
@@ -1626,13 +1600,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             view.executionUnitLimitHex ??
             SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
 
-          // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
+          // Sign + submit via the plaintext mesh_submitTx path.
           // Sprintnet does not use an eth_sendRawTransaction fallback path.
-          const { txHash } = await submitEncryptedMlDsaTx({
+          const { txHash } = await submitPlaintextMlDsaTx({
             ...(txReq.to !== undefined ? { to: txReq.to } : {}),
             ...(txReq.value !== undefined ? { value: txReq.value } : {}),
             ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-            ...(mempoolClass !== undefined ? { mempoolClass } : {}),
             nonce: nonceHex,
             gas: executionUnitsHex,
             gasPrice: executionUnitPriceHex,
@@ -1713,7 +1686,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitEncryptedMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(approvedTxReq);
         return ok({ txHash, via });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -1829,7 +1802,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           chainIdHex,
           fromAddress: fromAddr,
         });
-        const { txHash, via } = await submitEncryptedMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(approvedTxReq);
         return ok({ txHash, via, plan });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -6093,7 +6066,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               ? action.valueWeiHex
               : action.valueWeiHex ?? "0x0";
           const data = action.kind === "contract" ? action.data : action.data;
-          const r = await submitEncryptedMlDsaTx({
+          const r = await submitPlaintextMlDsaTx({
             to: action.to,
             value: valueWeiHex,
             ...(data !== undefined ? { data } : {}),
@@ -8006,7 +7979,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitEncryptedMlDsaTx(txReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(txReq);
         return { ok: true, txHash, via };
       } catch (e) {
         const err = e as Error & {
@@ -8584,8 +8557,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // the ML-DSA-65 envelope.
         data?: string;
         gasLimitHex?: string;
-        mempoolClass?: unknown;
-        class?: unknown;
         // Notifications — optional operation tag. METADATA
         // ONLY: this is never plumbed into submitEncryptedMlDsaTx; it
         // rides only into persistPendingRowBackground's pending-row
@@ -8597,16 +8568,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // opKind): rides only into the pending row, never the signer.
         clusterId?: unknown;
         clusterName?: unknown;
-        // SDK 0.3.11 optional-encryption toggle. DEFAULT (absent /
-        // false) = the PLAINTEXT `mesh_submitTx` path, which is the
-        // functional inclusion path on the live chain
-        // (`encrypted_mempool_required = false`). `true` engages the
-        // threshold-encrypted `lyth_submitEncrypted` pipeline, which is
-        // NOT live yet (fast-follow) — the popup gates it behind a
-        // default-off, disabled PREVIEW toggle so a user cannot submit
-        // an encrypted tx that will not confirm. Anything non-boolean is
-        // treated as the safe plaintext default.
-        private?: unknown;
         // T1-04(a) — elevated re-auth for an over-limit passkey send. When
         // the per-vault passkey cap would reject this value-only transfer,
         // the popup re-submits with the account password here; the SW
@@ -8662,12 +8623,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         typeof p.clusterName === "string" && p.clusterName.length > 0
           ? p.clusterName
           : undefined;
-      let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
-      try {
-        mempoolClass = mempoolClassOverride(p);
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "send is only wired for Monolythium Testnet today" };
       }
@@ -8806,20 +8761,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           value: p.valueWeiHex,
           ...(p.data !== undefined ? { data: p.data } : {}),
-          ...(mempoolClass !== undefined ? { mempoolClass } : {}),
           gas: gasHex,
           nonce: nonceHex,
           maxFeePerGas,
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        // DEFAULT = plaintext (`mesh_submitTx`). Only the explicit
-        // `private === true` opt-in engages the not-yet-live encrypted
-        // pipeline; the popup keeps that toggle default-off + disabled.
-        const usePrivate = p.private === true;
-        const { txHash, via } = usePrivate
-          ? await submitEncryptedMlDsaTx(txReq)
-          : await submitPlaintextMlDsaTx(txReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(txReq);
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are
