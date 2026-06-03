@@ -636,30 +636,6 @@ export function AssetList({ account, network, indexer }: AssetListProps) {
           <div className="chg">—</div>
         </div>
       </div>
-
-      {/* LYTH-p — disabled (private denomination not active in this build).
-          The "coming soon" state is carried by the priv (blue Ⓜ) icon, the
-          "—" amount, the default cursor, and the "private denomination"
-          subtitle copy — NOT by dimming. A prior row-wide `opacity: 0.6`
-          dragged the --fg-400 subtitle to ~3.1:1 (sub-AA); dropped so the
-          subtitle reads at its token tier (≈6.5:1). Kept at --fg-400 (not a
-          --fg-500 inline) on purpose: this row sits on the theme surface, and
-          an inline --fg-500 would override the `.ext.light .chain` rule with a
-          light-on-light value in the light theme. */}
-      <div className="ext-asset" style={{ cursor: "default" }}>
-        <div className="ext-asset__ico priv">Ⓜ</div>
-        <div className="ext-asset__main">
-          <div className="sym" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            LYTH-p
-            <span className="ext-badge-att">Att</span>
-          </div>
-          <div className="chain">Monolythium (private) · private denomination</div>
-        </div>
-        <div className="ext-asset__spark" />
-        <div className="ext-asset__right">
-          <div className="amt">—</div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1734,47 +1710,6 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
                 active={activeChip === "staked"}
                 disabled
               />
-            </div>
-          )}
-
-          {/* Whitepaper §13 bifurcation surface — private LYTH ships in a
-              later phase (Sprintnet activates the private side after
-              mainnet); this row makes the model visible so users learn it
-              exists. No fetch, no chain call. */}
-          {!isPriv && (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginTop: 10,
-                padding: "8px 12px",
-                borderRadius: 10,
-                background: "rgba(124,127,255,0.06)",
-                border: "1px dashed var(--fg-700)",
-              }}
-            >
-              <div
-                style={{
-                  fontFamily: "var(--f-mono)",
-                  fontSize: 10,
-                  letterSpacing: "0.16em",
-                  textTransform: "uppercase",
-                  color: "var(--fg-400)",
-                }}
-              >
-                Private LYTH
-              </div>
-              <div
-                style={{
-                  fontFamily: "var(--f-mono)",
-                  fontSize: 11,
-                  color: "var(--fg-400)",
-                  fontStyle: "italic",
-                }}
-              >
-                — coming soon
-              </div>
             </div>
           )}
 
@@ -4104,19 +4039,6 @@ function readUint256(body: string, slot: number): bigint | null {
   }
 }
 
-// T3-04 — human names for the encrypted-mempool class the dApp can declare
-// (signed into the envelope AAD). Surfaced on the approval so a non-default
-// lane isn't hidden from the user.
-const MEMPOOL_CLASS_NAMES: Record<number, string> = {
-  0: "Transfer",
-  1: "ContractCall",
-  2: "PrivacyOp",
-  3: "CLOBOp",
-  4: "AgentOp",
-  5: "FoundationOp",
-  6: "RWAOp",
-};
-
 // ---- send_tx approval ----
 interface ReqSendTxProps {
   request: SendTxRequest;
@@ -4216,22 +4138,6 @@ export function ReqSendTx({
           <span className="k">Nonce</span>
           <span className="v">{view.nonce ?? "—"}</span>
         </div>
-        {(() => {
-          // T3-04 — show the mempool lane the dApp declared (signed into the
-          // envelope AAD) so a non-default class (PrivacyOp / FoundationOp / …)
-          // isn't hidden from the user. Only rendered when the dApp set it.
-          const cls = tx.mempoolClass ?? tx.class;
-          if (cls === undefined) return null;
-          const name = MEMPOOL_CLASS_NAMES[cls] ?? `class ${cls}`;
-          return (
-            <div className="req-kv">
-              <span className="k">Mempool class</span>
-              <span className="v">
-                {name} <span style={{ color: "var(--fg-500)" }}>({cls})</span>
-              </span>
-            </div>
-          );
-        })()}
       </div>
 
       {hasCalldata && (

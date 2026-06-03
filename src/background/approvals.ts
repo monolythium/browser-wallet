@@ -99,8 +99,6 @@ export interface SendTxApprovalReq {
     maxPriorityFeePerGas?: string;
     nonce?: string;
     chainId?: string;
-    mempoolClass?: number;
-    class?: number;
   };
   view: SendTxView;
 }
