@@ -2259,7 +2259,6 @@ describe("wallet-send-tx pending-row prepend", () => {
         data: "0x2468786f" + "00".repeat(192),
         gasLimitHex: "0x30d40",
         chainIdHex: TESTNET_CHAIN_ID_HEX,
-        mempoolClass: 3,
       },
     })) as { ok: true; txHash: string };
     expect(r.ok).toBe(true);
@@ -2268,7 +2267,6 @@ describe("wallet-send-tx pending-row prepend", () => {
       to: "0x0000000000000000000000000000000000001001",
       value: "0x0",
       data: "0x2468786f" + "00".repeat(192),
-      mempoolClass: 3,
       gas: "0x30d40",
       nonce: "0x0",
       maxFeePerGas: "0x2540be401",
