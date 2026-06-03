@@ -64,7 +64,7 @@ describe("classifyOperatorRisk — capabilities", () => {
   it("flags missing-N when expected surfaces absent", () => {
     const r = classifyOperatorRisk({
       ...HEALTHY,
-      capabilities: { ferveo: "available" }, // missing 'indexer'
+      capabilities: {}, // missing 'indexer'
     });
     const flag = r.find((b) => b.kind === "missing-capabilities");
     expect(flag).toBeDefined();
