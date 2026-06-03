@@ -67,11 +67,16 @@ export function cancelClipboardAutoClear(): void {
 }
 
 /**
- * Format a 24-word phrase into the user-requested numbered, space-
- * separated form: "1.plunge 2.thank ... 24.odor". Used as the clipboard
- * payload so paste-into-storage preserves both word order and the
- * 1-based numbering callers can read back at a glance.
+ * Format a 24-word recovery phrase for the clipboard as BARE, space-
+ * separated words ("plunge thank ... odor") — no ordinal numbers.
+ *
+ * Both clipboard surfaces copy through this single join so their payloads
+ * can't drift: the onboarding grid (MnemonicGrid's built-in copy button)
+ * and Settings → "Show recovery phrase" (RevealPhrase). Numbers belong to
+ * the on-screen layout only; a clipboard payload must be the raw phrase so
+ * it can be pasted straight back into a wallet on restore. Splitting on
+ * whitespace first normalizes any stray spacing in the source mnemonic.
  */
-export function formatPhraseForClipboard(words: readonly string[]): string {
-  return words.map((word, i) => `${i + 1}.${word}`).join(" ");
+export function formatPhraseForClipboard(mnemonic: string): string {
+  return mnemonic.trim().split(/\s+/).join(" ");
 }

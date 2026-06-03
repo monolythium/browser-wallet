@@ -45,6 +45,7 @@ import { Send } from "./pages/Send";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
+import { Theme } from "./pages/Theme";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -148,6 +149,7 @@ type Screen =
   | "multisig-list"
   | "security"
   | "features"
+  | "theme"
   | "main-menu"
   | "contacts"
   | "new-wallet-flow"
@@ -1298,6 +1300,10 @@ export default function App() {
           // navigateBack would fall back to home, skipping Settings.
           onOpenAbout={() => navigateTo("about")}
           onOpenDelegations={() => setScreen("delegations")}
+          // Settings → Theme pushes onto the screen stack via navigateTo
+          // so Theme's onBack (navigateBack) returns to Settings — and the
+          // same Theme page is reachable from the hamburger menu.
+          onOpenTheme={() => navigateTo("theme")}
           {...(activeVaultSummary
             ? {
                 onOpenSecurity: () => setScreen("security"),
@@ -1330,6 +1336,11 @@ export default function App() {
       {screen === "features" && (
         <Features onBack={() => setScreen("settings")} />
       )}
+
+      {/* Theme page. Reached from the Settings "Theme" category card AND
+         the hamburger menu, both via navigateTo, so onBack (navigateBack)
+         returns to whichever pushed it. */}
+      {screen === "theme" && <Theme onBack={navigateBack} />}
 
       {screen === "operators" && (
         <Operators onBack={() => setScreen("settings")} />
@@ -1463,6 +1474,9 @@ export default function App() {
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
           onSettings={() => navigateTo("settings")}
+          // Theme — opens the same Theme page the Settings "Theme" category
+          // routes to. navigateTo pushes "main-menu" so back returns here.
+          onTheme={() => navigateTo("theme")}
           onAbout={() => navigateTo("about")}
           onLockWallet={() => {
             void bgKeystoreLock();

@@ -13,6 +13,8 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { ExternalLink } from "../components/ExternalLink";
+import { monoscanTxUrl } from "../../shared/build-info";
 import { RedemptionQueueCard } from "../components/RedemptionQueueCard";
 import { RewardCard } from "../components/RewardCard";
 import {
@@ -69,6 +71,9 @@ export function Delegations({
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
+  // Set when the pending-rewards read returns ok:false (hard error). Drives
+  // RewardCard's honest-absence state instead of perpetual "Loading…".
+  const [rewardsError, setRewardsError] = useState<string | null>(null);
   const [redemptionQueue, setRedemptionQueue] =
     useState<RedemptionQueueView | null>(null);
   const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
@@ -97,6 +102,7 @@ export function Delegations({
     setRedemptionQueue(null);
     setRedemptionQueueMock(false);
     setRedemptionQueueError(null);
+    setRewardsError(null);
     void (async () => {
       const [dirR, delR, balR, queueR] = await Promise.all([
         bgStakingClusterDirectory(),
@@ -119,10 +125,20 @@ export function Delegations({
       }
       if (delR.ok) {
         const rewR = await bgStakingPendingRewards(account.addr, delR.data.rows);
-        if (!cancelled && rewR.ok) {
-          setRewards(rewR.data);
-          setRewardsMock(rewR.via === "mock");
+        if (!cancelled) {
+          if (rewR.ok) {
+            setRewards(rewR.data);
+            setRewardsMock(rewR.via === "mock");
+          } else {
+            // Hard ok:false (malformed / non-"method absent" RPC error) —
+            // surface honest absence instead of leaving the card on "Loading…".
+            setRewardsError(rewR.reason);
+          }
         }
+      } else if (!cancelled) {
+        // Delegations failed to load → pending rewards can't be keyed off the
+        // active set; show honest absence rather than perpetual loading.
+        setRewardsError(delR.reason);
       }
     })();
     return () => {
@@ -258,6 +274,7 @@ export function Delegations({
         {delegations !== null && delegations.rows.length > 0 && (
           <RewardCard
             rewards={rewards}
+            error={rewardsError}
             isMock={rewardsMock}
             clusters={clusters}
             onClaim={() => void handleClaim()}
@@ -309,11 +326,16 @@ export function Delegations({
           >
             {redemptionResult.ok ? (
               <>
-                Redemption submitted ·{" "}
-                <span style={{ color: "var(--fg-200)" }}>
-                  {redemptionResult.txHash.slice(0, 10)}…
-                  {redemptionResult.txHash.slice(-6)}
-                </span>
+                <div>Redemption submitted</div>
+                {/* Full tx hash + ↗ + Monoscan link — mirrors the
+                   emergency-recovery (SLH-DSA backup) result display. */}
+                <ExternalLink
+                  href={monoscanTxUrl(redemptionResult.txHash)}
+                  title={redemptionResult.txHash}
+                  style={{ color: "var(--fg-200)", marginTop: 4 }}
+                >
+                  {redemptionResult.txHash}
+                </ExternalLink>
               </>
             ) : (
               redemptionResult.reason
