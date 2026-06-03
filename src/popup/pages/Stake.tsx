@@ -91,8 +91,7 @@ type Action = "delegate" | "undelegate" | "redelegate" | "claim";
 
 /** Top-level interaction mode. `"manual"` = single-cluster pick →
  *  stake form path. The four autovote modes route through
- *  AutovotePreview before submitting; only the first
- *  allocation submits (full batch lands as a follow-up). */
+ *  AutovotePreview before submitting; only the first allocation submits. */
 type EntryMode = "manual" | AutovoteMode;
 
 // sessionStorage persistence so a round-trip through ClusterDetail
@@ -246,6 +245,9 @@ export function Stake({
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   const [rewards, setRewards] = useState<PendingRewardsView | null>(null);
   const [rewardsMock, setRewardsMock] = useState(true);
+  // Set when the pending-rewards read returns ok:false (hard error). Drives
+  // RewardCard's honest-absence state instead of perpetual "Loading…".
+  const [rewardsError, setRewardsError] = useState<string | null>(null);
   const [redemptionQueue, setRedemptionQueue] =
     useState<RedemptionQueueView | null>(null);
   const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
@@ -350,6 +352,7 @@ export function Stake({
     setRedemptionQueue(null);
     setRedemptionQueueMock(false);
     setRedemptionQueueError(null);
+    setRewardsError(null);
     void (async () => {
       const [delR, capR, balR, seedR, queueR] = await Promise.all([
         bgStakingDelegations(account.addr),
@@ -380,10 +383,20 @@ export function Stake({
       // the SW returns mock-derived figures with `via: "mock"`.
       if (delR.ok) {
         const rewR = await bgStakingPendingRewards(account.addr, delR.data.rows);
-        if (!cancelled && rewR.ok) {
-          setRewards(rewR.data);
-          setRewardsMock(rewR.via === "mock");
+        if (!cancelled) {
+          if (rewR.ok) {
+            setRewards(rewR.data);
+            setRewardsMock(rewR.via === "mock");
+          } else {
+            // Hard ok:false (malformed / non-"method absent" RPC error) —
+            // surface honest absence instead of leaving the card on "Loading…".
+            setRewardsError(rewR.reason);
+          }
         }
+      } else if (!cancelled) {
+        // Delegations failed to load → pending rewards can't be keyed off the
+        // active set; show honest absence rather than perpetual loading.
+        setRewardsError(delR.reason);
       }
     })();
     return () => {
@@ -695,6 +708,7 @@ export function Stake({
             {delegations !== null && delegations.rows.length > 0 && (
               <RewardCard
                 rewards={rewards}
+                error={rewardsError}
                 isMock={rewardsMock}
                 clusters={clusters}
                 onClaim={() => void handleClaim()}
@@ -748,11 +762,16 @@ export function Stake({
               >
                 {redemptionResult.ok ? (
                   <>
-                    Redemption submitted ·{" "}
-                    <span style={{ color: "var(--fg-200)" }}>
-                      {redemptionResult.txHash.slice(0, 10)}…
-                      {redemptionResult.txHash.slice(-6)}
-                    </span>
+                    <div>Redemption submitted</div>
+                    {/* Full tx hash + ↗ + Monoscan link — mirrors the
+                       emergency-recovery (SLH-DSA backup) result display. */}
+                    <ExternalLink
+                      href={monoscanTxUrl(redemptionResult.txHash)}
+                      title={redemptionResult.txHash}
+                      style={{ color: "var(--fg-200)", marginTop: 4 }}
+                    >
+                      {redemptionResult.txHash}
+                    </ExternalLink>
                   </>
                 ) : (
                   redemptionResult.reason
@@ -807,10 +826,8 @@ export function Stake({
                 onProceed={() => {
                   if (autovotePlan === null) return;
                   if (autovotePlan.allocations.length === 0) return;
-                  // Single-tx submit of the FIRST
-                  // allocation. Multi-allocation batching lands in a
-                  // follow-up so the same `bgWalletSendTx` envelope
-                  // path keeps the audit shape simple.
+                  // Single-tx submit of the FIRST allocation, through the
+                  // standard `bgWalletSendTx` envelope path.
                   const first = autovotePlan.allocations[0]!;
                   setSelectedClusterId(first.cluster);
                   setAmountStr(
@@ -2111,19 +2128,6 @@ function AutovotePlanCard({
             <Icon name="check" size={12} />
             Review first allocation
           </button>
-          <div
-            style={{
-              marginTop: 6,
-              fontFamily: "var(--f-mono)",
-              fontSize: 9,
-              color: "var(--fg-500)",
-              lineHeight: 1.5,
-              textAlign: "center",
-            }}
-          >
-            Submits one tx per allocation. Phase 7 ships the first; multi-tx
-            batching lands as a follow-up.
-          </div>
         </div>
       )}
     </div>

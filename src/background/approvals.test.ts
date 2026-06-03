@@ -24,12 +24,23 @@ function installChrome() {
 }
 
 const connect = (origin: string) => ({ kind: "connect" as const, origin });
-const personalSign = (origin: string, message: string, address = "0xabc") => ({
-  kind: "personal_sign" as const,
+
+// A minimal-but-valid send_tx approval request. `to`/`value` vary per call so a
+// test can build distinct or byte-identical sends from one origin.
+const sendTx = (origin: string, to: string, value: string) => ({
+  kind: "send_tx" as const,
   origin,
-  message,
-  address,
+  tx: { to, value },
+  view: {
+    executionUnitLimitHex: null,
+    pricePerExecutionUnitLythoshiHex: null,
+    nonce: null,
+    simulation: null,
+    chainId: "0x10F2C",
+    chainLabel: "Sprintnet",
+  },
 });
+
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
 beforeEach(() => {
@@ -41,7 +52,9 @@ afterEach(() => {
 });
 
 describe("approvals — window-bomb guards (T4-06)", () => {
-  it("dedup: a duplicate (same kind+origin) reuses the open window; one decision resolves all", async () => {
+  it("dedup: a duplicate connect (same kind+origin) reuses the open window; one decision resolves all", async () => {
+    // connect is the ONE idempotent kind dedup still collapses (C7): no
+    // consent-relevant payload, and double-execution merely re-returns accounts.
     const a = await import("./approvals.js");
     const p1 = a.enqueue(connect("https://a.example"));
     const p2 = a.enqueue(connect("https://a.example"));
@@ -55,41 +68,57 @@ describe("approvals — window-bomb guards (T4-06)", () => {
     expect(await p2).toEqual({ ok: true });
   });
 
-  it("dedup is payload-aware: two DISTINCT personal_sign messages get separate windows", async () => {
+  it("C7: two DISTINCT send_tx (different to/value) from one origin → two windows, two separate decisions", async () => {
+    // The confused-deputy case. A payload-bearing kind must NEVER collapse: the
+    // user must consent to each tx, and a decision on one must not resolve the
+    // other (else an unseen distinct tx would be signed off tx#1's approval).
     const a = await import("./approvals.js");
-    const p1 = a.enqueue(personalSign("https://a.example", "hello"));
-    const p2 = a.enqueue(personalSign("https://a.example", "goodbye"));
+    const p1 = a.enqueue(sendTx("https://dapp.example", "0xAAA", "0x1"));
+    const p2 = a.enqueue(sendTx("https://dapp.example", "0xBBB", "0x999"));
     await tick();
-    // Distinct payloads must NOT collapse — one user decision cannot sign both.
     expect(createCalls).toBe(2);
     expect(a.listPending().length).toBe(2);
-    // Resolving the first window must not resolve the second caller.
-    const first = a
-      .listPending()
-      .find((x) => x.request.kind === "personal_sign" && x.request.message === "hello")!;
-    a.resolve(first.id, { ok: true });
+    // Resolve each window with a DIFFERENT decision; each must land on its OWN
+    // promise (proof they never shared a resolver).
+    const pendings = a.listPending();
+    const e1 = pendings.find((p) => p.request.kind === "send_tx" && p.request.tx.to === "0xAAA")!;
+    const e2 = pendings.find((p) => p.request.kind === "send_tx" && p.request.tx.to === "0xBBB")!;
+    a.resolve(e1.id, { ok: true });
+    a.resolve(e2.id, { ok: false, reason: "rejected #2" });
     expect(await p1).toEqual({ ok: true });
-    let p2Settled = false;
-    void p2.then(() => {
-      p2Settled = true;
-    });
-    await tick();
-    expect(p2Settled).toBe(false);
-    const second = a.listPending()[0]!;
-    a.resolve(second.id, { ok: false, reason: "user rejected" });
-    expect(await p2).toEqual({ ok: false, reason: "user rejected" });
+    expect(await p2).toEqual({ ok: false, reason: "rejected #2" });
   });
 
-  it("dedup still collapses IDENTICAL personal_sign requests onto one window", async () => {
+  it("C7: two BYTE-IDENTICAL send_tx from one origin → still two windows, two decisions (no double-submit off one consent)", async () => {
+    // Even identical sends must not collapse: each request's continuation
+    // independently submits, so one approval covering both would put TWO txs
+    // on-chain from ONE consent. Full-identity dedup keying would re-open this
+    // hole — hence dedup is restricted to connect, not "identical".
     const a = await import("./approvals.js");
-    const p1 = a.enqueue(personalSign("https://a.example", "same"));
-    const p2 = a.enqueue(personalSign("https://a.example", "same"));
+    const p1 = a.enqueue(sendTx("https://dapp.example", "0xAAA", "0x1"));
+    const p2 = a.enqueue(sendTx("https://dapp.example", "0xAAA", "0x1"));
     await tick();
-    expect(createCalls).toBe(1);
-    expect(a.listPending().length).toBe(1);
-    a.resolve(a.listPending()[0]!.id, { ok: true });
-    expect(await p1).toEqual({ ok: true });
-    expect(await p2).toEqual({ ok: true });
+    expect(createCalls).toBe(2);
+    expect(a.listPending().length).toBe(2);
+    // Two independent consents — distinct decisions must split across the two
+    // promises (a collapse would force both to share one decision).
+    const ids = a.listPending().map((p) => p.id);
+    a.resolve(ids[0]!, { ok: true });
+    a.resolve(ids[1]!, { ok: false, reason: "second consent" });
+    const settled = [await p1, await p2];
+    expect(settled).toContainEqual({ ok: true });
+    expect(settled).toContainEqual({ ok: false, reason: "second consent" });
+  });
+
+  it("C7: two switch_chain to DIFFERENT chainIds from one origin → two windows (distinct intents not collapsed)", async () => {
+    const a = await import("./approvals.js");
+    const p1 = a.enqueue({ kind: "switch_chain", origin: "https://d.example", chainId: "0x1" });
+    const p2 = a.enqueue({ kind: "switch_chain", origin: "https://d.example", chainId: "0x2" });
+    await tick();
+    expect(createCalls).toBe(2);
+    expect(a.listPending().length).toBe(2);
+    for (const p of a.listPending()) a.resolve(p.id, { ok: false });
+    await Promise.all([p1, p2]);
   });
 
   it("concurrency cap: the 6th distinct pending approval is rejected", async () => {

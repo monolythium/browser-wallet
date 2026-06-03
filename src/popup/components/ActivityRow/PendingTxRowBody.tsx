@@ -26,6 +26,17 @@ function relativeMs(ms: number, now: number): string {
 }
 
 export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyProps) {
+  const opKind = row.opKind;
+  // `complete-redemption` + `emergency-key` are 0-value OUTGOING precompile
+  // calls — on THIS row the user neither sends nor receives LYTH, so a
+  // "0 LYTH" amount is meaningless and reads as "0 received". Suppress the
+  // amount entirely (per the no-mock rule a wrong `0` is worse than none).
+  // When the chain exposes the returned redemption principal as a tx_receive,
+  // it auto-surfaces as a SEPARATE "Received N LYTH" incoming row — so this
+  // call row must never carry an amount of its own.
+  const suppressAmount =
+    opKind === "complete-redemption" || opKind === "emergency-key";
+
   // Confirmed via the real-time receipt but the indexer hasn't surfaced the
   // canonical row yet — render it as a confirmed send (no spinner, theme-accent
   // icon, "block N") so the confirm shows at chain speed instead of sitting on
@@ -33,7 +44,6 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
   // by the indexer's tx_send within a few seconds (reconcilePending drops it),
   // so it mirrors TxSendRowBody for a seamless swap.
   if (row.confirmedBlockHeight !== undefined) {
-    const opKind = row.opKind;
     const isSend = opKind === undefined || opKind === "send";
     const isDelegation =
       opKind === "delegate" ||
@@ -44,7 +54,8 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       : opKind === "claim" || opKind === "complete-redemption"
         ? "receive"
         : "send";
-    const showAmount = !/^0(\.0+)?$/.test(row.amountDecimal);
+    const showAmount =
+      !suppressAmount && !/^0(\.0+)?$/.test(row.amountDecimal);
     // Cluster target for delegations (the tx `to` is the module, not the
     // cluster); the real *.cluster.mono name when captured, else #id.
     const clusterTarget = isDelegation
@@ -102,8 +113,16 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
-          Pending · {row.amountDecimal} LYTH to{" "}
-          {renderCounterparty(row.to, counterpartyLabel)}
+          {suppressAmount ? (
+            // No "0 LYTH to <precompile>" — the send-shaped template doesn't
+            // fit a 0-value precompile call. Name it by its operation instead.
+            <>Pending · {txTypeLabel(row)}</>
+          ) : (
+            <>
+              Pending · {row.amountDecimal} LYTH to{" "}
+              {renderCounterparty(row.to, counterpartyLabel)}
+            </>
+          )}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>
@@ -114,8 +133,12 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
         </div>
       </div>
       <div className="ext-act-row__right">
-        <div className="amt">{row.amountDecimal}</div>
-        <div className="sym">LYTH</div>
+        {!suppressAmount && (
+          <>
+            <div className="amt">{row.amountDecimal}</div>
+            <div className="sym">LYTH</div>
+          </>
+        )}
       </div>
     </div>
   );
