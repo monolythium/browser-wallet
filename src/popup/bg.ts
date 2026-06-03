@@ -129,8 +129,6 @@ export interface SendTxRequest {
     maxPriorityFeePerGas?: string;
     nonce?: string;
     chainId?: string;
-    mempoolClass?: number;
-    class?: number;
   };
   view: SendTxView;
 }
@@ -899,8 +897,6 @@ export async function bgWalletSendTx(args: {
    *  floor). Callers passing non-trivial calldata should supply a conservative
    *  overhead-aware estimate. */
   executionUnitLimitHex?: string;
-  /** Optional encrypted-mempool class override for SDK-built action plans. */
-  mempoolClass?: number;
   /** Phase-1.5 — optional operation tag forwarded to the pending-row
    *  record so the notifications hook can label the resulting
    *  NotificationRecord with a friendly title (OS toast + in-app
