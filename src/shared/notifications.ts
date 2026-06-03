@@ -40,10 +40,10 @@ export const NOTIFICATION_HISTORY_CAP = 50;
  *  to a friendly title.
  *
  *  CRITICAL invariant: `opKind` is **pending-row metadata only** — it
- *  is never plumbed into `submitEncryptedMlDsaTx`'s argument object and
- *  cannot affect the signed tx bytes, the ML-DSA-65 signature, the
- *  encrypted envelope, the nonce, the fee, or the gas. See the
- *  metadata-only invariant test in `service-worker.activity.test.ts`.
+ *  is never plumbed into the submit-tx argument object and cannot affect
+ *  the signed tx bytes, the ML-DSA-65 signature, the nonce, the fee, or
+ *  the gas. See the metadata-only invariant test in
+ *  `service-worker.activity.test.ts`.
  *
  *  `contract_call` is the explicit fallback for untagged paths (legacy
  *  Phase-1 records on disk + any caller that omits `opKind`). */
@@ -85,8 +85,8 @@ export function isTxOpKind(v: unknown): v is TxOpKind {
 export interface NotificationRecord {
   /** `${chainIdHex}:${txHash}` — also the dedupe-set membership key. */
   id: string;
-  /** Canonical inner-tx hash (`innerTxHashHex` from
-   *  `submitEncryptedMlDsaTx`). 0x-prefixed. */
+  /** Canonical inner-tx hash (`innerTxHashHex` from the submit path).
+   *  0x-prefixed. */
   txHash: string;
   /** Real on-chain receipt status — explicit `1` ⇒ "confirmed",
    *  explicit `0` ⇒ "failed". Anything else upstream is treated as

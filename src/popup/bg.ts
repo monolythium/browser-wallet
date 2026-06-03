@@ -129,8 +129,6 @@ export interface SendTxRequest {
     maxPriorityFeePerGas?: string;
     nonce?: string;
     chainId?: string;
-    mempoolClass?: number;
-    class?: number;
   };
   view: SendTxView;
 }
@@ -619,8 +617,8 @@ export async function bgWalletFeeSuggestion(
   if (!r.ok) return r;
   // Magnitude contract: the SW handler returns wei-magnitude fee fields
   // (V4-LIVE-0008 operators expect wei on the wire and `wallet-send-tx`
-  // forwards `fee.maxFeePerGas` straight through to
-  // `submitEncryptedMlDsaTx`). The popup `FeeSuggestion` is documented
+  // forwards `fee.maxFeePerGas` straight through to the submit
+  // path). The popup `FeeSuggestion` is documented
   // as lythoshi-per-execution-unit and every popup consumer
   // (`nativeFeeDisplayFromFeeSuggestion`, balance comparisons, max-spend
   // math) assumes lythoshi. Compensate at the IPC boundary so the
@@ -899,15 +897,13 @@ export async function bgWalletSendTx(args: {
    *  floor). Callers passing non-trivial calldata should supply a conservative
    *  overhead-aware estimate. */
   executionUnitLimitHex?: string;
-  /** Optional encrypted-mempool class override for SDK-built action plans. */
-  mempoolClass?: number;
   /** Phase-1.5 — optional operation tag forwarded to the pending-row
    *  record so the notifications hook can label the resulting
    *  NotificationRecord with a friendly title (OS toast + in-app
    *  UI). PENDING-ROW METADATA ONLY: the SW never plumbs this into
-   *  `submitEncryptedMlDsaTx`'s argument object — the signed tx bytes,
-   *  the ML-DSA-65 signature, the encrypted envelope, the nonce, the
-   *  fee, and the gas are unchanged whether this is set or not. Omit
+   *  the submit-tx argument object — the signed tx bytes, the ML-DSA-65
+   *  signature, the nonce, the fee, and the gas are unchanged whether
+   *  this is set or not. Omit
    *  for the coarse `"send"` / `"contract_call"` fallback. */
   opKind?: TxOpKind;
   /** Cluster a delegation send (delegate / undelegate / redelegate) targets.
@@ -917,14 +913,6 @@ export async function bgWalletSendTx(args: {
    *  the signer. Omit for non-delegation sends. */
   clusterId?: number;
   clusterName?: string;
-  /** SDK 0.3.11 optional-encryption toggle. DEFAULT (omitted / false) =
-   *  the PLAINTEXT `mesh_submitTx` path, which is the functional
-   *  inclusion path on the live chain (`encrypted_mempool_required =
-   *  false`). `true` engages the threshold-encrypted
-   *  `lyth_submitEncrypted` pipeline — NOT live yet (fast-follow). The
-   *  Send screen keeps the corresponding "Private (preview)" toggle
-   *  default-off + disabled so this is never `true` from the UI today. */
-  private?: boolean;
   /** T1-04(a) — account password supplied to clear an over-limit passkey
    *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
    *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */
@@ -1391,7 +1379,7 @@ export interface OperatorHealthRowCommon {
   observedGenesis: string | null;
   /** Operator-surface availability from
    *  `lyth_operatorCapabilities` (SDK commit 0f483b8). Keys are surface
-   *  names ("ferveo", "streams", "indexer", "prover", "websocket", etc.);
+   *  names ("streams", "indexer", "prover", "websocket", etc.);
    *  values are the chain-reported status string. `null` when the
    *  capability probe failed or the operator doesn't expose the method
    *  — RPC dispatch is not gated on this; it's a display-only hint. */
@@ -1800,7 +1788,7 @@ export async function bgMultisigReject(args: {
 
 /** Execute a proposal whose approvals have reached threshold. Pulls
  *  the action out of the proposal record + broadcasts via the
- *  encrypted-envelope path using the multisig vault's own keypair.
+ *  plaintext mesh_submitTx path using the multisig vault's own keypair.
  *  Returns the tx hash on success; updates the proposal record's
  *  status + txHash atomically. */
 export async function bgMultisigExecute(args: {
