@@ -440,8 +440,7 @@ export type StakingResult<T> =
 //
 // MOCK — verify against live chain when Sprintnet back
 // ────────────────────────────────────────────────────
-// The Sprintnet cluster set may be offline (Ferveo wiring still in
-// deploying Ferveo wiring after CI iteration). The wallet's read paths
+// The Sprintnet cluster set may be offline. The wallet's read paths
 // fall through to these fixtures when every active operator fails the
 // genesis-pin trust check or returns a transport-level error.
 //
