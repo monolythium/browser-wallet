@@ -28,6 +28,23 @@ interface InboundEvent {
   payload: unknown;
 }
 
+// Announce this page's origin to the service worker the moment the bridge loads.
+// This runs in the ISOLATED world at document_start — before the page's own
+// scripts — so the SW learns the tab's CURRENT origin on every navigation, not
+// only at the tab's next rpc. It keeps the SW's tabId->origin map fresh so
+// account-carrying events (accountsChanged / connect, which carry the wallet
+// address) are never delivered to a tab that has navigated away from a connected
+// origin. Closes the C6 navigation-staleness residual WITHOUT the "tabs" or
+// "webNavigation" permission (both add a "read your browsing history" install
+// warning, unacceptable for a fund-holding extension). The announced origin is
+// `window.location.origin`, stamped from the ISOLATED world (the page cannot
+// forge it) and trusted exactly as the rpc-stamped origin already is — the SW's
+// per-dApp authorization key. Fire-and-forget: read lastError to suppress the
+// harmless "no response" console noise when the SW acknowledges synchronously.
+chrome.runtime.sendMessage({ kind: "announce", origin: window.location.origin }, () => {
+  void chrome.runtime.lastError;
+});
+
 window.addEventListener("message", (ev) => {
   const data = ev.data as OutboundEnvelope | undefined;
   if (!data || data.source !== "monolythium-wallet-page") return;

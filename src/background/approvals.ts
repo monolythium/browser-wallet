@@ -171,45 +171,6 @@ function newId(): string {
   );
 }
 
-/**
- * Dedup identity for an approval request. Two requests share an approval
- * window only when this key matches. For idempotent kinds (connect /
- * switch_chain / add_chain) the key is kind+origin(+target), so a page that
- * fires the same request twice reuses one window. For signing kinds the key
- * MUST include the signed-over payload: two distinct personal_sign / typed_sign
- * / send_tx requests from one origin are NOT the same approval — collapsing
- * them onto a single window would let one user decision authorize a payload the
- * user never saw (WYSIWYS bypass). Distinct payload ⇒ distinct key ⇒ distinct
- * window.
- */
-function dedupKey(request: ApprovalReq): string {
-  switch (request.kind) {
-    case "connect":
-      return `connect|${request.origin}`;
-    case "switch_chain":
-      return `switch_chain|${request.origin}|${request.chainId}`;
-    case "add_chain":
-      return `add_chain|${request.origin}|${request.chain.chainId}`;
-    case "personal_sign":
-      return `personal_sign|${request.origin}|${request.address}|${request.message}`;
-    case "typed_sign":
-      return `typed_sign|${request.origin}|${request.address}|${request.rawTypedData}`;
-    case "send_tx": {
-      const t = request.tx;
-      return [
-        "send_tx",
-        request.origin,
-        t.from ?? "",
-        t.to ?? "",
-        t.value ?? "",
-        t.data ?? "",
-        t.nonce ?? "",
-        t.chainId ?? "",
-      ].join("|");
-    }
-  }
-}
-
 async function openApprovalWindow(approvalId: string): Promise<number | undefined> {
   if (!chrome.windows?.create) {
     // Fallback: in test environments without windows API, just open the popup.
@@ -255,19 +216,33 @@ export function enqueue(request: ApprovalReq): Promise<ApprovalDecision> {
   times.push(now);
   recentEnqueuesByOrigin.set(request.origin, times);
 
-  // T4-06 (2) — dedup: an identical pending request reuses the open window
-  // rather than spawning a second one; the new caller's promise resolves with
-  // the same user decision. Identity is the full `dedupKey` (payload-aware for
-  // signing kinds) so two DISTINCT sign/send requests from one origin never
-  // collapse onto a single approval — that would sign a payload the user never
-  // saw.
-  const key = dedupKey(request);
-  for (const entry of pending.values()) {
-    if (dedupKey(entry.approval.request) === key) {
-      if (entry.windowId != null) void focusApproval(entry.approval.id);
-      return new Promise((resolve) => {
-        entry.resolvers.push(resolve);
-      });
+  // T4-06 (2) — dedup, restricted to idempotent `connect` ONLY (C7 fix).
+  //
+  // A pending `connect` from the same origin reuses the open window: `connect`
+  // carries no consent-relevant payload (its full identity IS kind+origin), and
+  // double-executing it is harmless — it merely re-returns the account list.
+  //
+  // Every payload-bearing kind (send_tx, personal_sign, typed_sign,
+  // switch_chain, add_chain) is DELIBERATELY excluded: the dedup collapses the
+  // approval *window*, but each request's continuation independently signs and
+  // submits its OWN payload. Collapsing a send/sign would therefore either sign
+  // an UNSEEN distinct request (the user approves tx#1 and an unrendered tx#2
+  // resolves approved — confused deputy), or, for byte-identical requests,
+  // double-submit N on-chain txs off ONE consent. So such kinds each get their
+  // OWN window and their OWN decision per request and can never take this
+  // branch. The window-bomb is still bounded by the rate-limit (above) and the
+  // concurrency cap (below), which don't need dedup to collapse distinct work.
+  if (request.kind === "connect") {
+    for (const entry of pending.values()) {
+      if (
+        entry.approval.request.kind === "connect" &&
+        entry.approval.request.origin === request.origin
+      ) {
+        if (entry.windowId != null) void focusApproval(entry.approval.id);
+        return new Promise((resolve) => {
+          entry.resolvers.push(resolve);
+        });
+      }
     }
   }
 

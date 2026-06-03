@@ -12,7 +12,6 @@ import {
   type UiOpenMode,
 } from "../bg";
 import { CheckIcon, ClipboardIcon } from "../components/AddressLine";
-import { THEMES, applyTheme, readTheme } from "../theme";
 
 interface SettingsProps {
   onBack: () => void;
@@ -47,6 +46,9 @@ interface SettingsProps {
   /** Routes to the Features page (two-tier UX
    *  toggles per §28.5 Q29). Optional for the same reasons. */
   onOpenFeatures?: () => void;
+  /** Routes to the Theme page (appearance / theme picker, promoted to
+   *  its own top-level category). Always wired — theme is not vault-gated. */
+  onOpenTheme: () => void;
   /** Passed only when the active vault is a multisig vault.
    *  When set, Settings renders the Multisig card with M-of-N pill +
    *  pending count + entry points to the Pending dashboard and
@@ -90,6 +92,7 @@ export function Settings({
   onOpenDelegations,
   onOpenSecurity,
   onOpenFeatures,
+  onOpenTheme,
   multisig,
 }: SettingsProps) {
   const [autoLock, setAutoLock] = useState<number | null>(null);
@@ -100,10 +103,6 @@ export function Settings({
   const [uiMode, setUiMode] = useState<UiOpenMode | null>(null);
   const [savingUiMode, setSavingUiMode] = useState(false);
   const [uiModePending, setUiModePending] = useState(false);
-
-  // Appearance — selected theme id (drives <html data-theme>, persisted in
-  // localStorage by applyTheme). "monolythium" renders the native palette.
-  const [themeId, setThemeId] = useState<string>(readTheme);
 
   // Account section inline copy state.
   const [addrCopied, setAddrCopied] = useState(false);
@@ -296,11 +295,11 @@ export function Settings({
           </div>
         </div>
 
-        {/* Section order: Account, Multisig (conditional),
-           Staking, Security, Developer tools, Network operators, About.
-           Multisig kept in slot 2 (account-adjacent) since the spec didn't
-           mention it but its content is logically about access control on
-           the active vault. */}
+        {/* Section order: Account, Multisig (conditional), Security,
+           Notifications, Theme, Staking, Developer tools, Network operators,
+           About. Multisig kept in slot 2 (account-adjacent) since the spec
+           didn't mention it but its content is logically about access
+           control on the active vault. */}
         {multisig && (
           <div className="ext-card">
             <div className="ext-card__head">
@@ -375,45 +374,6 @@ export function Settings({
 
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Staking</h3>
-          </div>
-          <div
-            style={{
-              fontSize: 11.5,
-              color: "var(--fg-300)",
-              lineHeight: 1.5,
-              marginBottom: 10,
-            }}
-          >
-            View active delegations, pending rewards, and manage existing
-            positions across clusters.
-          </div>
-          <button
-            onClick={onOpenDelegations}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid var(--fg-700)",
-              background: "rgba(255,255,255,0.04)",
-              color: "var(--fg-100)",
-              fontFamily: "var(--f-sans)",
-              fontSize: 12.5,
-              fontWeight: 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <span>Delegations dashboard</span>
-            <Icon name="chev" size={12} />
-          </button>
-        </div>
-
-        <div className="ext-card">
-          <div className="ext-card__head">
             <h3>Security</h3>
           </div>
           <div
@@ -461,84 +421,6 @@ export function Settings({
                   }}
                 >
                   {m} min
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Appearance — theme picker. Mirrors the monoscan/website palette
-             set (themes.css) via a data-theme attribute on <html>; applied and
-             persisted by ../theme. */}
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 10,
-              color: "var(--fg-400)",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              marginBottom: 6,
-            }}
-          >
-            Theme
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 6,
-              marginBottom: 14,
-            }}
-          >
-            {THEMES.map((opt) => {
-              const active = opt.id === themeId;
-              return (
-                <button
-                  key={opt.id}
-                  onClick={() => {
-                    applyTheme(opt.id);
-                    setThemeId(opt.id);
-                  }}
-                  title={opt.desc}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "8px 10px",
-                    borderRadius: 8,
-                    border: active
-                      ? "1px solid var(--gold)"
-                      : "1px solid var(--fg-700)",
-                    background: active
-                      ? "var(--gold-bg)"
-                      : "rgba(255,255,255,0.04)",
-                    color: active ? "var(--gold)" : "var(--fg-100)",
-                    fontFamily: "var(--f-sans)",
-                    fontSize: 12,
-                    fontWeight: active ? 600 : 500,
-                    cursor: "pointer",
-                    transition: "all 150ms var(--e-out)",
-                    textAlign: "left",
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 14,
-                      height: 14,
-                      borderRadius: 4,
-                      background: opt.swatch,
-                      flexShrink: 0,
-                      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)",
-                    }}
-                  />
-                  <span
-                    style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {opt.label}
-                  </span>
                 </button>
               );
             })}
@@ -676,15 +558,12 @@ export function Settings({
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
+                justifyContent: "center",
                 gap: 8,
               }}
             >
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Icon name="passkey" size={13} />
-                Passkey policy
-              </span>
-              <Icon name="chev" size={12} />
+              <Icon name="passkey" size={13} />
+              Passkey policy
             </button>
           )}
 
@@ -705,15 +584,12 @@ export function Settings({
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
+                justifyContent: "center",
                 gap: 8,
               }}
             >
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Icon name="shield" size={13} />
-                Features
-              </span>
-              <Icon name="chev" size={12} />
+              <Icon name="shield" size={13} />
+              Features
             </button>
           )}
 
@@ -788,6 +664,90 @@ export function Settings({
             }}
           >
             <span>Manage notifications</span>
+            <Icon name="chev" size={12} />
+          </button>
+        </div>
+
+        {/* Theme — promoted out of the Security card into its own
+           top-level category. The picker lives on the Theme sub-page so
+           it stays a single source shared with the hamburger entry. */}
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Theme</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            Choose the wallet&apos;s colour theme — light, dark, and accent
+            palettes.
+          </div>
+          <button
+            onClick={onOpenTheme}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon name="contrast" size={13} />
+              Appearance
+            </span>
+            <Icon name="chev" size={12} />
+          </button>
+        </div>
+
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Staking</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            View active delegations, pending rewards, and manage existing
+            positions across clusters.
+          </div>
+          <button
+            onClick={onOpenDelegations}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>Delegations dashboard</span>
             <Icon name="chev" size={12} />
           </button>
         </div>

@@ -713,11 +713,31 @@ html[data-theme="light"] .btn--gold {
 
 /* ---------- Dark-theme legibility pass ----------
    The explorer has dense monospace metadata. Keep the hierarchy muted, but
-   stop helper/caption text from disappearing into the dark glass canvas. */
+   stop helper/caption text from disappearing into the dark glass canvas.
+
+   The first selector covers the DEFAULT Monolythium theme, which runs with
+   NO data-theme attribute (applyTheme removes it for the default), so the
+   `[data-theme]…` selector below never matched it — leaving its muted text
+   on the un-lifted :root tokens (fg-400 3.47:1, fg-500 2.19:1 — both fail
+   WCAG AA). With the lift, against the Monolythium ink (#0d0e18 body /
+   #151723 card): fg-300 9.9:1 / 9.2:1, fg-400 7.0:1 / 6.5:1, fg-500
+   4.9:1 / 4.55:1 — all clear AA for normal text. Hue/saturation are
+   unchanged (same indigo-gray family); only lightness is raised. */
+html:not([data-theme]),
 html[data-theme]:not([data-theme="light"]) {
   --fg-300: #b6bac8;
   --fg-400: #969cac;
   --fg-500: #788193;
+}
+
+/* Monolythium default (attr-less) only — NOT the shared rule above.
+   Same specificity as `html:not([data-theme])`, declared later, so it wins
+   for the default theme and leaves every other dark theme on #788193. Lifts
+   the most-muted tier from 4.55:1 (on the #151723 card) to ~4.83:1 so it
+   clears AA on the ELEVATED surface (#1b1e2c) too, where #788193 dipped just
+   under 4.5:1. Same cool indigo-gray hue; only lightness is raised. */
+html:not([data-theme]) {
+  --fg-500: #828b9d; /* was #788193 */
 }
 
 /* =====================================================
