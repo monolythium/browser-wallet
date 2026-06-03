@@ -26,23 +26,15 @@ vi.mock("./networks.js", () => ({
 
 // Canonical-hash threading needs the SDK submission builder + keystore
 // stubbed: the wallet must surface the SDK's `innerTxHashHex` (the canonical
-// inner-tx hash the chain indexes), NOT the `lyth_submitEncrypted` envelope
-// hash. Only the runtime export (buildEncryptedSubmission) is mocked; the
-// other crypto imports in tx-mldsa.ts are type-only and erased.
+// inner-tx hash the chain indexes). Only the runtime export
+// (buildPlaintextSubmission) is mocked; the other crypto imports in
+// tx-mldsa.ts are type-only and erased.
 const CANONICAL_TX_HASH =
   CANONICAL_INNER_TX_HASH;
-const ENVELOPE_SUBMISSION_HASH =
-  "0x7bcde98eb1820654644c07e33627f772ba9df56b189508af97c26c82268d1ba4";
 
 const PLAINTEXT_SIGNED_TX_WIRE_HEX = "0xcafef00d";
 
 vi.mock("@monolythium/core-sdk/crypto", () => ({
-  buildEncryptedSubmission: vi.fn(async () => ({
-    envelopeWireHex: "0xdeadbeef",
-    innerSighashHex: "0xsighash",
-    innerTxHashHex: CANONICAL_TX_HASH,
-    innerWireBytes: 4,
-  })),
   // SDK 0.3.11 plaintext builder — signs over the canonical sighash and
   // returns the bincode `SignedTransaction` wire bytes + canonical hashes.
   buildPlaintextSubmission: vi.fn(() => ({
@@ -59,8 +51,6 @@ vi.mock("./keystore-mldsa.js", () => ({
 
 import {
   sprintnetJsonRpc,
-  submitEncryptedMlDsaTx,
-  broadcastEncryptedEnvelope,
   submitPlaintextMlDsaTx,
   broadcastPlaintextTransaction,
 } from "./tx-mldsa.js";
@@ -173,58 +163,6 @@ describe("sprintnetJsonRpc — per-call timeout (opts.timeoutMs)", () => {
     expect(r.result).toBe("0xok");
     // No timeoutMs ⇒ no AbortController ⇒ no signal key on the fetch init.
     expect(capturedSignal).toBeUndefined();
-  });
-});
-
-describe("submitEncryptedMlDsaTx — canonical hash threading", () => {
-  const originalFetch = globalThis.fetch;
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  // fetch answers both RPCs the submit path makes: lyth_getEncryptionKey
-  // (so fetchSprintnetEncryptionKey resolves) and lyth_submitEncrypted
-  // (returns the ENVELOPE/submission hash, which must NOT become txHash).
-  function installFetch(): void {
-    globalThis.fetch = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
-      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
-        method?: string;
-      };
-      let result: unknown = null;
-      if (body.method === "lyth_getEncryptionKey") {
-        result = { algo: "ml-kem-768", epoch: 1, encapsulationKey: "0x00" };
-      } else if (body.method === "lyth_submitEncrypted") {
-        result = ENVELOPE_SUBMISSION_HASH;
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ jsonrpc: "2.0", id: 1, result }),
-      };
-    }) as unknown as typeof fetch;
-  }
-
-  it("returns the SDK canonical innerTxHashHex as txHash, envelope hash as submissionHash", async () => {
-    installFetch();
-    const r = await submitEncryptedMlDsaTx({
-      to: "0x0102030405060708090a0b0c0d0e0f1011121314",
-      value: "0xf4240",
-      gas: "0x7530",
-      gasPrice: "0x7d0",
-      nonce: "0x0",
-      chainIdHex: "0x10F2C",
-    });
-    expect(r.txHash).toBe(CANONICAL_TX_HASH);
-    expect(r.submissionHash).toBe(ENVELOPE_SUBMISSION_HASH);
-    // The bug being fixed: the displayed hash must NOT be the envelope hash.
-    expect(r.txHash).not.toBe(ENVELOPE_SUBMISSION_HASH);
-  });
-
-  it("broadcastEncryptedEnvelope surfaces the RPC result as submissionHash", async () => {
-    installFetch();
-    const b = await broadcastEncryptedEnvelope("0xdeadbeef");
-    expect(b.submissionHash).toBe(ENVELOPE_SUBMISSION_HASH);
-    expect(b.via).toBe("operator-test");
   });
 });
 
