@@ -36,7 +36,6 @@ export type SendErrorKind =
   | "gas-estimation"
   | "nonce-conflict"
   | "operator-offline"
-  | "encryption-failure"
   | "user-rejected"
   | "transaction-reverted"
   | "spending-policy-blocked"
@@ -136,25 +135,6 @@ export function classifySendError(
       body:
         "The current operator is not responding. Try switching network " +
         "in Settings → Network.",
-      severity: "warn",
-    };
-  }
-
-  // Encrypted-submit failures — Ferveo / ML-KEM body.
-  if (
-    lower.includes("encryption") ||
-    lower.includes("ferveo") ||
-    lower.includes("ml-kem") ||
-    lower.includes("encrypted-submit") ||
-    lower.includes("decryption")
-  ) {
-    return {
-      kind: "encryption-failure",
-      headline: "Encrypted submission failed",
-      body:
-        "The encrypted-mempool ceremony rejected this transaction. The " +
-        "operator may be on an older binary or a key-rotation epoch may " +
-        "be in flight. Try again in a few seconds.",
       severity: "warn",
     };
   }
