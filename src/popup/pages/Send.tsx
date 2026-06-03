@@ -153,15 +153,6 @@ export function Send({
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
-  // SDK 0.3.11 optional-encryption toggle. DEFAULT (and, for now, ONLY)
-  // value is `false` = the PLAINTEXT `mesh_submitTx` path, which is the
-  // functional inclusion path on the live chain. The "Private (preview)"
-  // toggle below is rendered DISABLED with honest copy because the
-  // threshold-encrypted INCLUSION pipeline is not live yet (fast-follow):
-  // a user must not be able to submit an encrypted tx that will never
-  // confirm. The state + wiring are in place so flipping the toggle live
-  // later is a one-line change (drop `disabled`).
-  const [privateTx, setPrivateTx] = useState(false);
   // Contacts picker. pickerOpen drives the modal;
   // selectedContact holds the chosen contact so the preview screen can
   // render its name above the address. selectedContact clears when
@@ -468,11 +459,6 @@ export function Send({
         valueWeiHex: valueLythoshiHex,
         chainIdHex: chainId,
         opKind: "send",
-        // DEFAULT plaintext. `privateTx` can only ever be `false` from the
-        // UI today (the "Private (preview)" toggle is disabled because the
-        // threshold-encrypted inclusion pipeline is not live yet); passed
-        // explicitly so the submit path is honest about which path it takes.
-        private: privateTx,
         // T1-04(a) — present only on the over-limit re-auth path; the SW
         // verifies it before signing.
         ...(opts?.elevatedPassword
@@ -1106,62 +1092,6 @@ export function Send({
               </details>
             </div>
           )}
-        </FormCard>
-
-        <FormCard label="Privacy">
-          <label
-            htmlFor="send-private-toggle"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              // Default-off PREVIEW: the control is disabled, so the row
-              // reads as not-yet-available rather than interactive.
-              opacity: 0.6,
-              cursor: "not-allowed",
-            }}
-          >
-            <span
-              style={{
-                fontFamily: "var(--f-sans)",
-                fontSize: 12.5,
-                fontWeight: 600,
-                color: "var(--fg-100)",
-              }}
-            >
-              Private (preview)
-            </span>
-            <input
-              id="send-private-toggle"
-              type="checkbox"
-              role="switch"
-              checked={privateTx}
-              // PREVIEW: threshold-encrypted inclusion is not live yet, so
-              // the toggle is disabled and can never flip to `true` from the
-              // UI. `onChange` stays wired (and clamped off) so enabling the
-              // feature later is just dropping `disabled`.
-              disabled
-              aria-disabled
-              onChange={(e) => setPrivateTx(e.target.checked)}
-              style={{ cursor: "not-allowed" }}
-            />
-          </label>
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--fg-400)",
-              lineHeight: 1.6,
-              marginTop: 8,
-            }}
-          >
-            Your transactions are sent over the public (plaintext) path,
-            which is the path the network confirms today. Threshold-encrypted
-            private send is in preview and not live on the network yet —
-            it&apos;s disabled so a transaction can&apos;t get stuck waiting on
-            a pipeline that isn&apos;t running. We&apos;ll enable it here once
-            it&apos;s live.
-          </div>
         </FormCard>
 
         <button

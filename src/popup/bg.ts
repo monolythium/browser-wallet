@@ -917,14 +917,6 @@ export async function bgWalletSendTx(args: {
    *  the signer. Omit for non-delegation sends. */
   clusterId?: number;
   clusterName?: string;
-  /** SDK 0.3.11 optional-encryption toggle. DEFAULT (omitted / false) =
-   *  the PLAINTEXT `mesh_submitTx` path, which is the functional
-   *  inclusion path on the live chain (`encrypted_mempool_required =
-   *  false`). `true` engages the threshold-encrypted
-   *  `lyth_submitEncrypted` pipeline — NOT live yet (fast-follow). The
-   *  Send screen keeps the corresponding "Private (preview)" toggle
-   *  default-off + disabled so this is never `true` from the UI today. */
-  private?: boolean;
   /** T1-04(a) — account password supplied to clear an over-limit passkey
    *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
    *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */

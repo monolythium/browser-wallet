@@ -250,7 +250,6 @@ import {
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
-  submitEncryptedMlDsaTx,
   submitPlaintextMlDsaTx,
   sprintnetJsonRpc,
   sprintnetMaxBalanceConsensus,
@@ -1626,9 +1625,9 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             view.executionUnitLimitHex ??
             SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
 
-          // Sign + ML-KEM-768/ChaCha20-Poly1305 wrap + lyth_submitEncrypted.
+          // Sign + submit via the plaintext mesh_submitTx path.
           // Sprintnet does not use an eth_sendRawTransaction fallback path.
-          const { txHash } = await submitEncryptedMlDsaTx({
+          const { txHash } = await submitPlaintextMlDsaTx({
             ...(txReq.to !== undefined ? { to: txReq.to } : {}),
             ...(txReq.value !== undefined ? { value: txReq.value } : {}),
             ...(txReq.data !== undefined ? { data: txReq.data } : {}),
@@ -1713,7 +1712,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitEncryptedMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(approvedTxReq);
         return ok({ txHash, via });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -1829,7 +1828,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           chainIdHex,
           fromAddress: fromAddr,
         });
-        const { txHash, via } = await submitEncryptedMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(approvedTxReq);
         return ok({ txHash, via, plan });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -6093,7 +6092,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               ? action.valueWeiHex
               : action.valueWeiHex ?? "0x0";
           const data = action.kind === "contract" ? action.data : action.data;
-          const r = await submitEncryptedMlDsaTx({
+          const r = await submitPlaintextMlDsaTx({
             to: action.to,
             value: valueWeiHex,
             ...(data !== undefined ? { data } : {}),
@@ -8006,7 +8005,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitEncryptedMlDsaTx(txReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(txReq);
         return { ok: true, txHash, via };
       } catch (e) {
         const err = e as Error & {
@@ -8597,16 +8596,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // opKind): rides only into the pending row, never the signer.
         clusterId?: unknown;
         clusterName?: unknown;
-        // SDK 0.3.11 optional-encryption toggle. DEFAULT (absent /
-        // false) = the PLAINTEXT `mesh_submitTx` path, which is the
-        // functional inclusion path on the live chain
-        // (`encrypted_mempool_required = false`). `true` engages the
-        // threshold-encrypted `lyth_submitEncrypted` pipeline, which is
-        // NOT live yet (fast-follow) — the popup gates it behind a
-        // default-off, disabled PREVIEW toggle so a user cannot submit
-        // an encrypted tx that will not confirm. Anything non-boolean is
-        // treated as the safe plaintext default.
-        private?: unknown;
         // T1-04(a) — elevated re-auth for an over-limit passkey send. When
         // the per-vault passkey cap would reject this value-only transfer,
         // the popup re-submits with the account password here; the SW
@@ -8813,13 +8802,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        // DEFAULT = plaintext (`mesh_submitTx`). Only the explicit
-        // `private === true` opt-in engages the not-yet-live encrypted
-        // pipeline; the popup keeps that toggle default-off + disabled.
-        const usePrivate = p.private === true;
-        const { txHash, via } = usePrivate
-          ? await submitEncryptedMlDsaTx(txReq)
-          : await submitPlaintextMlDsaTx(txReq);
+        const { txHash, via } = await submitPlaintextMlDsaTx(txReq);
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are
