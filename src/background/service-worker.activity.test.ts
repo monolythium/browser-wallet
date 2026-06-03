@@ -96,7 +96,7 @@ interface CapturedRpcCall {
   params: unknown[];
 }
 const rpcCalls: CapturedRpcCall[] = [];
-// Capture of submitEncryptedMlDsaTx argument objects — used by the
+// Capture of submitPlaintextMlDsaTx argument objects — used by the
 // metadata-only invariant test (assert opKind never reaches the signer).
 const submitMlDsaCalls: Record<string, unknown>[] = [];
 let rpcResponses: Record<string, unknown> = {};
@@ -125,23 +125,10 @@ vi.mock("./tx-mldsa.js", () => ({
     contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
     failing: [],
   })),
-  submitEncryptedMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
-    submitMlDsaCalls.push(args);
-    if (submitFailure !== null) {
-      throw submitFailure;
-    }
-    return {
-      txHash: SUBMITTED_TX_HASH,
-      submissionHash: SUBMITTED_TX_HASH,
-      via: "mock-operator",
-      innerSighashHex: "0x" + "b".repeat(64),
-    };
-  }),
-  // SDK 0.3.11 DEFAULT path. `wallet-send-tx` routes here unless the
-  // caller opts into the not-yet-live encrypted path (`private: true`).
-  // It feeds the SAME `submitMlDsaCalls` capture so the metadata-only
-  // invariant (`opKind` never reaches the signer) and the arg-shape
-  // assertions hold against whichever path the default is.
+  // The DEFAULT (and only) submit path: `wallet-send-tx` plus the dApp
+  // eth_sendTransaction / MRV / multisig paths all route here. It feeds
+  // `submitMlDsaCalls` so the metadata-only invariant (`opKind` / cluster
+  // never reach the signer) and the arg-shape assertions hold.
   submitPlaintextMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
     submitMlDsaCalls.push(args);
     if (submitFailure !== null) {
@@ -466,7 +453,7 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitEncryptedMlDsaTx, submitPlaintextMlDsaTx } from "./tx-mldsa.js";
+import { submitPlaintextMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -2276,8 +2263,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       },
     })) as { ok: true; txHash: string };
     expect(r.ok).toBe(true);
-    // DEFAULT submit = PLAINTEXT (`submitPlaintextMlDsaTx`). No `private`
-    // flag in the payload ⇒ the encrypted path must NOT be engaged.
+    // DEFAULT submit = PLAINTEXT (`submitPlaintextMlDsaTx`).
     expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
       to: "0x0000000000000000000000000000000000001001",
       value: "0x0",
@@ -2289,7 +2275,6 @@ describe("wallet-send-tx pending-row prepend", () => {
       maxPriorityFeePerGas: "0x2540be400",
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     });
-    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("fire-and-forget timing: send-tx reply resolves BEFORE pending storage write completes", async () => {
@@ -2354,7 +2339,7 @@ describe("wallet-send-tx pending-row prepend", () => {
 
   // ───────────────────────────────────────────────────────────────────────
   // opKind tagging. opKind is pending-row metadata only; it
-  // must NEVER reach submitEncryptedMlDsaTx's argument object (the signed
+  // must NEVER reach submitPlaintextMlDsaTx's argument object (the signed
   // tx bytes / ML-DSA-65 signature / encrypted envelope / nonce / fee /
   // gas must be identical with or without opKind).
   // ───────────────────────────────────────────────────────────────────────
@@ -2441,7 +2426,7 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(persisted.pending[0]?.opKind).toBe("contract_call");
   });
 
-  it("METADATA-ONLY INVARIANT — opKind NEVER reaches submitEncryptedMlDsaTx's argument object", async () => {
+  it("METADATA-ONLY INVARIANT — opKind NEVER reaches submitPlaintextMlDsaTx's argument object", async () => {
     // First dispatch — WITH opKind. Capture the signer arg.
     await dispatchSend({
       to: "0xrecipient",
@@ -2503,7 +2488,7 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect("clusterName" in p2.pending[0]!).toBe(false);
   });
 
-  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitEncryptedMlDsaTx", async () => {
+  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitPlaintextMlDsaTx", async () => {
     submitMlDsaCalls.length = 0;
     storageLocal = {};
     await dispatchSend({
@@ -2556,7 +2541,7 @@ describe("wallet-mrv-submit-plan", () => {
       txHash: SUBMITTED_TX_HASH,
       via: "mock-operator",
     });
-    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2578,7 +2563,7 @@ describe("wallet-mrv-submit-plan", () => {
     })) as { ok: false; reason?: string };
 
     expect(r).toEqual({ ok: false, reason: "wallet locked" });
-    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("blocks tampered preview plans before encrypted submission", async () => {
@@ -2594,7 +2579,7 @@ describe("wallet-mrv-submit-plan", () => {
 
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/exactly one transaction extension/);
-    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("submits a previewed MRV plan through the dapp provider boundary", async () => {
@@ -2633,7 +2618,7 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Sprintnet",
     });
-    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2702,7 +2687,7 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Sprintnet",
     });
-    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith({
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2749,7 +2734,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.error).toBeUndefined();
     // The SIGNED fee is the ceiling, not the absurd quote; the tip is re-clamped
     // to the (capped) max. Display == signed: the approval shows the same caps.
-    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith(
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: CEILING_HEX,
         maxPriorityFeePerGas: CEILING_HEX,
@@ -2788,7 +2773,7 @@ describe("wallet-mrv-submit-plan", () => {
     });
     expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
     expect(enqueuedApprovals).toHaveLength(0);
-    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("rejects provider MRV submissions from unconnected origins", async () => {
@@ -2801,7 +2786,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4100);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
-    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("blocks tampered provider MRV plans before approval", async () => {
@@ -2823,7 +2808,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.error?.code).toBe(-32602);
     expect(r.error?.message).toMatch(/exactly one transaction extension/);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
-    expect(submitEncryptedMlDsaTx).not.toHaveBeenCalled();
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
   });
 });
 
@@ -2856,7 +2841,7 @@ describe("dApp eth_sendTransaction fee clamp (T4-04 a1)", () => {
     expect(r.error).toBeUndefined();
     // The 1611-1619 clamp on the MLDSA encrypted submit path caps the signed
     // execution-unit price (gasPrice) at the ceiling, not the absurd dApp quote.
-    expect(submitEncryptedMlDsaTx).toHaveBeenCalledWith(
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gasPrice: CEILING_HEX }),
     );
   });
