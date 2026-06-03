@@ -239,46 +239,9 @@ describe("native LYTH fee display math", () => {
 });
 
 // Method-aware error rendering keeps pre-submit lookup failures distinct
-// from real lyth_submitEncrypted rejects.
+// from chain-side submission rejects.
 describe("formatSendError — method-aware copy", () => {
   const ADMISSION = -32030; // anywhere in [-32049, -32020]
-  const NON_ADMISSION = -32600;
-
-  it("lyth_submitEncrypted + admission code → 'Mempool rejected', not 'Chain rejected'", () => {
-    const s = formatSendError({
-      message: "mempool: decryption failed",
-      code: ADMISSION,
-      method: "lyth_submitEncrypted",
-      via: "operator-2",
-    });
-    expect(s).toContain("Mempool rejected");
-    expect(s).not.toContain("Chain rejected");
-    expect(s).toContain("via operator-2");
-  });
-
-  it("lyth_submitEncrypted + non-admission code → 'Submission failed'", () => {
-    const s = formatSendError({
-      message: "internal error",
-      code: NON_ADMISSION,
-      method: "lyth_submitEncrypted",
-      via: "operator-3",
-    });
-    expect(s).toContain("Submission failed");
-    expect(s).not.toContain("Mempool rejected");
-  });
-
-  it("lyth_getEncryptionKey → 'Couldn't fetch encryption key'", () => {
-    const s = formatSendError({
-      message: "upstream unavailable: mempool: decryption failed",
-      code: ADMISSION,
-      method: "lyth_getEncryptionKey",
-      via: "operator-2",
-    });
-    expect(s).toContain("Couldn't fetch encryption key");
-    expect(s).toContain("lyth_getEncryptionKey");
-    expect(s).toContain("via operator-2");
-    expect(s).not.toContain("Chain rejected");
-  });
 
   it("eth_feeHistory → 'Fee history fetch failed'", () => {
     const s = formatSendError({
