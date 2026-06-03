@@ -322,25 +322,7 @@ type EthSendTransactionRequest = {
   maxPriorityFeePerGas?: string;
   nonce?: string;
   chainId?: string;
-  mempoolClass?: unknown;
-  class?: unknown;
 };
-
-function mempoolClassOverride(
-  txReq: Pick<EthSendTransactionRequest, "mempoolClass" | "class">,
-): EthSendTxFields["mempoolClass"] | undefined {
-  const value = txReq.mempoolClass ?? txReq.class;
-  if (value === undefined) return undefined;
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value < 0 ||
-    value > 6
-  ) {
-    throw new Error("mempoolClass must be an integer in the range 0..6");
-  }
-  return value as EthSendTxFields["mempoolClass"];
-}
 
 interface WalletMrvNativeReceiptEvidence {
   schema: string | null;
@@ -1544,12 +1526,6 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
       const arr = Array.isArray(params) ? params : [];
       const txReq = (arr[0] as EthSendTransactionRequest | undefined) ?? {};
-      let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
-      try {
-        mempoolClass = mempoolClassOverride(txReq);
-      } catch (e) {
-        return err(-32602, (e as Error).message);
-      }
       if (!chainRequiresMlDsa(session.chainId)) {
         return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
       }
@@ -1572,7 +1548,6 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           : {}),
         ...(typeof txReq.nonce === "string" ? { nonce: txReq.nonce } : {}),
         ...(typeof txReq.chainId === "string" ? { chainId: txReq.chainId } : {}),
-        ...(mempoolClass !== undefined ? { mempoolClass } : {}),
       };
 
       const decision = await gatedEnqueue({
@@ -1631,7 +1606,6 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             ...(txReq.to !== undefined ? { to: txReq.to } : {}),
             ...(txReq.value !== undefined ? { value: txReq.value } : {}),
             ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-            ...(mempoolClass !== undefined ? { mempoolClass } : {}),
             nonce: nonceHex,
             gas: executionUnitsHex,
             gasPrice: executionUnitPriceHex,
@@ -8583,8 +8557,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // the ML-DSA-65 envelope.
         data?: string;
         gasLimitHex?: string;
-        mempoolClass?: unknown;
-        class?: unknown;
         // Notifications — optional operation tag. METADATA
         // ONLY: this is never plumbed into submitEncryptedMlDsaTx; it
         // rides only into persistPendingRowBackground's pending-row
@@ -8651,12 +8623,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         typeof p.clusterName === "string" && p.clusterName.length > 0
           ? p.clusterName
           : undefined;
-      let mempoolClass: EthSendTxFields["mempoolClass"] | undefined;
-      try {
-        mempoolClass = mempoolClassOverride(p);
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "send is only wired for Monolythium Testnet today" };
       }
@@ -8795,7 +8761,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           value: p.valueWeiHex,
           ...(p.data !== undefined ? { data: p.data } : {}),
-          ...(mempoolClass !== undefined ? { mempoolClass } : {}),
           gas: gasHex,
           nonce: nonceHex,
           maxFeePerGas,
