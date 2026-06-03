@@ -24,9 +24,10 @@ export function LoadingState({ label = "Loading…", paddingY = 18 }: LoadingSta
         padding: `${paddingY}px 18px`,
         textAlign: "center",
         fontSize: 11,
+        // Status copy the user reads — kept at its --fg-400 token tier
+        // (≈6.5:1). A prior `opacity: 0.7` dragged it to ~4.0:1 (sub-AA).
         color: "var(--fg-400)",
         lineHeight: 1.5,
-        opacity: 0.7,
       }}
       role="status"
       aria-live="polite"

@@ -25,7 +25,9 @@ const FEEDBACK_RESET_MS = 3_000;
  *
  * Word font 12 → 15 px monospace for readability, and
  * an optional Copy-to-clipboard button below the grid. The clipboard
- * format mirrors the on-screen layout ("1.word 2.word ... 24.word")
+ * payload is the BARE phrase (bare words, no ordinal numbers — the
+ * on-screen ordinals are layout only), matching the Settings → "Show
+ * recovery phrase" copy via the shared `formatPhraseForClipboard` join,
  * and auto-clears 30 s after copy via the shared clipboard helper.
  */
 export function MnemonicGrid({
@@ -54,7 +56,7 @@ export function MnemonicGrid({
   useEffect(() => () => cancelClipboardAutoClear(), []);
 
   const handleCopy = async () => {
-    const text = formatPhraseForClipboard(words);
+    const text = formatPhraseForClipboard(mnemonic);
     try {
       await copyWithAutoClear(text, CLEAR_AFTER_MS);
       setCopyState("copied");

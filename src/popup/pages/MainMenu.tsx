@@ -37,6 +37,9 @@ interface MainMenuProps {
    *  the menu item is hidden (advanced agent-commerce UX). */
   onAgentPolicy?: () => void;
   onSettings: () => void;
+  /** Opens the Theme page (appearance / theme picker) — the same page
+   *  the Settings "Theme" category routes to. */
+  onTheme: () => void;
   onAbout: () => void;
   onLockWallet: () => void;
   /** Destructive reset entry at the very bottom of
@@ -59,6 +62,7 @@ export function MainMenu({
   onMultisig,
   onAgentPolicy,
   onSettings,
+  onTheme,
   onAbout,
   onLockWallet,
   onResetWallet,
@@ -176,6 +180,12 @@ export function MainMenu({
             icon="settings"
             label="Settings"
             onClick={onSettings}
+            hasChevron
+          />
+          <MenuItem
+            icon="contrast"
+            label="Theme"
+            onClick={onTheme}
             hasChevron
           />
           <MenuItem icon="info" label="About" onClick={onAbout} hasChevron />
