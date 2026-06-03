@@ -1,14 +1,12 @@
-// Monolythium Wallet — ML-DSA-65 encrypted-submit bridge.
+// Monolythium Wallet — ML-DSA-65 transaction submission bridge.
 //
-// Protocol-critical signing, native tx encoding, and encrypted-envelope
-// construction live in `@monolythium/core-sdk/crypto`. This module keeps
-// browser-wallet responsibilities local: translate EIP-1193 fields,
-// iterate Sprintnet operator RPCs, and surface wallet-friendly errors.
+// Protocol-critical signing + native tx encoding live in
+// `@monolythium/core-sdk/crypto`. This module keeps browser-wallet
+// responsibilities local: translate EIP-1193 fields, iterate Sprintnet
+// operator RPCs, and surface wallet-friendly errors.
 
 import {
-  buildEncryptedSubmission as sdkBuildEncryptedSubmission,
   buildPlaintextSubmission as sdkBuildPlaintextSubmission,
-  type EncryptionKey,
   type MempoolClass,
   type NativeEvmTxFields,
   type NativeTxExtensionLike,
@@ -37,30 +35,6 @@ export interface EthSendTxFields {
   extensions?: readonly NativeTxExtensionLike[];
   /** Hex chain id of the target chain (e.g. `0x10F2C` for Sprintnet). */
   chainIdHex: string;
-}
-
-/** Chain response shape for `lyth_getEncryptionKey`. */
-interface SprintnetEncryptionKeyJson {
-  algo: string;
-  epoch: number | string;
-  encapsulationKey: string;
-}
-
-/** Decoded form of `lyth_getEncryptionKey` for downstream callers. */
-export interface SprintnetEncryptionKey extends EncryptionKey {}
-
-function hexToBytes(s: string): Uint8Array {
-  const stripped = s.startsWith("0x") || s.startsWith("0X") ? s.slice(2) : s;
-  if (stripped.length % 2 !== 0) {
-    throw new Error("hex must have even length");
-  }
-  const out = new Uint8Array(stripped.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    const b = Number.parseInt(stripped.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(b)) throw new Error("invalid hex byte");
-    out[i] = b;
-  }
-  return out;
 }
 
 /**
@@ -353,26 +327,6 @@ export async function sprintnetMaxBalanceConsensus(
   };
 }
 
-/** Fetch the cluster's current ML-KEM-768 encapsulation key. */
-export async function fetchSprintnetEncryptionKey(): Promise<SprintnetEncryptionKey> {
-  const { result } = await sprintnetJsonRpc<SprintnetEncryptionKeyJson>(
-    "lyth_getEncryptionKey",
-    [],
-  );
-  if (typeof result?.encapsulationKey !== "string") {
-    throw new Error("lyth_getEncryptionKey: missing encapsulationKey");
-  }
-  const epoch =
-    typeof result.epoch === "string"
-      ? BigInt(result.epoch.startsWith("0x") ? result.epoch : result.epoch)
-      : BigInt(result.epoch);
-  return {
-    algo: typeof result.algo === "string" ? result.algo : "ml-kem-768",
-    epoch,
-    encapsulationKey: hexToBytes(result.encapsulationKey),
-  };
-}
-
 function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
   const maxFeePerGas = req.maxFeePerGas ?? req.gasPrice;
   if (maxFeePerGas === undefined) throw new Error("maxFeePerGas/gasPrice missing");
@@ -389,90 +343,20 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
   };
 }
 
-/**
- * Sign + wrap an `eth_sendTransaction` into an encrypted envelope ready
- * for `lyth_submitEncrypted`.
- */
-export async function buildEncryptedSubmission(args: {
-  txReq: EthSendTxFields;
-  encryptionKey: SprintnetEncryptionKey;
-}): Promise<{
-  envelopeWireHex: string;
-  innerSighashHex: string;
-  innerTxHashHex: string;
-  innerWireBytes: number;
-}> {
-  const backend = getUnlockedBackendV4();
-  if (backend === null) {
-    throw new Error("v3 wallet is locked");
-  }
-  return sdkBuildEncryptedSubmission({
-    backend,
-    tx: normalizeFields(args.txReq),
-    encryptionKey: args.encryptionKey,
-    ...(args.txReq.mempoolClass !== undefined || args.txReq.class !== undefined
-      ? { class: args.txReq.mempoolClass ?? args.txReq.class }
-      : {}),
-  });
-}
-
-/** Submit an encrypted-envelope hex blob via `lyth_submitEncrypted`. The RPC
- *  returns the pre-decryption ENVELOPE/submission hash, NOT the canonical
- *  inner-tx hash the chain indexes after Ferveo decryption — so it is named
- *  `submissionHash` and must never be surfaced as the displayed tx hash. */
-export async function broadcastEncryptedEnvelope(envelopeWireHex: string): Promise<{
-  submissionHash: string;
-  via: string;
-}> {
-  const { result, via } = await sprintnetJsonRpc<string>(
-    "lyth_submitEncrypted",
-    [envelopeWireHex],
-  );
-  return { submissionHash: result, via };
-}
-
-/** One-shot helper used by the service worker. `txHash` is the CANONICAL
- *  inner-tx hash (`signed.txHash`, surfaced by the SDK as `innerTxHashHex`) —
- *  the value the chain indexes and `eth_getTransactionByHash` / `lyth_txStatus`
- *  resolve. `submissionHash` is the pre-decryption envelope hash from
- *  `lyth_submitEncrypted`, retained for debugging/logging only. */
-export async function submitEncryptedMlDsaTx(req: EthSendTxFields): Promise<{
-  txHash: string;
-  submissionHash: string;
-  via: string;
-  innerSighashHex: string;
-}> {
-  const encryptionKey = await fetchSprintnetEncryptionKey();
-  const wrapped = await buildEncryptedSubmission({ txReq: req, encryptionKey });
-  const { submissionHash, via } = await broadcastEncryptedEnvelope(wrapped.envelopeWireHex);
-  return {
-    txHash: wrapped.innerTxHashHex,
-    submissionHash,
-    via,
-    innerSighashHex: wrapped.innerSighashHex,
-  };
-}
-
-// ----- Plaintext (default) submission path -----
+// ----- Plaintext submission path -----
 //
-// The live optional-encryption testnet runs with `encrypted_mempool_required
-// = false`, so the FUNCTIONAL inclusion path is the PLAINTEXT one: the wallet
-// signs the chain-side `SignedTransaction` (no Ferveo threshold-decrypt step)
-// and forwards the bincode bytes through `mesh_submitTx`. The encrypted
-// `lyth_submitEncrypted` path above engages the threshold-encrypted inclusion
-// pipeline, which is NOT live yet — so it stays behind a default-off PREVIEW
-// toggle, and plaintext is what every wallet flow submits by default.
+// The wallet signs the chain-side `SignedTransaction` and forwards the bincode
+// bytes through `mesh_submitTx` — the functional inclusion path on the live
+// chain.
 //
-// We do NOT route through the SDK's `submitTransactionWithPrivacy` /
-// `submitPlaintextTransaction` RpcClient helpers here: the wallet's
-// operator-iteration in `sprintnetJsonRpc` carries the genesis-hash
-// pin + multi-operator failover that protect every wallet RPC. Reusing it for
-// `mesh_submitTx` keeps the plaintext path under the same protections as the
-// encrypted path, while still using the SDK's `buildPlaintextSubmission` for
-// the protocol-critical sign + bincode serialization (the bytes are byte-for-
-// byte what `submitPlaintextTransaction` would send). We mirror the SDK's
-// node-echo validation: the node returns the canonical 32-byte native tx hash
-// on admission, and any mismatch is rejected loud so the wallet never trusts a
+// We do NOT route through the SDK's `submitPlaintextTransaction` RpcClient
+// helper here: the wallet's operator-iteration in `sprintnetJsonRpc` carries
+// the genesis-hash pin + multi-operator failover that protect every wallet
+// RPC. We still use the SDK's `buildPlaintextSubmission` for the
+// protocol-critical sign + bincode serialization (the bytes are byte-for-byte
+// what `submitPlaintextTransaction` would send), and mirror the SDK's node-echo
+// validation: the node returns the canonical 32-byte native tx hash on
+// admission, and any mismatch is rejected loud so the wallet never trusts a
 // hash it did not derive itself.
 
 /** Build a PLAINTEXT submission — the opt-OUT-of-privacy counterpart to
