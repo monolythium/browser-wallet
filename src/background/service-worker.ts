@@ -1390,10 +1390,11 @@ function acceptSignedFee(signedFee: unknown): {
 // connected origins WITHOUT the "tabs" permission (reading a tab's URL would
 // need it and triggers a "read your browsing history" store warning). Populated
 // from the bridge-stamped origin on each rpc message (see the onMessage rpc
-// branch); entries self-clean on send failure (tab closed). RESIDUAL: a tab
-// that navigates from a connected origin to a different origin keeps its stale
-// mapping until its next rpc — a complete fix needs a navigation listener or
-// the "tabs" permission (flagged in the audit report).
+// branch) AND from the content-script origin-announce sent on load (the
+// onMessage "announce" branch); entries self-clean on send failure (tab closed).
+// The announce flips the entry the instant a new page loads, so the former
+// "stale until the tab's next rpc" residual on cross-origin navigation now
+// closes at the content-script load instant — still permission-free.
 const tabOriginById = new Map<number, string>();
 
 function broadcastEvent(event: string, payload: unknown): void {
@@ -1680,10 +1681,14 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
 
       let txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>;
       try {
-        txReq = walletMrvNativePlanToSubmitTx(plan, {
-          chainIdHex,
-          fromAddress: displayFromAddr,
-        });
+        // T4-04 (Item D, a1): clamp the caller-supplied plan fee before it is
+        // displayed + signed (this path bypasses the wallet-send-tx clamp).
+        txReq = clampMrvSubmitTxFee(
+          walletMrvNativePlanToSubmitTx(plan, {
+            chainIdHex,
+            fromAddress: displayFromAddr,
+          }),
+        );
       } catch (e) {
         return err(-32602, (e as Error).message);
       }
@@ -1700,10 +1705,14 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, "wallet has no unlocked address");
       }
       try {
-        const approvedTxReq = walletMrvNativePlanToSubmitTx(plan, {
-          chainIdHex,
-          fromAddress: fromAddr,
-        });
+        // Clamp the submit-side tx identically so the signed fee equals the
+        // approval-side fee shown to the user (bind preserved).
+        const approvedTxReq = clampMrvSubmitTxFee(
+          walletMrvNativePlanToSubmitTx(plan, {
+            chainIdHex,
+            fromAddress: fromAddr,
+          }),
+        );
         const { txHash, via } = await submitEncryptedMlDsaTx(approvedTxReq);
         return ok({ txHash, via });
       } catch (e) {
@@ -1762,19 +1771,35 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           typeof p.priorityTipLythoshiHex !== "string"
             ? await suggestFee(chainIdHex)
             : null;
+        // T4-04 (Item D, a1): clamp the caller/operator-influenced fee to the
+        // sane ceiling BEFORE it is bound into the plan + signed — the MRV path
+        // is the one fee-bearing send the wallet-send-tx clamp doesn't cover.
+        // Clamping at the input means the captured `plan` (and therefore both
+        // the approval-side `txReq` and the submit-side `approvedTxReq` derived
+        // from it) carry the clamped fee, so display == signed. Mirrors the
+        // eth_sendTransaction (1616) / wallet-send-tx (8734) rails.
+        const clampedMaxExecutionFeeHex =
+          "0x" +
+          clampToSaneBound(
+            BigInt(
+              typeof p.maxExecutionFeeLythoshiHex === "string"
+                ? p.maxExecutionFeeLythoshiHex
+                : fee?.maxFeePerGas ?? "0x0",
+            ),
+            MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+          ).toString(16);
         const input: WalletMrvCallNativePlanInput = {
           fromAddress: displayFromAddr,
           chainIdHex,
           nonceHex,
           executionUnitLimitHex: p.executionUnitLimitHex,
-          maxExecutionFeeLythoshiHex:
-            typeof p.maxExecutionFeeLythoshiHex === "string"
-              ? p.maxExecutionFeeLythoshiHex
-              : fee?.maxFeePerGas ?? "0x0",
-          priorityTipLythoshiHex:
+          maxExecutionFeeLythoshiHex: clampedMaxExecutionFeeHex,
+          priorityTipLythoshiHex: clampPriorityTipToMaxFee(
             typeof p.priorityTipLythoshiHex === "string"
               ? p.priorityTipLythoshiHex
               : fee?.maxPriorityFeePerGas ?? "0x0",
+            clampedMaxExecutionFeeHex,
+          ),
           contractAddress,
           input: p.input,
         };
@@ -2184,6 +2209,35 @@ function clampPriorityTipToMaxFee(
     // hot send path.
     return priorityTipHex;
   }
+}
+
+/**
+ * T4-04 (Item D, a1) — clamp an MRV submit-tx's execution-unit price to the
+ * sane ceiling (and re-clamp the tip to the capped max) before it is signed.
+ * The MRV plan-based paths (`monolythium_submitMrvNativePlan`,
+ * `wallet-mrv-submit-plan`) carry a caller-supplied / operator-influenced fee
+ * that does NOT pass through the `wallet-send-tx` clamp (8734) or the
+ * `eth_sendTransaction` clamp (1616), so this applies the same de-trust
+ * backstop. In-bound fees are returned unchanged; the bind (display == signed)
+ * is preserved by clamping the approval-side and submit-side tx identically.
+ */
+function clampMrvSubmitTxFee(
+  txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>,
+): ReturnType<typeof walletMrvNativePlanToSubmitTx> {
+  const clampedMaxFee =
+    "0x" +
+    clampToSaneBound(
+      BigInt(txReq.maxFeePerGas),
+      MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+    ).toString(16);
+  return {
+    ...txReq,
+    maxFeePerGas: clampedMaxFee,
+    maxPriorityFeePerGas: clampPriorityTipToMaxFee(
+      txReq.maxPriorityFeePerGas,
+      clampedMaxFee,
+    ),
+  };
 }
 
 // ---- Passkey IPC marshalling ----
@@ -7942,10 +7996,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
       try {
-        const txReq = walletMrvNativePlanToSubmitTx(p.plan, {
-          chainIdHex: p.chainIdHex,
-          fromAddress: fromAddr,
-        });
+        // T4-04 (Item D, a1): clamp the popup-supplied plan fee before signing
+        // (this wallet-UI path builds + signs directly, bypassing the
+        // wallet-send-tx clamp). Defends against a tampered popup the same way
+        // the dApp paths defend against a malicious operator.
+        const txReq = clampMrvSubmitTxFee(
+          walletMrvNativePlanToSubmitTx(p.plan, {
+            chainIdHex: p.chainIdHex,
+            fromAddress: fromAddr,
+          }),
+        );
         const { txHash, via } = await submitEncryptedMlDsaTx(txReq);
         return { ok: true, txHash, via };
       } catch (e) {
@@ -9010,6 +9070,24 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   // Anything that touches state belongs in the popup or rpc branch.
   if (m?.kind === "ping") {
     sendResponse({ ok: true });
+    return false;
+  }
+  if (m?.kind === "announce") {
+    // T2-01 residual close — the content-script bridge announces its origin on
+    // load (document_start), BEFORE its first rpc. Refresh the SAME tabId->origin
+    // map the rpc branch maintains so a cross-origin navigation flips the entry
+    // the instant the new page loads, not at the tab's next rpc. This shrinks
+    // the stale-mapping window to the content-script load instant — without the
+    // "tabs"/"webNavigation" permission. Gated by `sender.id === runtime.id`
+    // above (C5); deliberately NOT routed through the popup-URL branch — a
+    // content script's `sender.url` is the page URL, which that branch correctly
+    // rejects. The announced origin is trusted exactly as the rpc-stamped origin
+    // (same ISOLATED-world source, the per-dApp authz key) — no new trust surface.
+    const ann = message as { origin?: unknown };
+    const annTabId = sender.tab?.id;
+    if (typeof annTabId === "number" && typeof ann.origin === "string") {
+      tabOriginById.set(annTabId, ann.origin);
+    }
     return false;
   }
   if (m?.kind === "rpc") {

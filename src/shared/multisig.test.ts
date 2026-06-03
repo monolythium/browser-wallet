@@ -2,6 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
+
 import {
   DEFAULT_TX_PROPOSAL_TTL_MS,
   GovernanceAction,
@@ -38,6 +40,13 @@ function fakePubkey(byte: number): string {
 
 function fakeAddress(byte: number): string {
   return "0x" + byte.toString(16).padStart(2, "0").repeat(20);
+}
+
+// Lowercase 0x-hex of raw bytes — for real ML-DSA-65 pubkeys / signatures.
+function bytesToHex0x(b: Uint8Array): string {
+  let s = "0x";
+  for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
+  return s;
 }
 
 function makeSigner(
@@ -697,11 +706,13 @@ describe("verifyProposalApprovals + verifyGovernanceApprovals (signature filter)
     expect(r.validApprovals.size).toBe(0);
   });
 
-  it("execute gate (T3-03): approvals[].length can pass the count check while no signature verifies", () => {
-    // Mimics a tampered action: the approvals[] array still has >= threshold
-    // entries (so the old length-only isExecutable check passes) but the stored
-    // signatures no longer cover the live action digest, so verifyProposalApprovals
-    // returns fewer valid approvals than the threshold → execute must fail closed.
+  it("execute gate (T3-03): approvals from signers not in the roster fail the signature check even when the count passes (unknown-signer guard)", () => {
+    // ghost-1/ghost-2 are NOT in the signer roster [s-a, s-b], so
+    // verifySignatureFor short-circuits at the unknown-signer guard and counts
+    // zero valid approvals: approvals[].length satisfies the old length-only
+    // isExecutable check while no signature verifies. This pins the
+    // UNKNOWN-SIGNER path; the GENUINE digest-tamper path (real roster sigs vs a
+    // mutated action) is the separate test below.
     const signers = [
       makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
       makeSigner({ id: "s-b", address: fakeAddress(0x02) }),
@@ -717,6 +728,56 @@ describe("verifyProposalApprovals + verifyGovernanceApprovals (signature filter)
     expect(p.approvals.length).toBeGreaterThanOrEqual(threshold); // count check would pass
     const { validApprovals } = verifyProposalApprovals(p, signers);
     expect(validApprovals.size).toBeLessThan(threshold); // signature check fails closed
+  });
+
+  it("execute gate (T3-03): a real roster signature stops verifying when the action is tampered (digest-bound reject)", () => {
+    // Real ML-DSA-65 roster signers sign the ORIGINAL action; the action is then
+    // mutated post-signing. hashTxProposal binds the signature to the action, so
+    // the real signatures no longer verify against the re-hashed (mutated)
+    // digest → validApprovals drops below threshold → execute fails closed. This
+    // proves DIGEST-bound rejection of a genuine tamper, distinct from the
+    // unknown-signer guard above.
+    const kpA = ml_dsa65.keygen(new Uint8Array(32).fill(0x11));
+    const kpB = ml_dsa65.keygen(new Uint8Array(32).fill(0x22));
+    const signers = [
+      makeSigner({ id: "s-a", address: fakeAddress(0x01), pubkey: bytesToHex0x(kpA.publicKey) }),
+      makeSigner({ id: "s-b", address: fakeAddress(0x02), pubkey: bytesToHex0x(kpB.publicKey) }),
+    ];
+    const threshold = 2;
+
+    const proposal = makeProposal({ id: "p-real-tamper" });
+    const digest = hashTxProposal(proposal);
+    proposal.approvals = [
+      {
+        signerId: "s-a",
+        signature: bytesToHex0x(ml_dsa65.sign(digest, kpA.secretKey, { extraEntropy: false })),
+        signedAt: 1,
+      },
+      {
+        signerId: "s-b",
+        signature: bytesToHex0x(ml_dsa65.sign(digest, kpB.secretKey, { extraEntropy: false })),
+        signedAt: 2,
+      },
+    ];
+
+    // Sanity: the real signatures verify against the ORIGINAL action → executable.
+    const before = verifyProposalApprovals(proposal, signers);
+    expect(before.validApprovals.size).toBe(2);
+    expect(before.validApprovals.size).toBeGreaterThanOrEqual(threshold);
+
+    // TAMPER: mutate the action (different recipient) AFTER the signatures were
+    // collected. approvals[] is unchanged, so the count check still passes.
+    const tampered: PendingProposal = {
+      ...proposal,
+      action: { kind: "send", to: fakeAddress(0xee), valueWeiHex: "0x1", chainIdHex: "0x10F2C" },
+    };
+    expect(tampered.approvals.length).toBeGreaterThanOrEqual(threshold); // count check passes
+
+    // The real signatures cover the original digest, not the tampered one → none
+    // verify → fewer than threshold valid approvals → execute fails closed.
+    const after = verifyProposalApprovals(tampered, signers);
+    expect(after.validApprovals.size).toBe(0);
+    expect(after.validApprovals.size).toBeLessThan(threshold);
   });
 
   it("drops governance approvals with malformed signature length", () => {

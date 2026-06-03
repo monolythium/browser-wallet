@@ -8,7 +8,7 @@ export type IconName =
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
-  | "expand" | "copy" | "trash" | "external" | "bell";
+  | "expand" | "copy" | "trash" | "external" | "bell" | "contrast";
 
 interface IconProps {
   name: IconName;
@@ -305,6 +305,17 @@ export function Icon({ name, size = 16 }: IconProps) {
         <svg {...props}>
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        </svg>
+      );
+    case "contrast":
+      // Half-filled circle — the canonical light/dark "theme / appearance"
+      // glyph. Used by the Settings "Theme" category card and the hamburger
+      // "Theme" entry. The filled right half overrides the set-wide
+      // fill:none; the circle outline still uses the shared stroke.
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 2a10 10 0 0 1 0 20Z" fill="currentColor" stroke="none" />
         </svg>
       );
     default:
