@@ -2608,14 +2608,7 @@ export function formatSendError(args: {
     code >= ADMISSION_REJECT_CODE_LO &&
     code <= ADMISSION_REJECT_CODE_HI;
   const viaSuffix = via ? ` via ${via}` : "";
-  const viaParen = via ? ` (via ${via})` : "";
   switch (method) {
-    case "lyth_submitEncrypted":
-      return isAdmissionReject
-        ? `Mempool rejected: ${message}${viaParen}`
-        : `Submission failed: ${message}${viaParen}`;
-    case "lyth_getEncryptionKey":
-      return `Couldn't fetch encryption key. The cluster may be unavailable. (lyth_getEncryptionKey${viaSuffix})`;
     case "lyth_executionUnitPrice":
       return `Execution fee quote failed (lyth_executionUnitPrice${viaSuffix})`;
     case "lyth_getTransactionCount":
