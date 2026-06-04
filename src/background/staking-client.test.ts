@@ -522,8 +522,8 @@ describe("readClusterStatus", () => {
         offline: 0,
         maintenance: 0,
         members: [
-          { operatorId: "op-1", blsPubkey: "0xabc", state: "active" },
-          { operatorId: "op-2", blsPubkey: "0xdef", state: "active" },
+          { operatorId: "op-1", consensusPubkey: "0xabc", state: "active" },
+          { operatorId: "op-2", consensusPubkey: "0xdef", state: "active" },
         ],
         epoch: 42n,
         round: 12345n,
@@ -537,6 +537,7 @@ describe("readClusterStatus", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.members).toHaveLength(2);
+    expect(r.data.members[0]?.consensusPubkey).toBe("0xabc");
     expect(r.data.epoch).toBe("42");
     expect(r.data.lastUpdateHeight).toBe("99999");
     expect(r.data.reputationScore).toBe(0.91);

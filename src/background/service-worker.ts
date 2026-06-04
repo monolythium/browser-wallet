@@ -386,7 +386,7 @@ interface WalletMrvNoEvmFinalityCertificate {
 
 interface WalletMrvNoEvmFinalityEvidence {
   schema: "mono.no_evm_receipt_finality.v1";
-  source: "blsRoundCertificate";
+  source: typeof MRV_ROUND_CERTIFICATE_SOURCE;
   round: number;
   certificate: WalletMrvNoEvmFinalityCertificate;
 }
@@ -2340,6 +2340,8 @@ const MRV_COMPACT_RECEIPT_NODE_DOMAIN_BYTES = new TextEncoder().encode(
 );
 const MAX_U32 = 0xffff_ffff;
 const MRV_NO_EVM_RECEIPT_TRUST_REGISTRY_NETWORK = "testnet-69420";
+const MRV_ROUND_CERTIFICATE_SOURCE = "roundCertificate";
+const MRV_LEGACY_ROUND_CERTIFICATE_SOURCE = "blsRoundCertificate";
 
 function parseMrvNativeReceiptEvidence(
   raw: unknown,
@@ -2743,7 +2745,12 @@ function parseMrvFinalityEvidence(
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (r.schema !== "mono.no_evm_receipt_finality.v1") return null;
-  if (r.source !== "blsRoundCertificate") return null;
+  if (
+    r.source !== MRV_ROUND_CERTIFICATE_SOURCE &&
+    r.source !== MRV_LEGACY_ROUND_CERTIFICATE_SOURCE
+  ) {
+    return null;
+  }
   const round = parseNonNegativeSafeInteger(r.round);
   const certificate = parseMrvFinalityCertificate(r.certificate);
   if (round === null || certificate === null || certificate.round !== round) {
@@ -2751,7 +2758,7 @@ function parseMrvFinalityEvidence(
   }
   return {
     schema: "mono.no_evm_receipt_finality.v1",
-    source: "blsRoundCertificate",
+    source: MRV_ROUND_CERTIFICATE_SOURCE,
     round,
     certificate,
   };
@@ -2955,7 +2962,7 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
     return {
       kind: "invalid",
       reason:
-        "registry BLS finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
+        "registry round-finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
     };
   }
 
@@ -2965,7 +2972,7 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
   if (chainId === null) {
     return {
       kind: "invalid",
-      reason: "registry BLS finality trust policy is missing chainId",
+      reason: "registry round-finality trust policy is missing chainId",
     };
   }
   const requestChainId = parseMrvChainIdBigInt(requestChainIdHex);
@@ -2976,7 +2983,7 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
     return {
       kind: "invalid",
       reason:
-        "registry BLS finality chain id does not match the receipt request chain id",
+        "registry round-finality chain id does not match the receipt request chain id",
     };
   }
 
@@ -2985,20 +2992,20 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
     return {
       kind: "invalid",
       reason:
-        "registry BLS finality trust policy has invalid committeeSize",
+        "registry round-finality trust policy has invalid committeeSize",
     };
   }
   const threshold = parsePositiveSafeIntegerValue(finality.threshold);
   if (threshold === null) {
     return {
       kind: "invalid",
-      reason: "registry BLS finality trust policy has invalid threshold",
+      reason: "registry round-finality trust policy has invalid threshold",
     };
   }
   if (threshold > committeeSize) {
     return {
       kind: "invalid",
-      reason: "registry BLS finality threshold exceeds committee size",
+      reason: "registry round-finality threshold exceeds committee size",
     };
   }
 
@@ -3010,7 +3017,7 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
     return {
       kind: "invalid",
       reason:
-        "registry BLS finality clusterPublicKey must be 48 bytes",
+        "registry round-finality clusterPublicKey must be 48 bytes",
     };
   }
 
@@ -3021,7 +3028,7 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
     return {
       kind: "invalid",
       reason:
-        "registry BLS finality trust policy has invalid validFromRound",
+        "registry round-finality trust policy has invalid validFromRound",
     };
   }
   const validToRound = parseMrvOptionalTrustPolicyBound(finality.validToRound);
@@ -3029,7 +3036,7 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
     return {
       kind: "invalid",
       reason:
-        "registry BLS finality trust policy has invalid validToRound",
+        "registry round-finality trust policy has invalid validToRound",
     };
   }
   if (
@@ -3040,7 +3047,7 @@ function resolveMrvNoEvmRegistryFinalityTrustConfig(
     return {
       kind: "invalid",
       reason:
-        "registry BLS finality trust policy validFromRound exceeds validToRound",
+        "registry round-finality trust policy validFromRound exceeds validToRound",
     };
   }
 
@@ -3228,7 +3235,7 @@ function parseMrvNoEvmFinalityTrustConfig(
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality trust config must be an object`,
+      reason: `${source} round-finality trust config must be an object`,
     };
   }
   const r = raw as Record<string, unknown>;
@@ -3240,31 +3247,31 @@ function parseMrvNoEvmFinalityTrustConfig(
   if (typeof chainIdRaw !== "string" || chainIdRaw.length === 0) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality trust config is missing chainIdHex`,
+      reason: `${source} round-finality trust config is missing chainIdHex`,
     };
   }
   if (typeof clusterPublicKeyRaw !== "string" || clusterPublicKeyRaw.length === 0) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality trust config is missing clusterPublicKey`,
+      reason: `${source} round-finality trust config is missing clusterPublicKey`,
     };
   }
   if (committeeSize === null) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality trust config has invalid committeeSize`,
+      reason: `${source} round-finality trust config has invalid committeeSize`,
     };
   }
   if (threshold === null) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality trust config has invalid threshold`,
+      reason: `${source} round-finality trust config has invalid threshold`,
     };
   }
   if (threshold > committeeSize) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality threshold exceeds committee size`,
+      reason: `${source} round-finality threshold exceeds committee size`,
     };
   }
 
@@ -3279,13 +3286,13 @@ function parseMrvNoEvmFinalityTrustConfig(
   if (configuredChainId === null) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality trust config has invalid chainIdHex`,
+      reason: `${source} round-finality trust config has invalid chainIdHex`,
     };
   }
   if (configuredChainId !== requestChainId) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality chain id does not match the receipt request chain id`,
+      reason: `${source} round-finality chain id does not match the receipt request chain id`,
     };
   }
 
@@ -3293,14 +3300,14 @@ function parseMrvNoEvmFinalityTrustConfig(
   if (clusterPublicKeyHex === null) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality trust config has malformed clusterPublicKey`,
+      reason: `${source} round-finality trust config has malformed clusterPublicKey`,
     };
   }
   const clusterPublicKey = hexToMrvReceiptBytes(clusterPublicKeyHex);
   if (clusterPublicKey.length !== 48) {
     return {
       kind: "invalid",
-      reason: `${source} BLS finality clusterPublicKey must be 48 bytes`,
+      reason: `${source} round-finality clusterPublicKey must be 48 bytes`,
     };
   }
 
@@ -3561,7 +3568,7 @@ function verifyMrvNoEvmFinalityEvidence(
   if (finalityTrust.kind === "none") {
     return {
       status: "unverified",
-      reason: "trusted BLS finality config not configured",
+      reason: "trusted round-finality config not configured",
       details: null,
     };
   }
@@ -3582,32 +3589,44 @@ function verifyMrvNoEvmFinalityEvidence(
   ) {
     return {
       status: "mismatch",
-      reason: `BLS finality trust policy is not valid at round ${finalityEvidence.round}`,
+      reason: `round-finality trust policy is not valid at round ${finalityEvidence.round}`,
       details: null,
     };
   }
 
   try {
-    const details = verifyNoEvmFinalityEvidenceThreshold(finalityEvidence, {
-      chainId: finalityTrust.config.chainId,
-      clusterPublicKey: finalityTrust.config.clusterPublicKey,
-      committeeSize: finalityTrust.config.committeeSize,
-      threshold: finalityTrust.config.threshold,
-    });
+    const details = verifyNoEvmFinalityEvidenceThreshold(
+      mrvFinalityEvidenceForCurrentSdk(finalityEvidence),
+      {
+        chainId: finalityTrust.config.chainId,
+        clusterPublicKey: finalityTrust.config.clusterPublicKey,
+        committeeSize: finalityTrust.config.committeeSize,
+        threshold: finalityTrust.config.threshold,
+      },
+    );
     return {
       status: details.verified ? "verified" : "mismatch",
       reason: details.verified
         ? null
-        : "BLS finality evidence did not verify against configured trust inputs",
+        : "round-finality evidence did not verify against configured trust inputs",
       details,
     };
   } catch (e) {
     return {
       status: "mismatch",
-      reason: `BLS finality verification failed: ${mrvErrorMessage(e)}`,
+      reason: `round-finality verification failed: ${mrvErrorMessage(e)}`,
       details: null,
     };
   }
+}
+
+function mrvFinalityEvidenceForCurrentSdk(
+  finalityEvidence: WalletMrvNoEvmFinalityEvidence,
+): Parameters<typeof verifyNoEvmFinalityEvidenceThreshold>[0] {
+  return {
+    ...finalityEvidence,
+    source: MRV_LEGACY_ROUND_CERTIFICATE_SOURCE,
+  } as Parameters<typeof verifyNoEvmFinalityEvidenceThreshold>[0];
 }
 
 function mrvErrorMessage(e: unknown): string {

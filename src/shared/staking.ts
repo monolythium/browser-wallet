@@ -149,7 +149,7 @@ export interface ClusterDirectoryPage {
  *  the 10 operator-positions inside the cluster. */
 export interface ClusterMember {
   operatorId: string;
-  blsPubkey: string;
+  consensusPubkey: string;
   /** Operator membership state inside this cluster. Free-form string on
    *  the wire (`ClusterMemberResponse.state` is `string` in SDK 0.3.9 —
    *  no formal enum yet). Live `lyth_clusterStatus(0)` probes
@@ -176,7 +176,7 @@ export interface ClusterMember {
 
 /** Per-operator metadata from `lyth_operatorInfo`. Mirrors the
  *  user-facing subset of SDK `OperatorInfoResponse`; SDK-internal
- *  fields (operatorKeyFingerprint, blsKeyFingerprint, capability,
+ *  fields (operatorKeyFingerprint, consensusKeyFingerprint, capability,
  *  activeClusterIds) are deliberately not surfaced — add them when a
  *  UI consumer needs them. `bondedAmount` is the operator's self-bond
  *  in lythoshi (V4.1-BOND-0001 = 5,000 LYTH chain-enforced floor). */

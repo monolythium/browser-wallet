@@ -1086,7 +1086,7 @@ export interface WalletMrvNoEvmFinalityCertificate {
 
 export interface WalletMrvNoEvmFinalityEvidence {
   schema: "mono.no_evm_receipt_finality.v1";
-  source: "blsRoundCertificate";
+  source: "roundCertificate";
   round: number;
   certificate: WalletMrvNoEvmFinalityCertificate;
 }
