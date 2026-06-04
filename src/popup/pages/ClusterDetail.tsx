@@ -492,7 +492,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
                   flex: 1,
                   minWidth: 0,
                 }}
-                title={m.blsPubkey}
+                title={m.consensusPubkey}
               >
                 {m.operatorId}
               </span>

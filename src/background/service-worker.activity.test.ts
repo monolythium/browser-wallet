@@ -173,10 +173,10 @@ const ARCHIVE_COVERING_SNAPSHOT = {
 const FINALITY_CLUSTER_PUBLIC_KEY = "0x" + "1".repeat(96);
 const REGISTRY_FINALITY_CLUSTER_PUBLIC_KEY = new Uint8Array(48).fill(0x22);
 const MISSING_FINALITY_PROOF_MATERIAL =
-  "BLS aggregate finality certificate for block round";
+  "round certificate for block round";
 const NO_EVM_FINALITY_EVIDENCE = {
   schema: "mono.no_evm_receipt_finality.v1",
-  source: "blsRoundCertificate",
+  source: "roundCertificate",
   round: 57,
   certificate: {
     round: 57,
@@ -3067,7 +3067,7 @@ describe("wallet-mrv-receipt-status", () => {
       },
       noEvmFinalityVerification: {
         status: "unverified",
-        reason: "trusted BLS finality config not configured",
+        reason: "trusted round-finality config not configured",
         details: null,
       },
       noEvmProofVerification: {
@@ -3218,7 +3218,7 @@ describe("wallet-mrv-receipt-status", () => {
     expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
       status: "mismatch",
       reason:
-        "registry BLS finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
+        "registry round-finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
       details: null,
     });
   });
@@ -3537,7 +3537,7 @@ describe("wallet-mrv-receipt-status", () => {
     });
   });
 
-  it("verifies BLS finality evidence with caller-supplied threshold cluster trust", async () => {
+  it("verifies round-finality evidence with caller-supplied threshold cluster trust", async () => {
     const blsResult = {
       finalityEvidencePresent: true,
       signerCountMatches: true,
@@ -3590,7 +3590,10 @@ describe("wallet-mrv-receipt-status", () => {
 
     expect(mockVerifyNoEvmFinalityEvidenceThreshold).toHaveBeenCalledTimes(1);
     expect(mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[0]).toEqual(
-      NO_EVM_FINALITY_EVIDENCE,
+      {
+        ...NO_EVM_FINALITY_EVIDENCE,
+        source: "blsRoundCertificate",
+      },
     );
     const options = mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[1] as {
       chainId: bigint;
