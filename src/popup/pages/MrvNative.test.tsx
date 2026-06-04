@@ -52,10 +52,10 @@ const ARCHIVE_COVERING_SNAPSHOT = {
   signatures: [`mono.snapshot.sig.v1:0x${"d".repeat(40)}:0x1234abcd`],
 };
 const MISSING_FINALITY_PROOF_MATERIAL =
-  "BLS aggregate finality certificate for block round";
+  "round certificate for block round";
 const NO_EVM_FINALITY_EVIDENCE: WalletMrvNoEvmFinalityEvidence = {
   schema: "mono.no_evm_receipt_finality.v1",
-  source: "blsRoundCertificate",
+  source: "roundCertificate",
   round: 57,
   certificate: {
     round: 57,
@@ -101,7 +101,7 @@ const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification 
 };
 const NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED: WalletMrvNoEvmFinalityVerification = {
   status: "unverified",
-  reason: "trusted BLS finality config not configured",
+  reason: "trusted round-finality config not configured",
   details: null,
 };
 const NO_EVM_FINALITY_VERIFICATION_VERIFIED: WalletMrvNoEvmFinalityVerification = {
@@ -122,7 +122,7 @@ const NO_EVM_FINALITY_VERIFICATION_VERIFIED: WalletMrvNoEvmFinalityVerification 
 };
 const NO_EVM_FINALITY_VERIFICATION_MISMATCH: WalletMrvNoEvmFinalityVerification = {
   status: "mismatch",
-  reason: "BLS finality evidence did not verify against configured trust inputs",
+  reason: "round-finality evidence did not verify against configured trust inputs",
   details: {
     ...NO_EVM_FINALITY_VERIFICATION_VERIFIED.details!,
     signatureValid: false,
@@ -463,7 +463,7 @@ describe("MrvNative", () => {
     );
     expect(pollingHtml).toContain("Receipt status: waiting for inclusion");
     expect(pollingHtml).toContain("eth_getTransactionReceipt");
-    expect(pollingHtml).toContain("Anchor-level (BLS) finality is not established here");
+    expect(pollingHtml).toContain("Anchor-level round finality is not established here");
 
     const includedHtml = renderToStaticMarkup(
       <MrvNativePlanPreview
@@ -585,20 +585,20 @@ describe("MrvNative", () => {
       "Wallet archive check: trusted archive signer config not configured",
     );
     expect(compactArchiveHtml).not.toContain("Archive signature digest");
-    expect(compactArchiveHtml).toContain("BLS round certificate");
+    expect(compactArchiveHtml).toContain("round certificate");
     expect(compactArchiveHtml).toContain("round 57");
     expect(compactArchiveHtml).toContain("signer count 2");
     expect(compactArchiveHtml).toContain("0x1234");
     expect(compactArchiveHtml).toContain("1, 3");
     expect(compactArchiveHtml).toContain("0xabcd");
     expect(compactArchiveHtml).toContain(
-      "BLS round certificate parsed, not wallet-verified",
+      "round certificate parsed, not wallet-verified",
     );
     expect(compactArchiveHtml).toContain(
-      "Wallet BLS check: trusted BLS finality config not configured",
+      "Wallet round-finality check: trusted round-finality config not configured",
     );
     expect(compactArchiveHtml).toContain(
-      "wallet-side BLS finality verification is not configured here",
+      "wallet-side round-finality verification is not configured here",
     );
     expect(compactArchiveHtml).toContain("Compact inclusion self-check verified");
     expect(compactArchiveHtml).toContain("target-only receipt evidence");
@@ -638,12 +638,12 @@ describe("MrvNative", () => {
       />,
     );
     expect(verifiedFinalityHtml).toContain(
-      "wallet-verified BLS round certificate",
+      "wallet-verified round certificate",
     );
-    expect(verifiedFinalityHtml).toContain("BLS threshold check");
+    expect(verifiedFinalityHtml).toContain("Round threshold check");
     expect(verifiedFinalityHtml).toContain("2/2 signatures · signature valid");
     expect(verifiedFinalityHtml).toContain(
-      "wallet-side BLS finality verification is shown",
+      "wallet-side round-finality verification is shown",
     );
 
     const mismatchFinalityHtml = renderToStaticMarkup(
@@ -676,14 +676,14 @@ describe("MrvNative", () => {
       />,
     );
     expect(mismatchFinalityHtml).toContain(
-      "BLS round certificate verification mismatch",
+      "round certificate verification mismatch",
     );
     expect(mismatchFinalityHtml).toContain(
-      "Wallet BLS check: BLS finality evidence did not verify against configured trust inputs",
+      "Wallet round-finality check: round-finality evidence did not verify against configured trust inputs",
     );
     expect(mismatchFinalityHtml).toContain("2/2 signatures · signature invalid");
     expect(mismatchFinalityHtml).toContain(
-      "wallet-side BLS finality verification did not pass",
+      "wallet-side round-finality verification did not pass",
     );
 
     const digestArchiveProof: WalletMrvNoEvmCompactReceiptProofTranscript = {
@@ -727,7 +727,7 @@ describe("MrvNative", () => {
       "Snapshot archive signature digest material is present",
     );
     expect(digestArchiveHtml).toContain(
-      "not anchor-level (BLS) finality, and archive signature verification is reported separately",
+      "not anchor-level round finality, and archive signature verification is reported separately",
     );
     expect(digestArchiveHtml).toContain("Archive signature digest");
     expect(digestArchiveHtml).toContain(ARCHIVE_SIGNATURE_DIGEST);

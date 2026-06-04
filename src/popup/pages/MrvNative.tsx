@@ -947,7 +947,7 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
           {state.via ? ` via ${state.via}` : ""}.
         </div>
         <div style={submitMeta}>Native receipt evidence is checked after inclusion.</div>
-        <div style={submitMeta}>Anchor-level (BLS) finality is not established here.</div>
+        <div style={submitMeta}>Anchor-level round finality is not established here.</div>
       </div>
     );
   }
@@ -1066,11 +1066,11 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
       <div style={submitMeta}>
         {hasFinalityEvidence
           ? finalityVerification?.status === "verified"
-            ? "Receipt self-check and wallet-side BLS finality verification is shown."
+            ? "Receipt self-check and wallet-side round-finality verification is shown."
             : finalityVerification?.status === "mismatch"
-              ? "Receipt self-check and BLS round-certificate material are shown; wallet-side BLS finality verification did not pass."
-              : "Receipt self-check and parsed BLS round-certificate material are shown; wallet-side BLS finality verification is not configured here."
-          : "Transcript self-consistency only; anchor-level (BLS) finality is not established here."}
+              ? "Receipt self-check and round-certificate material are shown; wallet-side round-finality verification did not pass."
+              : "Receipt self-check and parsed round-certificate material are shown; wallet-side round-finality verification is not configured here."
+          : "Transcript self-consistency only; anchor-level round finality is not established here."}
       </div>
     </div>
   );
@@ -1144,8 +1144,8 @@ function MrvNoEvmReceiptProofTranscriptDetails({
       <div style={submitMeta}>
         Source: {sourceText}.{" "}
         {proof.finalityEvidence === null
-          ? "Anchor-level (BLS) finality is not established here."
-          : "BLS round-certificate material is present."}
+          ? "Anchor-level round finality is not established here."
+          : "Round-certificate material is present."}
       </div>
       {proof.archiveProof !== null && (
         <>
@@ -1193,7 +1193,7 @@ function MrvNoEvmReceiptProofTranscriptDetails({
             <>
               <div style={submitMeta}>
                 Snapshot archive signature digest material is present; this is
-                not anchor-level (BLS) finality, and archive signature verification is
+                not anchor-level round finality, and archive signature verification is
                 reported separately.
               </div>
               <ReceiptProofHashRow
@@ -1244,35 +1244,35 @@ function MrvNoEvmReceiptProofTranscriptDetails({
         <>
           <div style={finalityStatusStyle}>
             {finalityVerification?.status === "verified"
-              ? "Finality evidence: wallet-verified BLS round certificate"
+              ? "Finality evidence: wallet-verified round certificate"
               : finalityVerification?.status === "mismatch"
-                ? "Finality evidence: BLS round certificate verification mismatch"
-                : "Finality evidence: BLS round certificate parsed, not wallet-verified"}{" "}
+                ? "Finality evidence: round certificate verification mismatch"
+                : "Finality evidence: round certificate parsed, not wallet-verified"}{" "}
             · round {proof.finalityEvidence.round} · signer count{" "}
             {proof.finalityEvidence.certificate.signerCount}.
           </div>
           {finalityVerification?.reason && (
-            <div style={submitMeta}>Wallet BLS check: {finalityVerification.reason}.</div>
+            <div style={submitMeta}>Wallet round-finality check: {finalityVerification.reason}.</div>
           )}
           {finalityVerification?.details !== null &&
             finalityVerification?.details !== undefined && (
               <ReceiptProofHashRow
-                label="BLS threshold check"
+                label="Round threshold check"
                 value={`${finalityVerification.details.acceptedSignatureCount}/${finalityVerification.details.requiredSignatureCount} signatures · ${finalityVerification.details.signatureValid ? "signature valid" : "signature invalid"}`}
               />
             )}
           <ReceiptProofHashRow
-            label="BLS signature"
+            label="Certificate signature"
             value={proof.finalityEvidence.certificate.signature}
           />
           <ReceiptProofHashRow
-            label="BLS signers"
+            label="Certificate signers"
             value={formatSignerIndices(
               proof.finalityEvidence.certificate.signerIndices,
             )}
           />
           <ReceiptProofHashRow
-            label="BLS bitmap"
+            label="Certificate bitmap"
             value={proof.finalityEvidence.certificate.signersBitmap}
           />
         </>
