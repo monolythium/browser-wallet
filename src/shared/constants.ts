@@ -98,6 +98,7 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "wallet-fee-suggestion",
   "wallet-active-chain",
   "chain-list",
+  "policy-chain-list",
   "wallet-operator-status",
   "wallet-chain-block-number",
   "wallet-indexer-snapshot",

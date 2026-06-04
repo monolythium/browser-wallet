@@ -40,6 +40,7 @@ import type {
   SendTxRequest,
   AddChainRequest,
   ChainEntry,
+  PolicyChainEntry,
   PendingApproval,
   WalletIndexerSnapshot,
   WalletBridgeDisclosureValue,
@@ -2699,14 +2700,23 @@ function BridgeDisclosureSection({
 interface NetworksProps {
   current: ChainEntry;
   chains: ChainEntry[];
+  policyChains: PolicyChainEntry[];
   onBack: () => void;
   onOpenDetail: (chainId: string) => void;
   onOpenAddCustom: () => void;
 }
 
-export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCustom }: NetworksProps) {
+export function Networks({
+  current,
+  chains,
+  policyChains,
+  onBack,
+  onOpenDetail,
+  onOpenAddCustom,
+}: NetworksProps) {
   const builtin = chains.filter((c) => c.builtin);
   const custom = chains.filter((c) => !c.builtin);
+  const bridgeNetworks = policyChains.filter((c) => c.family !== "monolythium");
   return (
     <>
       <div className="ext-top">
@@ -2721,6 +2731,11 @@ export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCusto
           currentChainId={current.chainId}
           onOpenDetail={onOpenDetail}
           emptyHint={null}
+        />
+        <PolicyNetworksSection
+          title="Bridge networks"
+          chains={bridgeNetworks}
+          emptyHint="No bridge networks configured yet."
         />
         <NetworksSection
           title="Custom"
@@ -2835,6 +2850,166 @@ function NetworksSection({ title, chains, currentChainId, onOpenDetail, emptyHin
     </div>
   );
 }
+
+interface PolicyNetworksSectionProps {
+  title: string;
+  chains: PolicyChainEntry[];
+  emptyHint: string | null;
+}
+
+function PolicyNetworksSection({ title, chains, emptyHint }: PolicyNetworksSectionProps) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-400)",
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+          margin: "8px 12px 6px",
+        }}
+      >
+        {title}
+      </div>
+      {chains.length === 0 ? (
+        emptyHint && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--fg-400)",
+              padding: "12px 18px",
+              fontStyle: "italic",
+            }}
+          >
+            {emptyHint}
+          </div>
+        )
+      ) : (
+        <div className="ext-card" style={{ padding: "6px 10px" }}>
+          {chains.map((c) => (
+            <div
+              key={c.id}
+              style={{
+                padding: "12px 6px",
+                borderRadius: 10,
+                marginBottom: 2,
+                border: "1px solid transparent",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 500,
+                      display: "flex",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      gap: 6,
+                    }}
+                  >
+                    {c.displayName}
+                    <PolicyBadge chain={c} />
+                    <WalletModeBadge chain={c} />
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 10,
+                      color: "var(--fg-400)",
+                      marginTop: 3,
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {c.rpcUrls[0] ?? c.id}
+                  </div>
+                  {c.warning && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 11,
+                        lineHeight: 1.35,
+                        color: "var(--warn)",
+                      }}
+                    >
+                      {c.warning}
+                    </div>
+                  )}
+                </div>
+                <div
+                  style={{
+                    textAlign: "right",
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 10,
+                    color: "var(--fg-400)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <div>{c.environment}</div>
+                  {c.bridgeRouteIds.length > 0 && (
+                    <div style={{ marginTop: 4, color: "var(--fg-300)" }}>
+                      {c.bridgeRouteIds.length} route{c.bridgeRouteIds.length === 1 ? "" : "s"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PolicyBadge({ chain }: { chain: PolicyChainEntry }) {
+  if (chain.pqPosture === "native-pq") {
+    return <span className="ext-badge-att">PQ native</span>;
+  }
+  if (chain.pqPosture === "pq-attested") {
+    return <span className="ext-badge-bridged">PQ attested</span>;
+  }
+  return <span style={warningBadgeStyle}>Classical</span>;
+}
+
+function WalletModeBadge({ chain }: { chain: PolicyChainEntry }) {
+  switch (chain.walletMode) {
+    case "native-signing":
+      return <span className="ext-badge-att">Signing</span>;
+    case "bridge-readonly":
+      return <span className="ext-badge-bridged">Read only</span>;
+    case "unsupported":
+      return <span style={mutedBadgeStyle}>Disabled</span>;
+  }
+}
+
+const warningBadgeStyle: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 8,
+  letterSpacing: "0.1em",
+  padding: "1px 5px",
+  borderRadius: 3,
+  background: "rgba(249,168,37,0.12)",
+  color: "var(--warn)",
+  textTransform: "uppercase",
+  border: "1px solid rgba(249,168,37,0.35)",
+  display: "inline-flex",
+  alignItems: "center",
+};
+
+const mutedBadgeStyle: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 8,
+  letterSpacing: "0.1em",
+  padding: "1px 5px",
+  borderRadius: 3,
+  background: "rgba(255,255,255,0.06)",
+  color: "var(--fg-400)",
+  textTransform: "uppercase",
+  border: "1px solid rgba(255,255,255,0.12)",
+  display: "inline-flex",
+  alignItems: "center",
+};
 
 // ---- Sheet wrapper for request dialogs ----
 interface ReqSheetProps {

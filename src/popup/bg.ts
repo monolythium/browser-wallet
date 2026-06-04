@@ -11,6 +11,7 @@ import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
 import type { TxOpKind } from "../shared/notifications.js";
+import type { PolicyChainDescriptor } from "../shared/pq-chain-registry.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
@@ -179,6 +180,10 @@ export interface ChainEntry {
   active: boolean;
   blockExplorer?: string;
   nativeCurrency?: { name: string; symbol: string; decimals: number };
+}
+
+export interface PolicyChainEntry extends PolicyChainDescriptor {
+  bridgeRouteIds: string[];
 }
 
 /** Error-message fragments that indicate the SW was
@@ -1285,6 +1290,10 @@ export async function bgRevokeAllOrigins(): Promise<{ ok: boolean }> {
 
 export async function bgChainList(): Promise<ChainEntry[]> {
   return send<ChainEntry[]>("chain-list");
+}
+
+export async function bgPolicyChainList(): Promise<PolicyChainEntry[]> {
+  return send<PolicyChainEntry[]>("policy-chain-list");
 }
 
 /**
