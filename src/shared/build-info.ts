@@ -40,7 +40,7 @@ export const SDK_PACKAGE_VERSION: string =
  *  mismatch and the live-registry fetch shows the current GitHub-registry
  *  value alongside it. */
 export const SPRINTNET_GENESIS_HASH =
-  "0xe67cf82131fc63e335ce61afeae53299283eaa3a692830a618911aa840245031";
+  "0x3b5fe6c9394c67661ddabd4aca3f883b4570c435c912412ef1d7e83b386e461c";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from SPRINTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
