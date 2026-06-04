@@ -210,6 +210,10 @@ import {
   snapshotGenesisCache,
   clearGenesisCache,
 } from "./networks.js";
+import {
+  BRIDGE_ROUTES,
+  POLICY_CHAINS,
+} from "../shared/pq-chain-registry.js";
 import { clampToSaneBound } from "../shared/operator-bounds.js";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
@@ -5004,6 +5008,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         active: id === session.chainId,
         ...(n.blockExplorer ? { blockExplorer: n.blockExplorer } : {}),
         ...(n.nativeCurrency ? { nativeCurrency: n.nativeCurrency } : {}),
+      }));
+    }
+    case "policy-chain-list": {
+      return POLICY_CHAINS.map((chain) => ({
+        ...chain,
+        bridgeRouteIds: BRIDGE_ROUTES
+          .filter((route) => route.fromChainId === chain.id || route.toChainId === chain.id)
+          .map((route) => route.id),
       }));
     }
     case "wallet-active-chain": {

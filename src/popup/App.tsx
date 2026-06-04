@@ -96,6 +96,7 @@ import {
   bgWalletActiveChain,
   bgWalletSetActiveChain,
   bgChainList,
+  bgPolicyChainList,
   bgGetUiOpenMode,
   bgGetUnread,
   bgSetUiOpenMode,
@@ -109,6 +110,7 @@ import {
   type TypedSignRequest,
   type AddChainRequest,
   type ChainEntry,
+  type PolicyChainEntry,
   type WalletIndexerSnapshot,
 } from "./bg";
 
@@ -352,6 +354,7 @@ export default function App() {
   // now-deleted user-added chain.
   const [activeChainId, setActiveChainId] = useState<string>(SPRINTNET_FALLBACK.chainId);
   const [chainList, setChainList] = useState<ChainEntry[]>([]);
+  const [policyChainList, setPolicyChainList] = useState<PolicyChainEntry[]>([]);
   const activeChain: ChainEntry =
     chainList.find((c) => c.chainId === activeChainId) ?? SPRINTNET_FALLBACK;
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
@@ -384,11 +387,13 @@ export default function App() {
       : null;
 
   const loadChainState = async () => {
-    const [activeRes, list] = await Promise.all([
+    const [activeRes, list, policyList] = await Promise.all([
       bgWalletActiveChain(),
       bgChainList(),
+      bgPolicyChainList(),
     ]);
     setChainList(list);
+    setPolicyChainList(policyList);
     if (activeRes.ok) setActiveChainId(activeRes.chainId);
   };
 
@@ -1210,6 +1215,7 @@ export default function App() {
         <Networks
           current={activeChain}
           chains={chainList}
+          policyChains={policyChainList}
           onBack={navigateBack}
           onOpenDetail={(chainId) => {
             setSelectedChainId(chainId);
