@@ -48,9 +48,9 @@ import { getUnread } from "./notifications-store.js";
  *  worker, so passing one throws `ReferenceError` at runtime). */
 const NOTIFICATION_ICON_URL = "icon-48.png";
 
-/** Toolbar badge color when an unread count is shown. Tracks the project's
- *  attention-red used elsewhere (`var(--err)` family ≈ `#dc5050`). */
-const BADGE_BG_COLOR = "#dc5050";
+/** Toolbar badge color when an unread count is shown. Blue to signal a new
+ *  notification (distinct from the red error/attention family). */
+const BADGE_BG_COLOR = "#3b82f6";
 
 /** User-facing toggle key. The flag gates ONLY the OS toast
  *  (chrome.notifications.create). The in-app notification history record

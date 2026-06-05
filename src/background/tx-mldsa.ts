@@ -115,11 +115,11 @@ export async function sprintnetJsonRpc<T>(
   }
   // If EVERY operator failed the genesis pin check,
   // surface a clearer aggregate error instead of the last-operator's
-  // raw "name: untrusted genesis" message. See About → Operators for
+  // raw "name: untrusted genesis" message. See Operators for
   // per-operator status the user can act on.
   if (untrustedCount > 0 && untrustedCount === totalOperators) {
     throw new Error(
-      `Chain genesis mismatch — all ${totalOperators} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See About → Operators.`,
+      `Chain genesis mismatch — all ${totalOperators} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See Operators.`,
     );
   }
   throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
@@ -354,10 +354,11 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
 // admission, and any mismatch is rejected loud so the wallet never trusts a
 // hash it did not derive itself.
 
-/** Build a PLAINTEXT submission — the opt-OUT-of-privacy counterpart to
- *  `buildEncryptedSubmission`. Signs over the canonical chain-side sighash with
- *  the unlocked ML-DSA-65 backend and bincode-serializes the result; never
- *  engages the Ferveo threshold-decrypt pipeline. */
+/** Build a PLAINTEXT submission for the ML-DSA-65 mesh_submitTx path. Signs
+ *  over the canonical chain-side sighash with the unlocked ML-DSA-65 backend
+ *  and bincode-serializes the result. (The encrypted-mempool / Ferveo
+ *  threshold-decrypt path was removed; a LythiumSeal encrypted path may
+ *  return later.) */
 export async function buildPlaintextSubmission(args: {
   txReq: EthSendTxFields;
 }): Promise<{

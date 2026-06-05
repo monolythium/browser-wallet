@@ -1377,12 +1377,12 @@ export interface OperatorHealthRowCommon {
   /** Observed genesis identity or fallback block-0 hash; null when the
    *  probe shape is unsupported or malformed. */
   observedGenesis: string | null;
-  /** Operator-surface availability from
-   *  `lyth_operatorCapabilities` (SDK commit 0f483b8). Keys are surface
-   *  names ("streams", "indexer", "prover", "websocket", etc.);
-   *  values are the chain-reported status string. `null` when the
-   *  capability probe failed or the operator doesn't expose the method
-   *  — RPC dispatch is not gated on this; it's a display-only hint. */
+  /** Operator-surface availability from `lyth_operatorCapabilities`.
+   *  Keys are the chain's surface names (e.g. "operator_info",
+   *  "cluster_status", "cluster_directory", "indexer_history"); values are
+   *  the chain-reported status string ("available", "disabled", …). `null`
+   *  when the capability probe failed or the operator doesn't expose the
+   *  method — RPC dispatch is not gated on this; it's a display-only hint. */
   capabilities: Record<string, string> | null;
   /** Indexer height summary from `lyth_indexerStatus`. `null`
    *  when the operator's indexer is disabled or the probe failed.

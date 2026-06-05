@@ -57,6 +57,10 @@ import { NetworkDetail } from "./pages/NetworkDetail";
 import { AddCustomChain } from "./pages/AddCustomChain";
 import { EditChain } from "./pages/EditChain";
 import { Operators } from "./pages/Operators";
+import { OperatorDirectory } from "./pages/OperatorDirectory";
+import { EmergencyRecovery } from "./pages/EmergencyRecovery";
+import { Resources } from "./pages/Resources";
+import { WhyMonolythium } from "./pages/WhyMonolythium";
 import { NotificationSettings } from "./pages/NotificationSettings";
 import { About } from "./pages/About";
 import { Welcome } from "./pages/Welcome";
@@ -130,6 +134,10 @@ type Screen =
   | "network-edit"
   | "settings"
   | "operators"
+  | "operator-directory"
+  | "emergency-recovery"
+  | "resources"
+  | "why-monolythium"
   | "notification-settings"
   | "about"
   | "reveal-phrase"
@@ -1179,12 +1187,12 @@ export default function App() {
               <>
                 <SetupHealthChip
                   vaultId={activeVaultSummary.id}
-                  onOpenSecurity={() => setScreen("security")}
+                  onOpenSecurity={() => navigateTo("security")}
                 />
                 <UnifiedOnboardingHintBar
                   vaultId={activeVaultSummary.id}
-                  onOpenSecurity={() => setScreen("security")}
-                  onOpenFeatures={() => setScreen("features")}
+                  onOpenSecurity={() => navigateTo("security")}
+                  onOpenFeatures={() => navigateTo("features")}
                 />
               </>
             ) : undefined
@@ -1284,15 +1292,9 @@ export default function App() {
           // Sites correctly returns to Settings (same fix-pattern as
           // the Settings → About entry).
           onShowConnectedSites={() => navigateTo("connected-sites")}
-          // Settings → Reset wallet now pushes the
-          // stack so back from ResetWallet returns to Settings. The
-          // same ResetWallet screen is reached from the hamburger's
-          // "Reset wallet" entry (which pushes "main-menu");
-          // navigateBack handles both pushers.
-          onResetWallet={() => navigateTo("reset-wallet")}
-          onOpenOperators={() => setScreen("operators")}
+          onOpenOperators={() => navigateTo("operators")}
           onOpenNotificationSettings={() => setScreen("notification-settings")}
-          onOpenMrvNative={() => setScreen("mrv-native")}
+          onOpenMrvNative={() => navigateTo("mrv-native")}
           // Settings → About now pushes onto the
           // screen stack via navigateTo so About's onBack (which
           // uses navigateBack) returns to Settings. Without
@@ -1306,8 +1308,8 @@ export default function App() {
           onOpenTheme={() => navigateTo("theme")}
           {...(activeVaultSummary
             ? {
-                onOpenSecurity: () => setScreen("security"),
-                onOpenFeatures: () => setScreen("features"),
+                onOpenSecurity: () => navigateTo("security"),
+                onOpenFeatures: () => navigateTo("features"),
               }
             : {})}
           {...(activeVaultSummary?.kind === "multisig"
@@ -1326,7 +1328,8 @@ export default function App() {
 
       {screen === "security" && activeVaultSummary && (
         <Security
-          onBack={() => setScreen("settings")}
+          onBack={navigateBack}
+          onResetWallet={() => navigateTo("reset-wallet")}
           vaultId={activeVaultSummary.id}
           vaultAddress={activeVaultSummary.addr}
           chainIdHex={activeChain.chainId}
@@ -1334,7 +1337,7 @@ export default function App() {
       )}
 
       {screen === "features" && (
-        <Features onBack={() => setScreen("settings")} />
+        <Features onBack={navigateBack} />
       )}
 
       {/* Theme page. Reached from the Settings "Theme" category card AND
@@ -1343,7 +1346,29 @@ export default function App() {
       {screen === "theme" && <Theme onBack={navigateBack} />}
 
       {screen === "operators" && (
-        <Operators onBack={() => setScreen("settings")} />
+        <Operators onBack={navigateBack} />
+      )}
+
+      {screen === "operator-directory" && (
+        <OperatorDirectory
+          onBack={navigateBack}
+          onManageOperators={() => navigateTo("operators")}
+        />
+      )}
+
+      {screen === "emergency-recovery" && activeVaultSummary && (
+        <EmergencyRecovery
+          onBack={navigateBack}
+          vaultId={activeVaultSummary.id}
+          vaultAddress={activeVaultSummary.addr}
+          chainIdHex={activeChain.chainId}
+        />
+      )}
+
+      {screen === "resources" && <Resources onBack={navigateBack} />}
+
+      {screen === "why-monolythium" && (
+        <WhyMonolythium onBack={navigateBack} />
       )}
 
       {screen === "notification-settings" && (
@@ -1353,7 +1378,7 @@ export default function App() {
       {screen === "mrv-native" && (
         <MrvNative
           chainIdHex={activeChain.chainId}
-          onBack={() => setScreen("settings")}
+          onBack={navigateBack}
         />
       )}
 
@@ -1469,6 +1494,7 @@ export default function App() {
           onContacts={() => navigateTo("contacts")}
           onConnectedSites={() => navigateTo("connected-sites")}
           onNetworks={() => navigateTo("networks")}
+          onOperators={() => navigateTo("operator-directory")}
           onMultisig={() => navigateTo("multisig-list")}
           {...(agentCommerceEnabled
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
@@ -1478,6 +1504,16 @@ export default function App() {
           // routes to. navigateTo pushes "main-menu" so back returns here.
           onTheme={() => navigateTo("theme")}
           onAbout={() => navigateTo("about")}
+          onResources={() => navigateTo("resources")}
+          onWhyMonolythium={() => navigateTo("why-monolythium")}
+          {...(activeVaultSummary
+            ? {
+                onOpenSecurity: () => navigateTo("security"),
+                onEmergencyRecovery: () => navigateTo("emergency-recovery"),
+              }
+            : {})}
+          onOpenFeatures={() => navigateTo("features")}
+          onOpenRiscv={() => navigateTo("mrv-native")}
           onLockWallet={() => {
             void bgKeystoreLock();
             // The SW writes walletLocked=true and the
@@ -1564,12 +1600,12 @@ export default function App() {
             ? {
                 phase9: {
                   vaultId: activeVaultSummary.id,
-                  onOpenSecurity: () => setScreen("security"),
-                  onOpenFeatures: () => setScreen("features"),
+                  onOpenSecurity: () => navigateTo("security"),
+                  onOpenFeatures: () => navigateTo("features"),
                 },
                 phase10: {
                   activeVaultId: activeVaultSummary.id,
-                  onOpenSecurity: () => setScreen("security"),
+                  onOpenSecurity: () => navigateTo("security"),
                 },
               }
             : {})}
@@ -1626,6 +1662,7 @@ export default function App() {
           account={acc}
           chainId={activeChain.chainId}
           onBack={() => setScreen("home")}
+          onOpenOperators={() => navigateTo("operator-directory")}
           {...(activeVaultSummary?.kind === "multisig"
             ? { multisigVaultId: activeVaultSummary.id }
             : activeVaultSummary !== null

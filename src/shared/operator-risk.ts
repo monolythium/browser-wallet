@@ -77,7 +77,7 @@ export const INDEXER_STALE_LAG = 10;
 /** Required capability surfaces a healthy operator should expose. Missing
  *  any of these surfaces the missing-capabilities badge. */
 export const EXPECTED_CAPABILITY_SURFACES: readonly string[] = [
-  "indexer",
+  "indexer_history",
 ];
 
 /** Classify an operator into zero-or-more risk badges. Returns an empty
@@ -221,7 +221,7 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
     label: "Capability surface gaps",
     body:
       "Operator is missing capability surfaces the wallet expects " +
-      "(indexer, etc.). Often means a pre-uplift " +
+      "(indexer_history, etc.). Often means a pre-uplift " +
       "binary; not load-bearing for basic sends.",
   },
   {

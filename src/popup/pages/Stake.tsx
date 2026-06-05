@@ -1261,7 +1261,7 @@ function PreviewView({
           }}
         >
           {action === "delegate" &&
-            "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile via the encrypted-mempool path; the LYTH amount is sent as msg.value (your staked principal)."}
+            "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile (0x100A) via plaintext mesh_submitTx; the LYTH amount is sent as msg.value (your staked principal)."}
           {action === "undelegate" &&
             "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
           {action === "redelegate" &&
@@ -1312,7 +1312,7 @@ function SubmittingView() {
       <div
         style={{ fontSize: 10, color: "var(--fg-500)", marginTop: 6, lineHeight: 1.5 }}
       >
-        Encrypted-mempool envelope → cluster → admission gate
+        mesh_submitTx → cluster → admission gate
       </div>
     </div>
   );

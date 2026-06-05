@@ -91,7 +91,7 @@ export const WALLET_PITCH: ReadonlyArray<{ title: string; body: string }> = [
     body: "Multi-vault container ships with day-one accounts and on-chain m-of-n. No bolt-on smart-wallet — the keystore is the multisig.",
   },
   {
-    title: "MCP local tool ready",
+    title: "MCP Copilot ready",
     body: "Wallet surface is Model-Context-Protocol-aware so agentic flows (autovote, runbooks) can read state without a brittle scraper.",
   },
   {

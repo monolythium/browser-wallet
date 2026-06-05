@@ -268,7 +268,7 @@ function buildDeployPlan(): WalletMrvNativeSubmissionPlan {
 }
 
 describe("MrvNative", () => {
-  it("renders the v4.1 MRV native preview and honest submit scope", () => {
+  it("renders the RISC-V (MRV native) preview and honest submit scope", () => {
     const html = renderToStaticMarkup(
       <MrvNative chainIdHex="0x10F2C" onBack={() => undefined} />,
     );
@@ -279,7 +279,7 @@ describe("MrvNative", () => {
     expect(html).toContain("native fees");
     expect(html).toContain("typed addresses");
     expect(html).toContain("polls transaction receipt inclusion status");
-    expect(html).toContain("does not prove live MRV execution");
+    expect(html).toContain("does not prove live RISC-V execution");
     expect(html).toContain("Native market replay");
     expect(html).toContain("Checking recent orderbook replay status");
   });

@@ -165,7 +165,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       if (r.ok) {
         setPlan(r.plan);
       } else {
-        setError(r.reason ?? "MRV native plan builder failed");
+        setError(r.reason ?? "RISC-V plan builder failed");
       }
     } catch (e) {
       setError((e as Error).message);
@@ -185,7 +185,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
         setReceiptState({ phase: "polling" });
       } else {
         setSubmitError({
-          message: r.reason ?? "MRV native submission failed",
+          message: r.reason ?? "RISC-V submission failed",
           ...(r.code !== undefined ? { code: r.code } : {}),
           ...(r.method !== undefined ? { method: r.method } : {}),
           ...(r.via !== undefined ? { via: r.via } : {}),
@@ -208,7 +208,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
     if (!TX_HASH_RE.test(submittedTxHash)) {
       setReceiptState({
         phase: "unavailable",
-        reason: "MRV receipt polling requires a 32-byte transaction hash",
+        reason: "RISC-V receipt polling requires a 32-byte transaction hash",
       });
       return;
     }
@@ -245,7 +245,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       if (!r.ok) {
         setReceiptState({
           phase: "unavailable",
-          reason: r.reason ?? "MRV native receipt polling failed",
+          reason: r.reason ?? "RISC-V receipt polling failed",
           ...(r.code !== undefined ? { code: r.code } : {}),
           ...(r.method !== undefined ? { method: r.method } : {}),
           ...(r.via !== undefined ? { via: r.via } : {}),
@@ -357,9 +357,33 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{
+            flex: 1,
+            fontSize: 13,
+            fontWeight: 600,
+            textAlign: "center",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
         >
-          MRV native
+          RISC-V
+          <span
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 8.5,
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "var(--fg-400)",
+              border: "1px solid var(--fg-700)",
+              borderRadius: 3,
+              padding: "0 4px",
+            }}
+          >
+            MRV
+          </span>
         </div>
         <div style={{ width: 36 }} />
       </div>
@@ -370,11 +394,11 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
             <h3>Native contract preview</h3>
           </div>
           <div style={bodyCopy}>
-            Build a v4.1 MRV native contract deploy or call plan. This page
+            Build a RISC-V (MRV native) contract deploy or call plan. This page
             previews execution units, native fees, typed addresses, and the
             JSON-safe transaction extension before signing. After submission,
             the wallet polls transaction receipt inclusion status when the RPC
-            supports it; it does not prove live MRV execution.
+            supports it; it does not prove live RISC-V execution.
           </div>
           <div style={chainPill}>Chain {chainIdHex}</div>
         </div>
@@ -385,7 +409,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           <div
             className="ext-tabs"
             role="tablist"
-            aria-label="MRV native plan mode"
+            aria-label="RISC-V plan mode"
             style={{ marginTop: 0 }}
           >
             <button
@@ -874,7 +898,7 @@ export function MrvNativePlanPreview({
       </div>
 
       <div style={jsonLabel}>JSON-safe plan</div>
-      <pre aria-label="MRV native plan JSON" style={jsonBlock}>
+      <pre aria-label="RISC-V plan JSON" style={jsonBlock}>
         {JSON.stringify(plan, null, 2)}
       </pre>
 

@@ -7,6 +7,7 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { Section } from "./OperatorDirectory";
 import {
   bgOperatorsHealth,
   bgPasskeyGetState,
@@ -345,7 +346,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                           style={{ color: "var(--fg-500)", fontSize: 10 }}
                           title="The update check only works in the Chrome Web Store build (not a dev/unpacked load)."
                         >
-                          unavailable in this build
+                          Web Store build only
                         </span>
                       );
                   }
@@ -910,25 +911,15 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           </div>
         )}
 
-        {/* Operator table */}
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Operators</h3>
-            <div className="spacer" />
-            <span
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 10,
-                color: operators === null ? "var(--fg-500)" : "var(--fg-300)",
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-              }}
-            >
-              {operators === null
-                ? "probing…"
-                : `${trustedCount}/${totalCount} trusted · ${healthyCount} live`}
-            </span>
-          </div>
+        {/* Operator table — collapsible button-style (matches OperatorDirectory) */}
+        <AboutSection
+          title="Operators"
+          meta={
+            operators === null
+              ? "probing…"
+              : `${trustedCount}/${totalCount} trusted · ${healthyCount} live`
+          }
+        >
           {probeError !== null && (
             <div
               style={{
@@ -996,7 +987,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
             {operators !== null &&
               operators.map((op) => <OperatorRow key={op.rpc} row={op} />)}
           </div>
-        </div>
+        </AboutSection>
 
         {/* Operator risk legend. Decodes the chips
             rendered on operator rows above. */}
@@ -1407,16 +1398,38 @@ function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
   );
 }
 
+/** Uncontrolled collapsible wrapper around the shared OperatorDirectory
+ *  `Section` button — keeps the About operator surfaces button-style and
+ *  collapsed by default, matching the Operators directory. */
+function AboutSection({
+  title,
+  meta,
+  children,
+}: {
+  title: string;
+  meta?: string | undefined;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Section
+      title={title}
+      meta={meta}
+      open={open}
+      onToggle={() => setOpen((v) => !v)}
+    >
+      {children}
+    </Section>
+  );
+}
+
 /** Operator-risk legend card rendered on the About
  *  page below the operator probe list. One-line explanation per risk
  *  kind so the user can decode the badges from the probe rows above.
  *  Static (no chain reads); content tracks OPERATOR_RISK_LEGEND. */
 function OperatorRiskLegendCard() {
   return (
-    <div className="ext-card">
-      <div className="ext-card__head">
-        <h3>Operator risk legend</h3>
-      </div>
+    <AboutSection title="Operator risk legend">
       <div
         style={{
           fontSize: 11,
@@ -1460,7 +1473,7 @@ function OperatorRiskLegendCard() {
           </div>
         ))}
       </div>
-    </div>
+    </AboutSection>
   );
 }
 

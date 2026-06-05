@@ -139,7 +139,7 @@ export const FEATURE_META: Record<FeatureFlag, FeatureMeta> = {
   },
   AI_FEATURES: {
     label: "AI features",
-    tagline: "MCP local tool conversational assistant — lands in a future phase.",
+    tagline: "MCP Copilot conversational assistant — lands in a future phase.",
   },
   REGISTRY: {
     label: "Name registry",

@@ -98,7 +98,7 @@ import {
 // Reflects the wallet's actual operational state instead of the legacy
 // "MOCK · NO REAL VALUE · DESIGN-ONLY" copy. The wallet now holds real
 // ML-DSA-65 keys, reads live Sprintnet state, and submits real
-// encrypted-envelope txs — that's worth surfacing. Other parts of the
+// plaintext mesh_submitTx txs — that's worth surfacing. Other parts of the
 // UI (Top status bar, account list, activity log) ARE
 // still demo data and live below the AttStrip; we'll address those in
 // follow-up cleanups.
@@ -428,6 +428,7 @@ export function ChainStatusBanner({
                 onClick={onMenu}
                 ariaLabel="Menu"
                 icon="menu"
+                showDot={typeof unreadCount === "number" && unreadCount > 0}
               />
             )}
           </div>

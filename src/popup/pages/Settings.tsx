@@ -1,17 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
-import {
-  bgGetAutoLockMinutes,
-  bgGetUiOpenMode,
-  bgKeystoreLock,
-  bgSetAutoLockMinutes,
-  bgSetUiOpenMode,
-  type SignAlgo,
-  type UiOpenMode,
-} from "../bg";
+import { type SignAlgo } from "../bg";
 import { CheckIcon, ClipboardIcon } from "../components/AddressLine";
+import { WalletSecurityControls } from "../components/WalletSecurityControls";
 
 interface SettingsProps {
   onBack: () => void;
@@ -22,8 +15,6 @@ interface SettingsProps {
   onShowPhrase: () => void;
   /** Routes to the ConnectedSites page. */
   onShowConnectedSites: () => void;
-  /** Routes to the ResetWallet page (destructive). */
-  onResetWallet: () => void;
   /** Routes to the Sprintnet operators sub-page. */
   onOpenOperators: () => void;
   /** Routes to the NotificationSettings sub-page (the four notification
@@ -68,8 +59,6 @@ const ALGO_LABEL: Record<SignAlgo, string> = {
   secp256k1: "secp256k1 (legacy)",
 };
 
-const FALLBACK_OPTIONS: readonly number[] = [5, 15, 30, 60];
-
 function getExtensionVersion(): string {
   try {
     return chrome.runtime.getManifest().version;
@@ -84,7 +73,6 @@ export function Settings({
   algo,
   onShowPhrase,
   onShowConnectedSites,
-  onResetWallet,
   onOpenOperators,
   onOpenNotificationSettings,
   onOpenMrvNative,
@@ -95,15 +83,6 @@ export function Settings({
   onOpenTheme,
   multisig,
 }: SettingsProps) {
-  const [autoLock, setAutoLock] = useState<number | null>(null);
-  const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
-  const [savingAutoLock, setSavingAutoLock] = useState(false);
-
-  // UI open mode preference.
-  const [uiMode, setUiMode] = useState<UiOpenMode | null>(null);
-  const [savingUiMode, setSavingUiMode] = useState(false);
-  const [uiModePending, setUiModePending] = useState(false);
-
   // Account section inline copy state.
   const [addrCopied, setAddrCopied] = useState(false);
   const handleAddrCopy = (e: ReactMouseEvent) => {
@@ -116,54 +95,6 @@ export function Settings({
       },
       () => {},
     );
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const r = await bgGetAutoLockMinutes();
-      if (cancelled) return;
-      setAutoLock(r.autoLockMinutes);
-      setOptions(r.options);
-    })();
-    void (async () => {
-      const r = await bgGetUiOpenMode();
-      if (cancelled) return;
-      if (r.ok) setUiMode(r.mode);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handlePickAutoLock = async (minutes: number) => {
-    if (savingAutoLock || minutes === autoLock) return;
-    setSavingAutoLock(true);
-    const r = await bgSetAutoLockMinutes(minutes);
-    if (r.ok) setAutoLock(r.autoLockMinutes);
-    setSavingAutoLock(false);
-  };
-
-  const handlePickUiMode = async (mode: UiOpenMode) => {
-    if (savingUiMode || mode === uiMode) return;
-    setSavingUiMode(true);
-    const r = await bgSetUiOpenMode(mode);
-    if (r.ok) {
-      setUiMode(r.mode);
-      // The chrome.action / chrome.sidePanel binding is live immediately,
-      // but the CURRENTLY-OPEN surface keeps its mode (popup stays popup,
-      // sidepanel stays sidepanel) until next icon click. Surface a one-
-      // shot hint so users don't think the toggle silently failed.
-      setUiModePending(true);
-    }
-    setSavingUiMode(false);
-  };
-
-  const handleLockNow = async () => {
-    await bgKeystoreLock();
-    // The SW writes walletLocked=true; App.tsx's chrome.storage.onChanged
-    // listener (Yarı 1) flips the screen back to Unlock — no local nav
-    // needed here.
   };
 
   const version = getExtensionVersion();
@@ -376,147 +307,7 @@ export function Settings({
           <div className="ext-card__head">
             <h3>Security</h3>
           </div>
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 10,
-              color: "var(--fg-400)",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              marginBottom: 6,
-            }}
-          >
-            Auto-lock after
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: `repeat(${options.length}, 1fr)`,
-              gap: 6,
-              marginBottom: 14,
-            }}
-          >
-            {options.map((m) => {
-              const active = m === autoLock;
-              return (
-                <button
-                  key={m}
-                  onClick={() => void handlePickAutoLock(m)}
-                  disabled={savingAutoLock}
-                  style={{
-                    padding: "8px 4px",
-                    borderRadius: 8,
-                    border: active
-                      ? "1px solid var(--gold)"
-                      : "1px solid var(--fg-700)",
-                    background: active
-                      ? "var(--gold-bg)"
-                      : "rgba(255,255,255,0.04)",
-                    color: active ? "var(--gold)" : "var(--fg-100)",
-                    fontFamily: "var(--f-sans)",
-                    fontSize: 12,
-                    fontWeight: active ? 600 : 500,
-                    cursor: "pointer",
-                    transition: "all 150ms var(--e-out)",
-                  }}
-                >
-                  {m} min
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Window mode toggle. Persists via
-             bgSetUiOpenMode; SW re-binds chrome.action / chrome.sidePanel
-             immediately. The hint below appears after a successful switch
-             since the current surface keeps its open mode until next
-             icon click. */}
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 10,
-              color: "var(--fg-400)",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              marginBottom: 6,
-            }}
-          >
-            Window mode
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 6,
-              marginBottom: uiModePending ? 6 : 14,
-            }}
-          >
-            {(["sidepanel", "popup"] as const).map((mode) => {
-              const active = mode === uiMode;
-              return (
-                <button
-                  key={mode}
-                  onClick={() => void handlePickUiMode(mode)}
-                  disabled={savingUiMode || uiMode === null}
-                  style={{
-                    padding: "8px 4px",
-                    borderRadius: 8,
-                    border: active
-                      ? "1px solid var(--gold)"
-                      : "1px solid var(--fg-700)",
-                    background: active
-                      ? "var(--gold-bg)"
-                      : "rgba(255,255,255,0.04)",
-                    color: active ? "var(--gold)" : "var(--fg-100)",
-                    fontFamily: "var(--f-sans)",
-                    fontSize: 12,
-                    fontWeight: active ? 600 : 500,
-                    cursor: "pointer",
-                    transition: "all 150ms var(--e-out)",
-                  }}
-                >
-                  {mode === "sidepanel" ? "Sidebar" : "Popup"}
-                </button>
-              );
-            })}
-          </div>
-          {uiModePending && (
-            <div
-              style={{
-                fontSize: 10.5,
-                color: "var(--fg-300)",
-                marginBottom: 14,
-                lineHeight: 1.4,
-              }}
-            >
-              Close this window and click the wallet icon again to open
-              in the new mode.
-            </div>
-          )}
-
-          <button
-            onClick={() => void handleLockNow()}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid var(--fg-700)",
-              background: "rgba(255,255,255,0.04)",
-              color: "var(--fg-100)",
-              fontFamily: "var(--f-sans)",
-              fontSize: 12.5,
-              fontWeight: 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-            }}
-          >
-            <Icon name="lock" size={13} />
-            Lock wallet now
-          </button>
-
+          <WalletSecurityControls bare showLockReset={false} />
           <button
             onClick={onShowConnectedSites}
             style={{
@@ -593,36 +384,6 @@ export function Settings({
             </button>
           )}
 
-          <div
-            style={{
-              marginTop: 14,
-              paddingTop: 14,
-              borderTop: "1px solid var(--fg-700)",
-            }}
-          >
-            <button
-              onClick={onResetWallet}
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid rgba(220,80,80,0.4)",
-                background: "rgba(220,80,80,0.08)",
-                color: "var(--err)",
-                fontFamily: "var(--f-sans)",
-                fontSize: 12.5,
-                fontWeight: 500,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-              }}
-            >
-              <Icon name="warn" size={13} />
-              Reset wallet
-            </button>
-          </div>
         </div>
 
         {/* Notifications — relocated behind "Manage notifications" (mirrors
@@ -764,8 +525,8 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            Preview MRV native contract deploy and call transaction plans with
-            execution-unit and lythoshi fee fields.
+            Preview RISC-V (MRV native) contract deploy and call transaction
+            plans with execution-unit and lythoshi fee fields.
           </div>
           <button
             onClick={onOpenMrvNative}
@@ -788,7 +549,22 @@ export function Settings({
           >
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Icon name="contract" size={13} />
-              MRV native plan preview
+              RISC-V contracts
+              <span
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 8.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "var(--fg-400)",
+                  border: "1px solid var(--fg-700)",
+                  borderRadius: 3,
+                  padding: "0 4px",
+                }}
+              >
+                MRV
+              </span>
             </span>
             <Icon name="chev" size={12} />
           </button>

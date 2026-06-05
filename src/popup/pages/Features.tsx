@@ -3,7 +3,7 @@
 // Surfaces the §28.5 Q29 two-tier UX toggles:
 //   TRADING_INTERFACE — advanced staking analytics + spot CLOB surfaces
 //   MARKETPLACE       — rich NFT detail + filters + agent-commerce listings
-//   AI_FEATURES       — MCP local tool (placeholder until that phase ships)
+//   AI_FEATURES       — MCP Copilot (placeholder until that phase ships)
 //   REGISTRY          — name registration UI (resolution stays available
 //                       always; registration CTA is gated)
 //

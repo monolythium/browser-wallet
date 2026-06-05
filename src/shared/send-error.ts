@@ -8,7 +8,7 @@
 //   - "execution reverted (no data present; likely require(false))"
 //   - "intrinsic gas too low; sender: 0xabcd; got: 21000"
 //   - "nonce too low; have 14, want 15"
-//   - "ferveo decryption ceremony failed; partial-share count 6 of 7"
+//   - "replacement transaction underpriced"
 //
 // This module classifies the raw error into a typed kind so the popup
 // can render context-aware copy + a specific recovery suggestion. The
@@ -16,8 +16,8 @@
 // transacting, not debugging.
 //
 // Whitepaper alignment:
-//   §21.5  — Ferveo encrypted mempool (failure mode = "encrypted-submit
-//            failed; falling back to plaintext")
+//   §21.5  — transparent mempool today (the Ferveo encrypted-submit path
+//            was removed; a LythiumSeal encrypted path may return later)
 //   §22    — EIP-1559-style fee model (execution-unit estimation failures)
 //   §23.2  — liquid bonding (no nonce/cooldown blockers for delegators
 //            specifically — but nonce-too-low still happens on multi-
@@ -32,6 +32,8 @@ import {
  *  the classifier doesn't recognise; the popup then renders the raw
  *  message verbatim (preserving the existing behaviour). */
 export type SendErrorKind =
+  | "genesis-mismatch"
+  | "plaintext-not-allowed"
   | "insufficient-funds"
   | "gas-estimation"
   | "nonce-conflict"
@@ -73,6 +75,48 @@ export function classifySendError(
   context?: SendErrorContext,
 ): SendErrorClassification {
   const lower = message.toLowerCase();
+
+  // Chain genesis mismatch — the wallet's pinned genesis no longer matches
+  // the network (likely a regenesis). The Send ErrorView renders this kind's
+  // body with a clickable "Operators" link. Display/classification only — the
+  // trust gate itself is unchanged (build-info.ts pin + networks.ts).
+  if (
+    lower.includes("untrusted genesis") ||
+    lower.includes("genesis mismatch")
+  ) {
+    return {
+      kind: "genesis-mismatch",
+      headline: "Chain genesis mismatch",
+      body:
+        "The wallet's pinned chain genesis no longer matches the live " +
+        "network, which may have re-genesised. Sends are paused until the " +
+        "pinned genesis is updated. See Operators.",
+      severity: "err",
+    };
+  }
+
+  // Chain requires encrypted transactions but this wallet submits plaintext
+  // only. When the encrypted-mempool milestone is ON, mempool admission rejects
+  // every plaintext tx pre-signature with -32040 PlaintextNotAllowed ("plaintext
+  // mempool entry not allowed: encrypted envelope required"). Classify it so the
+  // user sees an honest explanation instead of a raw debugger string. This does
+  // NOT add an encrypted-send path — it only explains the rejection.
+  if (
+    (lower.includes("plaintext") &&
+      (lower.includes("not allowed") || lower.includes("encrypted envelope"))) ||
+    lower.includes("encrypted mempool required")
+  ) {
+    return {
+      kind: "plaintext-not-allowed",
+      headline: "Encrypted transactions required",
+      body:
+        "This network currently requires encrypted transactions, and this " +
+        "wallet version sends plaintext ones only — so sends are unavailable " +
+        "here until an encrypted-send-capable build ships. Your funds are " +
+        "unaffected: the transaction was rejected before it was signed.",
+      severity: "err",
+    };
+  }
 
   // Insufficient funds — most common, gets the richest copy.
   if (

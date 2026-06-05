@@ -202,9 +202,9 @@ export interface WalletOperatorInfo {
  *  as offering a tier when at least one member operator probes
  *  reachable for that tier ("any-true" aggregation).
  *
- *  Surfaced for the five user-facing tiers; SDK exposes nine bits in
+ *  Surfaced for the five user-facing tiers; SDK exposes ten bits in
  *  `NODE_REGISTRY_CAPABILITIES` but Broadcaster, WebSocket, LightClient,
- *  and PublicAPI are operator-internal and skipped here.
+ *  PublicAPI, and GpuProve are operator-internal and skipped here.
  *
  *  The long-term fix is a `ClusterDirectoryEntry.serviceTiers:
  *  string[]` aggregate field on the chain side; once shipped, the wallet

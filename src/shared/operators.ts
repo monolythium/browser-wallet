@@ -2,12 +2,13 @@
 // shared between the service worker (which iterates operators on RPC dispatch)
 // and the popup (which renders the override-management UI).
 //
-// Sprintnet has 6 hardcoded default operator RPCs (see networks.ts:
-// SPRINTNET_OPERATOR_RPCS_DEFAULTS; the original operator-1 was dropped
-// per the regenesis, see that file's docstring). Power users
-// can override that list with their own operator nodes; the override is
-// persisted to chrome.storage.local and merged at lookup time. Absence
-// of the key (or null value) means "use the defaults".
+// Sprintnet's default operator RPCs are derived from the SDK chain registry
+// (see networks.ts: SPRINTNET_OPERATOR_RPCS_DEFAULTS, built by mapping
+// getRpcEndpoints("testnet-69420")) — the wallet hardcodes no operator list,
+// and any one entry is excluded at runtime only if it fails the chain-id /
+// genesis probe. Power users can override that list with their own operator
+// nodes; the override is persisted to chrome.storage.local and merged at
+// lookup time. Absence of the key (or null value) means "use the defaults".
 
 /**
  * Storage key for the user-configured operator override. Lives in

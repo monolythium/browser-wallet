@@ -5,6 +5,11 @@ import { classifySendError } from "./send-error.js";
 
 describe("classifySendError — kind detection", () => {
   it.each([
+    ["Chain genesis mismatch — all 14 operators reported untrusted genesis. See Operators.", "genesis-mismatch"],
+    ["operator-3: untrusted genesis", "genesis-mismatch"],
+    ["Chain rejected: plaintext mempool entry not allowed: encrypted envelope required", "plaintext-not-allowed"],
+    ["plaintext not allowed", "plaintext-not-allowed"],
+    ["encrypted mempool required", "plaintext-not-allowed"],
     ["insufficient funds for transfer", "insufficient-funds"],
     ["INSUFFICIENT BALANCE", "insufficient-funds"],
     ["not enough balance to cover gas", "insufficient-funds"],
@@ -31,6 +36,7 @@ describe("classifySendError — kind detection", () => {
 describe("classifySendError — copy quality", () => {
   it("every kind has non-empty headline and body", () => {
     const inputs = [
+      "plaintext mempool entry not allowed: encrypted envelope required",
       "insufficient funds",
       "intrinsic gas too low",
       "nonce too low",
