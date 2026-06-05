@@ -1,10 +1,12 @@
 // MetaMask-style hamburger main menu.
 //
-// One screen, three logical sections:
-//   1. Quick action — "Switch to popup/sidebar" mode toggle.
-//   2. Manage — Contacts, Connected sites, Networks, Multisig.
-//   3. Settings — Settings page, About.
-//   4. Danger — Lock wallet (red).
+// One screen, logical sections:
+//   1. Quick action — Notifications, full screen, popup/sidebar toggle.
+//   2. Manage — Contacts, Connected sites, Networks, Multisig, RISC-V.
+//   3. Security — Security, Features, Emergency recovery.
+//   4. Settings — Settings, Theme, Operators.
+//   5. Info — About, Resources, Why Monolythium.
+//   6. Danger — Lock wallet, Reset wallet (red).
 //
 // Routing lives in App.tsx via a screen-stack so back-navigation from
 // any sub-screen reached via this menu returns HERE, not to home. See
@@ -231,7 +233,7 @@ export function MainMenu({
           )}
         </MenuSection>
 
-        <MenuSection title="Settings & Info">
+        <MenuSection title="Settings">
           <MenuItem
             icon="settings"
             label="Settings"
@@ -250,6 +252,9 @@ export function MainMenu({
             onClick={onOperators}
             hasChevron
           />
+        </MenuSection>
+
+        <MenuSection title="Info">
           <MenuItem icon="info" label="About" onClick={onAbout} hasChevron />
           <MenuItem
             icon="external"

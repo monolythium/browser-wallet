@@ -1700,6 +1700,7 @@ export default function App() {
             setClusterDetailEntrySource("stake");
             setScreen("cluster-detail");
           }}
+          onOpenOperators={() => navigateTo("operator-directory")}
           onBack={() => {
             const wasDeepLinked = stakeDeepLink !== null;
             setStakeDeepLink(null);

@@ -23,6 +23,7 @@ import {
 } from "react";
 import { Icon } from "../Icon";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
+import { classifySendError } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
@@ -208,6 +209,9 @@ interface StakeProps {
   onShowClusterDetail?: (
     cluster: import("../../shared/staking").ClusterDirectoryEntry,
   ) => void;
+  /** Opens the operator directory — wired to the genesis-mismatch error's
+   *  "Operators" word so it becomes a button (mirrors Send). */
+  onOpenOperators?: () => void;
   onBack: () => void;
 }
 
@@ -217,6 +221,7 @@ export function Stake({
   initialAction,
   initialClusterId,
   onShowClusterDetail,
+  onOpenOperators,
   onBack,
 }: StakeProps) {
   // Restore prior Stake state when the user returns from a sibling
@@ -1033,6 +1038,7 @@ export function Stake({
               setStep("form");
             }}
             onCancel={onBack}
+            {...(onOpenOperators ? { onOpenOperators } : {})}
           />
         )}
       </div>
@@ -1526,6 +1532,37 @@ function SuccessView({
   );
 }
 
+/** Render the genesis-mismatch error body with the trailing "Operators"
+ *  word as a button that opens the operator directory. Falls back to the
+ *  plain string when the marker is absent. Mirrors Send's treatment so the
+ *  stake-flow genesis error is consistent. Display/nav only. */
+function genesisErrorBody(body: string, onOpenOperators: () => void) {
+  const marker = "Operators";
+  const i = body.lastIndexOf(marker);
+  if (i < 0) return body;
+  return (
+    <>
+      {body.slice(0, i)}
+      <button
+        type="button"
+        onClick={onOpenOperators}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          font: "inherit",
+          color: "var(--gold)",
+          textDecoration: "underline",
+          cursor: "pointer",
+        }}
+      >
+        {marker}
+      </button>
+      {body.slice(i + marker.length)}
+    </>
+  );
+}
+
 interface ErrorViewProps {
   error: {
     message: string;
@@ -1535,9 +1572,18 @@ interface ErrorViewProps {
   };
   onRetry: () => void;
   onCancel: () => void;
+  /** When set and the error classifies as genesis-mismatch, the body's
+   *  "Operators" word becomes a button opening the operator directory. */
+  onOpenOperators?: () => void;
 }
 
-function ErrorView({ error, onRetry, onCancel }: ErrorViewProps) {
+function ErrorView({
+  error,
+  onRetry,
+  onCancel,
+  onOpenOperators,
+}: ErrorViewProps) {
+  const classified = classifySendError(error.message);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div
@@ -1571,7 +1617,9 @@ function ErrorView({ error, onRetry, onCancel }: ErrorViewProps) {
             lineHeight: 1.5,
           }}
         >
-          {error.message}
+          {classified.kind === "genesis-mismatch" && onOpenOperators
+            ? genesisErrorBody(classified.body, onOpenOperators)
+            : error.message}
         </div>
         {(error.code !== null || error.method !== null || error.via !== null) && (
           <div

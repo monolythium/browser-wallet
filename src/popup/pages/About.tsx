@@ -911,9 +911,16 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           </div>
         )}
 
-        {/* Operator table — collapsible button-style (matches OperatorDirectory) */}
-        <AboutSection
-          title="Operators"
+        {/* Operators — titled card grouping the operator table + risk legend,
+            consistent with the other About sections (Runtime, Why Monolythium,
+            etc.) instead of two loose collapsible rows. */}
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Operators</h3>
+          </div>
+          {/* Operator table — collapsible button-style (matches OperatorDirectory) */}
+          <AboutSection
+            title="Operators"
           meta={
             operators === null
               ? "probing…"
@@ -989,9 +996,9 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           </div>
         </AboutSection>
 
-        {/* Operator risk legend. Decodes the chips
-            rendered on operator rows above. */}
-        <OperatorRiskLegendCard />
+          {/* Operator risk legend — decodes the chips on the operator rows. */}
+          <OperatorRiskLegendCard />
+        </div>
 
         {/* Pitch / differentiation */}
         <div className="ext-card">
