@@ -1769,6 +1769,8 @@ export default function App() {
           account={acc}
           chainId={activeChain.chainId}
           onBack={() => setScreen("main-menu")}
+          onOpenSettings={() => navigateTo("settings")}
+          onOpenAbout={() => navigateTo("about")}
         />
       )}
 

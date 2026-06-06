@@ -17,7 +17,6 @@ import type { CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "../Icon";
 import type { UiOpenMode } from "../bg";
 import { bgGetUnread } from "../bg";
-import { useFeature } from "../hooks/useFeature";
 
 interface MainMenuProps {
   /** Current ui-mode (sidebar vs popup) so the toggle item can label
@@ -95,7 +94,6 @@ export function MainMenu({
   onResetWallet,
   onNotifications,
 }: MainMenuProps) {
-  const devMode = useFeature("DEVELOPER_MODE");
   const switchLabel =
     uiMode === null
       ? "Switch window mode"
@@ -190,7 +188,7 @@ export function MainMenu({
               hasChevron
             />
           )}
-          {onOpenRiscv && devMode && (
+          {onOpenRiscv && (
             <MenuItem
               icon="contract"
               label="RISC-V"
@@ -198,7 +196,7 @@ export function MainMenu({
               hasChevron
             />
           )}
-          {onAgentPolicy && devMode && (
+          {onAgentPolicy && (
             <MenuItem
               icon="settings"
               label="Automation spending limits"
