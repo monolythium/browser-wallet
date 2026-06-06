@@ -78,8 +78,7 @@ const BRAND_FRAGMENTS = [
  *  legitimate (or at least a subdomain of the canonical brand) and does
  *  NOT trigger the brand-lookalike rule. */
 const CANONICAL_BRAND_HOSTS = [
-  "monolythium.org",
-  "monolythium.vision",
+  "monolythium.com",
   "monoscan.xyz",
   "metamask.io",
   "coinbase.com",

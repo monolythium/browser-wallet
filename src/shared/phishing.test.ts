@@ -7,8 +7,8 @@ import { detectOriginWarnings, detectMessageWarnings } from "./phishing.js";
 
 describe("detectOriginWarnings — legitimate origins", () => {
   it("returns no warnings for canonical brand domains", () => {
-    expect(detectOriginWarnings("https://monolythium.org")).toEqual([]);
-    expect(detectOriginWarnings("https://app.monolythium.vision")).toEqual([]);
+    expect(detectOriginWarnings("https://monolythium.com")).toEqual([]);
+    expect(detectOriginWarnings("https://app.monolythium.com")).toEqual([]);
     expect(detectOriginWarnings("https://opensea.io")).toEqual([]);
   });
 
@@ -83,8 +83,8 @@ describe("detectOriginWarnings — brand lookalike", () => {
   });
 
   it("does NOT flag a subdomain of the canonical brand", () => {
-    // app.monolythium.org ends with .monolythium.org → canonical match.
-    const r = detectOriginWarnings("https://app.monolythium.org");
+    // app.monolythium.com ends with .monolythium.com → canonical match.
+    const r = detectOriginWarnings("https://app.monolythium.com");
     expect(r.map((w) => w.code)).not.toContain("brand-lookalike");
   });
 
@@ -131,9 +131,9 @@ describe("detectMessageWarnings — empty / non-string input", () => {
 describe("detectMessageWarnings — printable UTF-8 messages", () => {
   it("returns [] for a normal SIWE message", () => {
     const siwe = [
-      "monolythium.org wants you to sign in with your account.",
+      "monolythium.com wants you to sign in with your account.",
       "",
-      "URI: https://monolythium.org",
+      "URI: https://monolythium.com",
       "Version: 1",
       "Chain ID: 69420",
       "Nonce: a1b2c3d4",
