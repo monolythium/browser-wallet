@@ -17,6 +17,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "../Icon";
 import type { UiOpenMode } from "../bg";
 import { bgGetUnread } from "../bg";
+import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
 
 interface MainMenuProps {
   /** Current ui-mode (sidebar vs popup) so the toggle item can label
@@ -139,6 +140,15 @@ export function MainMenu({
       </div>
 
       <div className="ext-body" style={{ paddingTop: 4 }}>
+        {/* Developer-mode toggle — first row, above the nav, with a divider. */}
+        <DeveloperModeToggle style={{ marginBottom: 4 }} />
+        <div
+          style={{
+            height: 1,
+            background: "rgba(255,255,255,0.06)",
+            margin: "8px 0 10px",
+          }}
+        />
         <MenuSection>
           {onNotifications && (
             <MenuItem

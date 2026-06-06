@@ -8,6 +8,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import { Section } from "./OperatorDirectory";
+import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
 import {
   bgOperatorsHealth,
   bgPasskeyGetState,
@@ -290,6 +291,18 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
       </div>
 
       <div className="ext-body">
+        {/* Developer-mode toggle — first element, above the Identity card.
+            NOTE: this page is otherwise read-only by design (see the file
+            header comment); mounting this write-toggle here is an intentional,
+            user-approved exception. No other read-only behavior is relaxed. */}
+        <DeveloperModeToggle />
+        <div
+          style={{
+            height: 1,
+            background: "rgba(255,255,255,0.06)",
+            margin: "10px 0 12px",
+          }}
+        />
         {/* Identity card */}
         <div className="ext-card">
           <div className="ext-card__head">

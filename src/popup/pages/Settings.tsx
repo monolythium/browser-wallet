@@ -5,6 +5,7 @@ import { bech32mDisplay } from "../../shared/bech32m";
 import { type SignAlgo } from "../bg";
 import { CheckIcon, ClipboardIcon } from "../components/AddressLine";
 import { WalletSecurityControls } from "../components/WalletSecurityControls";
+import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
 
 interface SettingsProps {
   onBack: () => void;
@@ -114,6 +115,15 @@ export function Settings({
       </div>
 
       <div className="ext-body">
+        {/* Developer-mode toggle — first card at the top of Settings. */}
+        <DeveloperModeToggle />
+        <div
+          style={{
+            height: 1,
+            background: "rgba(255,255,255,0.06)",
+            margin: "10px 0 12px",
+          }}
+        />
         {/* Account section compacted. Row gap was 8 px
             with the address+copy on two stacked rows (RevealableAddressBlock
             renders the AddressLine + a separate copy button below). Now
