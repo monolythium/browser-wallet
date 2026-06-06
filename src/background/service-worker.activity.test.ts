@@ -435,7 +435,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
       chain_id: 69420,
       // genesis_hash stub — mirrors __fixtures__ TESTNET_69420_GENESIS_HASH_STUB (inline: hoisted vi.mock factory).
       genesis_hash:
-        "0xd24750ca765e702af7cbf3c6a3b479da9fafbc56fadd2168b22d035a23e29421",
+        "0xe9a2a956f8f05a73a5abaa30fda2716eccb53b719efa4871b8ca6fd4a0e9c7a6",
     },
   };
 });

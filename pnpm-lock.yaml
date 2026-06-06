@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@monolythium/core-sdk':
-        specifier: 0.4.5
-        version: 0.4.5
+        specifier: github:monolythium/mono-core-sdk#ba35900
+        version: https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/ba359006827c0477d799f9dfadc1294fded27379
       '@noble/ciphers':
         specifier: 2.2.0
         version: 2.2.0
@@ -323,8 +323,9 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@monolythium/core-sdk@0.4.5':
-    resolution: {integrity: sha512-/xxHqZKOkN46iE+b1JBO90SDE9911LVcVjoz3pYddQnPjjq18D0ixKU2k5BA3PQIkc1NwaHIhw9RcR0FN30y/Q==}
+  '@monolythium/core-sdk@https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/ba359006827c0477d799f9dfadc1294fded27379':
+    resolution: {tarball: https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/ba359006827c0477d799f9dfadc1294fded27379}
+    version: 0.4.6
     engines: {node: '>=22'}
 
   '@noble/ciphers@2.0.1':
@@ -1265,7 +1266,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@monolythium/core-sdk@0.4.5':
+  '@monolythium/core-sdk@https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/ba359006827c0477d799f9dfadc1294fded27379':
     dependencies:
       '@noble/ciphers': 2.2.0
       '@noble/curves': 2.2.0
