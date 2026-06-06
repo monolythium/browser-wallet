@@ -1,8 +1,8 @@
 // Opt-in developer-mode toggle row — an accessible slide switch + a
-// guarded confirm popup. Mounted at the top of the hamburger menu,
-// Settings, and About. Developer mode reveals technical surfaces (raw
-// hashes, RPC method names, error codes, the RISC-V console) that are
-// hidden by default for everyday users.
+// guarded confirm popup. Mounted at the top of Settings and About.
+// Developer mode reveals technical surfaces (raw hashes, RPC method
+// names, error codes, the RISC-V console) that are hidden by default
+// for everyday users.
 //
 // Single source of truth: the switch state is driven purely by
 // `useFeature("DEVELOPER_MODE")` — no separate local on/off state.
