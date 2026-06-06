@@ -24,7 +24,7 @@
     "vitest": "^4.1.5"
   },
   "dependencies": {
-    "@monolythium/core-sdk": "github:monolythium/mono-core-sdk#ba35900",
+    "@monolythium/core-sdk": "github:monolythium/mono-core-sdk#0e4fdf9",
     "@noble/ciphers": "2.2.0",
     "@noble/hashes": "2.2.0",
     "@noble/post-quantum": "0.6.0",
