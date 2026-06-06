@@ -512,8 +512,11 @@ function LegendEntry({
   return (
     <div
       style={{
-        padding: "10px 0",
-        borderBottom: last ? "none" : "1px solid var(--fg-700)",
+        padding: "10px 12px",
+        borderRadius: 8,
+        border: "1px solid var(--fg-700)",
+        background: "rgba(255,255,255,0.02)",
+        marginBottom: last ? 0 : 6,
       }}
     >
       <div

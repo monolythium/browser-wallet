@@ -1565,6 +1565,9 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
         type="button"
         onClick={onOpenOperators}
         style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
           background: "none",
           border: "none",
           padding: 0,
@@ -1575,6 +1578,7 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
         }}
       >
         {marker}
+        <Icon name="external" size={11} />
       </button>
       {body.slice(i + marker.length)}
     </>

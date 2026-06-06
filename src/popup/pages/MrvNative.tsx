@@ -30,7 +30,28 @@ export type MrvNativeMode = "deploy" | "call";
 export interface MrvNativeProps {
   chainIdHex: string;
   onBack: () => void;
+  /** Opens Settings / About — surfaced as buttons on the dev-mode-required
+   *  stub so the user can reach the developer-mode toggle. */
+  onOpenSettings?: () => void;
+  onOpenAbout?: () => void;
 }
+
+// Gold-accent pill with a ↗ affordance, used on the dev-mode-required stub
+// to send the user to the pages that host the developer-mode toggle.
+const devModeNavBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 10,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg, rgba(212,160,60,0.12))",
+  color: "var(--gold)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
 export interface MrvNativeFormValues {
   artifactBytes: string;
@@ -111,7 +132,12 @@ function formatMrvLythAmount(lythoshiDecimal: string): string {
   return formatNativeLythAmount(BigInt(lythoshiDecimal));
 }
 
-export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
+export function MrvNative({
+  chainIdHex,
+  onBack,
+  onOpenSettings,
+  onOpenAbout,
+}: MrvNativeProps) {
   const devMode = useFeature("DEVELOPER_MODE");
   const [mode, setMode] = useState<MrvNativeMode>("deploy");
   const [form, setForm] = useState<MrvNativeFormValues>(DEFAULT_FORM);
@@ -392,8 +418,27 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
                 lineHeight: 1.5,
               }}
             >
-              The RISC-V contract console is a developer tool. Enable developer
-              mode from the menu, Settings, or About to use it.
+              The RISC-V contract console is a developer tool. Turn on
+              developer mode to use it.
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "center",
+                marginTop: 14,
+              }}
+            >
+              {onOpenSettings && (
+                <button type="button" onClick={onOpenSettings} style={devModeNavBtn}>
+                  Settings <Icon name="external" size={11} />
+                </button>
+              )}
+              {onOpenAbout && (
+                <button type="button" onClick={onOpenAbout} style={devModeNavBtn}>
+                  About <Icon name="external" size={11} />
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -156,16 +156,16 @@ export function MainMenu({
             />
           )}
           <MenuItem
-            icon="expand"
+            icon="display"
             label="Open full screen"
             onClick={onOpenFullscreen}
           />
-          <MenuItem icon="display" label={switchLabel} onClick={onSwitchMode} />
+          <MenuItem icon="expand" label={switchLabel} onClick={onSwitchMode} />
         </MenuSection>
 
         <MenuSection title="Manage">
           <MenuItem
-            icon="book"
+            icon="contacts"
             label="Contacts"
             onClick={onContacts}
             hasChevron
@@ -177,7 +177,7 @@ export function MainMenu({
             hasChevron
           />
           <MenuItem
-            icon="bridge"
+            icon="network"
             label="Networks"
             onClick={onNetworks}
             hasChevron
@@ -219,7 +219,7 @@ export function MainMenu({
           )}
           {onOpenFeatures && (
             <MenuItem
-              icon="more"
+              icon="sliders"
               label="Features"
               onClick={onOpenFeatures}
               hasChevron
@@ -249,7 +249,7 @@ export function MainMenu({
             hasChevron
           />
           <MenuItem
-            icon="globe"
+            icon="server"
             label="Operators"
             onClick={onOperators}
             hasChevron
@@ -265,7 +265,7 @@ export function MainMenu({
             hasChevron
           />
           <MenuItem
-            icon="book"
+            icon="gem"
             label="Why Monolythium"
             onClick={onWhyMonolythium}
             hasChevron

@@ -37,7 +37,28 @@ import {
 
 interface OperatorsProps {
   onBack: () => void;
+  /** Opens Settings / About — surfaced as buttons on the dev-mode-required
+   *  stub so the user can reach the developer-mode toggle. */
+  onOpenSettings?: () => void;
+  onOpenAbout?: () => void;
 }
+
+// Gold-accent pill with a ↗ affordance, used on the dev-mode-required stub
+// to send the user to the pages that host the developer-mode toggle.
+const devModeNavBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 10,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg, rgba(212,160,60,0.12))",
+  color: "var(--gold)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
 interface DraftOperator extends OperatorEntryWire {
   /** Local row id so React keys stay stable across moves/edits even when
@@ -49,7 +70,11 @@ interface DraftOperator extends OperatorEntryWire {
 let RID_COUNTER = 0;
 const newRid = () => `op-${RID_COUNTER++}`;
 
-export function Operators({ onBack }: OperatorsProps) {
+export function Operators({
+  onBack,
+  onOpenSettings,
+  onOpenAbout,
+}: OperatorsProps) {
   const devMode = useFeature("DEVELOPER_MODE");
   const [defaults, setDefaults] = useState<OperatorEntryWire[]>([]);
   const [originalOverride, setOriginalOverride] = useState<OperatorEntryWire[] | null>(null);
@@ -175,8 +200,26 @@ export function Operators({ onBack }: OperatorsProps) {
               }}
             >
               Operator management (custom RPC endpoints and consensus-authority
-              details) is a developer tool. Enable developer mode from the menu,
-              Settings, or About to use it.
+              details) is a developer tool. Turn on developer mode to use it.
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "center",
+                marginTop: 14,
+              }}
+            >
+              {onOpenSettings && (
+                <button type="button" onClick={onOpenSettings} style={devModeNavBtn}>
+                  Settings <Icon name="external" size={11} />
+                </button>
+              )}
+              {onOpenAbout && (
+                <button type="button" onClick={onOpenAbout} style={devModeNavBtn}>
+                  About <Icon name="external" size={11} />
+                </button>
+              )}
             </div>
           </div>
         </div>

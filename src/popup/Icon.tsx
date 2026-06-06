@@ -8,7 +8,8 @@ export type IconName =
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
-  | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code";
+  | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
+  | "contacts" | "network" | "sliders" | "server" | "gem";
 
 interface IconProps {
   name: IconName;
@@ -42,6 +43,60 @@ export function Icon({ name, size = 16 }: IconProps) {
           <path d="m18 16 4-4-4-4" />
           <path d="m6 8-4 4 4 4" />
           <path d="m14.5 4-5 16" />
+        </svg>
+      );
+    case "contacts":
+      // Two people — Contacts.
+      return (
+        <svg {...props}>
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+      );
+    case "network":
+      // Connected nodes — Networks.
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="5" r="2.5" />
+          <circle cx="5" cy="19" r="2.5" />
+          <circle cx="19" cy="19" r="2.5" />
+          <path d="M10.7 7.1 6.3 16.9M13.3 7.1l4.4 9.8M7.5 19h9" />
+        </svg>
+      );
+    case "sliders":
+      // Adjustment sliders — Features (advanced surfaces).
+      return (
+        <svg {...props}>
+          <line x1="4" y1="21" x2="4" y2="14" />
+          <line x1="4" y1="10" x2="4" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="12" />
+          <line x1="12" y1="8" x2="12" y2="3" />
+          <line x1="20" y1="21" x2="20" y2="16" />
+          <line x1="20" y1="12" x2="20" y2="3" />
+          <line x1="1" y1="14" x2="7" y2="14" />
+          <line x1="9" y1="8" x2="15" y2="8" />
+          <line x1="17" y1="16" x2="23" y2="16" />
+        </svg>
+      );
+    case "server":
+      // Stacked server racks — Operators (network nodes).
+      return (
+        <svg {...props}>
+          <rect x="2" y="3" width="20" height="8" rx="2" />
+          <rect x="2" y="13" width="20" height="8" rx="2" />
+          <line x1="6" y1="7" x2="6.01" y2="7" />
+          <line x1="6" y1="17" x2="6.01" y2="17" />
+        </svg>
+      );
+    case "gem":
+      // Faceted gem — Why Monolythium (brand / value).
+      return (
+        <svg {...props}>
+          <path d="M6 3h12l4 6-10 12L2 9 6 3z" />
+          <path d="M2 9h20" />
+          <path d="m9.5 9 2.5 12 2.5-12L12 3" />
         </svg>
       );
     case "qr":

@@ -1346,7 +1346,11 @@ export default function App() {
       {screen === "theme" && <Theme onBack={navigateBack} />}
 
       {screen === "operators" && (
-        <Operators onBack={navigateBack} />
+        <Operators
+          onBack={navigateBack}
+          onOpenSettings={() => navigateTo("settings")}
+          onOpenAbout={() => navigateTo("about")}
+        />
       )}
 
       {screen === "operator-directory" && (
@@ -1379,6 +1383,8 @@ export default function App() {
         <MrvNative
           chainIdHex={activeChain.chainId}
           onBack={navigateBack}
+          onOpenSettings={() => navigateTo("settings")}
+          onOpenAbout={() => navigateTo("about")}
         />
       )}
 

@@ -1034,7 +1034,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
         </AboutSection>
 
           {/* Operator risk legend — decodes the chips on the operator rows. */}
-          <OperatorRiskLegendCard />
+          <OperatorRiskLegendCard operators={operators} />
         </div>
 
         {/* Pitch / differentiation */}
@@ -1479,8 +1479,28 @@ function AboutSection({
  *  page below the operator probe list. One-line explanation per risk
  *  kind so the user can decode the badges from the probe rows above.
  *  Static (no chain reads); content tracks OPERATOR_RISK_LEGEND. */
-function OperatorRiskLegendCard() {
+function OperatorRiskLegendCard({
+  operators,
+}: {
+  operators: OperatorHealthRow[] | null;
+}) {
   const devMode = useFeature("DEVELOPER_MODE");
+  // How many operators currently exhibit each risk kind — drives the
+  // "N affected" badge so the legend mirrors the Operators page (which of
+  // these issues are live right now, not just what each chip means).
+  const affectedByKind = new Map<string, number>();
+  for (const op of operators ?? []) {
+    for (const badge of classifyOperatorRisk({
+      ok: op.ok,
+      trustedGenesis: op.trustedGenesis,
+      capabilities: op.capabilities,
+      indexerHeight: op.indexerHeight,
+      indexerLatest: op.indexerLatest,
+      latencyMs: op.ok ? op.latencyMs : null,
+    })) {
+      affectedByKind.set(badge.kind, (affectedByKind.get(badge.kind) ?? 0) + 1);
+    }
+  }
   return (
     <AboutSection title="Operator risk legend">
       <div
@@ -1503,29 +1523,71 @@ function OperatorRiskLegendCard() {
         }}
       >
         {OPERATOR_RISK_LEGEND.filter((entry) => devMode || !entry.devOnly).map(
-          (entry) => (
-          <div key={entry.kind}>
-            <div
-              style={{
-                fontSize: 11.5,
-                fontWeight: 600,
-                color: "var(--fg-100)",
-                marginBottom: 2,
-              }}
-            >
-              {entry.label}
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: "var(--fg-300)",
-                lineHeight: 1.5,
-              }}
-            >
-              {entry.body}
-            </div>
-          </div>
-        ))}
+          (entry) => {
+            const affected = affectedByKind.get(entry.kind) ?? 0;
+            return (
+              // Each entry is its own bordered card so the signals read as
+              // distinct sections rather than one run-on list.
+              <div
+                key={entry.kind}
+                style={{
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--fg-700)",
+                  background: "rgba(255,255,255,0.02)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    marginBottom: 3,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      color: "var(--fg-100)",
+                    }}
+                  >
+                    {entry.label}
+                  </div>
+                  {affected > 0 && (
+                    <span
+                      title={`${affected} operator${affected === 1 ? "" : "s"} currently affected`}
+                      style={{
+                        background: "rgba(220,80,80,0.12)",
+                        border: "1px solid rgba(220,80,80,0.4)",
+                        borderRadius: 4,
+                        padding: "1px 6px",
+                        color: "var(--err)",
+                        fontFamily: "var(--f-mono)",
+                        fontSize: 9,
+                        fontWeight: 600,
+                        letterSpacing: "0.06em",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {affected} affected
+                    </span>
+                  )}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--fg-300)",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {entry.body}
+                </div>
+              </div>
+            );
+          },
+        )}
       </div>
     </AboutSection>
   );
