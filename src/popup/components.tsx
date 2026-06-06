@@ -24,7 +24,7 @@ import {
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
-import { clusterLabel } from "../shared/staking";
+import { clusterLabel, formatWeightBpsPercent } from "../shared/staking";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import {
@@ -1635,6 +1635,7 @@ interface HomeProps {
 export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
+  const devMode = useFeature("DEVELOPER_MODE");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
   // Activity rows now flow through useActivity() inside ActivityList —
@@ -1680,7 +1681,9 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               {activeChip === "total"
                 ? "—% · 24h · attested"
                 : latestDelegation
-                  ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
+                  ? devMode
+                    ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
+                    : `${clusterLabel(latestDelegation.cluster)} · ${formatWeightBpsPercent(latestDelegation.weightBps)}`
                   : "delegated · 0 / 10 clusters"}
             </div>
           )}

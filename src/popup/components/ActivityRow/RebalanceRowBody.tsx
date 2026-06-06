@@ -5,6 +5,8 @@
 
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
+import { formatWeightBpsPercent } from "../../../shared/staking.js";
+import { useFeature } from "../../hooks/useFeature.js";
 import type { RebalanceRow } from "../../../shared/activity.js";
 
 export interface RebalanceRowBodyProps {
@@ -12,6 +14,7 @@ export interface RebalanceRowBodyProps {
 }
 
 export function RebalanceRowBody({ row }: RebalanceRowBodyProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div className="ext-act-row">
       <div className="dir out">
@@ -27,7 +30,11 @@ export function RebalanceRowBody({ row }: RebalanceRowBodyProps) {
       </div>
       <div className="ext-act-row__right">
         <div className="amt">
-          {row.weightBps !== null ? `${row.weightBps} bps` : "—"}
+          {row.weightBps !== null
+            ? devMode
+              ? `${row.weightBps} bps`
+              : formatWeightBpsPercent(row.weightBps)
+            : "—"}
         </div>
         <div className="sym">rebalance</div>
       </div>

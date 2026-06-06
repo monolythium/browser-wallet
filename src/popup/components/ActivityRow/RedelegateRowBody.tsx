@@ -8,13 +8,15 @@
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { RedelegateRow } from "../../../shared/activity.js";
-import { clusterLabel } from "../../../shared/staking.js";
+import { clusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
+import { useFeature } from "../../hooks/useFeature.js";
 
 export interface RedelegateRowBodyProps {
   row: RedelegateRow;
 }
 
 export function RedelegateRowBody({ row }: RedelegateRowBodyProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const bps = row.weightBps;
   return (
     <div className="ext-act-row">
@@ -33,7 +35,13 @@ export function RedelegateRowBody({ row }: RedelegateRowBodyProps) {
         </div>
       </div>
       <div className="ext-act-row__right">
-        <div className="amt">{bps !== null ? `${bps} bps` : "—"}</div>
+        <div className="amt">
+          {bps !== null
+            ? devMode
+              ? `${bps} bps`
+              : formatWeightBpsPercent(bps)
+            : "—"}
+        </div>
         <div className="sym">redelegated</div>
       </div>
     </div>
