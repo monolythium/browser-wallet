@@ -177,10 +177,8 @@ export function SlhDsaBackupCard({
           marginBottom: 10,
         }}
       >
-        A separate post-quantum backup key (SLH-DSA-SHA2-128s) lives
-        alongside your primary key. If a future cryptographic break
-        invalidates ML-DSA, this key lets you keep control of your
-        account via a chain-side G3 emergency rotation.
+        A separate backup key, in a different cryptographic family, that
+        protects your funds if your main signature scheme is ever broken.
       </div>
 
       {loadErr && <div style={errBox}>Could not load: {loadErr}</div>}
@@ -402,12 +400,11 @@ export function SlhDsaBackupCard({
                         color: "var(--fg-100)",
                       }}
                     >
-                      The emergency-key precompile is one-time per address.
-                      Once you've registered on chain (or even attempted to),
-                      generating a new backup will leave the prior chain
-                      registration permanently in place — the new key will
-                      not be registerable for this wallet. Continue only if
-                      you've lost the cold-storage copy.
+                      You can register an emergency-recovery slot only once
+                      per address — choose your backup key carefully. Once
+                      registered (or even attempted) on chain, generating a
+                      new backup leaves the prior registration permanently in
+                      place. Continue only if you've lost the cold-storage copy.
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button

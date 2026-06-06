@@ -960,10 +960,20 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 fontSize: 11,
                 color: "var(--err)",
                 marginBottom: 8,
-                fontFamily: "var(--f-mono)",
               }}
             >
-              {probeError}
+              Couldn&apos;t reach operators to check status.
+              {devMode && (
+                <div
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    color: "var(--fg-500)",
+                    marginTop: 4,
+                  }}
+                >
+                  {probeError}
+                </div>
+              )}
             </div>
           )}
           {devMode && capabilitySummary !== null && capabilitySummary.length > 0 && (

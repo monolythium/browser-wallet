@@ -86,7 +86,7 @@ export function Features({ onBack }: FeaturesProps) {
           </div>
 
           {loadErr && (
-            <div style={errBox}>Could not load feature state: {loadErr}</div>
+            <div style={errBox}>Couldn&apos;t load features.</div>
           )}
 
           {state && (

@@ -4,12 +4,14 @@
 
 import { Icon } from "../Icon";
 import { EXTERNAL_LINKS } from "../../shared/build-info";
+import { useFeature } from "../hooks/useFeature";
 
 interface ResourcesProps {
   onBack: () => void;
 }
 
 export function Resources({ onBack }: ResourcesProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <>
       <div className="ext-top">
@@ -49,19 +51,21 @@ export function Resources({ onBack }: ResourcesProps) {
                 }}
               >
                 <span>{link.label}</span>
-                <span
-                  style={{
-                    fontFamily: "var(--f-mono)",
-                    fontSize: 10,
-                    color: "var(--fg-500)",
-                    maxWidth: 180,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {link.url.replace(/^https?:\/\//, "")}
-                </span>
+                {devMode && (
+                  <span
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 10,
+                      color: "var(--fg-500)",
+                      maxWidth: 180,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {link.url.replace(/^https?:\/\//, "")}
+                  </span>
+                )}
               </a>
             ))}
           </div>
