@@ -1,5 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The MrvNative page is developer-mode-gated; force the flag on so these
+// tests exercise the real RISC-V console rather than the "developer mode
+// required" stub.
+vi.mock("../hooks/useFeature", () => ({
+  useFeature: () => true,
+}));
 
 import {
   MrvNative,

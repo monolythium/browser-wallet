@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgNativeMarketOrderBookDeltas,
   bgWalletChainBlockNumber,
@@ -111,6 +112,7 @@ function formatMrvLythAmount(lythoshiDecimal: string): string {
 }
 
 export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const [mode, setMode] = useState<MrvNativeMode>("deploy");
   const [form, setForm] = useState<MrvNativeFormValues>(DEFAULT_FORM);
   const [plan, setPlan] = useState<WalletMrvNativeSubmissionPlan | null>(null);
@@ -349,6 +351,55 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       cancelled = true;
     };
   }, [chainIdHex]);
+
+  // Whole route is developer-only — the RISC-V contract console (bytecode,
+  // raw lythoshi, RPC metadata, proof transcripts) is technical tooling and
+  // is off the LYTH-only fee-display posture. Reached only via the (now
+  // dev-gated) RISC-V menu entry; the route is gated too as defense-in-depth.
+  if (!devMode) {
+    return (
+      <>
+        <div className="ext-top">
+          <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+            <Icon name="back" size={15} />
+          </button>
+          <div
+            style={{
+              flex: 1,
+              fontSize: 13,
+              fontWeight: 600,
+              textAlign: "center",
+            }}
+          >
+            RISC-V
+          </div>
+          <div style={{ width: 36 }} />
+        </div>
+        <div className="ext-body">
+          <div
+            className="ext-card"
+            style={{ textAlign: "center", padding: "32px 18px" }}
+          >
+            <Icon name="code" size={28} />
+            <div style={{ marginTop: 14, fontSize: 13, fontWeight: 600 }}>
+              Developer mode required
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+              }}
+            >
+              The RISC-V contract console is a developer tool. Enable developer
+              mode from the menu, Settings, or About to use it.
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
