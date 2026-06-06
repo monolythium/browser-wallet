@@ -39,7 +39,7 @@ import {
   type AddressKind,
 } from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
-import { classifySendError } from "../../shared/send-error";
+import { classifySendError, errorLinksOperators } from "../../shared/send-error";
 import {
   STORAGE_KEY_NAME_CACHE,
   lookupNameInCache,
@@ -175,6 +175,7 @@ export function Send({
   // External data the form depends on.
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
+  const devMode = useFeature("DEVELOPER_MODE");
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   // T4-03 (Item C): the lowest cross-operator balance, used ONLY by the spend
   // gate (Max + insufficient-funds) so a single inflating operator can't enable
@@ -1019,11 +1020,32 @@ export function Send({
           </div>
           {feeError ? (
             <div style={{ ...inlineError, marginTop: 8 }}>
-              Could not fetch fee:{" "}
-              {classifySendError(feeError).kind === "genesis-mismatch" &&
-              onOpenOperators
-                ? genesisErrorBody(feeError, onOpenOperators)
-                : feeError}
+              {(() => {
+                const c = classifySendError(feeError);
+                const body =
+                  errorLinksOperators(c.kind) && onOpenOperators
+                    ? genesisErrorBody(c.body, onOpenOperators)
+                    : c.body;
+                return (
+                  <>
+                    Could not fetch fee: {body}
+                    {devMode && c.body !== feeError && (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontFamily: "var(--f-mono)",
+                          fontSize: 10,
+                          color: "var(--fg-500)",
+                          lineHeight: 1.5,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {feeError}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           ) : feeSuggestion === null ? (
             <div
@@ -2776,7 +2798,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
           }}
         >
           <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--fg-100)" }}>
-            {classified.kind === "genesis-mismatch" && onOpenOperators
+            {errorLinksOperators(classified.kind) && onOpenOperators
               ? genesisErrorBody(classified.body, onOpenOperators)
               : classified.body}
           </div>

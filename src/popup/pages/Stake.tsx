@@ -23,7 +23,7 @@ import {
 } from "react";
 import { Icon } from "../Icon";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
-import { classifySendError } from "../../shared/send-error";
+import { classifySendError, errorLinksOperators } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
@@ -243,6 +243,7 @@ export function Stake({
   // Cluster directory state.
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
   const [clustersError, setClustersError] = useState<string | null>(null);
+  const devMode = useFeature("DEVELOPER_MODE");
 
   // Delegation context state.
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
@@ -847,10 +848,32 @@ export function Stake({
               <>
                 {clustersError !== null ? (
                   <div style={errBanner}>
-                    {classifySendError(clustersError).kind ===
-                      "genesis-mismatch" && onOpenOperators
-                      ? genesisErrorBody(clustersError, onOpenOperators)
-                      : clustersError}
+                    {(() => {
+                      const c = classifySendError(clustersError);
+                      const body =
+                        errorLinksOperators(c.kind) && onOpenOperators
+                          ? genesisErrorBody(c.body, onOpenOperators)
+                          : c.body;
+                      return (
+                        <>
+                          {body}
+                          {devMode && c.body !== clustersError && (
+                            <div
+                              style={{
+                                marginTop: 6,
+                                fontFamily: "var(--f-mono)",
+                                fontSize: 10,
+                                color: "var(--fg-500)",
+                                lineHeight: 1.5,
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {clustersError}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 ) : clusters.length === 0 ? (
                   <div
@@ -1645,7 +1668,7 @@ function ErrorView({
             lineHeight: 1.5,
           }}
         >
-          {classified.kind === "genesis-mismatch" && onOpenOperators
+          {errorLinksOperators(classified.kind) && onOpenOperators
             ? genesisErrorBody(classified.body, onOpenOperators)
             : classified.body}
         </div>

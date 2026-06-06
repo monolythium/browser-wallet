@@ -33,6 +33,7 @@ import {
  *  message verbatim (preserving the existing behaviour). */
 export type SendErrorKind =
   | "genesis-mismatch"
+  | "chain-quarantined"
   | "plaintext-not-allowed"
   | "insufficient-funds"
   | "gas-estimation"
@@ -92,6 +93,34 @@ export function classifySendError(
         "network, which may have re-genesised. Sends are paused until the " +
         "pinned genesis is updated. See Operators.",
       severity: "err",
+    };
+  }
+
+  // Operator node quarantined / PQ-checkpoint or state-root mismatch / upstream
+  // unavailable. The operator's node has stopped serving RPC (a checkpoint
+  // state-root divergence, or its upstream is down). The raw message is a
+  // multi-line operator runbook — chain_id/height/block_hash, local vs
+  // checkpoint state roots, signer pubkey prefixes, a `protocore quarantine
+  // clear` command — useless and alarming to a normal user. Plain body +
+  // "See Operators"; the raw detail is shown only in developer mode at the
+  // render sites.
+  if (
+    lower.includes("quarantin") ||
+    lower.includes("checkpointstaterootmismatch") ||
+    lower.includes("state-root mismatch") ||
+    lower.includes("state root mismatch") ||
+    lower.includes("checkpoint state-root") ||
+    lower.includes("upstream unavailable")
+  ) {
+    return {
+      kind: "chain-quarantined",
+      headline: "Operator node unavailable",
+      body:
+        "The selected operator's node is temporarily out of sync with the " +
+        "network and isn't serving requests right now. The wallet skips it " +
+        "automatically and uses other operators — your funds are unaffected. " +
+        "See Operators.",
+      severity: "warn",
     };
   }
 
@@ -177,8 +206,9 @@ export function classifySendError(
       kind: "operator-offline",
       headline: "Operator unreachable",
       body:
-        "The current operator is not responding. Try switching network " +
-        "in Settings → Network.",
+        "The current operator isn't responding. The wallet skips it and " +
+        "uses other operators automatically — nothing for you to do. " +
+        "See Operators.",
       severity: "warn",
     };
   }
@@ -253,6 +283,17 @@ export function classifySendError(
     body: message,
     severity: "err",
   };
+}
+
+/** Operator / node-health kinds whose body ends in "See Operators" — the
+ *  render sites linkify that word to a button into the operator directory and
+ *  (for these kinds) tuck the raw chain detail behind developer mode. */
+export function errorLinksOperators(kind: SendErrorKind): boolean {
+  return (
+    kind === "genesis-mismatch" ||
+    kind === "chain-quarantined" ||
+    kind === "operator-offline"
+  );
 }
 
 // Native LYTH precision sourced from the SDK (single source of truth). Chain

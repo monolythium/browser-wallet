@@ -128,7 +128,7 @@ export const EXTERNAL_LINKS: ReadonlyArray<{
   {
     label: "Ecosystem",
     url: "https://monolythium.com/ecosystem",
-    icon: "network",
+    icon: "grid",
   },
   {
     label: "Documentation",
@@ -148,7 +148,7 @@ export const EXTERNAL_LINKS: ReadonlyArray<{
   {
     label: "Privacy",
     url: "https://monolythium.com/legal/privacy",
-    icon: "shield",
+    icon: "lock",
   },
 ];
 

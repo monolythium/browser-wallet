@@ -10,7 +10,7 @@ export type IconName =
   | "menu" | "book" | "info" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
-  | "mono-mark" | "github";
+  | "mono-mark" | "github" | "grid";
 
 interface IconProps {
   name: IconName;
@@ -116,6 +116,16 @@ export function Icon({ name, size = 16 }: IconProps) {
       return (
         <svg {...props} viewBox="23 23 185 185" fill="currentColor" stroke="none">
           <path d="M52 31 L79 46 L54 60 L54 199 L31 186 L31 43 Z M178 31 L200 43 L200 186 L176 200 L176 61 L117 93 L64 65 L89 51 L116 66 Z M79 103 L103 116 L103 186 L80 199 Z M150 103 L151 199 L128 186 L128 116 Z" />
+        </svg>
+      );
+    case "grid":
+      // 2×2 app tiles — Ecosystem (a collection of connected projects).
+      return (
+        <svg {...props}>
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
         </svg>
       );
     case "qr":
