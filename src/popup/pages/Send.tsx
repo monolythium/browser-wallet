@@ -27,6 +27,7 @@ import { AddContactModal } from "./Contacts";
 import { ContactsPickerModal } from "../components/ContactsPickerModal";
 import type { ContactRecord } from "../bg";
 import { useContacts } from "../hooks/useContacts";
+import { useFeature } from "../hooks/useFeature";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { Modal } from "../components/Modal";
@@ -2722,6 +2723,7 @@ function severityColours(severity: "err" | "warn" | "info"): {
 
 function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperators }: ErrorViewProps) {
   const display = formatSendError({ message, code, method, via });
+  const devMode = useFeature("DEVELOPER_MODE");
   // Typed classification on top of the formatted message. Unknown kinds
   // preserve the formatted display string in the body.
   const classified = classifySendError(display);
@@ -2774,7 +2776,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
               ? genesisErrorBody(classified.body, onOpenOperators)
               : classified.body}
           </div>
-          {classified.kind !== "unknown" && (
+          {devMode && classified.kind !== "unknown" && (
             <details style={{ marginTop: 8 }}>
               <summary
                 style={{
