@@ -1470,6 +1470,7 @@ function AboutSection({
  *  kind so the user can decode the badges from the probe rows above.
  *  Static (no chain reads); content tracks OPERATOR_RISK_LEGEND. */
 function OperatorRiskLegendCard() {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <AboutSection title="Operator risk legend">
       <div
@@ -1491,7 +1492,8 @@ function OperatorRiskLegendCard() {
           gap: 8,
         }}
       >
-        {OPERATOR_RISK_LEGEND.map((entry) => (
+        {OPERATOR_RISK_LEGEND.filter((entry) => devMode || !entry.devOnly).map(
+          (entry) => (
           <div key={entry.kind}>
             <div
               style={{

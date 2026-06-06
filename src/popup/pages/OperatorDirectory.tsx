@@ -216,13 +216,15 @@ export function OperatorDirectory({
             dispatcher already routes around offline / untrusted operators.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {OPERATOR_RISK_LEGEND.map((entry, i) => (
+            {OPERATOR_RISK_LEGEND.filter(
+              (entry) => devMode || !entry.devOnly,
+            ).map((entry, i, visible) => (
               <LegendEntry
                 key={entry.kind}
                 label={entry.label}
                 body={entry.body}
                 affected={byRisk.get(entry.kind) ?? []}
-                last={i === OPERATOR_RISK_LEGEND.length - 1}
+                last={i === visible.length - 1}
               />
             ))}
           </div>
