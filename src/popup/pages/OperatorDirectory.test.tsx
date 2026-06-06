@@ -1,7 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { OperatorDirectory } from "./OperatorDirectory.js";
+
+// The "Reported attributes" section + per-operator telemetry are
+// developer-mode-gated; force the flag on so this shell-guard test still sees
+// those sections.
+vi.mock("../hooks/useFeature", () => ({
+  useFeature: () => true,
+}));
 
 describe("OperatorDirectory", () => {
   // renderToStaticMarkup does not run effects, so bgOperatorsHealth() is not

@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import { bgOperatorsHealth, type OperatorHealthRow } from "../bg";
 import {
   classifyOperatorRisk,
@@ -41,6 +42,7 @@ export function OperatorDirectory({
   onBack,
   onManageOperators,
 }: OperatorDirectoryProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   // null = still probing; [] = probed, none configured.
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   // Single-open accordion. Starts closed so the page opens on the four
@@ -107,7 +109,7 @@ export function OperatorDirectory({
         >
           {operators === null
             ? "Probing Monolythium Testnet operators…"
-            : `${total} operator${total === 1 ? "" : "s"} · ${live} live · ${trusted} trusted genesis. Probed live from each round-trip.`}
+            : `${total} operator${total === 1 ? "" : "s"} · ${live} reachable · ${trusted} verified`}
         </div>
 
         {/* 1. Operator list */}
@@ -130,7 +132,8 @@ export function OperatorDirectory({
           )}
         </Section>
 
-        {/* 2. Reported attributes */}
+        {/* 2. Reported attributes — developer-only capability telemetry. */}
+        {devMode && (
         <Section
           title="Reported attributes"
           meta={capSummary.length ? `${capSummary.length} surfaces` : undefined}
@@ -192,6 +195,7 @@ export function OperatorDirectory({
             </div>
           )}
         </Section>
+        )}
 
         {/* 3. Risk legend */}
         <Section
@@ -294,6 +298,7 @@ export function Section({
 /** A single operator row: summary line by default, expands to the operator's
  *  reported capability surfaces + genesis/probe detail. */
 function OperatorAccordionRow({ op }: { op: OperatorHealthRow }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const [open, setOpen] = useState(false);
   const badges = classifyOperatorRisk(toRiskInput(op));
   const danger = !op.trustedGenesis || !op.ok;
@@ -350,6 +355,7 @@ function OperatorAccordionRow({ op }: { op: OperatorHealthRow }) {
               {op.region}
             </span>
           </span>
+          {devMode && (
           <span
             style={{
               fontFamily: "var(--f-mono)",
@@ -364,6 +370,7 @@ function OperatorAccordionRow({ op }: { op: OperatorHealthRow }) {
             {op.indexerHeight !== null && ` · idx #${op.indexerHeight}`}
             {!op.ok && ` · ${op.reason}`}
           </span>
+          )}
           {badges.length > 0 && (
             <span
               style={{
@@ -392,6 +399,7 @@ function OperatorAccordionRow({ op }: { op: OperatorHealthRow }) {
  *  genesis/probe context. "What they reported" = the lyth_operatorCapabilities
  *  surfaces map (cluster_directory / cluster_status / indexer_history / …). */
 function OperatorDetail({ op }: { op: OperatorHealthRow }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const surfaces = op.capabilities ? Object.entries(op.capabilities) : [];
   return (
     <div
@@ -406,29 +414,34 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
         gap: 8,
       }}
     >
-      <DetailKv k="endpoint" v={<Mono>{op.rpc}</Mono>} />
+      {devMode && <DetailKv k="endpoint" v={<Mono>{op.rpc}</Mono>} />}
       <DetailKv
-        k="genesis"
-        title={op.observedGenesis ?? undefined}
+        k="Chain"
+        title={devMode ? (op.observedGenesis ?? undefined) : undefined}
         v={
           op.trustedGenesis ? (
-            <span style={{ color: "var(--ok)" }}>trusted ✓</span>
+            <span style={{ color: "var(--ok)" }}>Verified</span>
           ) : (
-            <span style={{ color: "var(--err)" }}>untrusted</span>
+            <span style={{ color: "var(--err)" }}>
+              Not verified — the wallet won&apos;t trust this operator
+            </span>
           )
         }
       />
-      {op.ok ? (
+      {devMode &&
+        (op.ok ? (
+          <>
+            <DetailKv k="chain id" v={<Mono>{op.chainIdDec ?? "—"}</Mono>} />
+            <DetailKv k="latency" v={<Mono>{op.latencyMs}ms</Mono>} />
+          </>
+        ) : (
+          <DetailKv
+            k="probe"
+            v={<span style={{ color: "var(--err)" }}>{op.reason}</span>}
+          />
+        ))}
+      {devMode && (
         <>
-          <DetailKv k="chain id" v={<Mono>{op.chainIdDec ?? "—"}</Mono>} />
-          <DetailKv k="latency" v={<Mono>{op.latencyMs}ms</Mono>} />
-        </>
-      ) : (
-        <DetailKv
-          k="probe"
-          v={<span style={{ color: "var(--err)" }}>{op.reason}</span>}
-        />
-      )}
       <div
         style={{
           fontFamily: "var(--f-mono)",
@@ -472,6 +485,8 @@ function OperatorDetail({ op }: { op: OperatorHealthRow }) {
             </div>
           ))}
         </div>
+      )}
+        </>
       )}
     </div>
   );
