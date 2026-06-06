@@ -367,7 +367,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                   }
                 })(),
               },
-              {
+              ...(devMode
+                ? [{
                 k: "SDK",
                 v: (() => {
                   const installed = `v${SDK_PACKAGE_VERSION}`;
@@ -398,7 +399,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                     </span>
                   );
                 })(),
-              },
+              }]
+                : []),
             ]}
           />
         </div>
@@ -660,7 +662,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                     ? "—"
                     : backupStatusLabel(activeBackup),
                 },
-                ...(activeBackup &&
+                ...(devMode &&
+                activeBackup &&
                 activeBackup.chainRegistrationTxHash !== undefined
                   ? [
                       {
@@ -669,7 +672,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                       },
                     ]
                   : []),
-                ...(activeBackup &&
+                ...(devMode &&
+                activeBackup &&
                 activeBackup.chainRegistrationBlock !== undefined
                   ? [
                       {
@@ -849,7 +853,9 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
             Renders when the SW IPC returns data; absent when the chain is
             offline. The wallet still mounts the About page; this card just
             doesn't show. */}
-        {provenance !== null && (
+        {/* Runtime provenance card is whole-cloth developer-only: chain-reported
+            client/commit/sha/P2P/tip + compile-time feature chips. */}
+        {provenance !== null && devMode && (
           <div className="ext-card">
             <div className="ext-card__head">
               <h3>Runtime</h3>
