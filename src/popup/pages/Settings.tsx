@@ -3,6 +3,7 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { type SignAlgo } from "../bg";
+import { useFeature } from "../hooks/useFeature";
 import { CheckIcon, ClipboardIcon } from "../components/AddressLine";
 import { WalletSecurityControls } from "../components/WalletSecurityControls";
 import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
@@ -60,6 +61,14 @@ const ALGO_LABEL: Record<SignAlgo, string> = {
   secp256k1: "secp256k1 (legacy)",
 };
 
+// Plain, non-technical signing labels for the default (non-developer) surface.
+// The exact scheme id (ALGO_LABEL) is shown only in developer mode.
+const ALGO_PLAIN_LABEL: Record<SignAlgo, string> = {
+  mldsa: "Post-quantum",
+  slhdsa: "Post-quantum",
+  secp256k1: "Legacy (not quantum-safe)",
+};
+
 function getExtensionVersion(): string {
   try {
     return chrome.runtime.getManifest().version;
@@ -84,6 +93,7 @@ export function Settings({
   onOpenTheme,
   multisig,
 }: SettingsProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   // Account section inline copy state.
   const [addrCopied, setAddrCopied] = useState(false);
   const handleAddrCopy = (e: ReactMouseEvent) => {
@@ -210,7 +220,7 @@ export function Settings({
                 letterSpacing: "0.05em",
               }}
             >
-              Signing: <span style={{ color: "var(--gold)" }}>{ALGO_LABEL[algo]}</span>
+              Signing: <span style={{ color: "var(--gold)" }}>{devMode ? ALGO_LABEL[algo] : ALGO_PLAIN_LABEL[algo]}</span>
             </div>
             <button
               onClick={onShowPhrase}
@@ -523,6 +533,7 @@ export function Settings({
           </button>
         </div>
 
+        {devMode && (
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Developer tools</h3>
@@ -579,6 +590,7 @@ export function Settings({
             <Icon name="chev" size={12} />
           </button>
         </div>
+        )}
 
         <div className="ext-card">
           <div className="ext-card__head">
@@ -592,8 +604,9 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            Override the Monolythium Testnet operator RPC list with your own operator
-            nodes. Defaults use the 7 published operators in round-robin.
+            {devMode
+              ? "Override the Monolythium Testnet operator RPC list with your own operator nodes. Defaults use the 7 published operators in round-robin."
+              : "Review the Monolythium Testnet operators the wallet connects to."}
           </div>
           <button
             onClick={onOpenOperators}
