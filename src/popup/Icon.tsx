@@ -8,7 +8,7 @@ export type IconName =
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
-  | "expand" | "copy" | "trash" | "external" | "bell" | "contrast";
+  | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code";
 
 interface IconProps {
   name: IconName;
@@ -33,6 +33,15 @@ export function Icon({ name, size = 16 }: IconProps) {
         <svg {...props}>
           <path d="M22 2 11 13" />
           <path d="M22 2l-7 20-4-9-9-4z" />
+        </svg>
+      );
+    case "code":
+      // `</>` developer glyph — code brackets + slash.
+      return (
+        <svg {...props}>
+          <path d="m18 16 4-4-4-4" />
+          <path d="m6 8-4 4 4 4" />
+          <path d="m14.5 4-5 16" />
         </svg>
       );
     case "qr":

@@ -91,7 +91,9 @@ export function Features({ onBack }: FeaturesProps) {
 
           {state && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {FEATURE_FLAGS.map((flag) => {
+              {/* DEVELOPER_MODE is excluded here — it is enabled only via the
+                  popup-guarded DeveloperModeToggle, never as a bare grid toggle. */}
+              {FEATURE_FLAGS.filter((flag) => flag !== "DEVELOPER_MODE").map((flag) => {
                 const meta = FEATURE_META[flag];
                 const s = state[flag];
                 const isSaving = saving === flag;
