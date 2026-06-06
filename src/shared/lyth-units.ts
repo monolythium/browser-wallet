@@ -1,4 +1,4 @@
-// Canonical lythoshi (10^8 per LYTH) → decimal-LYTH string formatting.
+// Canonical lythoshi (10^18 per LYTH) → decimal-LYTH string formatting.
 //
 // Lives in `shared/` (no `background/` import) so BOTH the background
 // pending-row writer (via wei-decimal.ts) and the popup-facing activity

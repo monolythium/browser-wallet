@@ -16,13 +16,13 @@ describe("chain-units (lythoshi-native wire; dc919df8)", () => {
   it("legacy mode is OFF: operators run the lythoshi-native binary dc919df8", () => {
     // Flipped to false on 2026-05-29 once operators upgraded past the
     // lythoshi-rescaling commits (a2a9e1fc et al). The chain now reports
-    // balance/gas price/fee fields in 8-decimal lythoshi directly, so
+    // balance/gas price/fee fields in canonical lythoshi directly, so
     // every helper below is an identity passthrough.
     expect(CHAIN_RETURNS_LEGACY_WEI).toBe(false);
   });
 
   it("chainAmountToLythoshi is identity (no /10^10 down-scale)", () => {
-    // Lythoshi-native: 10^10 lythoshi stays 10^10 lythoshi (= 100 LYTH),
+    // Lythoshi-native: 10^10 lythoshi stays 10^10 lythoshi,
     // NOT divided down to 1 lythoshi as the legacy-wei path would.
     expect(chainAmountToLythoshi(10_000_000_000n)).toBe(10_000_000_000n);
   });
@@ -33,8 +33,8 @@ describe("chain-units (lythoshi-native wire; dc919df8)", () => {
   });
 
   it("legacyChainBalanceHexToLythoshiHex is identity for the live-balance case", () => {
-    // Live evidence: eth_getBalance -> 0x2540be400 = 10^10 lythoshi = 100
-    // LYTH. The wallet must NOT touch it — the wire is already lythoshi.
+    // Live evidence: the wallet must NOT touch chain values; the wire is
+    // already lythoshi.
     expect(legacyChainBalanceHexToLythoshiHex("0x2540be400")).toBe("0x2540be400");
   });
 
@@ -72,7 +72,7 @@ describe("chain-units (lythoshi-native wire; dc919df8)", () => {
   });
 
   it("legacyChainFeeSuggestionWeiToLythoshi passes the three fee fields through unchanged", () => {
-    // Lythoshi-native: fee fields are already 8-decimal lythoshi, so the
+    // Lythoshi-native: fee fields are already canonical lythoshi, so the
     // helper is an identity passthrough — no /10^10 compensation.
     const input = {
       maxPriorityFeePerGas: "0x2540be400",

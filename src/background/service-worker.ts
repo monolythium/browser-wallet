@@ -4709,7 +4709,7 @@ async function dropConfirmedPendingByHash(
  *   - a zero fee (near-zero-gas testnet) → undefined (display would hide it)
  *  READ-ONLY + isolated: wrapped so it can never throw into the notification
  *  path, and it never touches signing / broadcast / nonce / payload. The fee
- *  is lythoshi (1 LYTH = 1e8), NOT 18-decimal wei. */
+ *  is lythoshi (1 LYTH = 1e18), NOT a separate wei domain. */
 async function fetchConfirmedFeeLythoshi(
   txHash: string,
   opts?: { timeoutMs?: number },
@@ -7209,7 +7209,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               : "";
           // Sprintnet operators now run the lythoshi-native binary
           // `dc919df8`: `eth_getBalance` is reported directly
-          // in 8-decimal lythoshi, which is exactly what the wallet's
+          // in canonical lythoshi, which is exactly what the wallet's
           // display path (`formatNativeLythAmount`) expects. The boundary
           // helper below is therefore an identity passthrough — it is
           // retained only as the single flag-aware chokepoint so the

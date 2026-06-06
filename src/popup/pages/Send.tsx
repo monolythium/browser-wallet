@@ -6,7 +6,7 @@
 //
 // Wire format: the SW still names the value field `valueWeiHex` at the IPC
 // compatibility boundary. Inside this Send page, native LYTH amounts are
-// handled as 8-decimal lythoshi per v4.1.
+// handled as 18-decimal lythoshi per v4.1.
 
 import type { ReactNode, CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";

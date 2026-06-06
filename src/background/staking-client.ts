@@ -1119,7 +1119,7 @@ function mockRedemptionQueueView(wallet: string): RedemptionQueueView {
  *  derived from active delegations + MOCK_CLUSTER_APR_BPS.
  *
  *  Mock derivation: for each active delegation row, the wallet computes
- *  a small fake reward in lythoshi (8-decimal native LYTH) proportional to
+ *  a small fake reward in lythoshi (18-decimal native LYTH) proportional to
  *  a 100 LYTH notional principal × delegation weight × APR / 365 / 288 —
  *  i.e. "as if 5 minutes of accrual at the cluster's nominal APR." */
 export async function readPendingRewards(

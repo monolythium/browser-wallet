@@ -75,7 +75,7 @@ export { LYTHOSHI_PER_LYTH };
  *  (chain GAP), we hardcode 100 LYTH as a stand-in. The limit is
  *  user-configurable from the Security page.
  *
- *  100 LYTH = 100 * 100_000_000 lythoshi = 10_000_000_000n
+ *  100 LYTH = 100 * 1_000_000_000_000_000_000 lythoshi
  *
  *  Reasoning for 100 LYTH proxy: at testnet pricing (no public mainnet
  *  price yet) this is a comfortable median user spend — large enough
@@ -85,7 +85,7 @@ export { LYTHOSHI_PER_LYTH };
 export const DEFAULT_PASSKEY_LIMIT_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
 
 /** Floor on the user-configurable passkey limit. 1 LYTH
- *  (100_000_000 lythoshi) — below this, passkey unlock is too narrow
+ *  (1_000_000_000_000_000_000 lythoshi) — below this, passkey unlock is too narrow
  *  to be useful. */
 export const MIN_PASSKEY_LIMIT_LYTHOSHI = LYTHOSHI_PER_LYTH;
 

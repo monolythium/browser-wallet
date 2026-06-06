@@ -150,7 +150,7 @@ const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
 
 /**
  * T4-03 (Item C) — absolute sane upper bound on a single-account balance, in
- * lythoshi. The chain's genesis supply is 100,000,000 LYTH = 10^16 lythoshi
+ * lythoshi. The chain's genesis supply is 100,000,000 LYTH = 10^26 lythoshi
  * (whitepaper §16.1), and the 8%/yr inflation cap means supply grows only
  * slowly (burn trends it deflationary), so no single address can ever hold
  * more than total supply. A generous 2x-supply ceiling is the "physically

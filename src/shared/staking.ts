@@ -356,7 +356,7 @@ export interface PendingRewardsRow {
   weightBps: number;
   /** Unsettled rewards from this cluster, as a decimal lythoshi string. */
   unsettledAmountLythoshi: string;
-  /** Accrued rewards as a hex lythoshi quantity (8-decimal native LYTH).
+  /** Accrued rewards as a hex lythoshi quantity (18-decimal native LYTH).
    *  The `amountWei` key is a legacy upstream/API compatibility name only. */
   amountWei: string;
   /** Cluster's effective APR at observation time, in basis points. `null`

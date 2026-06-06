@@ -777,15 +777,15 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               { k: "Whitepaper", v: "v5.0 · May 2026" },
               { k: "Signing", v: "ML-DSA-65 (FIPS 204)" },
               { k: "Address format", v: "bech32m" },
-              { k: "Atomic unit", v: "lythoshi (10⁻⁸ LYTH)" },
+              { k: "Atomic unit", v: "lythoshi (10^-18 LYTH)" },
               {
                 k: "Chain decimal mode",
                 v: CHAIN_RETURNS_LEGACY_WEI
                   ? "legacy compat (wei wire) · wallet compensates"
                   : "lythoshi-native · no compensation",
                 title: CHAIN_RETURNS_LEGACY_WEI
-                  ? "V4-LIVE-0008 operators (commit 5aead0f0) still report wei on the wire; wallet converts to lythoshi at IPC boundaries. Flip CHAIN_RETURNS_LEGACY_WEI=false when operators upgrade past a2a9e1fc."
-                  : "Operators report 8-decimal lythoshi directly as of binary dc919df8 (2026-05-29); eth_getBalance, gas price, and lyth_executionUnitPrice fields are already in lythoshi, so the wallet applies no inbound wei compensation.",
+                  ? "Legacy wire mode: the wallet converts inbound 18-decimal wei-like chain magnitudes to lythoshi at IPC boundaries."
+                  : "Operators report 18-decimal lythoshi directly; eth_getBalance, gas price, and lyth_executionUnitPrice fields are already in lythoshi, so the wallet applies no inbound wei compensation.",
               },
               {
                 k: "EVM compat",

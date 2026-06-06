@@ -4815,7 +4815,7 @@ describe("notification settings IPC — boolean validation at the boundary", () 
 // passkeyStateForTest (default null/disabled — see the keystore mock).
 // ─────────────────────────────────────────────────────────────────────────────
 describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
-  const LIMIT_LYTHOSHI = 10_000_000_000n; // 100 LYTH (1 LYTH = 1e8 lythoshi)
+  const LIMIT_LYTHOSHI = 100_000_000_000_000_000_000n; // 100 LYTH
   const OVER = "0x" + (LIMIT_LYTHOSHI * 2n).toString(16); // 200 LYTH
   const UNDER = "0x" + (LIMIT_LYTHOSHI / 2n).toString(16); // 50 LYTH
 

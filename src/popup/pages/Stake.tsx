@@ -473,7 +473,7 @@ export function Stake({
       // Native LYTH principal sent as `msg.value`. Only `delegate` commits
       // principal (mono-core ops.rs `principal_delta = ctx.value`); the
       // others are weight-only / selector-only. valueWeiHex carries native
-      // lythoshi (8-decimal), matching the Send path's value convention.
+      // lythoshi (18-decimal), matching the Send path's value convention.
       let valueWeiHex = "0x0";
       if (action === "claim") {
         data = encodeClaimRewards();
