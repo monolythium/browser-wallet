@@ -86,11 +86,11 @@ export function finalityPostureFor(chainIdHex: string): string {
 export const WALLET_PITCH: ReadonlyArray<{ title: string; body: string }> = [
   {
     title: "Post-quantum from the first block.",
-    body: `Most chains plan to "migrate" to post-quantum cryptography someday. Monolythium started there. Every transaction is admitted under ML-DSA-65 (NIST FIPS 204) and nothing else — no secp256k1 acceptance path, no hybrid mode, no swap-at-mainnet migration to wait for. The signatures protecting your funds are already quantum-resistant, from genesis. This wallet signs every transaction with ML-DSA-65 and keeps a separate SLH-DSA (FIPS 205) key — a different cryptographic family — as an emergency backup.`,
+    body: `Every transaction is admitted under ML-DSA-65 (NIST FIPS 204) and nothing else — no secp256k1 acceptance path, no hybrid mode, no swap-at-mainnet migration. The signatures protecting your funds are quantum-resistant from genesis. This wallet signs every transaction with ML-DSA-65 and keeps a separate SLH-DSA (FIPS 205) key — a different cryptographic family — as an emergency backup.`,
   },
   {
     title: "No EVM. Real programs, deterministically executed.",
-    body: `Monolythium does not run the Ethereum Virtual Machine. Contracts compile to a deterministic RISC-V target, so execution is fast, auditable, and free of the EVM's legacy quirks. A read-only slice of Ethereum-style RPC is kept for tooling compatibility, but the mutating and simulation calls are rejected — there is no EVM execution to fall back on. This wallet speaks the chain's native methods directly and never pretends an EVM call will work.`,
+    body: `Monolythium does not run the Ethereum Virtual Machine. Contracts compile to a deterministic RISC-V target, so execution is fast and auditable. A read-only slice of Ethereum-style RPC is kept for tooling compatibility, but the mutating and simulation calls are rejected — there is no EVM execution behind them. This wallet speaks the chain's native methods directly and never pretends an EVM call will work.`,
   },
   {
     title: "Trust anchored to genesis, not to whoever answers.",
@@ -105,8 +105,8 @@ export const WALLET_PITCH: ReadonlyArray<{ title: string; body: string }> = [
     body: `Validation runs on distributed-validator clusters — seven active operators plus three on standby, with a seven-of-ten signing threshold — published openly so you can see who is securing the network. Concentration is capped per operator and per wallet by enforced on-chain limits. (The 100-cluster, 1,000-position scale is a growth target the design is built for, not a number claimed today.) This wallet lets you browse clusters, see their health and makeup, and delegate to the ones you choose.`,
   },
   {
-    title: "Native token standards, not Ethereum imports.",
-    body: `Tokens, NFTs, and vaults are first-class chain primitives — native MRC-20, MRC-721, MRC-1155, and MRC-4626 — not ERC contracts ported onto a foreign VM. The standards your assets follow are part of the chain itself. This wallet reads and handles these native standards directly.`,
+    title: "Native token standards.",
+    body: `Tokens, NFTs, and vaults are first-class chain primitives — native MRC-20, MRC-721, MRC-1155, and MRC-4626. The standards your assets follow are part of the chain itself. This wallet reads and handles these native standards directly.`,
   },
   {
     title: "Defined as much by what it refuses.",
@@ -114,7 +114,7 @@ export const WALLET_PITCH: ReadonlyArray<{ title: string; body: string }> = [
   },
   {
     title: "Many vaults, one keystore — and built for agents.",
-    body: `Hold several independent vaults behind one master password, each with its own approval rules. Multi-signature today lives in the keystore itself — the threshold and roster are part of your encrypted wallet, with approvals as ML-DSA-65 signatures — so there's no separate smart-contract wallet to deploy; a native on-chain m-of-n spend path is being wired next. And because the network ships an open-source MCP server, AI assistants can already read live chain state and run typed, auditable routines, with an opt-in in-wallet Copilot building toward that, off by default until it's ready. This wallet gives you multi-vault custody now, and is being built toward native on-chain multisig and an opt-in agentic Copilot.`,
+    body: `Hold several independent vaults behind one master password, each with its own approval rules. Multi-signature today lives in the keystore itself — the threshold and roster are part of your encrypted wallet, with approvals as ML-DSA-65 signatures; a native on-chain m-of-n spend path is being wired next. And because the network ships an open-source MCP server, AI assistants can already read live chain state and run typed, auditable routines, with an opt-in in-wallet Copilot building toward that, off by default until it's ready. This wallet gives you multi-vault custody now, and is being built toward native on-chain multisig and an opt-in agentic Copilot.`,
   },
 ];
 
