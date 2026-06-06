@@ -966,7 +966,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               {probeError}
             </div>
           )}
-          {capabilitySummary !== null && capabilitySummary.length > 0 && (
+          {devMode && capabilitySummary !== null && capabilitySummary.length > 0 && (
             <div
               style={{
                 display: "flex",
@@ -1179,6 +1179,7 @@ function Mono({ children }: { children: ReactNode }) {
 }
 
 function OperatorRow({ row }: { row: OperatorHealthRow }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const ok = row.ok;
   const trusted = row.trustedGenesis;
   // Untrusted (forked) operators are RPC-skipped regardless of liveness,
@@ -1260,30 +1261,35 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
                 border: "1px solid rgba(220,80,80,0.4)",
               }}
               title={
-                row.observedGenesis !== null
-                  ? `observed genesis: ${row.observedGenesis}`
-                  : "operator did not return chain-genesis metadata"
+                devMode
+                  ? row.observedGenesis !== null
+                    ? `observed genesis: ${row.observedGenesis}`
+                    : "operator did not return chain-genesis metadata"
+                  : "This operator reports a different chain — the wallet won't trust its data."
               }
             >
               untrusted chain
             </span>
           )}
         </div>
-        <div
-          style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            color: "var(--fg-400)",
-            marginTop: 2,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-          title={row.rpc}
-        >
-          {row.rpc.replace(/^https?:\/\//, "")}
-        </div>
+        {devMode && (
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              marginTop: 2,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={row.rpc}
+          >
+            {row.rpc.replace(/^https?:\/\//, "")}
+          </div>
+        )}
       </div>
+      {devMode && (
       <div
         style={{
           fontFamily: "var(--f-mono)",
@@ -1324,6 +1330,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           <div>{row.reason}</div>
         )}
       </div>
+      )}
       {/* Operator risk badges (derived from probe
           data via classifyOperatorRisk). Spans the full row when any
           risk badge applies; absent for healthy operators. */}
@@ -1347,7 +1354,8 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
       {/* Per-operator capability badge strip. Spans all 3
           columns when present; absent when the operator's response had
           no capabilities or returned an error for `lyth_operatorCapabilities`. */}
-      {row.capabilities !== null &&
+      {devMode &&
+        row.capabilities !== null &&
         Object.keys(row.capabilities).length > 0 && (
           <div
             style={{
