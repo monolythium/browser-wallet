@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The MrvNative page is developer-mode-gated; force the flag on so these
-// tests exercise the real RISC-V console rather than the "developer mode
-// required" stub.
+// The MrvNative page is developer-mode-gated. Mock useFeature so that ONLY
+// DEVELOPER_MODE is on (other flags keep their real-default-off behavior, so a
+// regression in another flag's gating isn't masked). The OFF-path test below
+// flips DEVELOPER_MODE false to assert the gate.
 vi.mock("../hooks/useFeature", () => ({
-  useFeature: () => true,
+  useFeature: vi.fn((flag: string) => flag === "DEVELOPER_MODE"),
 }));
 
 import {
@@ -30,6 +31,15 @@ import type {
   WalletMrvNoEvmReceiptProofTranscript,
   WalletMrvNoEvmReceiptProofVerification,
 } from "../bg.js";
+import { useFeature } from "../hooks/useFeature";
+
+// Each test starts from the scoped default (only DEVELOPER_MODE on); the
+// OFF-path test overrides it and beforeEach restores it for the next test.
+beforeEach(() => {
+  vi.mocked(useFeature).mockImplementation(
+    (flag: string) => flag === "DEVELOPER_MODE",
+  );
+});
 
 const CONTRACT_RAW = "0x2222222222222222222222222222222222222222";
 const CONTRACT_TYPED = "monoc1yg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zr6jfvd";
@@ -289,6 +299,19 @@ describe("MrvNative", () => {
     expect(html).toContain("does not prove live RISC-V execution");
     expect(html).toContain("Native market replay");
     expect(html).toContain("Checking recent orderbook replay status");
+  });
+
+  it("hides the RISC-V console when developer mode is off", () => {
+    vi.mocked(useFeature).mockImplementation(() => false);
+    const html = renderToStaticMarkup(
+      <MrvNative chainIdHex="0x10F2C" onBack={() => undefined} />,
+    );
+    // The "Developer mode required" stub replaces the console.
+    expect(html).toContain("Developer mode required");
+    // None of the dev console body renders.
+    expect(html).not.toContain("Native contract preview");
+    expect(html).not.toContain("MRV native");
+    expect(html).not.toContain("Native market replay");
   });
 
   it("renders native market replay readiness from returned deltas only", () => {
