@@ -33,22 +33,22 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value tracks chain-registry commit `a82df06` / protocore
- *  v0.0.25-testnet (2026-06-01), where `lyth_chainStats.genesisHash`
+ *  Current value tracks protocore v0.1.18-testnet (2026-06-06), where
+ *  `lyth_chainStats.genesisHash`
  *  reports the registry identity hash below. Bumping this security pin is
  *  a human-reviewer decision; the About-page drift banner surfaces the
  *  mismatch and the live-registry fetch shows the current GitHub-registry
  *  value alongside it. */
 export const SPRINTNET_GENESIS_HASH =
-  "0x3b5fe6c9394c67661ddabd4aca3f883b4570c435c912412ef1d7e83b386e461c";
+  "0xd24750ca765e702af7cbf3c6a3b479da9fafbc56fadd2168b22d035a23e29421";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from SPRINTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
  *  exposes the chain identity hash used by the registry / p2p binding,
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
- *  header hash. They are not the same value on protocore v0.0.25. */
+ *  header hash. They are not the same value on protocore v0.1.18. */
 export const SPRINTNET_BLOCK0_HASH =
-  "0x5c9b9859ef036e2dac514a5b4cc45bb3686078f69bb4c5e413d238c5202aac6b";
+  "0x14dbab3e71ab9b2dc9959afd788584fe728a3945af0cb58d2c674bbb354a7a45";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from SPRINTNET_GENESIS_HASH so the

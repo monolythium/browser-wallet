@@ -355,7 +355,6 @@ export async function readClusterDirectory(
 interface RawClusterMember {
   operatorId?: string;
   consensusPubkey?: string;
-  blsPubkey?: string;
   state?: string;
 }
 
@@ -377,20 +376,16 @@ interface RawClusterStatus {
 }
 
 function normaliseMember(raw: RawClusterMember): ClusterMember | null {
-  const consensusPubkey =
-    typeof raw.consensusPubkey === "string"
-      ? raw.consensusPubkey
-      : raw.blsPubkey;
   if (
     typeof raw.operatorId !== "string" ||
-    typeof consensusPubkey !== "string" ||
+    typeof raw.consensusPubkey !== "string" ||
     typeof raw.state !== "string"
   ) {
     return null;
   }
   return {
     operatorId: raw.operatorId,
-    consensusPubkey,
+    consensusPubkey: raw.consensusPubkey,
     state: raw.state,
   };
 }

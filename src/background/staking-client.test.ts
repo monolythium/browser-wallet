@@ -593,7 +593,7 @@ describe("readClusterStatus", () => {
       offline: 1,
       maintenance: 0,
       members: [
-        { operatorId: "op-a", blsPubkey: "0x" + "11".repeat(48), state: "active" },
+        { operatorId: "op-a", consensusPubkey: "0x" + "11".repeat(48), state: "active" },
       ],
       epoch: 17n,
       round: 256n,
@@ -633,7 +633,7 @@ describe("readOperatorInfo", () => {
         bondedAmount: "500000000000",
         activeClusterIds: [1, 3],
         operatorKeyFingerprint: "fp-1",
-        blsKeyFingerprint: "fp-bls",
+        consensusKeyFingerprint: "fp-consensus",
         lifecycleState: "active",
         capability: {},
       },
@@ -684,7 +684,7 @@ describe("readOperatorInfo", () => {
       bondedAmount: "5000" + "0".repeat(8), // 5,000 LYTH in lythoshi
       activeClusterIds: [2],
       operatorKeyFingerprint: null,
-      blsKeyFingerprint: null,
+      consensusKeyFingerprint: null,
       lifecycleState: "active",
       capability: { region: "eu-west" },
     };
