@@ -40,8 +40,8 @@ interface MainMenuProps {
    *  list. When omitted the menu item is hidden (Multisig is
    *  in a follow-up commit). */
   onMultisig?: () => void;
-  /** Optional — §18.8 agent spending-policy management. When omitted
-   *  the menu item is hidden (advanced agent-commerce UX). */
+  /** Optional — automation spending-limits management. Dev-gated; when
+   *  omitted (or developer mode is off) the menu item is hidden. */
   onAgentPolicy?: () => void;
   onSettings: () => void;
   /** Opens the Theme page (appearance / theme picker) — the same page
@@ -208,10 +208,10 @@ export function MainMenu({
               hasChevron
             />
           )}
-          {onAgentPolicy && (
+          {onAgentPolicy && devMode && (
             <MenuItem
               icon="settings"
-              label="Agent spending policy"
+              label="Automation spending limits"
               onClick={onAgentPolicy}
               hasChevron
             />
