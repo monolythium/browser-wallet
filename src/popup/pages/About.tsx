@@ -6,7 +6,7 @@
 // the operator-health probe.
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { Icon } from "../Icon";
+import { Icon, type IconName } from "../Icon";
 import { Section } from "./OperatorDirectory";
 import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
 import { useFeature } from "../hooks/useFeature";
@@ -1106,7 +1106,20 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                   textDecoration: "none",
                 }}
               >
-                <span>{link.label}</span>
+                <span
+                  style={{ display: "flex", alignItems: "center", gap: 10 }}
+                >
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      color: link.brandColor ?? "var(--fg-300)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Icon name={link.icon as IconName} size={16} />
+                  </span>
+                  {link.label}
+                </span>
                 <span
                   style={{
                     fontFamily: "var(--f-mono)",

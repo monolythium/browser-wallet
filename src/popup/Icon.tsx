@@ -9,7 +9,8 @@ export type IconName =
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
-  | "contacts" | "network" | "sliders" | "server" | "gem";
+  | "contacts" | "network" | "sliders" | "server" | "gem"
+  | "mono-mark" | "github";
 
 interface IconProps {
   name: IconName;
@@ -97,6 +98,24 @@ export function Icon({ name, size = 16 }: IconProps) {
           <path d="M6 3h12l4 6-10 12L2 9 6 3z" />
           <path d="M2 9h20" />
           <path d="m9.5 9 2.5 12 2.5-12L12 3" />
+        </svg>
+      );
+    case "github":
+      // GitHub mark (Octocat silhouette) — repo link. Fill glyph in the
+      // shared 24×24 box; overrides the set-wide stroke.
+      return (
+        <svg {...props} fill="currentColor" stroke="none">
+          <path d="M12 .5C5.73.5.5 5.73.5 12.18c0 5.16 3.35 9.53 7.99 11.08.58.11.8-.25.8-.56 0-.28-.01-1.02-.02-2-3.25.71-3.94-1.57-3.94-1.57-.53-1.35-1.3-1.71-1.3-1.71-1.06-.73.08-.71.08-.71 1.17.08 1.79 1.21 1.79 1.21 1.04 1.79 2.73 1.27 3.4.97.11-.76.41-1.27.74-1.56-2.6-.3-5.33-1.3-5.33-5.79 0-1.28.46-2.32 1.21-3.14-.12-.3-.52-1.49.11-3.11 0 0 .99-.32 3.23 1.2a11.2 11.2 0 0 1 5.88 0c2.24-1.52 3.22-1.2 3.22-1.2.64 1.62.24 2.81.12 3.11.76.82 1.21 1.86 1.21 3.14 0 4.5-2.74 5.49-5.35 5.78.42.36.8 1.08.8 2.18 0 1.58-.01 2.85-.01 3.24 0 .31.21.68.81.56 4.64-1.55 7.98-5.92 7.98-11.08C23.5 5.73 18.27.5 12 .5z" />
+        </svg>
+      );
+    case "mono-mark":
+      // Monolythium "M" brand mark (isometric folded-ribbon) — mirrors
+      // M_MARK in components/WalletLogo.tsx. Fill glyph in the brand's own
+      // 23 23 185 185 box; color comes from the wrapping element (brand
+      // purple for Monolythium, teal for Mono Labs).
+      return (
+        <svg {...props} viewBox="23 23 185 185" fill="currentColor" stroke="none">
+          <path d="M52 31 L79 46 L54 60 L54 199 L31 186 L31 43 Z M178 31 L200 43 L200 186 L176 200 L176 61 L117 93 L64 65 L89 51 L116 66 Z M79 103 L103 116 L103 186 L80 199 Z M150 103 L151 199 L128 186 L128 116 Z" />
         </svg>
       );
     case "qr":

@@ -2,7 +2,7 @@
 // repo, etc.), reached from the hamburger "Resources" entry. Mirrors the
 // About page's Resources card (same EXTERNAL_LINKS source of truth).
 
-import { Icon } from "../Icon";
+import { Icon, type IconName } from "../Icon";
 import { EXTERNAL_LINKS } from "../../shared/build-info";
 import { useFeature } from "../hooks/useFeature";
 
@@ -50,7 +50,20 @@ export function Resources({ onBack }: ResourcesProps) {
                   textDecoration: "none",
                 }}
               >
-                <span>{link.label}</span>
+                <span
+                  style={{ display: "flex", alignItems: "center", gap: 10 }}
+                >
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      color: link.brandColor ?? "var(--fg-300)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Icon name={link.icon as IconName} size={16} />
+                  </span>
+                  {link.label}
+                </span>
                 {devMode && (
                   <span
                     style={{

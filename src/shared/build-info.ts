@@ -102,18 +102,53 @@ export const WALLET_PITCH: ReadonlyArray<{ title: string; body: string }> = [
 
 /** Static external links surfaced from the About page. URLs are stable
  *  project endpoints; the About page is read-only / informational. */
-export const EXTERNAL_LINKS: ReadonlyArray<{ label: string; url: string }> = [
+export const EXTERNAL_LINKS: ReadonlyArray<{
+  label: string;
+  url: string;
+  /** Icon glyph name (see popup/Icon `IconName`), or "mono-mark" for the
+   *  brand "M". Typed as a plain string so this shared module stays free of
+   *  UI imports; the render sites cast it to IconName. */
+  icon: string;
+  /** Brand tint for the "M" marks — Monolythium purple / Mono Labs teal.
+   *  Other links use the default icon color. */
+  brandColor?: string;
+}> = [
+  {
+    label: "Monolythium",
+    url: "https://monolythium.com/",
+    icon: "mono-mark",
+    brandColor: "#7C5CFC",
+  },
+  {
+    label: "Mono Labs",
+    url: "https://mono-labs.org/",
+    icon: "mono-mark",
+    brandColor: "#2DD4BF",
+  },
+  {
+    label: "Ecosystem",
+    url: "https://monolythium.com/ecosystem",
+    icon: "network",
+  },
+  {
+    label: "Documentation",
+    url: "https://docs.monolythium.com/",
+    icon: "book",
+  },
   {
     label: "Whitepaper",
-    url: "https://monolythium.org/whitepaper",
+    url: "https://monolythium.com/whitepaper",
+    icon: "contract",
   },
   {
     label: "GitHub",
-    url: "https://github.com/monolythium/browser-wallet",
+    url: "https://github.com/monolythium/",
+    icon: "github",
   },
   {
-    label: "Privacy policy",
-    url: "https://monolythium.org/privacy",
+    label: "Privacy",
+    url: "https://monolythium.com/legal/privacy",
+    icon: "shield",
   },
 ];
 
