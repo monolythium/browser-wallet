@@ -846,7 +846,12 @@ export function Stake({
             {entryMode === "manual" && (
               <>
                 {clustersError !== null ? (
-                  <div style={errBanner}>{clustersError}</div>
+                  <div style={errBanner}>
+                    {classifySendError(clustersError).kind ===
+                      "genesis-mismatch" && onOpenOperators
+                      ? genesisErrorBody(clustersError, onOpenOperators)
+                      : clustersError}
+                  </div>
                 ) : clusters.length === 0 ? (
                   <div
                     style={{
