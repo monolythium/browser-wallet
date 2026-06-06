@@ -253,7 +253,7 @@ describe("validateActivityRow", () => {
     expect(validateActivityRow(r)).toEqual(r);
   });
 
-  it("accepts a crossing_to_private row even though Sprintnet doesn't emit it", () => {
+  it("accepts a crossing_to_private row even though the testnet doesn't emit it", () => {
     const row = {
       kind: "crossing_to_private",
       blockHeight: 100,
@@ -684,7 +684,7 @@ describe("mapAddressActivityToRows", () => {
     expect(rows).toHaveLength(0);
   });
 
-  it("maps crossing kinds (forward-compat — never fires on Sprintnet today)", () => {
+  it("maps crossing kinds (forward-compat — never fires on the testnet today)", () => {
     const rows = mapAddressActivityToRows(
       [
         makeActivity({ kind: "crossing", amount: "1.5" }),

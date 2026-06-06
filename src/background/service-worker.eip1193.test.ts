@@ -590,7 +590,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
         "chain-edit",
         {
           chainId: TESTNET_CHAIN_ID_HEX,
-          patch: { name: "Hijacked Sprintnet" },
+          patch: { name: "Hijacked Testnet" },
         },
       );
       expect(r.ok).toBe(false);
@@ -658,7 +658,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       expect(list.find((c) => c.chainId === KEY)).toBeUndefined();
     });
 
-    it("chain-delete on the active chain resets to Sprintnet and broadcasts chainChanged", async () => {
+    it("chain-delete on the active chain resets to the testnet and broadcasts chainChanged", async () => {
       const KEY = "0xCAFE";
       await popupDispatch("chain-add-manual", {
         chain: { chainId: KEY, name: "Active-then-deleted", rpc: "https://cafe.example" },
@@ -669,7 +669,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       broadcastEvents.length = 0;
       const r = await popupDispatch<{ ok: boolean }>("chain-delete", { chainId: KEY });
       expect(r.ok).toBe(true);
-      // Active chain must reset to Sprintnet and chainChanged must fire.
+      // Active chain must reset to the testnet and chainChanged must fire.
       const active = await popupDispatch<{ ok: boolean; chainId: string }>("wallet-active-chain");
       expect(active.chainId).toBe(TESTNET_CHAIN_ID_HEX);
       expect(broadcastEvents.some((e) => e.event === "chainChanged" && e.payload === TESTNET_CHAIN_ID_HEX)).toBe(true);
@@ -680,7 +680,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       await popupDispatch("chain-add-manual", {
         chain: { chainId: KEY, name: "Bystander", rpc: "https://bystander.example" },
       });
-      // Active chain stays as whatever was already active (Sprintnet, given test isolation).
+      // Active chain stays as whatever was already active (the testnet, given test isolation).
       broadcastEvents.length = 0;
       const r = await popupDispatch<{ ok: boolean }>("chain-delete", { chainId: KEY });
       expect(r.ok).toBe(true);
@@ -688,32 +688,32 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     });
   });
 
-  // ---- Sprintnet operator override ----
+  // ---- the testnet operator override ----
   describe("popup-IPC operator override", () => {
     interface OperatorWire { name: string; region: string; rpc: string; }
 
-    it("sprintnet-operators-get returns defaults + null override on a fresh wallet", async () => {
+    it("testnet-operators-get returns defaults + null override on a fresh wallet", async () => {
       // Defensive: clear any prior override so the test is order-independent.
-      await popupDispatch("sprintnet-operators-set", { operators: null });
+      await popupDispatch("testnet-operators-set", { operators: null });
       const r = await popupDispatch<{
         ok: boolean;
         override: OperatorWire[] | null;
         defaults: OperatorWire[];
         effective: OperatorWire[];
-      }>("sprintnet-operators-get");
+      }>("testnet-operators-get");
       expect(r.ok).toBe(true);
       expect(r.override).toBeNull();
       expect(r.defaults.length).toBeGreaterThanOrEqual(1);
       expect(r.effective).toEqual(r.defaults);
     });
 
-    it("sprintnet-operators-set persists a valid override and effective reflects it", async () => {
+    it("testnet-operators-set persists a valid override and effective reflects it", async () => {
       const override: OperatorWire[] = [
         { name: "my-node-1", region: "local", rpc: "http://127.0.0.1:8545" },
         { name: "my-node-2", region: "local", rpc: "http://127.0.0.2:8545" },
       ];
       const setRes = await popupDispatch<{ ok: boolean }>(
-        "sprintnet-operators-set",
+        "testnet-operators-set",
         { operators: override },
       );
       expect(setRes.ok).toBe(true);
@@ -721,21 +721,21 @@ describe("EIP-1193 conformance — service-worker request router", () => {
         ok: boolean;
         override: OperatorWire[] | null;
         effective: OperatorWire[];
-      }>("sprintnet-operators-get");
+      }>("testnet-operators-get");
       expect(getRes.ok).toBe(true);
       expect(getRes.override).toEqual(override);
       expect(getRes.effective).toEqual(override);
       // Cleanup so other tests don't see the override.
-      await popupDispatch("sprintnet-operators-set", { operators: null });
+      await popupDispatch("testnet-operators-set", { operators: null });
     });
 
-    it("sprintnet-operators-set with null reverts to defaults", async () => {
+    it("testnet-operators-set with null reverts to defaults", async () => {
       // Set then clear.
-      await popupDispatch("sprintnet-operators-set", {
+      await popupDispatch("testnet-operators-set", {
         operators: [{ name: "x", region: "y", rpc: "http://example.test" }],
       });
       const clear = await popupDispatch<{ ok: boolean }>(
-        "sprintnet-operators-set",
+        "testnet-operators-set",
         { operators: null },
       );
       expect(clear.ok).toBe(true);
@@ -744,12 +744,12 @@ describe("EIP-1193 conformance — service-worker request router", () => {
         override: OperatorWire[] | null;
         defaults: OperatorWire[];
         effective: OperatorWire[];
-      }>("sprintnet-operators-get");
+      }>("testnet-operators-get");
       expect(getRes.override).toBeNull();
       expect(getRes.effective).toEqual(getRes.defaults);
     });
 
-    it("sprintnet-operators-set rejects malformed input shapes", async () => {
+    it("testnet-operators-set rejects malformed input shapes", async () => {
       const cases: unknown[] = [
         [], // empty array
         [{ name: "x", region: "y" /* missing rpc */ }],
@@ -758,13 +758,13 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       ];
       for (const c of cases) {
         const r = await popupDispatch<{ ok: boolean; reason?: string }>(
-          "sprintnet-operators-set",
+          "testnet-operators-set",
           { operators: c },
         );
         expect(r.ok).toBe(false);
       }
       // Clean up.
-      await popupDispatch("sprintnet-operators-set", { operators: null });
+      await popupDispatch("testnet-operators-set", { operators: null });
     });
   });
 

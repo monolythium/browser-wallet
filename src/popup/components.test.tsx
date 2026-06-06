@@ -111,7 +111,7 @@ describe("ReqSendTx native fee helpers", () => {
   it("renders the default approval fee as one LYTH amount", () => {
     const chain = {
       chainId: "0x10f2c",
-      name: "Sprintnet",
+      name: "Monolythium Testnet",
       rpc: "http://localhost:8545",
       chainIdNum: 69420,
       builtin: true,
@@ -132,7 +132,7 @@ describe("ReqSendTx native fee helpers", () => {
             nonce: "0x1",
             simulation: null,
             chainId: "0x10f2c",
-            chainLabel: "Sprintnet",
+            chainLabel: "Monolythium Testnet",
           },
         }}
         custody="sw"
@@ -614,7 +614,7 @@ describe("indexed token balance display", () => {
     } satisfies Account;
     const network = {
       chainId: "0x1",
-      name: "Sprintnet",
+      name: "Monolythium Testnet",
       rpc: "http://localhost:8545",
       chainIdNum: 1,
       builtin: true,

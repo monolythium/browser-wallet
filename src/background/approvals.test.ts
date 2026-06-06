@@ -37,7 +37,7 @@ const sendTx = (origin: string, to: string, value: string) => ({
     nonce: null,
     simulation: null,
     chainId: "0x10F2C",
-    chainLabel: "Sprintnet",
+    chainLabel: "Monolythium Testnet",
   },
 });
 

@@ -9,7 +9,7 @@ interface RpcStub {
 const stub: RpcStub = { responses: {}, errors: {}, calls: [] };
 
 vi.mock("./tx-mldsa.js", () => ({
-  sprintnetJsonRpc: vi.fn(async (method: string, params: unknown[]) => {
+  testnetJsonRpc: vi.fn(async (method: string, params: unknown[]) => {
     stub.calls.push({ method, params });
     if (stub.errors[method] !== undefined) {
       const e = stub.errors[method]!;

@@ -89,7 +89,7 @@ const DISCOVERY_ROUTE = {
 // Module mocks — installed before the SW is imported.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Capture of sprintnetJsonRpc calls. Each test seeds responses keyed by
+// Capture of testnetJsonRpc calls. Each test seeds responses keyed by
 // JSON-RPC method; failures can be seeded with explicit error codes.
 interface CapturedRpcCall {
   method: string;
@@ -103,7 +103,7 @@ let rpcResponses: Record<string, unknown> = {};
 let rpcErrors: Record<string, { code: number; message: string }> = {};
 
 vi.mock("./tx-mldsa.js", () => ({
-  sprintnetJsonRpc: vi.fn(async (method: string, params: unknown[]) => {
+  testnetJsonRpc: vi.fn(async (method: string, params: unknown[]) => {
     rpcCalls.push({ method, params });
     if (rpcErrors[method] !== undefined) {
       const err = new Error(rpcErrors[method]!.message) as Error & { code: number };
@@ -119,7 +119,7 @@ vi.mock("./tx-mldsa.js", () => ({
     err.code = -32601;
     throw err;
   }),
-  sprintnetMaxBalanceConsensus: vi.fn(async (_address: string) => ({
+  testnetMaxBalanceConsensus: vi.fn(async (_address: string) => ({
     balanceHex: "0x0",
     spendGuardHex: "0x0",
     contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
@@ -316,21 +316,21 @@ function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
 }
 let submitFailure: (Error & { code?: number }) | null = null;
 
-// Networks: only the bits the handlers touch. Sprintnet chain id is
+// Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
 // fee structure so wallet-send-tx can complete the broadcast preamble.
 vi.mock("./networks.js", () => ({
   chainRequiresMlDsa: vi.fn((chainIdHex: string) =>
     chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase(),
   ),
-  SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
+  TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
   // T4-04 fee ceiling — real value so the clamp tests are meaningful.
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: 1_000_000_000_000_000n,
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
   BUILTIN_CHAINS: [
     {
       chainId: TESTNET_CHAIN_ID_HEX,
-      name: "Sprintnet",
+      name: "Monolythium Testnet",
       rpc: "http://mock",
       chainIdNum: 69420,
       official: true,
@@ -1350,7 +1350,7 @@ describe("wallet-indexer-snapshot", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("wallet-activity-get", () => {
-  it("rejects non-Sprintnet chain ids", async () => {
+  it("rejects non-testnet chain ids", async () => {
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-activity-get",
@@ -1738,7 +1738,7 @@ describe("wallet-activity-get", () => {
   it("records a 'confirmed' contract_call when eth_getTransactionReceipt.status === 1 (b4d6101 normalizer reused)", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "not_found" };
-    // Sprintnet operators emit numeric status + snake_case block_number —
+    // The testnet operators emit numeric status + snake_case block_number —
     // the same shape the b4d6101 fix handled. Re-asserts the normalizer.
     rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 12345 };
     const txHash = "0x" + "11".repeat(32);
@@ -2176,7 +2176,7 @@ describe("wallet-indexer-status", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("wallet-send-tx pending-row prepend", () => {
-  function seedSprintnetNonceAndFee(nonce: number | string = "0x0") {
+  function seedTestnetNonceAndFee(nonce: number | string = "0x0") {
     rpcResponses["lyth_getTransactionCount"] = nonce;
     rpcResponses["lyth_executionUnitPrice"] = {
       executionUnitPriceLythoshi: "0x2540be401",
@@ -2187,7 +2187,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   }
 
   it("successful broadcast writes a pending row", async () => {
-    seedSprintnetNonceAndFee();
+    seedTestnetNonceAndFee();
     rpcResponses["eth_blockNumber"] = "0x64"; // 100
     const r = (await dispatchPopup({
       kind: "popup",
@@ -2225,7 +2225,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("FAILED broadcast does NOT write a pending row", async () => {
-    seedSprintnetNonceAndFee();
+    seedTestnetNonceAndFee();
     submitFailure = new Error("broadcast rejected") as Error & { code: number };
     submitFailure.code = -32003;
     const r = (await dispatchPopup({
@@ -2249,7 +2249,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("passes SDK market plans through with the CLOB mempool class", async () => {
-    seedSprintnetNonceAndFee();
+    seedTestnetNonceAndFee();
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-send-tx",
@@ -2276,7 +2276,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("fire-and-forget timing: send-tx reply resolves BEFORE pending storage write completes", async () => {
-    seedSprintnetNonceAndFee();
+    seedTestnetNonceAndFee();
     // Make eth_blockNumber slow so the pending writer is provably still
     // running when the send-tx reply has already resolved. Resolve order
     // of two promises is the explicit assertion — no setTimeout polling.
@@ -2314,7 +2314,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   });
 
   it("eth_blockNumber failure → broadcastBlockHeight is null (TTL-only eviction path)", async () => {
-    seedSprintnetNonceAndFee();
+    seedTestnetNonceAndFee();
     rpcErrors["eth_blockNumber"] = { code: -32603, message: "down" };
     await dispatchPopup({
       kind: "popup",
@@ -2345,7 +2345,7 @@ describe("wallet-send-tx pending-row prepend", () => {
   const PENDING_KEY = `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
 
   async function dispatchSend(payload: Record<string, unknown>) {
-    seedSprintnetNonceAndFee();
+    seedTestnetNonceAndFee();
     rpcResponses["eth_blockNumber"] = "0x64";
     const r = await dispatchPopup({
       kind: "popup",
@@ -2614,7 +2614,7 @@ describe("wallet-mrv-submit-plan", () => {
       pricePerExecutionUnitLythoshiHex: "0x989680",
       nonce: "0x8",
       chainId: TESTNET_CHAIN_ID_HEX,
-      chainLabel: "Sprintnet",
+      chainLabel: "Monolythium Testnet",
     });
     expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
@@ -2683,7 +2683,7 @@ describe("wallet-mrv-submit-plan", () => {
       pricePerExecutionUnitLythoshiHex: "0x2540be401",
       nonce: "0x8",
       chainId: TESTNET_CHAIN_ID_HEX,
-      chainLabel: "Sprintnet",
+      chainLabel: "Monolythium Testnet",
     });
     expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,

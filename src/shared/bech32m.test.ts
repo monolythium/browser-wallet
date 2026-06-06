@@ -18,7 +18,7 @@ import {
 } from "./bech32m.js";
 
 describe("bech32m shim", () => {
-  it("round-trips Sprintnet test wallet addresses", () => {
+  it("round-trips the testnet test wallet addresses", () => {
     const wallets = [
       "0x0d1c8d3e7c6c5b6e8d4f8a8c0b9d6e5f4a3b2c1d",
       "0x9ba4e5f6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e2f4",

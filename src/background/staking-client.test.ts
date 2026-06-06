@@ -5,7 +5,7 @@
 //      typed StakingResult envelope (cluster-directory row count
 //      preserved, regions array passed through, entity stitched in
 //      via the second `lyth_getClusterEntity` lookup).
-//   2. Sprintnet-offline behaviour:
+//   2. testnet-offline behaviour:
 //      - readClusterDirectory propagates `ok: false` (no MOCK_CLUSTERS
 //        fallback — per `_dev-notes/_principles/no-mock-fallbacks.md`,
 //        the no-mock-fallbacks principle);
@@ -19,7 +19,7 @@
 //
 // Pending rewards and redemption queue now call their direct live RPCs
 // first, falling back to old mock render shapes only when the method is
-// absent or Sprintnet is unreachable.
+// absent or the testnet is unreachable.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -31,10 +31,10 @@ import type {
 // Stub the tx-mldsa dispatch surface; every staking read goes through
 // this single function so one mock controls the whole suite.
 vi.mock("./tx-mldsa.js", () => ({
-  sprintnetJsonRpc: vi.fn(),
+  testnetJsonRpc: vi.fn(),
 }));
 
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 import {
   readClusterApr,
   readClusterDelegators,
@@ -53,7 +53,7 @@ import { MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 
-const mockedRpc = sprintnetJsonRpc as unknown as ReturnType<typeof vi.fn>;
+const mockedRpc = testnetJsonRpc as unknown as ReturnType<typeof vi.fn>;
 
 const BPS_DENOMINATOR = 10_000n;
 const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
@@ -280,7 +280,7 @@ describe("readClusterDirectory", () => {
     expect(r.data.clusters[0]?.aprBps).toBeNull();
   });
 
-  it("propagates ok:false when sprintnetJsonRpc throws (Sprintnet offline)", async () => {
+  it("propagates ok:false when testnetJsonRpc throws (the testnet offline)", async () => {
     mockedRpc.mockRejectedValue(new Error("no Monolythium Testnet operator reachable"));
     const r = await readClusterDirectory(0, 25);
     expect(r.ok).toBe(false);
@@ -779,7 +779,7 @@ describe("readClusterServiceTiers", () => {
 describe("readDelegations", () => {
   const wallet = "0x" + "aa".repeat(20);
 
-  it("returns the chain rows when sprintnetJsonRpc succeeds", async () => {
+  it("returns the chain rows when testnetJsonRpc succeeds", async () => {
     mockedRpc.mockResolvedValue({
       via: "operator-1",
       result: {
@@ -798,7 +798,7 @@ describe("readDelegations", () => {
     expect(r.data.totalBps).toBe(5000);
   });
 
-  it("falls back to an empty envelope when sprintnetJsonRpc throws", async () => {
+  it("falls back to an empty envelope when testnetJsonRpc throws", async () => {
     mockedRpc.mockRejectedValue(new Error("transport"));
     const r = await readDelegations(wallet);
     expect(r.ok).toBe(true);
@@ -1430,7 +1430,7 @@ describe("readDelegationHistory", () => {
 // -32602 "wallet must be mono bech32m"). The reads listed below
 // receive an account address (typically 0x hex from the popup's
 // account list) and must convert via userAddressForNativeRpc() before
-// passing to sprintnetJsonRpc. This block pins the conversion at each
+// passing to testnetJsonRpc. This block pins the conversion at each
 // site so any future regression surfaces as a test failure.
 
 describe("bech32m wallet-param conversion (regression)", () => {

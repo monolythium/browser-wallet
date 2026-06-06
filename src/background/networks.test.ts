@@ -1,6 +1,6 @@
-// Regression-catchers for the Sprintnet operator defaults shape.
+// Regression-catchers for the testnet operator defaults shape.
 //
-// `SPRINTNET_OPERATOR_RPCS_DEFAULTS` is sourced from the SDK-bundled
+// `TESTNET_OPERATOR_RPCS_DEFAULTS` is sourced from the SDK-bundled
 // chain registry. The wallet should mirror whatever the SDK ships
 // instead of pinning a stale endpoint count locally.
 //
@@ -16,30 +16,30 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  SPRINTNET_OPERATOR_RPCS_DEFAULTS,
+  TESTNET_OPERATOR_RPCS_DEFAULTS,
   clearGenesisCache,
   snapshotGenesisCache,
   verifyOperatorGenesis,
 } from "./networks.js";
 import {
-  SPRINTNET_BLOCK0_HASH,
-  SPRINTNET_GENESIS_HASH,
+  TESTNET_BLOCK0_HASH,
+  TESTNET_GENESIS_HASH,
 } from "../shared/build-info.js";
 
-describe("SPRINTNET_OPERATOR_RPCS_DEFAULTS", () => {
+describe("TESTNET_OPERATOR_RPCS_DEFAULTS", () => {
   it("has at least one SDK-sourced endpoint", () => {
-    expect(SPRINTNET_OPERATOR_RPCS_DEFAULTS.length).toBeGreaterThanOrEqual(1);
-    for (const entry of SPRINTNET_OPERATOR_RPCS_DEFAULTS) {
+    expect(TESTNET_OPERATOR_RPCS_DEFAULTS.length).toBeGreaterThanOrEqual(1);
+    for (const entry of TESTNET_OPERATOR_RPCS_DEFAULTS) {
       expect(entry.rpc).toMatch(/^https?:\/\//);
     }
   });
 
   it("places operator-1 at position 0 (1-indexed off the SDK registry)", () => {
-    expect(SPRINTNET_OPERATOR_RPCS_DEFAULTS[0]?.name).toBe("operator-1");
+    expect(TESTNET_OPERATOR_RPCS_DEFAULTS[0]?.name).toBe("operator-1");
   });
 
   it("contains no entry pointing at the dropped operator's old IP (192.0.2.7)", () => {
-    for (const entry of SPRINTNET_OPERATOR_RPCS_DEFAULTS) {
+    for (const entry of TESTNET_OPERATOR_RPCS_DEFAULTS) {
       expect(entry.rpc).not.toContain("192.0.2.7");
     }
   });
@@ -84,17 +84,17 @@ describe("verifyOperatorGenesis", () => {
     return { jsonrpc: "2.0", id: 1, error: { message: "method not found" } };
   }
 
-  it("returns true when lyth_chainStats genesisHash matches SPRINTNET_GENESIS_HASH", async () => {
+  it("returns true when lyth_chainStats genesisHash matches TESTNET_GENESIS_HASH", async () => {
     installFetch(async () => ({
       jsonrpc: "2.0",
       id: 1,
-      result: { genesisHash: SPRINTNET_GENESIS_HASH },
+      result: { genesisHash: TESTNET_GENESIS_HASH },
     }));
     const ok = await verifyOperatorGenesis(RPC);
     expect(ok).toBe(true);
     expect(snapshotGenesisCache().get(RPC)?.ok).toBe(true);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBe(
-      SPRINTNET_GENESIS_HASH,
+      TESTNET_GENESIS_HASH,
     );
   });
 
@@ -119,13 +119,13 @@ describe("verifyOperatorGenesis", () => {
         : {
             jsonrpc: "2.0",
             id: 1,
-            result: { hash: SPRINTNET_BLOCK0_HASH },
+            result: { hash: TESTNET_BLOCK0_HASH },
           },
     );
     const ok = await verifyOperatorGenesis(RPC);
     expect(ok).toBe(true);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBe(
-      SPRINTNET_BLOCK0_HASH,
+      TESTNET_BLOCK0_HASH,
     );
   });
 
@@ -165,7 +165,7 @@ describe("verifyOperatorGenesis", () => {
       json: async () => ({
         jsonrpc: "2.0",
         id: 1,
-        result: { genesisHash: SPRINTNET_GENESIS_HASH },
+        result: { genesisHash: TESTNET_GENESIS_HASH },
       }),
     }));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
@@ -182,7 +182,7 @@ describe("verifyOperatorGenesis", () => {
       json: async () => ({
         jsonrpc: "2.0",
         id: 1,
-        result: { genesisHash: SPRINTNET_GENESIS_HASH },
+        result: { genesisHash: TESTNET_GENESIS_HASH },
       }),
     }));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
@@ -196,7 +196,7 @@ describe("verifyOperatorGenesis", () => {
     installFetch(async () => ({
       jsonrpc: "2.0",
       id: 1,
-      result: { genesisHash: SPRINTNET_GENESIS_HASH },
+      result: { genesisHash: TESTNET_GENESIS_HASH },
     }));
     await verifyOperatorGenesis(RPC);
     expect(snapshotGenesisCache().size).toBeGreaterThan(0);
@@ -208,7 +208,7 @@ describe("verifyOperatorGenesis", () => {
     installFetch(async () => ({
       jsonrpc: "2.0",
       id: 1,
-      result: { genesisHash: SPRINTNET_GENESIS_HASH.toUpperCase() },
+      result: { genesisHash: TESTNET_GENESIS_HASH.toUpperCase() },
     }));
     expect(await verifyOperatorGenesis(RPC)).toBe(true);
   });

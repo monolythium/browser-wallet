@@ -1,4 +1,4 @@
-// Unit coverage for sprintnetJsonRpc's body.error stamping. Two cases
+// Unit coverage for testnetJsonRpc's body.error stamping. Two cases
 // pin the asymmetry between RPC-level rejects (which stamp method +
 // via + code onto the thrown error) and transport-level failures
 // (which propagate unstamped after exhausting the operator list).
@@ -50,20 +50,20 @@ vi.mock("./keystore-mldsa.js", () => ({
 }));
 
 import {
-  sprintnetJsonRpc,
+  testnetJsonRpc,
   submitPlaintextMlDsaTx,
   broadcastPlaintextTransaction,
 } from "./tx-mldsa.js";
 import { CANONICAL_INNER_TX_HASH } from "../shared/__fixtures__/golden.js";
 
-describe("sprintnetJsonRpc — method/via/code stamping", () => {
+describe("testnetJsonRpc — method/via/code stamping", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
     globalThis.fetch = originalFetch;
   });
 
   it("body.error stamps method + via + code on the thrown error", async () => {
-    // Duck-typed Response — sprintnetJsonRpc only reads .ok, .status,
+    // Duck-typed Response — testnetJsonRpc only reads .ok, .status,
     // and .json(). Avoids depending on globalThis.Response availability
     // in the Node test env.
     globalThis.fetch = vi.fn(async () => ({
@@ -78,7 +78,7 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
 
     let caught: unknown;
     try {
-      await sprintnetJsonRpc("lyth_getEncryptionKey", []);
+      await testnetJsonRpc("lyth_getEncryptionKey", []);
     } catch (e) {
       caught = e;
     }
@@ -104,7 +104,7 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
 
     let caught: unknown;
     try {
-      await sprintnetJsonRpc("lyth_getEncryptionKey", []);
+      await testnetJsonRpc("lyth_getEncryptionKey", []);
     } catch (e) {
       caught = e;
     }
@@ -122,7 +122,7 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
   });
 });
 
-describe("sprintnetJsonRpc — per-call timeout (opts.timeoutMs)", () => {
+describe("testnetJsonRpc — per-call timeout (opts.timeoutMs)", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -142,7 +142,7 @@ describe("sprintnetJsonRpc — per-call timeout (opts.timeoutMs)", () => {
 
     // Single mocked operator → the abort exhausts the list → it throws.
     await expect(
-      sprintnetJsonRpc("eth_getTransactionReceipt", [], { timeoutMs: 20 }),
+      testnetJsonRpc("eth_getTransactionReceipt", [], { timeoutMs: 20 }),
     ).rejects.toThrow();
   });
 
@@ -159,7 +159,7 @@ describe("sprintnetJsonRpc — per-call timeout (opts.timeoutMs)", () => {
       },
     ) as unknown as typeof fetch;
 
-    const r = await sprintnetJsonRpc<string>("eth_blockNumber", []);
+    const r = await testnetJsonRpc<string>("eth_blockNumber", []);
     expect(r.result).toBe("0xok");
     // No timeoutMs ⇒ no AbortController ⇒ no signal key on the fetch init.
     expect(capturedSignal).toBeUndefined();

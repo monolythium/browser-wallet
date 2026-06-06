@@ -1,9 +1,9 @@
-// Unit coverage for sprintnetMaxBalanceConsensus — the parallel
+// Unit coverage for testnetMaxBalanceConsensus — the parallel
 // MAX-across-operators resilience fix for wallet-balance.
 //
 // Background: operators on the same chain can briefly lag behind each
 // other after a regenesis or binary rollout. The single-operator
-// failover in sprintnetJsonRpc would latch onto the first responder's
+// failover in testnetJsonRpc would latch onto the first responder's
 // stale "0x0" envelope; this helper queries all operators in parallel
 // and returns the MAX, which is safe specifically for balance (a
 // lagging operator can only under-report, never over-report).
@@ -23,7 +23,7 @@ vi.mock("./networks.js", () => ({
   verifyOperatorGenesis: async () => true,
 }));
 
-import { sprintnetMaxBalanceConsensus } from "./tx-mldsa.js";
+import { testnetMaxBalanceConsensus } from "./tx-mldsa.js";
 
 interface FetchHandlerArgs {
   url: string;
@@ -92,7 +92,7 @@ function malformedResponse() {
   };
 }
 
-describe("sprintnetMaxBalanceConsensus", () => {
+describe("testnetMaxBalanceConsensus", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -104,7 +104,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => envelopeResponse("0x989680"), // 0.1 LYTH
       "http://op-c.test": async () => envelopeResponse("0x0"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x989680");
     // T4-03: the spend guard is the LOWEST contributing balance (the two
     // lagging 0x0 operators), so an inflated Max can't pass the spend gate.
@@ -119,7 +119,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => envelopeResponse("0x989680"),
       "http://op-c.test": async () => envelopeResponse("0x989680"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x989680");
     expect(r.contributing).toHaveLength(3);
     expect(r.failing).toHaveLength(0);
@@ -131,7 +131,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => envelopeResponse("0x5"),
       "http://op-c.test": async () => envelopeResponse("0xa"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0xa");
     expect(r.contributing).toHaveLength(2);
     expect(r.failing).toHaveLength(1);
@@ -147,7 +147,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => errorBodyResponse(-32603, "boom"),
       "http://op-c.test": async () => ({ ok: false, status: 503, json: async () => ({}) }),
     });
-    await expect(sprintnetMaxBalanceConsensus("0xabc")).rejects.toThrow(
+    await expect(testnetMaxBalanceConsensus("0xabc")).rejects.toThrow(
       /all 3 Monolythium Testnet operators failed/,
     );
   });
@@ -158,7 +158,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => envelopeResponse("0x2"),
       "http://op-c.test": async () => envelopeResponse("0x3"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x3");
     expect(r.contributing.map((c) => c.name).sort()).toEqual(["op-b", "op-c"]);
     expect(r.failing).toHaveLength(1);
@@ -167,7 +167,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
   });
 
   it("accepts the plain hex-string return shape alongside the proof envelope", async () => {
-    // Non-Sprintnet chains return raw hex strings for eth_getBalance.
+    // Non-testnet chains return raw hex strings for eth_getBalance.
     // Helper should still handle that shape if it ever shows up on a
     // mixed cluster — robustness, not just envelope-specific.
     installFetchPerUrl({
@@ -175,7 +175,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => plainHexResponse("0x5"),
       "http://op-c.test": async () => plainHexResponse("0x2"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x5");
   });
 
@@ -187,7 +187,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => envelopeResponse("0x5"),
       "http://op-c.test": async () => envelopeResponse("0x3"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x5"); // the real max, not the absurd value
     expect(r.spendGuardHex).toBe("0x3"); // lowest real
     expect(r.contributing.map((c) => c.name).sort()).toEqual(["op-b", "op-c"]);
@@ -202,7 +202,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => envelopeResponse("0x2"),
       "http://op-c.test": async () => envelopeResponse("0x7"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x9");
     expect(r.spendGuardHex).toBe("0x2");
   });
@@ -250,7 +250,7 @@ describe("sprintnetMaxBalanceConsensus", () => {
       "http://op-b.test": async () => snakeCase,
       "http://op-c.test": async () => envelopeResponse("0x3"),
     });
-    const r = await sprintnetMaxBalanceConsensus("0xabc");
+    const r = await testnetMaxBalanceConsensus("0xabc");
     expect(r.balanceHex).toBe("0x9");
     expect(r.contributing).toHaveLength(3);
   });
