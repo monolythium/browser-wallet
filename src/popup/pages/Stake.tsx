@@ -1160,6 +1160,7 @@ function PreviewView({
   onConfirm,
   onBack,
 }: PreviewViewProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const amountLythoshi = parseLythAmountToLythoshi(amountStr);
   const aprBps = cluster.aprBps ?? null;
   const isUndelegate = action === "undelegate";
@@ -1266,13 +1267,27 @@ function PreviewView({
             lineHeight: 1.6,
           }}
         >
-          {action === "delegate" &&
-            "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile (0x100A) via plaintext mesh_submitTx; the LYTH amount is sent as msg.value (your staked principal)."}
-          {action === "undelegate" &&
-            "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
-          {action === "redelegate" &&
-            "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
-          Monolythium Testnet may reject the call until the gate is activated.
+          {devMode ? (
+            <>
+              {action === "delegate" &&
+                "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile (0x100A) via plaintext mesh_submitTx; the LYTH amount is sent as msg.value (your staked principal)."}
+              {action === "undelegate" &&
+                "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
+              {action === "redelegate" &&
+                "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
+              Monolythium Testnet may reject the call until the gate is activated.
+            </>
+          ) : (
+            <>
+              {action === "delegate" &&
+                "Submits your delegation to the network. "}
+              {action === "undelegate" &&
+                "Removes your delegation; your principal enters the redemption queue and can be claimed at maturity. "}
+              {action === "redelegate" &&
+                "Moves your delegation to another cluster instantly. "}
+              Monolythium Testnet may reject this until staking is enabled.
+            </>
+          )}
         </div>
       </div>
 
@@ -1303,6 +1318,7 @@ function PreviewView({
 }
 
 function SubmittingView() {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div
       style={{
@@ -1318,7 +1334,9 @@ function SubmittingView() {
       <div
         style={{ fontSize: 10, color: "var(--fg-500)", marginTop: 6, lineHeight: 1.5 }}
       >
-        mesh_submitTx → cluster → admission gate
+        {devMode
+          ? "mesh_submitTx → cluster → admission gate"
+          : "Broadcasting to the network…"}
       </div>
     </div>
   );
@@ -1584,6 +1602,7 @@ function ErrorView({
   onOpenOperators,
 }: ErrorViewProps) {
   const classified = classifySendError(error.message);
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div
@@ -1619,20 +1638,31 @@ function ErrorView({
         >
           {classified.kind === "genesis-mismatch" && onOpenOperators
             ? genesisErrorBody(classified.body, onOpenOperators)
-            : error.message}
+            : classified.body}
         </div>
-        {(error.code !== null || error.method !== null || error.via !== null) && (
+        {/* Raw error detail (message + code/method/via) is developer-only
+            noise; the plain classified body above is what all users see. */}
+        {devMode && (
           <div
             style={{
               fontFamily: "var(--f-mono)",
               fontSize: 9.5,
               color: "var(--fg-500)",
               marginTop: 8,
+              wordBreak: "break-word",
+              lineHeight: 1.5,
             }}
           >
-            {error.code !== null && <>code {error.code} · </>}
-            {error.method !== null && <>{error.method} · </>}
-            {error.via !== null && <>via {error.via}</>}
+            {error.message}
+            {(error.code !== null ||
+              error.method !== null ||
+              error.via !== null) && (
+              <div style={{ marginTop: 6 }}>
+                {error.code !== null && <>code {error.code} · </>}
+                {error.method !== null && <>{error.method} · </>}
+                {error.via !== null && <>via {error.via}</>}
+              </div>
+            )}
           </div>
         )}
       </div>
