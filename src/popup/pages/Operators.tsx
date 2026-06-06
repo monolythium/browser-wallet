@@ -11,6 +11,7 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgChainOperatorRisk,
   bgChainSigningActivity,
@@ -49,6 +50,7 @@ let RID_COUNTER = 0;
 const newRid = () => `op-${RID_COUNTER++}`;
 
 export function Operators({ onBack }: OperatorsProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const [defaults, setDefaults] = useState<OperatorEntryWire[]>([]);
   const [originalOverride, setOriginalOverride] = useState<OperatorEntryWire[] | null>(null);
   const [draft, setDraft] = useState<DraftOperator[]>([]);
@@ -132,6 +134,55 @@ export function Operators({ onBack }: OperatorsProps) {
     }
     await refresh();
   };
+
+  // The operator-management page (RPC-override editor + chain-signing /
+  // authority / upcoming-duties consensus cards) is developer-only. Reached
+  // via the (kept-discoverable) "Manage operators" entry; gate the destination.
+  if (!devMode) {
+    return (
+      <>
+        <div className="ext-top">
+          <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+            <Icon name="back" size={15} />
+          </button>
+          <div
+            style={{
+              flex: 1,
+              fontSize: 13,
+              fontWeight: 600,
+              textAlign: "center",
+            }}
+          >
+            Operators
+          </div>
+          <div style={{ width: 28 }} />
+        </div>
+        <div className="ext-body">
+          <div
+            className="ext-card"
+            style={{ textAlign: "center", padding: "32px 18px" }}
+          >
+            <Icon name="code" size={28} />
+            <div style={{ marginTop: 14, fontSize: 13, fontWeight: 600 }}>
+              Developer mode required
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+              }}
+            >
+              Operator management (custom RPC endpoints and consensus-authority
+              details) is a developer tool. Enable developer mode from the menu,
+              Settings, or About to use it.
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
