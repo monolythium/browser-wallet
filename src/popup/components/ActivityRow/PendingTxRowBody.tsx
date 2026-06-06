@@ -7,6 +7,7 @@
 // rotating amber ring indicator.
 
 import { Icon, type IconName } from "../../Icon.js";
+import { useFeature } from "../../hooks/useFeature.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { notificationTitle } from "../../../shared/notifications.js";
 import { renderCounterparty } from "../ActivityRow.js";
@@ -26,6 +27,7 @@ function relativeMs(ms: number, now: number): string {
 }
 
 export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const opKind = row.opKind;
   // `complete-redemption` + `emergency-key` are 0-value OUTGOING precompile
   // calls — on THIS row the user neither sends nor receives LYTH, so a
@@ -128,8 +130,12 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           <span>{txTypeLabel(row)}</span>
           <span>·</span>
           <span>{relativeMs(row.broadcastedAtMs, Date.now())}</span>
-          <span>·</span>
-          <span>via {row.via}</span>
+          {devMode && (
+            <>
+              <span>·</span>
+              <span>via {row.via}</span>
+            </>
+          )}
         </div>
       </div>
       <div className="ext-act-row__right">

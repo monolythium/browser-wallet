@@ -23,6 +23,7 @@ import {
 } from "../bg";
 import { PasskeyRegisterModal } from "../components/PasskeyRegisterModal";
 import { SlhDsaBackupCard } from "../components/SlhDsaBackupCard";
+import { WalletSecurityControls } from "../components/WalletSecurityControls";
 import {
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
@@ -34,6 +35,9 @@ import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface SecurityProps {
   onBack: () => void;
+  /** Routes to the ResetWallet page (destructive). Surfaced by the
+   *  WalletSecurityControls card at the top of this page. */
+  onResetWallet: () => void;
   /** Active vault id — passkey state is per-vault. */
   vaultId: string;
   /** Vault address — surfaced inside the WebAuthn user block during
@@ -100,6 +104,7 @@ export function closestStopIndex(lythoshiStr: string): number {
 
 export function Security({
   onBack,
+  onResetWallet,
   vaultId,
   vaultAddress,
   chainIdHex,
@@ -175,6 +180,7 @@ export function Security({
       </div>
 
       <div className="ext-body">
+        <WalletSecurityControls onResetWallet={onResetWallet} />
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Passkey policy</h3>

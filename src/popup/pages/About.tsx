@@ -6,7 +6,10 @@
 // the operator-health probe.
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { Icon } from "../Icon";
+import { Icon, type IconName } from "../Icon";
+import { Section } from "./OperatorDirectory";
+import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgOperatorsHealth,
   bgPasskeyGetState,
@@ -93,6 +96,7 @@ function readWalletVersion(): string {
 }
 
 export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [provenance, setProvenance] = useState<RuntimeProvenanceView | null>(
@@ -289,6 +293,18 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
       </div>
 
       <div className="ext-body">
+        {/* Developer-mode toggle — first element, above the Identity card.
+            NOTE: this page is otherwise read-only by design (see the file
+            header comment); mounting this write-toggle here is an intentional,
+            user-approved exception. No other read-only behavior is relaxed. */}
+        <DeveloperModeToggle />
+        <div
+          style={{
+            height: 1,
+            background: "rgba(255,255,255,0.06)",
+            margin: "10px 0 12px",
+          }}
+        />
         {/* Identity card */}
         <div className="ext-card">
           <div className="ext-card__head">
@@ -345,13 +361,14 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                           style={{ color: "var(--fg-500)", fontSize: 10 }}
                           title="The update check only works in the Chrome Web Store build (not a dev/unpacked load)."
                         >
-                          unavailable in this build
+                          Web Store build only
                         </span>
                       );
                   }
                 })(),
               },
-              {
+              ...(devMode
+                ? [{
                 k: "SDK",
                 v: (() => {
                   const installed = `v${SDK_PACKAGE_VERSION}`;
@@ -382,7 +399,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                     </span>
                   );
                 })(),
-              },
+              }]
+                : []),
             ]}
           />
         </div>
@@ -644,7 +662,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                     ? "—"
                     : backupStatusLabel(activeBackup),
                 },
-                ...(activeBackup &&
+                ...(devMode &&
+                activeBackup &&
                 activeBackup.chainRegistrationTxHash !== undefined
                   ? [
                       {
@@ -653,7 +672,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                       },
                     ]
                   : []),
-                ...(activeBackup &&
+                ...(devMode &&
+                activeBackup &&
                 activeBackup.chainRegistrationBlock !== undefined
                   ? [
                       {
@@ -741,6 +761,10 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <div className="ext-card__head">
             <h3>Monolythium Testnet</h3>
           </div>
+          {/* All chain-identity rows are developer-only — the network name
+              (card title) is the only user-relevant signal here. */}
+          {devMode && (
+            <>
           <KvList
             rows={[
               { k: "Chain ID", v: String(SPRINTNET_CHAIN_ID_DEC) },
@@ -767,7 +791,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 k: "EVM compat",
                 v: "Bridge active · native removal pending",
                 title:
-                  "Dapp-facing eth_sendTransaction / personal_sign / eth_signTypedData still bridge through the wallet's ML-DSA-65 backend. Native-only removal is queued for a focused follow-up commit; tracked in dev notes NAYIEM-PING.",
+                  "Dapp-facing eth_sendTransaction / personal_sign / eth_signTypedData still bridge through the wallet's ML-DSA-65 backend. Native-only removal is queued for a focused follow-up commit.",
               },
             ]}
           />
@@ -821,13 +845,17 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               )}
             </div>
           )}
+            </>
+          )}
         </div>
 
         {/* Runtime provenance — chain-side build info from lyth_runtimeProvenance.
             Renders when the SW IPC returns data; absent when the chain is
             offline. The wallet still mounts the About page; this card just
             doesn't show. */}
-        {provenance !== null && (
+        {/* Runtime provenance card is whole-cloth developer-only: chain-reported
+            client/commit/sha/P2P/tip + compile-time feature chips. */}
+        {provenance !== null && devMode && (
           <div className="ext-card">
             <div className="ext-card__head">
               <h3>Runtime</h3>
@@ -910,38 +938,45 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           </div>
         )}
 
-        {/* Operator table */}
+        {/* Operators — titled card grouping the operator table + risk legend,
+            consistent with the other About sections (Runtime, Why Monolythium,
+            etc.) instead of two loose collapsible rows. */}
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Operators</h3>
-            <div className="spacer" />
-            <span
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 10,
-                color: operators === null ? "var(--fg-500)" : "var(--fg-300)",
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-              }}
-            >
-              {operators === null
-                ? "probing…"
-                : `${trustedCount}/${totalCount} trusted · ${healthyCount} live`}
-            </span>
           </div>
+          {/* Operator table — collapsible button-style (matches OperatorDirectory) */}
+          <AboutSection
+            title="Operators"
+          meta={
+            operators === null
+              ? "probing…"
+              : `${trustedCount}/${totalCount} trusted · ${healthyCount} live`
+          }
+        >
           {probeError !== null && (
             <div
               style={{
                 fontSize: 11,
                 color: "var(--err)",
                 marginBottom: 8,
-                fontFamily: "var(--f-mono)",
               }}
             >
-              {probeError}
+              Couldn&apos;t reach operators to check status.
+              {devMode && (
+                <div
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    color: "var(--fg-500)",
+                    marginTop: 4,
+                  }}
+                >
+                  {probeError}
+                </div>
+              )}
             </div>
           )}
-          {capabilitySummary !== null && capabilitySummary.length > 0 && (
+          {devMode && capabilitySummary !== null && capabilitySummary.length > 0 && (
             <div
               style={{
                 display: "flex",
@@ -996,11 +1031,11 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
             {operators !== null &&
               operators.map((op) => <OperatorRow key={op.rpc} row={op} />)}
           </div>
-        </div>
+        </AboutSection>
 
-        {/* Operator risk legend. Decodes the chips
-            rendered on operator rows above. */}
-        <OperatorRiskLegendCard />
+          {/* Operator risk legend — decodes the chips on the operator rows. */}
+          <OperatorRiskLegendCard operators={operators} />
+        </div>
 
         {/* Pitch / differentiation */}
         <div className="ext-card">
@@ -1014,27 +1049,19 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               gap: 10,
             }}
           >
+            {/* Compact: titles only here (8 pillars would bloat the card) —
+                the full title + body lives on the Why-Monolythium page. */}
             {WALLET_PITCH.map((p) => (
-              <div key={p.title}>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: "var(--fg-100)",
-                    marginBottom: 3,
-                  }}
-                >
-                  {p.title}
-                </div>
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    color: "var(--fg-300)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {p.body}
-                </div>
+              <div
+                key={p.title}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--fg-100)",
+                  lineHeight: 1.5,
+                }}
+              >
+                {p.title}
               </div>
             ))}
           </div>
@@ -1071,7 +1098,20 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                   textDecoration: "none",
                 }}
               >
-                <span>{link.label}</span>
+                <span
+                  style={{ display: "flex", alignItems: "center", gap: 10 }}
+                >
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      color: link.brandColor ?? "var(--fg-300)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Icon name={link.icon as IconName} size={16} />
+                  </span>
+                  {link.label}
+                </span>
                 <span
                   style={{
                     fontFamily: "var(--f-mono)",
@@ -1154,6 +1194,7 @@ function Mono({ children }: { children: ReactNode }) {
 }
 
 function OperatorRow({ row }: { row: OperatorHealthRow }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const ok = row.ok;
   const trusted = row.trustedGenesis;
   // Untrusted (forked) operators are RPC-skipped regardless of liveness,
@@ -1235,30 +1276,35 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
                 border: "1px solid rgba(220,80,80,0.4)",
               }}
               title={
-                row.observedGenesis !== null
-                  ? `observed genesis: ${row.observedGenesis}`
-                  : "operator did not return chain-genesis metadata"
+                devMode
+                  ? row.observedGenesis !== null
+                    ? `observed genesis: ${row.observedGenesis}`
+                    : "operator did not return chain-genesis metadata"
+                  : "This operator reports a different chain — the wallet won't trust its data."
               }
             >
               untrusted chain
             </span>
           )}
         </div>
-        <div
-          style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            color: "var(--fg-400)",
-            marginTop: 2,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-          title={row.rpc}
-        >
-          {row.rpc.replace(/^https?:\/\//, "")}
-        </div>
+        {devMode && (
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              marginTop: 2,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={row.rpc}
+          >
+            {row.rpc.replace(/^https?:\/\//, "")}
+          </div>
+        )}
       </div>
+      {devMode && (
       <div
         style={{
           fontFamily: "var(--f-mono)",
@@ -1299,6 +1345,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
           <div>{row.reason}</div>
         )}
       </div>
+      )}
       {/* Operator risk badges (derived from probe
           data via classifyOperatorRisk). Spans the full row when any
           risk badge applies; absent for healthy operators. */}
@@ -1322,7 +1369,8 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
       {/* Per-operator capability badge strip. Spans all 3
           columns when present; absent when the operator's response had
           no capabilities or returned an error for `lyth_operatorCapabilities`. */}
-      {row.capabilities !== null &&
+      {devMode &&
+        row.capabilities !== null &&
         Object.keys(row.capabilities).length > 0 && (
           <div
             style={{
@@ -1407,16 +1455,59 @@ function RiskBadgeChip({ badge }: { badge: OperatorRiskBadge }) {
   );
 }
 
+/** Uncontrolled collapsible wrapper around the shared OperatorDirectory
+ *  `Section` button — keeps the About operator surfaces button-style and
+ *  collapsed by default, matching the Operators directory. */
+function AboutSection({
+  title,
+  meta,
+  children,
+}: {
+  title: string;
+  meta?: string | undefined;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Section
+      title={title}
+      meta={meta}
+      open={open}
+      onToggle={() => setOpen((v) => !v)}
+    >
+      {children}
+    </Section>
+  );
+}
+
 /** Operator-risk legend card rendered on the About
  *  page below the operator probe list. One-line explanation per risk
  *  kind so the user can decode the badges from the probe rows above.
  *  Static (no chain reads); content tracks OPERATOR_RISK_LEGEND. */
-function OperatorRiskLegendCard() {
+function OperatorRiskLegendCard({
+  operators,
+}: {
+  operators: OperatorHealthRow[] | null;
+}) {
+  const devMode = useFeature("DEVELOPER_MODE");
+  // How many operators currently exhibit each risk kind — drives the
+  // "N affected" badge so the legend mirrors the Operators page (which of
+  // these issues are live right now, not just what each chip means).
+  const affectedByKind = new Map<string, number>();
+  for (const op of operators ?? []) {
+    for (const badge of classifyOperatorRisk({
+      ok: op.ok,
+      trustedGenesis: op.trustedGenesis,
+      capabilities: op.capabilities,
+      indexerHeight: op.indexerHeight,
+      indexerLatest: op.indexerLatest,
+      latencyMs: op.ok ? op.latencyMs : null,
+    })) {
+      affectedByKind.set(badge.kind, (affectedByKind.get(badge.kind) ?? 0) + 1);
+    }
+  }
   return (
-    <div className="ext-card">
-      <div className="ext-card__head">
-        <h3>Operator risk legend</h3>
-      </div>
+    <AboutSection title="Operator risk legend">
       <div
         style={{
           fontSize: 11,
@@ -1436,31 +1527,74 @@ function OperatorRiskLegendCard() {
           gap: 8,
         }}
       >
-        {OPERATOR_RISK_LEGEND.map((entry) => (
-          <div key={entry.kind}>
-            <div
-              style={{
-                fontSize: 11.5,
-                fontWeight: 600,
-                color: "var(--fg-100)",
-                marginBottom: 2,
-              }}
-            >
-              {entry.label}
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: "var(--fg-300)",
-                lineHeight: 1.5,
-              }}
-            >
-              {entry.body}
-            </div>
-          </div>
-        ))}
+        {OPERATOR_RISK_LEGEND.filter((entry) => devMode || !entry.devOnly).map(
+          (entry) => {
+            const affected = affectedByKind.get(entry.kind) ?? 0;
+            return (
+              // Each entry is its own bordered card so the signals read as
+              // distinct sections rather than one run-on list.
+              <div
+                key={entry.kind}
+                style={{
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--fg-700)",
+                  background: "rgba(255,255,255,0.02)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    marginBottom: 3,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      color: "var(--fg-100)",
+                    }}
+                  >
+                    {entry.label}
+                  </div>
+                  {affected > 0 && (
+                    <span
+                      title={`${affected} operator${affected === 1 ? "" : "s"} currently affected`}
+                      style={{
+                        background: "rgba(220,80,80,0.12)",
+                        border: "1px solid rgba(220,80,80,0.4)",
+                        borderRadius: 4,
+                        padding: "1px 6px",
+                        color: "var(--err)",
+                        fontFamily: "var(--f-mono)",
+                        fontSize: 9,
+                        fontWeight: 600,
+                        letterSpacing: "0.06em",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {affected} affected
+                    </span>
+                  )}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--fg-300)",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {entry.body}
+                </div>
+              </div>
+            );
+          },
+        )}
       </div>
-    </div>
+    </AboutSection>
   );
 }
 

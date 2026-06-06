@@ -25,6 +25,7 @@
 
 import { useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgBuildSpendingPolicyClaim,
   bgReadSpendingPolicy,
@@ -58,7 +59,27 @@ interface AgentPolicyProps {
    *  by `bgWalletSendTx` to take the ML-DSA-65 envelope path. */
   chainId: string;
   onBack: () => void;
+  /** Opens Settings / About — surfaced as buttons on the dev-mode-required
+   *  stub so the user can reach the developer-mode toggle. */
+  onOpenSettings?: () => void;
+  onOpenAbout?: () => void;
 }
+
+// Gold-accent pill with a ↗ affordance, used on the dev-mode-required stub.
+const devModeNavBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 10,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg, rgba(212,160,60,0.12))",
+  color: "var(--gold)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
 interface FormState {
   perTxCapLyth: string;
@@ -100,7 +121,14 @@ interface SubmitError {
   via: string | null;
 }
 
-export function AgentPolicy({ account, chainId, onBack }: AgentPolicyProps) {
+export function AgentPolicy({
+  account,
+  chainId,
+  onBack,
+  onOpenSettings,
+  onOpenAbout,
+}: AgentPolicyProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const [step, setStep] = useState<Step>("overview");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
@@ -359,6 +387,73 @@ export function AgentPolicy({ account, chainId, onBack }: AgentPolicyProps) {
   // ───────────────────────────────────────────────────────────────────────
   // Render
   // ───────────────────────────────────────────────────────────────────────
+
+  // Automation spending limits is a developer tool — the menu entry stays
+  // visible to everyone, but opening it without developer mode shows a stub
+  // (same pattern as the RISC-V / Operators routes).
+  if (!devMode) {
+    return (
+      <>
+        <div className="ext-top">
+          <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+            <Icon name="back" size={15} />
+          </button>
+          <div
+            style={{
+              flex: 1,
+              fontSize: 13,
+              fontWeight: 600,
+              textAlign: "center",
+            }}
+          >
+            Automation
+          </div>
+          <div style={{ width: 28 }} />
+        </div>
+        <div className="ext-body">
+          <div
+            className="ext-card"
+            style={{ textAlign: "center", padding: "32px 18px" }}
+          >
+            <Icon name="code" size={28} />
+            <div style={{ marginTop: 14, fontSize: 13, fontWeight: 600 }}>
+              Developer mode required
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+              }}
+            >
+              Automation spending limits is a developer tool. Turn on developer
+              mode to use it.
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "center",
+                marginTop: 14,
+              }}
+            >
+              {onOpenSettings && (
+                <button type="button" onClick={onOpenSettings} style={devModeNavBtn}>
+                  Settings <Icon name="external" size={11} />
+                </button>
+              )}
+              {onOpenAbout && (
+                <button type="button" onClick={onOpenAbout} style={devModeNavBtn}>
+                  About <Icon name="external" size={11} />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -839,6 +934,7 @@ function ErrorView({
   error: SubmitError | null;
   onRetry: () => void;
 }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div className="ext-card" style={{ padding: 16 }}>
       <div style={{ ...cardTitle, color: "var(--err, #ff8a9a)" }}>
@@ -847,8 +943,8 @@ function ErrorView({
       <p style={{ fontSize: 12, color: "var(--fg-200)", wordBreak: "break-word" }}>
         {error?.message ?? "Unknown error."}
       </p>
-      {error?.code != null && <div style={mono}>code: {error.code}</div>}
-      {error?.via != null && <div style={mono}>via: {error.via}</div>}
+      {devMode && error?.code != null && <div style={mono}>code: {error.code}</div>}
+      {devMode && error?.via != null && <div style={mono}>via: {error.via}</div>}
       <button style={{ ...primaryBtn, marginTop: 12 }} onClick={onRetry}>
         Back to start
       </button>

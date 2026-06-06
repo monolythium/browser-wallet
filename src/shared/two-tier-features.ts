@@ -38,6 +38,11 @@ export const FEATURE_FLAGS = [
   "AI_FEATURES",
   "REGISTRY",
   "AGENT_COMMERCE",
+  // Opt-in developer mode — reveals technical surfaces (raw hashes, RPC
+  // method names, error codes, the RISC-V console) that are hidden by
+  // default. Enabled ONLY via the popup-guarded DeveloperModeToggle, never
+  // as a bare toggle on the Features grid (it is filtered out there).
+  "DEVELOPER_MODE",
 ] as const;
 
 export type FeatureFlag = (typeof FEATURE_FLAGS)[number];
@@ -139,7 +144,7 @@ export const FEATURE_META: Record<FeatureFlag, FeatureMeta> = {
   },
   AI_FEATURES: {
     label: "AI features",
-    tagline: "MCP local tool conversational assistant — lands in a future phase.",
+    tagline: "MCP Copilot conversational assistant — lands in a future phase.",
   },
   REGISTRY: {
     label: "Name registry",
@@ -150,5 +155,9 @@ export const FEATURE_META: Record<FeatureFlag, FeatureMeta> = {
     label: "Agent commerce (experimental)",
     tagline:
       "Agent spending-policy sub-accounts, bridge route risk disclosure, and cluster roster-diversity scoring. Experimental.",
+  },
+  DEVELOPER_MODE: {
+    label: "Developer mode",
+    tagline: "Show technical details, raw values, and developer tools",
   },
 };

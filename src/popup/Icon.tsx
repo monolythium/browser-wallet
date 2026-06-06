@@ -8,7 +8,9 @@ export type IconName =
   | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
-  | "expand" | "copy" | "trash" | "external" | "bell" | "contrast";
+  | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
+  | "contacts" | "network" | "sliders" | "server" | "gem"
+  | "mono-mark" | "github" | "grid";
 
 interface IconProps {
   name: IconName;
@@ -33,6 +35,97 @@ export function Icon({ name, size = 16 }: IconProps) {
         <svg {...props}>
           <path d="M22 2 11 13" />
           <path d="M22 2l-7 20-4-9-9-4z" />
+        </svg>
+      );
+    case "code":
+      // `</>` developer glyph — code brackets + slash.
+      return (
+        <svg {...props}>
+          <path d="m18 16 4-4-4-4" />
+          <path d="m6 8-4 4 4 4" />
+          <path d="m14.5 4-5 16" />
+        </svg>
+      );
+    case "contacts":
+      // Two people — Contacts.
+      return (
+        <svg {...props}>
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+      );
+    case "network":
+      // Connected nodes — Networks.
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="5" r="2.5" />
+          <circle cx="5" cy="19" r="2.5" />
+          <circle cx="19" cy="19" r="2.5" />
+          <path d="M10.7 7.1 6.3 16.9M13.3 7.1l4.4 9.8M7.5 19h9" />
+        </svg>
+      );
+    case "sliders":
+      // Adjustment sliders — Features (advanced surfaces).
+      return (
+        <svg {...props}>
+          <line x1="4" y1="21" x2="4" y2="14" />
+          <line x1="4" y1="10" x2="4" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="12" />
+          <line x1="12" y1="8" x2="12" y2="3" />
+          <line x1="20" y1="21" x2="20" y2="16" />
+          <line x1="20" y1="12" x2="20" y2="3" />
+          <line x1="1" y1="14" x2="7" y2="14" />
+          <line x1="9" y1="8" x2="15" y2="8" />
+          <line x1="17" y1="16" x2="23" y2="16" />
+        </svg>
+      );
+    case "server":
+      // Stacked server racks — Operators (network nodes).
+      return (
+        <svg {...props}>
+          <rect x="2" y="3" width="20" height="8" rx="2" />
+          <rect x="2" y="13" width="20" height="8" rx="2" />
+          <line x1="6" y1="7" x2="6.01" y2="7" />
+          <line x1="6" y1="17" x2="6.01" y2="17" />
+        </svg>
+      );
+    case "gem":
+      // Faceted gem — Why Monolythium (brand / value).
+      return (
+        <svg {...props}>
+          <path d="M6 3h12l4 6-10 12L2 9 6 3z" />
+          <path d="M2 9h20" />
+          <path d="m9.5 9 2.5 12 2.5-12L12 3" />
+        </svg>
+      );
+    case "github":
+      // GitHub mark (Octocat silhouette) — repo link. Fill glyph in the
+      // shared 24×24 box; overrides the set-wide stroke.
+      return (
+        <svg {...props} fill="currentColor" stroke="none">
+          <path d="M12 .5C5.73.5.5 5.73.5 12.18c0 5.16 3.35 9.53 7.99 11.08.58.11.8-.25.8-.56 0-.28-.01-1.02-.02-2-3.25.71-3.94-1.57-3.94-1.57-.53-1.35-1.3-1.71-1.3-1.71-1.06-.73.08-.71.08-.71 1.17.08 1.79 1.21 1.79 1.21 1.04 1.79 2.73 1.27 3.4.97.11-.76.41-1.27.74-1.56-2.6-.3-5.33-1.3-5.33-5.79 0-1.28.46-2.32 1.21-3.14-.12-.3-.52-1.49.11-3.11 0 0 .99-.32 3.23 1.2a11.2 11.2 0 0 1 5.88 0c2.24-1.52 3.22-1.2 3.22-1.2.64 1.62.24 2.81.12 3.11.76.82 1.21 1.86 1.21 3.14 0 4.5-2.74 5.49-5.35 5.78.42.36.8 1.08.8 2.18 0 1.58-.01 2.85-.01 3.24 0 .31.21.68.81.56 4.64-1.55 7.98-5.92 7.98-11.08C23.5 5.73 18.27.5 12 .5z" />
+        </svg>
+      );
+    case "mono-mark":
+      // Monolythium "M" brand mark (isometric folded-ribbon) — mirrors
+      // M_MARK in components/WalletLogo.tsx. Fill glyph in the brand's own
+      // 23 23 185 185 box; color comes from the wrapping element (brand
+      // purple for Monolythium, teal for Mono Labs).
+      return (
+        <svg {...props} viewBox="23 23 185 185" fill="currentColor" stroke="none">
+          <path d="M52 31 L79 46 L54 60 L54 199 L31 186 L31 43 Z M178 31 L200 43 L200 186 L176 200 L176 61 L117 93 L64 65 L89 51 L116 66 Z M79 103 L103 116 L103 186 L80 199 Z M150 103 L151 199 L128 186 L128 116 Z" />
+        </svg>
+      );
+    case "grid":
+      // 2×2 app tiles — Ecosystem (a collection of connected projects).
+      return (
+        <svg {...props}>
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
         </svg>
       );
     case "qr":

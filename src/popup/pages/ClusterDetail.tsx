@@ -245,22 +245,16 @@ function ClusterIdentityCard({
 }: {
   cluster: ClusterDirectoryEntry;
 }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <KeyValueRow
-        label="Cluster id"
-        value={String(cluster.clusterId)}
-      />
+      {devMode && (
+        <KeyValueRow label="Cluster id" value={String(cluster.clusterId)} />
+      )}
       <KeyValueRow
         label="Name"
-        value={cluster.name ?? `cluster-${cluster.clusterId}`}
+        value={cluster.name ?? "Unnamed cluster"}
         muted={cluster.name === null}
-        {...(cluster.name === null
-          ? {
-              tooltip:
-                "Naming registry has no SDK reader yet — wallet renders the fallback id.",
-            }
-          : {})}
       />
       <KeyValueRow
         label="Entity"
@@ -368,6 +362,7 @@ function DiversityBar({
 }
 
 function ClusterStatusCard({ status }: { status: ClusterStatus }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   // Per-operator info (self-bond + lifecycle) fetched
   // lazily after the cluster's member list arrives. Cache is
   // component-local; remounting the panel re-fetches. Per-operator
@@ -415,24 +410,25 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <KeyValue label="Live" value={String(status.live)} />
-        <KeyValue label="Lagging" value={String(status.lagging)} />
+        {devMode && <KeyValue label="Lagging" value={String(status.lagging)} />}
         <KeyValue label="Offline" value={String(status.offline)} />
-        <KeyValue
-          label="Maintenance"
-          value={String(status.maintenance)}
-        />
-        <KeyValue label="Quorum" value={status.quorum} />
+        {devMode && (
+          <KeyValue label="Maintenance" value={String(status.maintenance)} />
+        )}
+        {devMode && <KeyValue label="Quorum" value={status.quorum} />}
       </div>
-      {status.epoch !== null && (
+      {devMode && status.epoch !== null && (
         <KeyValueRow label="Epoch" value={status.epoch} />
       )}
-      {status.round !== null && (
+      {devMode && status.round !== null && (
         <KeyValueRow label="Round" value={status.round} />
       )}
-      <KeyValueRow
-        label="Last update height"
-        value={status.lastUpdateHeight}
-      />
+      {devMode && (
+        <KeyValueRow
+          label="Last update height"
+          value={status.lastUpdateHeight}
+        />
+      )}
       {/* Chain-real reputation + liveness scores (§14 + §28.3).
           Currently null on Sprintnet testnet; rows hidden until chain
           populates non-null. Per no-mock-fallback principle, no
@@ -454,9 +450,10 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
           tooltip="Cluster liveness score from lyth_clusterStatus.livenessScore. Float in [0,1]."
         />
       )}
-      {serviceTiers && serviceTiers.anyReachable && (
+      {devMode && serviceTiers && serviceTiers.anyReachable && (
         <ServiceTierBadgeRow tiers={serviceTiers} />
       )}
+      {devMode && (
       <div style={{ marginTop: 8 }}>
         <div
           style={{
@@ -510,6 +507,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -550,7 +548,7 @@ function ServiceTierBadgeRow({ tiers }: { tiers: ClusterServiceTiers }) {
         flexWrap: "wrap",
         marginTop: 4,
       }}
-      title={`Service-tier reachability aggregated across ${tiers.probedOperators} member operators (any-true). PING #11: long-term move to a ClusterDirectoryEntry.serviceTiers aggregate field.`}
+      title={`Service-tier reachability aggregated across ${tiers.probedOperators} member operators (any reachable).`}
     >
       {entries.map((e) => (
         <span
@@ -612,6 +610,7 @@ function StateChip({ state }: { state: string }) {
 }
 
 function DelegationHistoryLine({ row }: { row: DelegationHistoryRow }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const summary =
     row.kind === "delegate"
       ? `+${(row.weightBps / 100).toFixed(2)}%`
@@ -632,7 +631,9 @@ function DelegationHistoryLine({ row }: { row: DelegationHistoryRow }) {
     >
       <span style={{ width: 60, flexShrink: 0 }}>{row.kind}</span>
       <span style={{ flex: 1 }}>{summary}</span>
-      <span style={{ color: "var(--fg-500)" }}>block {row.blockHeight}</span>
+      {devMode && (
+        <span style={{ color: "var(--fg-500)" }}>block {row.blockHeight}</span>
+      )}
     </div>
   );
 }

@@ -27,6 +27,7 @@ import { AddContactModal } from "./Contacts";
 import { ContactsPickerModal } from "../components/ContactsPickerModal";
 import type { ContactRecord } from "../bg";
 import { useContacts } from "../hooks/useContacts";
+import { useFeature } from "../hooks/useFeature";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { Modal } from "../components/Modal";
@@ -38,7 +39,7 @@ import {
   type AddressKind,
 } from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
-import { classifySendError } from "../../shared/send-error";
+import { classifySendError, errorLinksOperators } from "../../shared/send-error";
 import {
   STORAGE_KEY_NAME_CACHE,
   lookupNameInCache,
@@ -100,6 +101,9 @@ interface SendProps {
    *  Confirm; over-limit / password-required txs proceed as today.
    *  Absent prop = unchanged behavior (no policy consultation). */
   singleVaultId?: string;
+  /** Navigate to the read-only Operators directory. Used by the
+   *  genesis-mismatch error view to make "Operators" clickable. */
+  onOpenOperators?: () => void;
 }
 
 type Step = "form" | "preview" | "sending" | "success" | "error";
@@ -124,7 +128,12 @@ const TIER_LABELS: Record<FeeTier, string> = {
   fast: "Fast",
 };
 
-const ADMISSION_REJECT_CODE_LO = -32049;
+// Mempool admission-reject JSON-RPC band (crates/boundary/mempool/src/error.rs).
+// LO tracks the most-negative code in the band. The spending-policy range grew
+// to -32051 (MonthlyCapExceeded -32050, CategoryNotAllowed -32051) per the
+// 2026-06-04 upstream audit, so LO must reach -32051 or those two rejects fall
+// outside the band and lose the "Chain rejected:" framing.
+const ADMISSION_REJECT_CODE_LO = -32051;
 const ADMISSION_REJECT_CODE_HI = -32020;
 
 // Fallback execution-unit limit for native LYTH transfer when the chain
@@ -137,6 +146,7 @@ export function Send({
   onBack,
   multisigVaultId,
   singleVaultId,
+  onOpenOperators,
 }: SendProps) {
   const [step, setStep] = useState<Step>("form");
   const [passkeyDecision, setPasskeyDecision] = useState<BgPasskeyDecision | null>(null);
@@ -165,6 +175,7 @@ export function Send({
   // External data the form depends on.
   const [feeSuggestion, setFeeSuggestion] = useState<FeeSuggestion | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
+  const devMode = useFeature("DEVELOPER_MODE");
   const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   // T4-03 (Item C): the lowest cross-operator balance, used ONLY by the spend
   // gate (Max + insufficient-funds) so a single inflating operator can't enable
@@ -750,6 +761,7 @@ export function Send({
         code={submitError.code}
         method={submitError.method}
         via={submitError.via}
+        {...(onOpenOperators ? { onOpenOperators } : {})}
         onRetry={() => {
           setSubmitError(null);
           setStep("form");
@@ -1008,7 +1020,32 @@ export function Send({
           </div>
           {feeError ? (
             <div style={{ ...inlineError, marginTop: 8 }}>
-              Could not fetch fee: {feeError}
+              {(() => {
+                const c = classifySendError(feeError);
+                const body =
+                  errorLinksOperators(c.kind) && onOpenOperators
+                    ? genesisErrorBody(c.body, onOpenOperators)
+                    : c.body;
+                return (
+                  <>
+                    Could not fetch fee: {body}
+                    {devMode && c.body !== feeError && (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontFamily: "var(--f-mono)",
+                          fontSize: 10,
+                          color: "var(--fg-500)",
+                          lineHeight: 1.5,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {feeError}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           ) : feeSuggestion === null ? (
             <div
@@ -2638,6 +2675,43 @@ interface ErrorViewProps {
   via: string | null;
   onRetry: () => void;
   onCancel: () => void;
+  /** Optional — when set and the error is genesis-mismatch, the body's
+   *  "Operators" word becomes a button that opens the Operators directory. */
+  onOpenOperators?: () => void;
+}
+
+/** Render the genesis-mismatch error body with the trailing word "Operators"
+ *  as a button that opens the Operators directory. Falls back to the plain
+ *  string if the marker is absent. Display/nav only. */
+function genesisErrorBody(body: string, onOpenOperators: () => void) {
+  const marker = "Operators";
+  const i = body.lastIndexOf(marker);
+  if (i < 0) return body;
+  return (
+    <>
+      {body.slice(0, i)}
+      <button
+        type="button"
+        onClick={onOpenOperators}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          background: "none",
+          border: "none",
+          padding: 0,
+          font: "inherit",
+          color: "var(--gold)",
+          textDecoration: "underline",
+          cursor: "pointer",
+        }}
+      >
+        {marker}
+        <Icon name="external" size={11} />
+      </button>
+      {body.slice(i + marker.length)}
+    </>
+  );
 }
 
 /** Colour palette per severity. User-cancelled prompts use the neutral
@@ -2673,8 +2747,9 @@ function severityColours(severity: "err" | "warn" | "info"): {
   }
 }
 
-function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewProps) {
+function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperators }: ErrorViewProps) {
   const display = formatSendError({ message, code, method, via });
+  const devMode = useFeature("DEVELOPER_MODE");
   // Typed classification on top of the formatted message. Unknown kinds
   // preserve the formatted display string in the body.
   const classified = classifySendError(display);
@@ -2723,9 +2798,11 @@ function ErrorView({ message, code, method, via, onRetry, onCancel }: ErrorViewP
           }}
         >
           <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--fg-100)" }}>
-            {classified.body}
+            {errorLinksOperators(classified.kind) && onOpenOperators
+              ? genesisErrorBody(classified.body, onOpenOperators)
+              : classified.body}
           </div>
-          {classified.kind !== "unknown" && (
+          {devMode && classified.kind !== "unknown" && (
             <details style={{ marginTop: 8 }}>
               <summary
                 style={{

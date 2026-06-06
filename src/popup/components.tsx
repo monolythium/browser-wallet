@@ -24,7 +24,7 @@ import {
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { bech32mDisplay } from "../shared/bech32m";
-import { clusterLabel } from "../shared/staking";
+import { clusterLabel, formatWeightBpsPercent } from "../shared/staking";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import {
@@ -98,7 +98,7 @@ import {
 // Reflects the wallet's actual operational state instead of the legacy
 // "MOCK · NO REAL VALUE · DESIGN-ONLY" copy. The wallet now holds real
 // ML-DSA-65 keys, reads live Sprintnet state, and submits real
-// encrypted-envelope txs — that's worth surfacing. Other parts of the
+// plaintext mesh_submitTx txs — that's worth surfacing. Other parts of the
 // UI (Top status bar, account list, activity log) ARE
 // still demo data and live below the AttStrip; we'll address those in
 // follow-up cleanups.
@@ -428,6 +428,7 @@ export function ChainStatusBanner({
                 onClick={onMenu}
                 ariaLabel="Menu"
                 icon="menu"
+                showDot={typeof unreadCount === "number" && unreadCount > 0}
               />
             )}
           </div>
@@ -1634,6 +1635,7 @@ interface HomeProps {
 export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
+  const devMode = useFeature("DEVELOPER_MODE");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
   // Activity rows now flow through useActivity() inside ActivityList —
@@ -1679,7 +1681,9 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
               {activeChip === "total"
                 ? "—% · 24h · attested"
                 : latestDelegation
-                  ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
+                  ? devMode
+                    ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
+                    : `${clusterLabel(latestDelegation.cluster)} · ${formatWeightBpsPercent(latestDelegation.weightBps)}`
                   : "delegated · 0 / 10 clusters"}
             </div>
           )}
@@ -4062,6 +4066,7 @@ export function ReqSendTx({
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
   const [showFeeDetails, setShowFeeDetails] = useState(false);
+  const devMode = useFeature("DEVELOPER_MODE");
 
   const originWarnings = detectOriginWarnings(origin);
   const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
@@ -4140,7 +4145,7 @@ export function ReqSendTx({
         </div>
       </div>
 
-      {hasCalldata && (
+      {devMode && hasCalldata && (
         <div className="req-section">
           <div className="req-section__h">
             <span>Simulation</span>
@@ -4181,9 +4186,11 @@ export function ReqSendTx({
       <div className="req-section">
         <div className="req-section__h">
           <span>Network fee</span>
-          <button onClick={() => setShowFeeDetails((v) => !v)}>
-            {showFeeDetails ? "hide" : "details"} ↓
-          </button>
+          {devMode && (
+            <button onClick={() => setShowFeeDetails((v) => !v)}>
+              {showFeeDetails ? "hide" : "details"} ↓
+            </button>
+          )}
         </div>
         {!hasStructuredFee && (
           <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
@@ -4237,7 +4244,7 @@ export function ReqSendTx({
               <span className="k">Max fee</span>
               <span className="v">{feeDisplay?.defaultText ?? "—"}</span>
             </div>
-            {showFeeDetails && (
+            {devMode && showFeeDetails && (
               <>
                 <div className="req-kv">
                   <span className="k">Execution-unit limit</span>
@@ -4259,7 +4266,7 @@ export function ReqSendTx({
         )}
       </div>
 
-      {decoded && (
+      {devMode && decoded && (
         <div className="req-section">
           <div className="req-section__h">
             <span>{decodedSurfaceTitle(decoded)}</span>
@@ -4292,7 +4299,7 @@ export function ReqSendTx({
         </div>
       )}
 
-      {hasCalldata && !decoded && (
+      {devMode && hasCalldata && !decoded && (
         <div className="req-section">
           <div className="req-warn warn">
             <Icon name="warn" size={14} />
@@ -4304,17 +4311,19 @@ export function ReqSendTx({
         </div>
       )}
 
-      <div className="req-section" style={{ paddingBottom: 16 }}>
-        <div className="req-section__h">
-          <span>Raw calldata</span>
-          <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
-        </div>
-        {showRaw && (
-          <div className="req-raw" style={{ wordBreak: "break-all" }}>
-            {hasCalldata ? data : "0x (no calldata)"}
+      {devMode && (
+        <div className="req-section" style={{ paddingBottom: 16 }}>
+          <div className="req-section__h">
+            <span>Raw calldata</span>
+            <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
           </div>
-        )}
-      </div>
+          {showRaw && (
+            <div className="req-raw" style={{ wordBreak: "break-all" }}>
+              {hasCalldata ? data : "0x (no calldata)"}
+            </div>
+          )}
+        </div>
+      )}
 
       <CustodyBadge mode={custody} />
       <div className="req-foot">

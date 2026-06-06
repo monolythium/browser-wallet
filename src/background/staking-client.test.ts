@@ -1024,6 +1024,36 @@ describe("readPendingRewards", () => {
     ]);
   });
 
+  it('accepts a block-tag ("latest") response and renders real rewards', async () => {
+    // The live chain returns block:"latest" (a tag string) because the wallet
+    // sends no explicit block height. The reader must NOT reject the whole
+    // valid response over a non-numeric block — it should parse rewards and
+    // leave the (UI-unused) blockHeight null. Regression for the long-standing
+    // "rewards loading" symptom (upstream audit 2026-06-04).
+    const total = 50_000_000n;
+    mockedRpc.mockResolvedValue({
+      via: "operator-3",
+      result: {
+        wallet,
+        totalAmountLythoshi: total.toString(10),
+        settledPendingLythoshi: "0",
+        unsettledAmountLythoshi: total.toString(10),
+        autoCompound: false,
+        rows: [],
+        block: "latest",
+      },
+    });
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2500 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("operator-3");
+    expect(r.data.totalAmountLythoshi).toBe(total.toString(10));
+    expect(r.data.unsettledAmountLythoshi).toBe(total.toString(10));
+    expect(r.data.blockHeight).toBeNull();
+    expect(r.data.rows).toEqual([]);
+  });
+
   it("rejects malformed lyth_pendingRewards responses instead of mocking them", async () => {
     mockedRpc.mockResolvedValue({
       via: "operator-7",

@@ -77,7 +77,7 @@ export const INDEXER_STALE_LAG = 10;
 /** Required capability surfaces a healthy operator should expose. Missing
  *  any of these surfaces the missing-capabilities badge. */
 export const EXPECTED_CAPABILITY_SURFACES: readonly string[] = [
-  "indexer",
+  "indexer_history",
 ];
 
 /** Classify an operator into zero-or-more risk badges. Returns an empty
@@ -184,22 +184,24 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
   kind: OperatorRiskKind;
   label: string;
   body: string;
+  /** Developer-only legend entries — technical risk signals (capability /
+   *  indexer / latency / pending) routed behind developer mode. The trust +
+   *  reachability entries stay visible to everyone. */
+  devOnly?: boolean;
 }> = [
   {
     kind: "untrusted-genesis",
     label: "Untrusted genesis",
     body:
-      "Operator's chain genesis doesn't match the wallet's pinned " +
-      "Monolythium Testnet genesis. The wallet's RPC dispatcher excludes operators " +
-      "with mismatched genesis (orphan-fork defense).",
+      "This operator is on a different chain — the wallet won't trust its " +
+      "data and excludes it from every request.",
   },
   {
     kind: "transport-error",
     label: "Offline / unreachable",
     body:
-      "Operator's probe failed at the transport layer (network error, " +
-      "HTTP 4xx/5xx, or RPC timeout). Wallet routes around it; user " +
-      "doesn't need to take action.",
+      "The wallet couldn't reach this operator. It's skipped automatically " +
+      "— nothing for you to do.",
   },
   {
     kind: "indexer-stale",
@@ -208,6 +210,7 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
       "Operator's indexer is more than 10 blocks behind the chain head. " +
       "Activity history fetched from this operator may miss recent " +
       "transactions until it catches up.",
+    devOnly: true,
   },
   {
     kind: "indexer-disabled",
@@ -215,14 +218,16 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
     body:
       "Operator does not serve the indexer endpoint. The activity feed " +
       "falls back to another operator when one is configured.",
+    devOnly: true,
   },
   {
     kind: "missing-capabilities",
     label: "Capability surface gaps",
     body:
       "Operator is missing capability surfaces the wallet expects " +
-      "(indexer, etc.). Often means a pre-uplift " +
+      "(indexer_history, etc.). Often means a pre-uplift " +
       "binary; not load-bearing for basic sends.",
+    devOnly: true,
   },
   {
     kind: "high-latency",
@@ -231,14 +236,15 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
       "Operator's probe round-trip exceeded 3 seconds. The wallet " +
       "tolerates it (operator failover kicks in on real RPC errors) " +
       "but routine reads may feel sluggish.",
+    devOnly: true,
   },
   {
     kind: "pending-change",
     label: "Pending operator change",
     body:
       "Chain registry reports a pending config / key / cluster change " +
-      "for this operator (chain commit 017cab9 risk-preview). Severity " +
-      "is chain-supplied; informational only — the wallet does nothing " +
-      "automatic.",
+      "for this operator. Severity is chain-supplied; informational only " +
+      "— the wallet does nothing automatic.",
+    devOnly: true,
   },
 ];

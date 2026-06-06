@@ -262,9 +262,7 @@ export function RewardCard({
             lineHeight: 1.5,
           }}
         >
-          Live pending-rewards read is unavailable from this operator;
-          the claim tx still routes to the delegation precompile and
-          settles on-chain rewards.
+          These are estimated figures — rewards still settle on-chain.
         </div>
       )}
     </div>

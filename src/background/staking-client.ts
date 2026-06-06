@@ -1142,6 +1142,13 @@ export async function readPendingRewards(
     const unsettledAmount = parseNonNegativeIntegerQuantity(
       raw.unsettledAmountLythoshi,
     );
+    // `block` is an opaque block selector, not load-bearing for the rewards
+    // view (no UI consumes blockHeight). The chain returns the TAG STRING
+    // "latest" when no explicit height is requested (the wallet sends none),
+    // and a numeric height only when one is passed — so a non-numeric tag
+    // must NOT fail the whole response. Mirror readDelegations, which omits
+    // `block` from its required shape entirely. We keep a best-effort numeric
+    // blockHeight (null for a tag) purely for the optional display field.
     const block = parseNonNegativeIntegerQuantity(raw.block);
     if (
       typeof raw.wallet !== "string" ||
@@ -1149,8 +1156,7 @@ export async function readPendingRewards(
       !Array.isArray(raw.rows) ||
       totalAmount === null ||
       settledAmount === null ||
-      unsettledAmount === null ||
-      block === null
+      unsettledAmount === null
     ) {
       return { ok: false, reason: "malformed lyth_pendingRewards response" };
     }
@@ -1175,7 +1181,7 @@ export async function readPendingRewards(
         autoCompound: raw.autoCompound,
         totalAmountWei: lythoshiHex(totalAmount),
         rows,
-        blockHeight: block.toString(10),
+        blockHeight: block === null ? null : block.toString(10),
       },
     };
   } catch (e) {

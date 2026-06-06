@@ -64,12 +64,12 @@ describe("classifyOperatorRisk — capabilities", () => {
   it("flags missing-N when expected surfaces absent", () => {
     const r = classifyOperatorRisk({
       ...HEALTHY,
-      capabilities: {}, // missing 'indexer'
+      capabilities: {}, // missing 'indexer_history'
     });
     const flag = r.find((b) => b.kind === "missing-capabilities");
     expect(flag).toBeDefined();
     expect(flag!.label).toBe("missing 1");
-    expect(flag!.tooltip).toContain("indexer");
+    expect(flag!.tooltip).toContain("indexer_history");
   });
 
   it("does not flag missing-caps when all expected surfaces present", () => {

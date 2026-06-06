@@ -23,6 +23,7 @@ import {
 } from "react";
 import { Icon } from "../Icon";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
+import { classifySendError, errorLinksOperators } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
@@ -208,6 +209,9 @@ interface StakeProps {
   onShowClusterDetail?: (
     cluster: import("../../shared/staking").ClusterDirectoryEntry,
   ) => void;
+  /** Opens the operator directory — wired to the genesis-mismatch error's
+   *  "Operators" word so it becomes a button (mirrors Send). */
+  onOpenOperators?: () => void;
   onBack: () => void;
 }
 
@@ -217,6 +221,7 @@ export function Stake({
   initialAction,
   initialClusterId,
   onShowClusterDetail,
+  onOpenOperators,
   onBack,
 }: StakeProps) {
   // Restore prior Stake state when the user returns from a sibling
@@ -238,6 +243,7 @@ export function Stake({
   // Cluster directory state.
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
   const [clustersError, setClustersError] = useState<string | null>(null);
+  const devMode = useFeature("DEVELOPER_MODE");
 
   // Delegation context state.
   const [delegations, setDelegations] = useState<DelegationsView | null>(null);
@@ -841,7 +847,34 @@ export function Stake({
             {entryMode === "manual" && (
               <>
                 {clustersError !== null ? (
-                  <div style={errBanner}>{clustersError}</div>
+                  <div style={errBanner}>
+                    {(() => {
+                      const c = classifySendError(clustersError);
+                      const body =
+                        errorLinksOperators(c.kind) && onOpenOperators
+                          ? genesisErrorBody(c.body, onOpenOperators)
+                          : c.body;
+                      return (
+                        <>
+                          {body}
+                          {devMode && c.body !== clustersError && (
+                            <div
+                              style={{
+                                marginTop: 6,
+                                fontFamily: "var(--f-mono)",
+                                fontSize: 10,
+                                color: "var(--fg-500)",
+                                lineHeight: 1.5,
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {clustersError}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
                 ) : clusters.length === 0 ? (
                   <div
                     style={{
@@ -1033,6 +1066,7 @@ export function Stake({
               setStep("form");
             }}
             onCancel={onBack}
+            {...(onOpenOperators ? { onOpenOperators } : {})}
           />
         )}
       </div>
@@ -1154,6 +1188,7 @@ function PreviewView({
   onConfirm,
   onBack,
 }: PreviewViewProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const amountLythoshi = parseLythAmountToLythoshi(amountStr);
   const aprBps = cluster.aprBps ?? null;
   const isUndelegate = action === "undelegate";
@@ -1260,13 +1295,27 @@ function PreviewView({
             lineHeight: 1.6,
           }}
         >
-          {action === "delegate" &&
-            "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile via the encrypted-mempool path; the LYTH amount is sent as msg.value (your staked principal)."}
-          {action === "undelegate" &&
-            "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
-          {action === "redelegate" &&
-            "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
-          Monolythium Testnet may reject the call until the gate is activated.
+          {devMode ? (
+            <>
+              {action === "delegate" &&
+                "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile (0x100A) via plaintext mesh_submitTx; the LYTH amount is sent as msg.value (your staked principal)."}
+              {action === "undelegate" &&
+                "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
+              {action === "redelegate" &&
+                "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
+              Monolythium Testnet may reject the call until the gate is activated.
+            </>
+          ) : (
+            <>
+              {action === "delegate" &&
+                "Submits your delegation to the network. "}
+              {action === "undelegate" &&
+                "Removes your delegation; your principal enters the redemption queue and can be claimed at maturity. "}
+              {action === "redelegate" &&
+                "Moves your delegation to another cluster instantly. "}
+              Monolythium Testnet may reject this until staking is enabled.
+            </>
+          )}
         </div>
       </div>
 
@@ -1297,6 +1346,7 @@ function PreviewView({
 }
 
 function SubmittingView() {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div
       style={{
@@ -1312,7 +1362,9 @@ function SubmittingView() {
       <div
         style={{ fontSize: 10, color: "var(--fg-500)", marginTop: 6, lineHeight: 1.5 }}
       >
-        Encrypted-mempool envelope → cluster → admission gate
+        {devMode
+          ? "mesh_submitTx → cluster → admission gate"
+          : "Broadcasting to the network…"}
       </div>
     </div>
   );
@@ -1526,6 +1578,41 @@ function SuccessView({
   );
 }
 
+/** Render the genesis-mismatch error body with the trailing "Operators"
+ *  word as a button that opens the operator directory. Falls back to the
+ *  plain string when the marker is absent. Mirrors Send's treatment so the
+ *  stake-flow genesis error is consistent. Display/nav only. */
+function genesisErrorBody(body: string, onOpenOperators: () => void) {
+  const marker = "Operators";
+  const i = body.lastIndexOf(marker);
+  if (i < 0) return body;
+  return (
+    <>
+      {body.slice(0, i)}
+      <button
+        type="button"
+        onClick={onOpenOperators}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          background: "none",
+          border: "none",
+          padding: 0,
+          font: "inherit",
+          color: "var(--gold)",
+          textDecoration: "underline",
+          cursor: "pointer",
+        }}
+      >
+        {marker}
+        <Icon name="external" size={11} />
+      </button>
+      {body.slice(i + marker.length)}
+    </>
+  );
+}
+
 interface ErrorViewProps {
   error: {
     message: string;
@@ -1535,9 +1622,19 @@ interface ErrorViewProps {
   };
   onRetry: () => void;
   onCancel: () => void;
+  /** When set and the error classifies as genesis-mismatch, the body's
+   *  "Operators" word becomes a button opening the operator directory. */
+  onOpenOperators?: () => void;
 }
 
-function ErrorView({ error, onRetry, onCancel }: ErrorViewProps) {
+function ErrorView({
+  error,
+  onRetry,
+  onCancel,
+  onOpenOperators,
+}: ErrorViewProps) {
+  const classified = classifySendError(error.message);
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div
@@ -1571,20 +1668,33 @@ function ErrorView({ error, onRetry, onCancel }: ErrorViewProps) {
             lineHeight: 1.5,
           }}
         >
-          {error.message}
+          {errorLinksOperators(classified.kind) && onOpenOperators
+            ? genesisErrorBody(classified.body, onOpenOperators)
+            : classified.body}
         </div>
-        {(error.code !== null || error.method !== null || error.via !== null) && (
+        {/* Raw error detail (message + code/method/via) is developer-only
+            noise; the plain classified body above is what all users see. */}
+        {devMode && (
           <div
             style={{
               fontFamily: "var(--f-mono)",
               fontSize: 9.5,
               color: "var(--fg-500)",
               marginTop: 8,
+              wordBreak: "break-word",
+              lineHeight: 1.5,
             }}
           >
-            {error.code !== null && <>code {error.code} · </>}
-            {error.method !== null && <>{error.method} · </>}
-            {error.via !== null && <>via {error.via}</>}
+            {error.message}
+            {(error.code !== null ||
+              error.method !== null ||
+              error.via !== null) && (
+              <div style={{ marginTop: 6 }}>
+                {error.code !== null && <>code {error.code} · </>}
+                {error.method !== null && <>{error.method} · </>}
+                {error.via !== null && <>via {error.via}</>}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -72,7 +72,7 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
       json: async () => ({
         jsonrpc: "2.0",
         id: 1,
-        error: { code: -32049, message: "mempool: decryption failed" },
+        error: { code: -32032, message: "decryption failed" },
       }),
     })) as unknown as typeof fetch;
 
@@ -88,10 +88,10 @@ describe("sprintnetJsonRpc — method/via/code stamping", () => {
       via?: string;
       method?: string;
     };
-    expect(err.code).toBe(-32049);
+    expect(err.code).toBe(-32032);
     expect(err.via).toBe("operator-test");
     expect(err.method).toBe("lyth_getEncryptionKey");
-    expect(err.message).toBe("mempool: decryption failed");
+    expect(err.message).toBe("decryption failed");
   });
 
   it("transport-only failure throws WITHOUT method/via/code stamping", async () => {

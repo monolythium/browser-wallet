@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgNativeMarketOrderBookDeltas,
   bgWalletChainBlockNumber,
@@ -29,7 +30,28 @@ export type MrvNativeMode = "deploy" | "call";
 export interface MrvNativeProps {
   chainIdHex: string;
   onBack: () => void;
+  /** Opens Settings / About — surfaced as buttons on the dev-mode-required
+   *  stub so the user can reach the developer-mode toggle. */
+  onOpenSettings?: () => void;
+  onOpenAbout?: () => void;
 }
+
+// Gold-accent pill with a ↗ affordance, used on the dev-mode-required stub
+// to send the user to the pages that host the developer-mode toggle.
+const devModeNavBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 10,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg, rgba(212,160,60,0.12))",
+  color: "var(--gold)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
 export interface MrvNativeFormValues {
   artifactBytes: string;
@@ -110,7 +132,13 @@ function formatMrvLythAmount(lythoshiDecimal: string): string {
   return formatNativeLythAmount(BigInt(lythoshiDecimal));
 }
 
-export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
+export function MrvNative({
+  chainIdHex,
+  onBack,
+  onOpenSettings,
+  onOpenAbout,
+}: MrvNativeProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const [mode, setMode] = useState<MrvNativeMode>("deploy");
   const [form, setForm] = useState<MrvNativeFormValues>(DEFAULT_FORM);
   const [plan, setPlan] = useState<WalletMrvNativeSubmissionPlan | null>(null);
@@ -165,7 +193,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       if (r.ok) {
         setPlan(r.plan);
       } else {
-        setError(r.reason ?? "MRV native plan builder failed");
+        setError(r.reason ?? "RISC-V plan builder failed");
       }
     } catch (e) {
       setError((e as Error).message);
@@ -185,7 +213,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
         setReceiptState({ phase: "polling" });
       } else {
         setSubmitError({
-          message: r.reason ?? "MRV native submission failed",
+          message: r.reason ?? "RISC-V submission failed",
           ...(r.code !== undefined ? { code: r.code } : {}),
           ...(r.method !== undefined ? { method: r.method } : {}),
           ...(r.via !== undefined ? { via: r.via } : {}),
@@ -208,7 +236,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
     if (!TX_HASH_RE.test(submittedTxHash)) {
       setReceiptState({
         phase: "unavailable",
-        reason: "MRV receipt polling requires a 32-byte transaction hash",
+        reason: "RISC-V receipt polling requires a 32-byte transaction hash",
       });
       return;
     }
@@ -245,7 +273,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
       if (!r.ok) {
         setReceiptState({
           phase: "unavailable",
-          reason: r.reason ?? "MRV native receipt polling failed",
+          reason: r.reason ?? "RISC-V receipt polling failed",
           ...(r.code !== undefined ? { code: r.code } : {}),
           ...(r.method !== undefined ? { method: r.method } : {}),
           ...(r.via !== undefined ? { via: r.via } : {}),
@@ -350,6 +378,74 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
     };
   }, [chainIdHex]);
 
+  // Whole route is developer-only — the RISC-V contract console (bytecode,
+  // raw lythoshi, RPC metadata, proof transcripts) is technical tooling and
+  // is off the LYTH-only fee-display posture. Reached only via the (now
+  // dev-gated) RISC-V menu entry; the route is gated too as defense-in-depth.
+  if (!devMode) {
+    return (
+      <>
+        <div className="ext-top">
+          <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
+            <Icon name="back" size={15} />
+          </button>
+          <div
+            style={{
+              flex: 1,
+              fontSize: 13,
+              fontWeight: 600,
+              textAlign: "center",
+            }}
+          >
+            RISC-V
+          </div>
+          <div style={{ width: 36 }} />
+        </div>
+        <div className="ext-body">
+          <div
+            className="ext-card"
+            style={{ textAlign: "center", padding: "32px 18px" }}
+          >
+            <Icon name="code" size={28} />
+            <div style={{ marginTop: 14, fontSize: 13, fontWeight: 600 }}>
+              Developer mode required
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 11.5,
+                color: "var(--fg-300)",
+                lineHeight: 1.5,
+              }}
+            >
+              The RISC-V contract console is a developer tool. Turn on
+              developer mode to use it.
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "center",
+                marginTop: 14,
+              }}
+            >
+              {onOpenSettings && (
+                <button type="button" onClick={onOpenSettings} style={devModeNavBtn}>
+                  Settings <Icon name="external" size={11} />
+                </button>
+              )}
+              {onOpenAbout && (
+                <button type="button" onClick={onOpenAbout} style={devModeNavBtn}>
+                  About <Icon name="external" size={11} />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <div className="ext-top">
@@ -357,9 +453,33 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{
+            flex: 1,
+            fontSize: 13,
+            fontWeight: 600,
+            textAlign: "center",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
         >
-          MRV native
+          RISC-V
+          <span
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 8.5,
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "var(--fg-400)",
+              border: "1px solid var(--fg-700)",
+              borderRadius: 3,
+              padding: "0 4px",
+            }}
+          >
+            MRV
+          </span>
         </div>
         <div style={{ width: 36 }} />
       </div>
@@ -370,11 +490,11 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
             <h3>Native contract preview</h3>
           </div>
           <div style={bodyCopy}>
-            Build a v4.1 MRV native contract deploy or call plan. This page
+            Build a RISC-V (MRV native) contract deploy or call plan. This page
             previews execution units, native fees, typed addresses, and the
             JSON-safe transaction extension before signing. After submission,
             the wallet polls transaction receipt inclusion status when the RPC
-            supports it; it does not prove live MRV execution.
+            supports it; it does not prove live RISC-V execution.
           </div>
           <div style={chainPill}>Chain {chainIdHex}</div>
         </div>
@@ -385,7 +505,7 @@ export function MrvNative({ chainIdHex, onBack }: MrvNativeProps) {
           <div
             className="ext-tabs"
             role="tablist"
-            aria-label="MRV native plan mode"
+            aria-label="RISC-V plan mode"
             style={{ marginTop: 0 }}
           >
             <button
@@ -874,7 +994,7 @@ export function MrvNativePlanPreview({
       </div>
 
       <div style={jsonLabel}>JSON-safe plan</div>
-      <pre aria-label="MRV native plan JSON" style={jsonBlock}>
+      <pre aria-label="RISC-V plan JSON" style={jsonBlock}>
         {JSON.stringify(plan, null, 2)}
       </pre>
 

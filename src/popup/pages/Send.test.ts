@@ -313,6 +313,32 @@ describe("formatSendError — method-aware copy", () => {
     expect(s).toBe("Chain rejected: decryption failed");
   });
 
+  it("widened band: -32050/-32051 spending-policy rejects get the 'Chain rejected:' prefix", () => {
+    // Upstream audit 2026-06-04: the mempool band grew to -32051
+    // (SpendingPolicyMonthlyCapExceeded -32050, SpendingPolicyCategoryNotAllowed
+    // -32051). Both are more negative than the old LO=-32049 and must now be
+    // inside the admission band.
+    for (const code of [-32050, -32051]) {
+      const s = formatSendError({
+        message: "spending-policy: monthly cap exceeded",
+        code,
+        method: null,
+        via: null,
+      });
+      expect(s).toBe("Chain rejected: spending-policy: monthly cap exceeded");
+    }
+  });
+
+  it("just below the band (-32052) is NOT treated as an admission reject", () => {
+    const s = formatSendError({
+      message: "some non-admission error",
+      code: -32052,
+      method: null,
+      via: null,
+    });
+    expect(s).toBe("some non-admission error");
+  });
+
   it("via === null → output does not contain ' via ' (graceful degradation)", () => {
     const s = formatSendError({
       message: "x",

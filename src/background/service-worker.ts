@@ -1581,7 +1581,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // Prefer the price captured into `view` at approval time over a
           // fresh read, then clamp to the sane ceiling (T4-04 D3) so a
           // malicious/MITM operator cannot inflate the fee signed into the
-          // encrypted envelope on the dApp path either.
+          // plaintext submission on the dApp path either.
           const rawExecutionUnitPriceHex =
             txReq.gasPrice ?? view.pricePerExecutionUnitLythoshiHex ??
             await sprintnetExecutionUnitPriceHex();
@@ -4451,7 +4451,7 @@ async function fetchOneAddressLabel(
 }
 
 /** Fire-and-forget pending-row writer called from wallet-send-tx after
- *  submitEncryptedMlDsaTx resolves. Designed so a failure here CANNOT
+ *  submitPlaintextMlDsaTx resolves. Designed so a failure here CANNOT
  *  affect the broadcast handler — that handler has already returned to
  *  the popup with the tx hash by the time this runs. Two protection
  *  layers:
@@ -4481,7 +4481,7 @@ async function persistPendingRowBackground(args: {
   via: string;
   /** Broadcast-time operation tag for the notifications hook.
    *  Pure pending-row metadata; the upstream handler ensures it never
-   *  reaches `submitEncryptedMlDsaTx`. */
+   *  reaches `submitPlaintextMlDsaTx`. */
   opKind?: TxOpKind;
   /** Cluster metadata for delegation sends — same metadata-only invariant. */
   clusterId?: number;
@@ -4595,7 +4595,7 @@ function parseReceiptBlockTx(result: {
 }
 
 /** Deterministic pending→terminal classification.
- *  Once a tx carries its canonical hash (`submitEncryptedMlDsaTx` surfaces
+ *  Once a tx carries its canonical hash (`submitPlaintextMlDsaTx` surfaces
  *  `innerTxHashHex`), the chain can be asked directly instead of relying solely
  *  on the counterparty+amount heuristic. Returns:
  *
@@ -6055,7 +6055,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         const before = (await listVaultsV4()) ?? [];
         const previouslyActive = before.find((v) => v.isActive);
 
-        // Switch to the multisig vault so submitEncryptedMlDsaTx
+        // Switch to the multisig vault so submitPlaintextMlDsaTx
         // uses the multisig's keypair as the "from" account; then
         // restore the prior active vault on exit. accountsChanged
         // broadcasts cover both transitions so connected dApps see
@@ -8577,7 +8577,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         data?: string;
         gasLimitHex?: string;
         // Notifications — optional operation tag. METADATA
-        // ONLY: this is never plumbed into submitEncryptedMlDsaTx; it
+        // ONLY: this is never plumbed into submitPlaintextMlDsaTx; it
         // rides only into persistPendingRowBackground's pending-row
         // record so the notifications hook can label the resulting
         // NotificationRecord with a friendly title. An unknown literal
@@ -8801,7 +8801,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
-          // Metadata-only: opKind never reached submitEncryptedMlDsaTx —
+          // Metadata-only: opKind never reached submitPlaintextMlDsaTx —
           // it travels straight from the popup → here → the pending-row
           // record for the notifications hook to read back.
           ...(acceptedOpKind !== undefined ? { opKind: acceptedOpKind } : {}),

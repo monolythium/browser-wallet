@@ -1,10 +1,12 @@
 // MetaMask-style hamburger main menu.
 //
-// One screen, three logical sections:
-//   1. Quick action — "Switch to popup/sidebar" mode toggle.
-//   2. Manage — Contacts, Connected sites, Networks, Multisig.
-//   3. Settings — Settings page, About.
-//   4. Danger — Lock wallet (red).
+// One screen, logical sections:
+//   1. Quick action — Notifications, full screen, popup/sidebar toggle.
+//   2. Manage — Contacts, Connected sites, Networks, Multisig, RISC-V.
+//   3. Security — Security, Features, Emergency recovery.
+//   4. Settings — Settings, Theme, Operators.
+//   5. Info — About, Resources, Why Monolythium.
+//   6. Danger — Lock wallet, Reset wallet (red).
 //
 // Routing lives in App.tsx via a screen-stack so back-navigation from
 // any sub-screen reached via this menu returns HERE, not to home. See
@@ -29,18 +31,35 @@ interface MainMenuProps {
   onContacts: () => void;
   onConnectedSites: () => void;
   onNetworks: () => void;
+  /** Open the Operators directory (read-only operator health + risk
+   *  legend, with a link through to the RPC-override editor). */
+  onOperators: () => void;
   /** Optional — landing page for the Multisig top-level
    *  list. When omitted the menu item is hidden (Multisig is
    *  in a follow-up commit). */
   onMultisig?: () => void;
-  /** Optional — §18.8 agent spending-policy management. When omitted
-   *  the menu item is hidden (advanced agent-commerce UX). */
+  /** Optional — automation spending-limits management. Dev-gated; when
+   *  omitted (or developer mode is off) the menu item is hidden. */
   onAgentPolicy?: () => void;
   onSettings: () => void;
   /** Opens the Theme page (appearance / theme picker) — the same page
    *  the Settings "Theme" category routes to. */
   onTheme: () => void;
   onAbout: () => void;
+  /** Optional — passkey / security policy page (§28.5). Vault-gated, so the
+   *  row hides when no active vault is selected. */
+  onOpenSecurity?: () => void;
+  /** Optional — two-tier UX feature-flag toggles page. */
+  onOpenFeatures?: () => void;
+  /** Optional — RISC-V (MRV native) contract plan preview page. */
+  onOpenRiscv?: () => void;
+  /** Optional — SLH-DSA emergency-recovery page. Vault-gated (the editor
+   *  needs an active vault), so the row hides without one. */
+  onEmergencyRecovery?: () => void;
+  /** External resources / links page (docs, explorer, repo). */
+  onResources: () => void;
+  /** "About Monolythium" page — the §28.5 differentiation pitch. */
+  onWhyMonolythium: () => void;
   onLockWallet: () => void;
   /** Destructive reset entry at the very bottom of
    *  the menu. Reuses the existing ResetWallet screen (password reauth
@@ -59,11 +78,18 @@ export function MainMenu({
   onContacts,
   onConnectedSites,
   onNetworks,
+  onOperators,
   onMultisig,
   onAgentPolicy,
   onSettings,
   onTheme,
   onAbout,
+  onOpenSecurity,
+  onOpenFeatures,
+  onOpenRiscv,
+  onEmergencyRecovery,
+  onResources,
+  onWhyMonolythium,
   onLockWallet,
   onResetWallet,
   onNotifications,
@@ -113,8 +139,8 @@ export function MainMenu({
       </div>
 
       <div className="ext-body" style={{ paddingTop: 4 }}>
-        {onNotifications && (
-          <MenuSection>
+        <MenuSection>
+          {onNotifications && (
             <MenuItem
               icon="bell"
               label="Notifications"
@@ -126,21 +152,18 @@ export function MainMenu({
                 ) : undefined
               }
             />
-          </MenuSection>
-        )}
-
-        <MenuSection>
+          )}
           <MenuItem
-            icon="expand"
+            icon="display"
             label="Open full screen"
             onClick={onOpenFullscreen}
           />
-          <MenuItem icon="display" label={switchLabel} onClick={onSwitchMode} />
+          <MenuItem icon="expand" label={switchLabel} onClick={onSwitchMode} />
         </MenuSection>
 
         <MenuSection title="Manage">
           <MenuItem
-            icon="book"
+            icon="contacts"
             label="Contacts"
             onClick={onContacts}
             hasChevron
@@ -152,7 +175,7 @@ export function MainMenu({
             hasChevron
           />
           <MenuItem
-            icon="bridge"
+            icon="network"
             label="Networks"
             onClick={onNetworks}
             hasChevron
@@ -165,11 +188,46 @@ export function MainMenu({
               hasChevron
             />
           )}
+          {onOpenRiscv && (
+            <MenuItem
+              icon="contract"
+              label="RISC-V"
+              onClick={onOpenRiscv}
+              hasChevron
+            />
+          )}
           {onAgentPolicy && (
             <MenuItem
               icon="settings"
-              label="Agent spending policy"
+              label="Automation spending limits"
               onClick={onAgentPolicy}
+              hasChevron
+            />
+          )}
+        </MenuSection>
+
+        <MenuSection title="Security">
+          {onOpenSecurity && (
+            <MenuItem
+              icon="shield"
+              label="Security"
+              onClick={onOpenSecurity}
+              hasChevron
+            />
+          )}
+          {onOpenFeatures && (
+            <MenuItem
+              icon="sliders"
+              label="Features"
+              onClick={onOpenFeatures}
+              hasChevron
+            />
+          )}
+          {onEmergencyRecovery && (
+            <MenuItem
+              icon="tpm"
+              label="Emergency recovery"
+              onClick={onEmergencyRecovery}
               hasChevron
             />
           )}
@@ -188,7 +246,28 @@ export function MainMenu({
             onClick={onTheme}
             hasChevron
           />
+          <MenuItem
+            icon="server"
+            label="Operators"
+            onClick={onOperators}
+            hasChevron
+          />
+        </MenuSection>
+
+        <MenuSection title="Info">
           <MenuItem icon="info" label="About" onClick={onAbout} hasChevron />
+          <MenuItem
+            icon="external"
+            label="Resources"
+            onClick={onResources}
+            hasChevron
+          />
+          <MenuItem
+            icon="gem"
+            label="Why Monolythium"
+            onClick={onWhyMonolythium}
+            hasChevron
+          />
         </MenuSection>
 
         <MenuSection>
@@ -198,12 +277,9 @@ export function MainMenu({
             onClick={onLockWallet}
             danger
           />
-          {/* Destructive reset. Routes to the
-             existing ResetWallet screen which already requires
-             password reauth + a typed "DELETE" confirm before the
-             wipe runs. The hamburger entry just navigates there; no
-             extra modal needed since the existing screen has a
-             stronger gate than a checkbox ack would. */}
+          {/* Destructive reset. Routes to the existing ResetWallet screen
+             (password reauth + typed "DELETE" confirm); the hamburger entry
+             only navigates there. */}
           <MenuItem
             icon="trash"
             label="Reset wallet"

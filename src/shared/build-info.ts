@@ -78,42 +78,95 @@ export function finalityPostureFor(chainIdHex: string): string {
   return "Depends on destination chain";
 }
 
-/** Pitch lines for the About page — kept here so design tweaks land in
- *  one place and so the page itself stays declarative. Phrases mirror
- *  whitepaper §28.5 (wallet portfolio differentiation). */
+/** Pitch lines for the About + "Why Monolythium" surfaces — kept here so copy
+ *  tweaks land in one place and the pages stay declarative. Approved public
+ *  8-pillar differentiation copy; each body closes with a "This wallet …"
+ *  sentence (the constant carries title + body only). The About card renders
+ *  titles only; the Why-Monolythium page renders the full body. */
 export const WALLET_PITCH: ReadonlyArray<{ title: string; body: string }> = [
   {
-    title: "Post-quantum native",
-    body: "Monolythium Testnet signs every transaction with ML-DSA-65 (NIST FIPS 204). No legacy secp256k1 fallback, no swap-at-mainnet migration drama.",
+    title: "Post-quantum from the first block.",
+    body: `Most chains plan to "migrate" to post-quantum cryptography someday. Monolythium started there. Every transaction is admitted under ML-DSA-65 (NIST FIPS 204) and nothing else — no secp256k1 acceptance path, no hybrid mode, no swap-at-mainnet migration to wait for. The signatures protecting your funds are already quantum-resistant, from genesis. This wallet signs every transaction with ML-DSA-65 and keeps a separate SLH-DSA (FIPS 205) key — a different cryptographic family — as an emergency backup.`,
   },
   {
-    title: "Multisig built-in",
-    body: "Multi-vault container ships with day-one accounts and on-chain m-of-n. No bolt-on smart-wallet — the keystore is the multisig.",
+    title: "No EVM. Real programs, deterministically executed.",
+    body: `Monolythium does not run the Ethereum Virtual Machine. Contracts compile to a deterministic RISC-V target, so execution is fast, auditable, and free of the EVM's legacy quirks. A read-only slice of Ethereum-style RPC is kept for tooling compatibility, but the mutating and simulation calls are rejected — there is no EVM execution to fall back on. This wallet speaks the chain's native methods directly and never pretends an EVM call will work.`,
   },
   {
-    title: "MCP local tool ready",
-    body: "Wallet surface is Model-Context-Protocol-aware so agentic flows (autovote, runbooks) can read state without a brittle scraper.",
+    title: "Trust anchored to genesis, not to whoever answers.",
+    body: `The wallet carries the chain's genesis identity and checks every operator against it. An operator on a different or forked chain is marked Not verified, and the wallet won't trust its data or route your transactions through it — even if it's online and fast. You aren't trusting a server because it replied; you're trusting it because it proved it's on your chain. This wallet verifies each operator's genesis before using it, and tells you plainly when one can't be trusted.`,
   },
   {
-    title: "Passkey-aware tier",
-    body: "Day-one passkey + hardware tier alongside the seed-phrase path. The wallet ships toward §28.5's three-tier custody story.",
+    title: "Live numbers, or nothing — never invented ones.",
+    body: `Every operator status, balance, and figure the wallet shows is read live from the chain. When the chain doesn't expose something, the wallet hides that field entirely rather than showing a placeholder or a guessed value. You never see a comforting number that isn't real. This wallet probes operators in real time, shows honest absence over fake data, and surfaces each node's actual risk.`,
+  },
+  {
+    title: "An open marketplace of operator clusters.",
+    body: `Validation runs on distributed-validator clusters — seven active operators plus three on standby, with a seven-of-ten signing threshold — published openly so you can see who is securing the network. Concentration is capped per operator and per wallet by enforced on-chain limits. (The 100-cluster, 1,000-position scale is a growth target the design is built for, not a number claimed today.) This wallet lets you browse clusters, see their health and makeup, and delegate to the ones you choose.`,
+  },
+  {
+    title: "Native token standards, not Ethereum imports.",
+    body: `Tokens, NFTs, and vaults are first-class chain primitives — native MRC-20, MRC-721, MRC-1155, and MRC-4626 — not ERC contracts ported onto a foreign VM. The standards your assets follow are part of the chain itself. This wallet reads and handles these native standards directly.`,
+  },
+  {
+    title: "Defined as much by what it refuses.",
+    body: `A chain's character is in its boundaries. Monolythium has no on-chain governance to capture, no perpetuals or margin engine, and a one-way cordon between public and private funds enforced at both admission and execution. The restraint is the point. This wallet respects those boundaries and never exposes functionality the chain deliberately doesn't have.`,
+  },
+  {
+    title: "Many vaults, one keystore — and built for agents.",
+    body: `Hold several independent vaults behind one master password, each with its own approval rules. Multi-signature today lives in the keystore itself — the threshold and roster are part of your encrypted wallet, with approvals as ML-DSA-65 signatures — so there's no separate smart-contract wallet to deploy; a native on-chain m-of-n spend path is being wired next. And because the network ships an open-source MCP server, AI assistants can already read live chain state and run typed, auditable routines, with an opt-in in-wallet Copilot building toward that, off by default until it's ready. This wallet gives you multi-vault custody now, and is being built toward native on-chain multisig and an opt-in agentic Copilot.`,
   },
 ];
 
 /** Static external links surfaced from the About page. URLs are stable
  *  project endpoints; the About page is read-only / informational. */
-export const EXTERNAL_LINKS: ReadonlyArray<{ label: string; url: string }> = [
+export const EXTERNAL_LINKS: ReadonlyArray<{
+  label: string;
+  url: string;
+  /** Icon glyph name (see popup/Icon `IconName`), or "mono-mark" for the
+   *  brand "M". Typed as a plain string so this shared module stays free of
+   *  UI imports; the render sites cast it to IconName. */
+  icon: string;
+  /** Brand tint for the "M" marks — Monolythium purple / Mono Labs teal.
+   *  Other links use the default icon color. */
+  brandColor?: string;
+}> = [
+  {
+    label: "Monolythium",
+    url: "https://monolythium.com/",
+    icon: "mono-mark",
+    brandColor: "#7C5CFC",
+  },
+  {
+    label: "Mono Labs",
+    url: "https://mono-labs.org/",
+    icon: "mono-mark",
+    brandColor: "#2DD4BF",
+  },
+  {
+    label: "Ecosystem",
+    url: "https://monolythium.com/ecosystem",
+    icon: "grid",
+  },
+  {
+    label: "Documentation",
+    url: "https://docs.monolythium.com/",
+    icon: "book",
+  },
   {
     label: "Whitepaper",
-    url: "https://monolythium.org/whitepaper",
+    url: "https://monolythium.com/whitepaper",
+    icon: "contract",
   },
   {
     label: "GitHub",
-    url: "https://github.com/monolythium/browser-wallet",
+    url: "https://github.com/monolythium/",
+    icon: "github",
   },
   {
-    label: "Privacy policy",
-    url: "https://monolythium.org/privacy",
+    label: "Privacy",
+    url: "https://monolythium.com/legal/privacy",
+    icon: "lock",
   },
 ];
 

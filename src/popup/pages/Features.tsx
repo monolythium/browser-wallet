@@ -3,7 +3,7 @@
 // Surfaces the §28.5 Q29 two-tier UX toggles:
 //   TRADING_INTERFACE — advanced staking analytics + spot CLOB surfaces
 //   MARKETPLACE       — rich NFT detail + filters + agent-commerce listings
-//   AI_FEATURES       — MCP local tool (placeholder until that phase ships)
+//   AI_FEATURES       — MCP Copilot (placeholder until that phase ships)
 //   REGISTRY          — name registration UI (resolution stays available
 //                       always; registration CTA is gated)
 //
@@ -86,12 +86,14 @@ export function Features({ onBack }: FeaturesProps) {
           </div>
 
           {loadErr && (
-            <div style={errBox}>Could not load feature state: {loadErr}</div>
+            <div style={errBox}>Couldn&apos;t load features.</div>
           )}
 
           {state && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {FEATURE_FLAGS.map((flag) => {
+              {/* DEVELOPER_MODE is excluded here — it is enabled only via the
+                  popup-guarded DeveloperModeToggle, never as a bare grid toggle. */}
+              {FEATURE_FLAGS.filter((flag) => flag !== "DEVELOPER_MODE").map((flag) => {
                 const meta = FEATURE_META[flag];
                 const s = state[flag];
                 const isSaving = saving === flag;
