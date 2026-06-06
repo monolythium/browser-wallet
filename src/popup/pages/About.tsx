@@ -9,6 +9,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import { Section } from "./OperatorDirectory";
 import { DeveloperModeToggle } from "../components/DeveloperModeToggle";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgOperatorsHealth,
   bgPasskeyGetState,
@@ -95,6 +96,7 @@ function readWalletVersion(): string {
 }
 
 export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
+  const devMode = useFeature("DEVELOPER_MODE");
   const [operators, setOperators] = useState<OperatorHealthRow[] | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [provenance, setProvenance] = useState<RuntimeProvenanceView | null>(
@@ -755,6 +757,10 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <div className="ext-card__head">
             <h3>Monolythium Testnet</h3>
           </div>
+          {/* All chain-identity rows are developer-only — the network name
+              (card title) is the only user-relevant signal here. */}
+          {devMode && (
+            <>
           <KvList
             rows={[
               { k: "Chain ID", v: String(SPRINTNET_CHAIN_ID_DEC) },
@@ -781,7 +787,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 k: "EVM compat",
                 v: "Bridge active · native removal pending",
                 title:
-                  "Dapp-facing eth_sendTransaction / personal_sign / eth_signTypedData still bridge through the wallet's ML-DSA-65 backend. Native-only removal is queued for a focused follow-up commit; tracked in dev notes NAYIEM-PING.",
+                  "Dapp-facing eth_sendTransaction / personal_sign / eth_signTypedData still bridge through the wallet's ML-DSA-65 backend. Native-only removal is queued for a focused follow-up commit.",
               },
             ]}
           />
@@ -834,6 +840,8 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
                 </>
               )}
             </div>
+          )}
+            </>
           )}
         </div>
 
