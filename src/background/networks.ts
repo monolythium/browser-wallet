@@ -12,16 +12,16 @@ import {
   type OperatorEntry,
 } from "../shared/operators.js";
 import {
-  SPRINTNET_BLOCK0_HASH,
-  SPRINTNET_GENESIS_HASH,
+  TESTNET_BLOCK0_HASH,
+  TESTNET_GENESIS_HASH,
 } from "../shared/build-info.js";
 
 /** Monolythium Testnet (L1 testnet) chain id, exposed as 0x-quantity hex. */
-export const SPRINTNET_CHAIN_ID_HEX =
+export const TESTNET_CHAIN_ID_HEX =
   "0x" + MONOLYTHIUM_TESTNET_CHAIN_ID.toString(16).toUpperCase(); // "0x10F2C"
 
 /** Numeric form for tx-build callsites that prefer u64. */
-export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
+export const TESTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
 
 /**
  * Minimum execution-unit limit for a plain LYTH transfer on Monolythium Testnet.
@@ -35,7 +35,7 @@ export const SPRINTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
  * mempool intrinsic floor. The Monolythium Testnet code paths must hardcode this
  * constant instead of estimating.
  */
-export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
+export const TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
 /**
  * T4-04 (Item D) — absolute sane upper bound on an operator-reported (or
@@ -44,7 +44,7 @@ export const SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
  * a malicious/MITM operator (or a tampered popup) could still supply an absurd
  * `maxFeePerGas`; clamp it here so a single unit can never be priced above this
  * physically-impossible line. 1e15 lythoshi/unit = 10,000,000 LYTH/unit — many
- * orders of magnitude above any honest Sprintnet price, so a legitimate fee is
+ * orders of magnitude above any honest testnet price, so a legitimate fee is
  * never blocked, while a 1e30-style inflation is capped. Paired with the
  * balance ceiling (Item C) via the shared `operator-bounds` helper.
  */
@@ -65,7 +65,7 @@ export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15
  * indexed, matching the SDK snapshot's ordering). The SDK registry owns
  * membership; the wallet mirrors it and no longer hardcodes exclusions.
  */
-export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
+export const TESTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
   getRpcEndpoints("testnet-69420").map((endpoint, i) => ({
     name: `operator-${i + 1}`,
     region: endpoint.region ?? "unknown",
@@ -80,12 +80,12 @@ export const SPRINTNET_OPERATOR_RPCS_DEFAULTS: ReadonlyArray<OperatorEntry> =
 /** In-memory active operator list. Hydrated from storage at SW boot via
  *  `loadOperatorOverride()` and updated by `setOperatorOverride()` and
  *  the chrome.storage.onChanged listener in service-worker.ts. */
-let activeOperators: OperatorEntry[] = SPRINTNET_OPERATOR_RPCS_DEFAULTS.map(
+let activeOperators: OperatorEntry[] = TESTNET_OPERATOR_RPCS_DEFAULTS.map(
   (d) => ({ ...d }),
 );
 
 /** Snapshot of the current effective operator list (defaults or override).
- *  RPC dispatch (`sprintnetJsonRpc`, `probeFirstAliveOperator`) calls
+ *  RPC dispatch (`testnetJsonRpc`, `probeFirstAliveOperator`) calls
  *  this on every iteration so a hot-swapped override takes effect on
  *  the next RPC without a SW restart. */
 export function getActiveOperators(): ReadonlyArray<OperatorEntry> {
@@ -99,7 +99,7 @@ export async function loadOperatorOverride(): Promise<void> {
     chrome.storage.local.get([STORAGE_KEY_OPERATOR_OVERRIDE], (res) => {
       const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
       const validated = validateOperatorList(raw);
-      activeOperators = mergeOperatorOverride(SPRINTNET_OPERATOR_RPCS_DEFAULTS, validated);
+      activeOperators = mergeOperatorOverride(TESTNET_OPERATOR_RPCS_DEFAULTS, validated);
       resolve();
     });
   });
@@ -113,7 +113,7 @@ export async function loadOperatorOverride(): Promise<void> {
 export async function setOperatorOverride(
   override: OperatorEntry[] | null,
 ): Promise<void> {
-  activeOperators = mergeOperatorOverride(SPRINTNET_OPERATOR_RPCS_DEFAULTS, override);
+  activeOperators = mergeOperatorOverride(TESTNET_OPERATOR_RPCS_DEFAULTS, override);
   return new Promise((resolve) => {
     if (override === null) {
       chrome.storage.local.remove(STORAGE_KEY_OPERATOR_OVERRIDE, () => resolve());
@@ -125,11 +125,11 @@ export async function setOperatorOverride(
 
 /** Defaults snapshot for popup-side display. */
 export function getDefaultOperators(): ReadonlyArray<OperatorEntry> {
-  return SPRINTNET_OPERATOR_RPCS_DEFAULTS;
+  return TESTNET_OPERATOR_RPCS_DEFAULTS;
 }
 
 /** Read the persisted override directly (without merging). Returns null
- *  when no override is set. Used by the popup `sprintnet-operators-get`
+ *  when no override is set. Used by the popup `testnet-operators-get`
  *  IPC to render the "custom override active" banner. */
 export async function readOperatorOverride(): Promise<OperatorEntry[] | null> {
   return new Promise((resolve) => {
@@ -155,7 +155,7 @@ export interface BuiltinChain {
   name: string;
   /** Single RPC URL for `RpcClient` consumers (user-added chains via
    * wallet_addEthereumChain). Monolythium Testnet reads/writes funnel through
-   * `sprintnetJsonRpc` (operator iteration), not through this URL — it's
+   * `testnetJsonRpc` (operator iteration), not through this URL — it's
    * here only to satisfy callers that still ask for one. */
   rpc: string;
   blockExplorer?: string;
@@ -171,17 +171,17 @@ export interface BuiltinChain {
  *
  * Note: the legacy "Local devnet" (0x7A69) and old DNS alias have been
  * removed. Monolythium Testnet IS the testnet, and the canonical RPC list comes from
- * the SDK-bundled chain registry (`SPRINTNET_OPERATOR_RPCS`) — the `rpc`
+ * the SDK-bundled chain registry (`TESTNET_OPERATOR_RPCS`) — the `rpc`
  * field below is the first operator, kept for `RpcClient` consumers
  * (user-added chains); the read/write hot path goes through
- * `sprintnetJsonRpc`.
+ * `testnetJsonRpc`.
  */
 export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
   {
-    chainId: SPRINTNET_CHAIN_ID_HEX,
-    chainIdNum: SPRINTNET_CHAIN_ID,
+    chainId: TESTNET_CHAIN_ID_HEX,
+    chainIdNum: TESTNET_CHAIN_ID,
     name: "Monolythium Testnet",
-    rpc: SPRINTNET_OPERATOR_RPCS_DEFAULTS[0]!.rpc,
+    rpc: TESTNET_OPERATOR_RPCS_DEFAULTS[0]!.rpc,
     nativeCurrency: { name: "Monolythium LYTH", symbol: "LYTH", decimals: 18 },
     official: true,
   },
@@ -196,7 +196,7 @@ export const BUILTIN_CHAINS: ReadonlyArray<BuiltinChain> = [
  * so the routing in service-worker.ts touches one constant.
  */
 export function chainRequiresMlDsa(chainIdHex: string): boolean {
-  return chainIdHex.toUpperCase() === SPRINTNET_CHAIN_ID_HEX.toUpperCase();
+  return chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase();
 }
 
 /**
@@ -214,7 +214,7 @@ export function chainRequiresMlDsa(chainIdHex: string): boolean {
  * one-time probe per operator suffices for the SW lifetime.
  */
 export async function probeFirstAliveOperator(
-  expectedChainIdDec: number = SPRINTNET_CHAIN_ID,
+  expectedChainIdDec: number = TESTNET_CHAIN_ID,
   timeoutMs: number = 3_000,
 ): Promise<{ name: string; rpc: string } | null> {
   for (const v of getActiveOperators()) {
@@ -268,7 +268,7 @@ interface GenesisCacheEntry {
 const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
 
 /**
- * Verify an operator's chain genesis identity matches SPRINTNET_GENESIS_HASH.
+ * Verify an operator's chain genesis identity matches TESTNET_GENESIS_HASH.
  * Returns true on match (or cache-hit "true"); false on mismatch,
  * unreachable, or malformed response. Result is cached forever (see
  * cache docstring). The cached false is the load-bearing behavior:
@@ -276,14 +276,14 @@ const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
  *
  * Preferred probe: `lyth_chainStats.genesisHash`, which is the chain
  * identity hash used by the registry and p2p binding. Fallback probe:
- * block-0's EVM header hash, compared against SPRINTNET_BLOCK0_HASH. The
+ * block-0's EVM header hash, compared against TESTNET_BLOCK0_HASH. The
  * two pins are separate because protocore does not define them as the
  * same hash.
  *
  * Used by:
  *  - probeFirstAliveOperator (defense-in-depth against orphan fork)
- *  - sprintnet-operators-health IPC (About-page table)
- *  - tx-mldsa.sprintnetJsonRpc (read/write dispatch skip-list)
+ *  - testnet-operators-health IPC (About-page table)
+ *  - tx-mldsa.testnetJsonRpc (read/write dispatch skip-list)
  */
 export async function verifyOperatorGenesis(
   rpc: string,
@@ -307,7 +307,7 @@ export function clearGenesisCache(rpc?: string): void {
 }
 
 /** Snapshot of the current cache state. Used by
- *  sprintnet-operators-health to assemble the per-operator response
+ *  testnet-operators-health to assemble the per-operator response
  *  without re-probing when the entry is fresh in-memory. */
 export function snapshotGenesisCache(): Map<string, GenesisCacheEntry> {
   return new Map(operatorGenesisCache);
@@ -327,7 +327,7 @@ async function probeOperatorGenesis(
     const observed = normaliseHash(result?.genesisHash);
     if (observed !== null) {
       return {
-        ok: observed === SPRINTNET_GENESIS_HASH.toLowerCase(),
+        ok: observed === TESTNET_GENESIS_HASH.toLowerCase(),
         observed,
         checkedAt: now,
       };
@@ -347,7 +347,7 @@ async function probeOperatorGenesis(
   // GAP #11 — older operator binaries did not expose block 0 via
   // eth_getBlockByNumber("0x0", false). That remains "probe not
   // supported" instead of orphan-fork evidence; newer binaries are
-  // verified against SPRINTNET_BLOCK0_HASH.
+  // verified against TESTNET_BLOCK0_HASH.
   if (body?.result == null) {
     console.info(
       "[probe] genesis probes unsupported on operator (ok=true, pin skipped):",
@@ -360,7 +360,7 @@ async function probeOperatorGenesis(
     return { ok: false, observed: null, checkedAt: now };
   }
   return {
-    ok: observed === SPRINTNET_BLOCK0_HASH.toLowerCase(),
+    ok: observed === TESTNET_BLOCK0_HASH.toLowerCase(),
     observed,
     checkedAt: now,
   };

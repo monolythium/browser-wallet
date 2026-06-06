@@ -1,4 +1,4 @@
-/// §25.4 public→private crossing. CHAIN-GATED — Sprintnet's indexer
+/// §25.4 public→private crossing. CHAIN-GATED — the testnet's indexer
 /// does NOT emit `kind === "crossing"` (or equivalent) on
 /// `lyth_getAddressActivity` sender-side today. This body never
 /// instantiates at runtime on the current testnet; the union member

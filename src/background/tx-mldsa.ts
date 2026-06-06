@@ -2,7 +2,7 @@
 //
 // Protocol-critical signing + native tx encoding live in
 // `@monolythium/core-sdk/crypto`. This module keeps browser-wallet
-// responsibilities local: translate EIP-1193 fields, iterate Sprintnet
+// responsibilities local: translate EIP-1193 fields, iterate testnet
 // operator RPCs, and surface wallet-friendly errors.
 
 import {
@@ -28,17 +28,17 @@ export interface EthSendTxFields {
   maxPriorityFeePerGas?: string;
   /** Optional native typed transaction extensions, used by MRV v1 deploy/call. */
   extensions?: readonly NativeTxExtensionLike[];
-  /** Hex chain id of the target chain (e.g. `0x10F2C` for Sprintnet). */
+  /** Hex chain id of the target chain (e.g. `0x10F2C` for the testnet). */
   chainIdHex: string;
 }
 
 /**
- * Iterate the published Sprintnet operators in order, returning the
+ * Iterate the published testnet operators in order, returning the
  * first one that produces a non-error JSON-RPC response. Transport-level
  * failures trigger fallback to the next operator; RPC-level rejections
  * propagate immediately because they are state-level consensus answers.
  */
-export async function sprintnetJsonRpc<T>(
+export async function testnetJsonRpc<T>(
   method: string,
   params: unknown[],
   opts?: { timeoutMs?: number },
@@ -59,7 +59,7 @@ export async function sprintnetJsonRpc<T>(
   for (const v of getActiveOperators()) {
     totalOperators++;
     // GAP #11: genesis-hash pin. Operators whose chain identity doesn't
-    // match SPRINTNET_GENESIS_HASH are skipped — they're either on a fork
+    // match TESTNET_GENESIS_HASH are skipped — they're either on a fork
     // or a different chain entirely, and routing any request to them
     // leaks reads / writes onto an untrusted ledger.
     if (!(await verifyOperatorGenesis(v.rpc))) {
@@ -126,7 +126,7 @@ export async function sprintnetJsonRpc<T>(
 }
 
 /**
- * Result of `sprintnetMaxBalanceConsensus`. `contributing` and `failing`
+ * Result of `testnetMaxBalanceConsensus`. `contributing` and `failing`
  * sum to the active-operator-list length; the consensus value is the
  * MAX across `contributing`.
  */
@@ -196,12 +196,12 @@ function parseBalanceFromRpcResult(result: unknown): string | null {
 }
 
 /**
- * Query every active Sprintnet operator in parallel for `eth_getBalance`
+ * Query every active testnet operator in parallel for `eth_getBalance`
  * and return the MAX value across responses.
  *
  * Operators may briefly lag behind each other after a regenesis or
  * binary rollout. The single-operator-with-failover pattern in
- * `sprintnetJsonRpc` latches onto the first responder, which for
+ * `testnetJsonRpc` latches onto the first responder, which for
  * balance reads can be a stale `0x0` envelope that hides the correct
  * value reported by other operators (observed in the field:
  * 192.0.2.1 returned `0x0` for a freshly funded address while
@@ -211,10 +211,10 @@ function parseBalanceFromRpcResult(result: unknown): string | null {
  * monotonically until a tx spends from the address — a lagging
  * operator can only under-report, never over-report. Do NOT
  * generalize this to `eth_call`, nonce, fee, or indexer methods,
- * where max() is not meaningful; those keep `sprintnetJsonRpc`
+ * where max() is not meaningful; those keep `testnetJsonRpc`
  * first-responder semantics.
  */
-export async function sprintnetMaxBalanceConsensus(
+export async function testnetMaxBalanceConsensus(
   address: string,
 ): Promise<BalanceConsensusResult> {
   const operators = getActiveOperators();
@@ -345,7 +345,7 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
 // chain.
 //
 // We do NOT route through the SDK's `submitPlaintextTransaction` RpcClient
-// helper here: the wallet's operator-iteration in `sprintnetJsonRpc` carries
+// helper here: the wallet's operator-iteration in `testnetJsonRpc` carries
 // the genesis-hash pin + multi-operator failover that protect every wallet
 // RPC. We still use the SDK's `buildPlaintextSubmission` for the
 // protocol-critical sign + bincode serialization (the bytes are byte-for-byte
@@ -387,7 +387,7 @@ export async function broadcastPlaintextTransaction(
   signedTxWireHex: string,
   expectedTxHashHex: string,
 ): Promise<{ txHash: string; via: string }> {
-  const { result, via } = await sprintnetJsonRpc<string>("mesh_submitTx", [
+  const { result, via } = await testnetJsonRpc<string>("mesh_submitTx", [
     signedTxWireHex,
   ]);
   const echoed = typeof result === "string" ? result.toLowerCase() : "";

@@ -47,8 +47,8 @@ import {
  *  4-byte selector. */
 export const EMERGENCY_KEY_REGISTER_SIGNATURE = "register(uint16,bytes)";
 
-/** Execution-unit limit for the precompile call. The Sprintnet native-
- *  transfer floor (`SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = 30000`)
+/** Execution-unit limit for the precompile call. The testnet native-
+ *  transfer floor (`TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = 30000`)
  *  is insufficient for the precompile's validate-and-store work — a prior
  *  attempt with that floor consumed all gas and reverted (`status:0`).
  *  The chain does not support `eth_estimateGas`, so we cannot estimate at

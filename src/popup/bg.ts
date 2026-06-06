@@ -172,7 +172,7 @@ export interface ChainEntry {
   rpc: string;
   chainIdNum: number;
   builtin: boolean;
-  /** True for Foundation-attested official chains (Sprintnet today).
+  /** True for Foundation-attested official chains (the testnet today).
    * Surfaces the "Official" badge on the Networks screen; user-added
    * chains via `wallet_addEthereumChain` are always `false`. */
   official?: boolean;
@@ -801,7 +801,7 @@ export type ChainUpcomingDutiesOutcome =
   >;
 
 /**
- * Read the active chain id from chrome.storage. Returns the Sprintnet
+ * Read the active chain id from chrome.storage. Returns the testnet
  * default (`0x10F2C`) when nothing is stored yet (first launch) or when
  * the stored id no longer maps to a known chain.
  */
@@ -823,7 +823,7 @@ export async function bgWalletSetActiveChain(
 }
 
 /**
- * Probe the published Sprintnet operators and report which one answered
+ * Probe the published testnet operators and report which one answered
  * (or `null` if none did within budget). Backs the chain-status banner;
  * the service worker caches the answer for 10s, so it's safe to call on
  * every popup tick.
@@ -893,7 +893,7 @@ export async function bgWalletSendTx(args: {
    *  ML-DSA-65 envelope path; signing semantics are unchanged. */
   data?: string;
   /** Optional execution-unit limit override (hex). When omitted the SW falls
-   *  back to its native-transfer default (Sprintnet's intrinsic execution-unit
+   *  back to its native-transfer default (the testnet's intrinsic execution-unit
    *  floor). Callers passing non-trivial calldata should supply a conservative
    *  overhead-aware estimate. */
   executionUnitLimitHex?: string;
@@ -1324,7 +1324,7 @@ export async function bgChainEdit(
 
 /**
  * Delete a user-added chain. Builtin chains are rejected. If the deleted
- * chain was active, the SW resets `session.chainId` to Sprintnet and
+ * chain was active, the SW resets `session.chainId` to the testnet and
  * broadcasts `chainChanged` so connected dApps re-prompt for the chain.
  */
 export async function bgChainDelete(
@@ -1348,7 +1348,7 @@ export async function bgOperatorsGet(): Promise<{
   defaults: OperatorEntryWire[];
   effective: OperatorEntryWire[];
 }> {
-  return send("sprintnet-operators-get");
+  return send("testnet-operators-get");
 }
 
 /** Persist a new operator override (or null to clear and revert to defaults).
@@ -1357,14 +1357,14 @@ export async function bgOperatorsGet(): Promise<{
 export async function bgOperatorsSet(
   operators: OperatorEntryWire[] | null,
 ): Promise<{ ok: true } | { ok: false; reason?: string }> {
-  return send("sprintnet-operators-set", { operators });
+  return send("testnet-operators-set", { operators });
 }
 
-/** Per-operator health row surfaced by `sprintnet-operators-health`. `ok`
+/** Per-operator health row surfaced by `testnet-operators-health`. `ok`
  *  is true when the operator responded with both a `net_version` and a
  *  `eth_blockNumber` within the probe budget; `trustedGenesis` is true
  *  when the operator's chain genesis matches the wallet's pinned
- *  SPRINTNET_GENESIS_HASH (Phase 6 GAP #11 — orphan-fork defense). The
+ *  TESTNET_GENESIS_HASH (Phase 6 GAP #11 — orphan-fork defense). The
  *  two are orthogonal: an operator can be live but on a forked chain
  *  (ok=true, trustedGenesis=false) — RPC dispatch still excludes it,
  *  and the row is rendered with a distinct badge. */
@@ -1411,7 +1411,7 @@ export async function bgOperatorsHealth(): Promise<{
   ok: true;
   operators: OperatorHealthRow[];
 }> {
-  return send("sprintnet-operators-health");
+  return send("testnet-operators-health");
 }
 
 /** Runtime provenance for the About page. Subset of
@@ -1434,7 +1434,7 @@ export interface RuntimeProvenanceView {
 export async function bgRuntimeProvenance(): Promise<
   { ok: true; provenance: RuntimeProvenanceView } | { ok: false; reason?: string }
 > {
-  return send("sprintnet-runtime-provenance");
+  return send("testnet-runtime-provenance");
 }
 
 export async function bgGetAutoLockMinutes(): Promise<{
@@ -1923,7 +1923,7 @@ export async function bgMultisigImportProposal(args: {
 //
 // Every wrapper returns a `StakingResult<T>` envelope (see
 // shared/staking.ts). The `via` field on success is `"mock"` when the
-// SW falls back to in-tree fixtures (Sprintnet offline or chain GAP);
+// SW falls back to in-tree fixtures (the testnet offline or chain GAP);
 // the popup surfaces the mock badge so the user knows the figures
 // aren't authoritative.
 
@@ -2040,7 +2040,7 @@ export async function bgStakingPendingRewards(
 
 /** Read the redemption queue for a wallet. The SW prefers live
  *  `lyth_redemptionQueue(wallet)` and only returns the empty mock shape
- *  when the method is absent or Sprintnet is unreachable. */
+ *  when the method is absent or the testnet is unreachable. */
 export async function bgStakingRedemptionQueue(
   wallet: string,
 ): Promise<StakingResult<RedemptionQueueView>> {

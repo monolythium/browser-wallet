@@ -10,7 +10,7 @@
 // This is **read-only** today. The actual
 // `emergency-key.rotate` precompile call lands in a future phase
 // (a future phase) when the G3 declaration framework matures on
-// Sprintnet. Today the chain side has the registration slot live
+// the testnet. Today the chain side has the registration slot live
 // + non-gateable (per prior investigation), but the
 // rotation-flow runbook + G3 declaration plumbing are still TBD
 // per the whitepaper §30.2 + §30.2.1 framework.

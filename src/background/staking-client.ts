@@ -1,5 +1,5 @@
 // staking-client. SW-side RPC wrappers for the §23 delegation
-// surface. Every read goes through `sprintnetJsonRpc` so the existing
+// surface. Every read goes through `testnetJsonRpc` so the existing
 // operator-iteration + genesis-pin trust path defends every
 // staking read against orphan-fork operators.
 //
@@ -26,7 +26,7 @@
 // to SDK types means a future chain-side shape change surfaces in the
 // wallet typecheck the next time the SDK rebuilds.
 
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 import { NODE_REGISTRY_CAPABILITIES } from "@monolythium/core-sdk";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
@@ -197,7 +197,7 @@ export async function readClusterApr(
   clusterId: number,
 ): Promise<StakingResult<{ aprBps: number }>> {
   try {
-    const { result, via } = await sprintnetJsonRpc<RawClusterApr>(
+    const { result, via } = await testnetJsonRpc<RawClusterApr>(
       "lyth_clusterApr",
       [clusterId],
     );
@@ -229,7 +229,7 @@ export async function readClusterDiversity(
   clusterId: number,
 ): Promise<StakingResult<ClusterDiversity>> {
   try {
-    const { result, via } = await sprintnetJsonRpc<RawClusterDiversity>(
+    const { result, via } = await testnetJsonRpc<RawClusterDiversity>(
       "lyth_getClusterDiversity",
       [clusterId],
     );
@@ -264,7 +264,7 @@ export async function readClusterDirectory(
   limit: number,
 ): Promise<StakingResult<ClusterDirectoryPage>> {
   try {
-    const { result, via } = await sprintnetJsonRpc<RawClusterDirectoryPage>(
+    const { result, via } = await testnetJsonRpc<RawClusterDirectoryPage>(
       "lyth_clusterDirectory",
       [page, limit],
     );
@@ -296,7 +296,7 @@ export async function readClusterDirectory(
       clusterIds.flatMap((clusterId) => [
         (async () => {
           try {
-            const { result: raw } = await sprintnetJsonRpc<RawClusterEntity>(
+            const { result: raw } = await testnetJsonRpc<RawClusterEntity>(
               "lyth_getClusterEntity",
               [clusterId],
             );
@@ -395,7 +395,7 @@ export async function readClusterStatus(
   clusterId: number,
 ): Promise<StakingResult<ClusterStatus>> {
   try {
-    const { result, via } = await sprintnetJsonRpc<RawClusterStatus>(
+    const { result, via } = await testnetJsonRpc<RawClusterStatus>(
       "lyth_clusterStatus",
       [clusterId],
     );
@@ -470,7 +470,7 @@ export async function readOperatorInfo(
   operatorId: string,
 ): Promise<StakingResult<WalletOperatorInfo>> {
   try {
-    const { result, via } = await sprintnetJsonRpc<RawOperatorInfo>(
+    const { result, via } = await testnetJsonRpc<RawOperatorInfo>(
       "lyth_operatorInfo",
       [operatorId],
     );
@@ -551,7 +551,7 @@ async function probeTier(
   operatorId: string,
   mask: number,
 ): Promise<boolean> {
-  const { result } = await sprintnetJsonRpc<RawServiceProbe | null>(
+  const { result } = await testnetJsonRpc<RawServiceProbe | null>(
     "lyth_getServiceProbe",
     [operatorId, mask],
   );
@@ -638,7 +638,7 @@ export async function readDelegations(
     // lyth_* read (verified live: lyth_getDelegations("0x...")
     // returns -32602 "wallet must be mono bech32m").
     const walletForChain = userAddressForNativeRpc(wallet);
-    const { result, via } = await sprintnetJsonRpc<RawDelegationsResponse>(
+    const { result, via } = await testnetJsonRpc<RawDelegationsResponse>(
       "lyth_getDelegations",
       [walletForChain],
     );
@@ -662,7 +662,7 @@ export async function readDelegations(
     };
   } catch (e) {
     // Empty delegations is a legitimate read for an unstaked wallet —
-    // the popup renders the empty-state CTA. Sprintnet-offline gets the
+    // the popup renders the empty-state CTA. testnet-offline gets the
     // same shape; the user sees "no active delegations" + can still
     // drill into the cluster directory. Log so the SW dev-tools console
     // distinguishes "actually empty" from "chain offline".
@@ -694,7 +694,7 @@ const CHAIN_CAP_DISABLED = 0xffffffff;
 /** Read the per-cluster delegation cap (§23.6). */
 export async function readDelegationCap(): Promise<StakingResult<DelegationCap>> {
   try {
-    const { result, via } = await sprintnetJsonRpc<RawDelegationCap>(
+    const { result, via } = await testnetJsonRpc<RawDelegationCap>(
       "lyth_getDelegationCap",
       [],
     );
@@ -713,7 +713,7 @@ export async function readDelegationCap(): Promise<StakingResult<DelegationCap>>
     // Pre-mainnet posture: whitepaper §23.6 Phase 12 launch cap = 50%
     // (`5000` bps). Mocking this is the cleanest way to render the
     // stake form's cap-headroom badge during cluster-offline windows;
-    // when Sprintnet returns, the chain value supersedes the mock. Log
+    // when the testnet returns, the chain value supersedes the mock. Log
     // so the SW dev-tools console distinguishes a real chain-side cap
     // from the §23.6 mock fallback.
     console.warn(
@@ -794,7 +794,7 @@ export async function readDelegationHistory(
       cursor === undefined
         ? [walletForChain, limit]
         : [walletForChain, limit, cursor];
-    const { result, via } = await sprintnetJsonRpc<
+    const { result, via } = await testnetJsonRpc<
       ReadonlyArray<RawDelegationHistoryRow>
     >("lyth_getDelegationHistory", params);
     if (!Array.isArray(result)) {
@@ -843,7 +843,7 @@ export async function readClusterDelegators(
   clusterId: number,
 ): Promise<StakingResult<ClusterDelegatorsView>> {
   try {
-    const { result, via } = await sprintnetJsonRpc<RawClusterDelegators>(
+    const { result, via } = await testnetJsonRpc<RawClusterDelegators>(
       "lyth_getClusterDelegators",
       [clusterId],
     );
@@ -1115,7 +1115,7 @@ function mockRedemptionQueueView(wallet: string): RedemptionQueueView {
 /** Per-account pending rewards. The wallet calls the chain's
  *  `lyth_pendingRewards(wallet)` first and preserves the RPC `via` on a
  *  successful parse. If the method is absent on the contacted operator or
- *  Sprintnet is unreachable, it falls back to the old render-shape mock
+ *  The testnet is unreachable, it falls back to the old render-shape mock
  *  derived from active delegations + MOCK_CLUSTER_APR_BPS.
  *
  *  Mock derivation: for each active delegation row, the wallet computes
@@ -1129,7 +1129,7 @@ export async function readPendingRewards(
   try {
     // bech32m for wallet param (chain rejects 0x).
     const walletForChain = userAddressForNativeRpc(wallet);
-    const { result, via } = await sprintnetJsonRpc<RawPendingRewardsResponse>(
+    const { result, via } = await testnetJsonRpc<RawPendingRewardsResponse>(
       "lyth_pendingRewards",
       [walletForChain],
     );
@@ -1200,7 +1200,7 @@ export async function readPendingRewards(
 /** Redemption queue. The wallet calls the chain's
  *  `lyth_redemptionQueue(wallet)` first and preserves the RPC `via` on
  *  a successful parse. It only falls back to the old empty envelope when
- *  the method is absent on the contacted operator or Sprintnet is
+ *  the method is absent on the contacted operator or the testnet is
  *  unreachable. Live malformed responses fail so a bad operator cannot
  *  silently turn pending tickets into an empty mock queue. */
 export async function readRedemptionQueue(
@@ -1211,7 +1211,7 @@ export async function readRedemptionQueue(
     // user-reported "wallet must be mono bech32m" error on the
     // redemption-queue surface).
     const walletForChain = userAddressForNativeRpc(wallet);
-    const { result, via } = await sprintnetJsonRpc<RawRedemptionQueueResponse>(
+    const { result, via } = await testnetJsonRpc<RawRedemptionQueueResponse>(
       "lyth_redemptionQueue",
       [walletForChain],
     );

@@ -3,12 +3,12 @@
 // detail page is where Activate / Edit / Delete actions live.
 //
 // Design contract:
-// - Builtin chains (Sprintnet) render metadata + [Activate] only — no
+// - Builtin chains (the testnet) render metadata + [Activate] only — no
 //   Edit/Delete affordances. The check for `chain.builtin` is the single
 //   visibility gate; the SW's chain-edit / chain-delete ops also reject
 //   builtin keys server-side, so this is defense in depth.
 // - Delete on the active chain triggers a chainChanged broadcast in the
-//   SW (active id resets to Sprintnet). The popup re-fetches chain state
+//   SW (active id resets to the testnet). The popup re-fetches chain state
 //   from the parent's onDeleted hook.
 
 import { useState, type CSSProperties } from "react";

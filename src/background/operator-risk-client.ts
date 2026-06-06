@@ -43,7 +43,7 @@ import {
   isOperatorRiskWire,
   type OperatorRiskWire,
 } from "../shared/audit-followup-types.js";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 /** Default sample authority — same canonical first validator slot
  *  as the signing-activity sampler. */
@@ -91,7 +91,7 @@ export async function readOperatorRisk(
   };
   return withChainFallback<OperatorRiskWire>(
     async () => {
-      const { result } = await sprintnetJsonRpc<OperatorRiskWire>(
+      const { result } = await testnetJsonRpc<OperatorRiskWire>(
         "lyth_operatorRisk",
         [authorityIndex, windowRounds],
       );

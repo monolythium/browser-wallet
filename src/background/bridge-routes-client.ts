@@ -9,7 +9,7 @@ import {
   type WalletBridgeRouteDisclosure,
   type WalletBridgeRoutesCatalogue,
 } from "../shared/token-balances.js";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 const EMPTY_BRIDGE_ROUTES: WalletBridgeRoutesCatalogue = {
   bridgeRouteDisclosures: [],
@@ -74,7 +74,7 @@ export async function readBridgeRoutes(): Promise<
 > {
   return withChainFallback<WalletBridgeRoutesCatalogue>(
     async () => {
-      const { result } = await sprintnetJsonRpc<unknown>("lyth_bridgeRoutes", []);
+      const { result } = await testnetJsonRpc<unknown>("lyth_bridgeRoutes", []);
       const routes = normaliseBridgeRoutesResponse(result);
       if (routes === null) {
         throw new Error("malformed lyth_bridgeRoutes response");

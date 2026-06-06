@@ -1,6 +1,6 @@
-// Operators — Sprintnet operator override management.
+// Operators — the testnet operator override management.
 //
-// Sprintnet is a single chain with multiple operator RPC endpoints. Power
+// The testnet is a single chain with multiple operator RPC endpoints. Power
 // users can override the published 7-operator default list with their
 // own operator URLs, or pin a single operator to bypass round-robin.
 //

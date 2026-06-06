@@ -21,7 +21,7 @@ import {
   isUpcomingDuties,
   type UpcomingDuties,
 } from "../shared/audit-followup-types.js";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 export const DEFAULT_UPCOMING_DUTIES_AUTHORITY = 0;
 /** Chain clamps at 1000 (MAX_UPCOMING_DUTIES_HORIZON); ask for the
@@ -65,7 +65,7 @@ export async function readUpcomingDuties(
   };
   return withChainFallback<UpcomingDuties>(
     async () => {
-      const { result } = await sprintnetJsonRpc<UpcomingDuties>(
+      const { result } = await testnetJsonRpc<UpcomingDuties>(
         "lyth_upcomingDuties",
         [authorityIndex, horizonRounds],
       );

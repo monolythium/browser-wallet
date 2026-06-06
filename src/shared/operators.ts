@@ -1,9 +1,9 @@
-// Sprintnet operator override — types, storage key, and the merge function
+// The testnet operator override — types, storage key, and the merge function
 // shared between the service worker (which iterates operators on RPC dispatch)
 // and the popup (which renders the override-management UI).
 //
-// Sprintnet's default operator RPCs are derived from the SDK chain registry
-// (see networks.ts: SPRINTNET_OPERATOR_RPCS_DEFAULTS, built by mapping
+// the testnet's default operator RPCs are derived from the SDK chain registry
+// (see networks.ts: TESTNET_OPERATOR_RPCS_DEFAULTS, built by mapping
 // getRpcEndpoints("testnet-69420")) — the wallet hardcodes no operator list,
 // and any one entry is excluded at runtime only if it fails the chain-id /
 // genesis probe. Power users can override that list with their own operator
@@ -18,7 +18,7 @@
 export const STORAGE_KEY_OPERATOR_OVERRIDE = "mono.operators.override";
 
 /**
- * Single operator entry. Mirrors the shape of SPRINTNET_OPERATOR_RPCS_DEFAULTS
+ * Single operator entry. Mirrors the shape of TESTNET_OPERATOR_RPCS_DEFAULTS
  * in networks.ts so the merge function can flip between defaults and override
  * without per-call shape adapters.
  *
@@ -42,7 +42,7 @@ export interface OperatorEntry {
 /**
  * Validate an unknown input as an OperatorEntry[]. Returns the validated
  * list on success, null on any structural failure. Used by the SW
- * sprintnet-operators-set IPC handler as defense-in-depth on top of the
+ * testnet-operators-set IPC handler as defense-in-depth on top of the
  * popup's client-side form validation.
  *
  * Validation rules:

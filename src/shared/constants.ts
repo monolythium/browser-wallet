@@ -101,8 +101,8 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "wallet-operator-status",
   "wallet-chain-block-number",
   "wallet-indexer-snapshot",
-  "sprintnet-operators-get",
-  "sprintnet-operators-health",
+  "testnet-operators-get",
+  "testnet-operators-health",
   // WS infra polls are passive: status reads and
   // fire-and-forget subscribe don't represent user activity.
   "ws-status",

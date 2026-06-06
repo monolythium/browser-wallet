@@ -188,18 +188,18 @@ interface UiApproval {
 }
 
 /**
- * Sprintnet fallback used during the bootstrap window before the first
+ * The testnet fallback used during the bootstrap window before the first
  * chain-list IPC fetch resolves, and as the safety net if the persisted
  * active chain id points at a chain that's no longer in the registry
  * (e.g. user removed a custom chain). Shape mirrors what the service
  * worker returns from `chain-list` so the popup never has to special-
  * case the bootstrap state.
  */
-const SPRINTNET_FALLBACK: ChainEntry = {
+const TESTNET_FALLBACK: ChainEntry = {
   chainId: "0x10F2C",
   chainIdNum: 69420,
   name: "Monolythium Testnet",
-  // Bootstrap-window rpc. Mirrors SPRINTNET_OPERATOR_RPCS_DEFAULTS[0] in
+  // Bootstrap-window rpc. Mirrors TESTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
   // live endpoint. Points at operator-2 after the regenesis in which
   // operator-1's bls.key was destroyed; see networks.ts docstring.
@@ -355,13 +355,13 @@ export default function App() {
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
   // the balance/fee hooks can dep on it. `activeChain` falls back to
-  // the Sprintnet shape during the bootstrap window before the first
+  // the testnet shape during the bootstrap window before the first
   // chain-list fetch resolves AND when a stored active id points at a
   // now-deleted user-added chain.
-  const [activeChainId, setActiveChainId] = useState<string>(SPRINTNET_FALLBACK.chainId);
+  const [activeChainId, setActiveChainId] = useState<string>(TESTNET_FALLBACK.chainId);
   const [chainList, setChainList] = useState<ChainEntry[]>([]);
   const activeChain: ChainEntry =
-    chainList.find((c) => c.chainId === activeChainId) ?? SPRINTNET_FALLBACK;
+    chainList.find((c) => c.chainId === activeChainId) ?? TESTNET_FALLBACK;
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
   // taps a row on the Networks list; cleared when they back out.
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
@@ -466,7 +466,7 @@ export default function App() {
 
   // Balance refresh. Reads from `activeChain.chainId`, which the service
   // worker resolves from chrome.storage (`mono.chain.active`) and falls back
-  // to Sprintnet on first launch. The token ref discards stale fetches so a
+  // to the testnet on first launch. The token ref discards stale fetches so a
   // slow result for a previous account/chain can't overwrite the current
   // balance — needed because refreshBalance is also called from event-driven
   // handlers (visibilitychange, screen-change-to-home) that don't have the
@@ -1242,7 +1242,7 @@ export default function App() {
           }}
           onEdit={() => setScreen("network-edit")}
           onDeleted={() => {
-            // SW removed the chain (and reset active to Sprintnet if it
+            // SW removed the chain (and reset active to the testnet if it
             // was the active one). Re-fetch chain-list + active chain so
             // the popup picks up the new state, then route back.
             setSelectedChainId(null);

@@ -1,7 +1,7 @@
 // Chain-unit compensation for the historical V4-LIVE-0008 wei-on-wire /
 // legacy lythoshi-internal regime.
 //
-// HISTORY: the Sprintnet operator binary that ran in production through
+// HISTORY: the testnet operator binary that ran in production through
 // 2026-05-25 was commit `5aead0f0` (V4-LIVE-0008 live-compat branch off
 // `5bf1b55`, 2026-05-18). Per its commit message it carried ONLY the
 // strict-catchup repair and intentionally did NOT include the lythoshi-
@@ -46,7 +46,7 @@ export const WEI_PER_LYTHOSHI = 10_000_000_000n;
  * expect lythoshi. When `false`, no transformation is applied — the
  * runtime is assumed to be on the lythoshi-native path.
  *
- * Set `true` while Sprintnet operators ran the legacy V4-LIVE-0008
+ * Set `true` while the testnet operators ran the legacy V4-LIVE-0008
  * (commit `5aead0f0`) wei-on-wire line. Now `false`: operators have
  * upgraded to the lythoshi-native binary `dc919df8` (2026-05-29), which
  * reports balance, gas price, and `lyth_executionUnitPrice` fields in

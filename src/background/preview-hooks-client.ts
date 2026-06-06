@@ -22,7 +22,7 @@ import {
   isTransactionHookPreview,
   type TransactionHookPreview,
 } from "../shared/audit-followup-types.js";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 /** Subset of the wallet's known tx fields that the chain needs to
  *  evaluate the spending-policy + fee-schedule hooks. `from` is
@@ -89,7 +89,7 @@ export async function previewTransactionHooks(
   const callRequest = buildCallRequest(input);
   return withChainFallback<TransactionHookPreview>(
     async () => {
-      const { result } = await sprintnetJsonRpc<TransactionHookPreview>(
+      const { result } = await testnetJsonRpc<TransactionHookPreview>(
         "lyth_previewTransactionHooks",
         [callRequest],
       );

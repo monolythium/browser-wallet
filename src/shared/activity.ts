@@ -26,7 +26,7 @@
 //   §23.6  — delegation rows distinct from generic tx rows.
 //   §23.7  — RebalanceRow kind reserved for future cap-tightening events.
 //   §25.4  — CrossingToPrivateRow defined but never client-synthesized; only
-//            renders when the indexer emits the kind on Sprintnet.
+//            renders when the indexer emits the kind on the testnet.
 
 import { bech32mToAddress } from "./bech32m.js";
 import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
@@ -48,7 +48,7 @@ export const PENDING_TTL_MS = 5 * 60 * 1000;
 /** Heuristic match window for pending-row reconciliation: when a confirmed
  *  entry's blockHeight falls within ±this many blocks of the pending row's
  *  anchor and counterparty + amount match, treat the pair as the same on-chain
- *  event and evict the pending row. Sprintnet produces BLS fast blocks
+ *  event and evict the pending row. The testnet produces fast blocks
  *  ~0.3 s apart (measured), so the gap between the broadcast anchor and the
  *  inclusion block — plus the indexer's materialization delay before the row
  *  is queryable — spans many more blocks than the old ±10 (≈3 s here) allowed,
@@ -211,7 +211,7 @@ export interface RebalanceRow extends ConfirmedAnchor {
   weightBps: number | null;
 }
 
-/** §25.4 public→private crossing. Chain-gated: the Sprintnet indexer does
+/** §25.4 public→private crossing. Chain-gated: the testnet indexer does
  *  not surface this kind on sender-side activity today. The row union ships
  *  the type so when the chain begins emitting it, no wallet code change is
  *  needed. */
@@ -656,7 +656,7 @@ export function mapAddressActivityToRows(
       continue;
     }
 
-    // §25.4 — public→private crossing. Chain doesn't emit this on Sprintnet
+    // §25.4 — public→private crossing. Chain doesn't emit this on the testnet
     // today; the branch exists for forward compatibility. When/if the
     // indexer ships a "crossing" kind (or analogous), it renders without
     // a wallet update.

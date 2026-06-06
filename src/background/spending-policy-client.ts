@@ -4,7 +4,7 @@
 // Two surfaces:
 //
 //   1. readSpendingPolicy(subAccount) — RPC read of the live policy via
-//      `sprintnetJsonRpc("lyth_getSpendingPolicy", [bech32mSubAccount])`,
+//      `testnetJsonRpc("lyth_getSpendingPolicy", [bech32mSubAccount])`,
 //      returned in the same `StakingResult<T>` envelope the staking
 //      readers use (ok:false on transport/shape error, no mock
 //      fallback). The popup renders the SpendingPolicyView summary card.
@@ -37,7 +37,7 @@
 // it submits via wallet-send-tx and surfaces the typed precompile-gate
 // error verbatim.
 
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 import {
   generatePqm1Mnemonic,
   pqm1MnemonicToMlDsa65Seed,
@@ -79,7 +79,7 @@ export async function readSpendingPolicy(
 ): Promise<StakingResult<SpendingPolicyView>> {
   const typed = userAddressForNativeRpc(subAccount);
   try {
-    const { result, via } = await sprintnetJsonRpc<RawSpendingPolicyView>(
+    const { result, via } = await testnetJsonRpc<RawSpendingPolicyView>(
       "lyth_getSpendingPolicy",
       [typed],
     );

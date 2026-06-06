@@ -1,5 +1,5 @@
 // Auto-rebalance row (§23.7 cap tightening). Reserved kind — the chain
-// does not currently emit these events on Sprintnet. The union member
+// does not currently emit these events on the testnet. The union member
 // exists so future cap-schedule transitions can render without a
 // wallet code change.
 

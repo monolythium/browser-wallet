@@ -23,10 +23,10 @@
 //    on-chain registrations (the registered public key remains
 //    valid regardless of how the wallet recovered it).
 //    `// TODO: chain GAP — needs Nayiem`
-// 2. Sprintnet operational endpoint availability — separate from the
+// 2. the testnet operational endpoint availability — separate from the
 //    precompile being live. The precompile itself is live and
 //    non-gateable per `mono-core/crates/core/runtime/src/precompiles.rs:43`.
-//    The wallet wires registration; if the Sprintnet RPC is offline at
+//    The wallet wires registration; if the testnet RPC is offline at
 //    user attempt-time, the IPC surfaces a typed error.
 //    `// TODO: chain GAP — operational, not feature`
 //

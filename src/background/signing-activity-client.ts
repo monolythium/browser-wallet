@@ -33,7 +33,7 @@ import {
   isOperatorSigningActivity,
   type OperatorSigningActivity,
 } from "../shared/audit-followup-types.js";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 /** Default sample authority. The first validator slot is a
  *  reasonable single-point sample for "is signing healthy on the
@@ -77,7 +77,7 @@ export async function readSigningActivity(
 
   return withChainFallback<OperatorSigningActivity>(
     async () => {
-      const { result } = await sprintnetJsonRpc<OperatorSigningActivity>(
+      const { result } = await testnetJsonRpc<OperatorSigningActivity>(
         "lyth_signingActivity",
         [authorityIndex, limit],
       );

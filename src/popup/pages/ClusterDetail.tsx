@@ -430,7 +430,7 @@ function ClusterStatusCard({ status }: { status: ClusterStatus }) {
         />
       )}
       {/* Chain-real reputation + liveness scores (§14 + §28.3).
-          Currently null on Sprintnet testnet; rows hidden until chain
+          Currently null on the testnet testnet; rows hidden until chain
           populates non-null. Per no-mock-fallback principle, no
           synthesized placeholder. */}
       {status.reputationScore !== null && (

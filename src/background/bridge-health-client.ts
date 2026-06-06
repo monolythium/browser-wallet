@@ -13,7 +13,7 @@
 // live quote/submit primitive (BRIDGE_QUOTE_API_BLOCKED_REASON /
 // BRIDGE_SUBMIT_API_BLOCKED_REASON), so nothing here is a write path.
 //
-// Both reads go through the genesis-pinned `sprintnetJsonRpc` fan-out
+// Both reads go through the genesis-pinned `testnetJsonRpc` fan-out
 // (the same trust path as `bridge-routes-client.ts`) wrapped in
 // `withChainFallback` so a not-deployed / offline operator collapses to
 // a typed `mock-not-deployed` / `mock-offline` outcome rather than
@@ -29,7 +29,7 @@ import {
   type BridgeDrainStatus,
   type BridgeHealthResponse,
 } from "@monolythium/core-sdk";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 // Empty sentinel for `withChainFallback`'s required `mockValue` slot.
 // A zero-record page is a legitimate "no bridges live yet" chain answer,
@@ -82,7 +82,7 @@ export async function readBridgeHealth(
     // `mock-error` via the validator — the two are distinct provenance
     // states the popup can surface differently.
     async () => {
-      const { result } = await sprintnetJsonRpc<BridgeHealthResponse>(
+      const { result } = await testnetJsonRpc<BridgeHealthResponse>(
         "lyth_bridgeHealth",
         params,
       );
@@ -121,7 +121,7 @@ export async function readBridgeDrainStatus(
   };
   return withChainFallback<BridgeDrainStatus>(
     async () => {
-      const { result } = await sprintnetJsonRpc<BridgeDrainStatus>(
+      const { result } = await testnetJsonRpc<BridgeDrainStatus>(
         "lyth_bridgeDrainStatus",
         [bridgeId, wrappedAsset],
       );

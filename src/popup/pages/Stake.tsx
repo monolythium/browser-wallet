@@ -10,7 +10,7 @@
 // `delegate(uint32,uint16)` calldata via shared/staking-tx.ts (SDK
 // encoders) and submits through the existing `bgWalletSendTx` IPC, with
 // the staked LYTH amount sent as msg.value (the delegation principal).
-// The delegation precompile (`0x100A`) is live + enabled on Sprintnet
+// The delegation precompile (`0x100A`) is live + enabled on the testnet
 // (`lyth_listActivePrecompiles`); the wallet surfaces any typed error
 // the chain returns verbatim.
 
@@ -195,7 +195,7 @@ interface StakeProps {
   account: Account;
   /** Active chain id (hex). Submitter routes through `bgWalletSendTx`
    *  with this id so the SW knows to take the ML-DSA-65 envelope path
-   *  on Sprintnet. */
+   *  on the testnet. */
   chainId: string;
   /** Optional entry point — when the page is opened from the
    *  Delegations dashboard, the parent supplies a pre-selected
@@ -458,7 +458,7 @@ export function Stake({
   // Submission. Encodes delegate / undelegate / redelegate / claim
   // calldata based on the current `action` and routes through
   // bgWalletSendTx; the SW wraps it into the ML-DSA-65 envelope path
-  // for Sprintnet.
+  // for the testnet.
   const handleConfirm = async () => {
     if (action !== "claim") {
       if (selectedCluster === null || balanceLythoshi === null) return;

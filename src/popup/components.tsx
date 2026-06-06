@@ -97,7 +97,7 @@ import {
 //
 // Reflects the wallet's actual operational state instead of the legacy
 // "MOCK · NO REAL VALUE · DESIGN-ONLY" copy. The wallet now holds real
-// ML-DSA-65 keys, reads live Sprintnet state, and submits real
+// ML-DSA-65 keys, reads live testnet state, and submits real
 // plaintext mesh_submitTx txs — that's worth surfacing. Other parts of the
 // UI (Top status bar, account list, activity log) ARE
 // still demo data and live below the AttStrip; we'll address those in
@@ -252,7 +252,7 @@ export function ChainStatusBanner({
   }, []);
 
   // Operator-name poll, separate from chain-health. The operator label is
-  // a pure side-info readout (which Sprintnet operator answered our
+  // a pure side-info readout (which the testnet operator answered our
   // probe) and stays decoupled from the LIVE/STALLED/OFFLINE state — a
   // chain can be live with an unknown operator, or stalled while the
   // operator is still reachable.
@@ -1546,7 +1546,7 @@ function PendingShelf() {
 // Tappable card pair under the hero balance. `Total` is always live
 // and reflects `account.balance`. `Staked` is rendered in disabled
 // style (opacity 0.6, no onClick) until the delegation precompile
-// (0x100A) activates on Sprintnet; the visual hierarchy keeps the
+// (0x100A) activates on the testnet; the visual hierarchy keeps the
 // "could-be-active" affordance so wiring later is just a prop flip.
 interface HeroChipProps {
   label: string;
@@ -1645,7 +1645,7 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
   const liveLabel = indexer?.addressLabel;
   const latestDelegation = indexer?.delegationHistory[0] ?? null;
   // Staked is hardcoded zero until the delegation precompile (0x100A)
-  // activates on Sprintnet — see ADR-0015. The Staked chip is rendered
+  // activates on the testnet — see ADR-0015. The Staked chip is rendered
   // disabled-style in the meantime; the hero number falls back to
   // "0.00" when staked is the active view, which is accurate, not a
   // placeholder.

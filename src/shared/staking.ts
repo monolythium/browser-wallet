@@ -438,9 +438,9 @@ export type StakingResult<T> =
 // Mock cluster fixtures
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// MOCK — verify against live chain when Sprintnet back
+// MOCK — verify against live chain when the testnet back
 // ────────────────────────────────────────────────────
-// The Sprintnet cluster set may be offline. The wallet's read paths
+// The testnet cluster set may be offline. The wallet's read paths
 // fall through to these fixtures when every active operator fails the
 // genesis-pin trust check or returns a transport-level error.
 //
@@ -587,11 +587,11 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //
 //   ✅ `lyth_pendingRewards` — wallet calls the direct RPC first and
 //      uses the old mock derivation only when the method is unavailable
-//      or Sprintnet is offline.
+//      or the testnet is offline.
 //
 //   ✅ `lyth_redemptionQueue` — wallet calls the direct RPC first and
 //      uses the old empty queue only when the method is unavailable or
-//      Sprintnet is offline. Current core tickets are maturity-height
+//      The testnet is offline. Current core tickets are maturity-height
 //      and weight-bps based; token amount remains optional.
 //
 //   ❌ `lyth_clusterApr` — STILL no chain reader. MOCK_CLUSTER_APR_BPS
@@ -600,6 +600,6 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //   ❌ `lyth_namingRegistry` (§22.8) — STILL no chain reader. Cluster
 //      names display `cluster-<id>` until the chain wires the resolver.
 //
-// The above is the binding wallet-side view; Sprintnet deploy status
+// The above is the binding wallet-side view; the testnet deploy status
 // of each method is checked at runtime via `withChainFallback` rather
 // than baked into the build.

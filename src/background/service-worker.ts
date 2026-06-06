@@ -18,7 +18,7 @@
 //   - keystore.{status, unlock, lock, create-from-new, create-from-mnemonic}
 //
 // Chain reads use `RpcClient` from `@monolythium/core-sdk` (root export).
-// Sprintnet flows route through `sprintnetJsonRpc()` against the native
+// The testnet flows route through `testnetJsonRpc()` against the native
 // `lyth_*` namespace directly. User-added chains use the same `RpcClient`
 // transport keyed on their declared RPC URL. Per mono-core `b2f0c498`,
 // the chain no longer serves `eth_call`, `eth_estimateGas`,
@@ -197,7 +197,7 @@ import {
 import { keccak_256, shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
-  SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
+  TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
@@ -251,8 +251,8 @@ import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   submitPlaintextMlDsaTx,
-  sprintnetJsonRpc,
-  sprintnetMaxBalanceConsensus,
+  testnetJsonRpc,
+  testnetMaxBalanceConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
 import {
@@ -602,7 +602,7 @@ interface NetInfo {
   chainIdNum: number;
   /** True when this chain is in the built-in Monolythium registry. */
   builtin?: boolean;
-  /** True for Foundation-attested official chains (Sprintnet). */
+  /** True for Foundation-attested official chains (the testnet). */
   official?: boolean;
   /** Optional explorer URL surfaced by `wallet_addEthereumChain`. */
   blockExplorer?: string;
@@ -617,7 +617,7 @@ interface NetInfo {
 const TESTNET_CHAIN_ID_HEX =
   "0x" + MONOLYTHIUM_TESTNET_CHAIN_ID.toString(16).toUpperCase(); // 0x10F2C
 
-// Built-in chains derived from networks.ts. v4.1 ships Sprintnet only;
+// Built-in chains derived from networks.ts. v4.1 ships the testnet only;
 // user-added chains via `wallet_addEthereumChain` live in `userChains`
 // (loaded from chrome.storage at boot) and are merged at lookup time.
 const BUILTIN_CHAINS: Record<string, NetInfo> = Object.fromEntries(
@@ -712,7 +712,7 @@ async function persistUserChains(): Promise<void> {
 
 /**
  * Load the persisted active chain id from chrome.storage. Returns the
- * Sprintnet default when nothing is stored yet (first launch) or when
+ * The testnet default when nothing is stored yet (first launch) or when
  * the stored id no longer maps to a known chain (e.g. user removed the
  * user-added chain that was active).
  */
@@ -917,7 +917,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 /**
  * Pre-populate the WS down-cache for any operator whose WS URL is
  * derived via the legacy `:8545 → :8546` fallback (i.e. the SDK chain
- * registry did not pin an explicit `ws_url`). Sprintnet operators on
+ * registry did not pin an explicit `ws_url`). the testnet operators on
  * binary commit 5aead0f0 (V4-LIVE-0008) do not expose port
  * 8546 — a PowerShell TCP probe confirmed timeout on all six.
  *
@@ -949,7 +949,7 @@ function prefillUnknownWsEndpointsDown(): void {
 }
 
 // Hot-reload the operator override when storage changes. The popup's
-// sprintnet-operators-set IPC writes here and the in-memory activeOperators
+// testnet-operators-set IPC writes here and the in-memory activeOperators
 // list re-syncs; the `cachedOperator` answer used by the chain-status
 // banner + chain-health poll is also invalidated so the next probe picks
 // up the new list immediately rather than waiting for the 10s TTL.
@@ -1268,8 +1268,8 @@ function rpcSend<T>(
   return client.call<T>(method, params);
 }
 
-async function sprintnetTransactionCountHex(address: string): Promise<string> {
-  const { result } = await sprintnetJsonRpc<number | string>(
+async function testnetTransactionCountHex(address: string): Promise<string> {
+  const { result } = await testnetJsonRpc<number | string>(
     "lyth_getTransactionCount",
     [userAddressForNativeRpc(address)],
   );
@@ -1282,8 +1282,8 @@ interface ExecutionUnitPriceQuoteHex {
   priorityTipHex: string;
 }
 
-async function sprintnetExecutionUnitPriceQuoteHex(): Promise<ExecutionUnitPriceQuoteHex> {
-  const { result } = await sprintnetJsonRpc<Record<string, unknown>>(
+async function testnetExecutionUnitPriceQuoteHex(): Promise<ExecutionUnitPriceQuoteHex> {
+  const { result } = await testnetJsonRpc<Record<string, unknown>>(
     "lyth_executionUnitPrice",
     [],
   );
@@ -1303,8 +1303,8 @@ async function sprintnetExecutionUnitPriceQuoteHex(): Promise<ExecutionUnitPrice
   };
 }
 
-async function sprintnetExecutionUnitPriceHex(): Promise<string> {
-  return (await sprintnetExecutionUnitPriceQuoteHex()).executionUnitPriceHex;
+async function testnetExecutionUnitPriceHex(): Promise<string> {
+  return (await testnetExecutionUnitPriceQuoteHex()).executionUnitPriceHex;
 }
 
 function rpcQuantityToHex(value: number | string | bigint, field: string): string {
@@ -1562,7 +1562,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
 
       // Monolythium-protocol chains require the SDK's ML-DSA-65 bincode
       // wire format. The v3 keystore holds the unlocked backend; reads and
-      // writes use the published Sprintnet operators while the canonical
+      // writes use the published testnet operators while the canonical
       // alias is unavailable.
       if (chainRequiresMlDsa(session.chainId)) {
         if (!isUnlockedV4()) {
@@ -1574,34 +1574,34 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // Resolve missing nonce/execution units/fee from the operators directly —
           // the chain registry's RPC alias resolves NXDOMAIN and the
           // existing `view` was built against that broken alias too, so
-          // its fields are usually null on Sprintnet.
+          // its fields are usually null on the testnet.
           const nonceHex =
             txReq.nonce ?? view.nonce ??
-            await sprintnetTransactionCountHex(fromAddr);
+            await testnetTransactionCountHex(fromAddr);
           // Prefer the price captured into `view` at approval time over a
           // fresh read, then clamp to the sane ceiling (T4-04 D3) so a
           // malicious/MITM operator cannot inflate the fee signed into the
           // plaintext submission on the dApp path either.
           const rawExecutionUnitPriceHex =
             txReq.gasPrice ?? view.pricePerExecutionUnitLythoshiHex ??
-            await sprintnetExecutionUnitPriceHex();
+            await testnetExecutionUnitPriceHex();
           const executionUnitPriceHex =
             "0x" +
             clampToSaneBound(
               BigInt(rawExecutionUnitPriceHex),
               MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
             ).toString(16);
-          // Sprintnet's mempool intrinsic execution-unit floor is above what
+          // the testnet's mempool intrinsic execution-unit floor is above what
           // the compatibility estimate reports. Honour an explicit dapp
           // execution-unit hint if provided; otherwise use the wallet's
-          // Sprintnet floor with headroom.
+          // The testnet floor with headroom.
           const executionUnitsHex =
             txReq.gas ??
             view.executionUnitLimitHex ??
-            SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
+            TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
 
           // Sign + submit via the plaintext mesh_submitTx path.
-          // Sprintnet does not use an eth_sendRawTransaction fallback path.
+          // The testnet does not use an eth_sendRawTransaction fallback path.
           const { txHash } = await submitPlaintextMlDsaTx({
             ...(txReq.to !== undefined ? { to: txReq.to } : {}),
             ...(txReq.value !== undefined ? { value: txReq.value } : {}),
@@ -1738,7 +1738,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       let plan: WalletMrvNativeSubmissionPlan;
       let txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>;
       try {
-        const nonceHex = await sprintnetTransactionCountHex(displayFromAddr);
+        const nonceHex = await testnetTransactionCountHex(displayFromAddr);
         const fee =
           typeof p.maxExecutionFeeLythoshiHex !== "string" ||
           typeof p.priorityTipLythoshiHex !== "string"
@@ -2011,8 +2011,8 @@ function parseTypedData(raw: string): TypedDataEnvelope | null {
  * retired `eth_call` and `eth_estimateGas`. The approval view shows declared
  * intent (recipient, value, calldata, fee) without a simulated outcome.
  * Fee and nonce reads still go through the chain's curated passive surface
- * (`eth_gasPrice` / `eth_getTransactionCount`) or the Sprintnet native
- * helpers when running against a Sprintnet operator.
+ * (`eth_gasPrice` / `eth_getTransactionCount`) or the testnet native
+ * helpers when running against a testnet operator.
  */
 async function buildSendTxView(
   txReq: EthSendTransactionRequest,
@@ -2039,13 +2039,13 @@ async function buildSendTxView(
     view.pricePerExecutionUnitLythoshiHex != null
       ? Promise.resolve(view.pricePerExecutionUnitLythoshiHex)
       : (chainRequiresMlDsa(chainId)
-          ? sprintnetExecutionUnitPriceHex()
+          ? testnetExecutionUnitPriceHex()
           : rpcSend<string>(client, "eth_gasPrice", []))
           .catch(() => null as string | null),
     view.nonce != null
       ? Promise.resolve(view.nonce)
       : (chainRequiresMlDsa(chainId)
-          ? sprintnetTransactionCountHex(fromAddr)
+          ? testnetTransactionCountHex(fromAddr)
           : rpcSend<string>(client, "eth_getTransactionCount", [fromAddr, "pending"]))
           .catch(() => null as string | null),
   ]);
@@ -2088,7 +2088,7 @@ function buildMrvNativeSendTxApproval(
 
 // ---- Operator liveness cache ----
 //
-// Backs the popup's chain-status banner. We probe the published Sprintnet
+// Backs the popup's chain-status banner. We probe the published testnet
 // operators in order and remember which one answered. The cache lives at
 // module scope inside the service worker, so it survives across popup
 // re-renders but resets when the worker hibernates — that's fine because
@@ -2101,7 +2101,7 @@ function buildMrvNativeSendTxApproval(
 const OPERATOR_CACHE_TTL_MS = 10_000;
 // Shared between `wallet-operator-status` (popup chain-status banner) and
 // `wallet-chain-block-number` (popup chain-health poll). Both want the same
-// "first alive Sprintnet operator" answer; caching name+rpc together avoids
+// "first alive testnet operator" answer; caching name+rpc together avoids
 // re-running the operator probe loop at the 8-second health-poll cadence.
 let cachedOperator: {
   name: string | null;
@@ -2124,29 +2124,29 @@ const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
 
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
- * given chain. On Sprintnet the values come from the native
+ * given chain. On the testnet the values come from the native
  * `lyth_executionUnitPrice` RPC.
  *
- * For non-Sprintnet chains we keep the compatibility read used by the
+ * For non-testnet chains we keep the compatibility read used by the
  * external-chain signing path.
  */
 async function suggestFee(chainIdHex: string): Promise<{
   maxPriorityFeePerGas: string;
   maxFeePerGas: string;
   baseFeePerGas: string;
-  /** Hex execution-unit limit recommendation. Sprintnet has a known intrinsic
+  /** Hex execution-unit limit recommendation. the testnet has a known intrinsic
    * floor that `eth_estimateGas` doesn't reflect — surface the
    * pre-resolved value to the popup so the fee preview is accurate.
    * Other chains return null and let the caller estimate themselves. */
   gasLimit: string | null;
 }> {
   if (chainRequiresMlDsa(chainIdHex)) {
-    const quote = await sprintnetExecutionUnitPriceQuoteHex();
+    const quote = await testnetExecutionUnitPriceQuoteHex();
     return {
       baseFeePerGas: quote.basePriceHex,
       maxPriorityFeePerGas: quote.priorityTipHex,
       maxFeePerGas: quote.executionUnitPriceHex,
-      gasLimit: SPRINTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
+      gasLimit: TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
     };
   }
   const client = rpcClientFor(chainIdHex);
@@ -3838,9 +3838,9 @@ interface SettledRpc<T> {
   error: string | null;
 }
 
-async function settleSprintnetRpc<T>(method: string, params: unknown[]): Promise<SettledRpc<T>> {
+async function settleTestnetRpc<T>(method: string, params: unknown[]): Promise<SettledRpc<T>> {
   try {
-    const { result } = await sprintnetJsonRpc<T>(method, params);
+    const { result } = await testnetJsonRpc<T>(method, params);
     return { value: result, error: null };
   } catch (e) {
     return { value: null, error: (e as Error).message };
@@ -3962,7 +3962,7 @@ async function enrichMrcHolderRows(
   const errors: string[] = [];
   await Promise.all(
     lookups.map(async (lookup) => {
-      const response = await settleSprintnetRpc<unknown>("lyth_mrcHolders", [
+      const response = await settleTestnetRpc<unknown>("lyth_mrcHolders", [
         lookup.standard,
         lookup.assetId,
         lookup.tokenId,
@@ -4010,7 +4010,7 @@ async function readMrcAccountLookup(
   if (lookupAccount === null) {
     return { value: null, error: "invalid MRC account lookup address" };
   }
-  const response = await settleSprintnetRpc<unknown>("lyth_mrcAccount", [
+  const response = await settleTestnetRpc<unknown>("lyth_mrcAccount", [
     lookupAccount,
     MRC_ACCOUNT_SPEND_LOOKUP_LIMIT,
   ]);
@@ -4073,7 +4073,7 @@ async function fetchIndexerSnapshot(
     delegationHistory,
     addressActivity,
   ] = await Promise.all([
-    settleSprintnetRpc<unknown>("lyth_getTokenBalances", [addressForChain]),
+    settleTestnetRpc<unknown>("lyth_getTokenBalances", [addressForChain]),
     readBridgeRoutes(),
     options.includeMrcAccount
       ? readMrcAccountLookup(address)
@@ -4081,9 +4081,9 @@ async function fetchIndexerSnapshot(
           value: null,
         }),
     readNativeAgentStateLookup(address),
-    settleSprintnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
-    settleSprintnetRpc<unknown[]>("lyth_getDelegationHistory", [addressForChain, 20]),
-    settleSprintnetRpc<unknown[]>("lyth_getAddressActivity", [addressForChain, 30]),
+    settleTestnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
+    settleTestnetRpc<unknown[]>("lyth_getDelegationHistory", [addressForChain, 20]),
+    settleTestnetRpc<unknown[]>("lyth_getAddressActivity", [addressForChain, 30]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
@@ -4415,7 +4415,7 @@ function validateRawNameLabel(input: unknown): NameLabelRecord | null {
 
 // Indexer-staleness threshold for the popup banner. The indexer is
 // considered "stale" when latestHeight - currentHeight exceeds this
-// many blocks. At Sprintnet's 3-second cadence, 10 blocks
+// many blocks. At the testnet's 3-second cadence, 10 blocks
 // is about 30 s of indexer lag: wider than normal ingestion variance,
 // narrow enough to flag a real backlog before it becomes user-visible.
 const INDEXER_LAG_STALE_THRESHOLD = 10;
@@ -4435,7 +4435,7 @@ async function fetchOneAddressLabel(
   addr: string,
 ): Promise<{ label: NameLabel; methodNotFound: boolean }> {
   try {
-    const { result } = await sprintnetJsonRpc<unknown>(
+    const { result } = await testnetJsonRpc<unknown>(
       "lyth_getAddressLabel",
       [addr],
     );
@@ -4491,7 +4491,7 @@ async function persistPendingRowBackground(args: {
     const now = Date.now();
     let broadcastBlockHeight: number | null = null;
     try {
-      const { result } = await sprintnetJsonRpc<unknown>("eth_blockNumber", []);
+      const { result } = await testnetJsonRpc<unknown>("eth_blockNumber", []);
       if (typeof result === "string" && result.startsWith("0x")) {
         const n = Number.parseInt(result, 16);
         if (Number.isFinite(n)) broadcastBlockHeight = n;
@@ -4571,7 +4571,7 @@ export interface TerminalPendingTx {
   txIndex: number | null;
 }
 
-/** Parse a Sprintnet receipt's block + tx index. Numeric (the operators' shape)
+/** Parse a testnet receipt's block + tx index. Numeric (the operators' shape)
  *  or hex-string; null when absent/unparseable. */
 function parseReceiptBlockTx(result: {
   blockNumber?: unknown;
@@ -4609,7 +4609,7 @@ function parseReceiptBlockTx(result: {
  *     reverted tx is still "found"), so the receipt's status bit is read to
  *     tag confirmed vs failed; only when no receipt is available does the
  *     indexer's inclusion stand as confirmed (we still never fabricate a
- *     failure). The `eth_getTransactionReceipt` branch reuses the b4d6101 Sprintnet
+ *     failure). The `eth_getTransactionReceipt` branch reuses the b4d6101 the testnet
  *     normalizer (numeric `status` 0/1 OR hex string; `blockNumber ??
  *     block_number`, numeric OR hex string) — the operators' actual receipt
  *     shape, not the EVM-standard hex-string shape.
@@ -4633,7 +4633,7 @@ async function dropConfirmedPendingByHash(
   let rpcFailures = 0;
   for (const p of pending) {
     try {
-      const { result } = await sprintnetJsonRpc<{ status?: string } | null>(
+      const { result } = await testnetJsonRpc<{ status?: string } | null>(
         "lyth_txStatus",
         [p.txHash],
         opts,
@@ -4650,7 +4650,7 @@ async function dropConfirmedPendingByHash(
         let blockNumber: number | null = null;
         let txIndex: number | null = null;
         try {
-          const receipt = await sprintnetJsonRpc<{
+          const receipt = await testnetJsonRpc<{
             status?: number | string;
             blockNumber?: unknown;
             block_number?: unknown;
@@ -4670,7 +4670,7 @@ async function dropConfirmedPendingByHash(
         terminal.push({ row: p, status, blockNumber, txIndex });
         continue;
       }
-      const receipt = await sprintnetJsonRpc<{
+      const receipt = await testnetJsonRpc<{
         status?: number | string;
         blockNumber?: unknown;
         block_number?: unknown;
@@ -4715,7 +4715,7 @@ async function fetchConfirmedFeeLythoshi(
   opts?: { timeoutMs?: number },
 ): Promise<string | undefined> {
   try {
-    const { result } = await sprintnetJsonRpc<{
+    const { result } = await testnetJsonRpc<{
       fee?: { total_lythoshi?: unknown } | null;
     } | null>("lyth_nativeReceipt", [txHash], opts);
     const raw = result?.fee?.total_lythoshi;
@@ -4855,8 +4855,8 @@ export async function pollPendingAndNotify(): Promise<{
       const chainIdHex = rest.slice(dot + 1);
       const pending = validatePendingActivityCache(all[key])?.pending ?? [];
       if (pending.length === 0) continue;
-      // Sprintnet-only: the receipt RPC + indexer are Sprintnet-shaped.
-      // Non-Sprintnet rows still count toward `remaining` (don't strand the
+      // testnet-only: the receipt RPC + indexer are testnet-shaped.
+      // Non-testnet rows still count toward `remaining` (don't strand the
       // alarm) but aren't polled.
       if (!chainRequiresMlDsa(chainIdHex)) {
         remaining += pending.length;
@@ -5178,7 +5178,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "chain-delete": {
       // Remove a user-added chain. If it was the active chain, reset to
-      // Sprintnet and broadcast chainChanged so connected dApps learn the
+      // the testnet and broadcast chainChanged so connected dApps learn the
       // chain they think the wallet is on no longer exists.
       const p = message.payload as { chainId?: string } | undefined;
       if (!p || typeof p.chainId !== "string") {
@@ -5200,7 +5200,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       return { ok: true };
     }
-    case "sprintnet-operators-get": {
+    case "testnet-operators-get": {
       const override = await readOperatorOverride();
       return {
         ok: true,
@@ -5209,7 +5209,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         effective: getActiveOperators().map((d) => ({ ...d })),
       };
     }
-    case "sprintnet-operators-health": {
+    case "testnet-operators-health": {
       // About-page operator-table source. Probes every active operator
       // in parallel (net_version + eth_blockNumber) and surfaces the
       // genesis-hash verification result. The inner
@@ -5323,7 +5323,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       );
       return { ok: true, operators: results };
     }
-    case "sprintnet-runtime-provenance": {
+    case "testnet-runtime-provenance": {
       // About-page runtime card. Calls `lyth_runtimeProvenance`
       // (SDK commit f67cf0e) via the existing operator-iteration path so
       // the genesis-pin trust check still applies. Returns a
@@ -5331,7 +5331,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // card renders. On chain-offline returns `{ ok: false, reason }`;
       // the About page falls back to a placeholder.
       try {
-        const { result, via } = await sprintnetJsonRpc<{
+        const { result, via } = await testnetJsonRpc<{
           schemaVersion?: number;
           chainId?: number;
           latestHeight?: number;
@@ -5373,7 +5373,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
     }
-    case "sprintnet-operators-set": {
+    case "testnet-operators-set": {
       // Payload: { operators: OperatorEntry[] | null }. Null clears the
       // override and reverts to defaults; non-null persists the override.
       // The chrome.storage.onChanged listener echoes the write and
@@ -6076,7 +6076,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         let txHash: string | null = null;
         let broadcastError: string | null = null;
         try {
-          const nonceHex = await sprintnetTransactionCountHex(fromAddr);
+          const nonceHex = await testnetTransactionCountHex(fromAddr);
           const fee = await suggestFee(action.chainIdHex);
           const gasHex =
             action.gasLimitHex ?? fee.gasLimit ?? "0x5208";
@@ -6859,7 +6859,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing/invalid txHash" };
       }
       try {
-        const { result } = await sprintnetJsonRpc<{
+        const { result } = await testnetJsonRpc<{
           status?: unknown;
           blockNumber?: unknown;
           block_number?: unknown;
@@ -6867,7 +6867,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         if (!result) {
           return { ok: true, receipt: null };
         }
-        // Sprintnet operators emit receipts with a numeric `status` (0/1) +
+        // The testnet operators emit receipts with a numeric `status` (0/1) +
         // snake_case `block_number`, not the EVM-standard hex-string `status`
         // + camelCase `blockNumber`. Accept both shapes and normalize to the
         // hex-string form the UI's `parseInt(value, 16)` expects, so an
@@ -7023,7 +7023,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-operator-status": {
       // Liveness probe for the popup's chain-status banner. We iterate
-      // SPRINTNET_OPERATOR_RPCS and return the first that answers
+      // TESTNET_OPERATOR_RPCS and return the first that answers
       // `net_version` with the expected chain id (within a 1-second
       // per-host budget). Result is cached for 10s so a banner that
       // re-renders on every screen change doesn't hammer the chain.
@@ -7059,7 +7059,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const heightHex = "0x" + Math.trunc(p.blockHeight).toString(16);
-        const { result } = await sprintnetJsonRpc<
+        const { result } = await testnetJsonRpc<
           { transactions?: Array<{ value?: string; hash?: string }> } | null
         >("eth_getBlockByNumber", [heightHex, true]);
         const tx = result?.transactions?.[p.txIndex];
@@ -7086,7 +7086,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-chain-block-number": {
       // Real chain-liveness probe for the popup's status-bar health
-      // indicator. Calls `eth_blockNumber` on the active Sprintnet
+      // indicator. Calls `eth_blockNumber` on the active testnet
       // operator and returns the hex result; the popup tracks block-
       // advance freshness client-side at an 8-second cadence to drive
       // the LIVE / STALLED / OFFLINE state machine.
@@ -7182,12 +7182,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-balance": {
       // Read-only `eth_getBalance` for the popup Home balance pill.
-      // Sprintnet uses MAX-consensus across all active operators (see
-      // `sprintnetMaxBalanceConsensus`): a lagging operator can only
+      // The testnet uses MAX-consensus across all active operators (see
+      // `testnetMaxBalanceConsensus`): a lagging operator can only
       // under-report balance, so taking the max across responding
-      // operators is the safe resilience strategy. Other Sprintnet RPC
+      // operators is the safe resilience strategy. Other testnet RPC
       // methods (eth_call, nonce, fee, indexer) keep the single-
-      // operator-with-failover path in `sprintnetJsonRpc`, where max()
+      // operator-with-failover path in `testnetJsonRpc`, where max()
       // would not be meaningful.
       //
       // Every other chain id flows through `rpcClientFor` so user-added
@@ -7199,7 +7199,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         if (chainRequiresMlDsa(p.chainIdHex)) {
-          const consensus = await sprintnetMaxBalanceConsensus(p.address);
+          const consensus = await testnetMaxBalanceConsensus(p.address);
           const total = consensus.contributing.length + consensus.failing.length;
           const failSummary =
             consensus.failing.length > 0
@@ -7207,7 +7207,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   .map((f) => `${f.name}: ${f.reason}`)
                   .join(", ")})`
               : "";
-          // Sprintnet operators now run the lythoshi-native binary
+          // The testnet operators now run the lythoshi-native binary
           // `dc919df8`: `eth_getBalance` is reported directly
           // in canonical lythoshi, which is exactly what the wallet's
           // display path (`formatNativeLythAmount`) expects. The boundary
@@ -7576,7 +7576,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       try {
-        const { result } = await sprintnetJsonRpc<unknown>(
+        const { result } = await testnetJsonRpc<unknown>(
           "lyth_addressActivityKind",
           [p.address],
         );
@@ -7615,7 +7615,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-resolve-names": {
       // Batched name resolution. The de facto naming source on
-      // Sprintnet is `lyth_getAddressLabel` (per the §22.8 GAP-OPEN
+      // The testnet is `lyth_getAddressLabel` (per the §22.8 GAP-OPEN
       // decision); resolveName-style hierarchical names land later
       // without a wallet code change.
       //
@@ -7773,7 +7773,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       try {
-        const { result } = await sprintnetJsonRpc<unknown>("lyth_indexerStatus", []);
+        const { result } = await testnetJsonRpc<unknown>("lyth_indexerStatus", []);
         const validated = validateIndexerStatus(result);
         if (validated === null) {
           // Malformed response — defensive default, no gate trip
@@ -7880,7 +7880,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
       try {
-        const nonceHex = await sprintnetTransactionCountHex(fromAddress);
+        const nonceHex = await testnetTransactionCountHex(fromAddress);
         const fee =
           p.maxExecutionFeeLythoshiHex === undefined ||
           p.priorityTipLythoshiHex === undefined
@@ -7939,7 +7939,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const contractAddress = requireTypedMrvContractAddress(p.contractAddress).typed;
-        const nonceHex = await sprintnetTransactionCountHex(fromAddress);
+        const nonceHex = await testnetTransactionCountHex(fromAddress);
         const fee =
           p.maxExecutionFeeLythoshiHex === undefined ||
           p.priorityTipLythoshiHex === undefined
@@ -8060,7 +8060,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         readRegistryTrust,
       );
       try {
-        const { result, via } = await sprintnetJsonRpc<{
+        const { result, via } = await testnetJsonRpc<{
           transactionHash?: string;
           status?: string;
           blockNumber?: string;
@@ -8072,7 +8072,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         let nativeReceipt: WalletMrvNativeReceiptEvidence | null = null;
         let nativeReceiptError: WalletMrvNativeReceiptEvidenceError | undefined;
         try {
-          const native = await sprintnetJsonRpc<unknown>("lyth_nativeReceipt", [
+          const native = await testnetJsonRpc<unknown>("lyth_nativeReceipt", [
             p.txHash,
           ]);
           nativeReceipt = parseMrvNativeReceiptEvidence(
@@ -8744,14 +8744,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
       }
       try {
-        const nonceHex = await sprintnetTransactionCountHex(fromAddr);
+        const nonceHex = await testnetTransactionCountHex(fromAddr);
         const fee = await suggestFee(p.chainIdHex);
         // T4-04 (Item D, b1): if the popup bound the exact fee it displayed,
         // sign THAT instead of a second operator read (closes the display-vs-
         // sign double-read + the Slow/Fast tier-multiplier desync). Absent /
         // malformed → fall back to suggestFee (legacy callers, e.g. Stake).
         const bound = acceptSignedFee(p.signedFee);
-        // Sprintnet's mempool enforces an intrinsic execution-unit floor
+        // the testnet's mempool enforces an intrinsic execution-unit floor
         // that the compatibility estimate does not reflect. Native transfers
         // use the pre-resolved hex from suggestFee; contract calls carry
         // their caller-supplied estimate because the hint is sized for native
@@ -8812,7 +8812,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         });
         return { ok: true, txHash, via };
       } catch (e) {
-        // Forward method + via when sprintnetJsonRpc stamped them onto
+        // Forward method + via when testnetJsonRpc stamped them onto
         // the error (see tx-mldsa.ts body.error branch). Popup's Send
         // ErrorView uses these for method-aware copy that distinguishes
         // pre-submit RPC failures from real submission rejects.

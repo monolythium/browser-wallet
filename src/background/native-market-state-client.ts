@@ -8,7 +8,7 @@ import {
   type NativeMarketStateFilter,
   type NativeMarketStateResponse,
 } from "../shared/native-market-state.js";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 export async function readNativeMarketState(
   filter: NativeMarketStateFilter = {},
@@ -16,7 +16,7 @@ export async function readNativeMarketState(
   const rpcFilter = buildNativeMarketStateRpcFilter(filter);
   return withChainFallback<NativeMarketStateResponse | null>(
     async () => {
-      const { result } = await sprintnetJsonRpc<unknown>(
+      const { result } = await testnetJsonRpc<unknown>(
         "lyth_nativeMarketState",
         [rpcFilter],
       );

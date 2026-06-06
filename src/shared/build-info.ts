@@ -1,6 +1,6 @@
 // About-page metadata. Holds the version + commit constants
 // that aren't readable at runtime (the wallet's own manifest version is,
-// via chrome.runtime.getManifest, but the SDK and Sprintnet chain
+// via chrome.runtime.getManifest, but the SDK and the testnet chain
 // identifiers aren't). Update these in lockstep with the corresponding
 // pnpm-lock + chain-registry sync commits.
 
@@ -22,7 +22,7 @@ export const SDK_PACKAGE_VERSION: string =
     ? __SDK_INSTALLED_VERSION__
     : "unknown";
 
-/** Expected Sprintnet genesis hash — the wallet's authoritative pin for
+/** Expected testnet genesis hash — the wallet's authoritative pin for
  *  GAP #11 (orphan-fork defense). Operator probes that return a
  *  different chain genesis hash are marked "untrusted chain" and skipped
  *  by every RPC-dispatch path (balance, fee, send, indexer).
@@ -39,29 +39,29 @@ export const SDK_PACKAGE_VERSION: string =
  *  a human-reviewer decision; the About-page drift banner surfaces the
  *  mismatch and the live-registry fetch shows the current GitHub-registry
  *  value alongside it. */
-export const SPRINTNET_GENESIS_HASH =
+export const TESTNET_GENESIS_HASH =
   "0xcb14e03313ffa63e0315c6619ed26bce82a90d6859de76e013c0759c62b3d4c8";
 
 /** Current block-0 header hash for the same chain. This is intentionally
- *  separate from SPRINTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
+ *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
  *  exposes the chain identity hash used by the registry / p2p binding,
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
  *  header hash. They are not the same value on protocore v0.1.21. */
-export const SPRINTNET_BLOCK0_HASH =
+export const TESTNET_BLOCK0_HASH =
   "0xd6bfce4472f7dec8f6b7d8e40adcdfdc46d23ae84848367a6a6e2a7cfbc09f79";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
- *  the About page when this differs from SPRINTNET_GENESIS_HASH so the
+ *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. */
 export const SDK_REGISTRY_GENESIS_HASH: string = TESTNET_69420.genesis_hash;
 
-/** Sprintnet chain id (decimal, for display). */
-export const SPRINTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
+/** The testnet chain id (decimal, for display). */
+export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
 
-/** Sprintnet chain id (hex, `0x`-prefixed) — the form the popup passes
+/** The testnet chain id (hex, `0x`-prefixed) — the form the popup passes
  *  around as `chainId`. Derived from the SDK registry decimal so it
  *  tracks any future re-chain. */
-export const SPRINTNET_CHAIN_ID_HEX: string =
+export const TESTNET_CHAIN_ID_HEX: string =
   "0x" + TESTNET_69420.chain_id.toString(16);
 
 /** §25.2 item 7 — static finality-posture label for the send/confirm
@@ -72,7 +72,7 @@ export const SPRINTNET_CHAIN_ID_HEX: string =
  *  the neutral "depends on destination chain" copy. */
 export function finalityPostureFor(chainIdHex: string): string {
   const normalised = chainIdHex.toLowerCase();
-  if (normalised === SPRINTNET_CHAIN_ID_HEX.toLowerCase()) {
+  if (normalised === TESTNET_CHAIN_ID_HEX.toLowerCase()) {
     return "Anchor-level (Starfish-C)";
   }
   return "Depends on destination chain";

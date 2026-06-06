@@ -4,7 +4,7 @@
 //
 // The TS SDK at mono-core-sdk @0fd8a79 did NOT move and exposes no
 // typed wrappers for any of these methods yet, so the wallet calls
-// them via the existing `sprintnetJsonRpc` + `withChainFallback`
+// them via the existing `testnetJsonRpc` + `withChainFallback`
 // pattern. This module captures the field-for-field response shapes
 // (mirroring Rust serde rename_all = "camelCase") plus thin runtime
 // validators usable as `withChainFallback`'s `isValid` callback.

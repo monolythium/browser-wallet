@@ -1,6 +1,6 @@
 // Live chain-registry fetcher.
 //
-// The wallet ships a build-time `SPRINTNET_GENESIS_HASH` pin used by
+// The wallet ships a build-time `TESTNET_GENESIS_HASH` pin used by
 // `networks.ts` for the GAP #11 orphan-fork defense — that stays
 // compile-time-anchored because it's a security decision (an operator
 // returning a different chain genesis hash is treated as untrusted and

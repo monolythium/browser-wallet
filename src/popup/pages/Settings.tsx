@@ -17,7 +17,7 @@ interface SettingsProps {
   onShowPhrase: () => void;
   /** Routes to the ConnectedSites page. */
   onShowConnectedSites: () => void;
-  /** Routes to the Sprintnet operators sub-page. */
+  /** Routes to the testnet operators sub-page. */
   onOpenOperators: () => void;
   /** Routes to the NotificationSettings sub-page (the four notification
    *  toggles, relocated behind "Manage notifications"). */

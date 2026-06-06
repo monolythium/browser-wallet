@@ -8,7 +8,7 @@ import {
   type NativeAgentStateFilter,
   type NativeAgentStateResponse,
 } from "../shared/native-agent-state.js";
-import { sprintnetJsonRpc } from "./tx-mldsa.js";
+import { testnetJsonRpc } from "./tx-mldsa.js";
 
 export async function readNativeAgentState(
   filter: NativeAgentStateFilter = {},
@@ -16,7 +16,7 @@ export async function readNativeAgentState(
   const rpcFilter = buildNativeAgentStateRpcFilter(filter);
   return withChainFallback<NativeAgentStateResponse | null>(
     async () => {
-      const { result } = await sprintnetJsonRpc<unknown>(
+      const { result } = await testnetJsonRpc<unknown>(
         "lyth_nativeAgentState",
         [rpcFilter],
       );

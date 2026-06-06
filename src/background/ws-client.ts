@@ -20,7 +20,7 @@
 //   4. Graceful degradation: when no WS endpoint is reachable, the
 //      manager surfaces "ws unavailable" to callers, who fall back
 //      to their existing polling path. This is the dominant case
-//      pre-mainnet when Sprintnet operators may not all expose wss://.
+//      pre-mainnet when the testnet operators may not all expose wss://.
 //
 // API:
 //   - `getWsClient()` returns the singleton client (lazy).
@@ -82,7 +82,7 @@ export function httpUrlToWss(url: string): string {
  *    3. Fall back to same-port http→ws conversion (legacy behaviour)
  *
  *  The :8546 default fixes the HTTP 303 handshake-failure spam reported
- *  by user against Sprintnet op-1 (8545 returns redirect for upgrade).
+ *  by user against the testnet op-1 (8545 returns redirect for upgrade).
  */
 export function deriveWsUrl(operator: OperatorEntry): string {
   if (operator.wsRpc !== undefined && operator.wsRpc.length > 0) {
@@ -120,7 +120,7 @@ function backoffMs(attempt: number): number {
 // the connection ever opens, we mark the URL as known-down for TTL
 // minutes. Subsequent ensureConnection() short-circuits to
 // `unavailable` status without trying again. Prevents the ~5 min of
-// console retry spam reported by user against Sprintnet :8545 (which
+// console retry spam reported by user against the testnet :8545 (which
 // returns HTTP 303 redirect on upgrade attempts).
 //
 // The cache is module-scoped so it survives WsClient singleton resets
@@ -299,7 +299,7 @@ export class WsClient {
     // `deriveWsUrl` knows about the `wsRpc`
     // override + the :8546 Geth convention. Previously we used the
     // naive `httpUrlToWss` which kept the HTTP port, causing 303
-    // handshake-failure spam against Sprintnet operators.
+    // handshake-failure spam against the testnet operators.
     const wsUrl = deriveWsUrl(ops[0]!);
     // Failure-cache short-circuit. If the URL is in the failure cache
     // within TTL, skip the connection attempt entirely + go straight

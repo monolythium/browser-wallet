@@ -35,8 +35,8 @@ import {
   EXTERNAL_LINKS,
   SDK_PACKAGE_VERSION,
   SDK_REGISTRY_GENESIS_HASH,
-  SPRINTNET_CHAIN_ID_DEC,
-  SPRINTNET_GENESIS_HASH,
+  TESTNET_CHAIN_ID_DEC,
+  TESTNET_GENESIS_HASH,
   WALLET_PITCH,
 } from "../../shared/build-info";
 import { fetchLiveTestnetRegistry } from "../../shared/live-registry";
@@ -270,13 +270,13 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
       : summariseOperatorCapabilities(operators);
   // The displayed registry genesis hash is the live GitHub value when
   // the fetch succeeded, the SDK-bundled snapshot otherwise. The
-  // build-time `SPRINTNET_GENESIS_HASH` pin still gates the genesis check in
+  // build-time `TESTNET_GENESIS_HASH` pin still gates the genesis check in
   // networks.ts — this is purely display + drift detection.
   const displayedRegistryGenesis =
     liveRegistryGenesis ?? SDK_REGISTRY_GENESIS_HASH;
   const sdkRegistryMismatch =
     displayedRegistryGenesis.toLowerCase() !==
-    SPRINTNET_GENESIS_HASH.toLowerCase();
+    TESTNET_GENESIS_HASH.toLowerCase();
 
   return (
     <>
@@ -767,11 +767,11 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
             <>
           <KvList
             rows={[
-              { k: "Chain ID", v: String(SPRINTNET_CHAIN_ID_DEC) },
+              { k: "Chain ID", v: String(TESTNET_CHAIN_ID_DEC) },
               {
                 k: "Genesis",
-                v: <Mono>{shortHex(SPRINTNET_GENESIS_HASH, 10, 8)}</Mono>,
-                title: SPRINTNET_GENESIS_HASH,
+                v: <Mono>{shortHex(TESTNET_GENESIS_HASH, 10, 8)}</Mono>,
+                title: TESTNET_GENESIS_HASH,
               },
               { k: "Execution", v: "Rust/RISC-V native" },
               { k: "Whitepaper", v: "v5.0 · May 2026" },
@@ -809,7 +809,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               wordBreak: "break-all",
             }}
           >
-            {SPRINTNET_GENESIS_HASH}
+            {TESTNET_GENESIS_HASH}
           </div>
           {sdkRegistryMismatch && (
             <div
