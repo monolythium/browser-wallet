@@ -25,6 +25,7 @@
 
 import { useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { useFeature } from "../hooks/useFeature";
 import {
   bgBuildSpendingPolicyClaim,
   bgReadSpendingPolicy,
@@ -839,6 +840,7 @@ function ErrorView({
   error: SubmitError | null;
   onRetry: () => void;
 }) {
+  const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div className="ext-card" style={{ padding: 16 }}>
       <div style={{ ...cardTitle, color: "var(--err, #ff8a9a)" }}>
@@ -847,8 +849,8 @@ function ErrorView({
       <p style={{ fontSize: 12, color: "var(--fg-200)", wordBreak: "break-word" }}>
         {error?.message ?? "Unknown error."}
       </p>
-      {error?.code != null && <div style={mono}>code: {error.code}</div>}
-      {error?.via != null && <div style={mono}>via: {error.via}</div>}
+      {devMode && error?.code != null && <div style={mono}>code: {error.code}</div>}
+      {devMode && error?.via != null && <div style={mono}>via: {error.via}</div>}
       <button style={{ ...primaryBtn, marginTop: 12 }} onClick={onRetry}>
         Back to start
       </button>

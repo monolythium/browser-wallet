@@ -4063,6 +4063,7 @@ export function ReqSendTx({
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
   const [showFeeDetails, setShowFeeDetails] = useState(false);
+  const devMode = useFeature("DEVELOPER_MODE");
 
   const originWarnings = detectOriginWarnings(origin);
   const hasOriginDanger = originWarnings.some((w) => w.level === "danger");
@@ -4141,7 +4142,7 @@ export function ReqSendTx({
         </div>
       </div>
 
-      {hasCalldata && (
+      {devMode && hasCalldata && (
         <div className="req-section">
           <div className="req-section__h">
             <span>Simulation</span>
@@ -4182,9 +4183,11 @@ export function ReqSendTx({
       <div className="req-section">
         <div className="req-section__h">
           <span>Network fee</span>
-          <button onClick={() => setShowFeeDetails((v) => !v)}>
-            {showFeeDetails ? "hide" : "details"} ↓
-          </button>
+          {devMode && (
+            <button onClick={() => setShowFeeDetails((v) => !v)}>
+              {showFeeDetails ? "hide" : "details"} ↓
+            </button>
+          )}
         </div>
         {!hasStructuredFee && (
           <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
@@ -4238,7 +4241,7 @@ export function ReqSendTx({
               <span className="k">Max fee</span>
               <span className="v">{feeDisplay?.defaultText ?? "—"}</span>
             </div>
-            {showFeeDetails && (
+            {devMode && showFeeDetails && (
               <>
                 <div className="req-kv">
                   <span className="k">Execution-unit limit</span>
@@ -4260,7 +4263,7 @@ export function ReqSendTx({
         )}
       </div>
 
-      {decoded && (
+      {devMode && decoded && (
         <div className="req-section">
           <div className="req-section__h">
             <span>{decodedSurfaceTitle(decoded)}</span>
@@ -4293,7 +4296,7 @@ export function ReqSendTx({
         </div>
       )}
 
-      {hasCalldata && !decoded && (
+      {devMode && hasCalldata && !decoded && (
         <div className="req-section">
           <div className="req-warn warn">
             <Icon name="warn" size={14} />
@@ -4305,17 +4308,19 @@ export function ReqSendTx({
         </div>
       )}
 
-      <div className="req-section" style={{ paddingBottom: 16 }}>
-        <div className="req-section__h">
-          <span>Raw calldata</span>
-          <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
-        </div>
-        {showRaw && (
-          <div className="req-raw" style={{ wordBreak: "break-all" }}>
-            {hasCalldata ? data : "0x (no calldata)"}
+      {devMode && (
+        <div className="req-section" style={{ paddingBottom: 16 }}>
+          <div className="req-section__h">
+            <span>Raw calldata</span>
+            <button onClick={() => setShowRaw((v) => !v)}>{showRaw ? "hide" : "show"} ↓</button>
           </div>
-        )}
-      </div>
+          {showRaw && (
+            <div className="req-raw" style={{ wordBreak: "break-all" }}>
+              {hasCalldata ? data : "0x (no calldata)"}
+            </div>
+          )}
+        </div>
+      )}
 
       <CustodyBadge mode={custody} />
       <div className="req-foot">
