@@ -1049,27 +1049,19 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
               gap: 10,
             }}
           >
+            {/* Compact: titles only here (8 pillars would bloat the card) —
+                the full title + body lives on the Why-Monolythium page. */}
             {WALLET_PITCH.map((p) => (
-              <div key={p.title}>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: "var(--fg-100)",
-                    marginBottom: 3,
-                  }}
-                >
-                  {p.title}
-                </div>
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    color: "var(--fg-300)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {p.body}
-                </div>
+              <div
+                key={p.title}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--fg-100)",
+                  lineHeight: 1.5,
+                }}
+              >
+                {p.title}
               </div>
             ))}
           </div>
