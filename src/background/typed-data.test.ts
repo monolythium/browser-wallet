@@ -268,3 +268,141 @@ describe("EIP-712 strict-reject — negative vectors (each coercion now throws)"
     expect(digest(oneField("uint256", 42n))).toMatch(/^0x[0-9a-f]{64}$/);
   });
 });
+
+// Extended real-world golden vectors (adversarial red-team follow-up). The
+// strict change preserved the VALID-input encoding path verbatim (only malformed
+// branches gained throws), so these are byte-identical to the pre-strict encoder
+// by construction — independently confirmed by the red-team's direct old-vs-new
+// probes. They lock the most common real dApp shapes (Permit, struct arrays,
+// signed ints, bytesN, nested arrays, address-in-message) forward.
+describe("EIP-712 golden vectors — extended real-world coverage", () => {
+  it("ERC-2612 Permit (representation-agnostic value/nonce/deadline)", () => {
+    const permit = (value: unknown, nonce: unknown, deadline: unknown) => ({
+      domain: {
+        name: "USD Coin",
+        version: "2",
+        chainId: 1,
+        verifyingContract: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      },
+      types: {
+        Permit: [
+          { name: "owner", type: "address" },
+          { name: "spender", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+        ],
+      },
+      primaryType: "Permit",
+      message: {
+        owner: "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826",
+        spender: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
+        value,
+        nonce,
+        deadline,
+      },
+    });
+    const d = digest(permit(1_000_000n, 0n, 1_700_000_000n));
+    // bigint vs decimal-string vs number vs computed-hex all encode identically.
+    expect(
+      digest(permit("1000000", 0, "0x" + (1_700_000_000).toString(16))),
+    ).toBe(d);
+    expect(d).toMatchInlineSnapshot(`"0xbf5ff63b923220854df34e0e39a967b7d4cb04143ed8a67c29909dba159750cd"`);
+  });
+
+  it("array of structs (Order with OrderItem[]) — non-empty and empty", () => {
+    const order = (items: unknown) => ({
+      domain: { name: "D", version: "1" },
+      types: {
+        OrderItem: [
+          { name: "token", type: "address" },
+          { name: "amount", type: "uint256" },
+        ],
+        Order: [
+          { name: "maker", type: "address" },
+          { name: "items", type: "OrderItem[]" },
+          { name: "expiry", type: "uint256" },
+        ],
+      },
+      primaryType: "Order",
+      message: {
+        maker: "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826",
+        items,
+        expiry: 99n,
+      },
+    });
+    expect(
+      digest(
+        order([
+          { token: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB", amount: 1n },
+          { token: "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC", amount: 2n },
+        ]),
+      ),
+    ).toMatchInlineSnapshot(`"0x5d7ef81e0e5ff22de114d3e95074be86cd6e9e7943fd744018e571d8e207d449"`);
+    expect(digest(order([]))).toMatchInlineSnapshot(`"0x26830db7fac230d915b0d69c2d9d03470169dce9fa31f35cb796d760d46b2de2"`);
+  });
+
+  it("signed int256 — negative (two's-complement), rep-agnostic, and bounds", () => {
+    const i = (x: unknown) => ({
+      domain: { name: "D", version: "1" },
+      types: { Foo: [{ name: "x", type: "int256" }] },
+      primaryType: "Foo",
+      message: { x },
+    });
+    const dNeg = digest(i(-1n));
+    expect(digest(i(-1))).toBe(dNeg); // number
+    expect(digest(i("-1"))).toBe(dNeg); // decimal string
+    expect(dNeg).toMatchInlineSnapshot(`"0x3db30e9ccc069d400ed427626bea4f77138052203ac2a9a388d898c273b18a90"`);
+    expect(digest(i(-1_000_000n))).toMatchInlineSnapshot(`"0x0a0a7dbb566359a45aab4c736a3433b7ee0585dab254690d6ce95261348129d6"`);
+    expect(digest(i((1n << 255n) - 1n))).toMatchInlineSnapshot(`"0x59c7ef04c54c4f5119391ad7a39104ade2c78997b95097261f49072e88734315"`); // max int256
+    expect(digest(i(-(1n << 255n)))).toMatchInlineSnapshot(`"0xf749c8737c5f5fec14886a7a3eee5855cae3ae7039e6e17c63f73a116183bc36"`); // min int256
+  });
+
+  it("bytes1 / bytes16 — hex string == Uint8Array", () => {
+    const b = (type: string, v: unknown) => ({
+      domain: { name: "D", version: "1" },
+      types: { Foo: [{ name: "b", type }] },
+      primaryType: "Foo",
+      message: { b: v },
+    });
+    const d1 = digest(b("bytes1", "0xab"));
+    expect(digest(b("bytes1", new Uint8Array([0xab])))).toBe(d1);
+    expect(d1).toMatchInlineSnapshot(`"0x287e7e33cfda6b02e0742be6553ef1f56c055d4d5f591bc975b3f6c7c0a55d9e"`);
+    const d16 = digest(b("bytes16", "0x" + "cd".repeat(16)));
+    expect(digest(b("bytes16", new Uint8Array(16).fill(0xcd)))).toBe(d16);
+    expect(d16).toMatchInlineSnapshot(`"0xcdfb6438656e517f697c8dbf88fc384c54b5d0bb3128f78cbbc99740a8d1cde4"`);
+  });
+
+  it("nested array uint256[][] and inner-fixed uint256[2][]", () => {
+    const a = (type: string, v: unknown) => ({
+      domain: { name: "D", version: "1" },
+      types: { Foo: [{ name: "m", type }] },
+      primaryType: "Foo",
+      message: { m: v },
+    });
+    expect(digest(a("uint256[][]", [[1n, 2n], [3n]]))).toMatchInlineSnapshot(`"0x8617edaa64ab56d539db95da2fb0379142b77d54a78c5391202a2dc5c9238059"`);
+    expect(
+      digest(a("uint256[2][]", [[1n, 2n], [3n, 4n]])),
+    ).toMatchInlineSnapshot(`"0xdd79fb38be87301a9c856d78b47c528ae3f4b1dec4a9031305b2ea3150249d41"`);
+  });
+
+  it("address inside a message field, and address[]", () => {
+    const env = (type: string, v: unknown) => ({
+      domain: { name: "D", version: "1" },
+      types: { Foo: [{ name: "a", type }] },
+      primaryType: "Foo",
+      message: { a: v },
+    });
+    expect(
+      digest(env("address", "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826")),
+    ).toMatchInlineSnapshot(`"0x9da9e7bdf384ae45ac2c4b4c4aa2819f3429d674816295708a3f3c5fc7ee7bd4"`);
+    expect(
+      digest(
+        env("address[]", [
+          "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826",
+          "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
+        ]),
+      ),
+    ).toMatchInlineSnapshot(`"0xc30e5e567a701442c04d2c13496462f722b033d88815adb3f0ed3b36e4b94b0e"`);
+  });
+});
