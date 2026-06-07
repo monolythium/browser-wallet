@@ -1903,6 +1903,20 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!found) {
         return err(ERR_CHAIN_NOT_ADDED, "Unknown chain. Use wallet_addEthereumChain first.");
       }
+      // A chain switch mutates GLOBAL wallet state (active chainId, persisted, +
+      // a chainChanged broadcast to every tab), so it must be authorized like any
+      // other state-changing dApp method: the origin must be connected AND the
+      // user must approve. Previously this arm applied the switch with no gate at
+      // all — any page, even unconnected, could silently flip the active chain
+      // (F-2.5). Param-validation (-32602) and unknown-chain (ERR_CHAIN_NOT_ADDED)
+      // still answer first so the EIP-3326 dApp contract is preserved for callers.
+      if (!session.connectedOrigins.has(origin)) {
+        return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
+      }
+      const decision = await gatedEnqueue({ kind: "switch_chain", origin, chainId: requested });
+      if (!decision.ok) {
+        return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the chain switch");
+      }
       session.chainId = canonicalChainKey(requested);
       await persistActiveChainId(session.chainId);
       broadcastEvent("chainChanged", session.chainId);

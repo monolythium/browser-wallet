@@ -379,7 +379,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       rpcUrls: ["http://127.0.0.1:8545"],
       nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
     }], origin);
-    await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
+    await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }], origin);
 
     const r = await dispatch("eth_sendTransaction", [{
       to: "0x0000000000000000000000000000000000000001",
@@ -400,7 +400,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   it("eth_sendTransaction surfaces user-rejected errors with code 4001", async () => {
     const origin = "https://rejecting.example";
     await connectOrigin(origin);
-    await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }]);
+    await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }], origin);
     approvalDecision = { ok: false, reason: "user rejected the transaction" };
     const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
     expect(r.result).toBeUndefined();
@@ -479,11 +479,33 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   });
 
   // ---- 7. wallet_switchEthereumChain ----
-  it("wallet_switchEthereumChain accepts the canonical testnet id and broadcasts chainChanged", async () => {
-    const r = await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }]);
+  it("wallet_switchEthereumChain (connected + approved) switches and broadcasts chainChanged", async () => {
+    const origin = "https://switch-ok.example";
+    await connectOrigin(origin);
+    const r = await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }], origin);
     expect(r.error).toBeUndefined();
     expect(r.result).toBeNull();
+    expect(enqueuedApprovals.some((a) => a.kind === "switch_chain")).toBe(true);
     expect(broadcastEvents.some((e) => e.event === "chainChanged" && e.payload === TESTNET_CHAIN_ID_HEX)).toBe(true);
+  });
+
+  it("wallet_switchEthereumChain from an unconnected origin is rejected (4100), no switch, no broadcast (F-2.5)", async () => {
+    const before = broadcastEvents.filter((e) => e.event === "chainChanged").length;
+    const r = await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }], "https://unconnected-switch.example");
+    expect(r.error?.code).toBe(4100);
+    expect(enqueuedApprovals.some((a) => a.kind === "switch_chain")).toBe(false);
+    expect(broadcastEvents.filter((e) => e.event === "chainChanged").length).toBe(before);
+  });
+
+  it("wallet_switchEthereumChain enqueues a switch_chain approval and aborts on reject (4001), no switch, no broadcast", async () => {
+    const origin = "https://switch-reject.example";
+    await connectOrigin(origin);
+    approvalDecision = { ok: false, reason: "user rejected the chain switch" };
+    const before = broadcastEvents.filter((e) => e.event === "chainChanged").length;
+    const r = await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }], origin);
+    expect(r.error?.code).toBe(4001);
+    expect(enqueuedApprovals.some((a) => a.kind === "switch_chain")).toBe(true);
+    expect(broadcastEvents.filter((e) => e.event === "chainChanged").length).toBe(before);
   });
 
   it("wallet_switchEthereumChain rejects an unknown chain with code 4902", async () => {
@@ -556,7 +578,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       rpcUrls: ["http://127.0.0.1:8545"],
       nativeCurrency: { name: "Lythium", symbol: "LYTH", decimals: 18 },
     }], origin);
-    await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }]);
+    await dispatch("wallet_switchEthereumChain", [{ chainId: "0x7A69" }], origin);
     const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000002" }], origin);
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4200);
