@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@monolythium/core-sdk':
-        specifier: github:monolythium/mono-core-sdk#0e4fdf9
-        version: https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/0e4fdf9895cce8415f3286318fb29bf851faf496
+        specifier: github:monolythium/mono-core-sdk#e83c4b2
+        version: https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/e83c4b2f23795c44299dad20eedee629e50058d2
       '@noble/ciphers':
         specifier: 2.2.0
         version: 2.2.0
@@ -323,9 +323,9 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@monolythium/core-sdk@https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/0e4fdf9895cce8415f3286318fb29bf851faf496':
-    resolution: {tarball: https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/0e4fdf9895cce8415f3286318fb29bf851faf496}
-    version: 0.4.7
+  '@monolythium/core-sdk@https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/e83c4b2f23795c44299dad20eedee629e50058d2':
+    resolution: {tarball: https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/e83c4b2f23795c44299dad20eedee629e50058d2}
+    version: 0.4.8
     engines: {node: '>=22'}
 
   '@noble/ciphers@2.0.1':
@@ -1266,7 +1266,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@monolythium/core-sdk@https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/0e4fdf9895cce8415f3286318fb29bf851faf496':
+  '@monolythium/core-sdk@https://codeload.github.com/monolythium/mono-core-sdk/tar.gz/e83c4b2f23795c44299dad20eedee629e50058d2':
     dependencies:
       '@noble/ciphers': 2.2.0
       '@noble/curves': 2.2.0
