@@ -369,7 +369,10 @@ export function Stake({
       ]);
       if (cancelled) return;
       if (delR.ok) setDelegations(delR.data);
-      if (capR.ok) setCapBps(capR.data.capBps);
+      // F-3.8/#25: only adopt a LIVE cap; a via:"mock" (offline) read carries a
+      // fabricated 50% launch cap that must not render as real (capBps stays
+      // null → cap badge hidden; the 0x100A precompile enforces the true cap).
+      if (capR.ok) setCapBps(capBpsFromCapResult(capR));
       if (balR.ok) {
         const parsedBalance = parseHexQuantity(balR.balanceHex);
         if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
@@ -1719,6 +1722,28 @@ function ErrorView({
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers + styles
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * F-3.8 / #25 — resolve the per-cluster delegation cap (bps) for DISPLAY from a
+ * `staking-delegation-cap` read, honoring the no-mock-fallback principle. A
+ * `via:"mock"` result (chain offline) carries a fabricated §23.6 launch cap
+ * (5000 bps = 50%); rendering that as a real percentage is forbidden, so a
+ * non-live read yields `null` — the cap badge is hidden (StakeForm /
+ * RedelegateForm already gate on `capBps !== null`) and the 0x100A delegation
+ * precompile still enforces the true cap chain-side. Only a live read sets a
+ * concrete cap. (Mirrors the existing `via === "mock"` idiom used for the
+ * rewards / redemption-queue mock flags.)
+ */
+export function capBpsFromCapResult(capR: {
+  ok: boolean;
+  via?: string | null;
+  data?: { capBps: number | null };
+}): number | null {
+  if (!capR.ok || capR.via === "mock") return null;
+  // capBps === null is the legitimate "cap disabled (u32::MAX)" state; either
+  // way a non-concrete cap collapses to null (badge hidden / unlimited).
+  return capR.data?.capBps ?? null;
+}
 
 export function parseLythAmountToLythoshi(s: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(s)) return null;
