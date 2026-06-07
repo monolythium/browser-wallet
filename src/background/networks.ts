@@ -51,6 +51,20 @@ export const TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15
 
 /**
+ * F-3.11 (#28) — absolute sane upper bound on the resolved execution-unit
+ * LIMIT signed into a tx, in execution units. Companion to
+ * MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: the per-unit price was already clamped,
+ * but the limit (from a popup `signedFee` bound or a caller hint) was not, so
+ * a future non-UI caller could sign an absurd limit. A de-trust BACKSTOP, not
+ * an economic claim: 30,000,000 is ~Ethereum-block-gas-limit order of
+ * magnitude and ≥60× the largest legitimate wallet budget (the spending-policy
+ * claim precompile, 500000 = 0x7A120), so it never alters a real native
+ * transfer (30000), precompile call, or large MRV submission while capping a
+ * physically-absurd value.
+ */
+export const MAX_EXECUTION_UNIT_LIMIT = 30_000_000n; // 0x1C9C380
+
+/**
  * Monolythium Testnet operator RPC endpoints — sourced from the SDK-bundled chain
  * registry (`@monolythium/core-sdk` `getRpcEndpoints("testnet-69420")`).
  * Broadcast paths iterate this list and use the first responder. Registry

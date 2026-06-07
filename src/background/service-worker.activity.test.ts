@@ -329,6 +329,8 @@ vi.mock("./networks.js", () => ({
   TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x7530",
   // T4-04 fee ceiling — real value so the clamp tests are meaningful.
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: 1_000_000_000_000_000n,
+  // F-3.11/#28 unit-limit ceiling — real value so the limit-clamp test is meaningful.
+  MAX_EXECUTION_UNIT_LIMIT: 30_000_000n,
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
   BUILTIN_CHAINS: [
     {
@@ -5013,6 +5015,57 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         // tip clamped to <= maxFeePerGas (== ceiling).
         maxPriorityFeePerGas: CEILING_HEX,
       }),
+    );
+  });
+
+  it("clamps an absurd signedFee execution-unit LIMIT to the sane ceiling (F-3.11/#28)", async () => {
+    seedOperatorFee("0x1", "0x1");
+    const absurdLimit = "0x" + (10n ** 18n).toString(16);
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: absurdLimit,
+      },
+    });
+    // 30,000,000 = MAX_EXECUTION_UNIT_LIMIT (0x1c9c380).
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x1c9c380" }),
+    );
+  });
+
+  it("passes legitimate budgets (precompile 500000 + native floor 30000) through the limit clamp unchanged (F-3.11/#28)", async () => {
+    seedOperatorFee("0x1", "0x1");
+    // Largest legitimate wallet budget (spending-policy claim, 0x7A120 = 500000).
+    await send({
+      to: "0x000000000000000000000000000000000000110c",
+      valueWeiHex: "0x0",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: "0x7a120",
+      },
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x7a120" }),
+    );
+    // Native-transfer floor (0x7530 = 30000) passes through.
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: "0x7530",
+      },
+    });
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x7530" }),
     );
   });
 

@@ -199,6 +199,7 @@ import {
   chainRequiresMlDsa,
   TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+  MAX_EXECUTION_UNIT_LIMIT,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
   loadOperatorOverride,
@@ -8770,8 +8771,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // use the pre-resolved hex from suggestFee; contract calls carry
         // their caller-supplied estimate because the hint is sized for native
         // transfers only.
-        const gasHex =
+        const rawGasHex =
           p.gasLimitHex ?? bound?.executionUnitLimitHex ?? fee.gasLimit ?? TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
+        // F-3.11 (#28): clamp the resolved execution-unit LIMIT to a sane
+        // ceiling, mirroring the per-unit-price clamp below. Defense-in-depth
+        // against a future non-UI caller supplying an absurd limit; the ceiling
+        // (MAX_EXECUTION_UNIT_LIMIT) is far above any legitimate budget so a
+        // real native transfer / precompile call / MRV submission is unchanged.
+        const gasHex =
+          "0x" + clampToSaneBound(BigInt(rawGasHex), MAX_EXECUTION_UNIT_LIMIT).toString(16);
         // T4-04 (Item D, a1): clamp the per-execution-unit price to a sane
         // ceiling so a malicious/MITM operator (or a tampered popup) cannot
         // sign an absurd maxFeePerGas. Applies to BOTH the bound fee and the
