@@ -13,7 +13,7 @@ import { useMemo } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { lythAmountToBps } from "../../shared/staking-tx";
-import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
+import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface RedelegateFormProps {
   /** Cluster the weight is moving from. Must have current weight. */
@@ -32,16 +32,14 @@ export interface RedelegateFormProps {
   /** Open the destination picker. The parent handles cluster picking
    *  via the same ClusterPicker the stake flow uses. */
   onPickDestination: () => void;
-  /** Compatibility prop name retained for existing callers. Value is
-   *  v4.1 native lythoshi, not 18-decimal EVM wei. */
-  balanceWei: bigint | null;
+  /** Native lythoshi balance (18-decimal); null while the SW
+   *  wallet-balance fetch is in flight. */
+  balanceLythoshi: bigint | null;
   onContinue: () => void;
   onBack: () => void;
 }
 
-// Native LYTH precision sourced from the SDK (chain migrated 8 → 18 decimals;
-// 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
-const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+// LYTHOSHI_PER_LYTH (10^18) is imported from the SDK above — single source of truth.
 
 export function lythToLythoshi(amountStr: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(amountStr)) return null;
@@ -82,14 +80,14 @@ export function RedelegateForm({
   amountStr,
   onAmountChange,
   onPickDestination,
-  balanceWei,
+  balanceLythoshi,
   onContinue,
   onBack,
 }: RedelegateFormProps) {
   const amountLythoshi = useMemo(() => lythToLythoshi(amountStr), [amountStr]);
   const moveBps =
-    amountLythoshi !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountLythoshi, balanceWei)
+    amountLythoshi !== null && balanceLythoshi !== null && balanceLythoshi > 0n
+      ? lythAmountToBps(amountLythoshi, balanceLythoshi)
       : 0;
 
   const exceedsSource = moveBps > srcWeightBps;
@@ -105,20 +103,20 @@ export function RedelegateForm({
     !exceedsDstCap &&
     dstChosen &&
     !sameAsSrc &&
-    balanceWei !== null;
+    balanceLythoshi !== null;
 
   const handleMax = () => {
-    if (balanceWei === null || srcWeightBps <= 0) return;
+    if (balanceLythoshi === null || srcWeightBps <= 0) return;
     // Max from source = full source delegation amount, then capped by
     // destination's headroom if applicable.
-    const srcAmountLythoshi = (balanceWei * BigInt(srcWeightBps)) / 10_000n;
+    const srcAmountLythoshi = (balanceLythoshi * BigInt(srcWeightBps)) / 10_000n;
     if (capBps !== null) {
       const headroomBps = Math.max(0, capBps - dstExistingWeightBps);
       if (headroomBps === 0) {
         onAmountChange("0");
         return;
       }
-      const headroomLythoshi = (balanceWei * BigInt(headroomBps)) / 10_000n;
+      const headroomLythoshi = (balanceLythoshi * BigInt(headroomBps)) / 10_000n;
       const limit =
         srcAmountLythoshi < headroomLythoshi
           ? srcAmountLythoshi
@@ -271,12 +269,12 @@ export function RedelegateForm({
           <button
             onClick={handleMax}
             disabled={
-              balanceWei === null || srcWeightBps <= 0 || dstCluster === null
+              balanceLythoshi === null || srcWeightBps <= 0 || dstCluster === null
             }
             style={{
               ...inlineBtnStyle,
               opacity:
-                balanceWei === null || srcWeightBps <= 0 || dstCluster === null
+                balanceLythoshi === null || srcWeightBps <= 0 || dstCluster === null
                   ? 0.5
                   : 1,
             }}

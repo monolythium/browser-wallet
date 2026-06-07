@@ -12,7 +12,7 @@
 import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
+import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface UnstakeFormProps {
   /** Cluster currently being unstaked from. */
@@ -20,18 +20,14 @@ export interface UnstakeFormProps {
   /** Current delegation weight to this cluster (bps). Displayed; the
    *  whole row is removed regardless of amount. */
   currentWeightBps: number;
-  /** Compatibility prop name retained for existing callers. Value is
-   *  native lythoshi (now 18-decimal — 1 lythoshi == 1 wei after the
-   *  chain's 8 → 18 migration). Used to display the LYTH amount the
-   *  current weight represents. */
-  balanceWei: bigint | null;
+  /** Native lythoshi balance (18-decimal). Used to display the LYTH
+   *  amount the current weight represents. */
+  balanceLythoshi: bigint | null;
   onContinue: () => void;
   onBack: () => void;
 }
 
-// Native LYTH precision sourced from the SDK (chain migrated 8 → 18 decimals;
-// 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
-const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+// LYTHOSHI_PER_LYTH (10^18) is imported from the SDK above — single source of truth.
 
 export function lythToLythoshi(amountStr: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(amountStr)) return null;
@@ -66,15 +62,15 @@ export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
 export function UnstakeForm({
   cluster,
   currentWeightBps,
-  balanceWei,
+  balanceLythoshi,
   onContinue,
   onBack,
 }: UnstakeFormProps) {
   const currentDelegationLythoshi =
-    balanceWei !== null && currentWeightBps > 0
-      ? (balanceWei * BigInt(currentWeightBps)) / 10_000n
+    balanceLythoshi !== null && currentWeightBps > 0
+      ? (balanceLythoshi * BigInt(currentWeightBps)) / 10_000n
       : 0n;
-  const hasDelegation = currentWeightBps > 0 && balanceWei !== null;
+  const hasDelegation = currentWeightBps > 0 && balanceLythoshi !== null;
   const aprBps = cluster.aprBps ?? null;
 
   return (

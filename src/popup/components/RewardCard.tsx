@@ -18,7 +18,7 @@ import {
   type ClusterDirectoryEntry,
   type PendingRewardsView,
 } from "../../shared/staking";
-import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
+import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 interface RewardCardProps {
   /** Compatibility reward fields are still named `*Wei` in
@@ -273,9 +273,7 @@ export function RewardCard({
 // Helpers + styles
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Native LYTH precision sourced from the SDK (chain migrated 8 → 18 decimals;
-// 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
-const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+// LYTHOSHI_PER_LYTH (10^18) is imported from the SDK above — single source of truth.
 
 export function formatLythoshiAsLyth(
   lythoshi: bigint,

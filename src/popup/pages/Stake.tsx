@@ -913,7 +913,7 @@ export function Stake({
           <UnstakeForm
             cluster={selectedCluster}
             currentWeightBps={existingWeightBps}
-            balanceWei={balanceLythoshi}
+            balanceLythoshi={balanceLythoshi}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -936,7 +936,7 @@ export function Stake({
             amountStr={amountStr}
             onAmountChange={setAmountStr}
             onPickDestination={() => setStep("redelegate-dst-pick")}
-            balanceWei={balanceLythoshi}
+            balanceLythoshi={balanceLythoshi}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -1005,7 +1005,7 @@ export function Stake({
             cluster={selectedCluster}
             amountStr={amountStr}
             onAmountChange={setAmountStr}
-            balanceWei={balanceLythoshi}
+            balanceLythoshi={balanceLythoshi}
             existingWeightBps={existingWeightBps}
             capBps={capBps}
             onContinue={() => setStep("preview")}

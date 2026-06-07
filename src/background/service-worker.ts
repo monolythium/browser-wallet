@@ -7247,8 +7247,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // wallet can be re-pointed at a legacy-wei operator line by
           // flipping `CHAIN_RETURNS_LEGACY_WEI` back to `true` in
           // shared/chain-units.ts, with no change here. (Under the prior
-          // V4-LIVE-0008 line operators reported 18-decimal wei, so this
-          // divided by WEI_PER_LYTHOSHI to compensate.)
+          // V4-LIVE-0008 wei-on-wire line this divided by WEI_PER_LYTHOSHI;
+          // with CHAIN_RETURNS_LEGACY_WEI=false it is now a no-op identity
+          // passthrough.)
           const balanceHex = legacyChainBalanceHexToLythoshiHex(consensus.balanceHex);
           // T4-03 (Item C): the spend-gate value (lowest contributing balance).
           const spendGuardHex = legacyChainBalanceHexToLythoshiHex(
