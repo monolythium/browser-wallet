@@ -131,6 +131,15 @@ class MonolythiumProvider {
   }
 
   private handleMessage(ev: MessageEvent) {
+    // Only accept messages from THIS window and THIS origin. The ISOLATED-world
+    // bridge shares the page window and posts replies/events back here, so
+    // legitimate bridge->provider traffic has ev.source === window and
+    // ev.origin === this page's origin. Reject anything from another frame /
+    // context / origin so a co-resident or cross-frame script cannot resolve a
+    // pending request or inject accountsChanged/chainChanged (F-2.1). Additive:
+    // the source-string check below still runs.
+    if (ev.source !== window) return;
+    if (ev.origin !== window.location.origin) return;
     const data = ev.data as InboundEnvelope | InboundEvent | undefined;
     if (!data || data.source !== "monolythium-wallet-bridge") return;
 
@@ -217,4 +226,8 @@ const announce = () => {
 
 window.addEventListener("eip6963:requestProvider", announce);
 announce();
+
+// This content script is bundled as an ES module by @crxjs; the explicit export
+// keeps it a TS module (so it can be dynamically imported by its test).
+export {};
 

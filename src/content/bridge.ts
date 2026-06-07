@@ -46,6 +46,13 @@ chrome.runtime.sendMessage({ kind: "announce", origin: window.location.origin },
 });
 
 window.addEventListener("message", (ev) => {
+  // Only accept messages posted from THIS window. The MAIN-world provider shares
+  // our window, so legitimate provider->bridge traffic has ev.source === window.
+  // A forged envelope from another frame/context (e.g. a cross-origin child
+  // iframe doing window.top.postMessage, whose ev.source is the iframe's window)
+  // is rejected here — closes the F-2.1 page-local spoof and the F-2.2
+  // cross-frame confused-deputy. Additive: the source-string check below still runs.
+  if (ev.source !== window) return;
   const data = ev.data as OutboundEnvelope | undefined;
   if (!data || data.source !== "monolythium-wallet-page") return;
 
@@ -76,4 +83,8 @@ chrome.runtime.onMessage.addListener((message: { kind: string; event?: string; p
   };
   window.postMessage(ev, "*");
 });
+
+// This content script is bundled as an ES module by @crxjs; the explicit export
+// keeps it a TS module (so it can be dynamically imported by its test).
+export {};
 
