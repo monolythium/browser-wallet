@@ -259,6 +259,7 @@ import {
 import {
   deriveWsUrl,
   getWsClient,
+  isWellFormedBlockNumberHex,
   markWsDown,
   type WsStatus,
 } from "./ws-client.js";
@@ -8576,21 +8577,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!wsNewHeadsListenerInstalled) {
         wsNewHeadsListenerInstalled = true;
         client.subscribe("newHeads", (params) => {
-          // Chain emits `{ number: "0x...", hash, parent, ... }`. The
-          // wallet only cares about the height for the live banner.
-          if (
-            typeof params === "object" &&
-            params !== null &&
-            "number" in (params as Record<string, unknown>)
-          ) {
-            const number = (params as { number?: unknown }).number;
-            if (typeof number === "string") {
-              chrome.storage.session
-                .set({ [STORAGE_KEY_WS_LAST_BLOCK_HEX]: number })
-                .catch(() => {
-                  // session write failure is non-load-bearing
-                });
-            }
+          // Chain emits `{ number: "0x...", hash, parent, ... }`. The wallet
+          // only cares about the height for the live banner. Shape-validate the
+          // operator-pushed payload before it touches banner state: a connected
+          // operator could push a malformed/garbage block number. Only a
+          // well-formed 0x block hex updates the banner; anything else is
+          // dropped (F-2.4/#21).
+          const number =
+            typeof params === "object" && params !== null
+              ? (params as { number?: unknown }).number
+              : undefined;
+          if (isWellFormedBlockNumberHex(number)) {
+            chrome.storage.session
+              .set({ [STORAGE_KEY_WS_LAST_BLOCK_HEX]: number })
+              .catch(() => {
+                // session write failure is non-load-bearing
+              });
           }
         });
       }

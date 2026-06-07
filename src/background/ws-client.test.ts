@@ -13,6 +13,7 @@ import {
   deriveWsUrl,
   getWsClient,
   httpUrlToWss,
+  isWellFormedBlockNumberHex,
   isWsKnownDown,
   markWsDown,
 } from "./ws-client.js";
@@ -107,6 +108,40 @@ describe("httpUrlToWss", () => {
     expect(httpUrlToWss("wss://op.example.com/rpc")).toBe(
       "wss://op.example.com/rpc",
     );
+  });
+});
+
+describe("isWellFormedBlockNumberHex (F-2.4/#21 pushed-payload shape gate)", () => {
+  // The SW newHeads subscriber writes the latest-block banner IFF this returns
+  // true, so these cases map directly to write (true) vs drop (false).
+  it("accepts a well-formed 0x block hex — these UPDATE the banner", () => {
+    for (const v of [
+      "0x0",
+      "0x1",
+      "0x1a2b3c",
+      "0xdeadbeef",
+      "0xffffffffffffffff", // u64 max — 16 hex digits
+    ]) {
+      expect(isWellFormedBlockNumberHex(v)).toBe(true);
+    }
+  });
+
+  it("rejects malformed/garbage pushes — these are DROPPED, banner unchanged", () => {
+    for (const v of [
+      null,
+      undefined,
+      42,
+      {},
+      { number: "0x1" }, // the wrapper object, not the extracted height
+      "0x", // no digits
+      "0xG1", // non-hex digit
+      "1a2b", // missing 0x prefix
+      "0x" + "f".repeat(17), // oversized — wider than a u64 height
+      "garbage",
+      "",
+    ]) {
+      expect(isWellFormedBlockNumberHex(v)).toBe(false);
+    }
   });
 });
 
