@@ -437,6 +437,47 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(r.error?.code).toBe(4100);
   });
 
+  // ---- 6b. eth_signTypedData_v4 — signer-display WYSIWYS (F-2.9a) ----
+  const SAMPLE_TYPED_DATA = JSON.stringify({
+    domain: { name: "Test dApp", version: "1", chainId: Number(TESTNET_CHAIN_ID_BIGINT) },
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+      ],
+      Mail: [{ name: "contents", type: "string" }],
+    },
+    primaryType: "Mail",
+    message: { contents: "hello typed data" },
+  });
+  // A dApp-chosen address that is NOT the wallet's own. The approval must never
+  // display this as the signer; the wallet always signs with its own key.
+  const FOREIGN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+
+  it("eth_signTypedData_v4 shows the wallet's own address as signer, ignoring the dApp-supplied address param", async () => {
+    const origin = "https://typed-sign.example";
+    await connectOrigin(origin);
+    const r = await dispatch("eth_signTypedData_v4", [FOREIGN_ADDRESS, SAMPLE_TYPED_DATA], origin);
+    expect(r.error).toBeUndefined();
+    const enq = enqueuedApprovals.filter((a) => a.kind === "typed_sign");
+    expect(enq).toHaveLength(1);
+    // The regression guard: the approval's displayed signer is the SW-derived
+    // wallet address, NOT the attacker-chosen param (closes the WYSIWYS spoof).
+    expect(enq[0]!.address).toBe(DETERMINISTIC_ADDRESS);
+    expect(enq[0]!.address).not.toBe(FOREIGN_ADDRESS);
+  });
+
+  it("personal_sign approval also shows the wallet's own address (parity)", async () => {
+    const origin = "https://psign-addr.example";
+    await connectOrigin(origin);
+    await dispatch("personal_sign", ["hello", FOREIGN_ADDRESS], origin);
+    const enq = enqueuedApprovals.filter((a) => a.kind === "personal_sign");
+    expect(enq).toHaveLength(1);
+    expect(enq[0]!.address).toBe(DETERMINISTIC_ADDRESS);
+    expect(enq[0]!.address).not.toBe(FOREIGN_ADDRESS);
+  });
+
   // ---- 7. wallet_switchEthereumChain ----
   it("wallet_switchEthereumChain accepts the canonical testnet id and broadcasts chainChanged", async () => {
     const r = await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }]);

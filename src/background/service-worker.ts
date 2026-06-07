@@ -1815,21 +1815,21 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
       }
       const arr = Array.isArray(params) ? params : [];
-      // EIP-712 dapps pass [address, typedData]. Some pass them swapped — we
-      // recognize an address-shaped string in either slot to be tolerant.
-      let address: string | null = null;
+      // EIP-712 dapps pass [address, typedData]; some swap the slots. We only
+      // need to locate the typed-data slot (the non-address one). The dApp-
+      // supplied address is intentionally NOT carried into the approval: the
+      // wallet always signs with — and the approval always displays — its own
+      // unlocked address (see the gatedEnqueue payload below), so a dApp cannot
+      // make the "Signing as" line show a foreign address (F-2.9a / WYSIWYS).
       let dataParam: unknown = null;
       const a = arr[0];
       const b = arr[1];
       if (typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a)) {
-        address = a;
         dataParam = b;
       } else if (typeof b === "string" && /^0x[0-9a-fA-F]{40}$/.test(b)) {
-        address = b;
         dataParam = a;
       } else {
         // Fall back: assume canonical [address, data].
-        address = typeof a === "string" ? a : "";
         dataParam = b;
       }
       if (dataParam == null) {
@@ -1850,7 +1850,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       const decision = await gatedEnqueue({
         kind: "typed_sign",
         origin,
-        address: address ?? getUnlockedAddressV4() ?? "",
+        address: getUnlockedAddressV4() ?? "",
         rawTypedData,
         parsed,
         digest,
