@@ -1072,6 +1072,11 @@ export function Send({
                   {estimatedFeeDisplay?.defaultText ?? "—"}
                 </span>
               </div>
+              {/* DEV-ONLY: low-level lythoshi/execution-unit fee breakdown.
+                  The default surface shows a single LYTH-denominated fee
+                  (project_fee_display_posture §22.4.1); these gas-style
+                  internals are gated behind DEVELOPER_MODE. */}
+              {devMode && (
               <details style={{ marginTop: 4 }}>
                 <summary
                   style={{
@@ -1127,6 +1132,7 @@ export function Send({
                   </>
                 )}
               </details>
+              )}
             </div>
           )}
         </FormCard>
