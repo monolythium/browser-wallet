@@ -6093,7 +6093,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           const nonceHex = await testnetTransactionCountHex(fromAddr);
           const fee = await suggestFee(action.chainIdHex);
           const gasHex =
-            action.gasLimitHex ?? fee.gasLimit ?? "0x5208";
+            action.gasLimitHex ?? fee.gasLimit ?? TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
           const valueWeiHex =
             action.kind === "send"
               ? action.valueWeiHex
@@ -8771,7 +8771,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // their caller-supplied estimate because the hint is sized for native
         // transfers only.
         const gasHex =
-          p.gasLimitHex ?? bound?.executionUnitLimitHex ?? fee.gasLimit ?? "0x5208";
+          p.gasLimitHex ?? bound?.executionUnitLimitHex ?? fee.gasLimit ?? TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
         // T4-04 (Item D, a1): clamp the per-execution-unit price to a sane
         // ceiling so a malicious/MITM operator (or a tampered popup) cannot
         // sign an absurd maxFeePerGas. Applies to BOTH the bound fee and the

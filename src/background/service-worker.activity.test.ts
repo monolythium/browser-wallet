@@ -323,7 +323,10 @@ vi.mock("./networks.js", () => ({
   chainRequiresMlDsa: vi.fn((chainIdHex: string) =>
     chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase(),
   ),
-  TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
+  // Real value (0x7530 = 30000, the mempool intrinsic floor). A no-hint
+  // native send resolves its unit limit to this floor; the old wallet-send-tx
+  // fallback literal (0x5208 = 21000) was below it (F-3.9/#26).
+  TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x7530",
   // T4-04 fee ceiling — real value so the clamp tests are meaningful.
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: 1_000_000_000_000_000n,
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
@@ -2185,6 +2188,26 @@ describe("wallet-send-tx pending-row prepend", () => {
       source: "test",
     };
   }
+
+  it("no-hint native send resolves the unit limit to the 30000 floor, never 21000 (F-3.9/#26)", async () => {
+    seedTestnetNonceAndFee();
+    rpcResponses["eth_blockNumber"] = "0x64";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x16345785d8a0000",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        // No gasLimitHex, no signedFee → the unit limit resolves to the
+        // mempool intrinsic floor (0x7530 = 30000), not the old 0x5208 (21000).
+      },
+    })) as { ok: true };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x7530" }),
+    );
+  });
 
   it("successful broadcast writes a pending row", async () => {
     seedTestnetNonceAndFee();
