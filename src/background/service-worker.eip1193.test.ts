@@ -468,6 +468,43 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(enq[0]!.address).not.toBe(FOREIGN_ADDRESS);
   });
 
+  // A parseable envelope (all four top-level keys present) whose message field
+  // does NOT match its declared type — uint256 given an object. The strict
+  // encoder (#29) rejects it; the preview try/catch must surface digest=null
+  // rather than a wrong-but-silent digest.
+  const MALFORMED_TYPED_DATA = JSON.stringify({
+    domain: { name: "Test dApp", version: "1", chainId: Number(TESTNET_CHAIN_ID_BIGINT) },
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+      ],
+      Bad: [{ name: "amount", type: "uint256" }],
+    },
+    primaryType: "Bad",
+    message: { amount: { not: "a number" } },
+  });
+
+  it("a valid typed-data envelope carries a computed digest into the approval", async () => {
+    const origin = "https://typed-digest-ok.example";
+    await connectOrigin(origin);
+    await dispatch("eth_signTypedData_v4", [FOREIGN_ADDRESS, SAMPLE_TYPED_DATA], origin);
+    const enq = enqueuedApprovals.filter((a) => a.kind === "typed_sign");
+    expect(enq).toHaveLength(1);
+    expect(enq[0]!.digest).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+
+  it("a malformed-but-parseable envelope yields a null preview digest (strict encoder rejects, no wrong digest) (#29)", async () => {
+    const origin = "https://typed-digest-null.example";
+    await connectOrigin(origin);
+    await dispatch("eth_signTypedData_v4", [FOREIGN_ADDRESS, MALFORMED_TYPED_DATA], origin);
+    const enq = enqueuedApprovals.filter((a) => a.kind === "typed_sign");
+    expect(enq).toHaveLength(1);
+    // Strict encoder throws on object-for-uint256; preview try/catch → digest=null.
+    expect(enq[0]!.digest).toBeNull();
+  });
+
   it("personal_sign approval also shows the wallet's own address (parity)", async () => {
     const origin = "https://psign-addr.example";
     await connectOrigin(origin);

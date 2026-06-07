@@ -10,7 +10,7 @@
 // digest independently proves the encoder is spec-correct for valid inputs.
 
 import { describe, it, expect } from "vitest";
-import { computeTypedDataDigest } from "./typed-data.js";
+import { computeTypedDataDigest, TypedDataError } from "./typed-data.js";
 
 function hex(b: Uint8Array): string {
   let s = "0x";
@@ -174,5 +174,97 @@ describe("EIP-712 golden vectors — digest invariance", () => {
     expect(digest(subset)).not.toBe(digest(full));
     expect(digest(subset)).toMatchInlineSnapshot(`"0xd0fbb23c51983503dbae4e26035e21f5adbd8e8a6cb02630d8f6a2f268b6017a"`);
     expect(digest(full)).toMatchInlineSnapshot(`"0x0650601aa8e081fe6245f22974bb14775ab09da59fa210803f2af40c9d919664"`);
+  });
+});
+
+// Negative vectors — the strict-reject behaviour (#29). Each of these inputs was
+// SILENTLY COERCED to a wrong digest by the pre-strict encoder; it must now throw
+// a TypedDataError so the caller surfaces a rejection instead of a mis-sign.
+describe("EIP-712 strict-reject — negative vectors (each coercion now throws)", () => {
+  const oneField = (type: string, v: unknown) => ({
+    domain: { name: "D", version: "1" },
+    types: { Foo: [{ name: "v", type }] },
+    primaryType: "Foo",
+    message: { v },
+  });
+  const structField = (p: unknown) => ({
+    domain: { name: "D", version: "1" },
+    types: {
+      Person: [
+        { name: "name", type: "string" },
+        { name: "wallet", type: "address" },
+      ],
+      Foo: [{ name: "p", type: "Person" }],
+    },
+    primaryType: "Foo",
+    message: { p },
+  });
+  const throws = (env: Parameters<typeof digest>[0]) =>
+    expect(() => digest(env)).toThrow(TypedDataError);
+
+  it("unknown / unresolved type (no String() fallback)", () => {
+    throws(oneField("foobar", "x"));
+    throws(oneField("ufixed128x18", "1"));
+  });
+
+  it("numeric — null / bool / object / non-numeric string / non-integer", () => {
+    throws(oneField("uint256", null));
+    throws(oneField("uint256", true));
+    throws(oneField("uint256", {}));
+    throws(oneField("uint256", "abc"));
+    throws(oneField("uint256", 1.5));
+  });
+
+  it("numeric — out of range / negative under uint / int256 bounds", () => {
+    throws(oneField("uint256", -1n));
+    throws(oneField("uint256", 1n << 256n));
+    throws(oneField("int256", 1n << 255n));
+    throws(oneField("int256", -(1n << 255n) - 1n));
+  });
+
+  it("address — non-string / wrong length / non-hex / uppercase-0X prefix", () => {
+    throws(oneField("address", 123));
+    throws(oneField("address", "0x123"));
+    throws(oneField("address", "0x" + "z".repeat(40)));
+    // 0X (uppercase prefix) is intentionally rejected — the wallet uses a
+    // lowercase-0x address form everywhere; no mainstream library emits 0X.
+    throws(oneField("address", "0X" + "a".repeat(40)));
+  });
+
+  it("bool — non-boolean (the dangerous string-\"false\" truthiness case)", () => {
+    throws(oneField("bool", "false"));
+    throws(oneField("bool", "true"));
+    throws(oneField("bool", 1));
+    throws(oneField("bool", 0));
+  });
+
+  it("string — non-string (no String() coercion)", () => {
+    throws(oneField("string", 123));
+    throws(oneField("string", {}));
+    throws(oneField("string", null));
+  });
+
+  it("bytes / bytesN — malformed hex / wrong byte length / invalid width", () => {
+    throws(oneField("bytes", "0xabc")); // odd nibble count
+    throws(oneField("bytes", "0xZZ")); // non-hex
+    throws(oneField("bytes", 123)); // not string / Uint8Array
+    throws(oneField("bytes32", "0xdeadbeef")); // 4 bytes for a 32-byte field
+    throws(oneField("bytes0", "0x")); // invalid width
+    throws(oneField("bytes33", "0x" + "ab".repeat(33))); // invalid width
+  });
+
+  it("arrays — non-array / wrong fixed length", () => {
+    throws(oneField("uint256[]", "notarray"));
+    throws(oneField("uint256[2]", [1n])); // fixed-length mismatch
+  });
+
+  it("struct — non-object / array-for-struct / null", () => {
+    throws(structField([1, 2]));
+    throws(structField("x"));
+    throws(structField(null));
+  });
+
+  it("a valid minimal envelope still encodes cleanly (sanity)", () => {
+    expect(digest(oneField("uint256", 42n))).toMatch(/^0x[0-9a-f]{64}$/);
   });
 });
