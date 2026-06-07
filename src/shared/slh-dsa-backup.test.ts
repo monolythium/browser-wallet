@@ -66,6 +66,21 @@ describe("chain-side constants", () => {
   it("pins the secret-key length to 64 bytes", () => {
     expect(SLH_DSA_SHA2_128S_LENGTHS.secretKey).toBe(64);
   });
+
+  it("pins the full FIPS-205 length table (128s sig = 7856, not 128f = 17088)", () => {
+    // SLH-DSA-SHA2-128s per FIPS-205 (Table 8) / RFC 9909
+    // (`id-slh-dsa-sha2-128s`). The 's' (small-signature) variant's
+    // signature is 7856 bytes; 17088 is the 128*f* (fast) value and
+    // must never be transcribed here. Locks the WHOLE table so neither
+    // the signature size nor any other field can silently regress.
+    expect(SLH_DSA_SHA2_128S_LENGTHS).toEqual({
+      publicKey: 32,
+      secretKey: 64,
+      signature: 7856,
+      seed: 48,
+      signRand: 16,
+    });
+  });
 });
 
 describe("emptySlhDsaBackup", () => {
