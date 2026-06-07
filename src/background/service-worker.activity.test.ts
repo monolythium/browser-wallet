@@ -1569,6 +1569,55 @@ describe("wallet-activity-get", () => {
     expect(r.pending).toHaveLength(1);
   });
 
+  // F-3.10 / #27 — found = INCLUDED, not confirmed. The row must resolve on the
+  // receipt's status bit only; a found-but-receiptless tx must NOT be
+  // optimistically confirmed. The open-surface bridge stamps confirmedBlockHeight
+  // on a confirmed row but leaves a kept (still-pending) row plain — so that
+  // field is the discriminator.
+  function getActivity() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    }) as Promise<{ ok: true; pending: Array<{ confirmedBlockHeight?: number }> }>;
+  }
+
+  it("found + UNAVAILABLE receipt keeps the row PENDING, not optimistically confirmed (F-3.10/#27)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = null; // receipt unavailable
+    seedPending("0x" + "ef".repeat(32));
+    const r = await getActivity();
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+    // Old behavior would optimistically confirm (stamp confirmedBlockHeight from
+    // the broadcast anchor); the fix leaves it a plain pending row.
+    expect(r.pending[0]?.confirmedBlockHeight).toBeUndefined();
+  });
+
+  it("found + receipt status 0x1 confirms the row (bridged with confirmedBlockHeight) (F-3.10/#27)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "ef".repeat(32));
+    const r = await getActivity();
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200);
+  });
+
+  it("found + receipt status 0x0 marks the row FAILED (dropped from pending) (F-3.10/#27)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "ef".repeat(32));
+    const r = await getActivity();
+    expect(r.ok).toBe(true);
+    // Failed rows are not bridged into the pending list (surfaced via the
+    // failed-row notification path instead).
+    expect(r.pending).toHaveLength(0);
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile
@@ -1833,6 +1882,9 @@ describe("wallet-activity-get", () => {
   it("dedupes across snapshots — the same txHash recorded on two snapshots produces ONE record", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found" };
+    // Readable confirmed receipt so the row genuinely terminalizes and a
+    // notification is recorded (F-3.10/#27: found alone no longer confirms).
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 300 };
     const txHash = "0x" + "44".repeat(32);
     seedPendingCustom({
       txHash,
@@ -1964,6 +2016,9 @@ describe("wallet-activity-get", () => {
   it("snapshot response returns BEFORE notification writes complete (post-write microtask placement)", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found" };
+    // Readable confirmed receipt so the row terminalizes and the notification
+    // I/O is queued (F-3.10/#27: found-without-receipt no longer confirms).
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 400 };
     const txHash = "0x" + "55".repeat(32);
     seedPendingCustom({
       txHash,
@@ -4397,22 +4452,24 @@ describe("pollPendingAndNotify — headless poll-core", () => {
     expect(hist.entries[0]!.blockNumber).toBe(456);
   });
 
-  it("found tx with no available receipt → inclusion stands as confirmed (back-compat)", async () => {
+  it("found tx with no available receipt stays PENDING — no optimistic confirm (F-3.10/#27)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
-    // found + receipt unavailable (null) → can't read a status bit; a
-    // not-yet-available receipt can't reveal a revert, so the indexer's
-    // inclusion stands as confirmed (preserves the prior fast-path).
+    // found + receipt unavailable (null) → no readable status bit. Per #27 the
+    // wallet no longer optimistically confirms (a not-yet-available receipt
+    // can't reveal a revert): the row stays pending and NO terminal
+    // notification is recorded. It resolves on a later poll once the receipt
+    // lands; PENDING_TTL_MS + the heuristic reconciler remain the backstops.
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = null;
 
     await pollPendingAndNotify();
 
-    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
-      entries: Array<{ status: string }>;
-    };
-    expect(hist.entries).toHaveLength(1);
-    expect(hist.entries[0]!.status).toBe("confirmed");
+    // No terminal transition → no notification-history entry for this tx.
+    expect(storageLocal[historyKey(ADDR, CHAIN)]).toBeUndefined();
+    // The row is written back as still-pending (kept), not dropped/confirmed.
+    const pend = storageLocal[pendingKey(ADDR, CHAIN)] as { pending: unknown[] };
+    expect(pend.pending).toHaveLength(1);
   });
 
   it("captures the native-receipt LYTH fee on a confirmed tx (feeLythoshi)", async () => {

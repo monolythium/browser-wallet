@@ -4655,15 +4655,19 @@ async function dropConfirmedPendingByHash(
       );
       if (result != null && result.status === "found") {
         // lyth_txStatus reports INCLUSION, not success — a reverted (failed)
-        // tx is still "found". Read the receipt for the authoritative status
-        // bit so a failed tx isn't mislabeled "confirmed" (which would toast
-        // e.g. "Staked" for a reverted stake and never surface it as failed).
-        // Receipt unavailable / unparseable → the indexer's inclusion stands
-        // as confirmed (the one residual assumption; a not-yet-available
-        // receipt can't reveal a revert).
-        let status: "confirmed" | "failed" = "confirmed";
-        let blockNumber: number | null = null;
-        let txIndex: number | null = null;
+        // tx is still "found". Confirm/fail ONLY on the receipt's actual status
+        // bit (1/0x1 → confirmed, 0/0x0 → failed). If the receipt is
+        // unavailable/unparseable, keep the row PENDING — it resolves on a
+        // later poll once the receipt lands. Don't optimistically confirm a
+        // found-but-receiptless tx (F-3.10/#27): a not-yet-available receipt
+        // can't reveal a revert, so labeling it confirmed could mislabel a
+        // briefly-reverted tx. PENDING_TTL_MS + the heuristic reconciler remain
+        // the backstops; we still never fabricate a verdict.
+        let resolved: {
+          status: "confirmed" | "failed";
+          blockNumber: number | null;
+          txIndex: number | null;
+        } | null = null;
         try {
           const receipt = await testnetJsonRpc<{
             status?: number | string;
@@ -4674,15 +4678,27 @@ async function dropConfirmedPendingByHash(
           } | null>("eth_getTransactionReceipt", [p.txHash], opts);
           if (receipt.result != null) {
             const anchor = parseReceiptBlockTx(receipt.result);
-            blockNumber = anchor.blockNumber;
-            txIndex = anchor.txIndex;
             const rawStatus = receipt.result.status;
-            if (rawStatus === 0 || rawStatus === "0x0") status = "failed";
+            if (rawStatus === 1 || rawStatus === "0x1") {
+              resolved = { status: "confirmed", blockNumber: anchor.blockNumber, txIndex: anchor.txIndex };
+            } else if (rawStatus === 0 || rawStatus === "0x0") {
+              resolved = { status: "failed", blockNumber: anchor.blockNumber, txIndex: anchor.txIndex };
+            }
+            // else: receipt present but status bit unreadable → keep pending.
           }
         } catch {
-          // Receipt unavailable — inclusion stands as confirmed.
+          // Receipt unavailable → keep pending (resolves on a later poll).
         }
-        terminal.push({ row: p, status, blockNumber, txIndex });
+        if (resolved) {
+          terminal.push({
+            row: p,
+            status: resolved.status,
+            blockNumber: resolved.blockNumber,
+            txIndex: resolved.txIndex,
+          });
+        } else {
+          kept.push(p);
+        }
         continue;
       }
       const receipt = await testnetJsonRpc<{
