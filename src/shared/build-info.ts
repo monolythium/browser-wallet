@@ -33,22 +33,22 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value tracks protocore v0.1.21-testnet (2026-06-06), where
+ *  Current value tracks protocore v0.1.25-testnet (2026-06-07), where
  *  `lyth_chainStats.genesisHash`
  *  reports the registry identity hash below. Bumping this security pin is
  *  a human-reviewer decision; the About-page drift banner surfaces the
  *  mismatch and the live-registry fetch shows the current GitHub-registry
  *  value alongside it. */
 export const TESTNET_GENESIS_HASH =
-  "0xcb14e03313ffa63e0315c6619ed26bce82a90d6859de76e013c0759c62b3d4c8";
+  "0xb9bcc577fa7256664364518f2943fe298b50973b0e43831a081b4dca3d2d5a6a";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
  *  exposes the chain identity hash used by the registry / p2p binding,
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
- *  header hash. They are not the same value on protocore v0.1.21. */
+ *  header hash. They are not the same value on protocore v0.1.25. */
 export const TESTNET_BLOCK0_HASH =
-  "0xd6bfce4472f7dec8f6b7d8e40adcdfdc46d23ae84848367a6a6e2a7cfbc09f79";
+  "0x9c22aef565cef7b87f6940eab49b5c202514a861b167c853c154ef4f60aac37b";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
