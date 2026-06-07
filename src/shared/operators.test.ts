@@ -66,6 +66,33 @@ describe("validateOperatorList", () => {
       validateOperatorList([{ name: longName, region: "r", rpc: "http://x.example" }]),
     ).toBeNull();
   });
+
+  // F-3.3 / #20 — rpc scheme allow-list: only http(s). A parseable but
+  // non-http URL (file:/data:/javascript:/ws:) must invalidate the entry so a
+  // tampered override / dev-mode add cannot install a non-http RPC endpoint.
+  it("rejects an rpc with a non-http(s) scheme (file/data/javascript/ws)", () => {
+    for (const rpc of [
+      "file:///etc/passwd",
+      "data:text/plain,x",
+      "javascript:alert(1)",
+      "ws://host:8546",
+      "wss://host:8546",
+      "ftp://host/x",
+    ]) {
+      expect(
+        validateOperatorList([{ name: "n", region: "r", rpc }]),
+      ).toBeNull();
+    }
+  });
+
+  it("accepts http:// and https:// rpc schemes", () => {
+    expect(
+      validateOperatorList([{ name: "n", region: "r", rpc: "http://x.example:8545" }]),
+    ).not.toBeNull();
+    expect(
+      validateOperatorList([{ name: "n", region: "r", rpc: "https://x.example" }]),
+    ).not.toBeNull();
+  });
 });
 
 describe("mergeOperatorOverride", () => {
