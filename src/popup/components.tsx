@@ -4513,6 +4513,25 @@ export function ReqTypedSign({
 
       <OriginWarningPanel warnings={originWarnings} />
 
+      {parsed && !digest && (
+        <div
+          className="req-section"
+          style={{
+            padding: "8px 10px",
+            borderRadius: 10,
+            background: "rgba(220, 70, 70, 0.12)",
+            border: "1px solid rgba(220, 70, 70, 0.45)",
+            color: "#ff9b9b",
+            fontSize: 11,
+            lineHeight: 1.4,
+          }}
+        >
+          Cannot encode this typed data — a field does not match its declared
+          type. Signing is disabled so the wallet never signs a digest that
+          differs from what is shown.
+        </div>
+      )}
+
       <div className="req-section">
         <div className="req-section__h">Signing as</div>
         <div className="req-kv">
@@ -4582,7 +4601,7 @@ export function ReqTypedSign({
         <button
           className={hasOriginDanger ? "danger" : "prim"}
           onClick={onApprove}
-          disabled={!parsed}
+          disabled={!parsed || !digest}
         >
           {custody === "hw"
             ? "Confirm on device"
