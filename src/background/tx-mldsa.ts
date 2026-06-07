@@ -167,7 +167,7 @@ const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
  * stranding the entire balance UI (Home/Send/Stake) on "loading" indefinitely.
  * See balance-consensus.test.ts for the realistic-balance regression guard.
  */
-const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 200_000_000_000_000_000_000_000_000n; // 2 x 10^26 (2x genesis supply @ 18 dec)
+export const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 200_000_000_000_000_000_000_000_000n; // 2 x 10^26 (2x genesis supply @ 18 dec)
 
 /** Accept both the proof-envelope shape `{ value, blockNumber, proof,
  *  stateRoot }` and the plain hex-string shape; reject everything else.

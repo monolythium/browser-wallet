@@ -884,7 +884,7 @@ export async function readClusterDelegators(
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BPS_DENOMINATOR = 10_000n;
-const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
+export const MOCK_REWARD_PRINCIPAL_LYTHOSHI = 100n * LYTHOSHI_PER_LYTH;
 const MOCK_REWARD_INTERVALS_PER_DAY = 288n;
 const MOCK_REWARD_DAYS_PER_YEAR = 365n;
 
