@@ -6117,14 +6117,34 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               ? action.valueWeiHex
               : action.valueWeiHex ?? "0x0";
           const data = action.kind === "contract" ? action.data : action.data;
+          // T4-04 (Item D) parity: clamp the operator-quoted per-execution-unit
+          // price to the sane de-trust ceiling before signing, exactly like the
+          // four other fee-bearing send paths (eth_sendTransaction, the two MRV
+          // rails, and wallet-send-tx :8806). The multisig-execute fee is fetched
+          // fresh from the first-responding operator at execute time with no
+          // human-in-the-loop review, so a malicious/MITM operator could otherwise
+          // inflate the signed maxFeePerGas without bound. The 1e15 ceiling is a
+          // no-op for legitimate fees (~1e9-1e10/unit) so there is no stuck-tx
+          // risk; the tip is re-clamped to <= max so the two stay consistent (a
+          // tip above the cap is rejected chain-side).
+          const maxFeePerGas =
+            "0x" +
+            clampToSaneBound(
+              BigInt(fee.maxFeePerGas),
+              MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+            ).toString(16);
+          const maxPriorityFeePerGas = clampPriorityTipToMaxFee(
+            fee.maxPriorityFeePerGas,
+            maxFeePerGas,
+          );
           const r = await submitPlaintextMlDsaTx({
             to: action.to,
             value: valueWeiHex,
             ...(data !== undefined ? { data } : {}),
             gas: gasHex,
             nonce: nonceHex,
-            maxFeePerGas: fee.maxFeePerGas,
-            maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+            maxFeePerGas,
+            maxPriorityFeePerGas,
             chainIdHex: action.chainIdHex,
           });
           txHash = r.txHash;

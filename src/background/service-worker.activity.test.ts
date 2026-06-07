@@ -360,6 +360,9 @@ let passkeyStateForTest: unknown = {
   credentials: [],
 };
 let correctElevatedPassword = "correct-horse-battery-staple";
+// Multisig-execute harness: the meta block readMultisigMetaV4 returns. Default
+// null (no multisig vault) so it is inert for every non-multisig test.
+let multisigMetaForTest: unknown = null;
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
@@ -392,7 +395,29 @@ vi.mock("./keystore-mldsa.js", () => ({
   wipeVaultV4: vi.fn(async () => undefined),
   personalSignV4: vi.fn(() => new Uint8Array(65)),
   signTypedDataV4FromV4: vi.fn(() => new Uint8Array(65)),
+  // Multisig-execute seams (used only by the multisig-execute handler test).
+  readMultisigMetaV4: vi.fn(async () => multisigMetaForTest),
+  writeMultisigMetaV4: vi.fn(async () => undefined),
+  listVaultsV4: vi.fn(async () => []),
+  selectActiveVaultV4: vi.fn(async () => undefined),
 }));
+
+// Multisig approval verification (shared/multisig.js): keep everything real
+// except the two checks that need live ML-DSA signatures over a real proposal
+// digest. The multisig-execute fee-clamp test only exercises the broadcast
+// preamble, so isExecutable + signature verification are stubbed to pass; the
+// real approval/signature logic is covered in shared/multisig.test.ts and
+// keystore-mldsa.test.ts.
+vi.mock("../shared/multisig.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/multisig.js")>();
+  return {
+    ...actual,
+    isExecutable: vi.fn(() => true),
+    verifyProposalApprovals: vi.fn(() => ({
+      validApprovals: new Set(["s1"]),
+    })),
+  };
+});
 
 let approvalDecision: { ok: true } | { ok: false; reason?: string } = { ok: true };
 const enqueuedApprovals: Array<{ kind: string; [k: string]: unknown }> = [];
@@ -5136,6 +5161,93 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
     });
     expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ maxFeePerGas: CEILING_HEX }),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fee de-trust parity — clamp the multisig-execute signed price to the sane
+// ceiling, mirroring the wallet-send-tx clamp (:8806). The multisig-execute fee
+// is operator-sourced at execute time with no human-in-the-loop review.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("multisig-execute fee ceiling (de-trust parity)", () => {
+  const CEILING = 1_000_000_000_000_000n; // matches the networks mock (1e15)
+  const CEILING_HEX = "0x" + CEILING.toString(16);
+
+  beforeEach(() => {
+    multisigMetaForTest = null;
+  });
+
+  function seedOperatorFee(
+    executionUnitPriceLythoshi: string,
+    priorityTipLythoshi: string,
+  ) {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi,
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi,
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+
+  function seedExecutableProposal() {
+    multisigMetaForTest = {
+      threshold: 1,
+      signers: [{ id: "s1", address: DETERMINISTIC_ADDRESS, pubkey: "0x00" }],
+      proposals: [
+        {
+          id: "prop-1",
+          status: "pending",
+          approvals: [{ signerId: "s1" }],
+          rejections: [],
+          expiresAt: Date.now() + 3_600_000,
+          action: {
+            kind: "send",
+            to: "0xrecipient",
+            valueWeiHex: "0x989680",
+            chainIdHex: TESTNET_CHAIN_ID_HEX,
+          },
+        },
+      ],
+    };
+  }
+
+  function execute() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "multisig-execute",
+      payload: { vaultId: "ms1", proposalId: "prop-1" },
+    });
+  }
+
+  it("clamps an absurd operator execution fee (and tip) to the sane ceiling on the multisig-execute path", async () => {
+    const absurd = "0x" + (CEILING * 1000n).toString(16);
+    seedOperatorFee(absurd, absurd);
+    seedExecutableProposal();
+    const r = (await execute()) as { ok: boolean; txHash?: string };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: CEILING_HEX,
+        // tip re-clamped to <= maxFeePerGas (== ceiling), mirroring :8806.
+        maxPriorityFeePerGas: CEILING_HEX,
+      }),
+    );
+  });
+
+  it("passes a legitimate operator fee through the multisig clamp unchanged (no-op)", async () => {
+    // 1e10 price, 5e9 tip — both far below the 1e15 ceiling.
+    seedOperatorFee("0x2540be400", "0x12a05f200");
+    seedExecutableProposal();
+    const r = (await execute()) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: "0x2540be400",
+        maxPriorityFeePerGas: "0x12a05f200",
+      }),
     );
   });
 });
