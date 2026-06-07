@@ -39,16 +39,34 @@ export const TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
 /**
  * T4-04 (Item D) — absolute sane upper bound on an operator-reported (or
- * popup-supplied) per-execution-unit price, in lythoshi. A de-trust BACKSTOP,
- * not an economic claim: the wallet signs the fee the user saw (T4-04 b1), but
- * a malicious/MITM operator (or a tampered popup) could still supply an absurd
- * `maxFeePerGas`; clamp it here so a single unit can never be priced above this
- * physically-impossible line. 1e15 lythoshi/unit = 10,000,000 LYTH/unit — many
- * orders of magnitude above any honest testnet price, so a legitimate fee is
- * never blocked, while a 1e30-style inflation is capped. Paired with the
- * balance ceiling (Item C) via the shared `operator-bounds` helper.
+ * popup-supplied) per-execution-unit PRICE. A de-trust BACKSTOP, not an
+ * economic claim: the wallet signs the fee the user saw (T4-04 b1), but a
+ * malicious/MITM operator (or a tampered popup) could still supply an absurd
+ * `maxFeePerGas`; `clampToSaneBound` caps it here so a single unit can never be
+ * priced above this line. Paired with the balance ceiling (Item C) via the
+ * shared `operator-bounds` helper.
+ *
+ * UNIT NOTE: lythoshi-per-execution-unit, 18-decimal domain (1 LYTH = 10^18
+ * lythoshi = LYTHOSHI_PER_LYTH). The realistic price is ~1e9–1e10 lythoshi/unit
+ * (idle testnet; the Send page shows ~1e9), so 1e15 sits ~1e5–1e6× above real.
+ * It therefore NEVER clamps a legitimate price — the dangerous direction would
+ * be a too-LOW ceiling that clamps a real high price down and underprices/stalls
+ * the tx — while bounding the worst-case malicious-induced fee to
+ * 1e15 × 30000 units = 3e19 lythoshi = 30 LYTH per transfer (and that fee is
+ * shown to the user via display==signed). The value MUST track the 18-decimal
+ * domain: at the prior 8-decimal scale 1e15 read as ~10,000,000 LYTH/unit; at 18
+ * decimals it means 0.001 LYTH/unit — still a safe loose ceiling, but the
+ * magnitude intent changed, so the stale comment was corrected.
+ *
+ * VALUE-DECISION (needs-decision — deliberately NOT changed here): 1e15 is
+ * loose-but-safe. Tightening toward realistic-peak-price × margin (e.g. 1e12–
+ * 1e13 → ~0.03–0.3 LYTH max fee) would shrink the malicious-overpay window, but
+ * is only safe if it stays comfortably above the network's realistic PEAK price
+ * under congestion — which the wallet cannot observe (a fee-policy call). Kept
+ * loose-but-safe pending that decision; never lower it below a wide margin over
+ * the real ~1e9–1e10 price.
  */
-export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15
+export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15 lythoshi/unit (18-dec; loose-but-safe — see VALUE-DECISION)
 
 /**
  * F-3.11 (#28) — absolute sane upper bound on the resolved execution-unit

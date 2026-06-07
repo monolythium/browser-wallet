@@ -17,10 +17,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TESTNET_OPERATOR_RPCS_DEFAULTS,
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   clearGenesisCache,
   snapshotGenesisCache,
   verifyOperatorGenesis,
 } from "./networks.js";
+import { clampToSaneBound } from "../shared/operator-bounds.js";
 import {
   TESTNET_BLOCK0_HASH,
   TESTNET_GENESIS_HASH,
@@ -211,5 +213,39 @@ describe("verifyOperatorGenesis", () => {
       result: { genesisHash: TESTNET_GENESIS_HASH.toUpperCase() },
     }));
     expect(await verifyOperatorGenesis(RPC)).toBe(true);
+  });
+});
+
+describe("MAX_EXECUTION_UNIT_PRICE_LYTHOSHI — fee-price ceiling (18-decimal domain)", () => {
+  // Pins the 18-decimal-domain ceiling so it can't silently regress to an
+  // 8-decimal-era value (the bug class that stranded the balance UI). The
+  // DANGEROUS direction is too-LOW: it would clamp a legitimate high price
+  // DOWN and underprice/stall the tx. Realistic price is ~1e9–1e10
+  // lythoshi/unit (Send page shows ~1e9).
+  it("is pinned at 1e15 lythoshi/unit (loose-but-safe, 18-dec)", () => {
+    expect(MAX_EXECUTION_UNIT_PRICE_LYTHOSHI).toBe(1_000_000_000_000_000n);
+  });
+
+  it("passes a realistic price (~1e9–1e10 lythoshi/unit) through UNCLAMPED", () => {
+    for (const realistic of [1_000_000_000n, 10_000_000_000n, 50_000_000_000n]) {
+      expect(clampToSaneBound(realistic, MAX_EXECUTION_UNIT_PRICE_LYTHOSHI)).toBe(
+        realistic,
+      );
+    }
+  });
+
+  it("never clamps even a 1000x congestion spike over the real price", () => {
+    // 1e10 (high end of observed) x 1000 = 1e13, still well below the 1e15 ceiling.
+    const congestionSpike = 10_000_000_000n * 1000n; // 1e13
+    expect(
+      clampToSaneBound(congestionSpike, MAX_EXECUTION_UNIT_PRICE_LYTHOSHI),
+    ).toBe(congestionSpike);
+  });
+
+  it("clamps an absurd operator/popup price down to the ceiling", () => {
+    const absurd = 10n ** 30n; // 1e30 lythoshi/unit — physically impossible
+    expect(clampToSaneBound(absurd, MAX_EXECUTION_UNIT_PRICE_LYTHOSHI)).toBe(
+      MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+    );
   });
 });
