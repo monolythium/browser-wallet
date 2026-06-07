@@ -16,6 +16,7 @@ import {
   isWsKnownDown,
   markWsDown,
 } from "./ws-client.js";
+import { snapshotGenesisCache, verifyOperatorGenesis } from "./networks.js";
 import type { OperatorEntry } from "../shared/operators.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,6 +27,18 @@ vi.mock("./networks.js", () => ({
   getActiveOperators: vi.fn(() => [
     { name: "op-1", region: "lon", rpc: "https://op-1.example.com/rpc" },
   ]),
+  // F-2.4/#21 genesis gate. Default: op-1 is genesis-trusted in the cache, so
+  // the synchronous WS connect path proceeds for the existing tests.
+  snapshotGenesisCache: vi.fn(
+    () =>
+      new Map([
+        [
+          "https://op-1.example.com/rpc",
+          { ok: true, observed: "0xabc", checkedAt: 0 },
+        ],
+      ]),
+  ),
+  verifyOperatorGenesis: vi.fn(async () => true),
 }));
 
 class FakeWebSocket {
@@ -94,6 +107,29 @@ describe("httpUrlToWss", () => {
     expect(httpUrlToWss("wss://op.example.com/rpc")).toBe(
       "wss://op.example.com/rpc",
     );
+  });
+});
+
+describe("WsClient genesis gate (F-2.4/#21)", () => {
+  it("connects when the genesis cache marks the operator trusted", () => {
+    const client = getWsClient();
+    client.subscribe("newHeads", vi.fn());
+    expect(FakeWebSocket.lastInstance).not.toBeNull();
+    expect(FakeWebSocket.lastInstance!.url).toBe("wss://op-1.example.com/rpc");
+    expect(client.status).toBe("connecting");
+  });
+
+  it("refuses to connect when no operator is genesis-trusted (HTTP poll stays source of truth)", () => {
+    // Cache reports NO trusted operator, and the cold-cache warm probe also
+    // finds none — the WS connect must be refused.
+    vi.mocked(snapshotGenesisCache).mockReturnValueOnce(new Map());
+    vi.mocked(verifyOperatorGenesis).mockResolvedValueOnce(false);
+    const client = getWsClient();
+    client.subscribe("newHeads", vi.fn());
+    // No WS opened; the banner reflects "unavailable" — not an error, since the
+    // genesis-gated HTTP poll remains authoritative.
+    expect(FakeWebSocket.lastInstance).toBeNull();
+    expect(client.status).toBe("unavailable");
   });
 });
 
