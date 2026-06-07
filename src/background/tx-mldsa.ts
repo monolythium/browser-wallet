@@ -158,8 +158,16 @@ const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
  * buggy operator, so its entry is DROPPED rather than allowed to win the MAX
  * reduce. A de-trust rail, NOT an economic claim. Shared sane-bound primitive
  * with the fee ceiling (Item D) via `operator-bounds`.
+ *
+ * UNIT NOTE: this value is in 18-decimal lythoshi (1 LYTH = 10^18 lythoshi) and
+ * MUST track the native decimal domain. The original 8-decimal-era value
+ * (2 x 10^16 = 0.02 LYTH) survived the 18-decimal migration unchanged, so it
+ * silently DROPPED every real balance (anything above 0.02 LYTH) as "exceeds
+ * total supply" — leaving `contributing` empty, throwing the consensus, and
+ * stranding the entire balance UI (Home/Send/Stake) on "loading" indefinitely.
+ * See balance-consensus.test.ts for the realistic-balance regression guard.
  */
-const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 20_000_000_000_000_000n; // 2 x 10^16
+const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 200_000_000_000_000_000_000_000_000n; // 2 x 10^26 (2x genesis supply @ 18 dec)
 
 /** Accept both the proof-envelope shape `{ value, blockNumber, proof,
  *  stateRoot }` and the plain hex-string shape; reject everything else.
