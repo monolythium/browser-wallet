@@ -351,6 +351,10 @@ export default function App() {
 
   const initialAccount: Account = ACCOUNTS[0]!;
   const [acc, setAcc] = useState<Account>(initialAccount);
+  // #42: true when the displayed balance is a RETAINED last-known value because
+  // the latest refresh couldn't reach the chain (offline/untrusted). Home only
+  // LABELS the retained value as stale — never fabricates or zeros it.
+  const [balanceStale, setBalanceStale] = useState(false);
   const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
@@ -412,6 +416,11 @@ export default function App() {
   const loadActiveAccount = async () => {
     const r = await bgWalletActiveAccount();
     if (!r.ok) return;
+    // On an account SWITCH the balance is nulled below and a fresh fetch is
+    // coming, so clear any stale flag carried from the prior account.
+    if (r.account.address.toLowerCase() !== acc.addr.toLowerCase()) {
+      setBalanceStale(false);
+    }
     setAcc((prev) => ({
       ...prev,
       id: "v3-active",
@@ -475,19 +484,30 @@ export default function App() {
   const refreshBalance = useCallback(async () => {
     if (!acc.addr.startsWith("0x")) return;
     const myToken = ++balanceTokenRef.current;
-    const r = await bgWalletBalance(acc.addr, activeChain.chainId);
+    const fetchOnce = () => bgWalletBalance(acc.addr, activeChain.chainId);
+    let r = await fetchOnce();
     if (myToken !== balanceTokenRef.current) return;
     if (!r.ok) {
-      // Leave the existing balance in place; Home renders "0.00" when
-      // null which is acceptable until we surface a load error.
+      // One quiet retry before flagging — a single transient blip shouldn't
+      // label the balance stale.
+      await new Promise((res) => setTimeout(res, 1_200));
+      if (myToken !== balanceTokenRef.current) return;
+      r = await fetchOnce();
+      if (myToken !== balanceTokenRef.current) return;
+    }
+    if (!r.ok) {
+      // Both attempts failed (chain unreachable/untrusted): retain the existing
+      // balance but flag it stale so Home can label it. Never zero/fabricate.
+      setBalanceStale(true);
       return;
     }
     try {
       const lyth = hexLythoshiToLythNumber(r.balanceHex);
       if (lyth === null) return;
+      setBalanceStale(false);
       setAcc((prev) => ({ ...prev, balance: lyth }));
     } catch {
-      // Malformed hex — ignore, balance stays null.
+      // Malformed hex — ignore, balance stays as-is.
     }
   }, [acc.addr, activeChain.chainId]);
 
@@ -1168,6 +1188,7 @@ export default function App() {
           account={acc}
           network={activeChain}
           indexer={indexerSnapshot}
+          balanceStale={balanceStale}
           onOpenAccounts={() => setScreen("accounts")}
           onSettings={() => setScreen("settings")}
           onOpenReceive={() => setScreen("receive")}

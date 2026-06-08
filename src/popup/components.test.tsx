@@ -13,6 +13,7 @@ import {
   AssetList,
   chainHealthForFailedPoll,
   chainHealthPresentation,
+  shouldLabelBalanceStale,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
@@ -1247,5 +1248,24 @@ describe("chainHealthPresentation (#42 untrusted = amber)", () => {
       label: "CONNECTING…",
       color: "var(--fg-500)",
     });
+  });
+});
+
+describe("shouldLabelBalanceStale (#42 balance staleness)", () => {
+  it("labels a retained real balance when the chain is unreachable", () => {
+    expect(shouldLabelBalanceStale(false, true, 12.5)).toBe(true);
+  });
+
+  it("never labels the pending null balance", () => {
+    expect(shouldLabelBalanceStale(false, true, null)).toBe(false);
+  });
+
+  it("does not label when the balance is fresh", () => {
+    expect(shouldLabelBalanceStale(false, false, 12.5)).toBe(false);
+    expect(shouldLabelBalanceStale(false, undefined, 12.5)).toBe(false);
+  });
+
+  it("does not label the private (hidden) balance", () => {
+    expect(shouldLabelBalanceStale(true, true, 12.5)).toBe(false);
   });
 });

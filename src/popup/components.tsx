@@ -158,6 +158,20 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
   }
 }
 
+/**
+ * #42: whether to label the Home hero balance as a retained last-known value.
+ * True only when the balance is real (not the pending "0.00" / null) and the
+ * latest refresh couldn't reach the chain. Pure + exported for unit tests; it
+ * gates only the LABEL — the balance value itself is never changed.
+ */
+export function shouldLabelBalanceStale(
+  isPriv: boolean,
+  balanceStale: boolean | undefined,
+  balance: number | null,
+): boolean {
+  return !isPriv && balanceStale === true && balance != null;
+}
+
 interface ChainStatusBannerProps {
   /** Active chain display data. Required — every callsite threads its
    *  resolved chain (`activeChain` in the main popup, or the prop-drilled
@@ -1659,6 +1673,10 @@ interface HomeProps {
   account: Account;
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
+  /** #42: the displayed balance is a RETAINED last-known value (the chain was
+   *  unreachable/untrusted on the latest refresh). When true and a balance is
+   *  present, the hero labels it as stale — it never fabricates/zeros it. */
+  balanceStale?: boolean;
   onOpenAccounts: () => void;
   onSettings: () => void;
   onOpenReceive: () => void;
@@ -1681,12 +1699,20 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, balanceStale, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
   const isPriv = account.denom === "private";
   const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
+  // #42: label the hero as a retained last-known value only when the chain
+  // couldn't be reached AND there's a real balance to annotate (never on the
+  // pending "0.00"). Annotate-only — the value itself is untouched.
+  const showStaleBalance = shouldLabelBalanceStale(
+    isPriv,
+    balanceStale,
+    account.balance,
+  );
   // Activity rows now flow through useActivity() inside ActivityList —
   // see src/popup/components/ActivityList.tsx. The Home component no
   // longer reads `indexer?.addressActivity` directly. `liveLabel` is
@@ -1719,10 +1745,26 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
           {isPriv ? (
             <div className="num opaque">— amount hidden by design</div>
           ) : (
-            <div className="num">
+            <div
+              className="num"
+              style={showStaleBalance ? { opacity: 0.55 } : undefined}
+            >
               {intPart}
               <span className="frac">.{fracPart ?? "00"}</span>
               <span className="d">LYTH</span>
+            </div>
+          )}
+          {showStaleBalance && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-500)",
+                letterSpacing: "0.04em",
+                marginTop: 2,
+              }}
+            >
+              last known · couldn&apos;t reach the chain
             </div>
           )}
           {!isPriv && (
