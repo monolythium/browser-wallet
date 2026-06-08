@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Icon } from "../Icon";
+import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bgKeystoreWipeUnauth } from "../bg";
 
 interface ForgotPasswordProps {
@@ -61,23 +62,7 @@ export function ForgotPassword({
       </div>
 
       <div style={{ padding: "32px 22px 8px", textAlign: "center" }}>
-        <div
-          style={{
-            width: 56,
-            height: 56,
-            margin: "0 auto 14px",
-            display: "grid",
-            placeItems: "center",
-            borderRadius: "var(--r-xl)",
-            background: "rgba(124,127,255,0.1)",
-            border: "1px solid var(--fg-700)",
-            color: "var(--fg-200)",
-            fontSize: 24,
-          }}
-          aria-hidden="true"
-        >
-          🔑
-        </div>
+        <WalletLockLogo badge="key" />
         <h2
           style={{
             margin: 0,
