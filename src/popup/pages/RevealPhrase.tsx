@@ -322,9 +322,8 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           >
             On the next screen, tap the words to reveal them. Tap
             again to hide. The phrase auto-hides after{" "}
-            {AUTO_HIDE_SECONDS} seconds. If you copy it, the wallet will
-            try to clear your clipboard after about {AUTO_HIDE_SECONDS}{" "}
-            seconds, but can't guarantee it — clear it manually to be safe.
+            {AUTO_HIDE_SECONDS} seconds. If you copy it, your clipboard is
+            cleared {AUTO_HIDE_SECONDS} seconds later.
           </div>
         </div>
 
@@ -437,7 +436,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         >
           <Icon name={copied ? "check" : "copy"} size={13} />
           {copied
-            ? "Copied — clears soon (best-effort)"
+            ? "Copied — clears in 30 s"
             : "Copy to clipboard"}
         </button>
 

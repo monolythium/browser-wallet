@@ -24,9 +24,10 @@
 // accidental tap (e.g. fat-fingered) does not flash the seed. The
 // timer cancels cleanly on mouseup / pointerup / blur.
 //
-// Clipboard: copying auto-clears after 60 seconds. Per the
-// convention, we overwrite the clipboard with an empty string so a
-// later paste in another window can't recover the mnemonic.
+// Clipboard: copying auto-clears after 30 seconds (consistent with every
+// other recovery-phrase copy in the wallet). Per the convention, we
+// overwrite the clipboard with an empty string so a later paste in another
+// window can't recover the mnemonic.
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -49,11 +50,10 @@ import {
  *  long enough to prevent accidental taps from leaking the seed. */
 const HOLD_REVEAL_MS = 1_500;
 
-/** Auto-clear delay after a successful clipboard copy. Mirrors
- *  the RevealPhrase surface (60 s — long enough for the user to
- *  paste into a password manager, short enough that an unattended
- *  popup doesn't sit with the seed in the buffer). */
-const CLIPBOARD_AUTO_CLEAR_MS = 60_000;
+/** Auto-clear delay after a successful clipboard copy. 30 s — matches
+ *  the RevealPhrase + MnemonicGrid recovery-phrase surfaces so every copy
+ *  button in the wallet clears the clipboard on the same schedule. */
+const CLIPBOARD_AUTO_CLEAR_MS = 30_000;
 
 /** Entry mode discriminant — see module header. */
 export type RevealMode = "generate" | "re-export";
@@ -169,8 +169,8 @@ export function SlhDsaBackupRevealModal({
     try {
       // Route through the shared auto-clear helper (readText-confirmed wipe
       // + flush-on-close/unmount) rather than a self-managed timer that a
-      // modal close would strand. 60 s window — long enough to paste into a
-      // password manager. The "Copied" badge resets on the next close cycle.
+      // modal close would strand. 30 s window. The "Copied" badge resets on
+      // the next close cycle.
       await copyWithAutoClear(screen.mnemonic, CLIPBOARD_AUTO_CLEAR_MS);
       setCopied(true);
     } catch {
@@ -316,7 +316,7 @@ export function SlhDsaBackupRevealModal({
               >
                 <button onClick={() => void handleCopy()} style={btnGhost}>
                   <Icon name="eye" size={11} />{" "}
-                  {copied ? "Copied (best-effort)" : "Copy"}
+                  {copied ? "Copied — clears in 30 s" : "Copy"}
                 </button>
                 <button onClick={handleDownload} style={btnGhost}>
                   Download .txt

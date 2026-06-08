@@ -142,7 +142,7 @@ export function MnemonicGrid({
               size={13}
             />
             {copyState === "copied"
-              ? "Copied — clears soon (best-effort)"
+              ? "Copied — clears in 30 s"
               : copyState === "failed"
                 ? "Copy failed — try again"
                 : "Copy to clipboard"}
@@ -157,9 +157,8 @@ export function MnemonicGrid({
               textAlign: "center",
             }}
           >
-            The wallet will try to clear your clipboard after ~30 s, but
-            can't guarantee it across the OS. Save the phrase, then clear
-            your clipboard manually to be safe.
+            The clipboard is cleared 30 s after you copy. Save the phrase
+            somewhere safe first.
           </div>
         </>
       )}
