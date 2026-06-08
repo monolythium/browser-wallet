@@ -4361,13 +4361,14 @@ describe("get-block-tx-value", () => {
   });
 });
 
-// C3 — wallet-tx-fee: on-demand native-receipt LYTH fee for the activity-detail
-// popup (indexer rows have no persisted fee).
+// C3 — wallet-tx-fee: on-demand lyth_decodeTx LYTH fee for the activity-detail
+// popup (indexer rows have no persisted fee). The chain computes the fee for
+// every tx kind; lyth_nativeReceipt was MRV-only → blank for native txs.
 describe("wallet-tx-fee", () => {
-  it("returns the native-receipt fee (lythoshi) for a tx", async () => {
-    rpcResponses["lyth_nativeReceipt"] = {
-      fee: { total_lythoshi: "600000" },
-      reverted: false,
+  it("returns the lyth_decodeTx fee (lythoshi) for a native tx", async () => {
+    // Live-verified shape: (base 1e9 + tip 1e9) × 21000 = 42000000000000.
+    rpcResponses["lyth_decodeTx"] = {
+      fee: { total_lythoshi: "42000000000000" },
     };
     const r = (await dispatchPopup({
       kind: "popup",
@@ -4375,17 +4376,62 @@ describe("wallet-tx-fee", () => {
       payload: { txHash: "0x" + "1".repeat(64) },
     })) as { ok: true; feeLythoshi: string | null };
     expect(r.ok).toBe(true);
-    expect(r.feeLythoshi).toBe("600000");
+    expect(r.feeLythoshi).toBe("42000000000000");
   });
 
-  it("returns null when the native receipt is unavailable / zero (honest-absence)", async () => {
-    // No seeded lyth_nativeReceipt → the mock throws -32601 → best-effort null.
+  it("returns null when lyth_decodeTx is unavailable (honest-absence)", async () => {
+    // No seeded lyth_decodeTx → the mock throws -32601 → best-effort null.
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-tx-fee",
       payload: { txHash: "0x" + "2".repeat(64) },
     })) as { ok: true; feeLythoshi: string | null };
     expect(r.ok).toBe(true);
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  // No-mock OFF paths — the wallet shows the chain's value or NOTHING; it never
+  // fabricates a fee. Each → null (no fee row).
+  it("returns null when the lyth_decodeTx result is null", async () => {
+    rpcResponses["lyth_decodeTx"] = null;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "3".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  it("returns null when the fee object is absent", async () => {
+    rpcResponses["lyth_decodeTx"] = { fee: null };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "4".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  it("returns null on a zero total_lythoshi (no fabricated 0)", async () => {
+    rpcResponses["lyth_decodeTx"] = { fee: { total_lythoshi: "0" } };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "5".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  it("returns null when the operator does not implement lyth_decodeTx (-32046)", async () => {
+    rpcErrors["lyth_decodeTx"] = {
+      code: -32046,
+      message: "transaction-by-hash capability not implemented",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "6".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
     expect(r.feeLythoshi).toBeNull();
   });
 });
@@ -4497,15 +4543,14 @@ describe("pollPendingAndNotify — headless poll-core", () => {
     expect(pend.pending).toHaveLength(1);
   });
 
-  it("captures the native-receipt LYTH fee on a confirmed tx (feeLythoshi)", async () => {
+  it("captures the lyth_decodeTx LYTH fee on a confirmed tx (feeLythoshi)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 77 };
-    // The eth receipt carries no fee — the LYTH fee comes from the native receipt.
-    rpcResponses["lyth_nativeReceipt"] = {
+    // The eth receipt carries no fee — the LYTH fee comes from lyth_decodeTx.
+    rpcResponses["lyth_decodeTx"] = {
       fee: { total_lythoshi: "600000" },
-      reverted: false,
     };
 
     await pollPendingAndNotify();
@@ -4521,18 +4566,18 @@ describe("pollPendingAndNotify — headless poll-core", () => {
   it("omits the fee on a failed tx and on a zero-fee confirmed tx (no-mock)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     // Failed tx — the fee fetch is skipped (status !== confirmed) even though a
-    // native receipt is seeded, so feeLythoshi stays absent.
+    // lyth_decodeTx fee is seeded, so feeLythoshi stays absent.
     const FAILED = "0x" + "c".repeat(64);
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: FAILED })] };
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 88 };
-    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "600000" } };
+    rpcResponses["lyth_decodeTx"] = { fee: { total_lythoshi: "600000" } };
     await pollPendingAndNotify();
     // Confirmed but ZERO fee → omitted (no fake "0 LYTH").
     const ZEROFEE = "0x" + "d".repeat(64);
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: ZEROFEE })] };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 89 };
-    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "0" } };
+    rpcResponses["lyth_decodeTx"] = { fee: { total_lythoshi: "0" } };
     await pollPendingAndNotify();
 
     const hist = storageLocal[historyKey(ADDR, CHAIN)] as {

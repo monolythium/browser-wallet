@@ -386,10 +386,11 @@ export async function bgGetBlockTxValue(
   return send("get-block-tx-value", { blockHeight, txIndex });
 }
 
-/** Best-effort total tx fee in lythoshi for a confirmed self-paid tx, read
- *  from the native receipt (`lyth_nativeReceipt.fee.total_lythoshi`). Used by
+/** Best-effort total tx fee in lythoshi for a confirmed tx, read from the
+ *  comprehensive tx-detail RPC (`lyth_decodeTx.fee.total_lythoshi`, which the
+ *  chain computes for every tx kind incl. native transfers/delegations). Used by
  *  the activity-detail popup, which has no persisted fee field (indexer-sourced
- *  rows). `feeLythoshi` is null when the fee is zero / the native receipt is
+ *  rows). `feeLythoshi` is null when the fee is zero / the decode is
  *  unavailable (failed / reverted / pruned). LYTH not wei. */
 export async function bgWalletTxFee(
   txHash: string,

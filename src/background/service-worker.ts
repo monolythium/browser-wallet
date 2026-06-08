@@ -4731,14 +4731,22 @@ async function dropConfirmedPendingByHash(
   return { kept, terminal, rpcFailures };
 }
 
-/** Best-effort total tx fee (lythoshi decimal string) for a CONFIRMED self-paid
- *  tx, read from `lyth_nativeReceipt.fee.total_lythoshi`. The eth-compat
- *  `eth_getTransactionReceipt` the classifier reads carries gas_used + status
- *  only (no price / no fee total), so the LYTH fee comes from the native
- *  receipt. Returns the lythoshi string only when it parses + is > 0:
- *   - failed / reverted / pruned txs → `lyth_nativeReceipt` `-32090 not found`
- *     → undefined (no fee line)
- *   - a zero fee (near-zero-gas testnet) → undefined (display would hide it)
+/** Best-effort total tx fee (lythoshi decimal string) for a CONFIRMED tx, read
+ *  from `lyth_decodeTx.fee.total_lythoshi` — the "comprehensive tx-detail" RPC
+ *  whose `fee` the chain COMPUTES for EVERY tx kind ((block base price + signed
+ *  priority tip) × execution-units-used). This covers native transfers and
+ *  delegation / system-precompile calls, which the previously-used
+ *  `lyth_nativeReceipt` does NOT: that method carries a fee only for RISC-V/MRV
+ *  (contract) txs and returns `-32090 not found` for native-lane txs — which is
+ *  why the fee line was blank for sends + delegations. The eth-compat
+ *  `eth_getTransactionReceipt` carries gas_used + status only (no price / no fee
+ *  total). Returns the lythoshi string only when it parses + is > 0:
+ *   - a not-decodable tx, or an operator that does not advertise `lyth_decodeTx`
+ *     (`-32046` / `-32090` / etc.) → undefined (no fee line)
+ *   - a zero fee → undefined (display would hide it)
+ *  NO-MOCK: the wallet surfaces the chain's `total_lythoshi` verbatim — it never
+ *  fabricates a value or locally computes `base × gas` itself; honest absence
+ *  (undefined → no fee row) beats an invented number.
  *  READ-ONLY + isolated: wrapped so it can never throw into the notification
  *  path, and it never touches signing / broadcast / nonce / payload. The fee
  *  is lythoshi (1 LYTH = 1e18), NOT a separate wei domain. */
@@ -4747,9 +4755,10 @@ async function fetchConfirmedFeeLythoshi(
   opts?: { timeoutMs?: number },
 ): Promise<string | undefined> {
   try {
+    // We read ONLY `fee.total_lythoshi` off the full tx-decode payload.
     const { result } = await testnetJsonRpc<{
       fee?: { total_lythoshi?: unknown } | null;
-    } | null>("lyth_nativeReceipt", [txHash], opts);
+    } | null>("lyth_decodeTx", [txHash], opts);
     const raw = result?.fee?.total_lythoshi;
     if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) return undefined;
     return BigInt(raw) > 0n ? raw : undefined;

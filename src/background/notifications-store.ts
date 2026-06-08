@@ -75,7 +75,7 @@ export interface RecordNotificationInput {
   counterparty: string;
   /** Total tx fee in lythoshi (decimal string) — set by the caller only for
    *  confirmed self-paid txs with a non-zero fee (from
-   *  `lyth_nativeReceipt.fee.total_lythoshi`). Omitted otherwise. */
+   *  `lyth_decodeTx.fee.total_lythoshi`). Omitted otherwise. */
   feeLythoshi?: string;
   /** Cluster the delegation tx targeted (numeric id + optional directory
    *  name), threaded from the pending row. Omitted on non-delegation kinds. */
