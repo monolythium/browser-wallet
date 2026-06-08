@@ -1224,9 +1224,9 @@ describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
 });
 
 describe("chainHealthPresentation (#42 untrusted = amber)", () => {
-  it("presents untrusted as amber 'UNTRUSTED CHAIN', distinct from red OFFLINE", () => {
+  it("presents untrusted as amber 'UNTRUSTED GENESIS', distinct from red OFFLINE", () => {
     expect(chainHealthPresentation("untrusted")).toEqual({
-      label: "UNTRUSTED CHAIN",
+      label: "UNTRUSTED GENESIS",
       color: "var(--warn)",
     });
     expect(chainHealthPresentation("offline")).toEqual({

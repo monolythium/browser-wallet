@@ -149,7 +149,7 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
     case "stalled":
       return { label: "STALLED", color: "var(--warn)" };
     case "untrusted":
-      return { label: "UNTRUSTED CHAIN", color: "var(--warn)" };
+      return { label: "UNTRUSTED GENESIS", color: "var(--warn)" };
     case "offline":
       return { label: "OFFLINE", color: "var(--err)" };
     case "loading":
@@ -208,7 +208,7 @@ interface ChainStatusBannerProps {
    *  Renders a 3-line hamburger icon on the far right when provided;
    *  caller routes to the MainMenu screen. */
   onMenu?: () => void;
-  /** Tap-through target for the UNTRUSTED CHAIN banner state — routes to the
+  /** Tap-through target for the UNTRUSTED GENESIS banner state — routes to the
    *  Operators screen so the user can see which operators are untrusted and
    *  why the pinned genesis may be stale. Optional; omitted on the secondary
    *  approval/unlock banners, where the label renders non-tappable. */
