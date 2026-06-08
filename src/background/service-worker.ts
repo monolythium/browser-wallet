@@ -7255,7 +7255,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           rpc = cachedOperator.rpc;
           operatorName = cachedOperator.name;
         } catch (e) {
-          return { ok: false, reason: (e as Error).message };
+          return {
+            ok: false,
+            reason: (e as Error).message,
+            cause: classifyNoOperatorReason(),
+          };
         }
       }
       if (rpc === null) {
@@ -7280,22 +7284,44 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           signal: ctrl.signal,
         });
         clearTimeout(timer);
+        // The chosen operator answered net_version + genesis but its block
+        // read failed. Attach the fleet trust cause so the banner can show
+        // UNTRUSTED OPERATOR when the wider fleet is untrusted (a working
+        // trusted operator would have returned ok:true -> LIVE above), instead
+        // of a bare OFFLINE that hides the real reason. In a healthy fleet
+        // classifyNoOperatorReason returns "unreachable" -> OFFLINE as before.
         if (!res.ok) {
-          return { ok: false, reason: `http ${res.status}` };
+          return {
+            ok: false,
+            reason: `http ${res.status}`,
+            cause: classifyNoOperatorReason(),
+          };
         }
         const body = (await res.json()) as {
           result?: string;
           error?: { message?: string };
         };
         if (body.error) {
-          return { ok: false, reason: body.error.message ?? "rpc error" };
+          return {
+            ok: false,
+            reason: body.error.message ?? "rpc error",
+            cause: classifyNoOperatorReason(),
+          };
         }
         if (typeof body.result !== "string") {
-          return { ok: false, reason: "bad response" };
+          return {
+            ok: false,
+            reason: "bad response",
+            cause: classifyNoOperatorReason(),
+          };
         }
         return { ok: true, blockHex: body.result, operator: operatorName };
       } catch (e) {
-        return { ok: false, reason: (e as Error).message };
+        return {
+          ok: false,
+          reason: (e as Error).message,
+          cause: classifyNoOperatorReason(),
+        };
       }
     }
     case "wallet-active-account": {
