@@ -115,7 +115,7 @@ export function AddCustomChain({ existingChainIds, onBack, onAdded }: AddCustomC
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="My chain"
+            placeholder="e.g. Monolythium"
             spellCheck={false}
             autoComplete="off"
             style={addressInputStyle}
@@ -166,7 +166,7 @@ export function AddCustomChain({ existingChainIds, onBack, onAdded }: AddCustomC
               type="text"
               value={currencyName}
               onChange={(e) => setCurrencyName(e.target.value)}
-              placeholder="Currency name (e.g. Ether)"
+              placeholder="Currency name (e.g. Monolythium LYTH)"
               spellCheck={false}
               autoComplete="off"
               style={addressInputStyle}
@@ -175,7 +175,7 @@ export function AddCustomChain({ existingChainIds, onBack, onAdded }: AddCustomC
               type="text"
               value={currencySymbol}
               onChange={(e) => setCurrencySymbol(e.target.value.trim())}
-              placeholder="Symbol (e.g. ETH)"
+              placeholder="Symbol (e.g. LYTH)"
               spellCheck={false}
               autoComplete="off"
               style={addressInputStyle}
