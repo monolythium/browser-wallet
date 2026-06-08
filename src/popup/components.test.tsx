@@ -11,6 +11,8 @@ import {
 import {
   applyFeeTier,
   AssetList,
+  chainHealthForFailedPoll,
+  chainHealthPresentation,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
@@ -1194,5 +1196,56 @@ describe("bridge route disclosure display", () => {
     expect(html).not.toContain("Asset</div>");
     expect(html).toContain("Request quote");
     expect(html).toContain("disabled");
+  });
+});
+
+describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
+  it("maps cause:'untrusted' to the untrusted state", () => {
+    expect(chainHealthForFailedPoll({ cause: "untrusted" })).toEqual({
+      kind: "untrusted",
+    });
+  });
+
+  it("maps a failure without an untrusted cause to offline (unchanged)", () => {
+    expect(chainHealthForFailedPoll({ reason: "no operator" })).toEqual({
+      kind: "offline",
+      reason: "no operator",
+    });
+    expect(chainHealthForFailedPoll({ cause: "unreachable" })).toEqual({
+      kind: "offline",
+      reason: "unreachable",
+    });
+    expect(chainHealthForFailedPoll({})).toEqual({
+      kind: "offline",
+      reason: "unreachable",
+    });
+  });
+});
+
+describe("chainHealthPresentation (#42 untrusted = amber)", () => {
+  it("presents untrusted as amber 'UNTRUSTED CHAIN', distinct from red OFFLINE", () => {
+    expect(chainHealthPresentation("untrusted")).toEqual({
+      label: "UNTRUSTED CHAIN",
+      color: "var(--warn)",
+    });
+    expect(chainHealthPresentation("offline")).toEqual({
+      label: "OFFLINE",
+      color: "var(--err)",
+    });
+  });
+
+  it("leaves live / stalled / loading unchanged", () => {
+    expect(chainHealthPresentation("live")).toEqual({
+      label: "LIVE",
+      color: "var(--ok)",
+    });
+    expect(chainHealthPresentation("stalled")).toEqual({
+      label: "STALLED",
+      color: "var(--warn)",
+    });
+    expect(chainHealthPresentation("loading")).toEqual({
+      label: "CONNECTING…",
+      color: "var(--fg-500)",
+    });
   });
 });

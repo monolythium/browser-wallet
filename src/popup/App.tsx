@@ -980,6 +980,10 @@ export default function App() {
           // stack at both entry pushers (top-bar + MainMenu).
           onOpenNetworks={() => navigateTo("networks")}
           unreadCount={bannerUnread}
+          // Tap-through for the UNTRUSTED CHAIN banner (#42) — available on
+          // every main-strip screen, not just home, so the user can always
+          // reach Operators to see the stale-pin / regenesis cause.
+          onOpenOperators={() => navigateTo("operators")}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),

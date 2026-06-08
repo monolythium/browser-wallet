@@ -112,11 +112,51 @@ type ChainHealth =
   | { kind: "loading" }
   | { kind: "live"; blockHex: string }
   | { kind: "stalled"; blockHex: string }
+  | { kind: "untrusted" }
   | { kind: "offline"; reason: string };
 
 const HEALTH_TICK_MS = 8_000;
 const STALL_THRESHOLD_MS = 30_000;
 const OPERATOR_TICK_MS = 10_000;
+
+/**
+ * Map a FAILED bgWalletChainBlockNumber poll to a banner health state. The
+ * typed `cause:"untrusted"` (all active operators answered but returned a
+ * mismatching genesis hash — #42) renders the distinct UNTRUSTED state; every
+ * other failure stays OFFLINE. Pure + exported for unit tests.
+ */
+export function chainHealthForFailedPoll(r: {
+  reason?: string;
+  cause?: "unreachable" | "untrusted";
+}): ChainHealth {
+  return r.cause === "untrusted"
+    ? { kind: "untrusted" }
+    : { kind: "offline", reason: r.reason ?? "unreachable" };
+}
+
+/**
+ * Banner label + dot/text color per health kind. Pure + exported so the
+ * rendered banner and the tested contract can't drift. Untrusted is amber
+ * (the STALLED token), distinct from red OFFLINE.
+ */
+export function chainHealthPresentation(kind: ChainHealth["kind"]): {
+  label: string;
+  color: string;
+} {
+  switch (kind) {
+    case "live":
+      return { label: "LIVE", color: "var(--ok)" };
+    case "stalled":
+      return { label: "STALLED", color: "var(--warn)" };
+    case "untrusted":
+      return { label: "UNTRUSTED CHAIN", color: "var(--warn)" };
+    case "offline":
+      return { label: "OFFLINE", color: "var(--err)" };
+    case "loading":
+    default:
+      return { label: "CONNECTING…", color: "var(--fg-500)" };
+  }
+}
 
 interface ChainStatusBannerProps {
   /** Active chain display data. Required — every callsite threads its
@@ -154,6 +194,11 @@ interface ChainStatusBannerProps {
    *  Renders a 3-line hamburger icon on the far right when provided;
    *  caller routes to the MainMenu screen. */
   onMenu?: () => void;
+  /** Tap-through target for the UNTRUSTED CHAIN banner state — routes to the
+   *  Operators screen so the user can see which operators are untrusted and
+   *  why the pinned genesis may be stale. Optional; omitted on the secondary
+   *  approval/unlock banners, where the label renders non-tappable. */
+  onOpenOperators?: () => void;
 }
 
 export function ChainStatusBanner({
@@ -164,6 +209,7 @@ export function ChainStatusBanner({
   onNotifications,
   unreadCount,
   onMenu,
+  onOpenOperators,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
   const [operator, setOperator] = useState<string | null>(null);
@@ -186,7 +232,7 @@ export function ChainStatusBanner({
         const r = await bgWalletChainBlockNumber();
         if (cancelled) return;
         if (!r.ok) {
-          setHealth({ kind: "offline", reason: r.reason ?? "unreachable" });
+          setHealth(chainHealthForFailedPoll(r));
           return;
         }
         const now = Date.now();
@@ -337,41 +383,44 @@ export function ChainStatusBanner({
   // a future surface — kept rather than ripped out so we don't
   // churn the visibility-gated effect just to delete a setState).
   void operator;
-  let dotColor: string;
+  // dotColor + label come from the shared, unit-tested chainHealthPresentation
+  // so the rendered banner and the contract can't drift. The body wraps the
+  // label with the network chip (and, for untrusted, the Operators tap-through).
+  const pres = chainHealthPresentation(health.kind);
+  const dotColor = pres.color;
   let body: ReactNode;
-  switch (health.kind) {
-    case "live":
-      dotColor = "var(--ok)";
-      body = (
-        <>
-          <span style={{ color: "var(--ok)", fontWeight: 500 }}>LIVE</span>
-          {networkChip}
-        </>
-      );
-      break;
-    case "stalled":
-      dotColor = "var(--warn)";
-      body = (
-        <>
-          <span style={{ color: "var(--warn)", fontWeight: 500 }}>STALLED</span>
-          {networkChip}
-        </>
-      );
-      break;
-    case "offline":
-      dotColor = "var(--err)";
-      body = (
-        <>
-          <span style={{ color: "var(--err)", fontWeight: 500 }}>OFFLINE</span>
-          {networkChip}
-        </>
-      );
-      break;
-    case "loading":
-    default:
-      dotColor = "var(--fg-500)";
-      body = <span>CONNECTING…</span>;
-      break;
+  if (health.kind === "loading") {
+    body = <span>{pres.label}</span>;
+  } else if (health.kind === "untrusted") {
+    // Amber (same token as STALLED), distinct from red OFFLINE. Tap-through to
+    // Operators when onOpenOperators is provided. No untrusted operator DATA is
+    // rendered — a static signal only.
+    body = (
+      <>
+        <span
+          {...(onOpenOperators
+            ? { onClick: onOpenOperators, role: "button" as const, tabIndex: 0 }
+            : {})}
+          style={{
+            color: pres.color,
+            fontWeight: 500,
+            cursor: onOpenOperators ? "pointer" : undefined,
+            textDecoration: onOpenOperators ? "underline" : undefined,
+          }}
+          title="Your pinned chain genesis may be stale (the network may have re-genesised). See Operators."
+        >
+          {pres.label}
+        </span>
+        {networkChip}
+      </>
+    );
+  } else {
+    body = (
+      <>
+        <span style={{ color: pres.color, fontWeight: 500 }}>{pres.label}</span>
+        {networkChip}
+      </>
+    );
   }
 
   return (
