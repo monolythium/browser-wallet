@@ -5076,6 +5076,22 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     expect(r.ok).toBe(true);
     expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
   });
+
+  it("empty-data (0x) over-limit send is treated as a bare value transfer and is capped (#36)", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      // "0x" is byte-identical to a native transfer (input normalizes to
+      // "0x"), so it must NOT slip past the value-only cap.
+      data: "0x",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

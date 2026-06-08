@@ -2132,10 +2132,11 @@ let cachedOperator: {
 // Used to enforce the daily-cap mode of `PasskeyPolicy`. Lives in memory
 // only — SW hibernation drops it, which is fine: the daily cap is purely
 // a wallet-side spam guard, not a security invariant, and a fresh SW boot
-// starts the window at zero (so a user who reboots their browser and
-// immediately makes a large passkey-unlocked tx is the worst-case "the cap
-// doesn't bind" scenario — still within the per-tx limit, which is the real
-// ceiling).
+// starts the window at zero. NOTE: in DAILY mode the rolling sum is the
+// ONLY control — daily mode applies no per-tx ceiling (see passkey.ts
+// `evaluatePolicy`), so the worst case after a ledger reset is one full
+// daily-cap's worth of passkey-unlocked value, NOT a single per-tx-capped
+// tx. The per-tx limit binds every tx only in per-tx mode.
 const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
 
 /**
@@ -8716,14 +8717,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
       // T1-04(a): LOCAL defense-in-depth enforcement of the per-vault passkey
-      // spending cap on VALUE-ONLY transfers (data sends are out of policy
-      // scope). Until now the cap was advisory (popup amber badge only);
-      // enforce it here so the displayed limit is a real block. An over-limit
-      // send requires an SW-VERIFIED password re-auth — NOT a popup-asserted
-      // flag, which the already-unlocked local IPC actor this gate targets
-      // could forge. This is local defense-in-depth, NOT cryptographic passkey
-      // authorization (that needs the chain precompile).
-      if (p.data === undefined) {
+      // spending cap on BARE VALUE TRANSFERS (real contract calls are out of
+      // policy scope). Until now the cap was advisory (popup amber badge
+      // only); enforce it here so the displayed limit is a real block. An
+      // over-limit send requires an SW-VERIFIED password re-auth — NOT a
+      // popup-asserted flag, which the already-unlocked local IPC actor this
+      // gate targets could forge. This is local defense-in-depth, NOT
+      // cryptographic passkey authorization (that needs the chain precompile).
+      //
+      // A bare value transfer is `data === undefined` OR an empty `data` of
+      // "0x": tx-mldsa normalizes input to "0x" either way, so a "0x" data
+      // field is byte-identical to a native transfer and must be capped too —
+      // otherwise an over-limit native-equivalent transfer could slip past the
+      // cap by sending data:"0x". (data === "" is already rejected by the
+      // 0x-prefix validation above; only "0x" reaches here.)
+      const isBareValueTransfer = p.data === undefined || p.data === "0x";
+      if (isBareValueTransfer) {
         const activeVaultId = getActiveVaultIdV4();
         if (activeVaultId) {
           const pkState = await readPasskeyStateV4(activeVaultId);
