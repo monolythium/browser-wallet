@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  clearClipboardNow,
   copyWithAutoClear,
   flushClipboardAutoClear,
   formatPhraseForClipboard,
@@ -38,6 +39,9 @@ export function MnemonicGrid({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
+  const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
+    "idle",
+  );
 
   // Reset the "Copied" badge after a few seconds so the button settles
   // back to its default label. The underlying clipboard timer is
@@ -51,6 +55,13 @@ export function MnemonicGrid({
     return () => clearTimeout(t);
   }, [copyState]);
 
+  // Same transient style for the manual "Clipboard cleared" confirmation.
+  useEffect(() => {
+    if (clearState === "idle") return;
+    const t = setTimeout(() => setClearState("idle"), FEEDBACK_RESET_MS);
+    return () => clearTimeout(t);
+  }, [clearState]);
+
   // On unmount, FLUSH the pending auto-clear (best-effort wipe NOW) rather
   // than merely cancelling the timer — the dominant flow is the user copies
   // then navigates away before the 30 s timer fires, which would otherwise
@@ -63,9 +74,16 @@ export function MnemonicGrid({
     try {
       await copyWithAutoClear(text, CLEAR_AFTER_MS);
       setCopyState("copied");
+      setClearState("idle");
     } catch {
       setCopyState("failed");
     }
+  };
+
+  const handleClear = async () => {
+    const ok = await clearClipboardNow();
+    setClearState(ok ? "cleared" : "failed");
+    if (ok) setCopyState("idle");
   };
 
   return (
@@ -146,6 +164,36 @@ export function MnemonicGrid({
               : copyState === "failed"
                 ? "Copy failed — try again"
                 : "Copy to clipboard"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleClear()}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              width: "100%",
+              padding: "6px 12px",
+              borderRadius: 10,
+              border: "none",
+              background: "transparent",
+              color: clearState === "cleared" ? "var(--ok)" : "var(--fg-500)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 11.5,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            <Icon
+              name={clearState === "cleared" ? "check" : "trash"}
+              size={12}
+            />
+            {clearState === "cleared"
+              ? "Clipboard cleared"
+              : clearState === "failed"
+                ? "Couldn't clear — clear manually"
+                : "Clear clipboard"}
           </button>
           <div
             style={{

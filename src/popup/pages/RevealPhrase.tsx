@@ -4,6 +4,7 @@ import { MnemonicGrid } from "../components/MnemonicGrid";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bgKeystoreExportSeed } from "../bg";
 import {
+  clearClipboardNow,
   copyWithAutoClear,
   flushClipboardAutoClear,
   formatPhraseForClipboard,
@@ -30,6 +31,9 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
   const [autoHideRemaining, setAutoHideRemaining] = useState(AUTO_HIDE_SECONDS);
   const [autoHideStarted, setAutoHideStarted] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
+    "idle",
+  );
   // Tap-to-reveal toggle. `revealed` flips on click anywhere on the
   // grid/overlay click target; first transition to `true` arms the
   // sticky `autoHideStarted` flag below.
@@ -143,9 +147,16 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         CLIPBOARD_CLEAR_MS,
       );
       setCopied(true);
+      setClearState("idle");
     } catch {
       // Clipboard write can fail in iframes / focus-loss races. Stay quiet.
     }
+  };
+
+  const handleClear = async () => {
+    const ok = await clearClipboardNow();
+    setClearState(ok ? "cleared" : "failed");
+    if (ok) setCopied(false);
   };
 
   // ---- render ----
@@ -457,6 +468,34 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           {copied
             ? "Copied — auto-clears in ~30 s"
             : "Copy to clipboard"}
+        </button>
+        <button
+          onClick={() => void handleClear()}
+          style={{
+            padding: "6px 12px",
+            borderRadius: 10,
+            border: "none",
+            background: "transparent",
+            color: clearState === "cleared" ? "var(--ok)" : "var(--fg-500)",
+            fontFamily: "var(--f-sans)",
+            fontSize: 11.5,
+            fontWeight: 500,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
+        >
+          <Icon
+            name={clearState === "cleared" ? "check" : "trash"}
+            size={12}
+          />
+          {clearState === "cleared"
+            ? "Clipboard cleared"
+            : clearState === "failed"
+              ? "Couldn't clear — clear manually"
+              : "Clear clipboard"}
         </button>
         <div
           style={{

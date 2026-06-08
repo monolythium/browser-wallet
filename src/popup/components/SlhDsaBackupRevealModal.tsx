@@ -41,6 +41,7 @@ import {
   bgSlhDsaBackupRecoverMnemonic,
 } from "../bg";
 import {
+  clearClipboardNow,
   copyWithAutoClear,
   flushClipboardAutoClear,
 } from "../../lib/clipboard-with-clear";
@@ -94,6 +95,9 @@ export function SlhDsaBackupRevealModal({
   const [screen, setScreen] = useState<ScreenState>({ kind: "explainer" });
   const [checkboxOn, setCheckboxOn] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
+    "idle",
+  );
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [confirmInFlight, setConfirmInFlight] = useState(false);
 
@@ -104,6 +108,7 @@ export function SlhDsaBackupRevealModal({
     setScreen({ kind: "explainer" });
     setCheckboxOn(false);
     setCopied(false);
+    setClearState("idle");
     setConfirmInFlight(false);
     if (holdTimerRef.current !== null) {
       clearTimeout(holdTimerRef.current);
@@ -173,9 +178,16 @@ export function SlhDsaBackupRevealModal({
       // the next close cycle.
       await copyWithAutoClear(screen.mnemonic, CLIPBOARD_AUTO_CLEAR_MS);
       setCopied(true);
+      setClearState("idle");
     } catch {
       // Clipboard write can fail in restricted contexts; stay quiet.
     }
+  };
+
+  const handleClear = async () => {
+    const ok = await clearClipboardNow();
+    setClearState(ok ? "cleared" : "failed");
+    if (ok) setCopied(false);
   };
 
   const handleDownload = () => {
@@ -312,7 +324,12 @@ export function SlhDsaBackupRevealModal({
                  semantics. */}
               <MnemonicGrid mnemonic={screen.mnemonic} showCopyButton={false} />
               <div
-                style={{ display: "flex", gap: 8, marginTop: 10 }}
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  marginTop: 10,
+                  flexWrap: "wrap",
+                }}
               >
                 <button onClick={() => void handleCopy()} style={btnGhost}>
                   <Icon name="eye" size={11} />{" "}
@@ -320,6 +337,17 @@ export function SlhDsaBackupRevealModal({
                 </button>
                 <button onClick={handleDownload} style={btnGhost}>
                   Download .txt
+                </button>
+                <button onClick={() => void handleClear()} style={btnGhost}>
+                  <Icon
+                    name={clearState === "cleared" ? "check" : "trash"}
+                    size={11}
+                  />{" "}
+                  {clearState === "cleared"
+                    ? "Cleared"
+                    : clearState === "failed"
+                      ? "Clear failed"
+                      : "Clear clipboard"}
                 </button>
               </div>
               <div

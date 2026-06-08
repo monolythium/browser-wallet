@@ -132,6 +132,31 @@ export async function flushClipboardAutoClear(): Promise<void> {
 }
 
 /**
+ * Clear the OS clipboard NOW, on an explicit user request. Always invoked
+ * from a click, so it carries transient activation — and with clipboardWrite
+ * declared the write is not gesture-gated either way. This is the RELIABLE,
+ * on-demand counterpart to the best-effort auto-clear: the timer / flush /
+ * pagehide paths can be defeated by a browser-action popup closing on blur or
+ * by an unfocused surface, but a user tap is always a valid write context.
+ *
+ * Unconditional (the user asked to clear): drops any pending auto-clear timer
+ * and the tracked copy, then writes "". Returns true on success, false on
+ * failure (failure is also surfaced via console.warn, like the auto-clear
+ * paths). Only ever writes "" — never a placeholder.
+ */
+export async function clearClipboardNow(): Promise<boolean> {
+  cancelClipboardAutoClear(); // drop any pending timer + its tracked copy
+  lastCopiedText = null; // ensure no tracked copy remains even if no timer
+  try {
+    await navigator.clipboard.writeText("");
+    return true;
+  } catch (err) {
+    console.warn("[clipboard] auto-clear write failed:", err);
+    return false;
+  }
+}
+
+/**
  * Best-effort clipboard wipe fired when the popup/sidepanel document is
  * actually UNLOADING (pagehide) — not merely losing focus. This is the only
  * backstop for a hard popup-close: there the in-page 30 s timer and the

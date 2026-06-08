@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   cancelClipboardAutoClear,
+  clearClipboardNow,
   copyWithAutoClear,
   flushClipboardAutoClear,
   formatPhraseForClipboard,
@@ -202,6 +203,46 @@ describe("clear-write failure is surfaced (#clipboardWrite)", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
 
+    expect(cb.writeText).toHaveBeenCalledWith("");
+    expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe("clearClipboardNow (manual on-demand clear)", () => {
+  it("writes '' and resolves true on success", async () => {
+    const cb = installClipboard();
+    cb.setStore("my-seed-phrase");
+
+    const ok = await clearClipboardNow();
+
+    expect(ok).toBe(true);
+    expect(cb.writeText).toHaveBeenCalledWith("");
+    expect(cb.getStore()).toBe("");
+  });
+
+  it("cancels a pending auto-clear timer and drops the tracked copy", async () => {
+    vi.useFakeTimers();
+    const cb = installClipboard();
+    await copyWithAutoClear("my-seed-phrase", 30_000);
+
+    await clearClipboardNow();
+    cb.writeText.mockClear();
+
+    // The cancelled timer must not fire a second clear, and a later flush
+    // (the tracked copy is gone) must be a no-op.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushClipboardAutoClear();
+
+    expect(cb.writeText).not.toHaveBeenCalled();
+  });
+
+  it("resolves false and warns (without throwing) on write failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cb = installClipboard(false, true); // writeText("") rejects
+
+    const ok = await clearClipboardNow();
+
+    expect(ok).toBe(false);
     expect(cb.writeText).toHaveBeenCalledWith("");
     expect(warn).toHaveBeenCalled();
   });
