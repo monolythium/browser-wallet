@@ -23,6 +23,19 @@ let lastCopiedText: string | null = null;
 let pagehideTarget: EventTarget | null = null;
 
 /**
+ * Log a best-effort clear-write the browser declined — almost always because
+ * the wallet document isn't focused (DOMException "Document is not focused"),
+ * which `clipboardWrite` does NOT lift. Expected and harmless: the auto-clear
+ * is best-effort and the manual "Clear clipboard" button is the reliable path.
+ * Prints a readable reason instead of "[object DOMException]".
+ */
+function warnClearWriteSkipped(err: unknown): void {
+  const e = err as { name?: string; message?: string } | null;
+  const reason = e?.name ? `${e.name}: ${e.message ?? ""}` : String(err);
+  console.warn("[clipboard] best-effort auto-clear skipped —", reason);
+}
+
+/**
  * Copy `text` to the clipboard, scheduling a best-effort wipe after
  * `clearAfterMs`. Returns once the initial write completes. The wipe
  * fires asynchronously and is not awaited.
@@ -58,10 +71,11 @@ export async function copyWithAutoClear(
           try {
             await navigator.clipboard.writeText("");
           } catch (err) {
-            // Keep swallowing — a failed clear must never crash anything —
-            // but surface it: without clipboardWrite a non-gesture clear is
-            // denied, and a silent swallow hid that the auto-clear never ran.
-            console.warn("[clipboard] auto-clear write failed:", err);
+            // Keep swallowing — a failed clear must never crash anything — but
+            // surface it: even with clipboardWrite, writeText needs the document
+            // focused, so a timer/teardown clear is denied when the wallet is
+            // unfocused. The manual "Clear clipboard" button is the reliable path.
+            warnClearWriteSkipped(err);
           }
         }
       } finally {
@@ -126,7 +140,7 @@ export async function flushClipboardAutoClear(): Promise<void> {
     try {
       await navigator.clipboard.writeText("");
     } catch (err) {
-      console.warn("[clipboard] auto-clear write failed:", err);
+      warnClearWriteSkipped(err);
     }
   }
 }
@@ -151,7 +165,7 @@ export async function clearClipboardNow(): Promise<boolean> {
     await navigator.clipboard.writeText("");
     return true;
   } catch (err) {
-    console.warn("[clipboard] auto-clear write failed:", err);
+    warnClearWriteSkipped(err);
     return false;
   }
 }
@@ -179,10 +193,10 @@ function handlePagehideWipe(): void {
   lastCopiedText = null;
   try {
     void navigator.clipboard.writeText("").catch((err) => {
-      console.warn("[clipboard] auto-clear write failed:", err);
+      warnClearWriteSkipped(err);
     });
   } catch (err) {
-    console.warn("[clipboard] auto-clear write failed:", err);
+    warnClearWriteSkipped(err);
   }
 }
 
