@@ -50,7 +50,6 @@ const RISKY_TLDS = new Set([
   "top",
   "xyz",
   "click",
-  "click",
   "support",
   "cam",
   "rest",
@@ -105,6 +104,23 @@ function extractRawHostname(origin: string): string {
   // Cut at first `/`, `?`, `#`, or `:` (port separator).
   const cut = afterScheme.search(/[/?#:]/);
   return cut >= 0 ? afterScheme.slice(0, cut) : afterScheme;
+}
+
+/** Collapse a small, fixed set of all-ASCII visual confusables so the
+ *  brand-fragment scan also catches lookalikes the raw substring misses
+ *  (e.g. "rnetamask" → "metamask", "met4mask" → "metamask"). The non-ASCII
+ *  homograph class is already handled by the punycode + homograph rules
+ *  above. ADVISORY-ONLY: the result feeds the brand-lookalike banner; it
+ *  never blocks the action. Bounded + pure; deliberately tiny to limit
+ *  false positives (which are harmless here — at worst an extra banner). */
+function normalizeConfusables(hostname: string): string {
+  return hostname
+    .replace(/rn/g, "m")
+    .replace(/vv/g, "w")
+    .replace(/0/g, "o")
+    .replace(/1/g, "l")
+    .replace(/5/g, "s")
+    .replace(/4/g, "a");
 }
 
 export function detectOriginWarnings(origin: string): OriginWarning[] {
@@ -184,7 +200,14 @@ export function detectOriginWarnings(origin: string): OriginWarning[] {
     (b) => hostname === b || hostname.endsWith(`.${b}`),
   );
   if (!canonicalMatch) {
-    const matchedBrand = BRAND_FRAGMENTS.find((b) => hostname.includes(b));
+    // Match the raw hostname AND an ASCII-confusable-normalized form so all-
+    // ASCII lookalikes (rnetamask / met4mask) raise the advisory banner too.
+    // canonicalMatch is computed on the RAW hostname, so a legitimate brand
+    // domain is never normalized into a false positive.
+    const normalizedHost = normalizeConfusables(hostname);
+    const matchedBrand = BRAND_FRAGMENTS.find(
+      (b) => hostname.includes(b) || normalizedHost.includes(b),
+    );
     if (matchedBrand !== undefined) {
       out.push({
         level: "danger",
