@@ -1000,10 +1000,12 @@ export default function App() {
           // stack at both entry pushers (top-bar + MainMenu).
           onOpenNetworks={() => navigateTo("networks")}
           unreadCount={bannerUnread}
-          // Tap-through for the UNTRUSTED OPERATOR banner (#42) — available on
-          // every main-strip screen, not just home, so the user can always
-          // reach Operators to see the stale-pin / regenesis cause.
-          onOpenOperators={() => navigateTo("operators")}
+          // Tap-through for the not-online banner states (#42) — available on
+          // every main-strip screen, not just home. Routes to the Operators
+          // DIRECTORY (per-operator health + risk legend: untrusted-genesis /
+          // wrong-chain / offline counts), not the manage-operators editor, so
+          // the user sees WHY the banner is degraded.
+          onOpenOperators={() => navigateTo("operator-directory")}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),
