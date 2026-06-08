@@ -172,22 +172,23 @@ export function MnemonicGrid({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: 6,
+              gap: 8,
               width: "100%",
-              padding: "6px 12px",
+              padding: "8px 12px",
               borderRadius: 10,
-              border: "none",
+              border: "1px solid var(--fg-700)",
               background: "transparent",
-              color: clearState === "cleared" ? "var(--ok)" : "var(--fg-500)",
+              color: clearState === "cleared" ? "var(--ok)" : "var(--fg-400)",
               fontFamily: "var(--f-sans)",
-              fontSize: 11.5,
+              fontSize: 12,
               fontWeight: 500,
               cursor: "pointer",
+              transition: "all 160ms var(--e-out)",
             }}
           >
             <Icon
               name={clearState === "cleared" ? "check" : "trash"}
-              size={12}
+              size={13}
             />
             {clearState === "cleared"
               ? "Clipboard cleared"
