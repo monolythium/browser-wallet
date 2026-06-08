@@ -211,6 +211,7 @@ import {
   getActiveOperators,
   verifyOperatorGenesis,
   snapshotGenesisCache,
+  classifyNoOperatorReason,
   clearGenesisCache,
 } from "./networks.js";
 import { clampToSaneBound } from "../shared/operator-bounds.js";
@@ -7258,7 +7259,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
       }
       if (rpc === null) {
-        return { ok: false, reason: "no operator" };
+        return {
+          ok: false,
+          reason: "no operator",
+          cause: classifyNoOperatorReason(),
+        };
       }
       try {
         const ctrl = new AbortController();

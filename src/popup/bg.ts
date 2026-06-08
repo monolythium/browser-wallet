@@ -845,7 +845,7 @@ export async function bgWalletOperatorStatus(): Promise<
  */
 export async function bgWalletChainBlockNumber(): Promise<
   { ok: true; blockHex: string; operator: string | null }
-  | { ok: false; reason?: string }
+  | { ok: false; reason?: string; cause?: "unreachable" | "untrusted" }
 > {
   return send("wallet-chain-block-number");
 }

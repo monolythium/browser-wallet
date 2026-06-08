@@ -346,6 +346,7 @@ vi.mock("./networks.js", () => ({
   readOperatorOverride: vi.fn(async () => null),
   getDefaultOperators: vi.fn(() => []),
   getActiveOperators: vi.fn(() => []),
+  classifyNoOperatorReason: vi.fn(() => "unreachable"),
 }));
 
 // Keystore (v4) — fixed unlocked address, never actually signs. The
@@ -5478,5 +5479,30 @@ describe("SW router sender authentication (T2-02)", () => {
     // A real response object came back (the request was not rejected).
     expect(r).toBeDefined();
     expect(typeof r).toBe("object");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-chain-block-number — #42 typed `cause` on the no-operator path
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-chain-block-number — untrusted/unreachable cause (#42)", () => {
+  it("threads classifyNoOperatorReason into the no-operator ok:false reply", async () => {
+    // No operator is serviceable this tick; the classifier reports untrusted.
+    // (cachedOperator starts null — no prior test populates it.) Resolve the
+    // mocked module dynamically so we don't trigger the vi.mock factory early
+    // at top-level-import time.
+    const networks = await import("./networks.js");
+    vi.mocked(networks.probeFirstAliveOperator).mockResolvedValueOnce(null);
+    vi.mocked(networks.classifyNoOperatorReason).mockReturnValueOnce(
+      "untrusted",
+    );
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-chain-block-number",
+    })) as { ok: boolean; reason?: string; cause?: string };
+
+    expect(r.ok).toBe(false);
+    expect(r.cause).toBe("untrusted");
   });
 });

@@ -345,6 +345,30 @@ export function snapshotGenesisCache(): Map<string, GenesisCacheEntry> {
   return new Map(operatorGenesisCache);
 }
 
+/**
+ * Classify why no operator is serviceable (probeFirstAliveOperator returned
+ * null) for the chain-status banner — WITHOUT a new RPC. An ACTIVE operator
+ * whose sticky genesis-cache entry recorded a MISMATCHING hash
+ * (ok===false && observed!==null) answered net_version + chain-id and failed
+ * only the genesis pin -> "untrusted". An absent / observed:null entry
+ * (unreachable, or a block-0 the probe couldn't read) -> "unreachable".
+ * ok===true (incl. the #18 probe-unsupported fail-open) is trusted.
+ * Untrusted is sticky and intentionally OUTRANKS unreachable. Params default
+ * to the live sources but are injectable for unit tests.
+ */
+export function classifyNoOperatorReason(
+  activeOps: ReadonlyArray<{ rpc: string }> = getActiveOperators(),
+  genesis: Map<string, GenesisCacheEntry> = snapshotGenesisCache(),
+): "unreachable" | "untrusted" {
+  for (const op of activeOps) {
+    const e = genesis.get(op.rpc);
+    if (e !== undefined && e.ok === false && e.observed !== null) {
+      return "untrusted";
+    }
+  }
+  return "unreachable";
+}
+
 /** One-shot fetch + compare. Always returns a cache entry — never
  *  throws — so the cache write path is non-throwing too. */
 async function probeOperatorGenesis(

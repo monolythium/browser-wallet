@@ -19,6 +19,7 @@ import {
   TESTNET_OPERATOR_RPCS_DEFAULTS,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   clearGenesisCache,
+  classifyNoOperatorReason,
   snapshotGenesisCache,
   verifyOperatorGenesis,
 } from "./networks.js";
@@ -246,6 +247,47 @@ describe("MAX_EXECUTION_UNIT_PRICE_LYTHOSHI — fee-price ceiling (18-decimal do
     const absurd = 10n ** 30n; // 1e30 lythoshi/unit — physically impossible
     expect(clampToSaneBound(absurd, MAX_EXECUTION_UNIT_PRICE_LYTHOSHI)).toBe(
       MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+    );
+  });
+});
+
+describe("classifyNoOperatorReason (#42 untrusted vs unreachable)", () => {
+  const entry = (ok: boolean, observed: string | null) => ({
+    ok,
+    observed,
+    checkedAt: 0,
+  });
+
+  it("empty genesis cache → unreachable", () => {
+    expect(classifyNoOperatorReason([{ rpc: "a" }], new Map())).toBe(
+      "unreachable",
+    );
+  });
+
+  it("active op with a mismatching hash (ok:false, observed!=null) → untrusted", () => {
+    const g = new Map([["a", entry(false, "0xdeadbeef")]]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("untrusted");
+  });
+
+  it("active op that couldn't read a hash (ok:false, observed:null) → unreachable", () => {
+    const g = new Map([["a", entry(false, null)]]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("unreachable");
+  });
+
+  it("#18 fail-open op (ok:true, observed:null) → unreachable (stays trusted)", () => {
+    const g = new Map([["a", entry(true, null)]]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("unreachable");
+  });
+
+  it("a stale untrusted entry for a REMOVED operator (not active) → unreachable", () => {
+    const g = new Map([["removed", entry(false, "0xstale")]]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("unreachable");
+  });
+
+  it("untrusted OUTRANKS unreachable in a mixed fleet", () => {
+    const g = new Map([["a", entry(false, "0xmismatch")]]); // b has no entry
+    expect(classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g)).toBe(
+      "untrusted",
     );
   });
 });
