@@ -40,6 +40,74 @@ function warnClearWriteSkipped(err: unknown): void {
 }
 
 /**
+ * Overwrite the OS clipboard with `value` via the legacy execCommand('copy')
+ * path. Unlike the async navigator.clipboard.writeText, this works even when
+ * the wallet document is NOT focused — provided the extension declares
+ * `clipboardWrite` (it does). The async API throws "Document is not focused"
+ * from a timer / teardown clear, which is exactly why the auto-clear used to
+ * fail silently. Restores prior focus so the UI isn't disturbed. Returns
+ * execCommand's success flag.
+ */
+function execCommandWrite(value: string): boolean {
+  if (
+    typeof document === "undefined" ||
+    typeof document.execCommand !== "function" ||
+    !document.body
+  ) {
+    return false;
+  }
+  const active = document.activeElement as HTMLElement | null;
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;";
+  document.body.appendChild(ta);
+  let ok = false;
+  try {
+    ta.focus();
+    ta.select();
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  try {
+    active?.focus?.();
+  } catch {
+    /* restoring focus is best-effort */
+  }
+  return ok;
+}
+
+/**
+ * Clear the OS clipboard synchronously and focus-independently (legacy path).
+ * Writes "" — or, if the browser declines to copy an empty selection, a single
+ * space — so the recovery phrase is removed even when the document isn't
+ * focused. Returns true on success.
+ */
+function clearClipboardLegacy(): boolean {
+  return execCommandWrite("") || execCommandWrite(" ");
+}
+
+/**
+ * Empty the clipboard, used by every clear path. Tries the async writeText("")
+ * first (cleanest — a true empty string — but it needs the document focused);
+ * on denial (the unfocused timer / teardown case, "Document is not focused")
+ * falls back to the focus-independent legacy path. Logs quietly only if BOTH
+ * fail. Returns true on success.
+ */
+async function clearClipboardEmpty(): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText("");
+    return true;
+  } catch (err) {
+    if (clearClipboardLegacy()) return true;
+    warnClearWriteSkipped(err);
+    return false;
+  }
+}
+
+/**
  * Copy `text` to the clipboard, scheduling a best-effort wipe after
  * `clearAfterMs`. Returns once the initial write completes. The wipe
  * fires asynchronously and is not awaited.
@@ -72,15 +140,10 @@ export async function copyWithAutoClear(
           // readText denied — assume our text is still there.
         }
         if (currentMatchesOurs) {
-          try {
-            await navigator.clipboard.writeText("");
-          } catch (err) {
-            // Keep swallowing — a failed clear must never crash anything — but
-            // surface it: even with clipboardWrite, writeText needs the document
-            // focused, so a timer/teardown clear is denied when the wallet is
-            // unfocused. The manual "Clear clipboard" button is the reliable path.
-            warnClearWriteSkipped(err);
-          }
+          // The timer almost always fires while the wallet is unfocused, where
+          // the async writeText is denied — clearClipboardEmpty falls back to
+          // the focus-independent legacy path so the phrase is actually cleared.
+          await clearClipboardEmpty();
         }
       } finally {
         clearTimer = null;
@@ -141,11 +204,7 @@ export async function flushClipboardAutoClear(): Promise<void> {
     shouldClear = true;
   }
   if (shouldClear) {
-    try {
-      await navigator.clipboard.writeText("");
-    } catch (err) {
-      warnClearWriteSkipped(err);
-    }
+    await clearClipboardEmpty();
   }
 }
 
@@ -158,20 +217,14 @@ export async function flushClipboardAutoClear(): Promise<void> {
  * by an unfocused surface, but a user tap is always a valid write context.
  *
  * Unconditional (the user asked to clear): drops any pending auto-clear timer
- * and the tracked copy, then writes "". Returns true on success, false on
- * failure (failure is also surfaced via console.warn, like the auto-clear
- * paths). Only ever writes "" — never a placeholder.
+ * and the tracked copy, then empties the clipboard via clearClipboardEmpty
+ * (async writeText("") when focused, else the focus-independent legacy path).
+ * Returns true on success, false on failure (also surfaced via a quiet log).
  */
 export async function clearClipboardNow(): Promise<boolean> {
   cancelClipboardAutoClear(); // drop any pending timer + its tracked copy
   lastCopiedText = null; // ensure no tracked copy remains even if no timer
-  try {
-    await navigator.clipboard.writeText("");
-    return true;
-  } catch (err) {
-    warnClearWriteSkipped(err);
-    return false;
-  }
+  return clearClipboardEmpty();
 }
 
 /**
@@ -184,9 +237,9 @@ export async function clearClipboardNow(): Promise<boolean> {
  * window but is not a hard guarantee — the accepted MV3/OS residual.
  *
  * Only acts on a still-pending seed copy; never touches the clipboard
- * otherwise. Uses a DIRECT blind writeText("") (no readText round-trip):
- * during teardown the user just had the phrase copied, so clobber risk is
- * low and completing the write matters more than confirming first.
+ * otherwise. Prefers the SYNC legacy clear (execCommand) — it works even
+ * unfocused and completes during teardown, where an async writeText usually
+ * can't; writeText is the fallback only if execCommand is unavailable.
  */
 function handlePagehideWipe(): void {
   if (lastCopiedText === null) return; // nothing pending — no-op
@@ -195,12 +248,14 @@ function handlePagehideWipe(): void {
     clearTimer = null;
   }
   lastCopiedText = null;
-  try {
-    void navigator.clipboard.writeText("").catch((err) => {
+  if (!clearClipboardLegacy()) {
+    try {
+      void navigator.clipboard.writeText("").catch((err) => {
+        warnClearWriteSkipped(err);
+      });
+    } catch (err) {
       warnClearWriteSkipped(err);
-    });
-  } catch (err) {
-    warnClearWriteSkipped(err);
+    }
   }
 }
 

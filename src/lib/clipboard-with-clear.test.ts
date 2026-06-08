@@ -247,3 +247,47 @@ describe("clearClipboardNow (manual on-demand clear)", () => {
     expect(warn).toHaveBeenCalled();
   });
 });
+
+describe("focus-independent clear via execCommand (#clipboardWrite)", () => {
+  // Stub a minimal document so the legacy execCommand path runs (the suite is
+  // node-env, so document is otherwise absent and only the writeText mock runs).
+  function installDocument(execOk = true) {
+    const execCommand = vi.fn(() => execOk);
+    const doc = {
+      activeElement: null,
+      body: { appendChild: () => {} },
+      createElement: () => ({
+        value: "",
+        style: {},
+        setAttribute: () => {},
+        focus: () => {},
+        select: () => {},
+        remove: () => {},
+      }),
+      execCommand,
+    };
+    vi.stubGlobal("document", doc);
+    return { execCommand };
+  }
+
+  it("clears via execCommand('copy') when writeText is denied (unfocused)", async () => {
+    const { execCommand } = installDocument(true);
+    installClipboard(false, true); // writeText("") rejects, like an unfocused doc
+
+    const ok = await clearClipboardNow();
+
+    expect(ok).toBe(true); // the focus-independent legacy path succeeded
+    expect(execCommand).toHaveBeenCalledWith("copy");
+  });
+
+  it("returns false when both writeText and execCommand fail", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    installDocument(false); // execCommand reports failure too
+    installClipboard(false, true); // writeText("") rejects
+
+    const ok = await clearClipboardNow();
+
+    expect(ok).toBe(false);
+    expect(warn).toHaveBeenCalled();
+  });
+});
