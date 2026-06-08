@@ -32,7 +32,11 @@ let pagehideTarget: EventTarget | null = null;
 function warnClearWriteSkipped(err: unknown): void {
   const e = err as { name?: string; message?: string } | null;
   const reason = e?.name ? `${e.name}: ${e.message ?? ""}` : String(err);
-  console.warn("[clipboard] best-effort auto-clear skipped —", reason);
+  // "Document is not focused" (NotAllowedError) is the EXPECTED best-effort
+  // skip when the wallet isn't focused — log it quietly at debug level so it
+  // doesn't read as an error in the console. Anything else is unexpected → warn.
+  const log = e?.name === "NotAllowedError" ? console.debug : console.warn;
+  log("[clipboard] best-effort auto-clear skipped —", reason);
 }
 
 /**
