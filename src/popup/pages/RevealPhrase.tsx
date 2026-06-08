@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
 import { MnemonicGrid } from "../components/MnemonicGrid";
 import { bgKeystoreExportSeed } from "../bg";
-import { formatPhraseForClipboard } from "../../lib/clipboard-with-clear";
+import {
+  copyWithAutoClear,
+  flushClipboardAutoClear,
+  formatPhraseForClipboard,
+} from "../../lib/clipboard-with-clear";
 
 interface RevealPhraseProps {
   /** Returns to Settings. Called on Cancel, on auto-hide expiry, and after
@@ -29,10 +33,6 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
   // grid/overlay click target; first transition to `true` arms the
   // sticky `autoHideStarted` flag below.
   const [revealed, setRevealed] = useState(false);
-
-  // Keep timer handles in refs so the unmount cleanup can clear them
-  // without re-running the effect on every state tick.
-  const clipboardClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Lockout countdown — mirrors UnlockScreen.
   useEffect(() => {
@@ -70,17 +70,17 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     return () => clearInterval(t);
   }, [autoHideStarted, onBack]);
 
-  // Cleanup on unmount: drop the mnemonic from React state and cancel any
-  // pending clipboard-clear timer. The mnemonic string itself can't be
-  // deterministically zeroed in JS, but releasing the reference is what
-  // we can do.
+  // Cleanup on unmount: drop the mnemonic from React state and FLUSH the
+  // shared clipboard auto-clear (best-effort wipe NOW). This screen
+  // auto-hides after 30 s — which unmounts it — so a self-managed timer
+  // would have been cancelled and left the copied phrase on the OS
+  // clipboard; the flush wipes it on the way out instead. The mnemonic
+  // string itself can't be deterministically zeroed in JS, but releasing
+  // the reference is what we can do.
   useEffect(() => {
     return () => {
       setMnemonic(null);
-      if (clipboardClearTimer.current !== null) {
-        clearTimeout(clipboardClearTimer.current);
-        clipboardClearTimer.current = null;
-      }
+      void flushClipboardAutoClear();
     };
   }, []);
 
@@ -133,19 +133,15 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     try {
       // Bare words, no ordinals — shared with the onboarding grid via the
       // single `formatPhraseForClipboard` join so the two can't drift.
-      await navigator.clipboard.writeText(formatPhraseForClipboard(mnemonic));
+      // Routed through the shared auto-clear helper so it gets the
+      // readText-confirmed wipe AND the flush-on-unmount path (this screen
+      // auto-hides after 30 s, which unmounts and would otherwise strand
+      // the phrase on the clipboard).
+      await copyWithAutoClear(
+        formatPhraseForClipboard(mnemonic),
+        CLIPBOARD_CLEAR_MS,
+      );
       setCopied(true);
-      if (clipboardClearTimer.current !== null) {
-        clearTimeout(clipboardClearTimer.current);
-      }
-      clipboardClearTimer.current = setTimeout(() => {
-        // navigator.clipboard.writeText("") wipes whatever is currently
-        // on the clipboard from this origin's perspective. Browsers may
-        // still expose the value to other origins until they next read,
-        // but it's the best we can do from a popup.
-        void navigator.clipboard.writeText("").catch(() => {});
-        clipboardClearTimer.current = null;
-      }, CLIPBOARD_CLEAR_MS);
     } catch {
       // Clipboard write can fail in iframes / focus-loss races. Stay quiet.
     }
@@ -341,9 +337,9 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           >
             On the next screen, tap the words to reveal them. Tap
             again to hide. The phrase auto-hides after{" "}
-            {AUTO_HIDE_SECONDS} seconds. If you copy it, your
-            clipboard will be cleared after another{" "}
-            {AUTO_HIDE_SECONDS} seconds.
+            {AUTO_HIDE_SECONDS} seconds. If you copy it, the wallet will
+            try to clear your clipboard after about {AUTO_HIDE_SECONDS}{" "}
+            seconds, but can't guarantee it — clear it manually to be safe.
           </div>
         </div>
 
@@ -456,7 +452,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         >
           <Icon name={copied ? "check" : "copy"} size={13} />
           {copied
-            ? "Copied — clears in 30 s"
+            ? "Copied — clears soon (best-effort)"
             : "Copy to clipboard"}
         </button>
 

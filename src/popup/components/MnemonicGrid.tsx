@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  cancelClipboardAutoClear,
   copyWithAutoClear,
+  flushClipboardAutoClear,
   formatPhraseForClipboard,
 } from "../../lib/clipboard-with-clear";
 import { Icon } from "../Icon";
@@ -51,9 +51,12 @@ export function MnemonicGrid({
     return () => clearTimeout(t);
   }, [copyState]);
 
-  // On unmount, cancel any pending auto-clear so a re-mounted grid
-  // doesn't race against a stale timer from this instance.
-  useEffect(() => () => cancelClipboardAutoClear(), []);
+  // On unmount, FLUSH the pending auto-clear (best-effort wipe NOW) rather
+  // than merely cancelling the timer — the dominant flow is the user copies
+  // then navigates away before the 30 s timer fires, which would otherwise
+  // leave the phrase on the OS clipboard. The flush only wipes if the
+  // clipboard still holds our phrase (or readText is denied).
+  useEffect(() => () => void flushClipboardAutoClear(), []);
 
   const handleCopy = async () => {
     const text = formatPhraseForClipboard(mnemonic);
@@ -139,7 +142,7 @@ export function MnemonicGrid({
               size={13}
             />
             {copyState === "copied"
-              ? "Copied — clears in 30 s"
+              ? "Copied — clears soon (best-effort)"
               : copyState === "failed"
                 ? "Copy failed — try again"
                 : "Copy to clipboard"}
@@ -154,8 +157,9 @@ export function MnemonicGrid({
               textAlign: "center",
             }}
           >
-            The clipboard auto-clears after 30 s. Store the phrase in a
-            safe place before then.
+            The wallet will try to clear your clipboard after ~30 s, but
+            can't guarantee it across the OS. Save the phrase, then clear
+            your clipboard manually to be safe.
           </div>
         </>
       )}

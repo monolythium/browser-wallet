@@ -39,6 +39,10 @@ import {
   bgSlhDsaBackupGenerate,
   bgSlhDsaBackupRecoverMnemonic,
 } from "../bg";
+import {
+  copyWithAutoClear,
+  flushClipboardAutoClear,
+} from "../../lib/clipboard-with-clear";
 
 /** Duration the user must hold the reveal button before the
  *  mnemonic renders. 1.5 s — short enough to feel responsive,
@@ -91,7 +95,6 @@ export function SlhDsaBackupRevealModal({
   const [checkboxOn, setCheckboxOn] = useState(false);
   const [copied, setCopied] = useState(false);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clipboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [confirmInFlight, setConfirmInFlight] = useState(false);
 
   // Reset every closed→open cycle so a re-open never inherits a
@@ -106,19 +109,16 @@ export function SlhDsaBackupRevealModal({
       clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
     }
-    if (clipboardTimerRef.current !== null) {
-      clearTimeout(clipboardTimerRef.current);
-      clipboardTimerRef.current = null;
-    }
+    // Flush any pending clipboard auto-clear (best-effort wipe NOW) so the
+    // mnemonic doesn't linger on the OS clipboard after the modal is closed.
+    void flushClipboardAutoClear();
   }, [open]);
 
-  // Cleanup pending timers on unmount.
+  // Cleanup pending timers on unmount + flush any pending clipboard wipe.
   useEffect(() => {
     return () => {
       if (holdTimerRef.current !== null) clearTimeout(holdTimerRef.current);
-      if (clipboardTimerRef.current !== null) {
-        clearTimeout(clipboardTimerRef.current);
-      }
+      void flushClipboardAutoClear();
     };
   }, []);
 
@@ -167,19 +167,12 @@ export function SlhDsaBackupRevealModal({
   const handleCopy = async () => {
     if (screen.kind !== "reveal" || !screen.held) return;
     try {
-      await navigator.clipboard.writeText(screen.mnemonic);
+      // Route through the shared auto-clear helper (readText-confirmed wipe
+      // + flush-on-close/unmount) rather than a self-managed timer that a
+      // modal close would strand. 60 s window — long enough to paste into a
+      // password manager. The "Copied" badge resets on the next close cycle.
+      await copyWithAutoClear(screen.mnemonic, CLIPBOARD_AUTO_CLEAR_MS);
       setCopied(true);
-      if (clipboardTimerRef.current !== null) {
-        clearTimeout(clipboardTimerRef.current);
-      }
-      clipboardTimerRef.current = setTimeout(() => {
-        // Auto-clear: overwrite with an empty string. Same
-        // RevealPhrase discipline — best-effort; clipboard.writeText
-        // can fail under focus-loss, swallow the rejection.
-        void navigator.clipboard.writeText("").catch(() => {});
-        setCopied(false);
-        clipboardTimerRef.current = null;
-      }, CLIPBOARD_AUTO_CLEAR_MS);
     } catch {
       // Clipboard write can fail in restricted contexts; stay quiet.
     }
@@ -322,7 +315,8 @@ export function SlhDsaBackupRevealModal({
                 style={{ display: "flex", gap: 8, marginTop: 10 }}
               >
                 <button onClick={() => void handleCopy()} style={btnGhost}>
-                  <Icon name="eye" size={11} /> {copied ? "Copied (60 s)" : "Copy"}
+                  <Icon name="eye" size={11} />{" "}
+                  {copied ? "Copied (best-effort)" : "Copy"}
                 </button>
                 <button onClick={handleDownload} style={btnGhost}>
                   Download .txt
