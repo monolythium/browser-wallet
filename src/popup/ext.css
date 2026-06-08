@@ -214,7 +214,12 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
    inline string can't trigger a horizontal scrollbar that would
    render alongside the vertical one and look like two scrollbars
    on the right edge. */
-.ext-body { flex:1; overflow-y:auto; overflow-x:hidden; padding: 10px 14px 14px; }
+/* min-height:0 is load-bearing: when a screen makes .ext-body its own flex
+   column (e.g. the recovery-phrase reveal), this scroll-container's automatic
+   min-height can resolve to its content height instead of 0, so it grows past
+   its flex allocation and the tall 24-word grid is clipped with no scroll.
+   Pinning min-height:0 forces it to shrink and scroll instead. */
+.ext-body { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding: 10px 14px 14px; }
 .ext-body::-webkit-scrollbar { width:6px; } .ext-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius:3px; }
 
 /* --- Denom toggle (mono-caps, gold indicator glow) --- */
