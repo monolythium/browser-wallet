@@ -379,6 +379,13 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
       <div
         className="ext-body"
         style={{
+          // Force the scroll inline too (not just via the .ext-body class):
+          // this screen makes .ext-body its own flex column, and a flex item
+          // that is also a flex container can otherwise grow past its
+          // allocation and clip the 24-word grid instead of scrolling.
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
           display: "flex",
           flexDirection: "column",
           gap: 12,
