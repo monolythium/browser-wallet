@@ -1,10 +1,7 @@
 import { useState } from "react";
 import { Icon } from "../Icon";
 import { PasswordStrengthMeter } from "../components/PasswordStrengthMeter";
-import {
-  getPasswordStrength,
-  isPasswordValid,
-} from "../../lib/password-validation";
+import { isPasswordValid } from "../../lib/password-validation";
 
 interface SetPasswordProps {
   onSubmit: (password: string) => void;
@@ -29,12 +26,11 @@ export function SetPassword({
   // strength + match requirements.
   const [acknowledged, setAcknowledged] = useState(false);
 
-  const strength = getPasswordStrength(password);
+  // isPasswordValid requires all five rules (incl. the 12-char floor), which
+  // already implies a "strong" meter — the old `strength !== "weak"` clause
+  // was dead. The binding gate is isPasswordValid + match + acknowledgement.
   const canSubmit =
-    isPasswordValid(password) &&
-    strength !== "weak" &&
-    password === confirm &&
-    acknowledged;
+    isPasswordValid(password) && password === confirm && acknowledged;
 
   return (
     <>

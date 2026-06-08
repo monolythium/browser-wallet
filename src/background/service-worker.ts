@@ -167,6 +167,7 @@ import {
   loadTwoTierState,
   setTwoTierFeature,
 } from "./two-tier-features-store.js";
+import { isPasswordValid } from "../lib/password-validation.js";
 import {
   FEATURE_FLAGS,
   type FeatureFlag,
@@ -5573,6 +5574,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // so the popup's VaultPicker reads a populated container with no
       // migration round-trip.
       const p = message.payload as { password: string };
+      // Defense-in-depth (#41): re-validate the password floor at the SW IPC
+      // boundary. The popup SetPassword UI already gates on isPasswordValid,
+      // but the SW must not trust a forged popup IPC. createVaultFrom* are
+      // policy-free primitives; the policy is enforced here at the boundary.
+      if (typeof p?.password !== "string" || !isPasswordValid(p.password)) {
+        return { ok: false, reason: "weak_password" };
+      }
       try {
         const r = await createVaultFromNewMnemonic(p.password);
         await resetAutoLock();
@@ -5583,6 +5591,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-create-from-mnemonic": {
       const p = message.payload as { password: string; mnemonic: string };
+      // Defense-in-depth (#41): same SW-boundary password-floor re-validation
+      // as keystore-create-new (see note there).
+      if (typeof p?.password !== "string" || !isPasswordValid(p.password)) {
+        return { ok: false, reason: "weak_password" };
+      }
       try {
         const r = await createVaultFromMnemonic(p.password, p.mnemonic);
         await resetAutoLock();
