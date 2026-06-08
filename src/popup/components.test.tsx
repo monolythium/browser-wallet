@@ -1223,11 +1223,11 @@ describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
   });
 });
 
-describe("chainHealthPresentation (#42 untrusted = amber + tap/tooltips)", () => {
-  it("presents untrusted as amber 'UNTRUSTED OPERATOR', tappable, distinct from red OFFLINE", () => {
+describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
+  it("presents untrusted as red 'UNTRUSTED OPERATOR', tappable (same red as OFFLINE)", () => {
     expect(chainHealthPresentation("untrusted")).toMatchObject({
       label: "UNTRUSTED OPERATOR",
-      color: "var(--warn)",
+      color: "var(--err)",
       tappable: true,
     });
     expect(chainHealthPresentation("offline")).toMatchObject({

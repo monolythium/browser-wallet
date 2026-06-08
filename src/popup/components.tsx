@@ -166,7 +166,9 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
     case "untrusted":
       return {
         label: "UNTRUSTED OPERATOR",
-        color: "var(--warn)",
+        // Red (same token as OFFLINE) — per the user, an operator serving the
+        // wrong chain is a hard trust failure, not a soft amber warning.
+        color: "var(--err)",
         tooltip:
           "The operator answered but is on a different chain than your wallet's pin (it may have re-genesised, or be pointed at another network). Tap to switch operators.",
         tappable: true,
@@ -457,15 +459,8 @@ export function ChainStatusBanner({
         }}
       >
         <span className="ext-banner-marquee-track" aria-label={pres.label}>
-          <span style={{ textDecoration: tappable ? "underline" : undefined }}>
-            {pres.label}
-          </span>
-          <span
-            aria-hidden="true"
-            style={{ textDecoration: tappable ? "underline" : undefined }}
-          >
-            {pres.label}
-          </span>
+          <span>{pres.label}</span>
+          <span aria-hidden="true">{pres.label}</span>
         </span>
       </span>
     ) : (
@@ -476,7 +471,6 @@ export function ChainStatusBanner({
           color: pres.color,
           fontWeight: 500,
           cursor: tappable ? "pointer" : undefined,
-          textDecoration: tappable ? "underline" : undefined,
         }}
       >
         {pres.label}
