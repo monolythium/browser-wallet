@@ -268,7 +268,22 @@ export async function probeFirstAliveOperator(
       if (!res.ok) continue;
       const body = (await res.json()) as { result?: string };
       const reportedChainId = Number(body?.result ?? 0);
-      if (reportedChainId !== expectedChainIdDec) continue;
+      if (reportedChainId !== expectedChainIdDec) {
+        // Reachable, but serving a different chain id. Remember it so the
+        // banner can say UNTRUSTED OPERATOR ("online but wrong chain") rather
+        // than OFFLINE — the operator answered, it's just not our chain.
+        operatorWrongChainId.add(v.rpc);
+        console.info(
+          "[probe] operator on a different chain id (untrusted):",
+          v.rpc,
+          "reported",
+          reportedChainId,
+          "expected",
+          expectedChainIdDec,
+        );
+        continue;
+      }
+      operatorWrongChainId.delete(v.rpc);
       // Genesis check. On mismatch the operator is excluded
       // from RPC dispatch for the rest of the SW lifetime.
       const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
@@ -298,6 +313,17 @@ interface GenesisCacheEntry {
 }
 
 const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
+
+/**
+ * Operators that answered `net_version` but reported a DIFFERENT chain id than
+ * the wallet expects — reachable, but serving the wrong chain (a regenesis
+ * that bumped the id, or an operator pointed at another network). Tracked
+ * separately from the genesis cache (chain-id reachability is not immutable
+ * the way a genesis hash is) so classifyNoOperatorReason can report UNTRUSTED
+ * OPERATOR ("online but wrong chain") instead of a misleading OFFLINE. A
+ * successful chain-id match deletes the entry; clearGenesisCache resets it.
+ */
+const operatorWrongChainId = new Set<string>();
 
 /**
  * Verify an operator's chain genesis identity matches TESTNET_GENESIS_HASH.
@@ -333,9 +359,17 @@ export async function verifyOperatorGenesis(
 export function clearGenesisCache(rpc?: string): void {
   if (rpc === undefined) {
     operatorGenesisCache.clear();
+    operatorWrongChainId.clear();
   } else {
     operatorGenesisCache.delete(rpc);
+    operatorWrongChainId.delete(rpc);
   }
+}
+
+/** Snapshot of operators seen reachable-but-on-the-wrong-chain-id. Used by
+ *  classifyNoOperatorReason (default) and injectable for unit tests. */
+export function snapshotWrongChainOperators(): Set<string> {
+  return new Set(operatorWrongChainId);
 }
 
 /** Snapshot of the current cache state. Used by
@@ -347,22 +381,27 @@ export function snapshotGenesisCache(): Map<string, GenesisCacheEntry> {
 
 /**
  * Classify why no operator is serviceable (probeFirstAliveOperator returned
- * null) for the chain-status banner — WITHOUT a new RPC. An ACTIVE operator
- * whose sticky genesis-cache entry recorded a MISMATCHING hash
- * (ok===false && observed!==null) answered net_version + chain-id and failed
- * only the genesis pin -> "untrusted". An absent / observed:null entry
- * (unreachable, or a block-0 the probe couldn't read) -> "unreachable".
- * ok===true (incl. the #18 probe-unsupported fail-open) is trusted.
- * Untrusted is sticky and intentionally OUTRANKS unreachable. Params default
- * to the live sources but are injectable for unit tests.
+ * null) for the chain-status banner — WITHOUT a new RPC. An ACTIVE operator is
+ * "untrusted" (reachable but wrong) when EITHER it answered net_version with a
+ * MISMATCHING chain id (in `wrongChainId`) OR its sticky genesis-cache entry
+ * recorded a MISMATCHING hash (ok===false && observed!==null). Both mean the
+ * operator answered but serves the wrong chain. An absent / observed:null
+ * genesis entry with no wrong-chain mark (truly unreachable, or a block-0 the
+ * probe couldn't read) -> "unreachable". ok===true (incl. the #18
+ * probe-unsupported fail-open) is trusted. Untrusted is sticky and
+ * intentionally OUTRANKS unreachable. Params default to the live sources but
+ * are injectable for unit tests.
  */
 export function classifyNoOperatorReason(
   activeOps: ReadonlyArray<{ rpc: string }> = getActiveOperators(),
   genesis: Map<string, GenesisCacheEntry> = snapshotGenesisCache(),
+  wrongChainId: ReadonlySet<string> = operatorWrongChainId,
 ): "unreachable" | "untrusted" {
   for (const op of activeOps) {
     const e = genesis.get(op.rpc);
-    if (e !== undefined && e.ok === false && e.observed !== null) {
+    const genesisMismatch =
+      e !== undefined && e.ok === false && e.observed !== null;
+    if (genesisMismatch || wrongChainId.has(op.rpc)) {
       return "untrusted";
     }
   }

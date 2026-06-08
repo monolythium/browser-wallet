@@ -20,7 +20,10 @@ import {
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   clearGenesisCache,
   classifyNoOperatorReason,
+  getActiveOperators,
+  probeFirstAliveOperator,
   snapshotGenesisCache,
+  snapshotWrongChainOperators,
   verifyOperatorGenesis,
 } from "./networks.js";
 import { clampToSaneBound } from "../shared/operator-bounds.js";
@@ -258,6 +261,9 @@ describe("classifyNoOperatorReason (#42 untrusted vs unreachable)", () => {
     checkedAt: 0,
   });
 
+  // Isolate from any module-level wrong-chain state a probe test may leave.
+  beforeEach(() => clearGenesisCache());
+
   it("empty genesis cache → unreachable", () => {
     expect(classifyNoOperatorReason([{ rpc: "a" }], new Map())).toBe(
       "unreachable",
@@ -289,5 +295,62 @@ describe("classifyNoOperatorReason (#42 untrusted vs unreachable)", () => {
     expect(classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g)).toBe(
       "untrusted",
     );
+  });
+
+  it("reachable op on the WRONG CHAIN ID (in wrongChain set) → untrusted", () => {
+    expect(
+      classifyNoOperatorReason([{ rpc: "a" }], new Map(), new Set(["a"])),
+    ).toBe("untrusted");
+  });
+
+  it("a wrong-chain entry for a REMOVED operator (not active) → unreachable", () => {
+    expect(
+      classifyNoOperatorReason([{ rpc: "a" }], new Map(), new Set(["removed"])),
+    ).toBe("unreachable");
+  });
+
+  it("wrong-chain OUTRANKS unreachable in a mixed fleet", () => {
+    expect(
+      classifyNoOperatorReason(
+        [{ rpc: "a" }, { rpc: "b" }],
+        new Map(),
+        new Set(["b"]),
+      ),
+    ).toBe("untrusted");
+  });
+});
+
+describe("probeFirstAliveOperator (#42 reachable-but-wrong-chain → untrusted)", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => clearGenesisCache());
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("records reachable operators that report the wrong chain id and classifies untrusted", async () => {
+    // Every active operator answers net_version, but with a chain id that does
+    // not match the expected one — reachable, wrong chain (not unreachable).
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ jsonrpc: "2.0", id: 1, result: "999999" }),
+    })) as unknown as typeof fetch;
+
+    const hit = await probeFirstAliveOperator(69420, 50);
+    expect(hit).toBeNull();
+
+    const active = getActiveOperators();
+    expect(active.length).toBeGreaterThanOrEqual(1);
+    for (const op of active) {
+      expect(snapshotWrongChainOperators().has(op.rpc)).toBe(true);
+    }
+    expect(
+      classifyNoOperatorReason(
+        active,
+        snapshotGenesisCache(),
+        snapshotWrongChainOperators(),
+      ),
+    ).toBe("untrusted");
   });
 });
