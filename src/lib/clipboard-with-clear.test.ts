@@ -119,3 +119,58 @@ describe("flushClipboardAutoClear (#39 wipe-on-unmount)", () => {
     expect(cb.writeText).toHaveBeenCalledWith("");
   });
 });
+
+describe("pagehide backstop (popup-close best-effort wipe)", () => {
+  // The pagehide listener is armed lazily inside copyWithAutoClear and bound
+  // by reference to the current `window`. Each test stubs a fresh EventTarget
+  // as `window`; the module re-binds to it on the next copy.
+  function installWindow() {
+    const target = new EventTarget();
+    const addSpy = vi.spyOn(target, "addEventListener");
+    vi.stubGlobal("window", target);
+    return {
+      addSpy,
+      firePagehide: () => target.dispatchEvent(new Event("pagehide")),
+    };
+  }
+
+  it("wipes a pending seed copy when the document unloads (pagehide)", async () => {
+    const win = installWindow();
+    const cb = installClipboard();
+    await copyWithAutoClear("my-seed-phrase", 1_000_000);
+    expect(cb.getStore()).toBe("my-seed-phrase");
+    cb.writeText.mockClear();
+
+    win.firePagehide();
+    await Promise.resolve(); // let the fire-and-forget wipe settle
+
+    expect(cb.writeText).toHaveBeenCalledWith("");
+    expect(cb.getStore()).toBe("");
+  });
+
+  it("is a no-op on a later pagehide once nothing is pending", async () => {
+    const win = installWindow();
+    const cb = installClipboard();
+    await copyWithAutoClear("my-seed-phrase", 1_000_000);
+    win.firePagehide(); // wipes and clears the pending copy
+    await Promise.resolve();
+    cb.writeText.mockClear();
+
+    win.firePagehide(); // nothing pending now → no-op
+    await Promise.resolve();
+
+    expect(cb.writeText).not.toHaveBeenCalled();
+  });
+
+  it("arms the pagehide listener once across multiple copies", async () => {
+    const win = installWindow();
+    installClipboard();
+    await copyWithAutoClear("seed-1", 1_000_000);
+    await copyWithAutoClear("seed-2", 1_000_000);
+
+    const pagehideAdds = win.addSpy.mock.calls.filter(
+      ([type]) => type === "pagehide",
+    );
+    expect(pagehideAdds).toHaveLength(1);
+  });
+});

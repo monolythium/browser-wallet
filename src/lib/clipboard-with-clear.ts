@@ -9,9 +9,18 @@
 // Only one in-flight clear-timer is tracked. Calling copyWithAutoClear
 // again while a previous timer is pending resets the timer (the user
 // expects a fresh 30s window after each copy).
+//
+// A pagehide listener (armed lazily on the first copy) adds a best-effort
+// wipe when the popup/sidepanel document is actually unloading — the only
+// backstop for a hard popup-close, where the 30 s timer and the unmount
+// flush both die with the document and the service worker has no clipboard.
+// It is best-effort (teardown async + focus limits), not a hard guarantee.
 
 let clearTimer: ReturnType<typeof setTimeout> | null = null;
 let lastCopiedText: string | null = null;
+// The document the pagehide backstop is bound to (popup/sidepanel). Tracked
+// by reference so the listener is registered at most once per document.
+let pagehideTarget: EventTarget | null = null;
 
 /**
  * Copy `text` to the clipboard, scheduling a best-effort wipe after
@@ -28,6 +37,10 @@ export async function copyWithAutoClear(
   cancelClipboardAutoClear();
   await navigator.clipboard.writeText(text);
   lastCopiedText = text;
+  // Arm the popup-close backstop on the first real copy. Lazy (never an
+  // import-time side-effect) so it stays inert in the service worker and
+  // other non-document contexts.
+  ensurePagehideWipe();
   clearTimer = setTimeout(() => {
     void (async () => {
       try {
@@ -113,6 +126,50 @@ export async function flushClipboardAutoClear(): Promise<void> {
       // writeText denied during flush — nothing we can do.
     }
   }
+}
+
+/**
+ * Best-effort clipboard wipe fired when the popup/sidepanel document is
+ * actually UNLOADING (pagehide) — not merely losing focus. This is the only
+ * backstop for a hard popup-close: there the in-page 30 s timer and the
+ * unmount flush both die with the document, and the service worker has no
+ * clipboard. pagehide runs during teardown (async work may not finish, and
+ * the document may already be unfocused), so this NARROWS the popup-close
+ * window but is not a hard guarantee — the accepted MV3/OS residual.
+ *
+ * Only acts on a still-pending seed copy; never touches the clipboard
+ * otherwise. Uses a DIRECT blind writeText("") (no readText round-trip):
+ * during teardown the user just had the phrase copied, so clobber risk is
+ * low and completing the write matters more than confirming first.
+ */
+function handlePagehideWipe(): void {
+  if (lastCopiedText === null) return; // nothing pending — no-op
+  if (clearTimer !== null) {
+    clearTimeout(clearTimer);
+    clearTimer = null;
+  }
+  lastCopiedText = null;
+  try {
+    void navigator.clipboard.writeText("").catch(() => {
+      // writeText rejected during teardown — nothing we can do.
+    });
+  } catch {
+    // navigator.clipboard unavailable — nothing we can do.
+  }
+}
+
+/**
+ * Register {@link handlePagehideWipe} on the current document, at most once
+ * per document. No-op in non-document contexts (the service worker has no
+ * `window`). Called lazily from copyWithAutoClear so it is never an
+ * import-time side-effect.
+ */
+function ensurePagehideWipe(): void {
+  const w = typeof window !== "undefined" ? window : null;
+  if (!w || typeof w.addEventListener !== "function") return;
+  if (pagehideTarget === w) return; // already armed on this document
+  pagehideTarget = w;
+  w.addEventListener("pagehide", handlePagehideWipe);
 }
 
 /**
