@@ -9,9 +9,13 @@ import {
 
 // Stub navigator.clipboard with an in-memory store. readText returns the
 // current store (or rejects when `readTextRejects`); writeText sets it.
-function installClipboard(readTextRejects = false) {
+function installClipboard(readTextRejects = false, writeEmptyRejects = false) {
   let store = "";
   const writeText = vi.fn(async (t: string) => {
+    // Optionally reject only the CLEAR write (writeText("")) while letting the
+    // initial copy succeed — mirrors Chromium denying a non-gesture writeText
+    // when the extension lacks clipboardWrite.
+    if (writeEmptyRejects && t === "") throw new Error("writeText denied");
     store = t;
   });
   const readText = vi.fn(async () => {
@@ -33,6 +37,7 @@ afterEach(() => {
   cancelClipboardAutoClear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("formatPhraseForClipboard", () => {
@@ -172,5 +177,32 @@ describe("pagehide backstop (popup-close best-effort wipe)", () => {
       ([type]) => type === "pagehide",
     );
     expect(pagehideAdds).toHaveLength(1);
+  });
+});
+
+describe("clear-write failure is surfaced (#clipboardWrite)", () => {
+  it("warns (without throwing) when the flush clear write is denied", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cb = installClipboard(false, true); // writeText("") rejects
+    await copyWithAutoClear("my-seed-phrase", 1_000_000); // copy succeeds
+    cb.writeText.mockClear();
+
+    await expect(flushClipboardAutoClear()).resolves.toBeUndefined();
+
+    expect(cb.writeText).toHaveBeenCalledWith(""); // the clear was attempted
+    expect(warn).toHaveBeenCalled(); // and the denial was surfaced
+  });
+
+  it("warns (without throwing) when the 30 s timer clear write is denied", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cb = installClipboard(false, true);
+    await copyWithAutoClear("my-seed-phrase", 30_000);
+    cb.writeText.mockClear();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(cb.writeText).toHaveBeenCalledWith("");
+    expect(warn).toHaveBeenCalled();
   });
 });

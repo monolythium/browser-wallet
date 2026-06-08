@@ -57,8 +57,11 @@ export async function copyWithAutoClear(
         if (currentMatchesOurs) {
           try {
             await navigator.clipboard.writeText("");
-          } catch {
-            // writeText denied during clear — nothing we can do.
+          } catch (err) {
+            // Keep swallowing — a failed clear must never crash anything —
+            // but surface it: without clipboardWrite a non-gesture clear is
+            // denied, and a silent swallow hid that the auto-clear never ran.
+            console.warn("[clipboard] auto-clear write failed:", err);
           }
         }
       } finally {
@@ -122,8 +125,8 @@ export async function flushClipboardAutoClear(): Promise<void> {
   if (shouldClear) {
     try {
       await navigator.clipboard.writeText("");
-    } catch {
-      // writeText denied during flush — nothing we can do.
+    } catch (err) {
+      console.warn("[clipboard] auto-clear write failed:", err);
     }
   }
 }
@@ -150,11 +153,11 @@ function handlePagehideWipe(): void {
   }
   lastCopiedText = null;
   try {
-    void navigator.clipboard.writeText("").catch(() => {
-      // writeText rejected during teardown — nothing we can do.
+    void navigator.clipboard.writeText("").catch((err) => {
+      console.warn("[clipboard] auto-clear write failed:", err);
     });
-  } catch {
-    // navigator.clipboard unavailable — nothing we can do.
+  } catch (err) {
+    console.warn("[clipboard] auto-clear write failed:", err);
   }
 }
 
