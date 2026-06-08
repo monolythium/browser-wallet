@@ -135,26 +135,58 @@ export function chainHealthForFailedPoll(r: {
 }
 
 /**
- * Banner label + dot/text color per health kind. Pure + exported so the
- * rendered banner and the tested contract can't drift. Untrusted is amber
- * (the STALLED token), distinct from red OFFLINE.
+ * Banner label + dot/text color + hover tooltip + tap-through flag per health
+ * kind. Pure + exported so the rendered banner and the tested contract can't
+ * drift. Untrusted is amber (the STALLED token), distinct from red OFFLINE.
+ * `tappable` is true for the not-online states (stalled / untrusted / offline)
+ * so the label routes to Operators; the callsite still gates on onOpenOperators.
  */
 export function chainHealthPresentation(kind: ChainHealth["kind"]): {
   label: string;
   color: string;
+  tooltip: string;
+  tappable: boolean;
 } {
   switch (kind) {
     case "live":
-      return { label: "LIVE", color: "var(--ok)" };
+      return {
+        label: "LIVE",
+        color: "var(--ok)",
+        tooltip: "Connected — an operator is serving your pinned chain.",
+        tappable: false,
+      };
     case "stalled":
-      return { label: "STALLED", color: "var(--warn)" };
+      return {
+        label: "STALLED",
+        color: "var(--warn)",
+        tooltip:
+          "The chain hasn't advanced for a while. Tap to review your operators.",
+        tappable: true,
+      };
     case "untrusted":
-      return { label: "UNTRUSTED OPERATOR", color: "var(--warn)" };
+      return {
+        label: "UNTRUSTED OPERATOR",
+        color: "var(--warn)",
+        tooltip:
+          "The operator answered but is on a different chain than your wallet's pin (it may have re-genesised, or be pointed at another network). Tap to switch operators.",
+        tappable: true,
+      };
     case "offline":
-      return { label: "OFFLINE", color: "var(--err)" };
+      return {
+        label: "OFFLINE",
+        color: "var(--err)",
+        tooltip:
+          "Can't reach any operator right now. Tap to review your operators.",
+        tappable: true,
+      };
     case "loading":
     default:
-      return { label: "CONNECTING…", color: "var(--fg-500)" };
+      return {
+        label: "CONNECTING…",
+        color: "var(--fg-500)",
+        tooltip: "Connecting to an operator…",
+        tappable: false,
+      };
   }
 }
 
@@ -400,42 +432,65 @@ export function ChainStatusBanner({
   // dotColor + label come from the shared, unit-tested chainHealthPresentation
   // so the rendered banner and the contract can't drift. The body wraps the
   // label with the network chip (and, for untrusted, the Operators tap-through).
+  // dotColor + label + tooltip + tap-flag come from the shared, unit-tested
+  // chainHealthPresentation so the rendered banner and the contract can't
+  // drift. Not-online states are a tap-through to Operators (gated on the
+  // optional onOpenOperators — omitted on the approval/unlock banners). The
+  // long UNTRUSTED OPERATOR label scrolls as a marquee so it doesn't crowd the
+  // network chip + action cluster.
   const pres = chainHealthPresentation(health.kind);
   const dotColor = pres.color;
-  let body: ReactNode;
-  if (health.kind === "loading") {
-    body = <span>{pres.label}</span>;
-  } else if (health.kind === "untrusted") {
-    // Amber (same token as STALLED), distinct from red OFFLINE. Tap-through to
-    // Operators when onOpenOperators is provided. No untrusted operator DATA is
-    // rendered — a static signal only.
-    body = (
-      <>
-        <span
-          {...(onOpenOperators
-            ? { onClick: onOpenOperators, role: "button" as const, tabIndex: 0 }
-            : {})}
-          style={{
-            color: pres.color,
-            fontWeight: 500,
-            cursor: onOpenOperators ? "pointer" : undefined,
-            textDecoration: onOpenOperators ? "underline" : undefined,
-          }}
-          title="This operator's chain genesis doesn't match your wallet — the network may have re-genesised, or the operator is on a different chain. Open Operators to switch."
-        >
-          {pres.label}
+  const tappable = pres.tappable && !!onOpenOperators;
+  const tapProps = tappable
+    ? { onClick: onOpenOperators, role: "button" as const, tabIndex: 0 }
+    : {};
+  const labelEl =
+    health.kind === "untrusted" ? (
+      <span
+        className="ext-banner-marquee"
+        {...tapProps}
+        title={pres.tooltip}
+        style={{
+          color: pres.color,
+          fontWeight: 500,
+          cursor: tappable ? "pointer" : undefined,
+        }}
+      >
+        <span className="ext-banner-marquee-track" aria-label={pres.label}>
+          <span style={{ textDecoration: tappable ? "underline" : undefined }}>
+            {pres.label}
+          </span>
+          <span
+            aria-hidden="true"
+            style={{ textDecoration: tappable ? "underline" : undefined }}
+          >
+            {pres.label}
+          </span>
         </span>
-        {networkChip}
-      </>
+      </span>
+    ) : (
+      <span
+        {...tapProps}
+        title={pres.tooltip}
+        style={{
+          color: pres.color,
+          fontWeight: 500,
+          cursor: tappable ? "pointer" : undefined,
+          textDecoration: tappable ? "underline" : undefined,
+        }}
+      >
+        {pres.label}
+      </span>
     );
-  } else {
-    body = (
+  const body =
+    health.kind === "loading" ? (
+      labelEl
+    ) : (
       <>
-        <span style={{ color: pres.color, fontWeight: 500 }}>{pres.label}</span>
+        {labelEl}
         {networkChip}
       </>
     );
-  }
 
   return (
     <div style={containerStyle}>
@@ -446,9 +501,7 @@ export function ChainStatusBanner({
           borderRadius: "50%",
           background: dotColor,
           boxShadow:
-            health.kind === "live" || health.kind === "stalled" || health.kind === "offline"
-              ? `0 0 6px ${dotColor}`
-              : "none",
+            health.kind === "loading" ? "none" : `0 0 6px ${dotColor}`,
           flexShrink: 0,
         }}
       />

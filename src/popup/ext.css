@@ -380,6 +380,37 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   0%, 80%, 100% { opacity: 0.2; }
   40% { opacity: 1; }
 }
+/* ChainStatusBanner long-label marquee (#42). "UNTRUSTED OPERATOR" overflows
+   the banner's left segment, so it scrolls as a seamless ticker: the track
+   holds two copies of the label and translates -50% per cycle (exactly one
+   copy width) so it loops with no visible jump. Scoped .ext-banner-* classes,
+   single keyframe — no impact on other rules. Honors prefers-reduced-motion. */
+.ext-banner-marquee {
+  display: inline-flex;
+  align-items: center;
+  max-width: 118px;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ext-banner-marquee-track {
+  display: inline-flex;
+  flex: none;
+  animation: ext-banner-marquee 7s linear infinite;
+}
+.ext-banner-marquee-track > span {
+  flex: none;
+  padding-right: 1.6em;
+}
+@keyframes ext-banner-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ext-banner-marquee-track {
+    animation: none;
+  }
+}
 .ext-pending-dot {
   position: absolute;
   top: -2px;

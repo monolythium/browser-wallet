@@ -1223,28 +1223,50 @@ describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
   });
 });
 
-describe("chainHealthPresentation (#42 untrusted = amber)", () => {
-  it("presents untrusted as amber 'UNTRUSTED OPERATOR', distinct from red OFFLINE", () => {
-    expect(chainHealthPresentation("untrusted")).toEqual({
+describe("chainHealthPresentation (#42 untrusted = amber + tap/tooltips)", () => {
+  it("presents untrusted as amber 'UNTRUSTED OPERATOR', tappable, distinct from red OFFLINE", () => {
+    expect(chainHealthPresentation("untrusted")).toMatchObject({
       label: "UNTRUSTED OPERATOR",
       color: "var(--warn)",
+      tappable: true,
     });
-    expect(chainHealthPresentation("offline")).toEqual({
+    expect(chainHealthPresentation("offline")).toMatchObject({
       label: "OFFLINE",
       color: "var(--err)",
+      tappable: true,
     });
   });
 
-  it("leaves live / stalled / loading unchanged", () => {
-    expect(chainHealthPresentation("live")).toEqual({
+  it("makes the not-online states tappable, live + loading not", () => {
+    expect(chainHealthPresentation("offline").tappable).toBe(true);
+    expect(chainHealthPresentation("stalled").tappable).toBe(true);
+    expect(chainHealthPresentation("untrusted").tappable).toBe(true);
+    expect(chainHealthPresentation("live").tappable).toBe(false);
+    expect(chainHealthPresentation("loading").tappable).toBe(false);
+  });
+
+  it("every state carries a non-empty hover tooltip", () => {
+    for (const k of [
+      "live",
+      "stalled",
+      "untrusted",
+      "offline",
+      "loading",
+    ] as const) {
+      expect(chainHealthPresentation(k).tooltip.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("leaves live / stalled / loading labels + colors unchanged", () => {
+    expect(chainHealthPresentation("live")).toMatchObject({
       label: "LIVE",
       color: "var(--ok)",
     });
-    expect(chainHealthPresentation("stalled")).toEqual({
+    expect(chainHealthPresentation("stalled")).toMatchObject({
       label: "STALLED",
       color: "var(--warn)",
     });
-    expect(chainHealthPresentation("loading")).toEqual({
+    expect(chainHealthPresentation("loading")).toMatchObject({
       label: "CONNECTING…",
       color: "var(--fg-500)",
     });
