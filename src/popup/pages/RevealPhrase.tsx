@@ -543,6 +543,11 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
               overflow: "hidden",
               cursor: "pointer",
               userSelect: "none",
+              // Don't let this tall, overflow:hidden grid shrink as a flex
+              // child of the scrolling .ext-body — otherwise it compresses to a
+              // few rows and nothing overflows/scrolls. Keep full height so
+              // .ext-body scrolls to reveal all 24 words.
+              flexShrink: 0,
             }}
           >
             <div
