@@ -41,7 +41,8 @@
     "alarms",
     "storage",
     "sidePanel",
-    "notifications"
+    "notifications",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "http://*/*",
