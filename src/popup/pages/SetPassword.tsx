@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Icon } from "../Icon";
 import { PasswordStrengthMeter } from "../components/PasswordStrengthMeter";
 import { isPasswordValid } from "../../lib/password-validation";
+import { isCommonPassword } from "../../lib/common-passwords";
 
 interface SetPasswordProps {
   onSubmit: (password: string) => void;
@@ -86,6 +87,22 @@ export function SetPassword({
           password={password}
           confirmPassword={confirm}
         />
+
+        {/* Common-password denylist hint (#41): a denylisted password can
+            pass the composition meter yet still be rejected by isPasswordValid,
+            which would otherwise disable Continue with no explanation. */}
+        {password.length > 0 && isCommonPassword(password) && (
+          <div
+            style={{
+              fontSize: "var(--fs-11)",
+              color: "var(--err)",
+              fontFamily: "var(--f-mono)",
+              lineHeight: 1.45,
+            }}
+          >
+            This password is too common — choose a less guessable one.
+          </div>
+        )}
 
         {/* Acknowledgement gate. The entire row is a
            label so a tap anywhere on the box toggles the checkbox. */}

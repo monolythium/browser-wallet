@@ -9,6 +9,8 @@
  * - At least 1 special character
  */
 
+import { isCommonPassword } from "./common-passwords.js";
+
 export interface PasswordRequirement {
   key: string;
   met: boolean;
@@ -29,9 +31,13 @@ export function validatePassword(password: string): PasswordRequirement[] {
   ];
 }
 
-/** Check if all password requirements are met */
+/** Check if all password requirements are met AND the password is not in the
+ *  common/breached-password denylist (#41 — NIST 800-63B denylist guidance on
+ *  top of the composition floor). */
 export function isPasswordValid(password: string): boolean {
-  return validatePassword(password).every((r) => r.met);
+  if (!validatePassword(password).every((r) => r.met)) return false;
+  if (isCommonPassword(password)) return false;
+  return true;
 }
 
 /** Calculate password strength based on requirements met */
