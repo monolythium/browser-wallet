@@ -316,11 +316,23 @@ export function SlhDsaBackupRevealModal({
               >
                 <button onClick={() => void handleCopy()} style={btnGhost}>
                   <Icon name="eye" size={11} />{" "}
-                  {copied ? "Copied — clears in 30 s" : "Copy"}
+                  {copied ? "Copied — auto-clears in ~30 s" : "Copy"}
                 </button>
                 <button onClick={handleDownload} style={btnGhost}>
                   Download .txt
                 </button>
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 10,
+                  color: "var(--fg-500)",
+                  lineHeight: 1.5,
+                  marginTop: 8,
+                }}
+              >
+                Copy only clears while this window stays open — clear your
+                clipboard yourself if you paste it elsewhere.
               </div>
             </>
           )}

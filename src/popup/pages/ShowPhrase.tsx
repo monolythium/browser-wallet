@@ -76,8 +76,10 @@ export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
             lineHeight: 1.5,
           }}
         >
-          Write these words down. Anyone with these words controls your
-          funds. Monolythium cannot recover them.
+          Write these words down on paper, in order, and keep them
+          offline. Don&apos;t screenshot them or save them to a file or
+          the cloud. Anyone with these words controls your funds —
+          Monolythium cannot recover them.
         </div>
       </div>
 

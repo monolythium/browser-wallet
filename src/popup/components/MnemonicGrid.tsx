@@ -121,17 +121,17 @@ export function MnemonicGrid({
               justifyContent: "center",
               gap: 8,
               width: "100%",
-              padding: "10px 12px",
+              padding: "8px 12px",
               borderRadius: 10,
+              // Secondary affordance: copy is the convenience, handwriting is
+              // the recommended path — so this reads as a quiet outline
+              // button (transparent fill, muted text), not a primary action.
               border: "1px solid var(--fg-700)",
-              background:
-                copyState === "copied"
-                  ? "rgba(88,200,140,0.10)"
-                  : "rgba(255,255,255,0.04)",
+              background: "transparent",
               color:
-                copyState === "copied" ? "var(--ok)" : "var(--fg-100)",
+                copyState === "copied" ? "var(--ok)" : "var(--fg-400)",
               fontFamily: "var(--f-sans)",
-              fontSize: 12.5,
+              fontSize: 12,
               fontWeight: 500,
               cursor: "pointer",
               transition: "all 160ms var(--e-out)",
@@ -142,7 +142,7 @@ export function MnemonicGrid({
               size={13}
             />
             {copyState === "copied"
-              ? "Copied — clears in 30 s"
+              ? "Copied — auto-clears in ~30 s"
               : copyState === "failed"
                 ? "Copy failed — try again"
                 : "Copy to clipboard"}
@@ -157,8 +157,8 @@ export function MnemonicGrid({
               textAlign: "center",
             }}
           >
-            The clipboard is cleared 30 s after you copy. Save the phrase
-            somewhere safe first.
+            Auto-clears ~30 s after copy, only while the wallet stays open.
+            Clear your clipboard yourself if you paste the phrase elsewhere.
           </div>
         </>
       )}

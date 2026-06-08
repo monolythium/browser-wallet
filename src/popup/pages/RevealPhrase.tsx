@@ -322,8 +322,9 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           >
             On the next screen, tap the words to reveal them. Tap
             again to hide. The phrase auto-hides after{" "}
-            {AUTO_HIDE_SECONDS} seconds. If you copy it, your clipboard is
-            cleared {AUTO_HIDE_SECONDS} seconds later.
+            {AUTO_HIDE_SECONDS} seconds. If you copy it, your clipboard
+            auto-clears about {AUTO_HIDE_SECONDS} s later while the wallet
+            stays open — clear it yourself if you paste it somewhere else.
           </div>
         </div>
 
@@ -405,6 +406,23 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           </div>
         </div>
 
+        {/* Handwrite-first guidance (primary safe path). The copy button
+           below stays available but reads as the secondary convenience. */}
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(242,180,65,0.08)",
+            border: "1px solid rgba(242,180,65,0.4)",
+            color: "var(--fg-100)",
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          Write these words down on paper, in order, and keep them offline.
+          Don&apos;t screenshot them or save them to a file or the cloud.
+        </div>
+
         {/* Copy button moved ABOVE the reveal-toggle
            wrapper. Previously RevealPhrase rendered TWO copy buttons:
            one inside MnemonicGrid (default-on, embedded under the
@@ -419,13 +437,14 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         <button
           onClick={() => void handleCopy()}
           style={{
-            padding: "10px 12px",
+            padding: "8px 12px",
             borderRadius: 10,
+            // Secondary affordance — quiet outline, not a primary action.
             border: "1px solid var(--fg-700)",
-            background: "rgba(255,255,255,0.04)",
-            color: copied ? "var(--ok)" : "var(--fg-100)",
+            background: "transparent",
+            color: copied ? "var(--ok)" : "var(--fg-400)",
             fontFamily: "var(--f-sans)",
-            fontSize: 12.5,
+            fontSize: 12,
             fontWeight: 500,
             cursor: "pointer",
             display: "flex",
@@ -436,9 +455,22 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         >
           <Icon name={copied ? "check" : "copy"} size={13} />
           {copied
-            ? "Copied — clears in 30 s"
+            ? "Copied — auto-clears in ~30 s"
             : "Copy to clipboard"}
         </button>
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            letterSpacing: "0.04em",
+            lineHeight: 1.5,
+            textAlign: "center",
+          }}
+        >
+          Only clears while the wallet stays open — clear it yourself if you
+          paste it elsewhere.
+        </div>
 
         {/* Tap-to-reveal click target. The grid is blurred (~12 px) by
             default; tapping anywhere on the area toggles `revealed`.
