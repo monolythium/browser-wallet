@@ -59,12 +59,14 @@ function execCommandWrite(value: string): boolean {
   const active = document.activeElement as HTMLElement | null;
   const ta = document.createElement("textarea");
   ta.value = value;
-  ta.setAttribute("readonly", "");
-  ta.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;";
+  // Off-screen but RENDERED — execCommand ignores display:none / hidden /
+  // opacity:0 elements. No focus() call: textarea.select() makes the selection
+  // execCommand('copy') copies, and execCommand (unlike the async writeText) is
+  // NOT gated on document focus.
+  ta.style.cssText = "position:fixed;top:0;left:-9999px;width:1px;height:1px;";
   document.body.appendChild(ta);
   let ok = false;
   try {
-    ta.focus();
     ta.select();
     ok = document.execCommand("copy");
   } catch {
@@ -81,12 +83,14 @@ function execCommandWrite(value: string): boolean {
 
 /**
  * Clear the OS clipboard synchronously and focus-independently (legacy path).
- * Writes "" — or, if the browser declines to copy an empty selection, a single
- * space — so the recovery phrase is removed even when the document isn't
- * focused. Returns true on success.
+ * execCommand('copy') copies a SELECTION, and an EMPTY selection is a no-op
+ * that would NOT overwrite the seed — so we copy a single space. That removes
+ * the recovery phrase even when the document is unfocused (where the async
+ * writeText is denied), at the cost of leaving a harmless space rather than a
+ * truly empty clipboard. Returns true on success.
  */
 function clearClipboardLegacy(): boolean {
-  return execCommandWrite("") || execCommandWrite(" ");
+  return execCommandWrite(" ");
 }
 
 /**
