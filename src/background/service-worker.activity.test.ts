@@ -5095,6 +5095,85 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// #36 — passkey daily-usage ledger persisted to chrome.storage.session so it
+// survives MV3 SW hibernation instead of resetting the rolling window.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("passkey daily-usage ledger persistence (#36)", () => {
+  const LYTH = 1_000_000_000_000_000_000n; // 1e18 lythoshi
+  const DAILY_CAP = 100n * LYTH;
+  const SESSION_KEY = "mono.session.passkey-usage.v1";
+  const hex = (v: bigint) => "0x" + v.toString(16);
+
+  function enableDailyCap() {
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "daily", dailyCapWei: DAILY_CAP },
+      credentials: [{ credentialId: "c1" }],
+    };
+  }
+
+  function record(vaultId: string, valueWei: bigint) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "passkey-record-usage",
+      payload: { vaultId, valueWeiHex: hex(valueWei) },
+    });
+  }
+  function evaluate(vaultId: string, valueWei: bigint) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "passkey-evaluate",
+      payload: { vaultId, valueWeiHex: hex(valueWei) },
+    }) as Promise<{ ok: boolean; decision?: { kind: string; mode?: string } }>;
+  }
+
+  it("passkey-record-usage persists to chrome.storage.session as a decimal string", async () => {
+    enableDailyCap();
+    await record("v1", 60n * LYTH);
+    const stored = storageSession[SESSION_KEY] as
+      | Record<string, { at: number; valueWei: string }[]>
+      | undefined;
+    const entries = stored?.v1;
+    expect(entries).toBeDefined();
+    expect(entries).toHaveLength(1);
+    // bigint is serialized as a decimal string (survives structured-clone).
+    expect(entries?.[0]?.valueWei).toBe((60n * LYTH).toString());
+    expect(typeof entries?.[0]?.at).toBe("number");
+  });
+
+  it("recorded usage persists in session and counts toward the daily cap (survives SW restart)", async () => {
+    enableDailyCap();
+    await record("v1", 60n * LYTH);
+    // The ledger now lives ONLY in chrome.storage.session, so a fresh read
+    // (as a restarted SW would do) still sees the prior usage.
+    const over = await evaluate("v1", 50n * LYTH); // 60 + 50 = 110 > 100
+    expect(over.ok).toBe(true);
+    expect(over.decision?.kind).toBe("over-limit");
+    expect(over.decision?.mode).toBe("daily");
+
+    const ok = await evaluate("v1", 30n * LYTH); // 60 + 30 = 90 <= 100
+    expect(ok.decision?.kind).toBe("passkey-ok");
+  });
+
+  it("prunes >24h usage entries on read", async () => {
+    enableDailyCap();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    storageSession[SESSION_KEY] = {
+      v1: [
+        // stale (>24h) — must be pruned and not counted.
+        { at: Date.now() - DAY_MS - 60_000, valueWei: (90n * LYTH).toString() },
+        // fresh.
+        { at: Date.now(), valueWei: (30n * LYTH).toString() },
+      ],
+    };
+    // If the stale 90 were counted: 90 + 30 + 50 = 170 > 100 → over-limit.
+    // With pruning: 30 + 50 = 80 <= 100 → passkey-ok.
+    const r = await evaluate("v1", 50n * LYTH);
+    expect(r.decision?.kind).toBe("passkey-ok");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // T4-04 (Item D) — fee binding + sane ceiling on wallet-send-tx.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {

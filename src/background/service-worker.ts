@@ -156,6 +156,7 @@ import {
 } from "../shared/notifications.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
+  DAILY_CAP_WINDOW_MS,
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
   evaluatePolicy as evaluatePasskeyPolicy,
@@ -2125,19 +2126,84 @@ let cachedOperator: {
   checkedAt: number;
 } | null = null;
 
-// ---- In-memory passkey usage ledger ----
+// ---- Passkey usage ledger (daily-cap mode) ----
 //
 // Per-vault list of compatibility-shaped `{ at, valueWei }` entries
-// containing lythoshi for txs signed under the passkey-unlock path.
-// Used to enforce the daily-cap mode of `PasskeyPolicy`. Lives in memory
-// only — SW hibernation drops it, which is fine: the daily cap is purely
-// a wallet-side spam guard, not a security invariant, and a fresh SW boot
-// starts the window at zero. NOTE: in DAILY mode the rolling sum is the
-// ONLY control — daily mode applies no per-tx ceiling (see passkey.ts
-// `evaluatePolicy`), so the worst case after a ledger reset is one full
-// daily-cap's worth of passkey-unlocked value, NOT a single per-tx-capped
-// tx. The per-tx limit binds every tx only in per-tx mode.
-const passkeyUsage = new Map<string, { at: number; valueWei: bigint }[]>();
+// (lythoshi) for txs signed under the passkey-unlock path. Enforces the
+// daily-cap mode of `PasskeyPolicy`.
+//
+// Persisted in chrome.storage.session (in-memory, SW-scope, cleared on
+// browser restart — the same tier as the MEK, never on disk) rather than a
+// plain module-level Map, so MV3 SW hibernation no longer silently resets
+// the rolling daily window mid-session (#36). This is NOT a security
+// invariant — the daily cap is a wallet-side spam guard — but persistence
+// makes daily mode behave as users expect across the frequent SW restarts.
+// NOTE: in DAILY mode the rolling sum is the ONLY control (daily mode
+// applies no per-tx ceiling — see passkey.ts `evaluatePolicy`); the per-tx
+// limit binds every tx only in per-tx mode. bigint doesn't survive the
+// structured-clone boundary into chrome.storage reliably, so `valueWei` is
+// stored as a decimal string and rehydrated to bigint.
+const SESSION_KEY_PASSKEY_USAGE = "mono.session.passkey-usage.v1";
+type PasskeyUsageWire = Record<string, { at: number; valueWei: string }[]>;
+
+async function readPasskeyUsageWire(): Promise<PasskeyUsageWire> {
+  try {
+    const raw = await chrome.storage.session.get(SESSION_KEY_PASSKEY_USAGE);
+    const stored = raw[SESSION_KEY_PASSKEY_USAGE];
+    if (!stored || typeof stored !== "object") return {};
+    return stored as PasskeyUsageWire;
+  } catch {
+    return {};
+  }
+}
+
+/** Pruned (<24h) usage entries for a vault, decoded to bigint lythoshi.
+ *  No-mock: a missing/malformed store yields an empty list, never a
+ *  fabricated entry. */
+async function readPasskeyUsageEntries(
+  vaultId: string,
+): Promise<{ at: number; valueWei: bigint }[]> {
+  const wire = await readPasskeyUsageWire();
+  const entries = wire[vaultId];
+  if (!Array.isArray(entries)) return [];
+  const cutoff = Date.now() - DAILY_CAP_WINDOW_MS;
+  const out: { at: number; valueWei: bigint }[] = [];
+  for (const e of entries) {
+    if (!e || typeof e.at !== "number" || typeof e.valueWei !== "string") {
+      continue;
+    }
+    if (e.at < cutoff) continue; // prune-on-read
+    let v: bigint;
+    try {
+      v = BigInt(e.valueWei);
+    } catch {
+      continue;
+    }
+    out.push({ at: e.at, valueWei: v });
+  }
+  return out;
+}
+
+/** Append a usage entry for a vault and persist to session, pruning
+ *  >24h entries so the stored blob stays bounded. Best-effort. */
+async function recordPasskeyUsageEntry(
+  vaultId: string,
+  valueWei: bigint,
+): Promise<void> {
+  const wire = await readPasskeyUsageWire();
+  const cutoff = Date.now() - DAILY_CAP_WINDOW_MS;
+  const prior = Array.isArray(wire[vaultId]) ? wire[vaultId]! : [];
+  const kept = prior.filter(
+    (e) => e && typeof e.at === "number" && e.at >= cutoff,
+  );
+  kept.push({ at: Date.now(), valueWei: valueWei.toString() });
+  wire[vaultId] = kept;
+  try {
+    await chrome.storage.session.set({ [SESSION_KEY_PASSKEY_USAGE]: wire });
+  } catch {
+    // session set best-effort.
+  }
+}
 
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
@@ -6663,7 +6729,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const state = await readPasskeyStateV4(p.vaultId);
-        const usage = passkeyUsage.get(p.vaultId) ?? [];
+        const usage = await readPasskeyUsageEntries(p.vaultId);
         const decision = evaluatePasskeyPolicy({
           state,
           valueWei: valueLythoshi,
@@ -6725,9 +6791,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch {
         return { ok: false, reason: "valueWeiHex is not a hex bigint" };
       }
-      const entries = passkeyUsage.get(p.vaultId) ?? [];
-      entries.push({ at: Date.now(), valueWei: valueLythoshi });
-      passkeyUsage.set(p.vaultId, entries);
+      await recordPasskeyUsageEntry(p.vaultId, valueLythoshi);
       return { ok: true };
     }
     case "passkey-set-policy": {
@@ -8743,10 +8807,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             } catch {
               return { ok: false, reason: "valueWeiHex is not a hex bigint" };
             }
+            const recentUsage = await readPasskeyUsageEntries(activeVaultId);
             const decision = evaluatePasskeyPolicy({
               state: pkState,
               valueWei: pkValue,
-              recentUsage: passkeyUsage.get(activeVaultId) ?? [],
+              recentUsage,
               now: Date.now(),
             });
             if (decision.kind === "over-limit") {
