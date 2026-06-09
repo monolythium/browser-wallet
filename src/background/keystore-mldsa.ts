@@ -999,11 +999,13 @@ export async function signWithVaultV4(
   } finally {
     vek.fill(0);
   }
+  let backend: MlDsa65Backend | null = null;
   try {
-    const backend = MlDsa65Backend.fromSeed(seed);
+    backend = MlDsa65Backend.fromSeed(seed);
     return backend.signPrehash(digest);
   } finally {
     seed.fill(0);
+    backend?.dispose(); // S1-01: wipe the transient signer's secret after use
   }
 }
 
@@ -1026,11 +1028,13 @@ export async function getVaultPubkeyV4(vaultId: string): Promise<string> {
   } finally {
     vek.fill(0);
   }
+  let backend: MlDsa65Backend | null = null;
   try {
-    const backend = MlDsa65Backend.fromSeed(seed);
+    backend = MlDsa65Backend.fromSeed(seed);
     return "0x" + bytesToHex(backend.publicKey());
   } finally {
     seed.fill(0);
+    backend?.dispose(); // S1-01: wipe the transient backend's secret after use
   }
 }
 
@@ -1564,6 +1568,9 @@ async function appendVaultRecord(
 ): Promise<{ vaultId: string; mnemonic: string; address: string }> {
   const container = await loadVaultsContainerV4();
   if (!container) throw new Error("no v4 vaults container");
+  // NOTE: this backend is RETAINED as the held session backend below
+  // (`unlocked = { backend, address }` — adding a fresh vault makes it active),
+  // so it must NOT be disposed here — lockV4() wipes it (S1-01) on lock.
   const backend = MlDsa65Backend.fromSeed(seed);
   const address = await backend.getAddress();
   if (container.vaults.some((v) => v.addr === address)) {
@@ -1676,14 +1683,19 @@ export async function verifyContainerPasswordV4(
   }
 }
 
-/** Lock — drop the in-memory backend reference. The backend's secret key
- * is held by the SDK in private fields; we cannot zero it deterministically,
- * but releasing the reference makes it eligible for GC.
+/** Lock — wipe the in-memory backend, then drop its reference. The backend's
+ * ML-DSA-65 secret key is held by the SDK; `dispose()` deterministically zeroes
+ * the SDK-held copy (S1-01 / Stage-1 #11) before we release the reference for
+ * GC, so the secret does not linger in the JS heap until the next collection.
+ * `dispose()` is idempotent and leaves public material usable; we drop the
+ * reference anyway. (Requires `@monolythium/core-sdk` >= 0.4.9, which ships
+ * `MlDsa65Backend.dispose()`.)
  *
  * Also zeros + drops the cached MEK and forgets the active vault id (Phase
  * 5 multi-vault state). After lock, any vault-switch or vault-add call
  * fails until the user re-unlocks the container. */
 export function lockV4(): void {
+  unlocked?.backend.dispose();
   unlocked = null;
   if (mekCache) {
     mekCache.fill(0);
@@ -1769,6 +1781,9 @@ async function commitVaultFromSeed(
   }
 
   // Derive the keypair eagerly for the address that goes in the record.
+  // NOTE: this backend is RETAINED as the held session backend below
+  // (`unlocked = { backend, address }`, unlock-on-create), so it must NOT be
+  // disposed here — lockV4() wipes it (S1-01) when the session ends.
   const backend = MlDsa65Backend.fromSeed(seed);
   const address = await backend.getAddress();
 

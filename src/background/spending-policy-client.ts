@@ -222,6 +222,10 @@ export async function buildSpendingPolicyClaim(
       ok: false,
       reason: (e as Error)?.message ?? "failed to build spending-policy claim",
     };
+  } finally {
+    // S1-01: wipe the fresh sub-account signer's secret after the claim is built
+    // (covers both the success path and the error-return above).
+    backend.dispose();
   }
 
   return {
