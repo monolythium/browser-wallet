@@ -604,6 +604,36 @@ export async function submitSealedMlDsaTx(
   return { txHash, via, innerSighashHex: built.innerSighashHex };
 }
 
+/** Encrypted submissions carry a much higher intrinsic execution-unit floor than
+ *  plaintext: the chain must ML-KEM-decrypt + threshold-reconstruct + verify the
+ *  sealed envelope before it can execute the inner tx (~227k units of fixed seal
+ *  overhead; observed floors ~248–250k). The wallet's per-tx-type limits (e.g.
+ *  30k send, 100k delegate) are calibrated for plaintext and fall below that
+ *  floor, so the chain rejects a sealed tx with "execution-unit limit X below
+ *  intrinsic floor Y" (-32047). Raise the limit by the seal overhead so EVERY tx
+ *  type clears the floor. Additive (base + overhead, not a flat floor) so a tx
+ *  that already needs a high base — e.g. an MRV deploy with large calldata —
+ *  still clears it. The fee is charged on units CONSUMED, so the extra headroom
+ *  is a cap, not a charge; the genuine cost rise is the chain's encrypted-
+ *  execution overhead, which the fee surfaces should reflect (a follow-up — see
+ *  the FIX report). Applied only on the sealed path (in the dispatcher) so
+ *  buildSealedSubmission stays a pure "seal this exact tx" and the canonical-hash
+ *  invariant is intact. */
+const ENCRYPTED_SEAL_OVERHEAD_UNITS = 250_000n;
+
+export function withEncryptedExecutionUnitFloor(
+  req: EthSendTxFields,
+): EthSendTxFields {
+  let base: bigint;
+  try {
+    base = BigInt(req.gas);
+  } catch {
+    base = 0n;
+  }
+  const raised = base + ENCRYPTED_SEAL_OVERHEAD_UNITS;
+  return { ...req, gas: `0x${raised.toString(16)}` };
+}
+
 /** Submit dispatcher — the SINGLE chokepoint every wallet tx type funnels
  *  through (send / stake / delegate / redelegate / claim / complete-redemption /
  *  spending-policy / multisig / MRV plan+call / emergency). Chooses the
@@ -637,7 +667,11 @@ export async function submitMlDsaTx(req: EthSendTxFields): Promise<{
     roster = null;
   }
   if (roster !== null) {
-    return submitSealedMlDsaTx(req, roster);
+    // Sealed submissions need a higher execution-unit limit (the seal-decrypt +
+    // verify overhead pushes the chain's intrinsic floor to ~248–250k); raise it
+    // here so every tx type clears the floor. The plaintext fallback below keeps
+    // its original (lower) limit.
+    return submitSealedMlDsaTx(withEncryptedExecutionUnitFloor(req), roster);
   }
   return submitPlaintextMlDsaTx(req);
 }

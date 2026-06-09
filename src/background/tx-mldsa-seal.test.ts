@@ -342,3 +342,68 @@ describe("submitMlDsaTx — seal-vs-plaintext decision (single chokepoint, fail-
     );
   });
 });
+
+describe("withEncryptedExecutionUnitFloor — clears the encrypted intrinsic floor", () => {
+  const originalFetch = globalThis.fetch;
+  const TEST_SEED = new Uint8Array(32).fill(4);
+  const BASE = {
+    to: "0x" + "ab".repeat(20),
+    value: "0x0",
+    data: "0x",
+    gas: "0x7530", // 30000 — a plaintext send limit
+    nonce: "0x4",
+    maxFeePerGas: "0x3b9aca00",
+    maxPriorityFeePerGas: "0x3b9aca00",
+    chainIdHex: "0x10f2c",
+  };
+  beforeEach(() => {
+    vi.resetModules();
+    installFetch();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("raises a plaintext per-tx-type limit above the observed encrypted floors", async () => {
+    const tx = await import("./tx-mldsa.js");
+    const send = tx.withEncryptedExecutionUnitFloor({ ...BASE, gas: "0x7530" }); // 30000
+    expect(BigInt(send.gas)).toBe(280000n); // 30000 + 250000
+    expect(BigInt(send.gas)).toBeGreaterThan(248213n); // observed send floor
+    const delegate = tx.withEncryptedExecutionUnitFloor({
+      ...BASE,
+      gas: "0x186a0", // 100000
+    });
+    expect(BigInt(delegate.gas)).toBe(350000n);
+    expect(BigInt(delegate.gas)).toBeGreaterThan(249301n); // observed delegate floor
+    expect(send.to).toBe(BASE.to);
+    expect(send.nonce).toBe(BASE.nonce); // other fields untouched
+  });
+
+  it("is additive so a high-base tx (e.g. MRV) still clears the floor", async () => {
+    const tx = await import("./tx-mldsa.js");
+    const mrv = tx.withEncryptedExecutionUnitFloor({
+      ...BASE,
+      gas: "0x7a120", // 500000
+    });
+    expect(BigInt(mrv.gas)).toBe(750000n);
+  });
+
+  it("the dispatcher seals the FLOOR-RAISED tx (receipt hash = bumped tx, not original)", async () => {
+    rosterToServe = makeRosterSource();
+    submitEncryptedResponse = { result: "0x" + "55".repeat(32) };
+    const backend = MlDsa65Backend.fromSeed(TEST_SEED);
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    const tx = await import("./tx-mldsa.js");
+    const r = await tx.submitMlDsaTx(BASE);
+    // The sealed tx's canonical hash equals the plaintext hash of the
+    // FLOOR-RAISED tx — proving the dispatcher sealed the bumped tx (and the
+    // canonical-hash invariant still holds for the bumped tx).
+    const plainBumped = await tx.buildPlaintextSubmission({
+      txReq: tx.withEncryptedExecutionUnitFloor(BASE),
+    });
+    const plainOriginal = await tx.buildPlaintextSubmission({ txReq: BASE });
+    expect(r.txHash).toBe(plainBumped.innerTxHashHex);
+    expect(r.txHash).not.toBe(plainOriginal.innerTxHashHex); // the bump took effect
+  });
+});
