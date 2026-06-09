@@ -7,6 +7,9 @@
 
 import {
   buildPlaintextSubmission as sdkBuildPlaintextSubmission,
+  parseClusterSealKeys,
+  type ClusterSealKeys,
+  type ClusterSealKeysSource,
   type NativeEvmTxFields,
   type NativeTxExtensionLike,
 } from "@monolythium/core-sdk/crypto";
@@ -429,4 +432,78 @@ export async function submitPlaintextMlDsaTx(req: EthSendTxFields): Promise<{
     built.innerTxHashHex,
   );
   return { txHash, via, innerSighashHex: built.innerSighashHex };
+}
+
+// ----- LythiumSeal encrypted (scheme-3) submission path -----
+//
+// On a chain running with the encrypted-mempool milestone ON (v0.1.44+),
+// `mesh_submitTx` is rejected ("-32047 plaintext mempool entry not allowed:
+// encrypted envelope required"). The wallet then seals the *already-signed*
+// inner tx to the operator cluster's ML-KEM-768 roster and submits the envelope
+// via `lyth_submitEncrypted`. The seal is confidentiality only — the inner
+// ML-DSA-65 signature + the canonical inner-tx hash are unchanged, so the
+// receipt is still keyed on the same hash the plaintext path produces.
+//
+// Roster trust: `fetchClusterSealKeys` reads `lyth_getClusterSealKeys` via
+// `testnetJsonRpc`, which skips any operator whose chain identity != the genesis
+// pin (`verifyOperatorGenesis`), so the roster only ever comes from a
+// genesis-trusted operator. The SDK's `parseClusterSealKeys` then recomputes the
+// roster hash from the served ek set and, when the source carries one, requires
+// the supplied hash to match — so the wallet can never seal under a roster hash
+// that does not commit to the exact recipient set it seals to.
+
+/** Soft TTL for the cluster seal roster cache. The roster rotates on cluster
+ *  membership / epoch changes (infrequent); a short TTL bounds staleness while
+ *  avoiding an extra RPC on every send. A stale roster the chain rejects
+ *  surfaces honestly and the next attempt re-fetches a fresh, re-validated one.
+ *  (Tune once the live rotation cadence is observed — see the FIX report.) */
+const SEAL_ROSTER_TTL_MS = 30_000;
+
+interface CachedClusterSealKeys {
+  clusterId: number;
+  epoch: bigint;
+  keys: ClusterSealKeys;
+  fetchedAtMs: number;
+}
+let cachedClusterSealKeys: CachedClusterSealKeys | null = null;
+
+/** Force-fetch + validate the cluster seal roster for `clusterId` from a
+ *  genesis-trusted operator, and refresh the cache. `parseClusterSealKeys`
+ *  validates the shape (ek lengths, contiguous `1..=n` indices, `2<=t<=n`) and
+ *  the roster hash; a malformed/forged roster throws here rather than being
+ *  sealed to. Prefer {@link getClusterSealKeys} in the hot path. */
+export async function fetchClusterSealKeys(
+  clusterId = 0,
+): Promise<ClusterSealKeys> {
+  const { result } = await testnetJsonRpc<
+    ClusterSealKeysSource & { clusterId?: number }
+  >("lyth_getClusterSealKeys", [clusterId]);
+  const keys = parseClusterSealKeys({
+    ...result,
+    clusterId: result.clusterId ?? clusterId,
+  });
+  cachedClusterSealKeys = {
+    clusterId: keys.clusterId,
+    epoch: keys.epoch,
+    keys,
+    fetchedAtMs: Date.now(),
+  };
+  return keys;
+}
+
+/** Cached cluster seal roster accessor (TTL `SEAL_ROSTER_TTL_MS`). Returns the
+ *  cached, already-validated roster within the TTL; otherwise force-fetches +
+ *  re-validates, which also picks up an epoch rotation. */
+export async function getClusterSealKeys(
+  clusterId = 0,
+): Promise<ClusterSealKeys> {
+  const cached = cachedClusterSealKeys;
+  if (
+    cached !== null &&
+    cached.clusterId === clusterId &&
+    Date.now() - cached.fetchedAtMs < SEAL_ROSTER_TTL_MS
+  ) {
+    return cached.keys;
+  }
+  return fetchClusterSealKeys(clusterId);
 }
