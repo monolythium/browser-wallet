@@ -229,7 +229,10 @@ export function MrvNative({
   const submittedTxHash = submitResult?.txHash ?? null;
 
   useEffect(() => {
-    if (submittedTxHash === null) {
+    // #31: gated on devMode so no receipt poll fires behind the dev-mode stub.
+    // (submittedTxHash is null until a submit, which is unreachable for a
+    // non-dev user who only sees the stub, but guard explicitly anyway.)
+    if (!devMode || submittedTxHash === null) {
       receiptPollStartedAtRef.current = null;
       return;
     }
@@ -306,9 +309,16 @@ export function MrvNative({
       cancelled = true;
       stop();
     };
-  }, [chainIdHex, submittedTxHash]);
+  }, [chainIdHex, submittedTxHash, devMode]);
 
   useEffect(() => {
+    // #31: no pre-stub network. A non-dev (but unlocked) user can navigate to
+    // this dev-gated route and render the "Developer mode required" stub below;
+    // the effect's hooks still run, so without this guard it would probe the
+    // chain head + a 128-block orderbook-delta range on mount, leaking the
+    // user's IP + activity to the operator for a page they can't use. Re-runs
+    // (and fetches) only once dev-mode is flipped ON.
+    if (!devMode) return;
     let cancelled = false;
 
     const checkReplayReadiness = async () => {
@@ -376,7 +386,7 @@ export function MrvNative({
     return () => {
       cancelled = true;
     };
-  }, [chainIdHex]);
+  }, [chainIdHex, devMode]);
 
   // Whole route is developer-only — the RISC-V contract console (bytecode,
   // raw lythoshi, RPC metadata, proof transcripts) is technical tooling and
