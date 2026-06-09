@@ -10,6 +10,18 @@ describe("classifySendError — kind detection", () => {
     ["Chain rejected: plaintext mempool entry not allowed: encrypted envelope required", "plaintext-not-allowed"],
     ["plaintext not allowed", "plaintext-not-allowed"],
     ["encrypted mempool required", "plaintext-not-allowed"],
+    // Ordering regression guard: the chain wraps the encrypted-required
+    // rejection in "upstream unavailable: mempool: …", so the SPECIFIC
+    // plaintext-not-allowed branch must win over the GENERIC chain-quarantined
+    // "upstream unavailable" match (the two branches were reordered for this).
+    [
+      "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
+      "plaintext-not-allowed",
+    ],
+    // …but a bare "upstream unavailable" outage WITHOUT the encrypted substring
+    // must STILL fall through to chain-quarantined (the reorder must not broaden).
+    ["upstream unavailable", "chain-quarantined"],
+    ["protocore quarantine clear; state-root mismatch", "chain-quarantined"],
     ["insufficient funds for transfer", "insufficient-funds"],
     ["INSUFFICIENT BALANCE", "insufficient-funds"],
     ["not enough balance to cover gas", "insufficient-funds"],

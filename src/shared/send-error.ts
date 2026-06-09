@@ -96,6 +96,38 @@ export function classifySendError(
     };
   }
 
+  // Chain requires encrypted transactions but this wallet submits plaintext
+  // only. When the encrypted-mempool milestone is ON, mempool admission rejects
+  // every plaintext tx pre-signature ("plaintext mempool entry not allowed:
+  // encrypted envelope required"; code -32040 PlaintextNotAllowed, or -32047 on
+  // v0.1.44-testnet). Classify it so the user sees an honest explanation instead
+  // of a raw debugger string. This does NOT add an encrypted-send path — it only
+  // explains the rejection.
+  //
+  // MUST precede the chain-quarantined branch below: the chain wraps this as
+  // "upstream unavailable: mempool: plaintext … not allowed …", so the generic
+  // "upstream unavailable" match would otherwise intercept it and show the wrong
+  // (operator-outage) message. The predicate stays SPECIFIC (the plaintext /
+  // encrypted-envelope substring) so a genuine "upstream unavailable" outage
+  // WITHOUT that substring still falls through to chain-quarantined — see the
+  // send-error.test ordering regression guard.
+  if (
+    (lower.includes("plaintext") &&
+      (lower.includes("not allowed") || lower.includes("encrypted envelope"))) ||
+    lower.includes("encrypted mempool required")
+  ) {
+    return {
+      kind: "plaintext-not-allowed",
+      headline: "Encrypted transactions required",
+      body:
+        "This network currently requires encrypted transactions, and this " +
+        "wallet version sends plaintext ones only — so sends are unavailable " +
+        "here until an encrypted-send-capable build ships. Your funds are " +
+        "unaffected: the transaction was rejected before it was signed.",
+      severity: "err",
+    };
+  }
+
   // Operator node quarantined / PQ-checkpoint or state-root mismatch / upstream
   // unavailable. The operator's node has stopped serving RPC (a checkpoint
   // state-root divergence, or its upstream is down). The raw message is a
@@ -103,7 +135,8 @@ export function classifySendError(
   // checkpoint state roots, signer pubkey prefixes, a `protocore quarantine
   // clear` command — useless and alarming to a normal user. Plain body +
   // "See Operators"; the raw detail is shown only in developer mode at the
-  // render sites.
+  // render sites. (Checked AFTER plaintext-not-allowed above so a wrapped
+  // encrypted-required rejection routes to the specific message.)
   if (
     lower.includes("quarantin") ||
     lower.includes("checkpointstaterootmismatch") ||
@@ -121,29 +154,6 @@ export function classifySendError(
         "automatically and uses other operators — your funds are unaffected. " +
         "See Operators.",
       severity: "warn",
-    };
-  }
-
-  // Chain requires encrypted transactions but this wallet submits plaintext
-  // only. When the encrypted-mempool milestone is ON, mempool admission rejects
-  // every plaintext tx pre-signature with -32040 PlaintextNotAllowed ("plaintext
-  // mempool entry not allowed: encrypted envelope required"). Classify it so the
-  // user sees an honest explanation instead of a raw debugger string. This does
-  // NOT add an encrypted-send path — it only explains the rejection.
-  if (
-    (lower.includes("plaintext") &&
-      (lower.includes("not allowed") || lower.includes("encrypted envelope"))) ||
-    lower.includes("encrypted mempool required")
-  ) {
-    return {
-      kind: "plaintext-not-allowed",
-      headline: "Encrypted transactions required",
-      body:
-        "This network currently requires encrypted transactions, and this " +
-        "wallet version sends plaintext ones only — so sends are unavailable " +
-        "here until an encrypted-send-capable build ships. Your funds are " +
-        "unaffected: the transaction was rejected before it was signed.",
-      severity: "err",
     };
   }
 
