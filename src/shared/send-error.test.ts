@@ -22,6 +22,12 @@ describe("classifySendError — kind detection", () => {
     // must STILL fall through to chain-quarantined (the reorder must not broaden).
     ["upstream unavailable", "chain-quarantined"],
     ["protocore quarantine clear; state-root mismatch", "chain-quarantined"],
+    // intrinsic-floor rejection (esp. encrypted sealed submissions) — must NOT
+    // read as a chain-quarantine despite the "upstream unavailable" wrapper.
+    [
+      "upstream unavailable: mempool: tx execution-unit limit 30000 below intrinsic floor 248213",
+      "gas-estimation",
+    ],
     ["insufficient funds for transfer", "insufficient-funds"],
     ["INSUFFICIENT BALANCE", "insufficient-funds"],
     ["not enough balance to cover gas", "insufficient-funds"],

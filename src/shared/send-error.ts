@@ -128,6 +128,27 @@ export function classifySendError(
     };
   }
 
+  // Execution-unit limit below the chain's intrinsic floor. The chain wraps it
+  // as "upstream unavailable: mempool: tx execution-unit limit X below intrinsic
+  // floor Y" (-32047), which the chain-quarantined branch below would otherwise
+  // steal — so it MUST be checked first. Encrypted (sealed) submissions carry a
+  // much higher floor (~250k); the wallet raises the limit automatically for
+  // them, so a residual hit here is rare and means the raise was still short.
+  if (
+    lower.includes("below intrinsic floor") ||
+    (lower.includes("execution-unit limit") && lower.includes("intrinsic"))
+  ) {
+    return {
+      kind: "gas-estimation",
+      headline: "Transaction limit too low",
+      body:
+        "The network rejected the transaction's execution-unit limit as below " +
+        "its minimum for this transaction. Your funds are unaffected — it was " +
+        "rejected before inclusion.",
+      severity: "err",
+    };
+  }
+
   // Operator node quarantined / PQ-checkpoint or state-root mismatch / upstream
   // unavailable. The operator's node has stopped serving RPC (a checkpoint
   // state-root divergence, or its upstream is down). The raw message is a
