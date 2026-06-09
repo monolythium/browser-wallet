@@ -28,6 +28,9 @@ describe("classifySendError — kind detection", () => {
       "upstream unavailable: mempool: tx execution-unit limit 30000 below intrinsic floor 248213",
       "gas-estimation",
     ],
+    // replace-underpriced (a tx already pending at this nonce) — also wrapped in
+    // "upstream unavailable"; must NOT read as a chain-quarantine.
+    ["upstream unavailable: mempool: replace underpriced", "nonce-conflict"],
     ["insufficient funds for transfer", "insufficient-funds"],
     ["INSUFFICIENT BALANCE", "insufficient-funds"],
     ["not enough balance to cover gas", "insufficient-funds"],

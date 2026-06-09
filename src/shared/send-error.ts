@@ -149,6 +149,29 @@ export function classifySendError(
     };
   }
 
+  // Replacement / already-pending: the chain wraps "upstream unavailable:
+  // mempool: replace underpriced" — a duplicate-nonce submission whose fee does
+  // not outbid the tx already pending at that nonce. Encrypted (sealed) txs sit
+  // in the mailbox longer before reveal, so a retry while the first is still
+  // pending lands here. Checked above chain-quarantined, which would otherwise
+  // steal the "upstream unavailable" wrapper.
+  if (
+    lower.includes("replace underpriced") ||
+    lower.includes("replacement transaction underpriced") ||
+    lower.includes("already known")
+  ) {
+    return {
+      kind: "nonce-conflict",
+      headline: "Transaction already pending",
+      body:
+        "A transaction at this nonce is already pending. Encrypted transactions " +
+        "take longer to confirm — wait for it to complete, or resubmit with a " +
+        "higher fee to replace it. Your funds are unaffected: this was rejected " +
+        "before inclusion.",
+      severity: "warn",
+    };
+  }
+
   // Operator node quarantined / PQ-checkpoint or state-root mismatch / upstream
   // unavailable. The operator's node has stopped serving RPC (a checkpoint
   // state-root divergence, or its upstream is down). The raw message is a
