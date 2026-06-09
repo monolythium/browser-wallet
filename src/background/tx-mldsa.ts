@@ -445,13 +445,27 @@ export async function submitPlaintextMlDsaTx(req: EthSendTxFields): Promise<{
 // ML-DSA-65 signature + the canonical inner-tx hash are unchanged, so the
 // receipt is still keyed on the same hash the plaintext path produces.
 //
-// Roster trust: `fetchClusterSealKeys` reads `lyth_getClusterSealKeys` via
-// `testnetJsonRpc`, which skips any operator whose chain identity != the genesis
-// pin (`verifyOperatorGenesis`), so the roster only ever comes from a
-// genesis-trusted operator. The SDK's `parseClusterSealKeys` then recomputes the
-// roster hash from the served ek set and, when the source carries one, requires
-// the supplied hash to match — so the wallet can never seal under a roster hash
-// that does not commit to the exact recipient set it seals to.
+// Roster trust — IMPORTANT, read before relying on this for PRIVACY:
+// `fetchClusterSealKeys` reads `lyth_getClusterSealKeys` via `testnetJsonRpc`,
+// which skips any operator whose chain identity != the genesis pin
+// (`verifyOperatorGenesis`), and the SDK's `parseClusterSealKeys` recomputes the
+// roster hash from the served ek set and rejects a mismatched supplied hash.
+// That gives INTEGRITY (the seal binds to exactly the ek set the operator
+// served) — but NOT AUTHENTICITY: the recompute is self-referential, so it
+// cannot distinguish a genuine cluster roster from an all-attacker-ek roster a
+// malicious (or MITM'd) operator substitutes. Adversarial review (2026-06-09)
+// CONFIRMED that a single malicious-but-genesis-trusted operator — or a
+// cleartext-HTTP MITM, since the default operators are http:// — can make the
+// wallet seal to a roster IT ALONE decrypts, defeating the t-of-n privacy. The
+// wallet does NOT yet anchor the roster to an authoritative source. REQUIRED
+// hardening before this is trusted for privacy (the user owns the design call):
+// pin the genesis cluster roster hash + require the recompute to equal it,
+// and/or cross-check each served ek against the on-chain node-registry seal-EK
+// from a QUORUM of independent genesis-trusted operators, plus close the
+// `probeOperatorGenesis` null-probe fail-open and move operators to TLS. Until
+// then this re-enables SENDING on the encrypted-mempool chain but does NOT
+// guarantee privacy against a hostile operator. See
+// `_dev-notes/browser-wallet/2026-06-09_lythiumseal-encrypted-send-impl-FIX.md`.
 
 /** Soft TTL for the cluster seal roster cache. The roster rotates on cluster
  *  membership / epoch changes (infrequent); a short TTL bounds staleness while
