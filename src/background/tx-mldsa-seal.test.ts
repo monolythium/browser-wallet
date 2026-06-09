@@ -54,21 +54,33 @@ function makeRosterSource(opts?: {
   return source;
 }
 
-// fetch mock: answer lyth_getClusterSealKeys with the queued roster source and
-// record every JSON-RPC method seen (so cache hit/miss is assertable).
-let fetchCalls: { method: string }[] = [];
+// fetch mock: answer lyth_getClusterSealKeys with the queued roster source,
+// lyth_submitEncrypted with the queued response, and record every JSON-RPC
+// (method + params) so cache hits + the submit param shape are assertable.
+let fetchCalls: { method: string; params: unknown }[] = [];
 let rosterToServe: unknown = null;
+let submitEncryptedResponse: {
+  result?: unknown;
+  error?: { code: number; message: string };
+} = { result: "0x" + "cd".repeat(32) };
 function installFetch(): void {
   fetchCalls = [];
+  submitEncryptedResponse = { result: "0x" + "cd".repeat(32) };
   globalThis.fetch = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
     const body = JSON.parse(String((init as { body?: string })?.body ?? "{}"));
-    fetchCalls.push({ method: body.method });
-    const result =
-      body.method === "lyth_getClusterSealKeys" ? rosterToServe : "0x";
+    fetchCalls.push({ method: body.method, params: body.params });
+    let payload: Record<string, unknown>;
+    if (body.method === "lyth_getClusterSealKeys") {
+      payload = { result: rosterToServe };
+    } else if (body.method === "lyth_submitEncrypted") {
+      payload = submitEncryptedResponse;
+    } else {
+      payload = { result: "0x" };
+    }
     return {
       ok: true,
       status: 200,
-      json: async () => ({ jsonrpc: "2.0", id: 1, result }),
+      json: async () => ({ jsonrpc: "2.0", id: 1, ...payload }),
     } as unknown as Response;
   }) as unknown as typeof fetch;
 }
@@ -195,5 +207,77 @@ describe("buildSealedSubmission — canonical-hash invariant (seal wraps, never 
     await expect(
       tx.buildSealedSubmission({ txReq: TX_REQ, clusterSealKeys: roster }),
     ).rejects.toThrow(/locked/i);
+  });
+});
+
+describe("broadcastEncryptedTransaction — lyth_submitEncrypted, trust local hash", () => {
+  const originalFetch = globalThis.fetch;
+  const ENVELOPE = "0xdeadbeef";
+  const LOCAL_HASH = "0x" + "ab".repeat(32);
+  beforeEach(() => {
+    vi.resetModules();
+    installFetch();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("submits the envelope as a positional [envelopeWireHex] param (not {envelope})", async () => {
+    const tx = await import("./tx-mldsa.js");
+    await tx.broadcastEncryptedTransaction(ENVELOPE, LOCAL_HASH);
+    const submit = fetchCalls.find((c) => c.method === "lyth_submitEncrypted");
+    expect(submit?.params).toEqual([ENVELOPE]);
+  });
+
+  it("returns the LOCAL canonical hash even when the node returns a DIFFERENT 32-byte hash", async () => {
+    submitEncryptedResponse = { result: "0x" + "99".repeat(32) }; // node id != local
+    const tx = await import("./tx-mldsa.js");
+    const r = await tx.broadcastEncryptedTransaction(ENVELOPE, LOCAL_HASH);
+    expect(r.txHash).toBe(LOCAL_HASH); // never adopts the node echo (it can't be the inner hash)
+  });
+
+  it("accepts a non-32-byte-hash success response without throwing (no false reject → no double-send)", async () => {
+    submitEncryptedResponse = { result: { mailboxId: 7 } }; // unexpected but non-error
+    const tx = await import("./tx-mldsa.js");
+    const r = await tx.broadcastEncryptedTransaction(ENVELOPE, LOCAL_HASH);
+    expect(r.txHash).toBe(LOCAL_HASH);
+  });
+
+  it("propagates a JSON-RPC error from the node (surfaced to the send-error classifier)", async () => {
+    submitEncryptedResponse = {
+      error: { code: -32602, message: "invalid params: missing encrypted envelope" },
+    };
+    const tx = await import("./tx-mldsa.js");
+    await expect(
+      tx.broadcastEncryptedTransaction(ENVELOPE, LOCAL_HASH),
+    ).rejects.toThrow();
+  });
+
+  it("submitSealedMlDsaTx builds + broadcasts, returning the local canonical inner-tx hash", async () => {
+    rosterToServe = makeRosterSource();
+    submitEncryptedResponse = { result: "0x" + "77".repeat(32) };
+    const backend = MlDsa65Backend.fromSeed(new Uint8Array(32).fill(9));
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    const tx = await import("./tx-mldsa.js");
+    const roster = await tx.fetchClusterSealKeys(0);
+    const r = await tx.submitSealedMlDsaTx(
+      {
+        to: "0x" + "cd".repeat(20),
+        value: "0x0",
+        data: "0x",
+        gas: "0x5208",
+        nonce: "0x2",
+        maxFeePerGas: "0x3b9aca00",
+        maxPriorityFeePerGas: "0x3b9aca00",
+        chainIdHex: "0x10f2c",
+      },
+      roster,
+    );
+    expect(r.txHash).toMatch(/^0x[0-9a-f]{64}$/); // the local canonical inner hash
+    expect(r.via).toBe("operator-seal");
+    const submit = fetchCalls.find((c) => c.method === "lyth_submitEncrypted");
+    expect(Array.isArray(submit?.params)).toBe(true);
+    expect((submit?.params as string[])[0]?.startsWith("0x")).toBe(true);
   });
 });

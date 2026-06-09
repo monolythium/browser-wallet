@@ -537,3 +537,55 @@ export async function buildSealedSubmission(args: {
     clusterSealKeys: args.clusterSealKeys,
   });
 }
+
+/** Submit a sealed `EncryptedEnvelope` (`0x`-hex) through the LythiumSeal
+ *  `lyth_submitEncrypted` path, with the same operator-failover testnetJsonRpc
+ *  gives the plaintext path.
+ *
+ *  Node-echo (deliberately NOT a hash-compare): unlike the plaintext path, the
+ *  node CANNOT echo the inner canonical tx hash — the inner tx is encrypted, so
+ *  the node never sees it. We therefore do NOT compare the response to
+ *  `expectedTxHashHex` (that would always fail); we mirror the SDK's
+ *  `submitTransactionWithPrivacy`, which only sanity-checks the response is a
+ *  32-byte hash and then returns the LOCAL canonical inner-tx hash for the
+ *  receipt lookup. testnetJsonRpc has already rejected any JSON-RPC `error`
+ *  response, so reaching here is a genuine node acceptance — we never reject a
+ *  successful submit on a response-shape guess (that would risk a double-send).
+ *  The exact success-response shape is unverified until a live sealed submit —
+ *  see the FIX report's live-verification checklist. */
+export async function broadcastEncryptedTransaction(
+  envelopeWireHex: string,
+  expectedTxHashHex: string,
+): Promise<{ txHash: string; via: string }> {
+  const { result, via } = await testnetJsonRpc<unknown>(
+    "lyth_submitEncrypted",
+    [envelopeWireHex],
+  );
+  const echoed = typeof result === "string" ? result.toLowerCase() : "";
+  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
+    // The node accepted (testnetJsonRpc already confirmed a non-error result);
+    // its response just isn't the 32-byte hash we expected. Trust the local
+    // canonical hash for receipt lookup and note the unexpected shape — do NOT
+    // throw, which would false-fail a landed tx and invite a double-send.
+    console.info(
+      "lyth_submitEncrypted accepted the envelope with a non-32-byte-hash response; trusting the locally computed canonical inner-tx hash for receipt lookup",
+    );
+  }
+  return { txHash: expectedTxHashHex, via };
+}
+
+/** One-shot SEALED helper — the encrypted counterpart of
+ *  {@link submitPlaintextMlDsaTx}. `txHash` is the CANONICAL inner-tx hash the
+ *  chain indexes (the same value the plaintext path returns), so the caller's
+ *  existing receipt poll resolves it unchanged. */
+export async function submitSealedMlDsaTx(
+  req: EthSendTxFields,
+  clusterSealKeys: ClusterSealKeys,
+): Promise<{ txHash: string; via: string; innerSighashHex: string }> {
+  const built = await buildSealedSubmission({ txReq: req, clusterSealKeys });
+  const { txHash, via } = await broadcastEncryptedTransaction(
+    built.envelopeWireHex,
+    built.innerTxHashHex,
+  );
+  return { txHash, via, innerSighashHex: built.innerSighashHex };
+}
