@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MlDsa65Backend,
   bytesToHex,
   generateOperatorSealKeypair,
 } from "@monolythium/core-sdk/crypto";
@@ -17,6 +18,11 @@ vi.mock("./networks.js", () => ({
     { name: "operator-seal", region: "x", rpc: "http://seal.example" },
   ],
   verifyOperatorGenesis: async () => true,
+}));
+
+// getUnlockedBackendV4 returns a real MlDsa65Backend the tests set per-case.
+vi.mock("./keystore-mldsa.js", () => ({
+  getUnlockedBackendV4: vi.fn(() => null),
 }));
 
 // Build a valid n-of-t cluster seal roster source from freshly generated
@@ -128,5 +134,66 @@ describe("fetchClusterSealKeys — genesis-trusted roster fetch + validation", (
       (c) => c.method === "lyth_getClusterSealKeys",
     );
     expect(sealFetches).toHaveLength(2); // force-fetch each time
+  });
+});
+
+describe("buildSealedSubmission — canonical-hash invariant (seal wraps, never re-keys)", () => {
+  const originalFetch = globalThis.fetch;
+  const TEST_SEED = new Uint8Array(32).fill(7);
+  const TX_REQ = {
+    to: "0x" + "ab".repeat(20),
+    value: "0x0",
+    data: "0x",
+    gas: "0x5208",
+    nonce: "0x1",
+    maxFeePerGas: "0x3b9aca00",
+    maxPriorityFeePerGas: "0x3b9aca00",
+    chainIdHex: "0x10f2c",
+  };
+  beforeEach(() => {
+    vi.resetModules();
+    installFetch();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("seals to the SAME canonical inner-tx hash + sighash as the plaintext path", async () => {
+    rosterToServe = makeRosterSource({ t: 2, n: 3 });
+    const backend = MlDsa65Backend.fromSeed(TEST_SEED);
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    const tx = await import("./tx-mldsa.js");
+    const roster = await tx.fetchClusterSealKeys(0);
+
+    const plain = await tx.buildPlaintextSubmission({ txReq: TX_REQ });
+    const sealed = await tx.buildSealedSubmission({
+      txReq: TX_REQ,
+      clusterSealKeys: roster,
+    });
+
+    // THE invariant: the inner canonical hashes are identical. The receipt is
+    // keyed on innerTxHashHex; if sealing changed it, the receipt poll could
+    // never resolve. signEvmTx is deterministic (extraEntropy: false), so the
+    // same {backend, tx} yields the same signed tx + hash on both paths.
+    expect(sealed.innerTxHashHex).toBe(plain.innerTxHashHex);
+    expect(sealed.innerSighashHex).toBe(plain.innerSighashHex);
+    // The envelope is a real sealed wrapper: 0x-hex, larger than the bare signed
+    // tx (ML-KEM ciphertext + Shamir shares + outer signature).
+    expect(sealed.envelopeWireHex.startsWith("0x")).toBe(true);
+    expect(sealed.envelopeWireHex.length).toBeGreaterThan(
+      plain.signedTxWireHex.length,
+    );
+  });
+
+  it("throws 'wallet is locked' when no backend is unlocked (fails closed)", async () => {
+    rosterToServe = makeRosterSource();
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(null);
+    const tx = await import("./tx-mldsa.js");
+    const roster = await tx.fetchClusterSealKeys(0);
+    await expect(
+      tx.buildSealedSubmission({ txReq: TX_REQ, clusterSealKeys: roster }),
+    ).rejects.toThrow(/locked/i);
   });
 });

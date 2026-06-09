@@ -6,6 +6,7 @@
 // operator RPCs, and surface wallet-friendly errors.
 
 import {
+  buildEncryptedSubmission as sdkBuildEncryptedSubmission,
   buildPlaintextSubmission as sdkBuildPlaintextSubmission,
   parseClusterSealKeys,
   type ClusterSealKeys,
@@ -506,4 +507,33 @@ export async function getClusterSealKeys(
     return cached.keys;
   }
   return fetchClusterSealKeys(clusterId);
+}
+
+/** Build a SEALED (LythiumSeal scheme-3) submission for the `lyth_submitEncrypted`
+ *  path — the encrypted counterpart of {@link buildPlaintextSubmission}. Signs
+ *  the inner ML-DSA-65 tx with the UNCHANGED signing path (the same `signEvmTx`
+ *  the plaintext path uses), then seals the signed bytes to the cluster roster
+ *  via the SDK. The seal is confidentiality only: `innerTxHashHex` /
+ *  `innerSighashHex` are derived from the inner signed tx exactly as the
+ *  plaintext path derives them, so the canonical inner-tx hash the chain indexes
+ *  is identical — the receipt is keyed on the same hash (invariant 3 + the
+ *  canonical-hash invariant; the seal wraps, it does not re-key). */
+export async function buildSealedSubmission(args: {
+  txReq: EthSendTxFields;
+  clusterSealKeys: ClusterSealKeys;
+}): Promise<{
+  envelopeWireHex: string;
+  innerSighashHex: string;
+  innerTxHashHex: string;
+  innerWireBytes: number;
+}> {
+  const backend = getUnlockedBackendV4();
+  if (backend === null) {
+    throw new Error("v3 wallet is locked");
+  }
+  return sdkBuildEncryptedSubmission({
+    backend,
+    tx: normalizeFields(args.txReq),
+    clusterSealKeys: args.clusterSealKeys,
+  });
 }
