@@ -589,3 +589,41 @@ export async function submitSealedMlDsaTx(
   );
   return { txHash, via, innerSighashHex: built.innerSighashHex };
 }
+
+/** Submit dispatcher — the SINGLE chokepoint every wallet tx type funnels
+ *  through (send / stake / delegate / redelegate / claim / complete-redemption /
+ *  spending-policy / multisig / MRV plan+call / emergency). Chooses the
+ *  LythiumSeal encrypted path when the operator cluster serves a seal roster,
+ *  else the plaintext path. Returns the identical shape as
+ *  {@link submitPlaintextMlDsaTx} so all callers are a drop-in swap.
+ *
+ *  Fail-closed (invariant 5): on a chain with the encrypted-mempool milestone
+ *  ON, the operators serve a roster → seal. If the roster can't be fetched (RPC
+ *  disabled / transport failure), we fall back to the plaintext path — which
+ *  that chain REJECTS (-32047) → the honest "Encrypted transactions required"
+ *  classifier message. We never claim privacy and silently send plaintext: a
+ *  roster-present send is always sealed; a roster-absent send is plaintext the
+ *  encrypted chain refuses. On a chain that does NOT require encryption, the
+ *  roster fetch failing → plaintext is the correct (no-privacy-promised)
+ *  behavior. The plaintext path (invariant 2) is untouched and stays the
+ *  fallback. */
+export async function submitMlDsaTx(req: EthSendTxFields): Promise<{
+  txHash: string;
+  via: string;
+  innerSighashHex: string;
+}> {
+  let roster: ClusterSealKeys | null = null;
+  try {
+    roster = await getClusterSealKeys();
+  } catch {
+    // Roster unavailable (lyth_getClusterSealKeys disabled on this node profile,
+    // or a transport failure) → plaintext fallback. On an encrypted-required
+    // chain the chain rejects the plaintext tx and the classifier surfaces the
+    // honest message; on a plaintext chain it is admitted normally.
+    roster = null;
+  }
+  if (roster !== null) {
+    return submitSealedMlDsaTx(req, roster);
+  }
+  return submitPlaintextMlDsaTx(req);
+}

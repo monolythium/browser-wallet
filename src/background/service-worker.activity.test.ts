@@ -96,7 +96,7 @@ interface CapturedRpcCall {
   params: unknown[];
 }
 const rpcCalls: CapturedRpcCall[] = [];
-// Capture of submitPlaintextMlDsaTx argument objects — used by the
+// Capture of submitMlDsaTx argument objects — used by the
 // metadata-only invariant test (assert opKind never reaches the signer).
 const submitMlDsaCalls: Record<string, unknown>[] = [];
 let rpcResponses: Record<string, unknown> = {};
@@ -129,7 +129,7 @@ vi.mock("./tx-mldsa.js", () => ({
   // eth_sendTransaction / MRV / multisig paths all route here. It feeds
   // `submitMlDsaCalls` so the metadata-only invariant (`opKind` / cluster
   // never reach the signer) and the arg-shape assertions hold.
-  submitPlaintextMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
+  submitMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
     submitMlDsaCalls.push(args);
     if (submitFailure !== null) {
       throw submitFailure;
@@ -484,7 +484,7 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitPlaintextMlDsaTx } from "./tx-mldsa.js";
+import { submitMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -2287,7 +2287,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       },
     })) as { ok: true };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x7530" }),
     );
   });
@@ -2368,8 +2368,8 @@ describe("wallet-send-tx pending-row prepend", () => {
       },
     })) as { ok: true; txHash: string };
     expect(r.ok).toBe(true);
-    // DEFAULT submit = PLAINTEXT (`submitPlaintextMlDsaTx`).
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    // DEFAULT submit = PLAINTEXT (`submitMlDsaTx`).
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: "0x0000000000000000000000000000000000001001",
       value: "0x0",
       data: "0x2468786f" + "00".repeat(192),
@@ -2443,7 +2443,7 @@ describe("wallet-send-tx pending-row prepend", () => {
 
   // ───────────────────────────────────────────────────────────────────────
   // opKind tagging. opKind is pending-row metadata only; it
-  // must NEVER reach submitPlaintextMlDsaTx's argument object (the signed
+  // must NEVER reach submitMlDsaTx's argument object (the signed
   // tx bytes / ML-DSA-65 signature / encrypted envelope / nonce / fee /
   // gas must be identical with or without opKind).
   // ───────────────────────────────────────────────────────────────────────
@@ -2530,7 +2530,7 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(persisted.pending[0]?.opKind).toBe("contract_call");
   });
 
-  it("METADATA-ONLY INVARIANT — opKind NEVER reaches submitPlaintextMlDsaTx's argument object", async () => {
+  it("METADATA-ONLY INVARIANT — opKind NEVER reaches submitMlDsaTx's argument object", async () => {
     // First dispatch — WITH opKind. Capture the signer arg.
     await dispatchSend({
       to: "0xrecipient",
@@ -2592,7 +2592,7 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect("clusterName" in p2.pending[0]!).toBe(false);
   });
 
-  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitPlaintextMlDsaTx", async () => {
+  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitMlDsaTx", async () => {
     submitMlDsaCalls.length = 0;
     storageLocal = {};
     await dispatchSend({
@@ -2645,7 +2645,7 @@ describe("wallet-mrv-submit-plan", () => {
       txHash: SUBMITTED_TX_HASH,
       via: "mock-operator",
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2667,7 +2667,7 @@ describe("wallet-mrv-submit-plan", () => {
     })) as { ok: false; reason?: string };
 
     expect(r).toEqual({ ok: false, reason: "wallet locked" });
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("blocks tampered preview plans before encrypted submission", async () => {
@@ -2683,7 +2683,7 @@ describe("wallet-mrv-submit-plan", () => {
 
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/exactly one transaction extension/);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("submits a previewed MRV plan through the dapp provider boundary", async () => {
@@ -2722,7 +2722,7 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Monolythium Testnet",
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2791,7 +2791,7 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Monolythium Testnet",
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2838,7 +2838,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.error).toBeUndefined();
     // The SIGNED fee is the ceiling, not the absurd quote; the tip is re-clamped
     // to the (capped) max. Display == signed: the approval shows the same caps.
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: CEILING_HEX,
         maxPriorityFeePerGas: CEILING_HEX,
@@ -2877,7 +2877,7 @@ describe("wallet-mrv-submit-plan", () => {
     });
     expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
     expect(enqueuedApprovals).toHaveLength(0);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("rejects provider MRV submissions from unconnected origins", async () => {
@@ -2890,7 +2890,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4100);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("blocks tampered provider MRV plans before approval", async () => {
@@ -2912,7 +2912,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.error?.code).toBe(-32602);
     expect(r.error?.message).toMatch(/exactly one transaction extension/);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
 
@@ -2945,7 +2945,7 @@ describe("dApp eth_sendTransaction fee clamp (T4-04 a1)", () => {
     expect(r.error).toBeUndefined();
     // The 1611-1619 clamp on the MLDSA encrypted submit path caps the signed
     // execution-unit price (gasPrice) at the ceiling, not the absurd dApp quote.
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gasPrice: CEILING_HEX }),
     );
   });
@@ -5005,7 +5005,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: false; passkeyElevation?: string };
     expect(r.ok).toBe(false);
     expect(r.passkeyElevation).toBe("required");
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("over-limit value send with the CORRECT password is SW-verified and broadcasts", async () => {
@@ -5018,7 +5018,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
       elevatedPassword: "correct-horse-battery-staple",
     })) as { ok: boolean };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
   it("over-limit value send with a WRONG password → passkeyElevation:wrong_password, no broadcast", async () => {
@@ -5032,7 +5032,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: false; passkeyElevation?: string };
     expect(r.ok).toBe(false);
     expect(r.passkeyElevation).toBe("wrong_password");
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("under-limit value send broadcasts with no elevation required", async () => {
@@ -5045,7 +5045,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: boolean; passkeyElevation?: string };
     expect(r.ok).toBe(true);
     expect(r.passkeyElevation).toBeUndefined();
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
   it("policy disabled → gate inert, over-limit value send broadcasts", async () => {
@@ -5061,7 +5061,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     })) as { ok: boolean };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
   it("data (contract-call) send bypasses the value-only cap even when over-limit", async () => {
@@ -5075,7 +5075,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     })) as { ok: boolean };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
   it("empty-data (0x) over-limit send is treated as a bare value transfer and is capped (#36)", async () => {
@@ -5091,7 +5091,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: false; passkeyElevation?: string };
     expect(r.ok).toBe(false);
     expect(r.passkeyElevation).toBe("required");
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
 
@@ -5257,7 +5257,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         executionUnitLimitHex: "0x5208",
       },
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: "0x2710",
         maxPriorityFeePerGas: "0x270f",
@@ -5279,7 +5279,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         executionUnitLimitHex: "0x5208",
       },
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: CEILING_HEX,
         // tip clamped to <= maxFeePerGas (== ceiling).
@@ -5302,7 +5302,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
       },
     });
     // 30,000,000 = MAX_EXECUTION_UNIT_LIMIT (0x1c9c380).
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x1c9c380" }),
     );
   });
@@ -5320,7 +5320,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         executionUnitLimitHex: "0x7a120",
       },
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x7a120" }),
     );
     // Native-transfer floor (0x7530 = 30000) passes through.
@@ -5334,7 +5334,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         executionUnitLimitHex: "0x7530",
       },
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x7530" }),
     );
   });
@@ -5347,7 +5347,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
       valueWeiHex: "0x989680",
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ maxFeePerGas: CEILING_HEX }),
     );
   });
@@ -5416,7 +5416,7 @@ describe("multisig-execute fee ceiling (de-trust parity)", () => {
     seedExecutableProposal();
     const r = (await execute()) as { ok: boolean; txHash?: string };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: CEILING_HEX,
         // tip re-clamped to <= maxFeePerGas (== ceiling), mirroring :8806.
@@ -5431,7 +5431,7 @@ describe("multisig-execute fee ceiling (de-trust parity)", () => {
     seedExecutableProposal();
     const r = (await execute()) as { ok: boolean };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: "0x2540be400",
         maxPriorityFeePerGas: "0x12a05f200",

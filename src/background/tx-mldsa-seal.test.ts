@@ -59,6 +59,8 @@ function makeRosterSource(opts?: {
 // (method + params) so cache hits + the submit param shape are assertable.
 let fetchCalls: { method: string; params: unknown }[] = [];
 let rosterToServe: unknown = null;
+let rosterError = false; // when true, lyth_getClusterSealKeys returns an error
+let meshEcho = "0x" + "ee".repeat(32); // mesh_submitTx echoed canonical hash
 let submitEncryptedResponse: {
   result?: unknown;
   error?: { code: number; message: string };
@@ -66,14 +68,20 @@ let submitEncryptedResponse: {
 function installFetch(): void {
   fetchCalls = [];
   submitEncryptedResponse = { result: "0x" + "cd".repeat(32) };
+  rosterError = false;
+  meshEcho = "0x" + "ee".repeat(32);
   globalThis.fetch = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
     const body = JSON.parse(String((init as { body?: string })?.body ?? "{}"));
     fetchCalls.push({ method: body.method, params: body.params });
     let payload: Record<string, unknown>;
     if (body.method === "lyth_getClusterSealKeys") {
-      payload = { result: rosterToServe };
+      payload = rosterError
+        ? { error: { code: -32601, message: "method not found" } }
+        : { result: rosterToServe };
     } else if (body.method === "lyth_submitEncrypted") {
       payload = submitEncryptedResponse;
+    } else if (body.method === "mesh_submitTx") {
+      payload = { result: meshEcho };
     } else {
       payload = { result: "0x" };
     }
@@ -279,5 +287,58 @@ describe("broadcastEncryptedTransaction — lyth_submitEncrypted, trust local ha
     const submit = fetchCalls.find((c) => c.method === "lyth_submitEncrypted");
     expect(Array.isArray(submit?.params)).toBe(true);
     expect((submit?.params as string[])[0]?.startsWith("0x")).toBe(true);
+  });
+});
+
+describe("submitMlDsaTx — seal-vs-plaintext decision (single chokepoint, fail-closed)", () => {
+  const originalFetch = globalThis.fetch;
+  const TEST_SEED = new Uint8Array(32).fill(3);
+  const TX_REQ = {
+    to: "0x" + "12".repeat(20),
+    value: "0x0",
+    data: "0x",
+    gas: "0x5208",
+    nonce: "0x3",
+    maxFeePerGas: "0x3b9aca00",
+    maxPriorityFeePerGas: "0x3b9aca00",
+    chainIdHex: "0x10f2c",
+  };
+  beforeEach(() => {
+    vi.resetModules();
+    installFetch();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("seals when a roster is available (lyth_submitEncrypted, never mesh_submitTx)", async () => {
+    rosterToServe = makeRosterSource();
+    const backend = MlDsa65Backend.fromSeed(TEST_SEED);
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    const tx = await import("./tx-mldsa.js");
+    const r = await tx.submitMlDsaTx(TX_REQ);
+    expect(r.txHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
+      true,
+    );
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
+  });
+
+  it("falls back to plaintext when the roster is unavailable (mesh_submitTx, never lyth_submitEncrypted)", async () => {
+    rosterError = true; // lyth_getClusterSealKeys errors → roster absent → plaintext
+    const backend = MlDsa65Backend.fromSeed(TEST_SEED);
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    const tx = await import("./tx-mldsa.js");
+    // Echo the correct canonical hash so the plaintext broadcast validates.
+    meshEcho = (await tx.buildPlaintextSubmission({ txReq: TX_REQ }))
+      .innerTxHashHex;
+    const r = await tx.submitMlDsaTx(TX_REQ);
+    expect(r.txHash).toBe(meshEcho);
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(true);
+    expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
+      false,
+    );
   });
 });

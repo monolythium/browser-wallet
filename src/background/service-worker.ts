@@ -254,7 +254,7 @@ import {
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
-  submitPlaintextMlDsaTx,
+  submitMlDsaTx,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   type EthSendTxFields,
@@ -1607,7 +1607,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
 
           // Sign + submit via the plaintext mesh_submitTx path.
           // The testnet does not use an eth_sendRawTransaction fallback path.
-          const { txHash } = await submitPlaintextMlDsaTx({
+          const { txHash } = await submitMlDsaTx({
             ...(txReq.to !== undefined ? { to: txReq.to } : {}),
             ...(txReq.value !== undefined ? { value: txReq.value } : {}),
             ...(txReq.data !== undefined ? { data: txReq.data } : {}),
@@ -1691,7 +1691,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitPlaintextMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitMlDsaTx(approvedTxReq);
         return ok({ txHash, via });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -1807,7 +1807,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           chainIdHex,
           fromAddress: fromAddr,
         });
-        const { txHash, via } = await submitPlaintextMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitMlDsaTx(approvedTxReq);
         return ok({ txHash, via, plan });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -6227,7 +6227,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fee.maxPriorityFeePerGas,
             maxFeePerGas,
           );
-          const r = await submitPlaintextMlDsaTx({
+          const r = await submitMlDsaTx({
             to: action.to,
             value: valueWeiHex,
             ...(data !== undefined ? { data } : {}),
@@ -8169,7 +8169,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitPlaintextMlDsaTx(txReq);
+        const { txHash, via } = await submitMlDsaTx(txReq);
         return { ok: true, txHash, via };
       } catch (e) {
         const err = e as Error & {
@@ -8974,7 +8974,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        const { txHash, via } = await submitPlaintextMlDsaTx(txReq);
+        const { txHash, via } = await submitMlDsaTx(txReq);
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are
