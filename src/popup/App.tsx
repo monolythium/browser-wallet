@@ -936,6 +936,11 @@ export default function App() {
     const r = await bgKeystoreCreateFromMnemonic(password, pendingMnemonic);
     if (!r.ok) {
       setImportError(explainImportError(r.reason ?? "Could not import wallet."));
+      // #35: clear the captured mnemonic on the commit-error exit (it otherwise
+      // lingered in App state after navigating back to "import"). Never
+      // displayed or persisted, but clear it explicitly to mirror the
+      // wipe-on-exit discipline; a retry re-captures it from ImportWallet.
+      setPendingMnemonic(null);
       setScreen("import");
       return;
     }
@@ -1151,7 +1156,12 @@ export default function App() {
       {screen === "set-password-import" && (
         <SetPassword
           title="Set wallet password"
-          onBack={() => setScreen("import")}
+          onBack={() => {
+            // #35: clear the captured mnemonic when backing out of the
+            // set-password step (it otherwise lingered in App state).
+            setPendingMnemonic(null);
+            setScreen("import");
+          }}
           onSubmit={handleImportSubmitPassword}
           error={importError}
         />
