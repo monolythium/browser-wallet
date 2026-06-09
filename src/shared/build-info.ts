@@ -33,14 +33,14 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value tracks protocore v0.1.25-testnet (2026-06-07), where
+ *  Current value tracks protocore v0.1.44-testnet (2026-06-08), where
  *  `lyth_chainStats.genesisHash`
  *  reports the registry identity hash below. Bumping this security pin is
  *  a human-reviewer decision; the About-page drift banner surfaces the
  *  mismatch and the live-registry fetch shows the current GitHub-registry
  *  value alongside it. */
 export const TESTNET_GENESIS_HASH =
-  "0xb9bcc577fa7256664364518f2943fe298b50973b0e43831a081b4dca3d2d5a6a";
+  "0x4327b7e8d1c06eed00194152f8235acaec5ba84a01487c885d9933840dc36fa5";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
