@@ -16,8 +16,11 @@
 // transacting, not debugging.
 //
 // Whitepaper alignment:
-//   §21.5  — transparent mempool today (the Ferveo encrypted-submit path
-//            was removed; a LythiumSeal encrypted path may return later)
+//   §21.5  — LythiumSeal encrypted mempool: the wallet seals (scheme-3 ML-KEM)
+//            when the operator cluster serves a seal roster, else falls back to
+//            plaintext (which an encryption-required chain rejects — see the
+//            plaintext-not-allowed branch). The earlier Ferveo threshold-decrypt
+//            path was removed.
 //   §22    — EIP-1559-style fee model (execution-unit estimation failures)
 //   §23.2  — liquid bonding (no nonce/cooldown blockers for delegators
 //            specifically — but nonce-too-low still happens on multi-
@@ -145,13 +148,14 @@ function classifyInnerError(
     };
   }
 
-  // Chain requires encrypted transactions but this wallet submits plaintext
-  // only. When the encrypted-mempool milestone is ON, mempool admission rejects
-  // every plaintext tx pre-signature ("plaintext mempool entry not allowed:
-  // encrypted envelope required"; code -32040 PlaintextNotAllowed, or -32047 on
-  // v0.1.44-testnet). Classify it so the user sees an honest explanation instead
-  // of a raw debugger string. This does NOT add an encrypted-send path — it only
-  // explains the rejection.
+  // Chain requires encrypted transactions and the wallet's encrypted (LythiumSeal)
+  // submission wasn't used for this tx: the dispatcher seals when the operator
+  // cluster serves a seal roster, but here the roster was unavailable, so it fell
+  // back to plaintext, which the encrypted-mempool milestone rejects ("plaintext
+  // mempool entry not allowed: encrypted envelope required"; code -32040
+  // PlaintextNotAllowed, or -32047 on v0.1.44-testnet). Classify it so the user
+  // sees an honest explanation instead of a raw debugger string. This branch only
+  // explains the rejection; the encrypted path itself lives in submitMlDsaTx.
   //
   // MUST precede the chain-quarantined branch below: the chain wraps this as
   // "upstream unavailable: mempool: plaintext … not allowed …", so the generic
@@ -169,10 +173,10 @@ function classifyInnerError(
       kind: "plaintext-not-allowed",
       headline: "Encrypted transactions required",
       body:
-        "This network currently requires encrypted transactions, and this " +
-        "wallet version sends plaintext ones only — so sends are unavailable " +
-        "here until an encrypted-send-capable build ships. Your funds are " +
-        "unaffected: the transaction was rejected before it was signed.",
+        "This network requires encrypted transactions, but the encrypted " +
+        "submission path was unavailable for this transaction, so the network " +
+        "rejected it. Your funds are unaffected — nothing was transferred. " +
+        "Try again in a moment.",
       severity: "err",
     };
   }
