@@ -736,6 +736,65 @@ describe("keystore-status address privacy", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// keystore wipe-scope — default-deny (S6 #43 B2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
+  // The sensitive families (+ the vault entries) the wipe must remove, per the
+  // audit durable-key inventory. All durable wallet keys are mono.*-prefixed.
+  const SENSITIVE = [
+    "mono.connected-sites",
+    "mono.contacts.v1",
+    "mono.sent-addrs.0xabc.0x10f2c",
+    "mono.activity.0xabc.0x10f2c",
+    "mono.notifications.history.0xabc.0x10f2c.v1",
+    "mono.names.cache",
+    "mono.two-tier-features.v1",
+    "mono.vault.v4",
+    "mono.vaults.v4",
+  ];
+
+  function seedFamilies() {
+    for (const k of SENSITIVE) storageLocal[k] = { seeded: true };
+    // A non-mono local key must SURVIVE — the scan is mono.* default-deny only.
+    storageLocal["nonmono.keep"] = "survives";
+  }
+
+  it("keystore-wipe-unauth removes every mono.* local key, keeps non-mono", async () => {
+    seedFamilies();
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
+    expect(storageLocal["nonmono.keep"]).toBe("survives");
+  });
+
+  it("keystore-reset (password-confirmed) wipes the IDENTICAL set", async () => {
+    seedFamilies();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
+    expect(storageLocal["nonmono.keep"]).toBe("survives");
+  });
+
+  it("closes the connected-sites carryover: a previously-connected origin no longer leaks the address after wipe + re-unlock", async () => {
+    const origin = "https://prior-owner-dapp.example";
+    await dispatchRpc("eth_requestAccounts", [], origin); // connects → session.connectedOrigins has origin
+    const before = await dispatchRpc("eth_accounts", [], origin);
+    expect(before.result).toEqual([DETERMINISTIC_ADDRESS]); // connected → address visible
+
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" }); // clears connectedOrigins + locks
+    unlocked = true; // simulate the NEW owner importing + unlocking a fresh vault
+
+    const after = await dispatchRpc("eth_accounts", [], origin);
+    expect(after.result).toEqual([]); // connectedOrigins cleared → no silent auto-reconnect / address leak
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // wallet-indexer-snapshot
 // ─────────────────────────────────────────────────────────────────────────────
 

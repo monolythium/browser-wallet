@@ -71,7 +71,6 @@ import {
   createVaultFromNewMnemonic,
   createVaultFromMnemonic,
   exportMnemonicV4,
-  wipeVaultV4,
   personalSignV4,
   signTypedDataV4FromV4,
   getUnlockedPublicKeyV4,
@@ -84,7 +83,6 @@ import {
   addVaultFreshV4,
   addVaultImportV4,
   generateFreshMnemonicV4,
-  wipeContainerV4,
   // Multisig surface.
   addVaultMultisigV4,
   readMultisigMetaV4,
@@ -701,6 +699,28 @@ async function purgeDemoAddrCacheKeys(): Promise<void> {
       }
     }
   }
+  if (toRemove.length === 0) return;
+  await new Promise<void>((resolve) => {
+    chrome.storage.local.remove(toRemove, () => resolve());
+  });
+}
+
+/** S6 #43 B2 — default-deny wipe of ALL persisted wallet state. Removes every
+ *  `chrome.storage.local` key with the `mono.` prefix (vault + container + every
+ *  PII family + settings) in one pass, so a reset / forgot-password leaves no
+ *  residue — address book, dApp connection graph, tx-history caches — for the
+ *  next profile user. Future-proof: any new `mono.*` family is wiped
+ *  automatically (no key list to maintain), the same enumeration idiom as
+ *  `purgeDemoAddrCacheKeys`. Does NOT touch `window.localStorage` (theme is a
+ *  non-secret UI preference there, a different storage area) or
+ *  `chrome.storage.session` (the MEK + lock state, cleared by `triggerAutoLock`
+ *  and the caller's `session.connectedOrigins.clear()`). Every removed key is
+ *  read-with-a-default at boot, so a clean Welcome + fresh import still work. */
+async function wipeAllLocalWalletState(): Promise<void> {
+  const all = await new Promise<Record<string, unknown>>((resolve) => {
+    chrome.storage.local.get(null, (res) => resolve(res ?? {}));
+  });
+  const toRemove = Object.keys(all).filter((k) => k.startsWith("mono."));
   if (toRemove.length === 0) return;
   await new Promise<void>((resolve) => {
     chrome.storage.local.remove(toRemove, () => resolve());
@@ -5743,12 +5763,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
         };
       }
-      // Password verified — wipe both legacy single-vault entry and the
-      // multi-vault container, then broadcast lock. The multi-vault path doubles the
-      // wipe surface; either entry left behind would let a reset user
-      // re-unlock with their old password.
-      await wipeVaultV4();
-      await wipeContainerV4();
+      // Password verified — default-deny wipe of ALL persisted wallet state
+      // (vault + container + every PII family + settings; S6 #43 B2), then
+      // broadcast lock. Removing every mono.* local key — not just the two
+      // vault entries — leaves no residue (address book, dApp grant graph,
+      // tx-history caches) for the next profile user; clearing the in-session
+      // grant set closes the connected-sites carryover.
+      // Drop the connection graph first (belt-and-braces / codebase idiom),
+      // THEN the default-deny scan removes its mono.connected-sites={} so no
+      // empty-object residue survives the wipe.
+      await clearAllConnectedSites();
+      await wipeAllLocalWalletState();
+      session.connectedOrigins.clear();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
@@ -5775,11 +5801,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await chrome.storage.session.set({
         [SESSION_KEY_LAST_WIPE_UNAUTH_AT]: now,
       });
-      // Same dual-wipe as keystore-reset — legacy entry plus
-      // the multi-vault container. Forgot-password → Reset & Import
-      // must leave no recoverable key material on disk.
-      await wipeVaultV4();
-      await wipeContainerV4();
+      // Same default-deny wipe as keystore-reset (S6 #43 B2): every mono.*
+      // local key + the in-session grant set. Forgot-password is the
+      // lost-control path, so it must wipe at least as much as the re-auth
+      // path — identical scope; no recoverable key material or PII residue.
+      // Drop the connection graph first (belt-and-braces / codebase idiom),
+      // THEN the default-deny scan removes its mono.connected-sites={} so no
+      // empty-object residue survives the wipe.
+      await clearAllConnectedSites();
+      await wipeAllLocalWalletState();
+      session.connectedOrigins.clear();
       await chrome.storage.session.remove([
         SESSION_KEY_UNLOCK_FAIL_COUNT,
         SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
