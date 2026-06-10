@@ -5410,6 +5410,28 @@ describe("multisig-execute fee ceiling (de-trust parity)", () => {
     });
   }
 
+  // S6 #45 B1 — the send-bypass guard. With a multisig active vault, the
+  // sanctioned multisig-EXECUTE broadcast (the two fee tests below) still
+  // succeeds, but the normal single-signer wallet-send-tx path is REFUSED.
+  // Same active-multisig state, disjoint outcomes — proves the guard is
+  // entry-layer-only and does NOT block the ceremony.
+  it("B1: refuses wallet-send-tx from a multisig active vault (ceremony unaffected)", async () => {
+    seedExecutableProposal(); // readMultisigMetaV4 now returns a multisig meta
+    activePasskeyVaultId = "ms1"; // getActiveVaultIdV4 returns the active id → guard predicate sees a multisig vault
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0x0000000000000000000000000000000000000001",
+        valueWeiHex: "0x0",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        opKind: "send",
+      },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/multisig wallet/i);
+  });
+
   it("clamps an absurd operator execution fee (and tip) to the sane ceiling on the multisig-execute path", async () => {
     const absurd = "0x" + (CEILING * 1000n).toString(16);
     seedOperatorFee(absurd, absurd);

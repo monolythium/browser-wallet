@@ -104,6 +104,9 @@ vi.mock("./approvals.js", () => ({
 // `unlocked` / `vaultExists` let tests flip the v4 mock's lock / has-vault state.
 let unlocked = true;
 let vaultExists = true;
+// S6 #45 B1 — flip to true to simulate a multisig active vault (exercises the
+// single-signer send-bypass guard). Reset to false after each guard test.
+let activeVaultMultisig = false;
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => vaultExists),
@@ -115,6 +118,11 @@ vi.mock("./keystore-mldsa.js", () => ({
   getUnlockedAddressV4: vi.fn(() => (unlocked ? DETERMINISTIC_ADDRESS : null)),
   tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
+  // S6 #45 B1 — the send-bypass guard reads the active vault kind.
+  getActiveVaultIdV4: vi.fn(() => (unlocked ? "v1" : null)),
+  readMultisigMetaV4: vi.fn(async () =>
+    activeVaultMultisig ? { signers: [], threshold: 1, proposals: [], governance: [] } : null,
+  ),
   lockV4: vi.fn(() => {
     unlocked = false;
   }),
@@ -410,6 +418,24 @@ describe("EIP-1193 conformance — service-worker request router", () => {
   it("eth_sendTransaction from an unconnected origin is rejected with 4100", async () => {
     const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000001" }], "https://not-connected.example");
     expect(r.error?.code).toBe(4100);
+  });
+
+  it("S6 #45 B1: eth_sendTransaction from a multisig active vault is refused with 4100 before any approval/RPC", async () => {
+    const origin = "https://multisig-dapp.example";
+    await connectOrigin(origin);
+    await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }], origin);
+    activeVaultMultisig = true;
+    try {
+      const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
+      expect(r.result).toBeUndefined();
+      expect(r.error?.code).toBe(4100);
+      expect(r.error?.message).toMatch(/multisig wallet/i);
+      // Refused EARLY: no approval popup, no operator nonce RPC.
+      expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
+      expect(rpcCalls.map((c) => c.method)).not.toContain("lyth_getTransactionCount");
+    } finally {
+      activeVaultMultisig = false;
+    }
   });
 
   // ---- 6. personal_sign ----

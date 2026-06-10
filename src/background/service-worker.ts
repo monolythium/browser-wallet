@@ -1239,6 +1239,32 @@ const ERR_UNSUPPORTED_METHOD = 4200;
 const ERR_CHAIN_NOT_ADDED = 4902;
 const ERR_INTERNAL = -32603;
 
+// S6 #45 B1 — multisig send-bypass guard.
+//
+// A kind:"multisig" active vault must route every fund-moving transaction
+// through the propose/approve ceremony (multisig-propose / -sign / -execute),
+// NEVER the normal single-signer submit paths — otherwise the executor's lone
+// signature would move the vault's funds without the M-of-N threshold (the
+// chain verifies only that one signature today). The guard lives ONLY at the
+// single-signer ENTRY handlers; multisig-execute reaches submitMlDsaTx
+// directly with a multisig active vault and is intentionally NOT guarded (it
+// IS the sanctioned broadcast). This closes the in-wallet bypass; the executor
+// seed-export bypass remains chain-blocked (native monom M-of-N — ping S6-01).
+const MULTISIG_SEND_REFUSAL =
+  "This is a multisig wallet — transactions go through the multisig propose/approve flow.";
+
+/** True when the active (unlocked) vault is a multisig vault. Cheap +
+ *  side-effect-free: getActiveVaultIdV4 is in-memory (null when locked);
+ *  readMultisigMetaV4 does one container read, needs no unlock, and returns
+ *  null unless kind==="multisig". MUST be called only from the single-signer
+ *  entry handlers, never from the submitMlDsaTx chokepoint (which
+ *  multisig-execute reaches directly with a multisig active vault). */
+async function activeVaultIsMultisig(): Promise<boolean> {
+  const id = getActiveVaultIdV4();
+  if (!id) return false;
+  return (await readMultisigMetaV4(id)) !== null;
+}
+
 /**
  * Build an `RpcClient` for the given chain. We keep an in-memory cache keyed
  * by `<chainId, rpcUrl>` so each chain reuses a single transport across
@@ -1534,6 +1560,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!chainRequiresMlDsa(session.chainId)) {
         return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
       }
+      // S6 #45 B1: refuse single-signer sends from a multisig active vault —
+      // they must go through the propose/approve ceremony (not this lone-
+      // executor path). Checked before buildSendTxView so no operator RPC fires.
+      if (await activeVaultIsMultisig()) {
+        return err(ERR_UNAUTHORIZED, MULTISIG_SEND_REFUSAL);
+      }
 
       // Build the approval view BEFORE opening the popup so the user sees
       // real numbers (execution-unit estimate, simulation outcome, nonce)
@@ -1656,6 +1688,10 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!displayFromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no address");
       }
+      // S6 #45 B1: a multisig active vault must use the propose/approve flow.
+      if (await activeVaultIsMultisig()) {
+        return err(ERR_UNAUTHORIZED, MULTISIG_SEND_REFUSAL);
+      }
 
       let txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>;
       try {
@@ -1732,6 +1768,10 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       const displayFromAddr = getUnlockedAddressV4();
       if (!displayFromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no address");
+      }
+      // S6 #45 B1: a multisig active vault must use the propose/approve flow.
+      if (await activeVaultIsMultisig()) {
+        return err(ERR_UNAUTHORIZED, MULTISIG_SEND_REFUSAL);
       }
       let contractAddress: string;
       try {
@@ -8158,6 +8198,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!fromAddr) {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
+      // S6 #45 B1: a multisig active vault must use the propose/approve flow.
+      if (await activeVaultIsMultisig()) {
+        return { ok: false, reason: MULTISIG_SEND_REFUSAL };
+      }
       try {
         // T4-04 (Item D, a1): clamp the popup-supplied plan fee before signing
         // (this wallet-UI path builds + signs directly, bypassing the
@@ -8823,6 +8867,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const fromAddr = getUnlockedAddressV4();
       if (!fromAddr) {
         return { ok: false, reason: "wallet has no unlocked address" };
+      }
+      // S6 #45 B1: a multisig active vault must use the propose/approve flow —
+      // refuse before the passkey-cap + nonce/fee/sign work below.
+      if (await activeVaultIsMultisig()) {
+        return { ok: false, reason: MULTISIG_SEND_REFUSAL };
       }
       // T1-04(a): LOCAL defense-in-depth enforcement of the per-vault passkey
       // spending cap on BARE VALUE TRANSFERS (real contract calls are out of
