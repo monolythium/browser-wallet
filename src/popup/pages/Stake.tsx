@@ -23,7 +23,7 @@ import {
 } from "react";
 import { Icon } from "../Icon";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
-import { classifySendError, errorLinksOperators } from "../../shared/send-error";
+import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
@@ -1637,6 +1637,10 @@ function ErrorView({
   onOpenOperators,
 }: ErrorViewProps) {
   const classified = classifySendError(error.message);
+  // S6 INFO #9: tint the error surface from classified.severity (shared with
+  // Send.tsx) so a warn-severity transient (e.g. spending-policy-unavailable)
+  // renders amber, not error-red.
+  const colours = severityColours(classified.severity);
   const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1644,7 +1648,7 @@ function ErrorView({
         style={{
           padding: "40px 20px",
           textAlign: "center",
-          color: "var(--err)",
+          color: colours.fg,
         }}
       >
         <Icon name="warn" size={40} />
@@ -1658,15 +1662,15 @@ function ErrorView({
         style={{
           padding: 12,
           borderRadius: 10,
-          background: "rgba(220,80,80,0.08)",
-          border: "1px solid rgba(220,80,80,0.4)",
+          background: colours.cardBg,
+          border: `1px solid ${colours.borderRgba}`,
         }}
       >
         <div
           style={{
             fontFamily: "var(--f-mono)",
             fontSize: 11,
-            color: "var(--err)",
+            color: colours.fg,
             wordBreak: "break-word",
             lineHeight: 1.5,
           }}

@@ -452,6 +452,42 @@ export function errorLinksOperators(kind: SendErrorKind): boolean {
   );
 }
 
+/** Colour palette per `SendErrorClassification.severity`, shared by the Send +
+ *  Stake error surfaces so they stay consistent. `warn` (e.g. the transient
+ *  spending-policy-unavailable) renders amber rather than the error-red of
+ *  `err`, so a retryable condition doesn't read as a hard failure; `info` is
+ *  neutral (e.g. a user-cancelled prompt). */
+export function severityColours(severity: "err" | "warn" | "info"): {
+  fg: string;
+  iconBg: string;
+  cardBg: string;
+  borderRgba: string;
+} {
+  switch (severity) {
+    case "err":
+      return {
+        fg: "var(--err)",
+        iconBg: "rgba(220,80,80,0.12)",
+        cardBg: "rgba(220,80,80,0.08)",
+        borderRgba: "rgba(220,80,80,0.4)",
+      };
+    case "warn":
+      return {
+        fg: "var(--warn)",
+        iconBg: "rgba(220,180,80,0.12)",
+        cardBg: "rgba(220,180,80,0.08)",
+        borderRgba: "rgba(220,180,80,0.4)",
+      };
+    case "info":
+      return {
+        fg: "var(--fg-200)",
+        iconBg: "rgba(120,160,220,0.10)",
+        cardBg: "rgba(120,160,220,0.06)",
+        borderRgba: "rgba(120,160,220,0.3)",
+      };
+  }
+}
+
 // Native LYTH precision sourced from the SDK (single source of truth). Chain
 // migrated 8 → 18 decimals (1 lythoshi == 1 wei); SDK 0.3.15 carries
 // `LYTHOSHI_PER_LYTH = 10^18` and `NATIVE_LYTH_DECIMALS = 18`.
