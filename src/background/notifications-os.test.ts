@@ -664,18 +664,50 @@ describe("toast + badge gating on the new settings", () => {
     };
     captures.storage["mono.notifications.badge-when-locked.v1"] = false;
     const { refreshUnreadBadge } = await import("./notifications-os.js");
-    await refreshUnreadBadge({ unlocked: false });
+    // Production locked tuple (no active vault → activeAddrLower null).
+    await refreshUnreadBadge({ unlocked: false, activeAddrLower: null });
     expect(captures.badgeText).toEqual([""]);
   });
 
-  it("locked + badge-when-locked ON (default) → count shown", async () => {
+  it("locked + badge-when-locked ON (default) → count shown (production tuple unlocked:false, activeAddrLower:null)", async () => {
     captures.storage[`mono.notifications.history.${ADDR}.${CHAIN}.v1`] = {
       schemaVersion: 0,
       entries: [baseRecord({ kind: "send" })],
     };
     const { refreshUnreadBadge } = await import("./notifications-os.js");
-    await refreshUnreadBadge({ unlocked: false });
+    // S6 closeout C1: the REAL production locked call passes activeAddrLower:null
+    // (no active vault). With the toggle ON it must still surface the count —
+    // this is the de-masked test (the old one omitted activeAddrLower and so
+    // exercised the global path production no longer uses).
+    await refreshUnreadBadge({ unlocked: false, activeAddrLower: null });
     expect(captures.badgeText).toEqual(["1"]);
+  });
+
+  it("closeout C1: locked + badge-when-locked ON falls back to the GLOBAL count, not the active scope", async () => {
+    const ADDR_B = "0x" + "cd".repeat(20);
+    // A has 2 unread, B has 3 → global = 5.
+    captures.storage[`mono.notifications.history.${ADDR}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [
+        baseRecord({ kind: "send" }),
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x22`, txHash: "0x22" },
+      ],
+    };
+    captures.storage[`mono.notifications.history.${ADDR_B}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x44`, txHash: "0x44" },
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x55`, txHash: "0x55" },
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x66`, txHash: "0x66" },
+      ],
+    };
+    const { refreshUnreadBadge } = await import("./notifications-os.js");
+    // Locked → no active vault → the privacy-safe GLOBAL count (5), NOT a scope.
+    // Contrast: the "B3: scopes the badge to the active address" test (UNLOCKED +
+    // active address) shows A's 2 only — proving unlocked stays scoped (B3) while
+    // only the locked-and-allowed case goes global (closeout C1).
+    await refreshUnreadBadge({ unlocked: false, activeAddrLower: null });
+    expect(captures.badgeText).toEqual(["5"]);
   });
 
   it("unlock → refreshUnreadBadge({unlocked:true}) surfaces the held count", async () => {

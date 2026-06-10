@@ -285,9 +285,10 @@ export async function fireOsNotification(
  *  chrome.action contract). Best-effort. */
 export async function refreshUnreadBadge(opts?: {
   unlocked?: boolean;
-  // S6 #44 B3 — active-vault scope forwarded to getUnread so the toolbar pip
-  // counts the SAME set the inbox shows (no badge/inbox desync). Omit (the
-  // 3-way contract's `undefined`) for the legacy global count.
+  // S6 #44 B3 + closeout C1 — active-vault scope for the UNLOCKED count, so the
+  // toolbar pip matches the inbox (no desync). Ignored while locked, where the
+  // badge falls back to the global count (see the body). Omit for the legacy
+  // global count.
   activeAddrLower?: string | null;
 }): Promise<void> {
   try {
@@ -297,12 +298,17 @@ export async function refreshUnreadBadge(opts?: {
     ) {
       return;
     }
-    const n = await getUnread(opts?.activeAddrLower);
-    // While locked with "Unread badge while locked" off, hide the count — the
-    // unread record is still kept; the next unlocked refresh surfaces it. The
-    // count itself never reveals tx content. `unlocked` is gate-only.
     const unlocked = opts?.unlocked ?? true;
+    // Scope selection (S6 closeout C1). UNLOCKED: scope the count to the active
+    // vault's address so the badge matches the inbox (B3). LOCKED: there is no
+    // active vault, so "Unread badge while locked" (default on) falls back to
+    // the GLOBAL count — a bare number, never tx content or an address, so it
+    // stays privacy-safe — while off holds it empty. `unlocked` selects
+    // scoped-vs-global; `activeAddrLower` scopes the unlocked case only.
     const suppressed = !unlocked && !(await getBadgeWhenLocked());
+    const n = suppressed
+      ? 0
+      : await getUnread(unlocked ? opts?.activeAddrLower : undefined);
     const text = !suppressed && n > 0 ? String(n) : "";
     await chrome.action.setBadgeText({ text });
     if (
