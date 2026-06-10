@@ -792,6 +792,31 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     const after = await dispatchRpc("eth_accounts", [], origin);
     expect(after.result).toEqual([]); // connectedOrigins cleared → no silent auto-reconnect / address leak
   });
+
+  it("F-B2V-1: still disposes the in-memory backend when the lockout session.remove rejects", async () => {
+    unlocked = true; // decrypted backend live (beforeEach default; explicit)
+    // Force the lockout-counter session.remove (the await BEFORE triggerAutoLock)
+    // to reject — the exact F-B2V-1 trigger. Pre-fix this skipped lockV4 and left
+    // the decrypted backend + MEK live in the SW heap after the disk was wiped;
+    // the new try/finally must zero it regardless of the rejection.
+    // chrome is installed once in beforeAll, so restore the shared remove in a
+    // finally to avoid leaking the rejecting stub into later tests.
+    const sessionArea = chrome.storage.session as unknown as {
+      remove: (keys: string | string[], cb?: () => void) => Promise<void>;
+    };
+    const origRemove = sessionArea.remove;
+    sessionArea.remove = vi.fn(() =>
+      Promise.reject(new Error("forced session.remove failure")),
+    );
+    try {
+      // The rejection propagates to the router catch; dispatchPopup resolves with
+      // { error }. What matters is that finally { lockV4() } ran first.
+      await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    } finally {
+      sessionArea.remove = origRemove;
+    }
+    expect(unlocked).toBe(false); // lockV4 (mock sets unlocked=false) ran via finally
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

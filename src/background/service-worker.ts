@@ -5772,14 +5772,25 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Drop the connection graph first (belt-and-braces / codebase idiom),
       // THEN the default-deny scan removes its mono.connected-sites={} so no
       // empty-object residue survives the wipe.
-      await clearAllConnectedSites();
-      await wipeAllLocalWalletState();
-      session.connectedOrigins.clear();
-      await chrome.storage.session.remove([
-        SESSION_KEY_UNLOCK_FAIL_COUNT,
-        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
-      ]);
-      await triggerAutoLock();
+      // F-B2V-1: run the in-memory teardown in a finally so a rejection of any
+      // session/alarm await in this sequence can't skip it and leave the
+      // decrypted ML-DSA backend + cached MEK live in the SW heap after the disk
+      // is already wiped — restoring the rejection-proof guarantee pre-B2's
+      // wipeVaultV4 gave for free (it ran lockV4 after a non-rejectable
+      // callback-form remove). lockV4 is sync + idempotent, so triggerAutoLock's
+      // own tail lockV4 stays a harmless no-op on the happy path.
+      try {
+        await clearAllConnectedSites();
+        await wipeAllLocalWalletState();
+        session.connectedOrigins.clear();
+        await chrome.storage.session.remove([
+          SESSION_KEY_UNLOCK_FAIL_COUNT,
+          SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+        ]);
+        await triggerAutoLock();
+      } finally {
+        lockV4();
+      }
       return { ok: true };
     }
     case "keystore-wipe-unauth": {
@@ -5808,14 +5819,25 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Drop the connection graph first (belt-and-braces / codebase idiom),
       // THEN the default-deny scan removes its mono.connected-sites={} so no
       // empty-object residue survives the wipe.
-      await clearAllConnectedSites();
-      await wipeAllLocalWalletState();
-      session.connectedOrigins.clear();
-      await chrome.storage.session.remove([
-        SESSION_KEY_UNLOCK_FAIL_COUNT,
-        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
-      ]);
-      await triggerAutoLock();
+      // F-B2V-1: run the in-memory teardown in a finally so a rejection of any
+      // session/alarm await in this sequence can't skip it and leave the
+      // decrypted ML-DSA backend + cached MEK live in the SW heap after the disk
+      // is already wiped — restoring the rejection-proof guarantee pre-B2's
+      // wipeVaultV4 gave for free (it ran lockV4 after a non-rejectable
+      // callback-form remove). lockV4 is sync + idempotent, so triggerAutoLock's
+      // own tail lockV4 stays a harmless no-op on the happy path.
+      try {
+        await clearAllConnectedSites();
+        await wipeAllLocalWalletState();
+        session.connectedOrigins.clear();
+        await chrome.storage.session.remove([
+          SESSION_KEY_UNLOCK_FAIL_COUNT,
+          SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+        ]);
+        await triggerAutoLock();
+      } finally {
+        lockV4();
+      }
       return { ok: true };
     }
     case "vault-list": {
