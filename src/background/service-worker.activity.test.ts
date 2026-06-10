@@ -702,6 +702,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
+  // S6 closeout C5: unwind any vi.spyOn (e.g. the F-B2V-1 session.remove
+  // rejection) so a spy can't leak across tests. Only affects vi.spyOn spies,
+  // not the vi.fn/vi.mock module mocks.
+  vi.restoreAllMocks();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -798,22 +802,20 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     // to reject — the exact F-B2V-1 trigger. Pre-fix this skipped lockV4 and left
     // the decrypted backend + MEK live in the SW heap after the disk was wiped;
     // the new try/finally must zero it regardless of the rejection.
-    // chrome is installed once in beforeAll, so restore the shared remove in a
-    // finally to avoid leaking the rejecting stub into later tests.
+    // S6 closeout C5: vi.spyOn + mockRejectedValueOnce is self-limiting (it
+    // rejects exactly once, then delegates to the original) and is unwound by
+    // afterEach's restoreAllMocks — so no rejecting stub can leak into a later
+    // test even if this test aborts (chrome is installed once in beforeAll, so
+    // the manual swap+finally it replaces could leak on a skipped finally).
     const sessionArea = chrome.storage.session as unknown as {
       remove: (keys: string | string[], cb?: () => void) => Promise<void>;
     };
-    const origRemove = sessionArea.remove;
-    sessionArea.remove = vi.fn(() =>
-      Promise.reject(new Error("forced session.remove failure")),
+    vi.spyOn(sessionArea, "remove").mockRejectedValueOnce(
+      new Error("forced session.remove failure"),
     );
-    try {
-      // The rejection propagates to the router catch; dispatchPopup resolves with
-      // { error }. What matters is that finally { lockV4() } ran first.
-      await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
-    } finally {
-      sessionArea.remove = origRemove;
-    }
+    // The rejection propagates to the router catch; dispatchPopup resolves with
+    // { error }. What matters is that finally { lockV4() } ran first.
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
     expect(unlocked).toBe(false); // lockV4 (mock sets unlocked=false) ran via finally
   });
 
