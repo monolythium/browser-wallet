@@ -817,6 +817,17 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     }
     expect(unlocked).toBe(false); // lockV4 (mock sets unlocked=false) ran via finally
   });
+
+  it("C2: clears the toolbar badge on wipe-unauth (no stale unread count for the next owner)", async () => {
+    mockRefreshUnreadBadge.mockClear();
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    // The wipe path's only refreshUnreadBadge call is the C2 clear — locked +
+    // null scope → after the store is wiped it resolves to an empty badge.
+    expect(mockRefreshUnreadBadge).toHaveBeenCalledWith({
+      unlocked: false,
+      activeAddrLower: null,
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

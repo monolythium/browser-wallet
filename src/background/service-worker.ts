@@ -5797,6 +5797,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } finally {
         lockV4();
       }
+      // S6 closeout C2: clear the toolbar pip so a prior owner's unread COUNT
+      // doesn't linger after the store is wiped (device-handoff #43). Best-
+      // effort + guarded; the now-empty store resolves to an empty badge.
+      void refreshUnreadBadge({ unlocked: false, activeAddrLower: null });
       return { ok: true };
     }
     case "keystore-wipe-unauth": {
@@ -5844,6 +5848,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } finally {
         lockV4();
       }
+      // S6 closeout C2: clear the toolbar pip so a prior owner's unread COUNT
+      // doesn't linger after the store is wiped (device-handoff #43). Best-
+      // effort + guarded; the now-empty store resolves to an empty badge.
+      void refreshUnreadBadge({ unlocked: false, activeAddrLower: null });
       return { ok: true };
     }
     case "vault-list": {
