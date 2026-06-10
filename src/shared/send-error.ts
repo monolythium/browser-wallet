@@ -42,6 +42,7 @@ export type SendErrorKind =
   | "user-rejected"
   | "transaction-reverted"
   | "spending-policy-blocked"
+  | "spending-policy-unavailable"
   | "wallet-locked"
   | "transaction-rejected"
   | "unknown";
@@ -173,6 +174,33 @@ function classifyInnerError(
         "here until an encrypted-send-capable build ships. Your funds are " +
         "unaffected: the transaction was rejected before it was signed.",
       severity: "err",
+    };
+  }
+
+  // Transient admission-time backend fault while the chain READS the spending
+  // policy — mono-core SpendingPolicyStorageRead, Display
+  // "spending-policy: admission-time storage read failed: <reason>". The user's
+  // policy is fine; this is a rare I/O glitch, not a violation. Classify it as a
+  // retryable transient so we don't mis-advise "adjust your policy".
+  //
+  // HOISTED above operator-offline / gas-estimation / nonce-conflict: the
+  // <reason> tail is arbitrary mono-core text and may contain those branches'
+  // trigger words (e.g. a storage "timeout" → operator-offline), which would
+  // otherwise steal it. The predicate stays SPECIFIC (storage-read AND a
+  // spending-policy context) so it never steals a genuine operator/gas/nonce
+  // error, and it stays ABOVE the generic spending-policy branch so a real
+  // policy violation still reads as spending-policy-blocked.
+  if (
+    lower.includes("storage read failed") &&
+    (lower.includes("spending-policy") || lower.includes("spending policy"))
+  ) {
+    return {
+      kind: "spending-policy-unavailable",
+      headline: "Couldn't check your spending policy",
+      body:
+        "A temporary network issue interrupted the spending-policy check — " +
+        "your policy is unchanged. Try again in a moment.",
+      severity: "warn",
     };
   }
 

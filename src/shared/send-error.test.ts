@@ -46,6 +46,15 @@ describe("classifySendError — kind detection", () => {
       "upstream unavailable: mempool: spending-policy: CREATE not permitted from sub-accounts with destination policy configured",
       "spending-policy-blocked",
     ],
+    // SpendingPolicyStorageRead (LOW): a TRANSIENT admission-time backend
+    // storage-read fault — the user's policy is fine. Must NOT read as
+    // spending-policy-blocked ("adjust your policy"); classifies as the
+    // retryable transient (checked before the generic spending-policy branch).
+    [
+      "upstream unavailable: mempool: spending-policy: admission-time storage read failed: backend timeout",
+      "spending-policy-unavailable",
+    ],
+    ["spending-policy: admission-time storage read failed: disk i/o", "spending-policy-unavailable"],
     // An admission inner with no specific branch is an honest transaction
     // rejection — NOT an operator outage.
     ["upstream unavailable: mempool: signature invalid", "transaction-rejected"],
@@ -296,5 +305,22 @@ describe("classifySendError — shared -32047 code disambiguated by inner (Part 
     expect(plaintext).not.toBe(policy);
     expect(plaintext).toBe("plaintext-not-allowed");
     expect(policy).toBe("spending-policy-blocked");
+  });
+
+  it("SpendingPolicyStorageRead → spending-policy-unavailable (transient/retry), never spending-policy-blocked", () => {
+    const r = classifySendError(
+      "upstream unavailable: mempool: spending-policy: admission-time storage read failed: backend timeout",
+    );
+    // Transient I/O fault — the user's policy is fine. Must NOT advise "adjust
+    // your policy" (that's spending-policy-blocked).
+    expect(r.kind).toBe("spending-policy-unavailable");
+    expect(r.kind).not.toBe("spending-policy-blocked");
+    expect(r.body.toLowerCase()).toMatch(/try again|temporary|moment/);
+    // And a GENUINE policy violation still classifies as blocked (no regression).
+    expect(
+      classifySendError(
+        "upstream unavailable: mempool: spending-policy: CREATE not permitted from sub-accounts with destination policy configured",
+      ).kind,
+    ).toBe("spending-policy-blocked");
   });
 });
