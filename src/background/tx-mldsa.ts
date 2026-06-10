@@ -368,9 +368,10 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
 
 /** Build a PLAINTEXT submission for the ML-DSA-65 mesh_submitTx path. Signs
  *  over the canonical chain-side sighash with the unlocked ML-DSA-65 backend
- *  and bincode-serializes the result. (The encrypted-mempool / Ferveo
- *  threshold-decrypt path was removed; a LythiumSeal encrypted path may
- *  return later.) */
+ *  and bincode-serializes the result. (The legacy Ferveo threshold-decrypt
+ *  path was removed; the LythiumSeal seal path is live in submitMlDsaTx — it
+ *  seals when the operator cluster serves a roster, else this plaintext path
+ *  is the fallback.) */
 export async function buildPlaintextSubmission(args: {
   txReq: EthSendTxFields;
 }): Promise<{
