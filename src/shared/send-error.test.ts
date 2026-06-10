@@ -242,3 +242,24 @@ describe("classifySendError — unwrap-inner-first (Part 2A systemic fix)", () =
     expect(classifySendError("random garbage message no one recognises").kind).toBe("unknown");
   });
 });
+
+describe("classifySendError — tx-type-neutral copy (Part 2A C2)", () => {
+  // The same classifier drives stake / undelegate / redelegate / claim / MRV
+  // (all funnel through the submitMlDsaTx chokepoint), so messages must not be
+  // phrased send-/contract-specific where a non-send tx hits them.
+  it("transaction-reverted copy is neutral (no 'recipient contract' / 'function arguments')", () => {
+    const r = classifySendError("execution reverted: insufficient allowance");
+    expect(r.kind).toBe("transaction-reverted");
+    expect(r.headline).not.toMatch(/recipient/i);
+    expect(r.body).not.toMatch(/recipient/i);
+    expect(r.body).not.toMatch(/function arguments/i);
+  });
+
+  it("gas-estimation copy drops the send-only 'recipient address and amount' but keeps execution-unit wording", () => {
+    const r = classifySendError("cannot estimate gas: execution may fail");
+    expect(r.kind).toBe("gas-estimation");
+    expect(r.body).not.toMatch(/recipient/i);
+    expect(r.body).toContain("execution units"); // native fee wording preserved
+    expect(r.body).not.toContain("gas");
+  });
+});

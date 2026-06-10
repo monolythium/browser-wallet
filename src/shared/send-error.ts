@@ -273,9 +273,9 @@ function classifyInnerError(
       kind: "gas-estimation",
       headline: "Could not estimate network fee",
       body:
-        "The wallet could not estimate the execution units for this " +
-        "transaction. The recipient contract may reject it. Check the " +
-        "recipient address and amount, then try again.",
+        "The wallet couldn't estimate the execution units for this " +
+        "transaction — it may be rejected when executed. Re-check the " +
+        "transaction details, then try again.",
       severity: "err",
     };
   }
@@ -329,17 +329,21 @@ function classifyInnerError(
     };
   }
 
-  // Generic EVM revert — recipient contract chose to abort.
+  // Generic execution revert — the transaction aborted during execution (a
+  // contract call, or a native module rejecting the operation). Reached by the
+  // staking surface too (delegate/undelegate/redelegate/claim funnel through
+  // the same classifier), so the copy stays tx-type-neutral.
   if (
     lower.includes("execution reverted") ||
     lower.includes("revert")
   ) {
     return {
       kind: "transaction-reverted",
-      headline: "Recipient contract rejected the transaction",
+      headline: "Transaction reverted",
       body:
-        "The destination contract reverted execution. Check that the " +
-        "function arguments are correct.",
+        "The network reverted this transaction during execution. If it calls " +
+        "a contract, re-check the call arguments; otherwise re-check the " +
+        "transaction details and try again.",
       severity: "err",
     };
   }
