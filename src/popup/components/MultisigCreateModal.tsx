@@ -13,12 +13,13 @@
 //                  its bech32m address + backup checkbox
 //
 // The "executor mnemonic" is the recovery secret for the multisig
-// vault's OWN keypair — the keypair that submits proposals on-chain.
-// Loss of the executor mnemonic does NOT compromise the M-of-N
-// security model (every tx still needs M signer approvals), but it
-// does brick the vault until a new container is initialized — same
-// stakes as any other vault mnemonic, so we use the same backup-
-// checkbox gate.
+// vault's OWN keypair — the keypair that submits the final tx on-chain.
+// It is FUND-CONTROLLING: in the v1 single-executor design the chain
+// verifies only the executor's single signature, so a holder of this
+// mnemonic can move the vault's funds without the M-of-N approvals
+// (the threshold ceremony is enforced in the wallet UI, not on-chain
+// today — see shared/multisig.ts). Same stakes as any other vault
+// mnemonic, so we use the same backup-checkbox gate.
 //
 // Whitepaper §28.5 (multisig built-in for Beta) is the binding
 // requirement. The chain has no user-multisig precompile today
@@ -1059,9 +1060,10 @@ function RevealStep({
         }}
       >
         This 24-word phrase recovers the multisig wallet&apos;s own
-        keypair. Approvals still require the configured threshold,
-        so losing it doesn&apos;t let an attacker spend — but it
-        does brick the wallet until governance restores access.
+        keypair — the executor that submits this wallet&apos;s
+        transactions. Anyone who holds it can move this wallet&apos;s
+        funds, so back it up and protect it as carefully as your
+        main recovery phrase.
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <div style={labelHintStyle}>Wallet address</div>
