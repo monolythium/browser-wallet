@@ -135,7 +135,6 @@ vi.mock("./keystore-mldsa.js", () => ({
   exportMnemonicV4: vi.fn(async () => ({
     mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
   })),
-  wipeVaultV4: vi.fn(async () => undefined),
   // personal_sign + eth_signTypedData_v4 route to
   // the v4 ML-DSA backend when the v4 keystore is unlocked. Tests stub the
   // sign output to a deterministic byte pattern — the SW just hex-encodes

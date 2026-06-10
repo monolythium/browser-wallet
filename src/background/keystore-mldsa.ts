@@ -109,8 +109,6 @@ import {
   MEK_REHYDRATE_MAX_MINUTES,
 } from "../shared/constants.js";
 
-const VAULT_KEY_V4 = "mono.vault.v4";
-
 const ARGON2_M_KIB = 64 * 1024; // 64 MiB
 const ARGON2_T = 3;
 const ARGON2_P = 1;
@@ -698,17 +696,6 @@ export interface VaultSummaryV4 {
 
 export async function hasContainerV4(): Promise<boolean> {
   return (await loadVaultsContainerV4()) !== null;
-}
-
-/** Wipe the multi-vault container from chrome.storage.local. Used by
- *  the Settings → Reset wallet path in conjunction with
- *  {@link wipeVaultV4} to remove both the legacy entry and the
- *  container. Also clears the unlocked + MEK cache. */
-export async function wipeContainerV4(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(VAULTS_CONTAINER_KEY_V4, () => resolve());
-  });
-  lockV4();
 }
 
 /** Internal: unwrap a vault's VEK, open its envelope, build the
@@ -1703,27 +1690,12 @@ export function lockV4(): void {
   }
   activeContainerVaultId = null;
   // Fire-and-forget the session-MEK clear — lockV4 is sync to preserve
-  // call-site shape (used by triggerAutoLock, wipeVaultV4, and the
-  // keystore-lock IPC). The session.remove is fast (single key); SW
+  // call-site shape (used by triggerAutoLock and the keystore-lock IPC).
+  // The session.remove is fast (single key); SW
   // boot's rehydrate path tolerates an absent key the same as a
   // present-but-invalid one, so a partial-clear can't unlock a
   // post-lock SW.
   void clearMekFromSessionV4();
-}
-
-/**
- * Wipe the v4 vault from chrome.storage.local and drop the in-memory
- * backend. Used by both the password-confirmed Settings → Reset wallet
- * path and the Welcome → Forgot password? path. Caller is responsible
- * for clearing the lockout counters (`SESSION_KEY_UNLOCK_FAIL_COUNT`,
- * `_UNTIL`) and broadcasting `walletLocked` if the popup needs to
- * route — those live in the SW dispatcher.
- */
-export async function wipeVaultV4(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(VAULT_KEY_V4, () => resolve());
-  });
-  lockV4();
 }
 
 /**

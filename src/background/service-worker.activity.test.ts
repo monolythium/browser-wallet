@@ -393,7 +393,6 @@ vi.mock("./keystore-mldsa.js", () => ({
     address: DETERMINISTIC_ADDRESS,
   })),
   exportMnemonicV4: vi.fn(async () => ({ mnemonic: "" })),
-  wipeVaultV4: vi.fn(async () => undefined),
   personalSignV4: vi.fn(() => new Uint8Array(65)),
   signTypedDataV4FromV4: vi.fn(() => new Uint8Array(65)),
   // Multisig-execute seams (used only by the multisig-execute handler test).
