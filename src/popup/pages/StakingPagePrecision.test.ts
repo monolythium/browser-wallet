@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  allocationToLythAmountStr,
+  allocationToPercentStr,
   formatLythoshi as formatStakeLythoshi,
   parseLythAmountToLythoshi,
 } from "./Stake.js";
@@ -26,12 +26,8 @@ describe("staking page native precision helpers", () => {
     expect(formatDelegationsLythoshi(123_456_780_000_000_000n, 8)).toBe("0.12345678");
   });
 
-  it("converts autovote allocation weights from balance lythoshi", () => {
-    expect(
-      allocationToLythAmountStr(
-        { cluster: 7, weightBps: 3333 },
-        1_234_567_890_000_000_000n,
-      ),
-    ).toBe("0.411481");
+  it("converts autovote allocation weights to a percent-of-balance string", () => {
+    expect(allocationToPercentStr({ cluster: 7, weightBps: 3333 })).toBe("33.33");
+    expect(allocationToPercentStr({ cluster: 1, weightBps: 0 })).toBe("0");
   });
 });

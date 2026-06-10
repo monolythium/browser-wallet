@@ -13,27 +13,21 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
-import { ExternalLink } from "../components/ExternalLink";
-import { monoscanTxUrl } from "../../shared/build-info";
-import { RedemptionQueueCard } from "../components/RedemptionQueueCard";
 import { RewardCard } from "../components/RewardCard";
 import {
   bgStakingClusterDirectory,
   bgStakingDelegations,
   bgStakingPendingRewards,
-  bgStakingRedemptionQueue,
   bgWalletBalance,
   bgWalletSendTx,
   type ClusterDirectoryEntry,
   type DelegationsView,
   type PendingRewardsView,
-  type RedemptionQueueView,
 } from "../bg";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
   encodeClaimRewards,
-  encodeCompleteRedemption,
 } from "../../shared/staking-tx";
 import {
   lythoshiToLythDecimal,
@@ -74,19 +68,8 @@ export function Delegations({
   // Set when the pending-rewards read returns ok:false (hard error). Drives
   // RewardCard's honest-absence state instead of perpetual "Loading…".
   const [rewardsError, setRewardsError] = useState<string | null>(null);
-  const [redemptionQueue, setRedemptionQueue] =
-    useState<RedemptionQueueView | null>(null);
-  const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
-  const [redemptionQueueError, setRedemptionQueueError] =
-    useState<string | null>(null);
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [claimResult, setClaimResult] = useState<
-    | { ok: true; txHash: string }
-    | { ok: false; reason: string }
-    | null
-  >(null);
-  const [completingIndex, setCompletingIndex] = useState<number | null>(null);
-  const [redemptionResult, setRedemptionResult] = useState<
     | { ok: true; txHash: string }
     | { ok: false; reason: string }
     | null
@@ -99,16 +82,12 @@ export function Delegations({
   useEffect(() => {
     if (!account.addr.startsWith("0x")) return;
     let cancelled = false;
-    setRedemptionQueue(null);
-    setRedemptionQueueMock(false);
-    setRedemptionQueueError(null);
     setRewardsError(null);
     void (async () => {
-      const [dirR, delR, balR, queueR] = await Promise.all([
+      const [dirR, delR, balR] = await Promise.all([
         bgStakingClusterDirectory(),
         bgStakingDelegations(account.addr),
         bgWalletBalance(account.addr, chainId),
-        bgStakingRedemptionQueue(account.addr),
       ]);
       if (cancelled) return;
       if (dirR.ok) setClusters(dirR.data.clusters.slice());
@@ -116,12 +95,6 @@ export function Delegations({
       if (balR.ok) {
         const parsedBalance = parseHexQuantity(balR.balanceHex);
         if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
-      }
-      if (queueR.ok) {
-        setRedemptionQueue(queueR.data);
-        setRedemptionQueueMock(queueR.via === "mock");
-      } else {
-        setRedemptionQueueError(queueR.reason);
       }
       if (delR.ok) {
         const rewR = await bgStakingPendingRewards(account.addr, delR.data.rows);
@@ -181,48 +154,6 @@ export function Delegations({
     }
   };
 
-  // Complete-redemption handler — submits `completeRedemption(index)`
-  // for a matured ticket through the same bgWalletSendTx envelope as
-  // claim/undelegate. With liquid bonding the ticket matures at the
-  // undelegate height, so a mature ticket is immediately redeemable;
-  // the call returns the queued principal to the wallet balance and
-  // prunes the ticket. Selector-only calldata (one uint64 arg).
-  const handleCompleteRedemption = async (ticketIndex: number) => {
-    setCompletingIndex(ticketIndex);
-    setRedemptionResult(null);
-    try {
-      const r = await bgWalletSendTx({
-        to: DELEGATION_PRECOMPILE,
-        valueWeiHex: "0x0",
-        chainIdHex: chainId,
-        data: encodeCompleteRedemption(ticketIndex),
-        executionUnitLimitHex: "0x186A0", // 100000 — single-arg precompile call
-        opKind: "complete-redemption",
-      });
-      if (r.ok) {
-        setRedemptionResult({ ok: true, txHash: r.result.txHash });
-        // Refresh the queue so the redeemed ticket drops out.
-        const queueR = await bgStakingRedemptionQueue(account.addr);
-        if (queueR.ok) {
-          setRedemptionQueue(queueR.data);
-          setRedemptionQueueMock(queueR.via === "mock");
-        }
-      } else {
-        setRedemptionResult({
-          ok: false,
-          reason: r.reason ?? "redemption rejected",
-        });
-      }
-    } catch (e) {
-      setRedemptionResult({
-        ok: false,
-        reason: (e as Error).message ?? "redemption failed",
-      });
-    } finally {
-      setCompletingIndex(null);
-    }
-  };
-
   return (
     <>
       <div className="ext-top">
@@ -259,7 +190,7 @@ export function Delegations({
               tone="var(--fg-100)"
             />
             <KvStack
-              label="Staked"
+              label="Effective weight"
               value={
                 totalDelegatedLythoshi === null
                   ? "—"
@@ -280,67 +211,6 @@ export function Delegations({
             onClaim={() => void handleClaim()}
             claimDisabled={claimSubmitting}
           />
-        )}
-
-        {account.addr.startsWith("0x") && (
-          <RedemptionQueueCard
-            queue={redemptionQueue}
-            isMock={redemptionQueueMock}
-            error={redemptionQueueError}
-            clusters={clusters}
-            onComplete={
-              redemptionQueueMock
-                ? undefined
-                : (ticketIndex) => void handleCompleteRedemption(ticketIndex)
-            }
-            completingIndex={completingIndex}
-          />
-        )}
-
-        {/* Redemption result toast */}
-        {redemptionResult !== null && (
-          <div
-            style={
-              redemptionResult.ok
-                ? {
-                    padding: "10px 12px",
-                    borderRadius: 10,
-                    background: "rgba(80,200,120,0.08)",
-                    border: "1px solid rgba(80,200,120,0.4)",
-                    fontFamily: "var(--f-mono)",
-                    fontSize: 10.5,
-                    color: "var(--ok)",
-                    lineHeight: 1.5,
-                  }
-                : {
-                    padding: "10px 12px",
-                    borderRadius: 10,
-                    background: "rgba(220,80,80,0.08)",
-                    border: "1px solid rgba(220,80,80,0.4)",
-                    fontFamily: "var(--f-mono)",
-                    fontSize: 10.5,
-                    color: "var(--err)",
-                    lineHeight: 1.5,
-                  }
-            }
-          >
-            {redemptionResult.ok ? (
-              <>
-                <div>Redemption submitted</div>
-                {/* Full tx hash + ↗ + Monoscan link — mirrors the
-                   emergency-recovery (SLH-DSA backup) result display. */}
-                <ExternalLink
-                  href={monoscanTxUrl(redemptionResult.txHash)}
-                  title={redemptionResult.txHash}
-                  style={{ color: "var(--fg-200)", marginTop: 4 }}
-                >
-                  {redemptionResult.txHash}
-                </ExternalLink>
-              </>
-            ) : (
-              redemptionResult.reason
-            )}
-          </div>
         )}
 
         {/* Claim result toast */}

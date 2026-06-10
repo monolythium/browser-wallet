@@ -1,9 +1,18 @@
 // staking-tx. Calldata encoders for the §23 delegation precompile
-// (`0x100A`), plus LYTH/bps conversion helpers used by the stake forms.
+// (`0x100A`), plus the percent ⇄ bps + effective-weight helpers used by
+// the stake forms.
 //
-// `bgWalletSendTx` takes the precompile address as `to`, the LYTH
-// principal as `valueWeiHex`, and the calldata as `data`. The calldata
-// encoding is delegated to the SDK 0.3.10 encoders
+// Delegation is NON-CUSTODIAL and balance-weighted: the wallet never
+// escrows tokens. `delegate` records a `weightBps` fraction of the
+// caller's LIVE balance; the contribution to a cluster is the effective
+// weight `floor(balance × weightBps / 10000)`, re-evaluated each
+// settlement. Tokens stay fully liquid and spendable. The delegate tx is
+// therefore sent with `value = 0` — the chain reverts (UnexpectedValue,
+// tag 0x020e) if any native value is attached.
+//
+// `bgWalletSendTx` takes the precompile address as `to`, `valueWeiHex`
+// (always "0x0" for delegation), and the calldata as `data`. The calldata
+// encoding is delegated to the SDK encoders
 // (`encode{Delegate,Undelegate,Redelegate,Claim}Calldata`), which match
 // the chain-canonical ABI signatures in mono-core
 // `crates/precompiles/system/delegation/src/abi.rs`
@@ -15,16 +24,14 @@
 // output + the chain selectors as golden vectors.
 //
 // The delegation precompile (`0x100A`) is live + enabled on testnet
-// (`lyth_listActivePrecompiles`). `delegate` commits the LYTH principal
-// via `msg.value` (the tx `value`); `weightBps` is the voting-power
-// share (cap-bound, sum ≤10000 across ≤10 clusters).
+// (`lyth_listActivePrecompiles`). `weightBps` is the voting-power /
+// contribution share (cap-bound, sum ≤10000 across ≤10 clusters).
 
 import {
   encodeDelegateCalldata,
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
-  encodeCompleteRedemptionCalldata,
 } from "@monolythium/core-sdk";
 
 /** Delegation precompile address — Whitepaper §5.4 / §7.6
@@ -39,17 +46,18 @@ export const DELEGATION_PRECOMPILE =
 /** `delegate(uint32 cluster, uint16 weightBps)` calldata via the SDK
  *  encoder (chain-canonical selector `0x662337de`; mono-core
  *  `crates/precompiles/system/delegation/src/abi.rs`). Returns a
- *  0x-prefixed hex string ready for `bgWalletSendTx({ data })`. The LYTH
- *  principal is sent separately as `msg.value` (tx `value`), NOT in the
- *  calldata — see `Stake.tsx`. */
+ *  0x-prefixed hex string ready for `bgWalletSendTx({ data })`. NON-CUSTODIAL:
+ *  the tx MUST be sent with `value = 0` (the chain reverts with
+ *  UnexpectedValue / tag 0x020e otherwise). `weightBps` is the fraction of
+ *  the caller's live balance to contribute; no principal is escrowed. */
 export function encodeDelegate(clusterId: number, weightBps: number): string {
   return encodeDelegateCalldata(clusterId, weightBps);
 }
 
 /** `undelegate(uint32 cluster)` calldata via the SDK encoder
- *  (chain-canonical selector `0x914f3ca8`). Removes the wallet's ENTIRE
- *  row for `cluster` — there is no partial unstake on-chain; the
- *  principal is queued for redemption (`completeRedemption`). No
+ *  (chain-canonical selector `0x914f3ca8`). INSTANTLY removes the wallet's
+ *  entire delegation row for `cluster`. There is no redemption queue or
+ *  cooldown — nothing was escrowed, so there is nothing to redeem. No
  *  weight/amount arg. */
 export function encodeUndelegate(clusterId: number): string {
   return encodeUndelegateCalldata(clusterId);
@@ -57,7 +65,7 @@ export function encodeUndelegate(clusterId: number): string {
 
 /** `redelegate(uint32 fromCluster, uint32 toCluster, uint16 weightBps)`
  *  calldata via the SDK encoder (chain-canonical selector `0xa06ac18f`).
- *  Atomic weight move; no new principal is committed (no `msg.value`). */
+ *  Atomic weight move; non-custodial (sent with `value = 0`). */
 export function encodeRedelegate(
   srcCluster: number,
   dstCluster: number,
@@ -72,48 +80,39 @@ export function encodeClaimRewards(): string {
   return encodeClaimCalldata();
 }
 
-/** `completeRedemption(uint64 index)` calldata via the SDK encoder
- *  (chain-canonical selector `0x26169d0a`). Settles the matured
- *  redemption ticket at `index`, returning the queued principal to the
- *  caller and pruning the ticket. With liquid bonding the ticket matures
- *  at the undelegate height, so this becomes claimable in the same/next
- *  anchor as the `undelegate` that created it. No `msg.value`. */
-export function encodeCompleteRedemption(ticketIndex: number): string {
-  return encodeCompleteRedemptionCalldata(ticketIndex);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Conversions used by the popup forms
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Convert a LYTH amount + total balance to a delegation basis-point
- *  weight, rounded down to the nearest bp. Returns 0 when the total
- *  balance is zero (the form caller will reject the submission with a
- *  more user-friendly error before reaching the chain).
- *
- *  Example: stake 25 LYTH out of a 100 LYTH balance → 2500 bps (25%).
- *  Example: stake 33.34 LYTH out of 100 LYTH → 3334 bps (33.34%). */
-export function lythAmountToBps(
-  amountWei: bigint,
-  totalBalanceWei: bigint,
-): number {
-  if (totalBalanceWei <= 0n) return 0;
-  if (amountWei < 0n) return 0;
-  if (amountWei >= totalBalanceWei) return 10_000;
-  // 10000 bps = 100%; integer division floors per spec.
-  const bps = (amountWei * 10_000n) / totalBalanceWei;
-  return Number(bps);
+/** Clamp + normalize a percent value (0–100, one-or-more decimals) into a
+ *  delegation basis-point weight (0–10000). Returns 0 for non-finite /
+ *  negative input. Example: 25 → 2500 bps; 33.34 → 3334 bps; 100 → 10000. */
+export function percentToBps(percent: number): number {
+  if (!Number.isFinite(percent) || percent <= 0) return 0;
+  const bps = Math.round(percent * 100);
+  return bps > 10_000 ? 10_000 : bps;
 }
 
-/** Inverse of `lythAmountToBps`: convert a bp weight + balance back to
- *  a lythoshi amount. Used by the stake-form's preview card to render the
- *  exact LYTH amount the chain will record. Floors any truncation. */
-export function bpsToLythAmountWei(
+/** Inverse of `percentToBps`: bps → percent number (0–100). */
+export function bpsToPercent(bps: number): number {
+  if (!Number.isFinite(bps) || bps <= 0) return 0;
+  return (bps > 10_000 ? 10_000 : bps) / 100;
+}
+
+/** Effective weight (a.k.a. contribution) the chain records for a delegation:
+ *  `floor(balance × weightBps / 10000)` of the wallet's LIVE balance. The
+ *  tokens are NOT escrowed — they stay liquid and spendable, and the
+ *  effective weight tracks the balance at the next settlement.
+ *
+ *  This is also the inverse of a percent/bps selection back to a lythoshi
+ *  amount, used by the autovote preview to render the LYTH the chain will
+ *  weight. */
+export function effectiveWeightWei(
   bps: number,
-  totalBalanceWei: bigint,
+  balanceWei: bigint,
 ): bigint {
-  if (totalBalanceWei <= 0n) return 0n;
+  if (balanceWei <= 0n) return 0n;
   if (bps <= 0) return 0n;
-  if (bps >= 10_000) return totalBalanceWei;
-  return (totalBalanceWei * BigInt(bps)) / 10_000n;
+  if (bps >= 10_000) return balanceWei;
+  return (balanceWei * BigInt(bps)) / 10_000n;
 }

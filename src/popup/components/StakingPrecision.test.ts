@@ -4,33 +4,23 @@ import {
   lythoshiToLyth as redelegateLythoshiToLyth,
 } from "./RedelegateForm.js";
 import { formatLythoshiAsLyth } from "./RewardCard.js";
-import {
-  lythToLythoshi as stakeLythToLythoshi,
-  lythoshiToLyth as stakeLythoshiToLyth,
-} from "./StakeForm.js";
+// StakeForm is now percent-of-balance (non-custodial), so it no longer
+// parses LYTH amounts — only the effective-weight display formatter remains.
+import { lythoshiToLyth as stakeLythoshiToLyth } from "./StakeForm.js";
 import {
   lythToLythoshi as unstakeLythToLythoshi,
   lythoshiToLyth as unstakeLythoshiToLyth,
 } from "./UnstakeForm.js";
 
 // Chain migrated 8 → 18 decimals (1 lythoshi == 1 wei): 1 LYTH = 10^18 lythoshi.
-const LYTHOSHI_PER_LYTH = 1_000_000_000_000_000_000n;
 
 describe("staking amount parsing at native lythoshi precision", () => {
-  it("parses whole and fractional LYTH into 18-decimal lythoshi", () => {
-    expect(stakeLythToLythoshi("1")).toBe(LYTHOSHI_PER_LYTH);
-    expect(stakeLythToLythoshi("0.000000000000000001")).toBe(1n);
-    expect(stakeLythToLythoshi("1.23456789")).toBe(1_234_567_890_000_000_000n);
-  });
-
   it("rejects fractional precision beyond one lythoshi", () => {
-    expect(stakeLythToLythoshi("0.0000000000000000001")).toBeNull();
     expect(unstakeLythToLythoshi("1.0000000000000000001")).toBeNull();
     expect(redelegateLythToLythoshi("12.1234567890000000001")).toBeNull();
   });
 
   it("rejects non-decimal amount strings", () => {
-    expect(stakeLythToLythoshi("")).toBeNull();
     expect(unstakeLythToLythoshi("1e-8")).toBeNull();
     expect(redelegateLythToLythoshi("-1")).toBeNull();
   });

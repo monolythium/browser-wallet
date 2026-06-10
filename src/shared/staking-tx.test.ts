@@ -1,13 +1,13 @@
 // staking-tx encoder tests.
 //
 // Pins three properties:
-//   1. The wallet's calldata equals the SDK 0.3.9 encoders byte-for-byte
+//   1. The wallet's calldata equals the SDK encoders byte-for-byte
 //      and carries the chain-canonical selector — drift would silently
 //      misroute a delegate tx into a non-existent precompile method.
 //   2. Calldata follows standard Solidity ABI (32-byte big-endian words),
 //      matching the mono-core abi.rs uint32/uint16 signatures.
-//   3. lythAmountToBps + bpsToLythAmountWei round-trip cleanly,
-//      including the truncation regime around the 1-bp boundary.
+//   3. The non-custodial percent ⇄ bps + effective-weight helpers round-trip
+//      cleanly, including the truncation regime around the 1-bp boundary.
 
 import { describe, expect, it } from "vitest";
 import { keccak_256 } from "@noble/hashes/sha3.js";
@@ -16,17 +16,16 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
-  encodeCompleteRedemptionCalldata,
 } from "@monolythium/core-sdk";
 import {
   DELEGATION_PRECOMPILE,
+  bpsToPercent,
+  effectiveWeightWei,
   encodeClaimRewards,
-  encodeCompleteRedemption,
   encodeDelegate,
   encodeRedelegate,
   encodeUndelegate,
-  bpsToLythAmountWei,
-  lythAmountToBps,
+  percentToBps,
 } from "./staking-tx.js";
 
 const enc = new TextEncoder();
@@ -104,69 +103,51 @@ describe("encodeClaimRewards", () => {
   });
 });
 
-describe("encodeCompleteRedemption", () => {
-  it("equals the SDK encoder + carries the chain completeRedemption(uint64) selector", () => {
-    const data = encodeCompleteRedemption(2);
-    expect(data).toBe(encodeCompleteRedemptionCalldata(2));
-    expect(
-      data.startsWith(computeSelector("completeRedemption(uint64)")),
-    ).toBe(true);
-    expect(data.startsWith("0x26169d0a")).toBe(true);
-    // selector + single ticket-index word.
-    expect(data).toHaveLength(2 + 8 + 64);
-    expect(data.slice(10)).toBe("0".repeat(63) + "2"); // index = 2
-  });
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
-// lythAmountToBps / bpsToLythAmountWei
+// percentToBps / bpsToPercent / effectiveWeightWei (non-custodial)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ONE_LYTH = 10n ** 18n;
 
-describe("lythAmountToBps", () => {
-  it("returns 0 when the balance is zero", () => {
-    expect(lythAmountToBps(ONE_LYTH, 0n)).toBe(0);
+describe("percentToBps", () => {
+  it("returns 0 for non-positive / non-finite input", () => {
+    expect(percentToBps(0)).toBe(0);
+    expect(percentToBps(-1)).toBe(0);
+    expect(percentToBps(Number.NaN)).toBe(0);
   });
 
-  it("returns 10000 (100%) when amount equals balance", () => {
-    expect(lythAmountToBps(100n * ONE_LYTH, 100n * ONE_LYTH)).toBe(10_000);
+  it("maps whole + fractional percents to bps", () => {
+    expect(percentToBps(25)).toBe(2500);
+    expect(percentToBps(33.34)).toBe(3334);
+    expect(percentToBps(100)).toBe(10_000);
   });
 
-  it("returns 10000 when amount exceeds balance (caller's job to reject)", () => {
-    expect(lythAmountToBps(101n * ONE_LYTH, 100n * ONE_LYTH)).toBe(10_000);
+  it("clamps above 100% to 10000 bps", () => {
+    expect(percentToBps(150)).toBe(10_000);
   });
 
-  it("floors fractional bp values", () => {
-    // 33.34 LYTH out of 100 LYTH = 3334 bps (0.3334 of total).
-    expect(lythAmountToBps(33340000000000000000n, 100n * ONE_LYTH)).toBe(3334);
-  });
-
-  it("handles small amounts that floor to zero bps", () => {
-    // 0.00001 LYTH out of 100 LYTH would be 0.001 bps → floors to 0.
-    expect(lythAmountToBps(10n ** 13n, 100n * ONE_LYTH)).toBe(0);
+  it("round-trips with bpsToPercent", () => {
+    expect(bpsToPercent(percentToBps(25))).toBe(25);
+    expect(bpsToPercent(percentToBps(33.34))).toBe(33.34);
+    expect(bpsToPercent(0)).toBe(0);
   });
 });
 
-describe("bpsToLythAmountWei", () => {
-  it("inverts lythAmountToBps cleanly for 25%", () => {
+describe("effectiveWeightWei", () => {
+  it("computes floor(balance × bps / 10000) of the LIVE balance", () => {
     const balance = 100n * ONE_LYTH;
-    const bps = lythAmountToBps(25n * ONE_LYTH, balance);
-    expect(bps).toBe(2500);
-    expect(bpsToLythAmountWei(bps, balance)).toBe(25n * ONE_LYTH);
+    expect(effectiveWeightWei(2500, balance)).toBe(25n * ONE_LYTH);
+    expect(effectiveWeightWei(3334, balance)).toBe(3334n * ONE_LYTH / 100n);
   });
 
   it("returns 0 for non-positive inputs", () => {
-    expect(bpsToLythAmountWei(0, 100n * ONE_LYTH)).toBe(0n);
-    expect(bpsToLythAmountWei(-1, 100n * ONE_LYTH)).toBe(0n);
+    expect(effectiveWeightWei(0, 100n * ONE_LYTH)).toBe(0n);
+    expect(effectiveWeightWei(-1, 100n * ONE_LYTH)).toBe(0n);
+    expect(effectiveWeightWei(5000, 0n)).toBe(0n);
   });
 
   it("returns the full balance for >= 10000 bps", () => {
-    expect(bpsToLythAmountWei(10_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
-    expect(bpsToLythAmountWei(15_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
-  });
-
-  it("returns 0 when the balance is zero", () => {
-    expect(bpsToLythAmountWei(5000, 0n)).toBe(0n);
+    expect(effectiveWeightWei(10_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
+    expect(effectiveWeightWei(15_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
   });
 });

@@ -1,13 +1,21 @@
-// StakeForm. Amount input + selected-cluster context +
+// StakeForm. Percent-of-balance input + selected-cluster context +
 // cap-headroom check + Continue CTA. Dumb component: the parent
 // (Stake page) owns the cluster pick, the wallet balance, and the
 // chain submission.
 //
+// NON-CUSTODIAL delegation: the user chooses a PERCENT of their balance
+// to delegate to the cluster (= weightBps). No tokens are escrowed — the
+// delegate tx is sent with value = 0 and the LYTH stays fully liquid and
+// spendable. The form shows the live EFFECTIVE WEIGHT
+// (balance × weightBps / 10000) so the user can see the contribution that
+// percent represents at the current balance; if they spend, the effective
+// weight tracks the balance down at the next settlement.
+//
 // Cap-headroom logic (§23.6 + §23.7):
-//   - The chain's per-cluster cap binds on capital per wallet. Phase 12
-//     launch = 50% (5000 bps). The form enforces that requested-amount
-//     + already-delegated <= cap × balance so the user can't construct
-//     a transaction the chain will reject.
+//   - The chain's per-cluster cap binds the bps fraction per wallet.
+//     Phase 12 launch = 50% (5000 bps). The form enforces that
+//     requested-percent + already-delegated <= cap so the user can't
+//     construct a transaction the chain will reject.
 //   - Cap can be `null` (chain returned `u32::MAX` = disabled). When
 //     disabled, the form skips the cap check entirely.
 //
@@ -19,14 +27,14 @@ import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { lythAmountToBps } from "../../shared/staking-tx";
+import { effectiveWeightWei, percentToBps } from "../../shared/staking-tx";
 import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface StakeFormProps {
   /** Cluster the user is about to delegate to. */
   cluster: ClusterDirectoryEntry;
-  /** Current amount string. The parent owns this so it survives
-   *  state transitions back to the picker. */
+  /** Current percent-of-balance string (0–100). The parent owns this so
+   *  it survives state transitions back to the picker. */
   amountStr: string;
   onAmountChange: (next: string) => void;
   /** Compatibility prop name retained for existing callers. Value is
@@ -50,28 +58,17 @@ export interface StakeFormProps {
 // 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
 const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
 
-/** Decimal-LYTH-amount string → lythoshi bigint. Kept inline so
- *  StakeForm stays self-contained at the compatibility boundary. */
-export function lythToLythoshi(amountStr: string): bigint | null {
+/** Parse a percent-of-balance string (0–100, optional decimals) into a
+ *  number, or `null` when it isn't a valid percent. */
+export function parsePercent(amountStr: string): number | null {
   if (!/^\d+(\.\d+)?$/.test(amountStr)) return null;
-  const dot = amountStr.indexOf(".");
-  const intPart = dot < 0 ? amountStr : amountStr.slice(0, dot);
-  const fracPart = dot < 0 ? "" : amountStr.slice(dot + 1);
-  if (fracPart.length > NATIVE_LYTH_DECIMALS) return null;
-  const padded =
-    fracPart + "0".repeat(NATIVE_LYTH_DECIMALS - fracPart.length);
-  try {
-    return (
-      BigInt(intPart) * LYTHOSHI_PER_LYTH +
-      (padded.length > 0 ? BigInt(padded) : 0n)
-    );
-  } catch {
-    return null;
-  }
+  const n = Number(amountStr);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return n;
 }
 
 /** Lythoshi → LYTH display string. Used for the
- *  balance + cap-headroom hint strings. */
+ *  balance + effective-weight hint strings. */
 export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
   const whole = lythoshi / LYTHOSHI_PER_LYTH;
   const remainder = lythoshi % LYTHOSHI_PER_LYTH;
@@ -95,48 +92,35 @@ export function StakeForm({
   onContinue,
   onBack,
 }: StakeFormProps) {
-  const amountLythoshi = useMemo(() => lythToLythoshi(amountStr), [amountStr]);
+  const percent = useMemo(() => parsePercent(amountStr), [amountStr]);
 
-  // Compute the would-be total delegated weight after this stake.
-  const additionalBps =
-    amountLythoshi !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountLythoshi, balanceWei)
-      : 0;
+  // The requested weight in bps and the would-be total after this stake.
+  const additionalBps = percent !== null ? percentToBps(percent) : 0;
   const totalAfterBps = existingWeightBps + additionalBps;
 
+  // Live effective weight this percent represents at the current balance.
+  const effectiveWeightLythoshi =
+    balanceWei !== null ? effectiveWeightWei(additionalBps, balanceWei) : null;
+
   const overCap = capBps !== null && totalAfterBps > capBps;
-  const insufficientFunds =
-    amountLythoshi !== null &&
-    balanceWei !== null &&
-    amountLythoshi > balanceWei;
-  const amountIsZero = amountLythoshi === null || amountLythoshi === 0n;
+  const percentIsZero = percent === null || additionalBps === 0;
 
   const canContinue =
-    amountLythoshi !== null &&
-    amountLythoshi > 0n &&
+    percent !== null &&
+    additionalBps > 0 &&
     !overCap &&
-    !insufficientFunds &&
     balanceWei !== null;
 
   const handleMax = () => {
-    if (balanceWei === null) return;
-    // Cap-aware max: if there's a cap and existing weight, only fill up
-    // to the headroom, not to 100% of balance. If cap is disabled
-    // (`capBps === null`), the max is the full balance.
+    // Cap-aware max: fill up to the per-cluster cap headroom (or 100% when
+    // the cap is disabled). Headroom is purely a bps fraction now — no
+    // balance math, because nothing is escrowed.
     if (capBps === null) {
-      onAmountChange(lythoshiToLyth(balanceWei, NATIVE_LYTH_DECIMALS));
+      onAmountChange("100");
       return;
     }
     const headroomBps = Math.max(0, capBps - existingWeightBps);
-    if (headroomBps === 0) {
-      onAmountChange("0");
-      return;
-    }
-    // amount = balance * headroomBps / 10000
-    const headroomLythoshi = (balanceWei * BigInt(headroomBps)) / 10_000n;
-    onAmountChange(
-      lythoshiToLyth(headroomLythoshi, NATIVE_LYTH_DECIMALS),
-    );
+    onAmountChange((headroomBps / 100).toString());
   };
 
   const aprBps = cluster.aprBps ?? null;
@@ -195,9 +179,9 @@ export function StakeForm({
         </div>
       </div>
 
-      {/* Amount input */}
+      {/* Percent input */}
       <div className="ext-card" style={{ padding: 14 }}>
-        <div style={cardLabel}>Amount</div>
+        <div style={cardLabel}>Delegate percent of balance</div>
         <div
           style={{
             display: "flex",
@@ -210,7 +194,7 @@ export function StakeForm({
             type="text"
             value={amountStr}
             onChange={(e) => onAmountChange(e.target.value.trim())}
-            placeholder="0.0"
+            placeholder="0"
             inputMode="decimal"
             style={amountInputStyle}
           />
@@ -228,19 +212,16 @@ export function StakeForm({
           <div
             style={{
               fontFamily: "var(--f-mono)",
-              fontSize: 11,
+              fontSize: 13,
               color: "var(--fg-400)",
             }}
           >
-            LYTH
+            %
           </div>
         </div>
-        {insufficientFunds && (
-          <div style={inlineErr}>Amount exceeds available balance.</div>
-        )}
         {overCap && capBps !== null && (
           <div style={inlineErr}>
-            Stake would exceed the per-cluster cap (
+            Delegation would exceed the per-cluster cap (
             {(capBps / 100).toFixed(0)}%) by{" "}
             {((totalAfterBps - capBps) / 100).toFixed(2)}%.
           </div>
@@ -250,8 +231,20 @@ export function StakeForm({
             "Balance loading…"
           ) : (
             <>
-              available {lythoshiToLyth(balanceWei)} LYTH · existing{" "}
-              {(existingWeightBps / 100).toFixed(2)}% in this cluster
+              {/* Live effective weight = balance × weightBps. */}
+              effective weight{" "}
+              <strong style={{ color: "var(--gold)" }}>
+                {effectiveWeightLythoshi === null
+                  ? "—"
+                  : `${lythoshiToLyth(effectiveWeightLythoshi)} LYTH`}
+              </strong>{" "}
+              ({(additionalBps / 100).toFixed(2)}% of {lythoshiToLyth(balanceWei)} LYTH)
+              {existingWeightBps > 0 && (
+                <>
+                  {" "}
+                  · existing {(existingWeightBps / 100).toFixed(2)}% in this cluster
+                </>
+              )}
               {capBps !== null && (
                 <>
                   {" "}
@@ -260,6 +253,11 @@ export function StakeForm({
               )}
             </>
           )}
+        </div>
+        <div style={liquidNote}>
+          Your LYTH stays in your wallet and remains spendable — nothing is
+          locked or sent to a staking contract. The effective weight tracks
+          your live balance at the next settlement.
         </div>
       </div>
 
@@ -278,13 +276,11 @@ export function StakeForm({
         }}
       >
         <Icon name="check" size={12} />
-        {amountIsZero
-          ? "Enter an amount"
+        {percentIsZero
+          ? "Enter a percent"
           : overCap
             ? "Reduce to cap"
-            : insufficientFunds
-              ? "Reduce amount"
-              : "Review delegation"}
+            : "Review delegation"}
       </button>
     </div>
   );
@@ -359,4 +355,14 @@ const fromHint: CSSProperties = {
   color: "var(--fg-500)",
   marginTop: 8,
   lineHeight: 1.5,
+};
+
+const liquidNote: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 9.5,
+  color: "var(--fg-500)",
+  marginTop: 8,
+  lineHeight: 1.5,
+  paddingTop: 8,
+  borderTop: "1px solid var(--fg-700)",
 };

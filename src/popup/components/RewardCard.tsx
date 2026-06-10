@@ -301,8 +301,7 @@ const cardLabel: CSSProperties = {
   textTransform: "uppercase",
 };
 
-// Mirrors RedemptionQueueCard's errorBannerStyle so the two staking-read
-// failure states read identically.
+// Staking-read failure banner.
 const errorBannerStyle: CSSProperties = {
   marginTop: 8,
   padding: "8px 10px",

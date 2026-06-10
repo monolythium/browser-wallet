@@ -1,13 +1,14 @@
 // UnstakeForm — remove an existing delegation.
 //
-// The chain primitive `undelegate(uint32 cluster)` removes the wallet's
-// ENTIRE row for the cluster (full-row removal — there is no partial
-// unstake on-chain). The principal is queued for redemption and becomes
-// claimable via `completeRedemption` once the ticket matures. The form
-// reflects this: a single "Unstake all" confirmation, no amount input.
+// The chain primitive `undelegate(uint32 cluster)` INSTANTLY removes the
+// wallet's entire row for the cluster (full-row removal — there is no
+// partial unstake on-chain). Delegation is non-custodial, so nothing was
+// ever escrowed: there is no redemption queue, cooldown, or claim step —
+// the weighting simply drops. The form reflects this: a single "Unstake all"
+// confirmation, no amount input.
 //
 // Submitted as `undelegate(uint32 cluster)` via the same bgWalletSendTx
-// path as stake. Encoded by shared/staking-tx.ts:encodeUndelegate.
+// path as stake (value = 0). Encoded by shared/staking-tx.ts:encodeUndelegate.
 
 import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
@@ -125,8 +126,8 @@ export function UnstakeForm({
             lineHeight: 1.6,
           }}
         >
-          Currently delegating {lythoshiToLyth(currentDelegationLythoshi)} LYTH (
-          {(currentWeightBps / 100).toFixed(2)}%) · APR{" "}
+          Effective weight {lythoshiToLyth(currentDelegationLythoshi)} LYTH (
+          {(currentWeightBps / 100).toFixed(2)}% of balance) · APR{" "}
           {aprBps === null ? "—" : `${(aprBps / 100).toFixed(2)}%`}
         </div>
       </div>
@@ -138,11 +139,11 @@ export function UnstakeForm({
           {hasDelegation ? (
             <>
               Removes your <strong>entire</strong> delegation from this cluster
-              ({lythoshiToLyth(currentDelegationLythoshi)} LYTH ·{" "}
+              (effective weight {lythoshiToLyth(currentDelegationLythoshi)} LYTH ·{" "}
               {(currentWeightBps / 100).toFixed(2)}%). The chain has no partial
-              unstake. Your principal enters the redemption queue and becomes
-              claimable once the ticket matures. Re-delegate any amount
-              afterward.
+              unstake. This is <strong>instant</strong> — no cooldown or
+              redemption queue, because your tokens were never locked. Re-delegate
+              any percent afterward.
             </>
           ) : (
             <>You have no active delegation in this cluster to unstake.</>

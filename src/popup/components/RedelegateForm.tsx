@@ -7,12 +7,16 @@
 // unbonding period, no cluster-side cooldown. The form's UX language
 // reflects this explicitly: "Instant cluster swap" rather than the
 // Cosmos-style 21-day-redelegation-window framing.
+//
+// NON-CUSTODIAL: the move is expressed as a PERCENT of balance (weightBps);
+// no tokens are escrowed at either cluster — the redelegate tx is sent with
+// value = 0.
 
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { lythAmountToBps } from "../../shared/staking-tx";
+import { percentToBps } from "../../shared/staking-tx";
 import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface RedelegateFormProps {
@@ -86,17 +90,19 @@ export function RedelegateForm({
   onContinue,
   onBack,
 }: RedelegateFormProps) {
-  const amountLythoshi = useMemo(() => lythToLythoshi(amountStr), [amountStr]);
-  const moveBps =
-    amountLythoshi !== null && balanceWei !== null && balanceWei > 0n
-      ? lythAmountToBps(amountLythoshi, balanceWei)
-      : 0;
+  // `amountStr` is a PERCENT of balance (weightBps) being moved.
+  const movePercent = useMemo(() => {
+    if (!/^\d+(\.\d+)?$/.test(amountStr)) return null;
+    const n = Number(amountStr);
+    return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
+  }, [amountStr]);
+  const moveBps = movePercent !== null ? percentToBps(movePercent) : 0;
 
   const exceedsSource = moveBps > srcWeightBps;
   const totalAtDstAfter = dstExistingWeightBps + moveBps;
   const exceedsDstCap = capBps !== null && totalAtDstAfter > capBps;
 
-  const amountIsZero = amountLythoshi === null || amountLythoshi === 0n;
+  const amountIsZero = movePercent === null || moveBps === 0;
   const dstChosen = dstCluster !== null;
   const sameAsSrc = dstCluster?.clusterId === srcCluster.clusterId;
   const canContinue =
@@ -108,27 +114,16 @@ export function RedelegateForm({
     balanceWei !== null;
 
   const handleMax = () => {
-    if (balanceWei === null || srcWeightBps <= 0) return;
-    // Max from source = full source delegation amount, then capped by
-    // destination's headroom if applicable.
-    const srcAmountLythoshi = (balanceWei * BigInt(srcWeightBps)) / 10_000n;
+    if (srcWeightBps <= 0) return;
+    // Max from source = full source weight, then capped by the
+    // destination's headroom if applicable. All in bps fractions now —
+    // no balance math, because nothing is escrowed.
+    let limitBps = srcWeightBps;
     if (capBps !== null) {
       const headroomBps = Math.max(0, capBps - dstExistingWeightBps);
-      if (headroomBps === 0) {
-        onAmountChange("0");
-        return;
-      }
-      const headroomLythoshi = (balanceWei * BigInt(headroomBps)) / 10_000n;
-      const limit =
-        srcAmountLythoshi < headroomLythoshi
-          ? srcAmountLythoshi
-          : headroomLythoshi;
-      onAmountChange(lythoshiToLyth(limit, NATIVE_LYTH_DECIMALS));
-      return;
+      limitBps = Math.min(srcWeightBps, headroomBps);
     }
-    onAmountChange(
-      lythoshiToLyth(srcAmountLythoshi, NATIVE_LYTH_DECIMALS),
-    );
+    onAmountChange((limitBps / 100).toString());
   };
 
   return (
@@ -249,9 +244,9 @@ export function RedelegateForm({
         )}
       </div>
 
-      {/* Amount input */}
+      {/* Percent-of-balance input */}
       <div className="ext-card" style={{ padding: 14 }}>
-        <div style={cardLabel}>Amount to move</div>
+        <div style={cardLabel}>Weight to move (% of balance)</div>
         <div
           style={{
             display: "flex",
@@ -264,21 +259,16 @@ export function RedelegateForm({
             type="text"
             value={amountStr}
             onChange={(e) => onAmountChange(e.target.value.trim())}
-            placeholder="0.0"
+            placeholder="0"
             inputMode="decimal"
             style={amountInputStyle}
           />
           <button
             onClick={handleMax}
-            disabled={
-              balanceWei === null || srcWeightBps <= 0 || dstCluster === null
-            }
+            disabled={srcWeightBps <= 0 || dstCluster === null}
             style={{
               ...inlineBtnStyle,
-              opacity:
-                balanceWei === null || srcWeightBps <= 0 || dstCluster === null
-                  ? 0.5
-                  : 1,
+              opacity: srcWeightBps <= 0 || dstCluster === null ? 0.5 : 1,
             }}
             type="button"
           >
@@ -287,11 +277,11 @@ export function RedelegateForm({
           <div
             style={{
               fontFamily: "var(--f-mono)",
-              fontSize: 11,
+              fontSize: 13,
               color: "var(--fg-400)",
             }}
           >
-            LYTH
+            %
           </div>
         </div>
         {exceedsSource && (
@@ -308,8 +298,9 @@ export function RedelegateForm({
           </div>
         )}
         <div style={fromHint}>
-          Instant cluster swap — zero-unbond, no cooldown between source
-          and destination.
+          Instant cluster swap — no cooldown between source and destination.
+          Your LYTH stays in your wallet the whole time; only the cluster
+          weighting moves.
         </div>
       </div>
 

@@ -6,13 +6,15 @@
 // AutovoteSelector + the four-button §23.9 path is
 // an alternative entry into the same submit step.
 //
-// Chain wiring: the form's Continue → preview → Confirm flow encodes a
-// `delegate(uint32,uint16)` calldata via shared/staking-tx.ts (SDK
-// encoders) and submits through the existing `bgWalletSendTx` IPC, with
-// the staked LYTH amount sent as msg.value (the delegation principal).
-// The delegation precompile (`0x100A`) is live + enabled on the testnet
-// (`lyth_listActivePrecompiles`); the wallet surfaces any typed error
-// the chain returns verbatim.
+// NON-CUSTODIAL delegation: the user picks a PERCENT of their balance to
+// delegate to a cluster (= weightBps). The form's Continue → preview →
+// Confirm flow encodes `delegate(uint32,uint16)` calldata via
+// shared/staking-tx.ts (SDK encoders) and submits through `bgWalletSendTx`
+// with value = 0 — NO tokens are escrowed. The wallet's contribution to a
+// cluster is the effective weight (balance × weightBps / 10000) of its live
+// balance; the LYTH stays liquid and spendable. The delegation precompile
+// (`0x100A`) is live + enabled on the testnet (`lyth_listActivePrecompiles`);
+// the wallet surfaces any typed error the chain returns verbatim.
 
 import {
   useEffect,
@@ -31,7 +33,6 @@ import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
-import { RedemptionQueueCard } from "../components/RedemptionQueueCard";
 import { RewardCard } from "../components/RewardCard";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
@@ -42,23 +43,21 @@ import {
   bgStakingDelegationCap,
   bgStakingDelegations,
   bgStakingPendingRewards,
-  bgStakingRedemptionQueue,
   bgWalletBalance,
   bgWalletSendTx,
   type ClusterDirectoryEntry,
   type DelegationsView,
   type PendingRewardsView,
-  type RedemptionQueueView,
 } from "../bg";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
+  effectiveWeightWei,
   encodeClaimRewards,
-  encodeCompleteRedemption,
   encodeDelegate,
   encodeRedelegate,
   encodeUndelegate,
-  lythAmountToBps,
+  percentToBps,
 } from "../../shared/staking-tx";
 import {
   LYTHOSHI_PER_LYTH,
@@ -254,21 +253,6 @@ export function Stake({
   // Set when the pending-rewards read returns ok:false (hard error). Drives
   // RewardCard's honest-absence state instead of perpetual "Loading…".
   const [rewardsError, setRewardsError] = useState<string | null>(null);
-  const [redemptionQueue, setRedemptionQueue] =
-    useState<RedemptionQueueView | null>(null);
-  const [redemptionQueueMock, setRedemptionQueueMock] = useState(false);
-  const [redemptionQueueError, setRedemptionQueueError] =
-    useState<string | null>(null);
-  // Complete-redemption is self-contained (it has no preview/confirm
-  // step and no principal arg), so it rides its own in-flight index +
-  // result toast rather than the delegate/undelegate `step`/`action`
-  // state machine below.
-  const [completingIndex, setCompletingIndex] = useState<number | null>(null);
-  const [redemptionResult, setRedemptionResult] = useState<
-    | { ok: true; txHash: string }
-    | { ok: false; reason: string }
-    | null
-  >(null);
 
   // §28.5 Q29 TRADING_INTERFACE flag gates the advanced
   // reward analytics surface (per-cluster breakdown inside RewardCard).
@@ -355,17 +339,13 @@ export function Stake({
   useEffect(() => {
     if (!account.addr.startsWith("0x")) return;
     let cancelled = false;
-    setRedemptionQueue(null);
-    setRedemptionQueueMock(false);
-    setRedemptionQueueError(null);
     setRewardsError(null);
     void (async () => {
-      const [delR, capR, balR, seedR, queueR] = await Promise.all([
+      const [delR, capR, balR, seedR] = await Promise.all([
         bgStakingDelegations(account.addr),
         bgStakingDelegationCap(),
         bgWalletBalance(account.addr, chainId),
         bgStakingAutovoteSeed(),
-        bgStakingRedemptionQueue(account.addr),
       ]);
       if (cancelled) return;
       if (delR.ok) setDelegations(delR.data);
@@ -377,12 +357,6 @@ export function Stake({
       if (seedR.ok) {
         const seedBytes = hexToBytes(seedR.seedHex);
         if (seedBytes !== null) setAutovoteSeed(seedBytes);
-      }
-      if (queueR.ok) {
-        setRedemptionQueue(queueR.data);
-        setRedemptionQueueMock(queueR.via === "mock");
-      } else {
-        setRedemptionQueueError(queueR.reason);
       }
       // Pending rewards: depends on the active delegation set, so we
       // fan it out after the delegations resolve. Chain GAP today —
@@ -470,25 +444,26 @@ export function Stake({
     try {
       let data: string;
       let executionUnitLimitHex: string;
-      // Native LYTH principal sent as `msg.value`. Only `delegate` commits
-      // principal (mono-core ops.rs `principal_delta = ctx.value`); the
-      // others are weight-only / selector-only. valueWeiHex carries native
-      // lythoshi (18-decimal), matching the Send path's value convention.
-      let valueWeiHex = "0x0";
+      // NON-CUSTODIAL: delegation never carries native value. The chain
+      // reverts (UnexpectedValue / tag 0x020e) if any value is attached —
+      // tokens stay liquid in the wallet, weighted by `weightBps`.
+      const valueWeiHex = "0x0";
       if (action === "claim") {
         data = encodeClaimRewards();
         executionUnitLimitHex = "0x14820"; // 84000 — selector-only allowance
       } else if (action === "undelegate") {
-        // Chain `undelegate(uint32 cluster)` removes the wallet's entire
-        // row for the cluster (full-row removal; no partial unstake) and
-        // queues the principal for redemption — no amount/weight arg.
+        // Chain `undelegate(uint32 cluster)` instantly removes the wallet's
+        // entire row for the cluster (full-row removal; no partial unstake).
+        // No redemption queue or cooldown — nothing was escrowed.
         data = encodeUndelegate(selectedCluster!.clusterId);
         executionUnitLimitHex = "0x186A0";
       } else {
-        const amountLythoshi = parseLythAmountToLythoshi(amountStr);
-        if (amountLythoshi === null || balanceLythoshi === null) {
+        // `amountStr` is a PERCENT of balance (0–100) in both the manual
+        // and autovote paths. Convert to weightBps for the calldata.
+        const bps = percentToBps(Number(amountStr));
+        if (bps <= 0 || balanceLythoshi === null) {
           setSubmitError({
-            message: "invalid amount",
+            message: "invalid percent",
             code: null,
             method: null,
             via: null,
@@ -496,14 +471,9 @@ export function Stake({
           setStep("error");
           return;
         }
-        const bps = lythAmountToBps(amountLythoshi, balanceLythoshi);
         if (action === "delegate") {
+          // Balance-weighted, non-custodial: weightBps only. No msg.value.
           data = encodeDelegate(selectedCluster!.clusterId, bps);
-          // delegate is principal-backed: the entered LYTH amount is the
-          // staked principal and must travel as msg.value (NOT 0x0, which
-          // would lock a voting weight with zero recoverable capital).
-          // weightBps in the calldata is the separate voting-power share.
-          valueWeiHex = "0x" + amountLythoshi.toString(16);
         } else {
           data = encodeRedelegate(
             selectedCluster!.clusterId,
@@ -601,49 +571,6 @@ export function Stake({
     }
   };
 
-  // Complete-redemption — submit `completeRedemption(index)` for a
-  // matured ticket through the same bgWalletSendTx envelope as
-  // claim/undelegate. With liquid bonding the ticket matures at the
-  // undelegate height, so a mature ticket is immediately redeemable;
-  // the call returns the queued principal to the wallet balance and
-  // prunes the ticket. Self-contained (no preview/confirm step) so it
-  // does not touch the delegate/undelegate `step`/`action` machine.
-  const handleCompleteRedemption = async (ticketIndex: number) => {
-    setCompletingIndex(ticketIndex);
-    setRedemptionResult(null);
-    try {
-      const r = await bgWalletSendTx({
-        to: DELEGATION_PRECOMPILE,
-        valueWeiHex: "0x0",
-        chainIdHex: chainId,
-        data: encodeCompleteRedemption(ticketIndex),
-        executionUnitLimitHex: "0x186A0", // 100000 — single-arg precompile call
-        opKind: "complete-redemption",
-      });
-      if (r.ok) {
-        setRedemptionResult({ ok: true, txHash: r.result.txHash });
-        // Refresh the queue so the redeemed ticket drops out.
-        const queueR = await bgStakingRedemptionQueue(account.addr);
-        if (queueR.ok) {
-          setRedemptionQueue(queueR.data);
-          setRedemptionQueueMock(queueR.via === "mock");
-        }
-      } else {
-        setRedemptionResult({
-          ok: false,
-          reason: r.reason ?? "redemption rejected",
-        });
-      }
-    } catch (e) {
-      setRedemptionResult({
-        ok: false,
-        reason: (e as Error).message ?? "redemption failed",
-      });
-    } finally {
-      setCompletingIndex(null);
-    }
-  };
-
   const handleCopyHash = async () => {
     if (txHash === null) return;
     try {
@@ -723,68 +650,6 @@ export function Stake({
               />
             )}
 
-            {account.addr.startsWith("0x") && (
-              <RedemptionQueueCard
-                queue={redemptionQueue}
-                isMock={redemptionQueueMock}
-                error={redemptionQueueError}
-                clusters={clusters}
-                onComplete={
-                  redemptionQueueMock
-                    ? undefined
-                    : (ticketIndex) =>
-                        void handleCompleteRedemption(ticketIndex)
-                }
-                completingIndex={completingIndex}
-              />
-            )}
-
-            {/* Redemption result toast */}
-            {redemptionResult !== null && (
-              <div
-                style={
-                  redemptionResult.ok
-                    ? {
-                        padding: "10px 12px",
-                        borderRadius: 10,
-                        background: "rgba(80,200,120,0.08)",
-                        border: "1px solid rgba(80,200,120,0.4)",
-                        fontFamily: "var(--f-mono)",
-                        fontSize: 10.5,
-                        color: "var(--ok)",
-                        lineHeight: 1.5,
-                      }
-                    : {
-                        padding: "10px 12px",
-                        borderRadius: 10,
-                        background: "rgba(220,80,80,0.08)",
-                        border: "1px solid rgba(220,80,80,0.4)",
-                        fontFamily: "var(--f-mono)",
-                        fontSize: 10.5,
-                        color: "var(--err)",
-                        lineHeight: 1.5,
-                      }
-                }
-              >
-                {redemptionResult.ok ? (
-                  <>
-                    <div>Redemption submitted</div>
-                    {/* Full tx hash + ↗ + Monoscan link — mirrors the
-                       emergency-recovery (SLH-DSA backup) result display. */}
-                    <ExternalLink
-                      href={monoscanTxUrl(redemptionResult.txHash)}
-                      title={redemptionResult.txHash}
-                      style={{ color: "var(--fg-200)", marginTop: 4 }}
-                    >
-                      {redemptionResult.txHash}
-                    </ExternalLink>
-                  </>
-                ) : (
-                  redemptionResult.reason
-                )}
-              </div>
-            )}
-
             {/* Existing delegations — manage Unstake / Redelegate per row */}
             {delegations !== null && delegations.rows.length > 0 && (
               <ExistingDelegations
@@ -833,12 +698,11 @@ export function Stake({
                   if (autovotePlan === null) return;
                   if (autovotePlan.allocations.length === 0) return;
                   // Single-tx submit of the FIRST allocation, through the
-                  // standard `bgWalletSendTx` envelope path.
+                  // standard `bgWalletSendTx` envelope path. `amountStr`
+                  // carries the allocation's percent-of-balance.
                   const first = autovotePlan.allocations[0]!;
                   setSelectedClusterId(first.cluster);
-                  setAmountStr(
-                    allocationToLythAmountStr(first, balanceLythoshi),
-                  );
+                  setAmountStr(allocationToPercentStr(first));
                   setStep("preview");
                 }}
               />
@@ -1051,8 +915,8 @@ export function Stake({
             clusterId={selectedClusterId}
             walletAddr0x={account.addr}
             amountLythoshi={
-              action === "delegate"
-                ? parseLythAmountToLythoshi(amountStr)
+              action === "delegate" && balanceLythoshi !== null
+                ? effectiveWeightWei(percentToBps(Number(amountStr)), balanceLythoshi)
                 : null
             }
           />
@@ -1085,12 +949,13 @@ interface SummaryBannerProps {
 
 function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
   const stakedBps = delegations?.totalBps ?? 0;
-  const stakedLythoshi =
-    balanceLythoshi !== null && stakedBps > 0
-      ? (balanceLythoshi * BigInt(stakedBps)) / 10_000n
-      : 0n;
-  const liquidLythoshi =
-    balanceLythoshi !== null ? balanceLythoshi - stakedLythoshi : null;
+  // Effective delegated weight = balance × totalBps. NON-CUSTODIAL: this is
+  // NOT removed from the spendable balance — the full balance stays liquid,
+  // the weight is just the contribution to clusters.
+  const effectiveWeightLythoshi = effectiveWeightWei(
+    stakedBps,
+    balanceLythoshi ?? 0n,
+  );
   return (
     <div className="ext-card" style={{ padding: 12, marginBottom: 4 }}>
       <div
@@ -1102,25 +967,37 @@ function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
         }}
       >
         <KvStack
-          label="Liquid"
+          label="Spendable balance"
           value={
-            liquidLythoshi === null
+            balanceLythoshi === null
               ? "—"
-              : `${formatLythoshi(liquidLythoshi)} LYTH`
+              : `${formatLythoshi(balanceLythoshi)} LYTH`
           }
           tone="var(--fg-100)"
         />
         <KvStack
-          label="Staked"
+          label="Effective weight"
           value={
-            stakedLythoshi === 0n && balanceLythoshi !== null
+            stakedBps === 0 && balanceLythoshi !== null
               ? "0 LYTH"
               : balanceLythoshi === null
                 ? "—"
-                : `${formatLythoshi(stakedLythoshi)} LYTH (${(stakedBps / 100).toFixed(2)}%)`
+                : `${formatLythoshi(effectiveWeightLythoshi)} LYTH (${(stakedBps / 100).toFixed(2)}%)`
           }
           tone="var(--gold)"
         />
+      </div>
+      <div
+        style={{
+          marginTop: 8,
+          fontFamily: "var(--f-mono)",
+          fontSize: 9,
+          color: "var(--fg-500)",
+          lineHeight: 1.5,
+        }}
+      >
+        Delegating is non-custodial — your full balance stays liquid and
+        spendable. Effective weight tracks your live balance.
       </div>
     </div>
   );
@@ -1189,21 +1066,20 @@ function PreviewView({
   onBack,
 }: PreviewViewProps) {
   const devMode = useFeature("DEVELOPER_MODE");
-  const amountLythoshi = parseLythAmountToLythoshi(amountStr);
   const aprBps = cluster.aprBps ?? null;
   const isUndelegate = action === "undelegate";
   // Undelegate is full-row removal — the chain has no partial unstake, so
   // the "moved" weight is the entire existing delegation regardless of any
-  // amount field, and the LYTH shown is the full delegated principal.
-  const fullDelegationLythoshi =
-    balanceLythoshi !== null && existingWeightBps > 0
-      ? (balanceLythoshi * BigInt(existingWeightBps)) / 10_000n
-      : 0n;
-  const moveBps = isUndelegate
-    ? existingWeightBps
-    : amountLythoshi !== null && balanceLythoshi !== null && balanceLythoshi > 0n
-      ? lythAmountToBps(amountLythoshi, balanceLythoshi)
-      : 0;
+  // input. The LYTH shown is the effective weight that row represents at
+  // the live balance (nothing is escrowed).
+  const fullDelegationLythoshi = effectiveWeightWei(
+    existingWeightBps,
+    balanceLythoshi ?? 0n,
+  );
+  // `amountStr` is a percent of balance (0–100) for delegate/redelegate.
+  const moveBps = isUndelegate ? existingWeightBps : percentToBps(Number(amountStr));
+  // Effective weight this delegation contributes at the current balance.
+  const moveLythoshi = effectiveWeightWei(moveBps, balanceLythoshi ?? 0n);
   const totalAfterBps =
     action === "delegate"
       ? existingWeightBps + moveBps
@@ -1223,14 +1099,20 @@ function PreviewView({
           />
         )}
         <Row
-          k="Amount"
+          k={isUndelegate ? "Effective weight" : "Delegate"}
           v={
             isUndelegate
               ? `${formatLythoshi(fullDelegationLythoshi)} LYTH (entire delegation)`
-              : `${amountStr} LYTH`
+              : `${(moveBps / 100).toFixed(2)}% of balance`
           }
           tone="var(--gold)"
         />
+        {!isUndelegate && balanceLythoshi !== null && (
+          <Row
+            k="Effective weight"
+            v={`${formatLythoshi(moveLythoshi)} LYTH (stays liquid)`}
+          />
+        )}
         <Row
           k={
             action === "delegate"
@@ -1256,21 +1138,15 @@ function PreviewView({
           v={aprBps === null ? "—" : `${(aprBps / 100).toFixed(2)}%`}
         />
         <Row
-          k={
-            action === "redelegate"
-              ? "Cluster swap"
-              : action === "undelegate"
-                ? "Redemption"
-                : "Unbonding"
-          }
+          k={action === "redelegate" ? "Cluster swap" : action === "undelegate" ? "Unstake" : "Custody"}
           v={
             action === "redelegate"
               ? "Instant"
               : action === "undelegate"
-                ? "Queued (claim on maturity)"
-                : "Instant (zero-unbond)"
+                ? "Instant (no cooldown)"
+                : "Non-custodial (tokens stay in wallet)"
           }
-          tone={action === "undelegate" ? "var(--gold)" : "var(--ok)"}
+          tone="var(--ok)"
         />
       </div>
 
@@ -1298,9 +1174,9 @@ function PreviewView({
           {devMode ? (
             <>
               {action === "delegate" &&
-                "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile (0x100A) via plaintext mesh_submitTx; the LYTH amount is sent as msg.value (your staked principal)."}
+                "Submits `delegate(uint32 cluster, uint16 weightBps)` to the delegation precompile (0x100A) via plaintext mesh_submitTx with value = 0 (non-custodial — no escrow). Your effective weight = balance × weightBps."}
               {action === "undelegate" &&
-                "Submits `undelegate(uint32 cluster)` — removes your entire delegation row; principal enters the redemption queue (claim on maturity)."}
+                "Submits `undelegate(uint32 cluster)` — instantly removes your entire delegation row. No redemption queue or cooldown."}
               {action === "redelegate" &&
                 "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
               Monolythium Testnet may reject the call until the gate is activated.
@@ -1308,9 +1184,9 @@ function PreviewView({
           ) : (
             <>
               {action === "delegate" &&
-                "Submits your delegation to the network. "}
+                "Delegates a percent of your balance to the cluster. Your LYTH stays in your wallet and remains spendable — nothing is locked. "}
               {action === "undelegate" &&
-                "Removes your delegation; your principal enters the redemption queue and can be claimed at maturity. "}
+                "Removes your delegation instantly. Your tokens were never locked, so there is nothing to wait for. "}
               {action === "redelegate" &&
                 "Moves your delegation to another cluster instantly. "}
               Monolythium Testnet may reject this until staking is enabled.
@@ -1738,23 +1614,11 @@ export function parseLythAmountToLythoshi(s: string): bigint | null {
   }
 }
 
-/** Convert an autovote allocation row + the wallet balance into the
- *  LYTH-amount string the StakeForm + preview expect. Floors to 6
- *  decimal places for display continuity with the manual flow. */
-export function allocationToLythAmountStr(
-  alloc: AutovoteAllocation,
-  balanceLythoshi: bigint | null,
-): string {
-  if (
-    balanceLythoshi === null ||
-    balanceLythoshi === 0n ||
-    alloc.weightBps <= 0
-  ) {
-    return "0";
-  }
-  const allocationLythoshi =
-    (balanceLythoshi * BigInt(alloc.weightBps)) / 10_000n;
-  return lythoshiToLythDecimal(allocationLythoshi, 6);
+/** Convert an autovote allocation row into the percent-of-balance string
+ *  the StakeForm + preview expect (weightBps → percent). */
+export function allocationToPercentStr(alloc: AutovoteAllocation): string {
+  if (alloc.weightBps <= 0) return "0";
+  return (alloc.weightBps / 100).toString();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
