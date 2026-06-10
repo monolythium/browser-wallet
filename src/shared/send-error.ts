@@ -43,6 +43,7 @@ export type SendErrorKind =
   | "transaction-reverted"
   | "spending-policy-blocked"
   | "wallet-locked"
+  | "transaction-rejected"
   | "unknown";
 
 export interface SendErrorClassification {
@@ -69,11 +70,58 @@ export interface SendErrorContext {
   estimatedNetworkFeeLythoshiHex?: string;
 }
 
-/** Best-effort classification. Pattern-matches against the chain-side
- *  error message; ordered from most specific to most generic. */
+/** Best-effort classification of a chain-side send error into a typed kind +
+ *  user copy.
+ *
+ *  Unwrap-inner-first: mono-core's live broadcaster flattens EVERY mempool
+ *  admission failure into `RpcError::UpstreamUnavailable(format!("mempool:
+ *  {e}"))` (mono-core providers.rs:6385), which reaches the wallet as code
+ *  -32047 + "upstream unavailable: mempool: <inner>". The generic "upstream
+ *  unavailable" substring would otherwise let the chain-quarantined branch
+ *  steal whatever specific error the chain wrapped (insufficient-funds,
+ *  nonce-too-low, …) and mis-render it as a warn-level operator outage. So we
+ *  strip the wrapper and classify the INNER reason on the existing predicates;
+ *  chain-quarantined then fires ONLY for a bare wrapper (a genuine operator
+ *  outage with no mempool inner). This is immune to future mono-core admission
+ *  errors — any new inner is classified on its merits, never stolen by the
+ *  wrapper. (Supersedes the three prior "hoist above chain-quarantined" reorder
+ *  patches — those predicates still match, now via the inner.) See
+ *  _dev-notes/browser-wallet/2026-06-09_followup-dispose-classifier-residue-INSPECT.md
+ *  Part 2A. */
 export function classifySendError(
   message: string,
   context?: SendErrorContext,
+): SendErrorClassification {
+  const inner = extractMempoolInner(message);
+  if (inner !== null) {
+    return classifyInnerError(inner, context, true);
+  }
+  return classifyInnerError(message, context, false);
+}
+
+/** Strip an `upstream unavailable: mempool: ` wrapper and return the inner
+ *  admission-error string, or null when the message is not a has-inner mempool
+ *  wrapper (a bare "upstream unavailable" outage, or a non-wrapped error). The
+ *  locate is case-insensitive; the inner is sliced from the ORIGINAL message so
+ *  display casing is preserved. An empty/whitespace inner returns null (treated
+ *  as a bare wrapper → chain-quarantined). */
+function extractMempoolInner(message: string): string | null {
+  const marker = "upstream unavailable: mempool: ";
+  const idx = message.toLowerCase().indexOf(marker);
+  if (idx === -1) return null;
+  const inner = message.slice(idx + marker.length).trim();
+  return inner.length > 0 ? inner : null;
+}
+
+/** Pattern-matches the (already-unwrapped) chain-side error message against the
+ *  branch chain, ordered from most specific to most generic. `wrapped` is true
+ *  when the caller stripped a mempool wrapper — it only changes the FINAL
+ *  fallback (an unrecognized admission rejection is an honest transaction
+ *  rejection, not "unknown" and not an operator outage). */
+function classifyInnerError(
+  message: string,
+  context: SendErrorContext | undefined,
+  wrapped: boolean,
 ): SendErrorClassification {
   const lower = message.toLowerCase();
 
@@ -330,7 +378,21 @@ export function classifySendError(
     };
   }
 
-  // Unrecognised — preserve the raw message in body.
+  // Unrecognised. When the caller stripped a mempool wrapper (`wrapped`), the
+  // chain explicitly rejected the tx at admission — surface that honestly as a
+  // transaction rejection (NOT an operator outage; before the unwrap the
+  // "upstream unavailable" wrapper made these read as chain-quarantined). A
+  // non-wrapped unknown keeps the prior raw-message behaviour.
+  if (wrapped) {
+    return {
+      kind: "transaction-rejected",
+      headline: "Transaction rejected",
+      body:
+        `The network rejected this transaction: ${message}. Your funds are ` +
+        "unaffected — it was rejected before inclusion.",
+      severity: "err",
+    };
+  }
   return {
     kind: "unknown",
     headline: "Transaction failed",

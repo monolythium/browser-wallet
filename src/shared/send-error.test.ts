@@ -1,7 +1,7 @@
 // Send-error classifier tests.
 
 import { describe, expect, it } from "vitest";
-import { classifySendError } from "./send-error.js";
+import { classifySendError, errorLinksOperators } from "./send-error.js";
 
 describe("classifySendError — kind detection", () => {
   it.each([
@@ -31,6 +31,24 @@ describe("classifySendError — kind detection", () => {
     // replace-underpriced (a tx already pending at this nonce) — also wrapped in
     // "upstream unavailable"; must NOT read as a chain-quarantine.
     ["upstream unavailable: mempool: replace underpriced", "nonce-conflict"],
+    // SYSTEMIC unwrap-inner-first (Part 2A): mono-core flattens EVERY admission
+    // error into "upstream unavailable: mempool: <inner>" (-32047), so the two
+    // most common send failures were stolen by chain-quarantined. After the
+    // unwrap they classify on their inner reason, NOT as an operator outage.
+    [
+      "upstream unavailable: mempool: insufficient balance for max execution-unit cost",
+      "insufficient-funds",
+    ],
+    ["upstream unavailable: mempool: nonce too low: expected 5, got 4", "nonce-conflict"],
+    // spending-policy CREATE-forbidden shares the -32047 code with the wrapper,
+    // but its inner text disambiguates it (Part 2A C3).
+    [
+      "upstream unavailable: mempool: spending-policy: CREATE not permitted from sub-accounts with destination policy configured",
+      "spending-policy-blocked",
+    ],
+    // An admission inner with no specific branch is an honest transaction
+    // rejection — NOT an operator outage.
+    ["upstream unavailable: mempool: signature invalid", "transaction-rejected"],
     ["insufficient funds for transfer", "insufficient-funds"],
     ["INSUFFICIENT BALANCE", "insufficient-funds"],
     ["not enough balance to cover gas", "insufficient-funds"],
@@ -157,5 +175,70 @@ describe("classifySendError — severity", () => {
   it("insufficient-funds is err", () => {
     const r = classifySendError("insufficient funds");
     expect(r.severity).toBe("err");
+  });
+});
+
+describe("classifySendError — unwrap-inner-first (Part 2A systemic fix)", () => {
+  // The two bugs the fix targets: the chain wraps these as
+  // "upstream unavailable: mempool: <inner>" (-32047) and the old
+  // chain-quarantined branch stole them — wrong kind, wrong severity, and a
+  // misleading "the wallet uses other operators automatically / See Operators".
+  it("wrapped insufficient-funds is err + Insufficient LYTH, NOT a warn operator outage", () => {
+    const r = classifySendError(
+      "upstream unavailable: mempool: insufficient balance for max execution-unit cost",
+    );
+    expect(r.kind).toBe("insufficient-funds");
+    expect(r.severity).toBe("err");
+    expect(r.headline).toBe("Insufficient LYTH");
+    expect(r.headline).not.toContain("Operator");
+    expect(errorLinksOperators(r.kind)).toBe(false);
+  });
+
+  it("wrapped nonce-too-low is a warn nonce-conflict, NOT an operator outage", () => {
+    const r = classifySendError("upstream unavailable: mempool: nonce too low: expected 5, got 4");
+    expect(r.kind).toBe("nonce-conflict");
+    expect(r.severity).toBe("warn");
+    expect(errorLinksOperators(r.kind)).toBe(false);
+  });
+
+  // The genuine operator outage must STILL route to chain-quarantined.
+  it("bare 'upstream unavailable' (no mempool inner) stays chain-quarantined + links Operators", () => {
+    const r = classifySendError("upstream unavailable");
+    expect(r.kind).toBe("chain-quarantined");
+    expect(errorLinksOperators(r.kind)).toBe(true);
+  });
+
+  // An admission inner with no specific branch: honest transaction rejection,
+  // carrying the inner reason — never an operator outage, never "unknown".
+  it("unrecognized wrapped inner is an honest transaction-rejected carrying the inner reason", () => {
+    const r = classifySendError("upstream unavailable: mempool: signature invalid");
+    expect(r.kind).toBe("transaction-rejected");
+    expect(r.severity).toBe("err");
+    expect(r.body).toContain("signature invalid");
+    expect(r.headline).not.toContain("Operator");
+    expect(errorLinksOperators(r.kind)).toBe(false);
+  });
+
+  // The prior three "hoist above chain-quarantined" patches must still classify
+  // honestly — now via the inner, not the reorder (the regression guard).
+  it.each([
+    [
+      "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
+      "plaintext-not-allowed",
+    ],
+    [
+      "upstream unavailable: mempool: tx execution-unit limit 30000 below intrinsic floor 248213",
+      "gas-estimation",
+    ],
+    ["upstream unavailable: mempool: replace underpriced", "nonce-conflict"],
+  ])("regression: %j still classifies as %s via the inner", (msg, expected) => {
+    expect(classifySendError(msg).kind).toBe(expected);
+  });
+
+  // A non-wrapped direct error must be untouched by the unwrap (no-op).
+  it("non-wrapped errors are unchanged by the unwrap step", () => {
+    expect(classifySendError("insufficient funds for transfer").kind).toBe("insufficient-funds");
+    expect(classifySendError("nonce too low; have 14, want 15").kind).toBe("nonce-conflict");
+    expect(classifySendError("random garbage message no one recognises").kind).toBe("unknown");
   });
 });
