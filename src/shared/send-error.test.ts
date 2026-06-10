@@ -263,3 +263,38 @@ describe("classifySendError — tx-type-neutral copy (Part 2A C2)", () => {
     expect(r.body).not.toContain("gas");
   });
 });
+
+describe("classifySendError — shared -32047 code disambiguated by inner (Part 2A C3)", () => {
+  // mono-core reuses code -32047 for BOTH the UpstreamUnavailable wrapper AND
+  // SpendingPolicyCreateForbidden (mempool/error.rs:395). Classification is by
+  // the inner MESSAGE, not the code, so once C1 unwraps the wrapper the two
+  // distinct inner Display strings route to distinct kinds — they must never
+  // cross-classify. (Exact mono-core Display strings used below.)
+  it("plaintext-not-allowed -32047 → 'Encrypted transactions required', never spending-policy", () => {
+    const r = classifySendError(
+      "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
+    );
+    expect(r.kind).toBe("plaintext-not-allowed");
+    expect(r.headline).toBe("Encrypted transactions required");
+  });
+
+  it("SpendingPolicyCreateForbidden -32047 → spending-policy-blocked, never 'Encrypted transactions required'", () => {
+    const r = classifySendError(
+      "upstream unavailable: mempool: spending-policy: CREATE not permitted from sub-accounts with destination policy configured",
+    );
+    expect(r.kind).toBe("spending-policy-blocked");
+    expect(r.headline).not.toBe("Encrypted transactions required");
+  });
+
+  it("the two -32047 inners do not cross-classify", () => {
+    const plaintext = classifySendError(
+      "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
+    ).kind;
+    const policy = classifySendError(
+      "upstream unavailable: mempool: spending-policy: CREATE not permitted from sub-accounts with destination policy configured",
+    ).kind;
+    expect(plaintext).not.toBe(policy);
+    expect(plaintext).toBe("plaintext-not-allowed");
+    expect(policy).toBe("spending-policy-blocked");
+  });
+});
