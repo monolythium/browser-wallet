@@ -285,6 +285,10 @@ export async function fireOsNotification(
  *  chrome.action contract). Best-effort. */
 export async function refreshUnreadBadge(opts?: {
   unlocked?: boolean;
+  // S6 #44 B3 — active-vault scope forwarded to getUnread so the toolbar pip
+  // counts the SAME set the inbox shows (no badge/inbox desync). Omit (the
+  // 3-way contract's `undefined`) for the legacy global count.
+  activeAddrLower?: string | null;
 }): Promise<void> {
   try {
     if (
@@ -293,7 +297,7 @@ export async function refreshUnreadBadge(opts?: {
     ) {
       return;
     }
-    const n = await getUnread();
+    const n = await getUnread(opts?.activeAddrLower);
     // While locked with "Unread badge while locked" off, hide the count — the
     // unread record is still kept; the next unlocked refresh surfaces it. The
     // count itself never reveals tx content. `unlocked` is gate-only.

@@ -268,6 +268,41 @@ describe("refreshUnreadBadge", () => {
     const { refreshUnreadBadge } = await import("./notifications-os.js");
     await expect(refreshUnreadBadge()).resolves.toBeUndefined();
   });
+
+  it("B3: scopes the badge to the active address — vault B's unread does NOT inflate the pip", async () => {
+    const ADDR_B = "0x" + "cd".repeat(20);
+    // A has 2 unread; B has 3 unread → global would be 5.
+    captures.storage[`mono.notifications.history.${ADDR}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [
+        baseRecord({ kind: "send" }),
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x22`, txHash: "0x22" },
+      ],
+    };
+    captures.storage[`mono.notifications.history.${ADDR_B}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x44`, txHash: "0x44" },
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x55`, txHash: "0x55" },
+        { ...baseRecord({ kind: "send" }), id: `${CHAIN}:0x66`, txHash: "0x66" },
+      ],
+    };
+    const { refreshUnreadBadge } = await import("./notifications-os.js");
+    // Active vault = A → the pip shows A's 2, not the global 5 (matches the inbox).
+    await refreshUnreadBadge({ unlocked: true, activeAddrLower: ADDR });
+    expect(captures.badgeText).toEqual(["2"]);
+  });
+
+  it("B3: null active address (locked / no active vault) → badge cleared even with unread on disk", async () => {
+    captures.storage[`mono.notifications.history.${ADDR}.${CHAIN}.v1`] = {
+      schemaVersion: 0,
+      entries: [baseRecord({ kind: "send" })],
+    };
+    const { refreshUnreadBadge } = await import("./notifications-os.js");
+    // null → getUnread(null) → 0 → empty pip (consistent with the empty locked inbox).
+    await refreshUnreadBadge({ unlocked: true, activeAddrLower: null });
+    expect(captures.badgeText).toEqual([""]);
+  });
 });
 
 describe("handleNotificationClick / parseTxHashFromNotificationId", () => {

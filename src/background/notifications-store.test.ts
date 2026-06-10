@@ -533,4 +533,102 @@ describe("notifications-store", () => {
     const list = await listNotifications(ADDR_A, CHAIN_A);
     expect(list).toHaveLength(1);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // S6 #44 B3 — active-address display scoping (3-way contract:
+  // undefined → global · null → empty · address → that address only).
+  // ───────────────────────────────────────────────────────────────────────
+
+  it("B3: with vault A active, listAllNotifications excludes vault B's records (undefined stays global)", async () => {
+    const { recordNotification, listAllNotifications } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_2 }),
+    );
+    const scoped = await listAllNotifications(ADDR_A);
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0]?.id).toBe(`${CHAIN_A}:${HASH_1}`); // B's record is hidden
+    // Legacy global (no arg) still merges both — existing callers unchanged.
+    expect(await listAllNotifications()).toHaveLength(2);
+  });
+
+  it("B3: the active-address scope keeps EVERY chain for that address (no same-vault hiding)", async () => {
+    const { recordNotification, listAllNotifications } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_B, txHash: HASH_2 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    const scoped = await listAllNotifications(ADDR_A);
+    expect(scoped).toHaveLength(2); // both of A's chains, none of B's
+    expect(scoped.map((r) => r.id).sort()).toEqual(
+      [`${CHAIN_A}:${HASH_1}`, `${CHAIN_B}:${HASH_2}`].sort(),
+    );
+  });
+
+  it("B3: null (locked / no active vault) → empty inbox + zero unread, no throw", async () => {
+    const { recordNotification, listAllNotifications, getUnread } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(baseInput({ addressLower: ADDR_A, txHash: HASH_1 }));
+    expect(await listAllNotifications(null)).toEqual([]);
+    expect(await getUnread(null)).toBe(0);
+  });
+
+  it("B3: getUnread scopes the count to the active address (badge matches the inbox)", async () => {
+    const { recordNotification, getUnread } = await import(
+      "./notifications-store.js"
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_B, txHash: HASH_2 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    expect(await getUnread(ADDR_A)).toBe(2); // A's two chains
+    expect(await getUnread(ADDR_B)).toBe(1); // B's one
+    expect(await getUnread()).toBe(3); // global (legacy)
+  });
+
+  it("B3: markAllNotificationsRead(A) flips ONLY A — B's records stay unread (display-scoping)", async () => {
+    const { recordNotification, markAllNotificationsRead, getUnread } =
+      await import("./notifications-store.js");
+    await recordNotification(
+      baseInput({ addressLower: ADDR_A, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_2 }),
+    );
+    const r = await markAllNotificationsRead(ADDR_A);
+    expect(r.flipped).toBe(1); // only A's record
+    expect(await getUnread(ADDR_A)).toBe(0);
+    expect(await getUnread(ADDR_B)).toBe(1); // B untouched on disk
+    expect(await getUnread()).toBe(1); // global: only B's unread remains
+  });
+
+  it("B3: markNotificationRead(id, A) refuses to flip a record outside A's scope", async () => {
+    const { recordNotification, markNotificationRead, getUnread } = await import(
+      "./notifications-store.js"
+    );
+    // B owns this id; A is the active scope → the scan skips B's key → not found.
+    await recordNotification(
+      baseInput({ addressLower: ADDR_B, chainIdHex: CHAIN_A, txHash: HASH_1 }),
+    );
+    const r = await markNotificationRead(`${CHAIN_A}:${HASH_1}`, ADDR_A);
+    expect(r.flipped).toBe(false);
+    expect(await getUnread()).toBe(1); // B's record still unread on disk
+  });
 });

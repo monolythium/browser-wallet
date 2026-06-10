@@ -5082,7 +5082,10 @@ export async function pollPendingAndNotify(): Promise<{
       }
       remaining += kept.length;
     }
-    await refreshUnreadBadge({ unlocked });
+    await refreshUnreadBadge({
+      unlocked,
+      activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+    });
   } catch {
     // Best-effort — a poll failure must never escape the alarm.
   }
@@ -5603,7 +5606,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           await resetAutoLock();
           // Surface any unread that was HELD while locked
           // ("Unread badge while locked" off) now that the user unlocked.
-          void refreshUnreadBadge({ unlocked: true });
+          void refreshUnreadBadge({
+            unlocked: true,
+            activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+          });
           return { ok: true, address: r.address };
         } catch {
           failCount += 1;
@@ -7785,7 +7791,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               // chrome.storage so it sees every record this loop wrote;
               // one call covers both heuristic + status-RPC paths.
               if (anyAdded) {
-                await refreshUnreadBadge({ unlocked });
+                await refreshUnreadBadge({
+        unlocked,
+        activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+      });
               }
             } catch {
               // Best-effort; never break the snapshot response.
@@ -9132,7 +9141,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // SW-only (only the wallet's own tracked-tx terminal transitions
       // can emit).
       try {
-        const records = await listAllNotifications();
+        // S6 #44 B3: scope the inbox to the active vault's address (null when
+        // locked → empty), so vault B's notifications never render under A.
+        const records = await listAllNotifications(
+          getUnlockedAddressV4()?.toLowerCase() ?? null,
+        );
         return { ok: true, records };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -9145,9 +9158,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // which we also fire here so the pip updates without waiting
       // for the next snapshot tick.
       try {
-        const { flipped } = await markAllNotificationsRead();
+        // S6 #44 B3: same active-address scope for the flip AND the badge
+        // refresh, so the toolbar pip stays consistent with the inbox.
+        const a = getUnlockedAddressV4()?.toLowerCase() ?? null;
+        const { flipped } = await markAllNotificationsRead(a);
         // Best-effort badge refresh — a badge failure is harmless.
-        void refreshUnreadBadge({ unlocked: isUnlockedV4() });
+        void refreshUnreadBadge({ unlocked: isUnlockedV4(), activeAddrLower: a });
         return { ok: true, flipped };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -9158,7 +9174,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // (matches the toolbar badge). Derived from history; no separate
       // counter key.
       try {
-        const count = await getUnread();
+        // S6 #44 B3: active-vault unread count (null when locked → 0), matching
+        // the inbox + toolbar badge.
+        const count = await getUnread(
+          getUnlockedAddressV4()?.toLowerCase() ?? null,
+        );
         return { ok: true, count };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -9188,8 +9208,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "id must be a non-empty string" };
       }
       try {
-        const r = await markNotificationRead(p.id);
-        if (r.flipped) void refreshUnreadBadge({ unlocked: isUnlockedV4() });
+        // S6 #44 B3: scope the flip + badge refresh to the active address.
+        const a = getUnlockedAddressV4()?.toLowerCase() ?? null;
+        const r = await markNotificationRead(p.id, a);
+        if (r.flipped)
+          void refreshUnreadBadge({ unlocked: isUnlockedV4(), activeAddrLower: a });
         return { ok: true, flipped: r.flipped };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -9307,7 +9330,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
 // badge once at startup so the unread pip is correct after a re-init.
 
 installNotificationsClickListener();
-void refreshUnreadBadge({ unlocked: isUnlockedV4() });
+void refreshUnreadBadge({
+  unlocked: isUnlockedV4(),
+  activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+});
 
 // ---- message routing ----
 
