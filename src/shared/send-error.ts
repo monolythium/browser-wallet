@@ -129,6 +129,37 @@ function classifyInnerError(
 ): SendErrorClassification {
   const lower = message.toLowerCase();
 
+  // Transient admission-time backend fault while the chain READS the spending
+  // policy — mono-core SpendingPolicyStorageRead, Display
+  // "spending-policy: admission-time storage read failed: <reason>". The user's
+  // policy is fine; this is a rare I/O glitch, not a violation — classify it as
+  // a retryable transient so we don't mis-advise "adjust your policy".
+  //
+  // CHECKED FIRST (above genesis-mismatch / plaintext-not-allowed / operator /
+  // gas / nonce / the generic spending-policy block): the <reason> tail is
+  // arbitrary mono-core text that may incidentally contain another branch's
+  // trigger substring (a storage "timeout" → operator-offline, or a reason that
+  // mentions "genesis" / "plaintext … not allowed"), which would otherwise
+  // steal it. The predicate stays maximally SPECIFIC — "storage read failed"
+  // AND a spending-policy context — so it never steals a genuine genesis /
+  // plaintext / operator / gas / nonce error (none carry that signature), and a
+  // real policy violation still reads as spending-policy-blocked (whose
+  // predicate lacks "storage read failed"). Runs after the unwrap-inner-first
+  // step in classifySendError, so the 2A chain-quarantined ordering is intact.
+  if (
+    lower.includes("storage read failed") &&
+    (lower.includes("spending-policy") || lower.includes("spending policy"))
+  ) {
+    return {
+      kind: "spending-policy-unavailable",
+      headline: "Couldn't check your spending policy",
+      body:
+        "A temporary network issue interrupted the spending-policy check — " +
+        "your policy is unchanged. Try again in a moment.",
+      severity: "warn",
+    };
+  }
+
   // Chain genesis mismatch — the wallet's pinned genesis no longer matches
   // the network (likely a regenesis). The Send ErrorView renders this kind's
   // body with a clickable "Operators" link. Display/classification only — the
@@ -178,33 +209,6 @@ function classifyInnerError(
         "rejected it. Your funds are unaffected — nothing was transferred. " +
         "Try again in a moment.",
       severity: "err",
-    };
-  }
-
-  // Transient admission-time backend fault while the chain READS the spending
-  // policy — mono-core SpendingPolicyStorageRead, Display
-  // "spending-policy: admission-time storage read failed: <reason>". The user's
-  // policy is fine; this is a rare I/O glitch, not a violation. Classify it as a
-  // retryable transient so we don't mis-advise "adjust your policy".
-  //
-  // HOISTED above operator-offline / gas-estimation / nonce-conflict: the
-  // <reason> tail is arbitrary mono-core text and may contain those branches'
-  // trigger words (e.g. a storage "timeout" → operator-offline), which would
-  // otherwise steal it. The predicate stays SPECIFIC (storage-read AND a
-  // spending-policy context) so it never steals a genuine operator/gas/nonce
-  // error, and it stays ABOVE the generic spending-policy branch so a real
-  // policy violation still reads as spending-policy-blocked.
-  if (
-    lower.includes("storage read failed") &&
-    (lower.includes("spending-policy") || lower.includes("spending policy"))
-  ) {
-    return {
-      kind: "spending-policy-unavailable",
-      headline: "Couldn't check your spending policy",
-      body:
-        "A temporary network issue interrupted the spending-policy check — " +
-        "your policy is unchanged. Try again in a moment.",
-      severity: "warn",
     };
   }
 

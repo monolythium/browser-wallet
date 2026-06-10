@@ -323,4 +323,37 @@ describe("classifySendError — shared -32047 code disambiguated by inner (Part 
       ).kind,
     ).toBe("spending-policy-blocked");
   });
+
+  // INFO #6 closeout — the spending-policy-unavailable branch is hoisted ABOVE
+  // genesis-mismatch + plaintext-not-allowed, so a storage-read <reason> that
+  // INCIDENTALLY contains those branches' trigger words is no longer stolen.
+  it("storage-read reason mentioning 'genesis' still → spending-policy-unavailable (not genesis-mismatch)", () => {
+    const r = classifySendError(
+      "upstream unavailable: mempool: spending-policy: admission-time storage read failed: genesis snapshot read error",
+    );
+    expect(r.kind).toBe("spending-policy-unavailable");
+    expect(r.kind).not.toBe("genesis-mismatch");
+  });
+
+  it("storage-read reason mentioning 'plaintext … not allowed' still → spending-policy-unavailable (not plaintext-not-allowed)", () => {
+    const r = classifySendError(
+      "upstream unavailable: mempool: spending-policy: admission-time storage read failed: plaintext page not allowed in cold store",
+    );
+    expect(r.kind).toBe("spending-policy-unavailable");
+    expect(r.kind).not.toBe("plaintext-not-allowed");
+  });
+
+  it("the hoist does NOT regress genuine genesis-mismatch or plaintext-not-allowed (no storage-read signature)", () => {
+    expect(classifySendError("operator-3: untrusted genesis").kind).toBe(
+      "genesis-mismatch",
+    );
+    expect(
+      classifySendError("Chain genesis mismatch — all 14 operators reported untrusted genesis").kind,
+    ).toBe("genesis-mismatch");
+    expect(
+      classifySendError(
+        "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
+      ).kind,
+    ).toBe("plaintext-not-allowed");
+  });
 });
