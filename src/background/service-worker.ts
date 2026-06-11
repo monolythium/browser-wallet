@@ -1587,6 +1587,13 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, MULTISIG_SEND_REFUSAL);
       }
 
+      // NN-01: snapshot the active vault id at view-build time (synchronously,
+      // before any await / the separate-window approval) so a vault-select
+      // landing DURING the approval await is caught at sign time. The popup
+      // displays `txReq.from ?? getUnlockedAddressV4()` off the same global, so
+      // this binds the signer to the displayed vault. Coalesced post-unlock
+      // below for the locked-at-view-build case (no false abort).
+      const boundVaultIdAtView = getActiveVaultIdV4();
       // Build the approval view BEFORE opening the popup so the user sees
       // real numbers (execution-unit estimate, simulation outcome, nonce)
       // instead of demo placeholders. RPC failures degrade gracefully; the
@@ -1623,6 +1630,16 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       // alias is unavailable.
       if (chainRequiresMlDsa(session.chainId)) {
         if (!isUnlockedV4()) {
+          return err(ERR_UNAUTHORIZED, "wallet is locked");
+        }
+        // NN-01: if locked at view-build (snapshot null), coalesce to the
+        // post-unlock active vault — the isUnlockedV4 gate above guarantees a
+        // non-null read here; guard defensively. Either branch binds the
+        // correct vault with no false abort (unlocked-at-view → displayed
+        // vault, catches the approval-window swap; locked-at-view → post-unlock
+        // vault, catches the sign-time window).
+        const boundVaultId = boundVaultIdAtView ?? getActiveVaultIdV4();
+        if (boundVaultId === null) {
           return err(ERR_UNAUTHORIZED, "wallet is locked");
         }
         try {
@@ -1667,7 +1684,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             gas: executionUnitsHex,
             gasPrice: executionUnitPriceHex,
             chainIdHex: session.chainId,
-          });
+          }, boundVaultId);
           return ok(txHash);
         } catch (e) {
           return err(ERR_INTERNAL, `ml-dsa tx failed: ${(e as Error).message}`);
@@ -1738,6 +1755,13 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!fromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no unlocked address");
       }
+      // NN-01: bind to the post-approval active vault. The existing plan.from
+      // re-check (mrv-native-plan.ts) covers the wide approval window; this
+      // closes the one-await residual (getClusterSealKeys) before the sign.
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) {
+        return err(ERR_UNAUTHORIZED, "wallet is locked");
+      }
       try {
         // Clamp the submit-side tx identically so the signed fee equals the
         // approval-side fee shown to the user (bind preserved).
@@ -1747,7 +1771,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitMlDsaTx(approvedTxReq, boundVaultId);
         return ok({ txHash, via });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -1862,12 +1886,18 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!fromAddr) {
         return err(ERR_UNAUTHORIZED, "wallet has no unlocked address");
       }
+      // NN-01: same post-approval bind + one-await residual closure as the
+      // Plan arm (the plan.from re-check covers the wide approval window).
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) {
+        return err(ERR_UNAUTHORIZED, "wallet is locked");
+      }
       try {
         const approvedTxReq = walletMrvNativePlanToSubmitTx(plan, {
           chainIdHex,
           fromAddress: fromAddr,
         });
-        const { txHash, via } = await submitMlDsaTx(approvedTxReq);
+        const { txHash, via } = await submitMlDsaTx(approvedTxReq, boundVaultId);
         return ok({ txHash, via, plan });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -2111,6 +2141,12 @@ async function buildSendTxView(
   if (!net) return view;
 
   const client = rpcClientFor(chainId);
+  // SEPARATE FINDING (NOT NN-01; tracked for its own triage): the approval view
+  // displays `txReq.from ?? getUnlockedAddressV4()`, but the wallet always SIGNS
+  // with the active vault's backend. A dApp-supplied `from` that differs from
+  // the active vault is a pre-existing display-vs-sign WYSIWYS gap, independent
+  // of the NN-01 active-vault TOCTOU (which binds the signer to the active vault
+  // via boundVaultId). Do not conflate the two.
   const fromAddr =
     txReq.from ?? getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
 
@@ -6334,6 +6370,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fee.maxPriorityFeePerGas,
             maxFeePerGas,
           );
+          // NN-01: bind to the INTENDED multisig target (p.vaultId). The
+          // handler did selectActiveVaultV4(p.vaultId) above, so active ==
+          // p.vaultId and the assert passes on the sanctioned path; an
+          // UNINTENDED swap during the nonce/fee awaits aborts (caught below,
+          // finally restores the prior vault).
           const r = await submitMlDsaTx({
             to: action.to,
             value: valueWeiHex,
@@ -6343,7 +6384,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             maxFeePerGas,
             maxPriorityFeePerGas,
             chainIdHex: action.chainIdHex,
-          });
+          }, p.vaultId);
           txHash = r.txHash;
         } catch (e) {
           broadcastError = (e as Error).message ?? "send failed";
@@ -8268,6 +8309,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!fromAddr) {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
+      // NN-01: bind to the active vault at handler entry.
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) {
+        return { ok: false, reason: "wallet locked" };
+      }
       // S6 #45 B1: a multisig active vault must use the propose/approve flow.
       if (await activeVaultIsMultisig()) {
         return { ok: false, reason: MULTISIG_SEND_REFUSAL };
@@ -8283,7 +8329,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitMlDsaTx(txReq);
+        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
         return { ok: true, txHash, via };
       } catch (e) {
         const err = e as Error & {
@@ -8938,6 +8984,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       if (!fromAddr) {
         return { ok: false, reason: "wallet has no unlocked address" };
       }
+      // NN-01: bind to the active vault at handler entry, before the passkey-cap
+      // + nonce/fee/sign awaits below (any of which yields the event loop to a
+      // concurrent vault-select). The per-vault passkey-cap block reads the
+      // active id again for cap eval; this binding is for the signer identity.
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) {
+        return { ok: false, reason: "wallet locked" };
+      }
       // S6 #45 B1: a multisig active vault must use the propose/approve flow —
       // refuse before the passkey-cap + nonce/fee/sign work below.
       if (await activeVaultIsMultisig()) {
@@ -9093,7 +9147,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        const { txHash, via } = await submitMlDsaTx(txReq);
+        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are

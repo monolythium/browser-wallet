@@ -21,8 +21,12 @@ vi.mock("./networks.js", () => ({
 }));
 
 // getUnlockedBackendV4 returns a real MlDsa65Backend the tests set per-case.
+// getActiveVaultIdV4 backs the NN-01 pre-sign vault-binding assert — default
+// "v1" (the id the happy-path tests pass as boundVaultId); TOCTOU cases override
+// it to a different id to simulate a concurrent active-vault swap.
 vi.mock("./keystore-mldsa.js", () => ({
   getUnlockedBackendV4: vi.fn(() => null),
+  getActiveVaultIdV4: vi.fn(() => "v1"),
 }));
 
 // Build a valid n-of-t cluster seal roster source from freshly generated
@@ -186,10 +190,14 @@ describe("buildSealedSubmission — canonical-hash invariant (seal wraps, never 
     const tx = await import("./tx-mldsa.js");
     const roster = await tx.fetchClusterSealKeys(0);
 
-    const plain = await tx.buildPlaintextSubmission({ txReq: TX_REQ });
+    const plain = await tx.buildPlaintextSubmission({
+      txReq: TX_REQ,
+      boundVaultId: "v1",
+    });
     const sealed = await tx.buildSealedSubmission({
       txReq: TX_REQ,
       clusterSealKeys: roster,
+      boundVaultId: "v1",
     });
 
     // THE invariant: the inner canonical hashes are identical. The receipt is
@@ -213,7 +221,11 @@ describe("buildSealedSubmission — canonical-hash invariant (seal wraps, never 
     const tx = await import("./tx-mldsa.js");
     const roster = await tx.fetchClusterSealKeys(0);
     await expect(
-      tx.buildSealedSubmission({ txReq: TX_REQ, clusterSealKeys: roster }),
+      tx.buildSealedSubmission({
+        txReq: TX_REQ,
+        clusterSealKeys: roster,
+        boundVaultId: "v1",
+      }),
     ).rejects.toThrow(/locked/i);
   });
 });
@@ -281,6 +293,7 @@ describe("broadcastEncryptedTransaction — lyth_submitEncrypted, trust local ha
         chainIdHex: "0x10f2c",
       },
       roster,
+      "v1",
     );
     expect(r.txHash).toMatch(/^0x[0-9a-f]{64}$/); // the local canonical inner hash
     expect(r.via).toBe("operator-seal");
@@ -317,7 +330,7 @@ describe("submitMlDsaTx — seal-vs-plaintext decision (single chokepoint, fail-
     const ks = await import("./keystore-mldsa.js");
     vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
     const tx = await import("./tx-mldsa.js");
-    const r = await tx.submitMlDsaTx(TX_REQ);
+    const r = await tx.submitMlDsaTx(TX_REQ, "v1");
     expect(r.txHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
       true,
@@ -332,9 +345,9 @@ describe("submitMlDsaTx — seal-vs-plaintext decision (single chokepoint, fail-
     vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
     const tx = await import("./tx-mldsa.js");
     // Echo the correct canonical hash so the plaintext broadcast validates.
-    meshEcho = (await tx.buildPlaintextSubmission({ txReq: TX_REQ }))
+    meshEcho = (await tx.buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" }))
       .innerTxHashHex;
-    const r = await tx.submitMlDsaTx(TX_REQ);
+    const r = await tx.submitMlDsaTx(TX_REQ, "v1");
     expect(r.txHash).toBe(meshEcho);
     expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(true);
     expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
@@ -395,15 +408,119 @@ describe("withEncryptedExecutionUnitFloor — clears the encrypted intrinsic flo
     const ks = await import("./keystore-mldsa.js");
     vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
     const tx = await import("./tx-mldsa.js");
-    const r = await tx.submitMlDsaTx(BASE);
+    const r = await tx.submitMlDsaTx(BASE, "v1");
     // The sealed tx's canonical hash equals the plaintext hash of the
     // FLOOR-RAISED tx — proving the dispatcher sealed the bumped tx (and the
     // canonical-hash invariant still holds for the bumped tx).
     const plainBumped = await tx.buildPlaintextSubmission({
       txReq: tx.withEncryptedExecutionUnitFloor(BASE),
+      boundVaultId: "v1",
     });
-    const plainOriginal = await tx.buildPlaintextSubmission({ txReq: BASE });
+    const plainOriginal = await tx.buildPlaintextSubmission({
+      txReq: BASE,
+      boundVaultId: "v1",
+    });
     expect(r.txHash).toBe(plainBumped.innerTxHashHex);
     expect(r.txHash).not.toBe(plainOriginal.innerTxHashHex); // the bump took effect
+  });
+});
+
+describe("NN-01 — vault-binding fail-closed assert (real-SDK, both branches)", () => {
+  const originalFetch = globalThis.fetch;
+  const TEST_SEED = new Uint8Array(32).fill(7);
+  const TX_REQ = {
+    to: "0x" + "34".repeat(20),
+    value: "0x0",
+    data: "0x",
+    gas: "0x5208",
+    nonce: "0x1",
+    maxFeePerGas: "0x3b9aca00",
+    maxPriorityFeePerGas: "0x3b9aca00",
+    chainIdHex: "0x10f2c",
+  };
+  beforeEach(() => {
+    vi.resetModules();
+    installFetch();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  async function setup(opts: { active: string; sealed: boolean }) {
+    if (opts.sealed) {
+      rosterToServe = makeRosterSource();
+    } else {
+      rosterError = true; // roster absent → plaintext branch
+    }
+    const backend = MlDsa65Backend.fromSeed(TEST_SEED);
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    vi.mocked(ks.getActiveVaultIdV4).mockReturnValue(opts.active);
+    return import("./tx-mldsa.js");
+  }
+
+  it("PLAINTEXT branch: a mid-flight vault swap aborts fail-closed (no mesh_submitTx)", async () => {
+    const tx = await setup({ active: "vaultB", sealed: false });
+    await expect(tx.submitMlDsaTx(TX_REQ, "vaultA")).rejects.toThrow(
+      /active account changed/,
+    );
+    // Nothing was broadcast — the throw is BEFORE the sign + submit.
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
+    expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(false);
+  });
+
+  it("SEALED branch: a mid-flight vault swap aborts fail-closed (no lyth_submitEncrypted)", async () => {
+    const tx = await setup({ active: "vaultB", sealed: true });
+    await expect(tx.submitMlDsaTx(TX_REQ, "vaultA")).rejects.toThrow(
+      /active account changed/,
+    );
+    // The roster fetch (upstream of the assert) may run, but NOTHING is submitted.
+    expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(false);
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
+  });
+
+  it("legit send (active == boundVaultId) succeeds — no false abort (plaintext)", async () => {
+    const tx = await setup({ active: "vaultA", sealed: false });
+    // Echo the correct canonical hash so the plaintext broadcast validates.
+    meshEcho = (
+      await tx.buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "vaultA" })
+    ).innerTxHashHex;
+    const r = await tx.submitMlDsaTx(TX_REQ, "vaultA");
+    expect(r.txHash).toBe(meshEcho);
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(true);
+  });
+
+  it("builder-direct: buildSealedSubmission throws on a mismatch before the backend read", async () => {
+    rosterToServe = makeRosterSource();
+    const backend = MlDsa65Backend.fromSeed(TEST_SEED);
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    vi.mocked(ks.getActiveVaultIdV4).mockReturnValue("vaultB");
+    const tx = await import("./tx-mldsa.js");
+    const roster = await tx.fetchClusterSealKeys(0);
+    await expect(
+      tx.buildSealedSubmission({ txReq: TX_REQ, clusterSealKeys: roster, boundVaultId: "vaultA" }),
+    ).rejects.toThrow(/active account changed/);
+  });
+
+  it("multisig-execute: an UNINTENDED swap away from the bound target aborts", async () => {
+    // multisig-execute binds p.vaultId ("ms1"); a vault-select to "attacker"
+    // during the nonce/fee awaits trips the assert.
+    const tx = await setup({ active: "attacker", sealed: false });
+    await expect(tx.submitMlDsaTx(TX_REQ, "ms1")).rejects.toThrow(
+      /active account changed/,
+    );
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
+  });
+
+  it("passkey-cap backstop: the sign-time assert fires regardless of cap state", async () => {
+    // A swap AFTER the per-vault passkey cap check (cap eval'd against the
+    // captured vault, signed with the swapped one) is caught at the sign-time
+    // assert — upstream of the signer, independent of the cap.
+    const tx = await setup({ active: "uncapped-vault", sealed: false });
+    await expect(tx.submitMlDsaTx(TX_REQ, "capped-vault")).rejects.toThrow(
+      /active account changed/,
+    );
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
   });
 });

@@ -353,9 +353,13 @@ vi.mock("./networks.js", () => ({
 // `computeTypedDataDigest` helper now lives in ./typed-data.js (pure, no
 // chrome dependency) and runs for real — no mock needed.
 let unlocked = true;
-// T1-04(a) passkey-cap gate controls. Default INERT (no active passkey
-// vault) so every existing send test behaves exactly as before the gate.
-let activePasskeyVaultId: string | null = null;
+// T1-04(a) passkey-cap gate controls. The cap gate is INERT via
+// passkeyStateForTest.policy.enabled=false (below), NOT via a null vault id —
+// so this defaults to a non-null "v1" to match the production invariant
+// (unlocked ⇒ getActiveVaultIdV4() != null), which the NN-01 boundVaultId
+// capture + non-null guard relies on. Tests that exercise the cap set it
+// explicitly; the multisig-execute test sets "ms1".
+let activePasskeyVaultId: string | null = "v1";
 let passkeyStateForTest: unknown = {
   policy: { enabled: false, mode: "per-tx", limitWei: 0n },
   credentials: [],
@@ -683,8 +687,9 @@ beforeEach(() => {
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   unlocked = true;
-  // Reset the passkey-cap gate to inert unless a test opts in.
-  activePasskeyVaultId = null;
+  // Reset to the non-null production-invariant default (see the declaration);
+  // the cap gate is kept inert by policy.enabled=false below, not a null id.
+  activePasskeyVaultId = "v1";
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -2385,6 +2390,7 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(r.ok).toBe(true);
     expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x7530" }),
+      "v1",
     );
   });
 
@@ -2450,6 +2456,30 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(storageLocal[pendingKey]).toBeUndefined();
   });
 
+  it("NN-01: a vault-binding abort surfaces ok:false and writes NO pending row", async () => {
+    seedTestnetNonceAndFee();
+    // submitMlDsaTx throws the fail-closed sentinel (the builder's pre-sign
+    // assert fired because the active vault changed mid-flight).
+    submitFailure = new Error(
+      "active account changed during signing — transaction cancelled for safety",
+    ) as Error & { code: number };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x989680",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: false; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/active account changed/);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    expect(storageLocal[pendingKey]).toBeUndefined();
+  });
+
   it("passes SDK market plans through with the CLOB mempool class", async () => {
     seedTestnetNonceAndFee();
     const r = (await dispatchPopup({
@@ -2474,7 +2504,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       maxFeePerGas: "0x2540be401",
       maxPriorityFeePerGas: "0x2540be400",
       chainIdHex: TESTNET_CHAIN_ID_HEX,
-    });
+    }, "v1");
   });
 
   it("fire-and-forget timing: send-tx reply resolves BEFORE pending storage write completes", async () => {
@@ -2751,7 +2781,7 @@ describe("wallet-mrv-submit-plan", () => {
       maxPriorityFeePerGas: "0x5",
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
-    });
+    }, "v1");
   });
 
   it("returns the locked-wallet error before signing", async () => {
@@ -2828,7 +2858,7 @@ describe("wallet-mrv-submit-plan", () => {
       maxPriorityFeePerGas: "0x5",
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
-    });
+    }, "v1");
   });
 
   it("builds and submits an MRV native call through the dapp provider boundary", async () => {
@@ -2897,7 +2927,7 @@ describe("wallet-mrv-submit-plan", () => {
       maxPriorityFeePerGas: "0x2540be400",
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
-    });
+    }, "v1");
     expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
   });
 
@@ -2939,6 +2969,7 @@ describe("wallet-mrv-submit-plan", () => {
         maxFeePerGas: CEILING_HEX,
         maxPriorityFeePerGas: CEILING_HEX,
       }),
+      "v1",
     );
     const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
     expect(approval?.tx).toMatchObject({
@@ -3043,6 +3074,7 @@ describe("dApp eth_sendTransaction fee clamp (T4-04 a1)", () => {
     // execution-unit price (gasPrice) at the ceiling, not the absurd dApp quote.
     expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gasPrice: CEILING_HEX }),
+      "v1",
     );
   });
 });
@@ -5359,6 +5391,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         maxPriorityFeePerGas: "0x270f",
         gas: "0x5208",
       }),
+      "v1",
     );
   });
 
@@ -5381,6 +5414,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         // tip clamped to <= maxFeePerGas (== ceiling).
         maxPriorityFeePerGas: CEILING_HEX,
       }),
+      "v1",
     );
   });
 
@@ -5400,6 +5434,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
     // 30,000,000 = MAX_EXECUTION_UNIT_LIMIT (0x1c9c380).
     expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x1c9c380" }),
+      "v1",
     );
   });
 
@@ -5418,6 +5453,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
     });
     expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x7a120" }),
+      "v1",
     );
     // Native-transfer floor (0x7530 = 30000) passes through.
     await send({
@@ -5432,6 +5468,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
     });
     expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gas: "0x7530" }),
+      "v1",
     );
   });
 
@@ -5445,6 +5482,7 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
     });
     expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ maxFeePerGas: CEILING_HEX }),
+      "v1",
     );
   });
 });
@@ -5540,6 +5578,7 @@ describe("multisig-execute fee ceiling (de-trust parity)", () => {
         // tip re-clamped to <= maxFeePerGas (== ceiling), mirroring :8806.
         maxPriorityFeePerGas: CEILING_HEX,
       }),
+      "ms1",
     );
   });
 
@@ -5554,6 +5593,7 @@ describe("multisig-execute fee ceiling (de-trust parity)", () => {
         maxFeePerGas: "0x2540be400",
         maxPriorityFeePerGas: "0x12a05f200",
       }),
+      "ms1",
     );
   });
 });

@@ -7,7 +7,7 @@
 // depends on the body.error branch carrying the method that threw;
 // these tests are the regression-catcher that pins that contract.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Stub getActiveOperators to a single deterministic entry. With a
 // real list the post-regenesis defaults (operator-1 through operator-6)
@@ -47,13 +47,20 @@ vi.mock("@monolythium/core-sdk/crypto", () => ({
 
 vi.mock("./keystore-mldsa.js", () => ({
   getUnlockedBackendV4: () => ({}),
+  // NN-01: the builders assert getActiveVaultIdV4() === boundVaultId before the
+  // backend read; default it to the id the happy-path tests pass ("v1"). A
+  // vi.fn so the TOCTOU test can override it to a mismatching id.
+  getActiveVaultIdV4: vi.fn(() => "v1"),
 }));
 
 import {
   testnetJsonRpc,
   submitPlaintextMlDsaTx,
+  buildPlaintextSubmission,
   broadcastPlaintextTransaction,
 } from "./tx-mldsa.js";
+import { buildPlaintextSubmission as sdkBuildPlaintextSubmission } from "@monolythium/core-sdk/crypto";
+import { getActiveVaultIdV4 } from "./keystore-mldsa.js";
 import { CANONICAL_INNER_TX_HASH } from "../shared/__fixtures__/golden.js";
 
 describe("testnetJsonRpc — method/via/code stamping", () => {
@@ -201,7 +208,7 @@ describe("submitPlaintextMlDsaTx — default plaintext path (mesh_submitTx)", ()
       gasPrice: "0x7d0",
       nonce: "0x0",
       chainIdHex: "0x10F2C",
-    });
+    }, "v1");
     expect(r.txHash).toBe(CANONICAL_TX_HASH);
     expect(r.via).toBe("operator-test");
     // The DEFAULT path is plaintext: mesh_submitTx, never lyth_submitEncrypted.
@@ -223,5 +230,40 @@ describe("submitPlaintextMlDsaTx — default plaintext path (mesh_submitTx)", ()
     await expect(broadcastPlaintextTransaction("0xcafe", CANONICAL_TX_HASH)).rejects.toThrow(
       /non-canonical tx hash/,
     );
+  });
+});
+
+describe("NN-01 — vault-binding fail-closed assert (plaintext builder)", () => {
+  const TX_REQ = {
+    to: "0x0102030405060708090a0b0c0d0e0f1011121314",
+    value: "0xf4240",
+    gas: "0x7530",
+    gasPrice: "0x7d0",
+    nonce: "0x0",
+    chainIdHex: "0x10F2C",
+  };
+  beforeEach(() => {
+    // Reset the swap-simulating mock + clear SDK-signer call history accumulated
+    // by other tests in this file, so not.toHaveBeenCalled() reflects only this
+    // test (the SDK builder mock is module-shared).
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
+    vi.mocked(sdkBuildPlaintextSubmission).mockClear();
+  });
+
+  it("aborts BEFORE signing when the active vault != boundVaultId (fail-closed)", async () => {
+    // Simulate a concurrent selectActiveVaultV4 that swapped the active vault
+    // to "v2" while the send was bound to "v1".
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v2");
+    await expect(
+      buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" }),
+    ).rejects.toThrow(/active account changed/);
+    // The SDK signer was NEVER reached — nothing was signed.
+    expect(sdkBuildPlaintextSubmission).not.toHaveBeenCalled();
+  });
+
+  it("signs when the active vault == boundVaultId (no false abort)", async () => {
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
+    await buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" });
+    expect(sdkBuildPlaintextSubmission).toHaveBeenCalledTimes(1);
   });
 });

@@ -47,6 +47,7 @@ export type SendErrorKind =
   | "spending-policy-blocked"
   | "spending-policy-unavailable"
   | "wallet-locked"
+  | "active-vault-changed"
   | "transaction-rejected"
   | "unknown";
 
@@ -128,6 +129,28 @@ function classifyInnerError(
   wrapped: boolean,
 ): SendErrorClassification {
   const lower = message.toLowerCase();
+
+  // NN-01 fail-closed vault-binding abort (wallet-INTERNAL, never a chain error,
+  // never mempool-wrapped). buildPlaintext/SealedSubmission throw
+  // VAULT_BINDING_CHANGED_MESSAGE ("active account changed …") when the active
+  // vault changed between approval and the synchronous pre-sign read — the tx
+  // was cancelled before anything was signed or broadcast. Checked FIRST so no
+  // chain-side predicate steals it (the "active account changed" substring is
+  // unique — it does NOT match "user rejected"/"cancelled by user"); without
+  // this it would fall through to the wrapped=false "unknown" red box. warn
+  // (transient, user-actionable retry — re-pick the account and resubmit), not
+  // err → amber via severityColours, rendered identically on Send + Stake.
+  if (lower.includes("active account changed")) {
+    return {
+      kind: "active-vault-changed",
+      headline: "Account changed — transaction cancelled",
+      body:
+        "Your active account changed while this transaction was being prepared, " +
+        "so the wallet cancelled it for safety. Nothing was sent and your funds " +
+        "are unaffected. Re-check the account shown, then try again.",
+      severity: "warn",
+    };
+  }
 
   // Transient admission-time backend fault while the chain READS the spending
   // policy — mono-core SpendingPolicyStorageRead, Display

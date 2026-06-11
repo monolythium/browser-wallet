@@ -75,6 +75,18 @@ describe("classifySendError — kind detection", () => {
     ["spending policy denied", "spending-policy-blocked"],
     ["wallet locked", "wallet-locked"],
     ["wallet is locked", "wallet-locked"],
+    // NN-01 fail-closed vault-binding abort (wallet-internal). The raw sentinel
+    // and the SW-wrapped dApp form ("ml-dsa tx failed: <sentinel>") both classify
+    // via the unique "active account changed" substring — NOT user-rejected
+    // despite the word "cancelled" (it lacks "cancelled by user"/"user rejected").
+    [
+      "active account changed during signing — transaction cancelled for safety",
+      "active-vault-changed",
+    ],
+    [
+      "ml-dsa tx failed: active account changed during signing — transaction cancelled for safety",
+      "active-vault-changed",
+    ],
     ["random garbage message no one recognises", "unknown"],
   ])("classifies %j as %s", (msg, expected) => {
     expect(classifySendError(msg).kind).toBe(expected);
@@ -184,6 +196,17 @@ describe("classifySendError — severity", () => {
   it("insufficient-funds is err", () => {
     const r = classifySendError("insufficient funds");
     expect(r.severity).toBe("err");
+  });
+
+  it("active-vault-changed is warn (transient, retryable — renders amber), not stolen by user-rejected", () => {
+    const r = classifySendError(
+      "active account changed during signing — transaction cancelled for safety",
+    );
+    expect(r.kind).toBe("active-vault-changed");
+    expect(r.severity).toBe("warn");
+    // The body says "cancelled" but must NOT be mis-read as a user cancellation,
+    // and it links no operators.
+    expect(errorLinksOperators(r.kind)).toBe(false);
   });
 });
 

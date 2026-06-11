@@ -14,9 +14,22 @@ import {
   type NativeEvmTxFields,
   type NativeTxExtensionLike,
 } from "@monolythium/core-sdk/crypto";
-import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
+import {
+  getActiveVaultIdV4,
+  getUnlockedBackendV4,
+} from "./keystore-mldsa.js";
 import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
 import { isWithinSaneBound } from "../shared/operator-bounds.js";
+
+/** Sentinel thrown by the fail-closed vault-binding assert when the active
+ *  vault changed between approval and the synchronous pre-sign read (NN-01
+ *  TOCTOU). Fail-closed: nothing was signed or broadcast. send-error.ts keys
+ *  on the stable "active account changed" substring to classify it as the
+ *  warn-level "active-vault-changed" kind. Mechanism-agnostic — catches any
+ *  active-vault change (selectActiveVaultV4 AND vault-add), since it compares
+ *  the live getActiveVaultIdV4() to the bound id rather than a mechanism. */
+export const VAULT_BINDING_CHANGED_MESSAGE =
+  "active account changed during signing — transaction cancelled for safety";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -374,12 +387,23 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
  *  is the fallback.) */
 export async function buildPlaintextSubmission(args: {
   txReq: EthSendTxFields;
+  boundVaultId: string;
 }): Promise<{
   signedTxWireHex: string;
   innerSighashHex: string;
   innerTxHashHex: string;
   innerWireBytes: number;
 }> {
+  // NN-01 fail-closed: assert the active vault still equals the approved/
+  // displayed vault IMMEDIATELY before the live backend read. This statement
+  // and the getUnlockedBackendV4() read below are consecutive SYNCHRONOUS reads
+  // of the same module-global (unlocked/activeContainerVaultId) — there is NO
+  // await between them, and sdkBuildPlaintextSubmission signs synchronously once
+  // `backend` is captured as a local — so a concurrent selectActiveVaultV4 /
+  // vault-add cannot interleave between the check and the sign.
+  if (getActiveVaultIdV4() !== args.boundVaultId) {
+    throw new Error(VAULT_BINDING_CHANGED_MESSAGE);
+  }
   const backend = getUnlockedBackendV4();
   if (backend === null) {
     throw new Error("v3 wallet is locked");
@@ -423,12 +447,15 @@ export async function broadcastPlaintextTransaction(
  *  on the live optional-encryption chain. `txHash` is the CANONICAL inner-tx
  *  hash the chain indexes (`eth_getTransactionByHash` / `lyth_txStatus`
  *  resolve it), validated against the node echo before it is surfaced. */
-export async function submitPlaintextMlDsaTx(req: EthSendTxFields): Promise<{
+export async function submitPlaintextMlDsaTx(
+  req: EthSendTxFields,
+  boundVaultId: string,
+): Promise<{
   txHash: string;
   via: string;
   innerSighashHex: string;
 }> {
-  const built = await buildPlaintextSubmission({ txReq: req });
+  const built = await buildPlaintextSubmission({ txReq: req, boundVaultId });
   const { txHash, via } = await broadcastPlaintextTransaction(
     built.signedTxWireHex,
     built.innerTxHashHex,
@@ -536,12 +563,20 @@ export async function getClusterSealKeys(
 export async function buildSealedSubmission(args: {
   txReq: EthSendTxFields;
   clusterSealKeys: ClusterSealKeys;
+  boundVaultId: string;
 }): Promise<{
   envelopeWireHex: string;
   innerSighashHex: string;
   innerTxHashHex: string;
   innerWireBytes: number;
 }> {
+  // NN-01 fail-closed: same consecutive-synchronous assert as the plaintext
+  // builder — getActiveVaultIdV4() and getUnlockedBackendV4() read the same
+  // module-global with no intervening await, and sdkBuildEncryptedSubmission
+  // signs synchronously after `backend` is captured.
+  if (getActiveVaultIdV4() !== args.boundVaultId) {
+    throw new Error(VAULT_BINDING_CHANGED_MESSAGE);
+  }
   const backend = getUnlockedBackendV4();
   if (backend === null) {
     throw new Error("v3 wallet is locked");
@@ -596,8 +631,13 @@ export async function broadcastEncryptedTransaction(
 export async function submitSealedMlDsaTx(
   req: EthSendTxFields,
   clusterSealKeys: ClusterSealKeys,
+  boundVaultId: string,
 ): Promise<{ txHash: string; via: string; innerSighashHex: string }> {
-  const built = await buildSealedSubmission({ txReq: req, clusterSealKeys });
+  const built = await buildSealedSubmission({
+    txReq: req,
+    clusterSealKeys,
+    boundVaultId,
+  });
   const { txHash, via } = await broadcastEncryptedTransaction(
     built.envelopeWireHex,
     built.innerTxHashHex,
@@ -652,7 +692,10 @@ export function withEncryptedExecutionUnitFloor(
  *  roster fetch failing → plaintext is the correct (no-privacy-promised)
  *  behavior. The plaintext path (invariant 2) is untouched and stays the
  *  fallback. */
-export async function submitMlDsaTx(req: EthSendTxFields): Promise<{
+export async function submitMlDsaTx(
+  req: EthSendTxFields,
+  boundVaultId: string,
+): Promise<{
   txHash: string;
   via: string;
   innerSighashHex: string;
@@ -672,7 +715,11 @@ export async function submitMlDsaTx(req: EthSendTxFields): Promise<{
     // verify overhead pushes the chain's intrinsic floor to ~248–250k); raise it
     // here so every tx type clears the floor. The plaintext fallback below keeps
     // its original (lower) limit.
-    return submitSealedMlDsaTx(withEncryptedExecutionUnitFloor(req), roster);
+    return submitSealedMlDsaTx(
+      withEncryptedExecutionUnitFloor(req),
+      roster,
+      boundVaultId,
+    );
   }
-  return submitPlaintextMlDsaTx(req);
+  return submitPlaintextMlDsaTx(req, boundVaultId);
 }
