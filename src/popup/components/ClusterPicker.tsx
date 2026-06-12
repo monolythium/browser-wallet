@@ -43,7 +43,7 @@ interface ClusterPickerProps {
  *  Higher = more decentralized. Weights three signals:
  *   - region count (Linux-style geographic spread)
  *   - inverse-reputation (penalise mega-clusters that already attract
- *     concentrated stake — §23.5 anti-saturation hint)
+ *     concentrated delegation — decentralization hint, not a reward signal)
  *   - independent-entity bonus over Foundation entities (§30.5
  *     sunset trajectory). */
 function decentralizationScore(c: ClusterDirectoryEntry): number {

@@ -22,7 +22,9 @@
 //   §14    — cluster marketplace (this page IS the marketplace surface)
 //   §22.4  — cluster-name registry (TODO: wire when SDK lands)
 //   §22.8  — naming registry (same)
-//   §23.5  — quadratic reward curve (renders cluster's effective APR)
+//   §23.5  — service-proved reward share (renders cluster's effective
+//            reward rate: rewards come from services the cluster proves,
+//            split across delegators by weight; stake is not rewarded)
 //   §23.6  — per-wallet delegation cap (cap headroom badge)
 //   §28.3.1— diversity scoring (rendered as region count + ASN proxy)
 //   §30.5  — Foundation-cluster sunset (entity flag badge)

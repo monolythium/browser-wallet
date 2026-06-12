@@ -310,10 +310,10 @@ export function pickMaxYield(input: AutovoteInput): AutovoteResult {
   // Bracket: clusters within 15% APR of the top get shuffled together so
   // two delegators picking Max Yield don't both land on the single
   // highest cluster (§23.9 anti-concentration property). The 15% width
-  // is calibrated for the §23.5 quadratic-curve regime where APRs
-  // typically spread within 1-2 percentage points across the top tier;
-  // a 5% bracket would collapse to a single cluster on small operator
-  // sets and defeat the entropy property.
+  // is calibrated for the service-proved reward regime where per-cluster
+  // rates typically spread within 1-2 percentage points across the top
+  // tier; a 5% bracket would collapse to a single cluster on small
+  // operator sets and defeat the entropy property.
   const topApr = clusterApr(sorted[0]!);
   const aprFloor = Math.floor(topApr * 0.85);
   const topBracket: ClusterDirectoryEntry[] = [];

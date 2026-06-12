@@ -359,10 +359,12 @@ export interface PendingRewardsRow {
   /** Accrued rewards as a hex lythoshi quantity (18-decimal native LYTH).
    *  The `amountWei` key is a legacy upstream/API compatibility name only. */
   amountWei: string;
-  /** Cluster's effective APR at observation time, in basis points. `null`
-   *  when the chain hasn't surfaced an APR for this cluster (per §23.5
-   *  the quadratic curve is deterministic, but the per-cluster instant
-   *  rate isn't yet emitted). */
+  /** Cluster's effective reward rate at observation time, in basis
+   *  points. Rewards are SERVICE-PROVED: they accrue from the services a
+   *  cluster actually delivers, then split across the cluster's delegators
+   *  in proportion to delegated weight — stake is not itself rewarded.
+   *  `null` when the chain hasn't surfaced a rate for this cluster (the
+   *  per-cluster instant rate isn't yet emitted). */
   effectiveAprBps: number | null;
 }
 
@@ -514,11 +516,15 @@ export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
   },
 ];
 
-/** Mock per-cluster APR table, in basis points. Numbers are illustrative
- *  and approximate the §23 model's diminishing-returns regime (clusters
- *  with more delegated stake → lower per-stake APR; community clusters
- *  marginally above Foundation clusters since the Foundation burns its
- *  rewards per §30.5).
+/** Mock per-cluster reward-rate table, in basis points. Numbers are
+ *  illustrative only. Under the service-based model a cluster's reward
+ *  rate reflects the services it actually proves and the delegators it
+ *  shares those rewards across — so a busy cluster carrying many
+ *  delegators yields a lower per-delegator rate, and community clusters
+ *  sit marginally above Foundation clusters since the Foundation burns
+ *  its rewards per §30.5. Stake itself is not rewarded; it only sets a
+ *  cluster's top-100 admission rank and a delegator's share of the
+ *  proved-service rewards.
  *
  *  RETIRED FROM USER-FACING DISPLAY — the chain now exposes
  *  `lyth_clusterApr(clusterId)` (mono-core `253cac0b`, live since
@@ -535,12 +541,12 @@ export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
  *  `staking-client.ts::mockPendingRewardsView`. Both must move to the
  *  real reader before this constant can be removed. */
 export const MOCK_CLUSTER_APR_BPS: Readonly<Record<number, number>> = {
-  1: 820, // 8.20% — Foundation, mid-saturation
+  1: 820, // 8.20% — Foundation, many delegators sharing proved rewards
   2: 805, // 8.05% — Foundation
-  3: 940, // 9.40% — under-served, higher APR per §23.5 quadratic
-  4: 720, // 7.20% — degraded health → slightly suppressed APR
+  3: 940, // 9.40% — fewer delegators, higher per-delegator share
+  4: 720, // 7.20% — degraded health → fewer services proved
   5: 880, // 8.80% — healthy community cluster
-  6: 1010, // 10.10% — newest cluster, max APR before delegation arrives
+  6: 1010, // 10.10% — newest cluster, few delegators sharing rewards
 };
 
 /** Mock per-cluster reputation. Range 0..1; community clusters with
