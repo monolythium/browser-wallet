@@ -630,6 +630,9 @@ interface TopProps {
   account: Account;
   onOpenAccounts: () => void;
   onSettings: () => void;
+  /** Active vault label, forwarded to VaultPicker so the chip shows the real
+   *  name on first paint instead of the "—" placeholder. */
+  activeVaultLabel?: string;
   /** VaultPicker's "New wallet" dropdown entry
    *  dispatches here instead of opening the legacy single-page modal.
    *  Threaded through Home for App-level routing to NewWalletFlow. */
@@ -657,7 +660,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (earlier design).
-export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
+export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       <div
@@ -679,6 +682,7 @@ export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
       </div>
       <VaultPicker
         activeAccount={account}
+        {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
       />
@@ -1736,6 +1740,12 @@ interface HomeProps {
    *  so test harnesses + callers without the route wired still
    *  render. */
   topSlot?: ReactNode;
+  /** Active vault label, threaded App → Top → VaultPicker so the chip
+   *  renders the real wallet name on first paint (App already fetched it via
+   *  loadActiveVaultSummary) instead of flashing the "—" placeholder until
+   *  the picker's own bgVaultsList resolves. Sourced from the vault summary
+   *  label only — never activeAccount.label. */
+  activeVaultLabel?: string;
   /** Threaded to VaultPicker so the "New wallet"
    *  dropdown entry routes to App's NewWalletFlow screen instead of
    *  opening the legacy single-page VaultAddModal fresh mode. */
@@ -1746,7 +1756,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, balanceStale, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, balanceStale, activeVaultLabel, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -1781,6 +1791,7 @@ export function Home({ account, network, indexer, balanceStale, onOpenAccounts, 
         account={account}
         onOpenAccounts={onOpenAccounts}
         onSettings={onSettings}
+        {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
       />

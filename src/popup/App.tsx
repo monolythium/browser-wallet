@@ -1207,6 +1207,15 @@ export default function App() {
           network={activeChain}
           indexer={indexerSnapshot}
           balanceStale={balanceStale}
+          // Seed the vault chip's label from the already-fetched active vault
+          // summary so the picker renders the real name immediately instead of
+          // flashing the "—" placeholder until its own bgVaultsList resolves.
+          // Sourced from the vault summary (never activeAccount.label — see the
+          // leak warning at loadActiveAccount). Conditional spread so an
+          // unresolved summary omits the prop (exactOptionalPropertyTypes).
+          {...(activeVaultSummary?.label
+            ? { activeVaultLabel: activeVaultSummary.label }
+            : {})}
           onOpenAccounts={() => setScreen("accounts")}
           onSettings={() => setScreen("settings")}
           onOpenReceive={() => setScreen("receive")}
