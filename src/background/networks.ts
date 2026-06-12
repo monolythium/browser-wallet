@@ -241,64 +241,90 @@ export function chainRequiresMlDsa(chainIdHex: string): boolean {
  * to reconfigure).
  *
  * Operators with a mismatched genesis hash (orphan-
- * fork attack surface) are also skipped. The genesis check is cached
- * forever in-memory per RPC URL — genesis is immutable per chain, so a
- * one-time probe per operator suffices for the SW lifetime.
+ * fork attack surface) are also skipped. A DEFINITIVE genesis verdict is
+ * cached in-memory per RPC URL — genesis is immutable per chain — while a
+ * "couldn't read" verdict (unreachable/timeout) expires on a short TTL so a
+ * transient outage self-heals (see verifyOperatorGenesis).
  */
+/**
+ * Probe ONE operator: reachable + right chain id + genesis match. Resolves to
+ * `{name, rpc}` on a full pass; THROWS on any failure (unreachable, timeout,
+ * wrong chain id, or genesis mismatch) so `Promise.any` in
+ * `probeFirstAliveOperator` selects the first operator that fully passes and
+ * treats every failure as a rejection. Records the wrong-chain-id set as a
+ * side effect so `classifyNoOperatorReason` can distinguish UNTRUSTED from
+ * OFFLINE.
+ */
+async function probeOneOperator(
+  v: { name: string; rpc: string },
+  expectedChainIdDec: number,
+  timeoutMs: number,
+): Promise<{ name: string; rpc: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(v.rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "net_version",
+        params: [],
+      }),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`net_version http ${res.status}`);
+  const body = (await res.json()) as { result?: string };
+  const reportedChainId = Number(body?.result ?? 0);
+  if (reportedChainId !== expectedChainIdDec) {
+    // Reachable, but serving a different chain id. Remember it so the banner
+    // can say UNTRUSTED OPERATOR ("online but wrong chain") rather than
+    // OFFLINE — the operator answered, it's just not our chain.
+    operatorWrongChainId.add(v.rpc);
+    throw new Error(`wrong chain id ${reportedChainId}`);
+  }
+  operatorWrongChainId.delete(v.rpc);
+  // Genesis check (orphan-fork defense). On mismatch the operator is excluded
+  // from RPC dispatch (cached per the verifyOperatorGenesis policy).
+  const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
+  if (!genesisOk) throw new Error("genesis mismatch");
+  return { name: v.name, rpc: v.rpc };
+}
+
 export async function probeFirstAliveOperator(
   expectedChainIdDec: number = TESTNET_CHAIN_ID,
   timeoutMs: number = 3_000,
 ): Promise<{ name: string; rpc: string } | null> {
-  for (const v of getActiveOperators()) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      const res = await fetch(v.rpc, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "net_version",
-          params: [],
-        }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-      if (!res.ok) continue;
-      const body = (await res.json()) as { result?: string };
-      const reportedChainId = Number(body?.result ?? 0);
-      if (reportedChainId !== expectedChainIdDec) {
-        // Reachable, but serving a different chain id. Remember it so the
-        // banner can say UNTRUSTED OPERATOR ("online but wrong chain") rather
-        // than OFFLINE — the operator answered, it's just not our chain.
-        operatorWrongChainId.add(v.rpc);
-        console.info(
-          "[probe] operator on a different chain id (untrusted):",
-          v.rpc,
-          "reported",
-          reportedChainId,
-          "expected",
-          expectedChainIdDec,
-        );
-        continue;
-      }
-      operatorWrongChainId.delete(v.rpc);
-      // Genesis check. On mismatch the operator is excluded
-      // from RPC dispatch for the rest of the SW lifetime.
-      const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
-      if (!genesisOk) continue;
-      return { name: v.name, rpc: v.rpc };
-    } catch {
-      // unreachable / timeout — try next
-    }
+  const operators = getActiveOperators();
+  if (operators.length === 0) return null;
+  // Probe all operators CONCURRENTLY (was a serial for-loop). A dead or slow
+  // operator can no longer add head-of-line latency: worst-case wall-clock is
+  // ONE timeout (~timeoutMs), not the sum across the whole fleet — this is the
+  // fix for the multi-second "freeze" the user hit when the testnet was
+  // unreachable. Promise.any resolves with the FIRST operator that fully passes
+  // (reachable + right chain id + genesis); if EVERY operator rejects (all
+  // dead / untrusted) it throws AggregateError and we return null, so the
+  // banner shows a fast OFFLINE/UNTRUSTED instead of hanging on CONNECTING.
+  // The losing probes run to their own timeout in the background, warming the
+  // genesis cache + wrong-chain set (used by classifyNoOperatorReason) — the
+  // same entries the old serial loop populated, just without blocking.
+  try {
+    return await Promise.any(
+      operators.map((v) => probeOneOperator(v, expectedChainIdDec, timeoutMs)),
+    );
+  } catch {
+    return null;
   }
-  return null;
 }
 
 /**
  * Per-operator genesis-hash cache. Key is the RPC URL; value is the
- * verification result. Entries are written once and never expired:
+ * verification result. A DEFINITIVE entry (observed !== null) never expires;
  * genesis is immutable per chain, so a cached `false` survives across
  * reconnects until the user clears the operator override or the SW
  * restarts.
@@ -328,9 +354,10 @@ const operatorWrongChainId = new Set<string>();
 /**
  * Verify an operator's chain genesis identity matches TESTNET_GENESIS_HASH.
  * Returns true on match (or cache-hit "true"); false on mismatch,
- * unreachable, or malformed response. Result is cached forever (see
- * cache docstring). The cached false is the load-bearing behavior:
- * one mismatch and we never route RPC to that operator again.
+ * unreachable, or malformed response. A DEFINITIVE verdict is cached forever;
+ * a "couldn't read" verdict (observed === null) expires after a short TTL so a
+ * transient blip self-heals. The cached definitive false is the load-bearing
+ * defense: one real mismatch and we never route RPC to that operator again.
  *
  * Preferred probe: `lyth_chainStats.genesisHash`, which is the chain
  * identity hash used by the registry and p2p binding. Fallback probe:
@@ -348,11 +375,32 @@ export async function verifyOperatorGenesis(
   timeoutMs: number = 3_000,
 ): Promise<boolean> {
   const cached = operatorGenesisCache.get(rpc);
-  if (cached !== undefined) return cached.ok;
+  if (cached !== undefined) {
+    // A DEFINITIVE read (observed a genesis / block-0 hash) is immutable per
+    // chain → cache it forever (a real mismatch must never be re-trusted; a
+    // real match never needs re-probing). But a NON-definitive read
+    // (observed === null: the operator was unreachable, timed out, or runs an
+    // old binary that doesn't expose the probe) is TRANSIENT — keep it only
+    // for a short TTL so a momentary blip self-heals on the next probe instead
+    // of de-trusting an otherwise-good operator for the whole SW lifetime.
+    // This was the load-bearing wedge behind the perpetual OFFLINE: one bad
+    // moment cached `false` forever.
+    if (cached.observed !== null) return cached.ok;
+    if (Date.now() - cached.checkedAt < GENESIS_OBSERVED_NULL_TTL_MS) {
+      return cached.ok;
+    }
+    // TTL expired on a non-definitive entry — fall through and re-probe.
+  }
   const result = await probeOperatorGenesis(rpc, timeoutMs);
   operatorGenesisCache.set(rpc, result);
   return result.ok;
 }
+
+/** TTL for a NON-definitive genesis-cache entry (observed === null:
+ *  unreachable / timeout / probe-unsupported). Definitive reads (a real
+ *  observed hash, match or mismatch) are cached forever; only the
+ *  "couldn't read" verdict expires, so a transient outage self-heals. */
+const GENESIS_OBSERVED_NULL_TTL_MS = 60_000;
 
 /** Force-refresh a single operator's genesis check. Surfaced via the
  *  About-page probe so the user can re-evaluate after a regenesis. */

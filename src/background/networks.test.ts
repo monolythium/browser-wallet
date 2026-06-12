@@ -181,6 +181,47 @@ describe("verifyOperatorGenesis", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("expires a TRANSIENT (observed:null) verdict after the TTL and self-heals on re-probe", async () => {
+    // The load-bearing resilience fix: a momentary unreachable blip must NOT
+    // de-trust an operator for the whole SW lifetime. A definitive verdict
+    // stays cached forever (above); a "couldn't read" verdict expires.
+    const nowSpy = vi.spyOn(Date, "now");
+    let reachable = false;
+    const fetchSpy = vi.fn(async () => {
+      if (!reachable) throw new TypeError("network unreachable");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { genesisHash: TESTNET_GENESIS_HASH },
+        }),
+      } as unknown as Response;
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    // t0: unreachable → cached false with observed:null (transient).
+    nowSpy.mockReturnValue(1_000_000);
+    expect(await verifyOperatorGenesis(RPC)).toBe(false);
+    expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
+    const callsAfterFirst = fetchSpy.mock.calls.length;
+
+    // Within the TTL → served from cache, NO re-probe.
+    nowSpy.mockReturnValue(1_000_000 + 59_000);
+    expect(await verifyOperatorGenesis(RPC)).toBe(false);
+    expect(fetchSpy.mock.calls.length).toBe(callsAfterFirst);
+
+    // Operator recovers; past the TTL → re-probe self-heals to true.
+    reachable = true;
+    nowSpy.mockReturnValue(1_000_000 + 61_000);
+    expect(await verifyOperatorGenesis(RPC)).toBe(true);
+    expect(snapshotGenesisCache().get(RPC)?.ok).toBe(true);
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+
+    nowSpy.mockRestore();
+  });
+
   it("clearGenesisCache(rpc) drops the entry and forces a re-probe", async () => {
     const fetchSpy = vi.fn(async () => ({
       ok: true,
@@ -352,5 +393,36 @@ describe("probeFirstAliveOperator (#42 reachable-but-wrong-chain → untrusted)"
         snapshotWrongChainOperators(),
       ),
     ).toBe("untrusted");
+  });
+
+  it("parallel probe returns a live operator even when the others are dead", async () => {
+    // The freeze fix: probing concurrently means one live operator is selected
+    // without waiting out every dead operator's timeout serially. Here every
+    // operator EXCEPT one is unreachable; the probe must still return the live
+    // one (and fast — not after summing the dead operators' timeouts).
+    const operators = getActiveOperators();
+    expect(operators.length).toBeGreaterThanOrEqual(2);
+    const liveRpc = operators[0]!.rpc;
+    globalThis.fetch = vi.fn(async (url, init) => {
+      if (String(url) !== liveRpc) throw new TypeError("network unreachable");
+      const payload = JSON.parse(String(init?.body ?? "{}")) as {
+        method?: string;
+      };
+      const result =
+        payload.method === "net_version"
+          ? "69420"
+          : payload.method === "lyth_chainStats"
+            ? { genesisHash: TESTNET_GENESIS_HASH }
+            : null;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jsonrpc: "2.0", id: 1, result }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const hit = await probeFirstAliveOperator(69420, 50);
+    expect(hit).not.toBeNull();
+    expect(hit?.rpc).toBe(liveRpc);
   });
 });
