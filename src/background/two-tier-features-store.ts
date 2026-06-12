@@ -7,7 +7,6 @@
 
 import {
   STORAGE_KEY_TWO_TIER_FEATURES,
-  defaultTwoTierState,
   normaliseTwoTierState,
   setFeature,
   type FeatureFlag,
@@ -33,15 +32,6 @@ export async function setTwoTierFeature(
     chrome.storage.local.set(
       { [STORAGE_KEY_TWO_TIER_FEATURES]: next },
       () => resolve(next),
-    );
-  });
-}
-
-export async function resetTwoTierFeatures(): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.storage.local.set(
-      { [STORAGE_KEY_TWO_TIER_FEATURES]: defaultTwoTierState() },
-      () => resolve(),
     );
   });
 }

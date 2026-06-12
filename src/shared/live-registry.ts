@@ -56,20 +56,3 @@ export async function fetchLiveTestnetRegistry(): Promise<ChainInfo | null> {
   return inFlight;
 }
 
-/**
- * Synchronous read of the cached value. Returns `null` if no fetch
- * has completed yet — callers that need a value at first render
- * should also kick off `fetchLiveTestnetRegistry()` to populate the
- * cache.
- */
-export function getCachedLiveTestnetRegistry(): ChainInfo | null {
-  if (!cache) return null;
-  if (Date.now() - cache.fetchedAt >= TTL_MS) return null;
-  return cache.info;
-}
-
-/** Test-only — clears the cache so each case can stand up fresh. */
-export function resetLiveRegistryCacheForTest(): void {
-  cache = null;
-  inFlight = null;
-}
