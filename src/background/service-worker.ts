@@ -67,7 +67,6 @@ import {
   getActiveVaultIdV4,
   verifyContainerPasswordV4,
   lockV4,
-  createVaultFromNewMnemonic,
   createVaultFromMnemonic,
   exportMnemonicV4,
   personalSignV4,
@@ -5721,29 +5720,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "keystore-lock": {
       await triggerAutoLock();
       return { ok: true };
-    }
-    case "keystore-create-new": {
-      // Every new wallet is v4 (ML-DSA-65). PQM-1 is the canonical recovery
-      // format: 24 BIP-39 words carrying the PQM-1 algo/version payload and
-      // 30 bytes of entropy. createVaultFromNewMnemonic commits straight into
-      // the multi-vault container (`mono.vaults.v4`) and leaves it unlocked,
-      // so the popup's VaultPicker reads a populated container with no
-      // migration round-trip.
-      const p = message.payload as { password: string };
-      // Defense-in-depth (#41): re-validate the password floor at the SW IPC
-      // boundary. The popup SetPassword UI already gates on isPasswordValid,
-      // but the SW must not trust a forged popup IPC. createVaultFrom* are
-      // policy-free primitives; the policy is enforced here at the boundary.
-      if (typeof p?.password !== "string" || !isPasswordValid(p.password)) {
-        return { ok: false, reason: "weak_password" };
-      }
-      try {
-        const r = await createVaultFromNewMnemonic(p.password);
-        await resetAutoLock();
-        return { ok: true, mnemonic: r.mnemonic, address: r.address };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
     }
     case "keystore-create-from-mnemonic": {
       const p = message.payload as { password: string; mnemonic: string };

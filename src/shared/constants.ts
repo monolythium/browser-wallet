@@ -114,7 +114,6 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   "focus-approval",
   "keystore-unlock",
   "keystore-lock",
-  "keystore-create-new",
   "keystore-create-from-mnemonic",
   "keystore-export-seed",
   "keystore-reset",

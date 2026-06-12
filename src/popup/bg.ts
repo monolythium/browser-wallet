@@ -263,15 +263,6 @@ export async function bgKeystoreLock(): Promise<{ ok: boolean }> {
   return send("keystore-lock");
 }
 
-export async function bgKeystoreCreateNew(
-  password: string,
-): Promise<
-  | { ok: true; mnemonic: string; address: string }
-  | { ok: false; reason?: string }
-> {
-  return send("keystore-create-new", { password });
-}
-
 export async function bgKeystoreCreateFromMnemonic(
   password: string,
   mnemonic: string,

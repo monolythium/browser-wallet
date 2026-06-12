@@ -5310,25 +5310,6 @@ describe("keystore create/import password floor (#41 SW-side gate)", () => {
   const VALID = "ValidPassw0rd!"; // >=12, upper, lower, digit, special
   const WEAK = "weak";
 
-  it("keystore-create-new rejects a weak password with reason:weak_password", async () => {
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "keystore-create-new",
-      payload: { password: WEAK },
-    })) as { ok: boolean; reason?: string };
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe("weak_password");
-  });
-
-  it("keystore-create-new accepts a valid password", async () => {
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "keystore-create-new",
-      payload: { password: VALID },
-    })) as { ok: boolean };
-    expect(r.ok).toBe(true);
-  });
-
   it("keystore-create-from-mnemonic rejects a weak password", async () => {
     const r = (await dispatchPopup({
       kind: "popup",
