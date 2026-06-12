@@ -85,6 +85,7 @@ import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { useFeature } from "./hooks/useFeature";
 import { ACCOUNTS, type Account } from "./demo-data";
+import { runMountHydrationLoads } from "./mount-hydration";
 import {
   bgListPending,
   bgKeystoreStatus,
@@ -464,11 +465,16 @@ export default function App() {
   const refreshKeystoreStatus = useCallback(async () => {
     const ks = await bgKeystoreStatus();
     setKeystore(ks);
-    if (ks.algo === "mldsa") {
-      await loadActiveAccount();
-      await loadActiveVaultSummary();
-    }
-    await loadChainState();
+    // The active-account, vault-summary, and chain-state loads are mutually
+    // independent (see mount-hydration.ts) — run them concurrently with
+    // per-load isolation instead of serially, so the mount gate costs one
+    // round-trip latency instead of three. Contract is unchanged: still
+    // returns only after all settle, so every caller stays fully hydrated.
+    await runMountHydrationLoads(ks.algo, {
+      loadActiveAccount,
+      loadActiveVaultSummary,
+      loadChainState,
+    });
     return ks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
