@@ -1250,10 +1250,6 @@ export async function bgListPending(): Promise<PendingApproval[]> {
   return send<PendingApproval[]>("list-pending");
 }
 
-export async function bgGetPending(id: string): Promise<PendingApproval | null> {
-  return send<PendingApproval | null>("get-pending", { id });
-}
-
 export async function bgResolveApproval(
   id: string,
   decision: { ok: boolean; reason?: string },
@@ -1271,10 +1267,6 @@ export interface ConnectedSiteRecord {
 }
 
 export type ConnectedSitesMap = Record<string, ConnectedSiteRecord>;
-
-export async function bgListConnectedSites(): Promise<ConnectedSitesMap> {
-  return send<ConnectedSitesMap>("list-connected-sites");
-}
 
 export async function bgRevokeOrigin(origin: string): Promise<{ ok: boolean }> {
   return send<{ ok: boolean }>("revoke-origin", { origin });
@@ -1504,13 +1496,6 @@ export interface ContactRecord {
 
 export type ContactsMap = Record<string, ContactRecord>;
 
-export async function bgContactsList(): Promise<
-  | { ok: true; contacts: ContactsMap }
-  | { ok: false; reason?: string }
-> {
-  return send("contacts-list");
-}
-
 export async function bgContactsAdd(input: {
   address: string;
   bech32m?: string;
@@ -1531,13 +1516,6 @@ export async function bgContactsRename(
   name: string,
 ): Promise<{ ok: true } | { ok: false; reason?: string }> {
   return send("contacts-rename", { address, name });
-}
-
-export async function bgContactsCheck(address: string): Promise<boolean> {
-  const r = await send<
-    { ok: true; known: boolean } | { ok: false; reason?: string }
-  >("contacts-check", { address });
-  return r.ok && r.known;
 }
 
 // ---- Multi-vault container surface ----
@@ -1724,15 +1702,8 @@ export async function bgVaultPubkey(
 // multisig vault's meta. The first self-signer in the roster acts as
 // proposer; their vault key signs the canonical proposal hash and
 // the signature lands in approvals[0]. Container must be unlocked.
-//
-// `bgMultisigListProposals` is a thin convenience wrapper around the
-// proposals array — saves callers from pulling the full meta when
-// they only need the proposal list.
 
-import type {
-  PendingProposal,
-  ProposalAction,
-} from "../shared/multisig.js";
+import type { ProposalAction } from "../shared/multisig.js";
 
 export type {
   PendingProposal,
@@ -1749,15 +1720,6 @@ export async function bgMultisigPropose(args: {
   | { ok: false; reason?: string }
 > {
   return send("multisig-propose", args);
-}
-
-export async function bgMultisigListProposals(
-  vaultId: string,
-): Promise<
-  | { ok: true; proposals: PendingProposal[] | null }
-  | { ok: false; reason?: string }
-> {
-  return send("multisig-list-proposals", { vaultId });
 }
 
 /** Add an approval signature to a pending proposal. Returns the new

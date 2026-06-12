@@ -52,7 +52,6 @@ import {
   enqueue as enqueueApproval,
   resolve as resolveApproval,
   rejectByWindow,
-  getPending,
   listPending,
   clearPending,
   focusApproval,
@@ -547,11 +546,9 @@ import {
   clearAllConnectedSites,
 } from "./connected-sites.js";
 import {
-  loadContacts,
   addContact,
   removeContact,
   renameContact,
-  isContactKnown,
 } from "./contacts.js";
 import { addressToBech32m } from "../shared/bech32m.js";
 import {
@@ -5195,10 +5192,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
   switch (message.op) {
     case "list-pending":
       return listPending();
-    case "get-pending": {
-      const id = (message.payload as { id?: string } | undefined)?.id;
-      return id ? getPending(id) : null;
-    }
     case "resolve": {
       const p = message.payload as { id: string; decision: ApprovalDecision };
       const found = resolveApproval(p.id, p.decision);
@@ -5208,9 +5201,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const id = (message.payload as { id?: string } | undefined)?.id;
       if (!id) return { focused: false };
       return await focusApproval(id);
-    }
-    case "list-connected-sites": {
-      return loadConnectedSites();
     }
     case "revoke-origin": {
       const p = message.payload as { origin?: string } | undefined;
@@ -6207,26 +6197,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ok: true,
           proposalId: proposal.id,
           proposerId: proposer.id,
-        };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
-    }
-    case "multisig-list-proposals": {
-      // Convenience read: returns the proposals array for a vault.
-      // Equivalent to bgVaultMultisigMeta().meta.proposals but cheaper
-      // for callers that only want the proposal list (skips the
-      // governance + signers payload). `proposals: null` for single
-      // vaults / unknown ids.
-      const p = (message.payload ?? {}) as { vaultId?: string };
-      if (typeof p.vaultId !== "string") {
-        return { ok: false, reason: "missing vaultId" };
-      }
-      try {
-        const meta = await readMultisigMetaV4(p.vaultId);
-        return {
-          ok: true,
-          proposals: meta?.proposals ?? null,
         };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
@@ -7298,14 +7268,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await applyUiOpenMode(p.mode as UiOpenMode);
       return { ok: true, mode: p.mode };
     }
-    // Contacts CRUD. All 5 ops are in
-    // AUTO_LOCK_EXEMPT_OPS so management activity doesn't bump the
-    // user-active deadline; the user "did something" signal comes
-    // from the send / sign / unlock paths, not from labelling.
-    case "contacts-list": {
-      const contacts = await loadContacts();
-      return { ok: true, contacts };
-    }
+    // Contacts CRUD (add / remove / rename). These are USER ACTIONS and are
+    // NOT in AUTO_LOCK_EXEMPT_OPS — labelling counts as activity. The popup
+    // reads the contact list reactively from chrome.storage via useContacts.
     case "contacts-add": {
       const p = (message.payload ?? {}) as {
         address?: unknown;
@@ -7363,14 +7328,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       await renameContact(p.address, nameTrimmed);
       return { ok: true };
-    }
-    case "contacts-check": {
-      const p = (message.payload ?? {}) as { address?: unknown };
-      if (typeof p.address !== "string") {
-        return { ok: false, reason: "missing address" };
-      }
-      const known = await isContactKnown(p.address);
-      return { ok: true, known };
     }
     case "wallet-operator-status": {
       // Liveness probe for the popup's chain-status banner. We iterate
