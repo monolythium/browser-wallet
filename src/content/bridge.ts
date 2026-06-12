@@ -28,6 +28,14 @@ interface InboundEvent {
   payload: unknown;
 }
 
+// Initial provider-state sync — the SW's reply to the load-time announce,
+// relayed to the MAIN-world provider so its eth_accounts/eth_chainId caches
+// seed from real connection-scoped state instead of hardcoded defaults.
+interface InboundState {
+  source: "monolythium-wallet-bridge";
+  state: { accounts?: unknown; chainId?: unknown };
+}
+
 // Announce this page's origin to the service worker the moment the bridge loads.
 // This runs in the ISOLATED world at document_start — before the page's own
 // scripts — so the SW learns the tab's CURRENT origin on every navigation, not
@@ -39,11 +47,24 @@ interface InboundEvent {
 // warning, unacceptable for a fund-holding extension). The announced origin is
 // `window.location.origin`, stamped from the ISOLATED world (the page cannot
 // forge it) and trusted exactly as the rpc-stamped origin already is — the SW's
-// per-dApp authorization key. Fire-and-forget: read lastError to suppress the
-// harmless "no response" console noise when the SW acknowledges synchronously.
-chrome.runtime.sendMessage({ kind: "announce", origin: window.location.origin }, () => {
-  void chrome.runtime.lastError;
-});
+// per-dApp authorization key. The SW replies with connection-scoped initial
+// provider state ({accounts, chainId} — accounts only for a connected,
+// unlocked origin), which we relay to the MAIN-world provider so a reloaded
+// dApp's eth_accounts / a late-opened tab's eth_chainId answer real state
+// instead of the hardcoded seeds. Read lastError first to suppress the
+// harmless "no response" noise if the SW is too old/absent to reply.
+chrome.runtime.sendMessage(
+  { kind: "announce", origin: window.location.origin },
+  (response: { accounts?: unknown; chainId?: unknown } | undefined) => {
+    void chrome.runtime.lastError;
+    if (!response || typeof response !== "object") return;
+    const state: InboundState = {
+      source: "monolythium-wallet-bridge",
+      state: { accounts: response.accounts, chainId: response.chainId },
+    };
+    window.postMessage(state, "*");
+  },
+);
 
 window.addEventListener("message", (ev) => {
   // Only accept messages posted from THIS window. The MAIN-world provider shares

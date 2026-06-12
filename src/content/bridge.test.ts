@@ -13,11 +13,15 @@ type Listener = (ev: unknown) => void;
 
 let messageListener: Listener | null;
 let sendMessageCalls: Array<{ kind?: string; origin?: string }>;
-let stubWindow: { location: { origin: string }; addEventListener: (t: string, fn: Listener) => void; postMessage: unknown };
+let stubWindow: { location: { origin: string }; addEventListener: (t: string, fn: Listener) => void; postMessage: ReturnType<typeof vi.fn> };
+// What the stub SW replies to the load-time announce (the initial-state sync).
+// `undefined` = legacy/absent SW (no reply).
+let announceResponse: unknown;
 
 function installEnv() {
   messageListener = null;
   sendMessageCalls = [];
+  announceResponse = undefined;
   const listeners = new Map<string, Listener>();
   stubWindow = {
     location: { origin: "https://dapp.example" },
@@ -34,7 +38,7 @@ function installEnv() {
       lastError: undefined,
       sendMessage: (msg: { kind?: string; origin?: string }, cb?: (r: unknown) => void) => {
         sendMessageCalls.push(msg);
-        if (cb) cb(undefined);
+        if (cb) cb(msg?.kind === "announce" ? announceResponse : undefined);
       },
       onMessage: { addListener: vi.fn() },
     },
@@ -88,5 +92,41 @@ describe("bridge postMessage source guard (F-2.1/F-2.2)", () => {
     const before = sendMessageCalls.length;
     messageListener!({ source: stubWindow, origin: "https://dapp.example", data: { source: "evil", id: "x", args: {} } });
     expect(rpcForwards(before)).toHaveLength(0);
+  });
+});
+
+// ---- BROKEN-1/2 fix — announce reply relayed as the initial-state sync ----
+
+describe("announce state relay (initial provider-state sync)", () => {
+  function statePosts(): Array<{ source?: string; state?: unknown }> {
+    return stubWindow.postMessage.mock.calls
+      .map((c: unknown[]) => c[0] as { source?: string; state?: unknown })
+      .filter((m) => m?.source === "monolythium-wallet-bridge" && "state" in (m ?? {}));
+  }
+
+  it("relays the SW's announce reply to the page as a state envelope", async () => {
+    announceResponse = { accounts: ["0xaaa0000000000000000000000000000000000001"], chainId: "0x2a" };
+    await loadBridge();
+    const posts = statePosts();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.state).toEqual({
+      accounts: ["0xaaa0000000000000000000000000000000000001"],
+      chainId: "0x2a",
+    });
+  });
+
+  it("posts no state envelope when the SW does not reply (legacy/absent SW)", async () => {
+    announceResponse = undefined;
+    await loadBridge();
+    expect(statePosts()).toHaveLength(0);
+  });
+
+  it("relays an empty-state reply verbatim (non-connected origin carries no accounts)", async () => {
+    announceResponse = { accounts: [], chainId: "0x10F2C" };
+    await loadBridge();
+    const posts = statePosts();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.state).toEqual({ accounts: [], chainId: "0x10F2C" });
+    expect(JSON.stringify(posts)).not.toContain("0xaaa");
   });
 });

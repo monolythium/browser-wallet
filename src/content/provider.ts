@@ -34,6 +34,22 @@ interface InboundEvent {
   payload: unknown;
 }
 
+// Initial provider-state sync — the SW's connection-scoped reply to the
+// bridge's load-time announce, relayed here so the locally-answered arms
+// seed from real state instead of the hardcoded defaults (the BROKEN-1/2
+// reload-shows-disconnected + stale-chainId fixes).
+interface InboundState {
+  source: "monolythium-wallet-bridge";
+  state: { accounts?: unknown; chainId?: unknown };
+}
+
+/** How long the locally-answered arms (eth_accounts / eth_chainId /
+ *  net_version) wait for the initial-state sync before falling back to the
+ *  legacy defaults. The announce round-trip is normally single-digit ms; a
+ *  cold SW start adds boot hydration (tens of ms). 250 ms comfortably covers
+ *  both while guaranteeing a dead/absent SW can never hang a page's RPC. */
+const INITIAL_STATE_TIMEOUT_MS = 250;
+
 // Methods the chain retired in mono-core b2f0c498 (EVM mutation,
 // simulation, and the six polling-filter methods). Note that
 // eth_sendRawTransaction is also retired by the chain but kept in
@@ -60,15 +76,33 @@ class MonolythiumProvider {
   private listeners = new Map<string, Set<EventHandler>>();
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
-  // Locally cached state — updated by the bridge when the user picks a
-  // different account or network in the popup. The default reflects the
-  // LythiumDAG-BFT testnet chain id from Whitepaper §13; the bridge will overwrite
-  // this on `chainChanged` if the user is on a different chain.
+  // Locally cached state — seeded by the initial-state sync (the SW's reply
+  // to the bridge's load-time announce) and updated by pushed events when the
+  // user changes account or network in the popup. The literals below are the
+  // POST-TIMEOUT fallbacks only (SW dead/absent): `[]` and the LythiumDAG-BFT
+  // testnet chain id from Whitepaper §13 — never the primary answer while the
+  // SW is alive.
   private cachedAccounts: string[] = [];
   private cachedChainId: string = "0x10F2C"; // LythiumDAG-BFT testnet (69420)
 
+  // One-shot gate the locally-answered arms await so a freshly loaded page
+  // answers real state, not the seeds. Settled by (in whichever order wins):
+  // the initial-state sync, the first pushed event (proves the channel is
+  // live and carries fresher data than the sync), or the timeout fallback.
+  private initialStateSettled: Promise<void>;
+  private settleInitialState: () => void = () => {};
+  // Pushed events outrank the initial sync: channel ordering between
+  // tabs.sendMessage events and the announce-reply callback is not
+  // guaranteed, so a sync that loses the race must not clobber fresher data.
+  private accountsPushed = false;
+  private chainPushed = false;
+
   constructor() {
     window.addEventListener("message", (ev) => this.handleMessage(ev));
+    this.initialStateSettled = new Promise<void>((resolve) => {
+      this.settleInitialState = resolve;
+    });
+    setTimeout(() => this.settleInitialState(), INITIAL_STATE_TIMEOUT_MS);
   }
 
   // ---- Public EIP-1193 surface ----
@@ -79,10 +113,21 @@ class MonolythiumProvider {
     }
 
     // Some methods can be answered locally for snappier UX (still authoritative
-    // because the bridge pushes updates).
-    if (args.method === "eth_chainId") return this.cachedChainId;
-    if (args.method === "eth_accounts") return this.cachedAccounts;
-    if (args.method === "net_version") return String(parseInt(this.cachedChainId, 16));
+    // because the cache seeds from the SW's initial-state sync and the bridge
+    // pushes updates). Await the one-shot sync gate so a freshly loaded page
+    // never answers the seeds while the SW is alive (BROKEN-1/2).
+    if (args.method === "eth_chainId") {
+      await this.initialStateSettled;
+      return this.cachedChainId;
+    }
+    if (args.method === "eth_accounts") {
+      await this.initialStateSettled;
+      return this.cachedAccounts;
+    }
+    if (args.method === "net_version") {
+      await this.initialStateSettled;
+      return String(parseInt(this.cachedChainId, 16));
+    }
 
     // Methods retired by mono-core b2f0c498 (v4.1 §22.9 — no EVM
     // simulation / polling-filters on Monolythium). Reject at the
@@ -140,11 +185,16 @@ class MonolythiumProvider {
     // the source-string check below still runs.
     if (ev.source !== window) return;
     if (ev.origin !== window.location.origin) return;
-    const data = ev.data as InboundEnvelope | InboundEvent | undefined;
+    const data = ev.data as InboundEnvelope | InboundEvent | InboundState | undefined;
     if (!data || data.source !== "monolythium-wallet-bridge") return;
 
     if ("event" in data) {
       this.handleEvent(data);
+      return;
+    }
+
+    if ("state" in data) {
+      this.handleInitialState(data);
       return;
     }
 
@@ -158,13 +208,42 @@ class MonolythiumProvider {
     }
   }
 
+  /** Apply the SW's initial-state sync. Field-wise: a pushed event that won
+   *  the race against this reply is fresher and must not be clobbered. The
+   *  shapes are re-validated here because the bridge→provider hop is
+   *  window.postMessage — same trust posture as handleEvent (the page can
+   *  only lie to itself; the source/origin guards above reject other frames). */
+  private handleInitialState(msg: InboundState) {
+    const s = msg.state;
+    if (
+      !this.accountsPushed &&
+      Array.isArray(s.accounts) &&
+      s.accounts.every((a) => typeof a === "string")
+    ) {
+      this.cachedAccounts = s.accounts as string[];
+    }
+    if (
+      !this.chainPushed &&
+      typeof s.chainId === "string" &&
+      /^0x[0-9a-fA-F]+$/.test(s.chainId)
+    ) {
+      this.cachedChainId = s.chainId;
+    }
+    this.settleInitialState();
+  }
+
   private handleEvent(ev: InboundEvent) {
     if (ev.event === "accountsChanged" && Array.isArray(ev.payload)) {
       this.cachedAccounts = ev.payload as string[];
+      this.accountsPushed = true;
     }
     if (ev.event === "chainChanged" && typeof ev.payload === "string") {
       this.cachedChainId = ev.payload;
+      this.chainPushed = true;
     }
+    // Any authenticated bridge message proves the channel is live — don't
+    // keep the locally-answered arms waiting on the initial sync.
+    this.settleInitialState();
     const listeners = this.listeners.get(ev.event);
     if (!listeners) return;
     for (const h of listeners) {
