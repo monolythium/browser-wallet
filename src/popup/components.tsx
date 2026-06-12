@@ -110,6 +110,13 @@ import {
 // on the loading-to-live transition itself.
 type ChainHealth =
   | { kind: "loading" }
+  // Warm-start: a block we persisted in a PRIOR session (poll tick or WS push)
+  // is shown on reopen as "last seen #N · reconnecting…" so the banner has a
+  // concrete datapoint instead of a bare CONNECTING… — WITHOUT asserting
+  // connectivity. Strictly distinct from `live`: a persisted block proves we
+  // once saw the chain, not that we are connected THIS session. The live tick
+  // supersedes it the instant a fresh block is confirmed.
+  | { kind: "reconnecting"; blockHex: string }
   | { kind: "live"; blockHex: string }
   | { kind: "stalled"; blockHex: string }
   | { kind: "untrusted" }
@@ -118,6 +125,12 @@ type ChainHealth =
 const HEALTH_TICK_MS = 8_000;
 const STALL_THRESHOLD_MS = 30_000;
 const OPERATOR_TICK_MS = 10_000;
+// Session key holding the last block hex we observed (written by the SW on a WS
+// newHeads push AND by the poll tick below). Read on mount to seed the honest
+// "reconnecting" warm-start so a reopen shows the last-seen block instead of a
+// bare CONNECTING…. Lives in chrome.storage.session (survives SW hibernation;
+// cleared on browser close / extension reload).
+const WS_BLOCK_KEY = "mono.ws.lastBlockHex";
 
 /**
  * Map a FAILED bgWalletChainBlockNumber poll to a banner health state. The
@@ -181,6 +194,19 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
           "Can't reach any operator right now. Tap to review your operators.",
         tappable: true,
       };
+    case "reconnecting":
+      return {
+        // Amber (the STALLED token) — deliberately NOT the green LIVE token:
+        // the seeded block is unverified this session. The visible label is
+        // rendered via reconnectingBannerLabel (with the block number); this
+        // base label is the aria/fallback text. Not tappable (no operator
+        // action implied while we re-establish the read).
+        label: "RECONNECTING…",
+        color: "var(--warn)",
+        tooltip:
+          "Showing the last block seen — reconnecting to an operator to confirm.",
+        tappable: false,
+      };
     case "loading":
     default:
       return {
@@ -190,6 +216,32 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         tappable: false,
       };
   }
+}
+
+/**
+ * Visible banner label for the reconnecting warm-start: the last-seen block
+ * NUMBER (decimal) with a reconnecting marker. The number is honest — labelled
+ * "last seen", never presented as the current head — and this NEVER renders the
+ * "LIVE" word: a persisted block proves we once saw the chain, not that we are
+ * connected this session. Pure + exported so the honest-label contract is
+ * tested independently of the banner render.
+ */
+export function reconnectingBannerLabel(blockHex: string): string {
+  return `LAST SEEN #${parseInt(blockHex, 16)} · RECONNECTING…`;
+}
+
+/**
+ * Validate a persisted block-hex seed (from chrome.storage.session) and lift it
+ * to a `reconnecting` health. Returns null for a missing/malformed seed, so the
+ * banner stays on CONNECTING… rather than rendering "#NaN". The result is
+ * ALWAYS `reconnecting`, NEVER `live` — the seed is unverified this session.
+ * Pure + exported for unit tests.
+ */
+export function seedReconnectingHealth(seed: unknown): ChainHealth | null {
+  if (typeof seed === "string" && /^0x[0-9a-fA-F]+$/.test(seed)) {
+    return { kind: "reconnecting", blockHex: seed };
+  }
+  return null;
 }
 
 /**
@@ -288,6 +340,14 @@ export function ChainStatusBanner({
           lastBlockHex = r.blockHex;
           lastBlockObservedAt = now;
           setHealth({ kind: "live", blockHex: r.blockHex });
+          // Persist the freshly-confirmed block so a later reopen can seed the
+          // honest reconnecting warm-start even if WS never pushed (e.g. the
+          // operator has no ws_url). Same key the SW writes on a WS head, so
+          // there's one source of "last seen block". Best-effort; a failed
+          // write just means the next open falls back to CONNECTING….
+          void chrome.storage.session
+            .set({ [WS_BLOCK_KEY]: r.blockHex })
+            .catch(() => {});
         } else if (now - lastBlockObservedAt >= STALL_THRESHOLD_MS) {
           setHealth({ kind: "stalled", blockHex: r.blockHex });
         }
@@ -301,6 +361,23 @@ export function ChainStatusBanner({
     const visHandler = () => {
       if (document.visibilityState === "visible") void tick();
     };
+
+    // Honest warm-start: seed the banner from the block we persisted in a prior
+    // session so the reopen shows "last seen #N · reconnecting…" instead of a
+    // bare CONNECTING…. Applied ONLY while still loading — the functional
+    // update yields to a live/offline/etc. state the tick may have set first,
+    // and the live tick supersedes it the instant a fresh block is confirmed.
+    // Never maps to live: the seed is unverified this session.
+    void chrome.storage.session
+      .get(WS_BLOCK_KEY)
+      .then((s) => {
+        if (cancelled) return;
+        const seeded = seedReconnectingHealth(s?.[WS_BLOCK_KEY]);
+        if (seeded) {
+          setHealth((prev) => (prev.kind === "loading" ? seeded : prev));
+        }
+      })
+      .catch(() => {});
 
     void tick();
     const intervalId = setInterval(tick, HEALTH_TICK_MS);
@@ -318,14 +395,13 @@ export function ChainStatusBanner({
       // ws-subscribe-new-heads is best-effort; failure means the
       // 8 s poll covers us alone (the existing behaviour).
     });
-    const wsKey = "mono.ws.lastBlockHex";
     const wsListener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
       changes,
       area,
     ) => {
       if (area !== "session") return;
       if (cancelled) return;
-      const change = changes[wsKey];
+      const change = changes[WS_BLOCK_KEY];
       if (!change || typeof change.newValue !== "string") return;
       const blockHex = change.newValue;
       const now = Date.now();
@@ -446,6 +522,13 @@ export function ChainStatusBanner({
   const tapProps = tappable
     ? { onClick: onOpenOperators, role: "button" as const, tabIndex: 0 }
     : {};
+  // Visible label: for the reconnecting warm-start, surface the last-seen block
+  // NUMBER (honest "last seen", never the LIVE word). Reconnecting is never an
+  // untrusted state, so only the non-marquee branch below consults this.
+  const labelText =
+    health.kind === "reconnecting"
+      ? reconnectingBannerLabel(health.blockHex)
+      : pres.label;
   const labelEl =
     health.kind === "untrusted" ? (
       <span
@@ -473,7 +556,7 @@ export function ChainStatusBanner({
           cursor: tappable ? "pointer" : undefined,
         }}
       >
-        {pres.label}
+        {labelText}
       </span>
     );
   const body =

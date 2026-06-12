@@ -13,6 +13,8 @@ import {
   AssetList,
   chainHealthForFailedPoll,
   chainHealthPresentation,
+  reconnectingBannerLabel,
+  seedReconnectingHealth,
   shouldLabelBalanceStale,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
@@ -1270,6 +1272,50 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       label: "CONNECTING…",
       color: "var(--fg-500)",
     });
+  });
+
+  it("presents reconnecting as amber, not tappable, and NOT the green LIVE token", () => {
+    const pres = chainHealthPresentation("reconnecting");
+    expect(pres.color).toBe("var(--warn)"); // amber, distinct from LIVE green / OFFLINE red
+    expect(pres.color).not.toBe("var(--ok)"); // never the LIVE token
+    expect(pres.tappable).toBe(false);
+    expect(pres.label).not.toBe("LIVE");
+    expect(pres.tooltip.length).toBeGreaterThan(0);
+  });
+});
+
+describe("reconnectingBannerLabel (D honest warm-start label)", () => {
+  it("shows the last-seen block NUMBER (decimal) with a reconnecting marker", () => {
+    expect(reconnectingBannerLabel("0x10")).toBe(
+      "LAST SEEN #16 · RECONNECTING…",
+    );
+    expect(reconnectingBannerLabel("0x1a2b")).toBe(
+      "LAST SEEN #6699 · RECONNECTING…",
+    );
+  });
+
+  it("never renders the word LIVE — a seeded block is not a confirmed connection", () => {
+    expect(reconnectingBannerLabel("0xff")).not.toContain("LIVE");
+  });
+});
+
+describe("seedReconnectingHealth (D seed validation — never asserts connectivity)", () => {
+  it("lifts a valid block-hex seed to a reconnecting health (never live)", () => {
+    const h = seedReconnectingHealth("0x1a2b");
+    expect(h).toEqual({ kind: "reconnecting", blockHex: "0x1a2b" });
+    // The hard honesty invariant: a persisted seed can NEVER produce a live
+    // state — connectivity is asserted only after a this-session fetch.
+    expect(h?.kind).not.toBe("live");
+  });
+
+  it("returns null for a missing or malformed seed (banner stays on CONNECTING…)", () => {
+    expect(seedReconnectingHealth(undefined)).toBeNull();
+    expect(seedReconnectingHealth(null)).toBeNull();
+    expect(seedReconnectingHealth("")).toBeNull();
+    expect(seedReconnectingHealth("not-hex")).toBeNull();
+    expect(seedReconnectingHealth("0xZZZ")).toBeNull();
+    expect(seedReconnectingHealth(123)).toBeNull();
+    expect(seedReconnectingHealth({})).toBeNull();
   });
 });
 
