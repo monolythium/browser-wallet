@@ -5664,3 +5664,70 @@ describe("wallet-chain-block-number — untrusted/unreachable cause (#42)", () =
     expect(r.cause).toBe("untrusted");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// purgeDemoAddrCacheKeys once-guard (E) — the full chrome.storage.local.get(null)
+// scan runs ONCE; thereafter a persisted versioned flag short-circuits it so it
+// doesn't repeat on every SW boot. Cleanup correctness (which keys it removes)
+// is preserved; only the per-boot repetition is gated.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("purgeDemoAddrCacheKeys once-guard (E)", () => {
+  const SENTINEL = "0xa9f2000000000000000000000000000000000001"; // ACCOUNTS[0]
+  const sentinelKey = `mono.activity.${SENTINEL}.0x10F2C`;
+  const pendingSentinelKey = `mono.activity.pending.${SENTINEL}.0x10F2C`;
+  const realKey =
+    "mono.activity.0x1111111111111111111111111111111111111111.0x10F2C";
+
+  it("the sentinel constant under test is a real demo-data sentinel", async () => {
+    const { DEMO_ADDR_SENTINELS_LOWER } = await import(
+      "../shared/demo-addr-sentinel.js"
+    );
+    expect(DEMO_ADDR_SENTINELS_LOWER).toContain(SENTINEL);
+  });
+
+  it("flag unset: runs the scan, removes sentinel keys, keeps real keys, sets the flag", async () => {
+    const { purgeDemoAddrCacheKeys, DEMO_ADDR_PURGE_FLAG } = await import(
+      "./service-worker.js"
+    );
+    storageLocal = {
+      [sentinelKey]: { entries: [] },
+      [pendingSentinelKey]: { pending: [] },
+      [realKey]: { entries: [] },
+    };
+    await purgeDemoAddrCacheKeys();
+    expect(sentinelKey in storageLocal).toBe(false);
+    expect(pendingSentinelKey in storageLocal).toBe(false);
+    expect(realKey in storageLocal).toBe(true); // non-sentinel cache untouched
+    expect(storageLocal[DEMO_ADDR_PURGE_FLAG]).toBe(true);
+  });
+
+  it("flag set: early-returns WITHOUT the full get(null) scan, removes nothing", async () => {
+    const { purgeDemoAddrCacheKeys, DEMO_ADDR_PURGE_FLAG } = await import(
+      "./service-worker.js"
+    );
+    storageLocal = {
+      [DEMO_ADDR_PURGE_FLAG]: true,
+      [sentinelKey]: { entries: [] }, // a stray key the guarded path must NOT touch
+    };
+    const getSpy = vi.spyOn(chrome.storage.local, "get");
+    await purgeDemoAddrCacheKeys();
+    // The guard reads ONLY the flag key — never the full-store get(null) scan.
+    expect(getSpy).not.toHaveBeenCalledWith(null, expect.anything());
+    expect(getSpy).not.toHaveBeenCalledWith(null);
+    expect(sentinelKey in storageLocal).toBe(true); // nothing removed
+    getSpy.mockRestore();
+  });
+
+  it("a non-true flag value (stale / pre-version) still triggers a single run", async () => {
+    const { purgeDemoAddrCacheKeys, DEMO_ADDR_PURGE_FLAG } = await import(
+      "./service-worker.js"
+    );
+    storageLocal = {
+      [DEMO_ADDR_PURGE_FLAG]: false, // not === true → guard does not short-circuit
+      [sentinelKey]: { entries: [] },
+    };
+    await purgeDemoAddrCacheKeys();
+    expect(sentinelKey in storageLocal).toBe(false);
+    expect(storageLocal[DEMO_ADDR_PURGE_FLAG]).toBe(true);
+  });
+});

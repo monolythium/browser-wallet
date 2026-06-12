@@ -675,13 +675,25 @@ async function loadUserChains(): Promise<void> {
  * `mono.activity.pending.<sentinel>.*` storage keys that landed under
  * a popup demo-data sentinel address during the boot race that
  * existed before the activity hook guarded sentinel addrs at the
- * write source. Scans `chrome.storage.local` once per cold start
- * (cheap — the sentinel set is 3 entries, the storage object has
- * dozens of keys at most). No-ops when no sentinel-keyed entries
- * exist, which is the steady state after one cold start past this
- * fix lands.
+ * write source.
+ *
+ * Once-guarded behind a persisted versioned flag: because the write
+ * source (useActivity's `isDemoAddrSentinel` early-return) no longer
+ * emits sentinel keys, this is a pure legacy cleanup — running the full
+ * `chrome.storage.local.get(null)` scan on every SW boot is wasted work
+ * (and the scan cost grows with the stored key count). It runs ONCE,
+ * sets the flag, and skips thereafter. Bump the version (`v1` → `v2`)
+ * if the match logic ever changes, to force a single re-run. Perf only:
+ * no wipe / keystore / boot-security behavior is touched. (The B2 reset
+ * wipe clears all `mono.*`, including this flag, so a post-reset boot
+ * re-runs the scan once — harmless, it finds nothing.)
  */
-async function purgeDemoAddrCacheKeys(): Promise<void> {
+export const DEMO_ADDR_PURGE_FLAG = "mono.migration.demoAddrPurge.v1";
+export async function purgeDemoAddrCacheKeys(): Promise<void> {
+  const flagRes = await new Promise<Record<string, unknown>>((resolve) => {
+    chrome.storage.local.get(DEMO_ADDR_PURGE_FLAG, (res) => resolve(res ?? {}));
+  });
+  if (flagRes[DEMO_ADDR_PURGE_FLAG] === true) return;
   const all = await new Promise<Record<string, unknown>>((resolve) => {
     chrome.storage.local.get(null, (res) => resolve(res ?? {}));
   });
@@ -699,9 +711,14 @@ async function purgeDemoAddrCacheKeys(): Promise<void> {
       }
     }
   }
-  if (toRemove.length === 0) return;
+  if (toRemove.length > 0) {
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.remove(toRemove, () => resolve());
+    });
+  }
+  // Mark done so the get(null) scan doesn't repeat on every subsequent boot.
   await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(toRemove, () => resolve());
+    chrome.storage.local.set({ [DEMO_ADDR_PURGE_FLAG]: true }, () => resolve());
   });
 }
 
