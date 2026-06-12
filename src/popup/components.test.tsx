@@ -1254,6 +1254,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       "untrusted",
       "offline",
       "loading",
+      "reconnecting",
     ] as const) {
       expect(chainHealthPresentation(k).tooltip.length).toBeGreaterThan(0);
     }
