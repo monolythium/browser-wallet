@@ -5624,6 +5624,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       clearGenesisCache();
       return { ok: true };
     }
+    case "probe-operator": {
+      // Single-operator usability probe for the "Use this operator" button.
+      // Forces a FRESH genesis verification for just this RPC (clears any
+      // cached verdict so the user gets a current answer), then reports whether
+      // it is reachable AND serving the pinned genesis — i.e. whether the RPC
+      // dispatch loop would actually use it. Read-only: it writes NO override
+      // (the popup reorders + saves only on a usable result), so it cannot
+      // strand the user, and the genesis-pin orphan-fork defense is unchanged.
+      const probe = message.payload as { rpc?: unknown } | undefined;
+      const probeRpc = typeof probe?.rpc === "string" ? probe.rpc : "";
+      if (probeRpc.length === 0) return { ok: false, usable: false };
+      clearGenesisCache(probeRpc);
+      const usable = await verifyOperatorGenesis(probeRpc, 2_500);
+      return { ok: true, usable };
+    }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
       // v4 multi-vault container unlock. Rate limiting counts every

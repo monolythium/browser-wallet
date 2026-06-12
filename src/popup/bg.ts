@@ -1361,6 +1361,16 @@ export async function bgOperatorsSet(
   return send("testnet-operators-set", { operators });
 }
 
+/** Single-operator usability probe for the "Use this operator" button.
+ *  `usable` is true when the operator is reachable AND serving the wallet's
+ *  pinned genesis (i.e. RPC dispatch would actually use it). Read-only — it
+ *  writes no override. */
+export async function bgProbeOperator(
+  rpc: string,
+): Promise<{ ok: true; usable: boolean } | { ok: false; usable: false }> {
+  return send("probe-operator", { rpc });
+}
+
 /** Per-operator health row surfaced by `testnet-operators-health`. `ok`
  *  is true when the operator responded with both a `net_version` and a
  *  `eth_blockNumber` within the probe budget; `trustedGenesis` is true
