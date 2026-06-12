@@ -27,9 +27,6 @@ import { bech32mDisplay } from "../shared/bech32m";
 import { clusterLabel, formatWeightBpsPercent } from "../shared/staking";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
-import {
-  ACCOUNTS,
-} from "./demo-data";
 import type {
   Account, Custody,
 } from "./demo-data";
@@ -711,7 +708,6 @@ function BannerActionButton({
 // the freed horizontal width to render in 1-2 lines instead of 3-4.
 interface TopProps {
   account: Account;
-  onOpenAccounts: () => void;
   onSettings: () => void;
   /** Active vault label, forwarded to VaultPicker so the chip shows the real
    *  name on first paint instead of the "—" placeholder. */
@@ -727,11 +723,9 @@ interface TopProps {
 }
 
 // Chip replaced with <VaultPicker /> (multi-vault
-// dropdown). `onOpenAccounts` is preserved on TopProps for caller
-// compatibility but no longer consumed here — the legacy Accounts
-// screen navigation is vestigial since BIP-32/44 HD derivation was
-// removed. Full deletion of the prop chain (HomeProps + App.tsx)
-// is a future cleanup.
+// dropdown). The legacy `onOpenAccounts` prop chain + the Accounts
+// screen it routed to were deleted along with the demo fixtures (the
+// screen was unreachable since BIP-32/44 HD derivation was removed).
 //
 // `onSettings` is also no longer consumed: the cog
 // migrated to ChainStatusBanner above this row so the VaultPicker
@@ -1811,7 +1805,6 @@ interface HomeProps {
    *  unreachable/untrusted on the latest refresh). When true and a balance is
    *  present, the hero labels it as stale — it never fabricates/zeros it. */
   balanceStale?: boolean;
-  onOpenAccounts: () => void;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -1839,7 +1832,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, balanceStale, activeVaultLabel, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, balanceStale, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -1872,7 +1865,6 @@ export function Home({ account, network, indexer, balanceStale, activeVaultLabel
     <>
       <Top
         account={account}
-        onOpenAccounts={onOpenAccounts}
         onSettings={onSettings}
         {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
@@ -2042,70 +2034,10 @@ export function Home({ account, network, indexer, balanceStale, activeVaultLabel
   );
 }
 
-// ---- Accounts picker ----
-interface AccountsProps {
-  current: Account;
-  onBack: () => void;
-  onPick: (a: Account) => void;
-}
-
-export function Accounts({ current, onBack, onPick }: AccountsProps) {
-  return (
-    <>
-      <div className="ext-top">
-        <button className="ext-iconbtn" onClick={onBack}><Icon name="back" size={15} /></button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>Accounts</div>
-        <button className="ext-iconbtn"><Icon name="plus" size={15} /></button>
-      </div>
-      <div className="ext-body">
-        <div className="ext-card" style={{ padding: "6px 10px" }}>
-          {ACCOUNTS.map((a) => (
-            <div
-              key={a.id}
-              className="ext-asset"
-              onClick={() => onPick(a)}
-              style={{ position: "relative", cursor: "pointer" }}
-            >
-              <div className={`ext-asset__ico ${a.denom === "private" ? "priv" : "native"}`}>
-                {a.label.slice(0, 1).toUpperCase()}
-              </div>
-              <div className="ext-asset__main">
-                <div className="sym">
-                  {a.label}{" "}
-                  {a.custody === "hw" && (
-                    <span
-                      className="ext-badge-att"
-                      style={{ background: "rgba(88,160,220,0.14)", color: "#78b0dc", borderColor: "rgba(88,160,220,0.3)" }}
-                    >
-                      <Icon name="hw" size={8} /> Ledger
-                    </span>
-                  )}
-                </div>
-                <div className="chain">{shortAddr(bech32mDisplay(a.addr), 18)} · {a.denom} · {a.algo === "slhdsa" ? "SLH-DSA" : "ML-DSA"}</div>
-              </div>
-              <div className="ext-asset__right">
-                {a.balance == null
-                  ? <div className="opaque">hidden</div>
-                  : <div className="amt">{fmt(a.balance, 0)}</div>}
-                <div className="sym" style={{ color: "var(--fg-400)", fontFamily: "var(--f-mono)", fontSize: 9, marginTop: 2 }}>
-                  {a.denom === "private" ? "LYTH-p" : "LYTH"}
-                </div>
-              </div>
-              {a.id === current.id && (
-                <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: "var(--gold)" }}>
-                  <Icon name="check" size={14} />
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-        <button className="ext-act" style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}>
-          <Icon name="plus" size={13} /> Import or create
-        </button>
-      </div>
-    </>
-  );
-}
+// The legacy "Accounts" picker (a static mock of the ACCOUNTS demo
+// fixtures) was removed with the demo data: vault switching is the
+// VaultPicker's job now, and the screen was unreachable (onOpenAccounts
+// was threaded but never invoked).
 
 // Stake page moved to src/popup/pages/Stake.tsx.
 // The placeholder static-strategy mock that used to live here was

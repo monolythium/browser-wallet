@@ -35,7 +35,7 @@ import "./themes.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Bridge,
+  Home, Networks, Bridge,
   ReqConnect,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -84,7 +84,7 @@ import { explainImportError } from "./lib/import-error";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { useFeature } from "./hooks/useFeature";
-import { ACCOUNTS, type Account } from "./demo-data";
+import { type Account } from "./demo-data";
 import { runMountHydrationLoads } from "./mount-hydration";
 import {
   bgListPending,
@@ -128,7 +128,6 @@ type Screen =
   | "forgot-password"
   | "locked"
   | "home"
-  | "accounts"
   | "networks"
   | "network-detail"
   | "network-add"
@@ -350,7 +349,22 @@ export default function App() {
   // Cleared after successful vault creation or when the user backs out.
   const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
 
-  const initialAccount: Account = ACCOUNTS[0]!;
+  // Neutral, non-fabricated seed: no real-looking address, null balance (→ the
+  // hero shows "0.00", the address line shows "—") until loadActiveAccount
+  // resolves the real identity. The wallet must NEVER paint a fake balance or
+  // address — the prior `ACCOUNTS[0]` demo fixture (John Doe / 4,128.42 /
+  // sentinel addr) was removed precisely because it leaked through whenever the
+  // account/chain was slow or unreachable.
+  const initialAccount: Account = {
+    id: "pending",
+    label: "",
+    denom: "public",
+    addr: "",
+    algo: "mldsa",
+    balance: null,
+    custody: "sw",
+    pinned: false,
+  };
   const [acc, setAcc] = useState<Account>(initialAccount);
   // #42: true when the displayed balance is a RETAINED last-known value because
   // the latest refresh couldn't reach the chain (offline/untrusted). Home only
@@ -963,7 +977,6 @@ export default function App() {
 
   const showBannerStrip =
     screen === "home" ||
-    screen === "accounts" ||
     screen === "networks" ||
     screen === "network-detail" ||
     screen === "network-add" ||
@@ -1216,7 +1229,6 @@ export default function App() {
           {...(activeVaultSummary?.label
             ? { activeVaultLabel: activeVaultSummary.label }
             : {})}
-          onOpenAccounts={() => setScreen("accounts")}
           onSettings={() => setScreen("settings")}
           onOpenReceive={() => setScreen("receive")}
           onOpenSend={() => setScreen("send")}
@@ -1249,14 +1261,6 @@ export default function App() {
               </>
             ) : undefined
           }
-        />
-      )}
-
-      {screen === "accounts" && (
-        <Accounts
-          current={acc}
-          onBack={() => setScreen("home")}
-          onPick={(a) => { setAcc(a); setScreen("home"); }}
         />
       )}
 
