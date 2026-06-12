@@ -298,6 +298,17 @@ interface ChainStatusBannerProps {
   onOpenOperators?: () => void;
 }
 
+// Last chain-health snapshot, cached at MODULE scope so it survives a banner
+// REMOUNT within the same popup session. The banner is rendered conditionally
+// (App's showBannerStrip) and the popup re-creates the component whenever the
+// user navigates to a screen that hides it and back — without this cache each
+// such remount cold-started health at {loading} = "CONNECTING…", which is why
+// the status re-flashed every time the user returned to Home. Seeding useState
+// from this snapshot shows the last-known LIVE/OFFLINE/etc. instantly instead.
+// Popup-session-scoped: a true reopen re-initializes the module to null (→ the
+// chrome.storage.session warm-start seed covers the cross-session case).
+let lastKnownHealth: ChainHealth | null = null;
+
 export function ChainStatusBanner({
   network,
   onOpenNetworks,
@@ -308,8 +319,16 @@ export function ChainStatusBanner({
   onMenu,
   onOpenOperators,
 }: ChainStatusBannerProps) {
-  const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
+  const [health, setHealth] = useState<ChainHealth>(
+    () => lastKnownHealth ?? { kind: "loading" },
+  );
   const [operator, setOperator] = useState<string | null>(null);
+
+  // Persist every health change to the module-scoped snapshot so the next
+  // in-session remount seeds from it (above) rather than re-showing CONNECTING.
+  useEffect(() => {
+    lastKnownHealth = health;
+  }, [health]);
 
   // Chain-health poll. Tracks `lastBlockHex` and `lastBlockObservedAt` so
   // we can distinguish "RPC reachable but chain stalled" from "RPC down".

@@ -983,6 +983,10 @@ export default function App() {
     screen === "network-edit" ||
     screen === "settings" ||
     screen === "operators" ||
+    // operator-directory is the banner's OWN tap-through target
+    // (onOpenOperators); keep the banner mounted there so tapping it and
+    // backing out doesn't remount the banner and re-flash CONNECTING.
+    screen === "operator-directory" ||
     screen === "notification-settings" ||
     screen === "mrv-native" ||
     screen === "receive" ||
