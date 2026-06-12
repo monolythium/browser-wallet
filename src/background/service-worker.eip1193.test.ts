@@ -1067,5 +1067,32 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       const viaAnnounce = await announceReply("https://sync-agree.example", 34);
       expect(viaAnnounce.accounts).toEqual(viaRpc.result);
     });
+
+    it("unlock emits accountsChanged to connected origins so locked-load tabs recover (CT-4 / C3)", async () => {
+      // Tab 40 connects; the wallet locks; its reload-while-locked synced [].
+      await dispatch("eth_requestAccounts", [], "https://sync-unlock.example");
+      unlocked = false;
+      try {
+        const locked = await announceReply("https://sync-unlock.example", 40);
+        expect(locked.accounts).toEqual([]);
+        // The user unlocks — the connected tab must learn the account is back.
+        broadcastEvents.length = 0;
+        const r = await popupDispatch<{ ok: boolean }>("keystore-unlock", {
+          password: "correct-horse",
+        });
+        expect(r.ok).toBe(true);
+        const acct = broadcastEvents.filter((e) => e.event === "accountsChanged");
+        expect(
+          acct.some(
+            (e) =>
+              e.tabId === 40 &&
+              Array.isArray(e.payload) &&
+              (e.payload as unknown[])[0] === DETERMINISTIC_ADDRESS,
+          ),
+        ).toBe(true);
+      } finally {
+        unlocked = true;
+      }
+    });
   });
 });

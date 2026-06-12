@@ -5700,6 +5700,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             unlocked: true,
             activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
           });
+          // CT-4 — tabs that loaded while the wallet was locked synced
+          // accounts: [] (the announce state reply mirrors the eth_accounts
+          // arm's locked behavior); tell connected origins the account is
+          // available again. broadcastEvent scopes account-carrying events
+          // to connected origins (T2-01). The lock direction is deliberately
+          // NOT mirrored — locking has never emitted, and a dApp holding the
+          // address of a now-locked wallet learns nothing new; revoke remains
+          // the only path that retracts an address (T2-03).
+          broadcastEvent("accountsChanged", [r.address]);
           return { ok: true, address: r.address };
         } catch {
           failCount += 1;
