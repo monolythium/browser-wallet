@@ -38,6 +38,11 @@ interface OperatorDirectoryProps {
 
 type OpenSection = "list" | "attrs" | "legend" | null;
 
+// Upper bound on the operator-health probe. The SW probe is parallel +
+// timeout-bounded now, so this rarely fires — but a wedged SW used to leave
+// this page stuck on "Probing…" forever; the deadline forces a definite state.
+const OPERATOR_PROBE_TIMEOUT_MS = 6_000;
+
 export function OperatorDirectory({
   onBack,
   onManageOperators,
@@ -48,16 +53,36 @@ export function OperatorDirectory({
   // Single-open accordion. Starts closed so the page opens on the four
   // buttons (per the requested layout).
   const [open, setOpen] = useState<OpenSection>(null);
+  // true when the probe didn't resolve (timeout/throw) — distinguishes
+  // "couldn't reach the wallet service" from a genuine "no operators".
+  const [probeError, setProbeError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const r = await bgOperatorsHealth();
+    // Bounded probe: a non-resolving bgOperatorsHealth() (a wedged SW) must not
+    // strand the page on "Probing…" forever — fall to a definite state.
+    const timer = setTimeout(() => {
       if (cancelled) return;
-      setOperators(r.ok ? r.operators : []);
+      setProbeError(true);
+      setOperators([]);
+    }, OPERATOR_PROBE_TIMEOUT_MS);
+    void (async () => {
+      try {
+        const r = await bgOperatorsHealth();
+        if (cancelled) return;
+        clearTimeout(timer);
+        setProbeError(false);
+        setOperators(r.ok ? r.operators : []);
+      } catch {
+        if (cancelled) return;
+        clearTimeout(timer);
+        setProbeError(true);
+        setOperators([]);
+      }
     })();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, []);
 
@@ -109,7 +134,9 @@ export function OperatorDirectory({
         >
           {operators === null
             ? "Probing Monolythium Testnet operators…"
-            : `${total} operator${total === 1 ? "" : "s"} · ${live} reachable · ${trusted} verified`}
+            : probeError
+              ? "Couldn't reach the wallet service — try reopening the wallet."
+              : `${total} operator${total === 1 ? "" : "s"} · ${live} reachable · ${trusted} verified`}
         </div>
 
         {/* 1. Operator list */}
