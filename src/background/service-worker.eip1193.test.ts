@@ -997,4 +997,75 @@ describe("EIP-1193 conformance — service-worker request router", () => {
       expect(acct.some((e) => e.tabId === 20)).toBe(true);
     });
   });
+
+  // ---- BROKEN-1/2 fix — announce state reply (initial provider-state sync) ----
+  //
+  // The bridge's load-time announce now receives a connection-scoped
+  // {accounts, chainId} reply that seeds the page provider's caches, closing
+  // the reload-shows-disconnected (BROKEN-1) and stale-default-chainId
+  // (BROKEN-2) defects. Contracts: CT-1 (connected sync), CT-2 (no account
+  // data to strangers), CT-4 (locked mirrors the eth_accounts arm), CT-5
+  // (connection re-checked at reply time).
+  describe("announce state reply (initial provider-state sync)", () => {
+    function announceReply(
+      origin: string,
+      tabId: number,
+    ): Promise<{ accounts?: unknown; chainId?: unknown }> {
+      return new Promise((resolve) => {
+        const ret = capturedOnMessage!(
+          { kind: "announce", origin },
+          { id: "test-id", tab: { id: tabId } },
+          resolve as (r: unknown) => void,
+        );
+        if (ret !== true) {
+          // The announce branch must keep the channel open for its async
+          // post-hydration reply.
+          resolve({ accounts: "announce did not signal async response" });
+        }
+      });
+    }
+
+    it("a connected origin's announce receives {accounts, chainId} (CT-1)", async () => {
+      await dispatch("eth_requestAccounts", [], "https://sync-connected.example");
+      const r = await announceReply("https://sync-connected.example", 30);
+      expect(r.accounts).toEqual([DETERMINISTIC_ADDRESS]);
+      expect(r.chainId).toBe(TESTNET_CHAIN_ID_HEX);
+    });
+
+    it("a non-connected origin's announce carries the chainId but NO account data (CT-2)", async () => {
+      const r = await announceReply("https://sync-stranger.example", 31);
+      expect(r.accounts).toEqual([]);
+      expect(r.chainId).toBe(TESTNET_CHAIN_ID_HEX);
+      // The whole reply must not contain the address in any field.
+      expect(JSON.stringify(r)).not.toContain(DETERMINISTIC_ADDRESS.slice(2));
+    });
+
+    it("a locked wallet's announce reply carries no accounts even for a connected origin (CT-4)", async () => {
+      await dispatch("eth_requestAccounts", [], "https://sync-locked.example");
+      unlocked = false;
+      try {
+        const r = await announceReply("https://sync-locked.example", 32);
+        expect(r.accounts).toEqual([]);
+        expect(r.chainId).toBe(TESTNET_CHAIN_ID_HEX);
+      } finally {
+        unlocked = true;
+      }
+    });
+
+    it("the reply reflects revocation — connection checked at reply time, not announce time (CT-5)", async () => {
+      await dispatch("eth_requestAccounts", [], "https://sync-revoked.example");
+      const before = await announceReply("https://sync-revoked.example", 33);
+      expect(before.accounts).toEqual([DETERMINISTIC_ADDRESS]);
+      await popupDispatch("revoke-origin", { origin: "https://sync-revoked.example" });
+      const after = await announceReply("https://sync-revoked.example", 33);
+      expect(after.accounts).toEqual([]);
+    });
+
+    it("the eth_accounts arm and the announce reply agree (shared scoping helper)", async () => {
+      await dispatch("eth_requestAccounts", [], "https://sync-agree.example");
+      const viaRpc = await dispatch("eth_accounts", [], "https://sync-agree.example");
+      const viaAnnounce = await announceReply("https://sync-agree.example", 34);
+      expect(viaAnnounce.accounts).toEqual(viaRpc.result);
+    });
+  });
 });

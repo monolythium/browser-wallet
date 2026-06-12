@@ -797,7 +797,12 @@ const session: SessionState = {
 // the worker spins up. Service-worker hibernation → we re-read on every
 // boot. The active-chain hydration runs after user-chains so a stored id
 // pointing at a user-added chain resolves cleanly via lookupChain.
-void (async () => {
+//
+// The promise is captured (not fire-and-forget) so paths that must answer
+// with POST-hydration state — the announce state reply, which seeds a
+// dApp's provider cache for the page's whole lifetime — can await it
+// instead of racing it on a cold SW start.
+const bootHydrated: Promise<void> = (async () => {
   // Try session-rehydrate first. MV3 SW hibernates
   // after ~30 s idle and drops the in-memory ML-DSA backend held by
   // keystore-mldsa.ts. Pre-rehydrate, every SW restart force-locked
@@ -1485,6 +1490,24 @@ function broadcastDisconnect(origin: string): void {
   }
 }
 
+/** Connection-scoped provider state — the single source for what a dApp
+ *  origin may learn about the wallet without an approval. Mirrors the
+ *  `eth_accounts` arm exactly: locked → no accounts (never leak the address
+ *  while locked); unlocked but origin not connected → no accounts. `chainId`
+ *  is included unconditionally — the `eth_chainId` arm already answers any
+ *  origin without a connection check (public, non-identifying). Used by BOTH
+ *  the `eth_accounts` arm and the announce state reply so the scoping logic
+ *  cannot drift between the two paths. */
+function connectionScopedProviderState(origin: string): {
+  accounts: string[];
+  chainId: string;
+} {
+  const addr = getUnlockedAddressV4();
+  const accounts =
+    addr !== null && session.connectedOrigins.has(origin) ? [addr] : [];
+  return { accounts, chainId: session.chainId };
+}
+
 // ---- RPC dispatch ----
 
 async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
@@ -1499,11 +1522,10 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return ok(String(parseInt(session.chainId, 16)));
 
     case "eth_accounts": {
-      // Locked → getUnlockedAddressV4() is null → return [] (never resolve or
-      // leak the address to a dApp while locked).
-      const addr = getUnlockedAddressV4();
-      if (!addr) return ok([]);
-      return ok(session.connectedOrigins.has(origin) ? [addr] : []);
+      // Locked → no accounts (never resolve or leak the address to a dApp
+      // while locked); unconnected → no accounts. The scoping logic lives in
+      // connectionScopedProviderState, shared with the announce state reply.
+      return ok(connectionScopedProviderState(origin).accounts);
     }
 
     case "eth_requestAccounts": {
@@ -9464,6 +9486,29 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     const annTabId = sender.tab?.id;
     if (typeof annTabId === "number" && typeof ann.origin === "string") {
       tabOriginById.set(annTabId, ann.origin);
+      // Initial provider-state sync. The page-local provider seeds its
+      // eth_accounts/eth_chainId caches from this reply, so it must reflect
+      // POST-hydration state: on a cold SW start (a page reload typically
+      // wakes the SW) connectedOrigins / chainId / the session-rehydrated
+      // unlock are restored by the boot path — await it before answering.
+      // The connection check runs inside connectionScopedProviderState AT
+      // REPLY TIME (after the await), so an origin revoked while we waited
+      // gets no accounts. Non-connected and locked origins receive
+      // accounts: [] — the chainId is public (same posture as the
+      // eth_chainId arm), the empty array carries no account data, and a
+      // uniform reply lets every page's provider settle immediately instead
+      // of burning its sync timeout on silence.
+      const announcedOrigin = ann.origin;
+      void (async () => {
+        try {
+          await bootHydrated;
+        } catch {
+          // Hydration failure → answer current (possibly empty) state; the
+          // provider's pushed-event updates still correct it later.
+        }
+        sendResponse(connectionScopedProviderState(announcedOrigin));
+      })();
+      return true;
     }
     return false;
   }
