@@ -598,6 +598,7 @@ export default function App() {
 
   // ---- mount-time bootstrap ----
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       const url = new URL(window.location.href);
       const approvalId = url.searchParams.get("approval");
@@ -605,8 +606,10 @@ export default function App() {
         // Approval window: just hydrate keystore (so the unlock prompt
         // can render correctly) and route to the approval screen.
         const ks = await bgKeystoreStatus();
+        if (cancelled) return;
         setKeystore(ks);
         const list = await bgListPending();
+        if (cancelled) return;
         const found = list.find((p) => p.id === approvalId);
         if (found) {
           setActiveApproval({ approval: found });
@@ -618,15 +621,42 @@ export default function App() {
         return;
       }
 
-      const ks = await refreshKeystoreStatus();
-      if (!ks.hasVault) {
-        setScreen("welcome");
-      } else if (!ks.unlocked) {
-        setScreen("locked");
-      } else {
-        setScreen("home");
+      // Self-healing keystore-status gate. The ENTIRE UI is blocked on this
+      // first reply, so a thrown reply used to leave the popup stuck on
+      // "loading" forever — there was no try/catch and no recovery path, and
+      // on a cold MV3 wake the SW can drop the first message(s) (send()'s
+      // single 100 ms retry isn't always enough before the worker finishes its
+      // ~438 KB cold boot). Retry with capped backoff until the SW answers
+      // with a well-shaped status, so the popup self-heals the instant the
+      // worker is up instead of hanging. A malformed / {error} reply (e.g. the
+      // router's catch-all) is treated as TRANSIENT — retried, never read as
+      // "no wallet" and false-routed to Welcome. The cancelled guard stops a
+      // late reply from clobbering a screen the user has already moved past.
+      for (let attempt = 0; !cancelled; attempt++) {
+        try {
+          const ks = await refreshKeystoreStatus();
+          if (cancelled) return;
+          if (
+            typeof ks?.hasVault !== "boolean" ||
+            typeof ks?.unlocked !== "boolean"
+          ) {
+            throw new Error("malformed keystore-status reply");
+          }
+          if (!ks.hasVault) setScreen("welcome");
+          else if (!ks.unlocked) setScreen("locked");
+          else setScreen("home");
+          return;
+        } catch {
+          if (cancelled) return;
+          await new Promise((r) =>
+            setTimeout(r, Math.min(200 * 2 ** attempt, 1500)),
+          );
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [refreshKeystoreStatus]);
 
   // SW-pushed lock/unlock signal — chrome.storage.session.walletLocked is
@@ -1582,10 +1612,16 @@ export default function App() {
           onOpenRiscv={() => navigateTo("mrv-native")}
           onLockWallet={() => {
             void bgKeystoreLock();
-            // The SW writes walletLocked=true and the
-            // chrome.storage.onChanged listener (App.tsx mount-
-            // effect) flips screen → "locked" on its own. Local
-            // setScreen is belt-and-braces against IPC race.
+            // Optimistically reflect the lock in popup STATE, not just the
+            // screen. Otherwise the belt-and-braces unlocked→home effect (see
+            // mount effects) sees keystore.unlocked still true and immediately
+            // reverts screen→"home", flashing the unlocked UI until the (now-
+            // slow) SW round-trip writes walletLocked=true. Clearing unlocked
+            // here makes that guard a no-op; the later walletLocked onChanged
+            // refresh just re-confirms (idempotent). The key material is
+            // already cleared by bgKeystoreLock above — this only fixes the
+            // visible screen flash.
+            setKeystore((k) => (k ? { ...k, unlocked: false, address: null } : k));
             setScreen("locked");
           }}
           // Destructive reset reached from the
