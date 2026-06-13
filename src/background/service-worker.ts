@@ -7433,6 +7433,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // `net_version` with the expected chain id (within a 1-second
       // per-host budget). Result is cached for 10s so a banner that
       // re-renders on every screen change doesn't hammer the chain.
+      //
+      // Same cold-wake boot race as wallet-chain-block-number: seed the
+      // persisted operator hint before reading the cache so a reopen reuses it
+      // (and so the concurrent chain-block tick sees a populated cachedOperator
+      // too). The hint seeds stale, so the TTL check still re-validates below.
+      if (cachedOperator === null) await rehydrateCachedOperator();
       const now = Date.now();
       if (
         cachedOperator !== null &&
@@ -7440,6 +7446,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       ) {
         return { ok: true, name: cachedOperator.name };
       }
+      // About to probe — load persisted genesis verdicts so the probe's genesis
+      // check hits cache instead of re-paying its round-trip.
+      await rehydrateGenesisCache();
       try {
         const hit = await probeFirstAliveOperator(undefined, 1_000);
         setCachedOperator({
@@ -7500,11 +7509,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // Reuses `cachedOperator` (shared with `wallet-operator-status`) to avoid
       // re-running the operator probe loop on every health tick. On a cold
       // reopen the cache is seeded from the persisted hint (checkedAt: 0 =
-      // stale) by rehydrateCachedOperator — so the block read below is tried
-      // against it FIRST, skipping the probe RTT. A stale candidate that fails
-      // falls through to a fresh probe in the SAME tick (so a dead persisted
-      // operator self-heals now, not at the next 8 s poll); a genuinely-fresh
-      // operator that fails means the fleet is unhealthy and surfaces as-is.
+      // stale) — so the block read below is tried against it FIRST, skipping
+      // the probe RTT. A stale candidate that fails falls through to a fresh
+      // probe in the SAME tick (so a dead persisted operator self-heals now,
+      // not at the next 8 s poll); a genuinely-fresh operator that fails means
+      // the fleet is unhealthy and surfaces as-is.
+      //
+      // Close the cold-wake boot race: the popup message dispatch does NOT
+      // await bootHydrated, so on a reopen after SW hibernation this handler
+      // runs before boot's own rehydrateCachedOperator() seeds the hint. Await
+      // it HERE so the very first health tick takes the readChainBlock fast
+      // path instead of paying the full probe (net_version + genesis) — that
+      // probe was the bulk of the "stuck on CONNECTING…" on every reopen.
+      // rehydrateCachedOperator no-ops once populated; one session read cold.
+      if (cachedOperator === null) await rehydrateCachedOperator();
+
       const now = Date.now();
       const cacheFresh =
         cachedOperator !== null &&
@@ -7531,6 +7550,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
 
       let rpc: string | null;
       let operatorName: string | null;
+      // Falling through to a fresh probe — load the persisted genesis verdicts
+      // first (same boot race) so the probe's genesis check hits cache instead
+      // of re-paying its round-trip.
+      await rehydrateGenesisCache();
       try {
         const hit = await probeFirstAliveOperator(undefined, 1_000);
         setCachedOperator({
