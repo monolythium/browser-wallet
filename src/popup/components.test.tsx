@@ -1247,17 +1247,23 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     });
   });
 
-  it("T9: presents regenesis as amber 'ALL OPERATORS UNTRUSTED', tappable (calm caution, not red alarm)", () => {
+  it("T9: presents regenesis as red 'ALL OPERATORS UNTRUSTED', tappable (hard trust failure)", () => {
     expect(chainHealthPresentation("regenesis")).toMatchObject({
       label: "ALL OPERATORS UNTRUSTED",
-      color: "var(--warn)",
+      color: "var(--err)",
       tappable: true,
     });
-    // Amber, never the red OFFLINE/UNTRUSTED token (a genesis churn is recoverable).
-    expect(chainHealthPresentation("regenesis").color).not.toBe("var(--err)");
     expect(chainHealthPresentation("regenesis").tooltip).toMatch(
-      /genesis|monoscan|paused/i,
+      /genesis|monoscan|network/i,
     );
+  });
+
+  it("regenesis + untrusted share the red hard-trust token (both 'on a different chain')", () => {
+    expect(chainHealthPresentation("regenesis").color).toBe("var(--err)");
+    expect(chainHealthPresentation("untrusted").color).toBe("var(--err)");
+    // distinct copy: all-operators vs this-operator
+    expect(chainHealthPresentation("regenesis").tooltip).toMatch(/^All operators/);
+    expect(chainHealthPresentation("untrusted").tooltip).toMatch(/^This operator/);
   });
 
   it("makes the not-online states tappable, live + loading not", () => {

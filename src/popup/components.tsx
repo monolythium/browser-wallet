@@ -185,23 +185,22 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
     case "untrusted":
       return {
         label: "UNTRUSTED OPERATOR",
-        // Red (same token as OFFLINE) — per the user, an operator serving the
-        // wrong chain is a hard trust failure, not a soft amber warning.
+        // Red (same hard-trust token as ALL OPERATORS UNTRUSTED / OFFLINE) — the
+        // operator is on a different chain than the wallet expects.
         color: "var(--err)",
         tooltip:
-          "The operator answered but is on a different chain than your wallet's pin (it may have re-genesised, or be pointed at another network). Tap to switch operators.",
+          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network.",
         tappable: true,
       };
     case "regenesis":
       return {
         label: "ALL OPERATORS UNTRUSTED",
-        // Amber (the caution token), NOT red — a genesis churn on this testnet is
-        // expected + recoverable, not a catastrophe. Distinct from `untrusted`
-        // (a wrong-chain-id operator, which stays red): here every operator is
-        // reachable on the right chain id but reports a different genesis hash.
-        color: "var(--warn)",
+        // Red (same hard-trust token as UNTRUSTED OPERATOR / OFFLINE) — every
+        // operator is on a different chain than the wallet expects, so on-chain
+        // actions stay paused. Scrolls as a marquee (the long label).
+        color: "var(--err)",
         tooltip:
-          "Every operator reports a different genesis hash than your wallet's pin — they may be on a different chain. Your balance is shown on Monoscan; on-chain actions are paused until your operators match.",
+          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. You can check your balance on Monoscan.",
         tappable: true,
       };
     case "offline":
@@ -2010,7 +2009,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
                 lineHeight: 1.5,
               }}
             >
-              <div style={{ color: "var(--warn)", fontWeight: 600 }}>
+              <div style={{ color: "var(--err)", fontWeight: 600 }}>
                 Untrusted operators
               </div>
               <div
