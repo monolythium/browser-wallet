@@ -2019,8 +2019,9 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
                   marginTop: 1,
                 }}
               >
-                Your wallet&apos;s pinned genesis doesn&apos;t match the
-                operators&apos; — they may be on a different chain.
+                {balanceCause === "untrusted"
+                  ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
+                  : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
               </div>
               {pausedMonoscanUrl && (
                 <div style={{ marginTop: 3, letterSpacing: 0 }}>
