@@ -592,8 +592,8 @@ function OperatorRow({
           autoComplete="off"
           style={{ ...inputStyle, flex: 1 }}
         />
-      </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+        {/* Inline with the RPC it probes — a compact secondary action rather
+            than an oversized button on its own row. */}
         <button
           onClick={onUse}
           disabled={busy || !rowUsable}
@@ -671,14 +671,16 @@ const posInputStyle: CSSProperties = {
 };
 
 const useBtnStyle: CSSProperties = {
-  padding: "6px 12px",
-  borderRadius: 8,
+  padding: "4px 9px",
+  borderRadius: 7,
   border: "1px solid var(--fg-700)",
   background: "rgba(124,127,255,0.10)",
   color: "var(--fg-100)",
   fontFamily: "var(--f-sans)",
-  fontSize: 11,
+  fontSize: 10,
   fontWeight: 500,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 
 const iconBtnStyle: CSSProperties = {
