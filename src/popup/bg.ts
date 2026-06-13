@@ -181,13 +181,25 @@ export interface ChainEntry {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-/** Error-message fragments that indicate the SW was
- *  idle/asleep when sendMessage fired. Chrome MV3 wakes the worker
- *  on demand, but the wake race can drop the first message; the
- *  retry path below catches these classes. */
+/** Error-message fragments that indicate the SW was idle/asleep — or was
+ *  torn down mid-request — when sendMessage fired. Chrome MV3 wakes the
+ *  worker on demand, but the wake/teardown race can drop the first message;
+ *  the retry path below catches these classes.
+ *
+ *  "message channel closed" is the async-listener variant: the SW returned
+ *  `true` (committing to an asynchronous sendResponse) and was then suspended
+ *  before it replied, so Chrome rejects the popup's promise with "A listener
+ *  indicated an asynchronous response by returning true, but the message
+ *  channel closed before a response was received". Without this marker the
+ *  rejection escaped the retry and surfaced as an "Uncaught (in promise)" —
+ *  most visibly in the long-lived side panel, which keeps polling the SW (the
+ *  action popup tears down before most of these land). It is the SAME MV3
+ *  race as "message port closed", just Chrome's wording for the path where
+ *  the handler had already returned `true`. */
 const SW_IDLE_ERROR_MARKERS = [
   "No SW",
   "message port closed",
+  "message channel closed",
   "receiving end does not exist",
   "Could not establish connection",
 ];
