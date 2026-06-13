@@ -192,12 +192,14 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
       };
     case "regenesis":
       return {
-        label: "NETWORK RESET — PAUSED",
-        // Red (same token as OFFLINE / UNTRUSTED) — a genesis mismatch is a hard
-        // trust failure; balances + activity are paused until the pin is updated.
-        color: "var(--err)",
+        label: "ALL OPERATORS UNTRUSTED",
+        // Amber (the caution token), NOT red — a genesis churn on this testnet is
+        // expected + recoverable, not a catastrophe. Distinct from `untrusted`
+        // (a wrong-chain-id operator, which stays red): here every operator is
+        // reachable on the right chain id but reports a different genesis hash.
+        color: "var(--warn)",
         tooltip:
-          "Operators report a different genesis hash than your wallet's pin — the network may have re-genesised. Balances and activity are paused until the pin is updated. Tap to review your operators.",
+          "Every operator reports a different genesis hash than your wallet's pin — they may be on a different chain. Your balance is shown on Monoscan; on-chain actions are paused until your operators match.",
         tappable: true,
       };
     case "offline":
@@ -585,7 +587,7 @@ export function ChainStatusBanner({
       ? reconnectingBannerLabel(health.blockHex)
       : pres.label;
   const labelEl =
-    health.kind === "untrusted" ? (
+    health.kind === "untrusted" || health.kind === "regenesis" ? (
       <span
         className="ext-banner-marquee"
         {...tapProps}

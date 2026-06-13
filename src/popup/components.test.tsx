@@ -1246,14 +1246,16 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     });
   });
 
-  it("T9 (C5): presents regenesis as red 'NETWORK RESET — PAUSED', tappable", () => {
+  it("T9: presents regenesis as amber 'ALL OPERATORS UNTRUSTED', tappable (calm caution, not red alarm)", () => {
     expect(chainHealthPresentation("regenesis")).toMatchObject({
-      label: "NETWORK RESET — PAUSED",
-      color: "var(--err)",
+      label: "ALL OPERATORS UNTRUSTED",
+      color: "var(--warn)",
       tappable: true,
     });
+    // Amber, never the red OFFLINE/UNTRUSTED token (a genesis churn is recoverable).
+    expect(chainHealthPresentation("regenesis").color).not.toBe("var(--err)");
     expect(chainHealthPresentation("regenesis").tooltip).toMatch(
-      /genesis|reset|paused/i,
+      /genesis|monoscan|paused/i,
     );
   });
 
