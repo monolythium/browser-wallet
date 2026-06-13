@@ -368,19 +368,34 @@ const operatorWrongChainId = new Set<string>();
 // a short TTL / are reachability-derived and must re-probe so a transient blip
 // self-heals. chrome.storage.session is SW-scope and clears on browser restart
 // / extension reload — the right tier for a chain-identity fact (never on disk).
-const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v1";
+// C6 (R3): bumped to v2 — the persisted blob is now pin-QUALIFIED
+// (`{ pin, entries }`). A pre-C6 v1 blob (un-qualified) lives at the old key and
+// is never read, so it can never be rehydrated as trusted.
+const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v2";
+
+/** Identity the persisted genesis blob is qualified by. If EITHER pin changes
+ *  (a re-pin build), a blob persisted under the old identity is DROPPED on
+ *  rehydrate → full re-probe against the new pin, so a stale-pin verdict can
+ *  never be silently re-trusted (R3). */
+function currentGenesisPinTag(): string {
+  return `${TESTNET_GENESIS_HASH.toLowerCase()}|${TESTNET_BLOCK0_HASH.toLowerCase()}`;
+}
 
 /** Best-effort persist the DEFINITIVE subset of the genesis cache. Overwrites
  *  the whole blob (a handful of operators) so an eviction in clearGenesisCache
  *  is mirrored too. Synchronous guard covers a missing chrome.storage in tests. */
 function persistGenesisCache(): void {
   try {
-    const defs: Record<string, GenesisCacheEntry> = {};
+    const entries: Record<string, GenesisCacheEntry> = {};
     for (const [rpc, e] of operatorGenesisCache) {
-      if (e.observed !== null) defs[rpc] = e;
+      if (e.observed !== null) entries[rpc] = e;
     }
+    // C6 (R3): qualify the blob with the current pin identity so a re-pin drops
+    // it on rehydrate instead of trusting a stale-pin verdict.
     void chrome.storage.session
-      .set({ [SESSION_KEY_GENESIS_CACHE]: defs })
+      .set({
+        [SESSION_KEY_GENESIS_CACHE]: { pin: currentGenesisPinTag(), entries },
+      })
       .catch(() => {});
   } catch {
     // best-effort — no persistence just means the next wake re-probes as before
@@ -394,9 +409,15 @@ function persistGenesisCache(): void {
 export async function rehydrateGenesisCache(): Promise<void> {
   try {
     const s = await chrome.storage.session.get(SESSION_KEY_GENESIS_CACHE);
-    const raw = s?.[SESSION_KEY_GENESIS_CACHE] as
-      | Record<string, unknown>
+    const blob = s?.[SESSION_KEY_GENESIS_CACHE] as
+      | { pin?: unknown; entries?: unknown }
       | undefined;
+    if (!blob || typeof blob !== "object") return;
+    // C6 (R3): only trust a blob persisted under the CURRENT pin. A re-pin (or
+    // any malformed / pin-less blob) → drop it entirely → full re-probe against
+    // the live pin. A stale-pin verdict can NEVER be rehydrated as trusted.
+    if (blob.pin !== currentGenesisPinTag()) return;
+    const raw = blob.entries as Record<string, unknown> | undefined;
     if (!raw || typeof raw !== "object") return;
     for (const [rpc, v] of Object.entries(raw)) {
       if (operatorGenesisCache.has(rpc)) continue; // a live probe already won
@@ -453,11 +474,20 @@ export async function verifyOperatorGenesis(
     // of de-trusting an otherwise-good operator for the whole SW lifetime.
     // This was the load-bearing wedge behind the perpetual OFFLINE: one bad
     // moment cached `false` forever.
-    if (cached.observed !== null) return cached.ok;
-    if (Date.now() - cached.checkedAt < GENESIS_OBSERVED_NULL_TTL_MS) {
+    // C6 (R3): a definitive MISMATCH is sticky forever — it keeps the wallet
+    // paused until the operator/pin is resolved and must never be silently
+    // re-trusted. A definitive PASS is bounded by a re-probe TTL so an operator
+    // that passed once then SILENTLY FORKED within this SW lifetime is
+    // re-detected within a bounded window; within the TTL the cached pass is
+    // trusted. A NON-definitive "couldn't read" keeps its existing short TTL.
+    if (cached.observed !== null) {
+      if (cached.ok === false) return false;
+      if (Date.now() - cached.checkedAt < GENESIS_POSITIVE_TTL_MS) return true;
+      // positive verdict aged out → fall through and re-probe.
+    } else if (Date.now() - cached.checkedAt < GENESIS_OBSERVED_NULL_TTL_MS) {
       return cached.ok;
     }
-    // TTL expired on a non-definitive entry — fall through and re-probe.
+    // TTL expired (positive or non-definitive) — fall through and re-probe.
   }
   // Share one in-flight probe per rpc across concurrent callers (C2).
   let pending = inflightProbes.get(rpc);
@@ -481,6 +511,12 @@ export async function verifyOperatorGenesis(
  *  observed hash, match or mismatch) are cached forever; only the
  *  "couldn't read" verdict expires, so a transient outage self-heals. */
 const GENESIS_OBSERVED_NULL_TTL_MS = 60_000;
+
+/** C6 (R3): re-probe TTL for a DEFINITIVE positive ("passed") verdict. A pass is
+ *  bounded (not forever) so an operator that passed once then silently forked
+ *  while the SW is alive is re-detected within this window. A definitive MISMATCH
+ *  stays sticky (no TTL) — it correctly keeps the wallet paused until resolved. */
+const GENESIS_POSITIVE_TTL_MS = 60_000;
 
 /** Force-refresh a single operator's genesis check. Surfaced via the
  *  About-page probe so the user can re-evaluate after a regenesis. */
