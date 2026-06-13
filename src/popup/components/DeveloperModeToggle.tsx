@@ -16,7 +16,7 @@ import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
 import { Modal } from "./Modal";
 import { useFeature } from "../hooks/useFeature";
-import { bgTwoTierSetFeature } from "../bg";
+import { bgPing, bgTwoTierSetFeature } from "../bg";
 
 interface DeveloperModeToggleProps {
   /** Optional spacing/layout override per placement. The icon / label /
@@ -47,6 +47,11 @@ export function DeveloperModeToggle({
     if (devMode) {
       void bgTwoTierSetFeature("DEVELOPER_MODE", false);
     } else {
+      // Wake the MV3 service worker NOW, while the user reads the confirm
+      // popup, so the enable write below doesn't pay the cold-start latency
+      // when they click Enable a moment later (that wake was the bulk of the
+      // "developer mode takes ages to turn on" delay).
+      void bgPing();
       setConfirmOpen(true);
     }
   };
