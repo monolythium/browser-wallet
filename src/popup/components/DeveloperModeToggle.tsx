@@ -47,10 +47,11 @@ export function DeveloperModeToggle({
     if (devMode) {
       void bgTwoTierSetFeature("DEVELOPER_MODE", false);
     } else {
-      // Wake the MV3 service worker NOW, while the user reads the confirm
-      // popup, so the enable write below doesn't pay the cold-start latency
-      // when they click Enable a moment later (that wake was the bulk of the
-      // "developer mode takes ages to turn on" delay).
+      // The flag write itself is applied popup-side now (instant, no worker
+      // round-trip — see bg.ts). Still wake the MV3 service worker while the
+      // user reads the confirm popup, so the developer surfaces revealed on
+      // enable (About / Operators chain probes, etc.) hit a warm worker
+      // instead of paying the cold start on their first read.
       void bgPing();
       setConfirmOpen(true);
     }

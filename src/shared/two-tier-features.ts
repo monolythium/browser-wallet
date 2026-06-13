@@ -4,10 +4,11 @@
 // =====================
 // Pure types + algorithms for the wallet's optional advanced surfaces.
 // No `chrome.storage`, no module-scope state — every helper here is
-// deterministic and testable in vitest. The storage round-trip lives
-// in the service worker (under `chrome.storage.local["mono.two-tier-
-// features.v1"]`); IPC dispatch lives in service-worker.ts; the UI
-// lives in popup/.
+// deterministic and testable in vitest. Reads round-trip through the
+// service worker (`two-tier-get-state` → two-tier-features-store.ts); the
+// WRITE is applied popup-side (bg.ts `bgTwoTierSetFeature`) directly to
+// `chrome.storage.local["mono.two-tier-features.v1"]` so a toggle flips
+// instantly without a worker wake. The UI lives in popup/.
 //
 // Design (§28.5 Q29)
 // ==================

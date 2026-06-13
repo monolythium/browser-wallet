@@ -2293,6 +2293,11 @@ export async function bgPasskeyRecordUsage(args: {
 }
 
 // Two-tier UX feature toggles
+import {
+  STORAGE_KEY_TWO_TIER_FEATURES,
+  normaliseTwoTierState,
+  setFeature,
+} from "../shared/two-tier-features.js";
 import type {
   FeatureFlag as TwoTierFlag,
   TwoTierState,
@@ -2304,11 +2309,29 @@ export async function bgTwoTierGetState(): Promise<
   return send("two-tier-get-state");
 }
 
+// Optimistic, popup-direct write — no service-worker round-trip.
+//
+// The feature-flag namespace is plain chrome.storage.local; the SW reads it on
+// demand (it caches nothing and runs NO side effect on a flag change), so
+// routing the write through the SW only bought the MV3 cold-wake latency that
+// made the Developer-mode toggle feel laggy. Writing storage directly here
+// fires chrome.storage.local.onChanged immediately, so the switch AND every
+// gated surface (all `useFeature` consumers) flip at once without waking the
+// worker. The merge reuses the SAME pure `setFeature` the SW used, so the
+// stored shape — including the sticky `firstSeenAt` stamp — is identical.
 export async function bgTwoTierSetFeature(
   flag: TwoTierFlag,
   enabled: boolean,
 ): Promise<{ ok: true; state: TwoTierState } | { ok: false; reason: string }> {
-  return send("two-tier-set-feature", { flag, enabled });
+  try {
+    const got = await chrome.storage.local.get(STORAGE_KEY_TWO_TIER_FEATURES);
+    const current = normaliseTwoTierState(got?.[STORAGE_KEY_TWO_TIER_FEATURES]);
+    const next = setFeature(current, flag, enabled, Date.now());
+    await chrome.storage.local.set({ [STORAGE_KEY_TWO_TIER_FEATURES]: next });
+    return { ok: true, state: next };
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message };
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

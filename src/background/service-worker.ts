@@ -159,15 +159,8 @@ import {
   validateCredentialName,
   validatePasskeyPolicy,
 } from "../shared/passkey.js";
-import {
-  loadTwoTierState,
-  setTwoTierFeature,
-} from "./two-tier-features-store.js";
+import { loadTwoTierState } from "./two-tier-features-store.js";
 import { isPasswordValid } from "../lib/password-validation.js";
-import {
-  FEATURE_FLAGS,
-  type FeatureFlag,
-} from "../shared/two-tier-features.js";
 import {
   DEFAULT_GOV_PROPOSAL_TTL_MS,
   DEFAULT_TX_PROPOSAL_TTL_MS,
@@ -7129,27 +7122,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
-    case "two-tier-set-feature": {
-      const p = (message.payload ?? {}) as {
-        flag?: string;
-        enabled?: unknown;
-      };
-      if (typeof p.flag !== "string" || typeof p.enabled !== "boolean") {
-        return { ok: false, reason: "missing flag or enabled bool" };
-      }
-      if (!(FEATURE_FLAGS as readonly string[]).includes(p.flag)) {
-        return { ok: false, reason: "unknown feature flag" };
-      }
-      try {
-        const state = await setTwoTierFeature(
-          p.flag as FeatureFlag,
-          p.enabled,
-        );
-        return { ok: true, state };
-      } catch (e) {
-        return { ok: false, reason: (e as Error).message };
-      }
-    }
+    // (The two-tier feature WRITE is applied popup-side now — see bg.ts
+    // `bgTwoTierSetFeature`. It writes chrome.storage.local directly so a
+    // toggle flips instantly without an MV3 cold-wake; the SW had no side
+    // effect on a flag change, so no IPC is needed. The read above stays.)
     // ────────────────────────────────────────────────────────────────
     // SLH-DSA emergency-backup IPCs (§30.1)
     // ────────────────────────────────────────────────────────────────
