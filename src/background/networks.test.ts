@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TESTNET_OPERATOR_RPCS_DEFAULTS,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+  allActiveOperatorsDefinitivelyUntrusted,
   clearGenesisCache,
   classifyNoOperatorReason,
   getActiveOperators,
@@ -424,5 +425,72 @@ describe("probeFirstAliveOperator (#42 reachable-but-wrong-chain → untrusted)"
     const hit = await probeFirstAliveOperator(69420, 50);
     expect(hit).not.toBeNull();
     expect(hit?.rpc).toBe(liveRpc);
+  });
+});
+
+describe("allActiveOperatorsDefinitivelyUntrusted (C1 short-circuit predicate)", () => {
+  const originalFetch = globalThis.fetch;
+  const FORK =
+    "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+  beforeEach(() => clearGenesisCache());
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    clearGenesisCache();
+  });
+
+  // Answer lyth_chainStats with a per-rpc genesisHash; block-0 fallback is
+  // unreachable so an absent stats hash yields a definitive nothing → observed null.
+  function installChainStats(hashFor: (url: string) => string) {
+    globalThis.fetch = vi.fn(async (url: unknown, init?: { body?: unknown }) => {
+      const method = (
+        JSON.parse(String(init?.body ?? "{}")) as { method?: string }
+      ).method;
+      if (method === "lyth_chainStats") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { genesisHash: hashFor(String(url)) },
+          }),
+        } as unknown as Response;
+      }
+      throw new TypeError("unreachable");
+    }) as unknown as typeof fetch;
+  }
+
+  async function seedAll(hashFor: (url: string) => string) {
+    installChainStats(hashFor);
+    for (const op of getActiveOperators()) await verifyOperatorGenesis(op.rpc);
+  }
+
+  it("returns false on an empty cache (unprobed → fall through to the gated walk)", () => {
+    expect(getActiveOperators().length).toBeGreaterThan(0);
+    expect(allActiveOperatorsDefinitivelyUntrusted()).toBe(false);
+  });
+
+  it("returns true ONLY when EVERY active op is a definitive genesis mismatch", async () => {
+    await seedAll(() => FORK); // observed FORK !== pin → definitive false for all
+    expect(allActiveOperatorsDefinitivelyUntrusted()).toBe(true);
+  });
+
+  it("T2: returns false when one op is still trusted (walk still tries it)", async () => {
+    const ops = getActiveOperators();
+    await seedAll((url) => (url === ops[0]!.rpc ? TESTNET_GENESIS_HASH : FORK));
+    expect(snapshotGenesisCache().get(ops[0]!.rpc)?.ok).toBe(true);
+    expect(allActiveOperatorsDefinitivelyUntrusted()).toBe(false);
+  });
+
+  it("T3: returns false when ops are observed:null (couldn't-read TTL → recovery)", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError("unreachable");
+    }) as unknown as typeof fetch;
+    for (const op of getActiveOperators()) await verifyOperatorGenesis(op.rpc);
+    for (const op of getActiveOperators()) {
+      expect(snapshotGenesisCache().get(op.rpc)?.observed).toBeNull();
+    }
+    expect(allActiveOperatorsDefinitivelyUntrusted()).toBe(false);
   });
 });

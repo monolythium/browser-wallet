@@ -496,6 +496,34 @@ export function snapshotGenesisCache(): Map<string, GenesisCacheEntry> {
 }
 
 /**
+ * Non-awaiting, no-RPC predicate: `true` ONLY when the active operator list is
+ * non-empty AND every active operator already carries a sticky DEFINITIVE
+ * verdict against it — either a genesis MISMATCH (`ok === false &&
+ * observed !== null`, the exact test `classifyNoOperatorReason` uses) OR a
+ * recorded wrong-chain-id. Any operator that is absent / `observed === null`
+ * (the 60 s "couldn't read" TTL) / `ok === true` → returns `false`, so the
+ * caller falls through to the real gated walk and a recovering operator is
+ * still tried.
+ *
+ * This reads the SAME live cache the gate writes; it NEVER bypasses the gate.
+ * It only lets a read fast-fail when the gate has ALREADY decided every
+ * operator is untrusted — turning the exhaustive re-walk-per-read (the
+ * re-genesis UI hang) into one cache read. The throw it enables serves zero
+ * chain data (R1). Reads the live module sets (not snapshots) so it reflects
+ * the current verdict at call time.
+ */
+export function allActiveOperatorsDefinitivelyUntrusted(): boolean {
+  const ops = getActiveOperators();
+  if (ops.length === 0) return false;
+  for (const op of ops) {
+    const e = operatorGenesisCache.get(op.rpc);
+    const genesisMismatch = e !== undefined && e.ok === false && e.observed !== null;
+    if (!(genesisMismatch || operatorWrongChainId.has(op.rpc))) return false;
+  }
+  return true;
+}
+
+/**
  * Classify why no operator is serviceable (probeFirstAliveOperator returned
  * null) for the chain-status banner — WITHOUT a new RPC. An ACTIVE operator is
  * "untrusted" (reachable but wrong) when EITHER it answered net_version with a

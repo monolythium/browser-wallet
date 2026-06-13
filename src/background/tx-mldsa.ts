@@ -18,7 +18,11 @@ import {
   getActiveVaultIdV4,
   getUnlockedBackendV4,
 } from "./keystore-mldsa.js";
-import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
+import {
+  allActiveOperatorsDefinitivelyUntrusted,
+  getActiveOperators,
+  verifyOperatorGenesis,
+} from "./networks.js";
 import { isWithinSaneBound } from "../shared/operator-bounds.js";
 
 /** Sentinel thrown by the fail-closed vault-binding assert when the active
@@ -49,6 +53,27 @@ export interface EthSendTxFields {
   chainIdHex: string;
 }
 
+/** Message for the all-operators-untrusted aggregate. Kept byte-identical to
+ *  the prior plain-Error string so message-keyed callers (send-error
+ *  classification, the chain-status banner) are unchanged; new callers can
+ *  `instanceof ChainGenesisMismatchError` instead of substring-matching. */
+function genesisMismatchMessage(operatorCount: number): string {
+  return `Chain genesis mismatch — all ${operatorCount} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See Operators.`;
+}
+
+/** Thrown when EVERY active operator fails the genesis gate — by the pre-loop
+ *  short-circuit (all operators already cached definitively-untrusted) OR the
+ *  post-loop aggregate. `kind` lets callers distinguish a chain-identity
+ *  rejection from a transport failure without string-matching. Subclass of
+ *  Error with the UNCHANGED message, so existing message-keyed handling holds. */
+export class ChainGenesisMismatchError extends Error {
+  readonly kind = "untrusted-chain" as const;
+  constructor(operatorCount: number) {
+    super(genesisMismatchMessage(operatorCount));
+    this.name = "ChainGenesisMismatchError";
+  }
+}
+
 /**
  * Iterate the published testnet operators in order, returning the
  * first one that produces a non-error JSON-RPC response. Transport-level
@@ -71,6 +96,19 @@ export async function testnetJsonRpc<T>(
   // user this is a chain-side issue (operator binaries stale, or
   // a regenesis the wallet pin hasn't been bumped for) rather than
   // a wallet bug.
+  // Fast-fail: when EVERY active operator already carries a sticky definitive
+  // untrusted verdict (re-genesis / wrong chain), don't re-walk the whole fleet
+  // on every read — that exhaustive re-loop-per-read is what turned a re-genesis
+  // into a multi-second UI hang. Pure cache read (~0 ms, no probe); throws the
+  // SAME typed error the post-loop aggregate would, with a byte-identical
+  // message, so message-keyed callers are unchanged. Falls through to the real
+  // gated walk below for any unprobed / 60 s-TTL / trusted operator, so a
+  // recovering fleet is still tried. The gate is unchanged — this only
+  // fast-paths the outcome the gate would reach anyway, and serves zero data.
+  if (allActiveOperatorsDefinitivelyUntrusted()) {
+    throw new ChainGenesisMismatchError(getActiveOperators().length);
+  }
+
   let untrustedCount = 0;
   let totalOperators = 0;
   for (const v of getActiveOperators()) {
@@ -135,9 +173,7 @@ export async function testnetJsonRpc<T>(
   // raw "name: untrusted genesis" message. See Operators for
   // per-operator status the user can act on.
   if (untrustedCount > 0 && untrustedCount === totalOperators) {
-    throw new Error(
-      `Chain genesis mismatch — all ${totalOperators} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See Operators.`,
-    );
+    throw new ChainGenesisMismatchError(totalOperators);
   }
   throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
 }

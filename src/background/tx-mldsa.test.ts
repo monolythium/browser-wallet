@@ -21,7 +21,13 @@ vi.mock("./networks.js", () => ({
   getActiveOperators: () => [
     { name: "operator-test", region: "x", rpc: "http://test.example" },
   ],
-  verifyOperatorGenesis: async () => true,
+  // vi.fn so the C1 short-circuit test can assert the gated walk was NOT
+  // entered; default returns true (operator trusted) so the existing dispatch
+  // error-stamping suite runs the walk unchanged.
+  verifyOperatorGenesis: vi.fn(async () => true),
+  // C1: pre-loop short-circuit predicate. Default false → existing tests run
+  // the real gated walk; the C1 suite flips it to true for one call.
+  allActiveOperatorsDefinitivelyUntrusted: vi.fn(() => false),
 }));
 
 // Canonical-hash threading needs the SDK submission builder + keystore
@@ -58,7 +64,12 @@ import {
   submitPlaintextMlDsaTx,
   buildPlaintextSubmission,
   broadcastPlaintextTransaction,
+  ChainGenesisMismatchError,
 } from "./tx-mldsa.js";
+import {
+  allActiveOperatorsDefinitivelyUntrusted,
+  verifyOperatorGenesis,
+} from "./networks.js";
 import { buildPlaintextSubmission as sdkBuildPlaintextSubmission } from "@monolythium/core-sdk/crypto";
 import { getActiveVaultIdV4 } from "./keystore-mldsa.js";
 import { CANONICAL_INNER_TX_HASH } from "../shared/__fixtures__/golden.js";
@@ -265,5 +276,44 @@ describe("NN-01 — vault-binding fail-closed assert (plaintext builder)", () =>
     vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
     await buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" });
     expect(sdkBuildPlaintextSubmission).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("testnetJsonRpc — C1 all-untrusted short-circuit (T1)", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(false);
+    vi.mocked(verifyOperatorGenesis).mockClear();
+  });
+
+  it("T1: fast-fails with ChainGenesisMismatchError WITHOUT walking the fleet", async () => {
+    // Every operator already definitively untrusted → the pre-loop predicate
+    // fires; the gated walk (verifyOperatorGenesis) must NOT run and no fetch
+    // goes out. Proves the fix is a pre-loop predicate, not a probe-count cut.
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(true);
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    vi.mocked(verifyOperatorGenesis).mockClear();
+
+    const err = await testnetJsonRpc("eth_getBalance", ["0x0", "latest"]).then(
+      () => null,
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(ChainGenesisMismatchError);
+    expect((err as ChainGenesisMismatchError).kind).toBe("untrusted-chain");
+    expect(verifyOperatorGenesis).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("T1b: short-circuit message is byte-identical to the post-loop aggregate", async () => {
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(true);
+    const err = await testnetJsonRpc("eth_getBalance", ["0x0", "latest"]).then(
+      () => null,
+      (e) => e as Error,
+    );
+    // The mocked getActiveOperators returns 1 op → "all 1 operators…".
+    expect(err?.message).toContain("Chain genesis mismatch — all 1 operators");
+    expect(err?.message).toContain("See Operators.");
   });
 });
