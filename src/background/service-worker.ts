@@ -871,6 +871,11 @@ const bootHydrated: Promise<void> = (async () => {
   // `prefillUnknownWsEndpointsDown` for the V4-LIVE-0008 rationale.
   prefillUnknownWsEndpointsDown();
 
+  // Seed the last-good operator (persisted in session) so the popup's first
+  // chain-block poll after this boot can skip the operator-probe RTT and go
+  // LIVE faster instead of lingering on CONNECTING….
+  await rehydrateCachedOperator();
+
   // Restore origins the user has previously approved. Without this, every
   // SW hibernation (~30 s idle) drops connectedOrigins back to empty and
   // dapps see eth_accounts → [] until the user re-approves.
@@ -2258,6 +2263,116 @@ let cachedOperator: {
   rpc: string | null;
   checkedAt: number;
 } | null = null;
+
+// Persist the last-good operator across SW hibernation. cachedOperator is
+// in-memory, so every reopen after the worker idled out lost it and the first
+// chain-block poll paid the full operator-probe RTT before the banner could go
+// LIVE — that probe was the bulk of the "stuck on CONNECTING…" delay on reopen.
+// chrome.storage.session is SW-scope, survives hibernation, and clears on
+// browser restart — the right tier for a runtime liveness hint (never on disk).
+const SESSION_KEY_LAST_OPERATOR = "mono.session.operator.v1";
+
+/** Set cachedOperator and best-effort persist a usable result so the next SW
+ *  boot can skip the probe. A null-rpc result ("no operator") is not seeded. */
+function setCachedOperator(op: {
+  name: string | null;
+  rpc: string | null;
+  checkedAt: number;
+}): void {
+  cachedOperator = op;
+  if (op.rpc !== null) {
+    void chrome.storage.session
+      .set({ [SESSION_KEY_LAST_OPERATOR]: { name: op.name, rpc: op.rpc } })
+      .catch(() => {});
+  }
+}
+
+/** On boot, seed cachedOperator from the persisted hint as a STALE candidate
+ *  (checkedAt: 0) — used only as an optimistic, self-validated fast path by the
+ *  chain-block poll, never trusted as a fresh cache hit. No hint → first poll
+ *  probes exactly as before. */
+async function rehydrateCachedOperator(): Promise<void> {
+  if (cachedOperator !== null) return; // a live probe already populated it
+  try {
+    const s = await chrome.storage.session.get(SESSION_KEY_LAST_OPERATOR);
+    const hint = s?.[SESSION_KEY_LAST_OPERATOR] as
+      | { name?: unknown; rpc?: unknown }
+      | undefined;
+    if (hint && typeof hint.rpc === "string") {
+      cachedOperator = {
+        name: typeof hint.name === "string" ? hint.name : null,
+        rpc: hint.rpc,
+        checkedAt: 0,
+      };
+    }
+  } catch {
+    // best-effort — no hint just means the first poll probes as before
+  }
+}
+
+/** Read eth_blockNumber from one operator RPC (1.5 s budget). Extracted so the
+ *  chain-block handler can try a cached/rehydrated operator first, then fall
+ *  back to a freshly-probed one, without duplicating the fetch + error mapping. */
+async function readChainBlock(
+  rpc: string,
+  operatorName: string | null,
+): Promise<
+  | { ok: true; blockHex: string; operator: string | null }
+  | {
+      ok: false;
+      reason: string;
+      cause: ReturnType<typeof classifyNoOperatorReason>;
+    }
+> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1_500);
+    const res = await fetch(rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_blockNumber",
+        params: [],
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: `http ${res.status}`,
+        cause: classifyNoOperatorReason(),
+      };
+    }
+    const body = (await res.json()) as {
+      result?: string;
+      error?: { message?: string };
+    };
+    if (body.error) {
+      return {
+        ok: false,
+        reason: body.error.message ?? "rpc error",
+        cause: classifyNoOperatorReason(),
+      };
+    }
+    if (typeof body.result !== "string") {
+      return {
+        ok: false,
+        reason: "bad response",
+        cause: classifyNoOperatorReason(),
+      };
+    }
+    return { ok: true, blockHex: body.result, operator: operatorName };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: (e as Error).message,
+      cause: classifyNoOperatorReason(),
+    };
+  }
+}
 
 // ---- Passkey usage ledger (daily-cap mode) ----
 //
@@ -7320,12 +7435,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         const hit = await probeFirstAliveOperator(undefined, 1_000);
-        cachedOperator = {
+        setCachedOperator({
           name: hit?.name ?? null,
           rpc: hit?.rpc ?? null,
           checkedAt: now,
-        };
-        return { ok: true, name: cachedOperator.name };
+        });
+        return { ok: true, name: hit?.name ?? null };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
@@ -7375,36 +7490,55 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // advance freshness client-side at an 8-second cadence to drive
       // the LIVE / STALLED / OFFLINE state machine.
       //
-      // Reuses `cachedOperator` (shared with `wallet-operator-status`)
-      // to avoid re-running the operator probe loop on every health
-      // tick. Cache miss / stale falls through to a fresh probe and
-      // refreshes the cache for both handlers.
+      // Reuses `cachedOperator` (shared with `wallet-operator-status`) to avoid
+      // re-running the operator probe loop on every health tick. On a cold
+      // reopen the cache is seeded from the persisted hint (checkedAt: 0 =
+      // stale) by rehydrateCachedOperator — so the block read below is tried
+      // against it FIRST, skipping the probe RTT. A stale candidate that fails
+      // falls through to a fresh probe in the SAME tick (so a dead persisted
+      // operator self-heals now, not at the next 8 s poll); a genuinely-fresh
+      // operator that fails means the fleet is unhealthy and surfaces as-is.
       const now = Date.now();
-      let rpc: string | null = null;
-      let operatorName: string | null = null;
-      if (
+      const cacheFresh =
         cachedOperator !== null &&
-        now - cachedOperator.checkedAt < OPERATOR_CACHE_TTL_MS
-      ) {
-        rpc = cachedOperator.rpc;
-        operatorName = cachedOperator.name;
-      } else {
-        try {
-          const hit = await probeFirstAliveOperator(undefined, 1_000);
-          cachedOperator = {
-            name: hit?.name ?? null,
-            rpc: hit?.rpc ?? null,
-            checkedAt: now,
-          };
-          rpc = cachedOperator.rpc;
-          operatorName = cachedOperator.name;
-        } catch (e) {
-          return {
-            ok: false,
-            reason: (e as Error).message,
-            cause: classifyNoOperatorReason(),
-          };
+        cachedOperator.rpc !== null &&
+        now - cachedOperator.checkedAt < OPERATOR_CACHE_TTL_MS;
+
+      if (cachedOperator?.rpc) {
+        const r = await readChainBlock(cachedOperator.rpc, cachedOperator.name);
+        if (r.ok) {
+          // Promote a successful stale/rehydrated candidate to a fresh hit so
+          // the next ticks reuse it within the TTL.
+          if (!cacheFresh) {
+            setCachedOperator({
+              name: cachedOperator.name,
+              rpc: cachedOperator.rpc,
+              checkedAt: now,
+            });
+          }
+          return r;
         }
+        if (cacheFresh) return r;
+        // stale candidate failed → fall through to a fresh probe
+      }
+
+      let rpc: string | null;
+      let operatorName: string | null;
+      try {
+        const hit = await probeFirstAliveOperator(undefined, 1_000);
+        setCachedOperator({
+          name: hit?.name ?? null,
+          rpc: hit?.rpc ?? null,
+          checkedAt: now,
+        });
+        rpc = hit?.rpc ?? null;
+        operatorName = hit?.name ?? null;
+      } catch (e) {
+        return {
+          ok: false,
+          reason: (e as Error).message,
+          cause: classifyNoOperatorReason(),
+        };
       }
       if (rpc === null) {
         return {
@@ -7413,60 +7547,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           cause: classifyNoOperatorReason(),
         };
       }
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 1_500);
-        const res = await fetch(rpc, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "eth_blockNumber",
-            params: [],
-          }),
-          signal: ctrl.signal,
-        });
-        clearTimeout(timer);
-        // The chosen operator answered net_version + genesis but its block
-        // read failed. Attach the fleet trust cause so the banner can show
-        // UNTRUSTED OPERATOR when the wider fleet is untrusted (a working
-        // trusted operator would have returned ok:true -> LIVE above), instead
-        // of a bare OFFLINE that hides the real reason. In a healthy fleet
-        // classifyNoOperatorReason returns "unreachable" -> OFFLINE as before.
-        if (!res.ok) {
-          return {
-            ok: false,
-            reason: `http ${res.status}`,
-            cause: classifyNoOperatorReason(),
-          };
-        }
-        const body = (await res.json()) as {
-          result?: string;
-          error?: { message?: string };
-        };
-        if (body.error) {
-          return {
-            ok: false,
-            reason: body.error.message ?? "rpc error",
-            cause: classifyNoOperatorReason(),
-          };
-        }
-        if (typeof body.result !== "string") {
-          return {
-            ok: false,
-            reason: "bad response",
-            cause: classifyNoOperatorReason(),
-          };
-        }
-        return { ok: true, blockHex: body.result, operator: operatorName };
-      } catch (e) {
-        return {
-          ok: false,
-          reason: (e as Error).message,
-          cause: classifyNoOperatorReason(),
-        };
-      }
+      return await readChainBlock(rpc, operatorName);
     }
     case "wallet-active-account": {
       // Surface the unlocked v3 keypair to the popup so Home can render
