@@ -330,9 +330,9 @@ describe("classifyNoOperatorReason (#42 untrusted vs unreachable)", () => {
     );
   });
 
-  it("active op with a mismatching hash (ok:false, observed!=null) → untrusted", () => {
+  it("active op with a mismatching hash, right chain id (ok:false, observed!=null) → regenesis (C5)", () => {
     const g = new Map([["a", entry(false, "0xdeadbeef")]]);
-    expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("untrusted");
+    expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("regenesis");
   });
 
   it("active op that couldn't read a hash (ok:false, observed:null) → unreachable", () => {
@@ -350,11 +350,18 @@ describe("classifyNoOperatorReason (#42 untrusted vs unreachable)", () => {
     expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("unreachable");
   });
 
-  it("untrusted OUTRANKS unreachable in a mixed fleet", () => {
+  it("regenesis (genesis-mismatch) OUTRANKS unreachable in a mixed fleet (C5)", () => {
     const g = new Map([["a", entry(false, "0xmismatch")]]); // b has no entry
     expect(classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g)).toBe(
-      "untrusted",
+      "regenesis",
     );
+  });
+
+  it("regenesis OUTRANKS a wrong-chain operator — the re-pin signal wins (C5)", () => {
+    const g = new Map([["a", entry(false, "0xmismatch")]]);
+    expect(
+      classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g, new Set(["b"])),
+    ).toBe("regenesis");
   });
 
   it("reachable op on the WRONG CHAIN ID (in wrongChain set) → untrusted", () => {

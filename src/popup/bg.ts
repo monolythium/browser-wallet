@@ -409,7 +409,14 @@ export async function bgWalletBalance(
   chainIdHex: string,
 ): Promise<
   | { ok: true; balanceHex: string; spendGuardHex: string }
-  | { ok: false; reason?: string }
+  | {
+      ok: false;
+      reason?: string;
+      // C5: typed cause so Home can label a re-genesis ("network may have reset
+      // — paused") distinctly from an unreachable chain, and suppress a
+      // misleading bare 0.00 when the balance is genuinely unknown.
+      cause?: "unreachable" | "untrusted" | "regenesis";
+    }
 > {
   return send("wallet-balance", { address, chainIdHex });
 }
@@ -887,7 +894,11 @@ export async function bgWalletOperatorStatus(): Promise<
  */
 export async function bgWalletChainBlockNumber(): Promise<
   { ok: true; blockHex: string; operator: string | null }
-  | { ok: false; reason?: string; cause?: "unreachable" | "untrusted" }
+  | {
+      ok: false;
+      reason?: string;
+      cause?: "unreachable" | "untrusted" | "regenesis";
+    }
 > {
   return send("wallet-chain-block-number");
 }

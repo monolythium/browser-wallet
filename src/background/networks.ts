@@ -555,15 +555,29 @@ export function classifyNoOperatorReason(
   activeOps: ReadonlyArray<{ rpc: string }> = getActiveOperators(),
   genesis: Map<string, GenesisCacheEntry> = snapshotGenesisCache(),
   wrongChainId: ReadonlySet<string> = operatorWrongChainId,
-): "unreachable" | "untrusted" {
+): "unreachable" | "untrusted" | "regenesis" {
+  // C5: split the genesis-MISMATCH case out of the generic "untrusted". An
+  // operator that answered with the right chain id but a DIFFERENT genesis hash
+  // (ok===false && observed!==null, NOT in wrongChainId) means the network
+  // re-genesised — an actionable "update the wallet pin" signal, distinct from
+  // an operator pointed at another chain id ("untrusted"). `regenesis` outranks
+  // `untrusted` (it is the operator-actionable cause); both outrank
+  // `unreachable`. The fund-path gate is unchanged — this only labels WHY no
+  // operator is serviceable, with NO new RPC.
+  let sawWrongChain = false;
   for (const op of activeOps) {
+    if (wrongChainId.has(op.rpc)) {
+      sawWrongChain = true;
+      continue;
+    }
     const e = genesis.get(op.rpc);
     const genesisMismatch =
       e !== undefined && e.ok === false && e.observed !== null;
-    if (genesisMismatch || wrongChainId.has(op.rpc)) {
-      return "untrusted";
+    if (genesisMismatch) {
+      return "regenesis";
     }
   }
+  if (sawWrongChain) return "untrusted";
   return "unreachable";
 }
 

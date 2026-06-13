@@ -7638,7 +7638,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // Single-source chain: the spend guard is the same value.
         return { ok: true, balanceHex, spendGuardHex: balanceHex };
       } catch (e) {
-        return { ok: false, reason: (e as Error).message };
+        // C5: thread the typed cause so Home can label a re-genesis ("network
+        // may have reset — paused") distinctly from an unreachable chain and
+        // suppress a misleading bare 0.00. Pure cache read, no new RPC.
+        return {
+          ok: false,
+          reason: (e as Error).message,
+          cause: classifyNoOperatorReason(),
+        };
       }
     }
     case "wallet-indexer-snapshot": {

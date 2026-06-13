@@ -370,6 +370,11 @@ export default function App() {
   // the latest refresh couldn't reach the chain (offline/untrusted). Home only
   // LABELS the retained value as stale — never fabricates or zeros it.
   const [balanceStale, setBalanceStale] = useState(false);
+  // C5: the typed reason the last balance refresh failed, so Home can pause
+  // honestly on a re-genesis / wrong-chain operator instead of a bare 0.00.
+  const [balanceCause, setBalanceCause] = useState<
+    "unreachable" | "untrusted" | "regenesis" | null
+  >(null);
   const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
@@ -519,12 +524,16 @@ export default function App() {
       // Both attempts failed (chain unreachable/untrusted): retain the existing
       // balance but flag it stale so Home can label it. Never zero/fabricate.
       setBalanceStale(true);
+      // C5: keep the typed cause so Home can pause honestly on a re-genesis /
+      // wrong-chain operator instead of a misleading bare 0.00.
+      setBalanceCause(r.cause ?? "unreachable");
       return;
     }
     try {
       const lyth = hexLythoshiToLythNumber(r.balanceHex);
       if (lyth === null) return;
       setBalanceStale(false);
+      setBalanceCause(null);
       setAcc((prev) => ({ ...prev, balance: lyth }));
     } catch {
       // Malformed hex — ignore, balance stays as-is.
@@ -1254,6 +1263,7 @@ export default function App() {
           network={activeChain}
           indexer={indexerSnapshot}
           balanceStale={balanceStale}
+          balanceCause={balanceCause}
           // Seed the vault chip's label from the already-fetched active vault
           // summary so the picker renders the real name immediately instead of
           // flashing the "—" placeholder until its own bgVaultsList resolves.

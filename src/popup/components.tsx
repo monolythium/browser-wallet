@@ -117,6 +117,10 @@ type ChainHealth =
   | { kind: "live"; blockHex: string }
   | { kind: "stalled"; blockHex: string }
   | { kind: "untrusted" }
+  // C5: operators answered with the RIGHT chain id but a DIFFERENT genesis hash
+  // — the network re-genesised. Distinct from `untrusted` (wrong chain id) so the
+  // banner can say "network may have reset" and Home can pause honestly.
+  | { kind: "regenesis" }
   | { kind: "offline"; reason: string };
 
 const HEALTH_TICK_MS = 8_000;
@@ -137,11 +141,14 @@ const WS_BLOCK_KEY = "mono.ws.lastBlockHex";
  */
 export function chainHealthForFailedPoll(r: {
   reason?: string;
-  cause?: "unreachable" | "untrusted";
+  cause?: "unreachable" | "untrusted" | "regenesis";
 }): ChainHealth {
-  return r.cause === "untrusted"
-    ? { kind: "untrusted" }
-    : { kind: "offline", reason: r.reason ?? "unreachable" };
+  // C5: a genesis MISMATCH on the right chain id (the network re-genesised)
+  // renders the distinct "network reset — paused" banner; a wrong-chain-id
+  // operator stays UNTRUSTED; every other failure stays OFFLINE.
+  if (r.cause === "regenesis") return { kind: "regenesis" };
+  if (r.cause === "untrusted") return { kind: "untrusted" };
+  return { kind: "offline", reason: r.reason ?? "unreachable" };
 }
 
 /**
@@ -181,6 +188,16 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         color: "var(--err)",
         tooltip:
           "The operator answered but is on a different chain than your wallet's pin (it may have re-genesised, or be pointed at another network). Tap to switch operators.",
+        tappable: true,
+      };
+    case "regenesis":
+      return {
+        label: "NETWORK RESET — PAUSED",
+        // Red (same token as OFFLINE / UNTRUSTED) — a genesis mismatch is a hard
+        // trust failure; balances + activity are paused until the pin is updated.
+        color: "var(--err)",
+        tooltip:
+          "Operators report a different genesis hash than your wallet's pin — the network may have re-genesised. Balances and activity are paused until the pin is updated. Tap to review your operators.",
         tappable: true,
       };
     case "offline":
@@ -253,6 +270,28 @@ export function shouldLabelBalanceStale(
   balance: number | null,
 ): boolean {
   return !isPriv && balanceStale === true && balance != null;
+}
+
+/**
+ * C5 (no-mock / R2): whether the Home hero should PAUSE the balance display
+ * instead of rendering a misleading bare "0.00". True only when the balance is
+ * genuinely UNKNOWN (null/undefined — never a real value, which is shown as-is)
+ * AND the last refresh failed because operators are untrusted: a re-genesis
+ * (`regenesis`) or a wrong-chain operator (`untrusted`). On an unreachable /
+ * transient failure the existing "last known" stale label handles it; this is
+ * the harder "operators serve a different chain, the value is unknowable"
+ * state. Honest absence — the value is never fabricated or zeroed.
+ */
+export function shouldPauseBalanceDisplay(
+  isPriv: boolean,
+  balance: number | null | undefined,
+  cause: "unreachable" | "untrusted" | "regenesis" | null | undefined,
+): boolean {
+  return (
+    !isPriv &&
+    balance == null &&
+    (cause === "regenesis" || cause === "untrusted")
+  );
 }
 
 interface ChainStatusBannerProps {
@@ -1824,6 +1863,9 @@ interface HomeProps {
    *  unreachable/untrusted on the latest refresh). When true and a balance is
    *  present, the hero labels it as stale — it never fabricates/zeros it. */
   balanceStale?: boolean;
+  /** C5: typed reason the last balance refresh failed, so Home can pause
+   *  honestly on a re-genesis / wrong-chain operator instead of a bare 0.00. */
+  balanceCause?: "unreachable" | "untrusted" | "regenesis" | null;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -1851,12 +1893,25 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, balanceStale, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, balanceStale, balanceCause, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
   const isPriv = account.denom === "private";
-  const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
+  // C5 (R2 no-mock): pause the display when operators serve a different chain
+  // (re-genesis / wrong chain) and the value is genuinely unknown — never a
+  // misleading bare 0.00. A real balance is always shown as-is.
+  const balancePaused = shouldPauseBalanceDisplay(
+    isPriv,
+    account.balance,
+    balanceCause,
+  );
+  const totalStr =
+    account.balance != null
+      ? fmt(account.balance, 2)
+      : balancePaused
+        ? "—"
+        : "0.00";
   // #42: label the hero as a retained last-known value only when the chain
   // couldn't be reached AND there's a real balance to annotate (never on the
   // pending "0.00"). Annotate-only — the value itself is untouched.
@@ -1899,11 +1954,32 @@ export function Home({ account, network, indexer, balanceStale, activeVaultLabel
           ) : (
             <div
               className="num"
-              style={showStaleBalance ? { opacity: 0.55 } : undefined}
+              style={
+                showStaleBalance || balancePaused
+                  ? { opacity: 0.55 }
+                  : undefined
+              }
             >
               {intPart}
-              <span className="frac">.{fracPart ?? "00"}</span>
+              {fracPart !== undefined && (
+                <span className="frac">.{fracPart}</span>
+              )}
               <span className="d">LYTH</span>
+            </div>
+          )}
+          {balancePaused && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--err)",
+                letterSpacing: "0.04em",
+                marginTop: 2,
+              }}
+            >
+              {balanceCause === "regenesis"
+                ? "network may have reset · balance paused"
+                : "operator on a different chain · balance paused"}
             </div>
           )}
           {showStaleBalance && (

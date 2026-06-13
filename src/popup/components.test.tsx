@@ -16,6 +16,7 @@ import {
   reconnectingBannerLabel,
   seedReconnectingHealth,
   shouldLabelBalanceStale,
+  shouldPauseBalanceDisplay,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
@@ -1223,6 +1224,12 @@ describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
       reason: "unreachable",
     });
   });
+
+  it("T9 (C5): maps cause:'regenesis' to the regenesis state (distinct from untrusted/offline)", () => {
+    expect(chainHealthForFailedPoll({ cause: "regenesis" })).toEqual({
+      kind: "regenesis",
+    });
+  });
 });
 
 describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
@@ -1239,6 +1246,17 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     });
   });
 
+  it("T9 (C5): presents regenesis as red 'NETWORK RESET — PAUSED', tappable", () => {
+    expect(chainHealthPresentation("regenesis")).toMatchObject({
+      label: "NETWORK RESET — PAUSED",
+      color: "var(--err)",
+      tappable: true,
+    });
+    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
+      /genesis|reset|paused/i,
+    );
+  });
+
   it("makes the not-online states tappable, live + loading not", () => {
     expect(chainHealthPresentation("offline").tappable).toBe(true);
     expect(chainHealthPresentation("stalled").tappable).toBe(true);
@@ -1252,6 +1270,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       "live",
       "stalled",
       "untrusted",
+      "regenesis",
       "offline",
       "loading",
       "reconnecting",
@@ -1336,5 +1355,27 @@ describe("shouldLabelBalanceStale (#42 balance staleness)", () => {
 
   it("does not label the private (hidden) balance", () => {
     expect(shouldLabelBalanceStale(true, true, 12.5)).toBe(false);
+  });
+});
+
+describe("shouldPauseBalanceDisplay (C5 / T10 — no bare 0.00 on re-genesis)", () => {
+  it("T10: pauses (no bare 0.00) when the balance is unknown and operators re-genesised", () => {
+    expect(shouldPauseBalanceDisplay(false, null, "regenesis")).toBe(true);
+    expect(shouldPauseBalanceDisplay(false, undefined, "untrusted")).toBe(true);
+  });
+
+  it("never pauses a REAL balance (it is always shown as-is, honest absence only)", () => {
+    expect(shouldPauseBalanceDisplay(false, 12.5, "regenesis")).toBe(false);
+    expect(shouldPauseBalanceDisplay(false, 0, "regenesis")).toBe(false);
+  });
+
+  it("does not pause on an unreachable / transient failure (the stale label handles that)", () => {
+    expect(shouldPauseBalanceDisplay(false, null, "unreachable")).toBe(false);
+    expect(shouldPauseBalanceDisplay(false, null, null)).toBe(false);
+    expect(shouldPauseBalanceDisplay(false, null, undefined)).toBe(false);
+  });
+
+  it("never pauses the private (hidden) balance", () => {
+    expect(shouldPauseBalanceDisplay(true, null, "regenesis")).toBe(false);
   });
 });
