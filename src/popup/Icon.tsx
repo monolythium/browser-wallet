@@ -418,7 +418,18 @@ export function Icon({ name, size = 16 }: IconProps) {
 
 export function fmt(n: number | null | undefined, dp = 2): string {
   if (n == null) return "—";
-  return n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  // Truncate toward zero — NEVER round a token balance up. toLocaleString
+  // rounds, so a 99.9998 balance rendered at 2dp came out as "100.00",
+  // overstating funds and disagreeing with the Send screen (which truncates
+  // via lythoshiToLythDecimal). Floor to `dp` places first, then format; the
+  // final toLocaleString only cleans up sub-dp float noise, it can't push the
+  // value back above the truncated amount.
+  const factor = 10 ** dp;
+  const truncated = Math.trunc(n * factor) / factor;
+  return truncated.toLocaleString(undefined, {
+    minimumFractionDigits: dp,
+    maximumFractionDigits: dp,
+  });
 }
 
 export function shortAddr(addr: string | undefined, n = 8): string {
