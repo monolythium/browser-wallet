@@ -350,6 +350,9 @@ vi.mock("./networks.js", () => ({
   // Called once on SW boot (genesis-cache rehydrate); a no-op here is fine —
   // these tests don't exercise the persisted-genesis fast path.
   rehydrateGenesisCache: vi.fn(async () => undefined),
+  // C7: liveness fast-path gate. Default false (operator trusted) so the
+  // chain-block fast-path proceeds as before in these tests.
+  operatorDefinitivelyUntrusted: vi.fn(() => false),
 }));
 
 // Keystore (v4) — fixed unlocked address, never actually signs. The

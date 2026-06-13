@@ -19,6 +19,7 @@ import {
   TESTNET_OPERATOR_RPCS_DEFAULTS,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   allActiveOperatorsDefinitivelyUntrusted,
+  operatorDefinitivelyUntrusted,
   clearGenesisCache,
   classifyNoOperatorReason,
   getActiveOperators,
@@ -517,5 +518,14 @@ describe("allActiveOperatorsDefinitivelyUntrusted (C1 short-circuit predicate)",
       expect(snapshotGenesisCache().get(op.rpc)?.observed).toBeNull();
     }
     expect(allActiveOperatorsDefinitivelyUntrusted()).toBe(false);
+  });
+
+  it("C7: operatorDefinitivelyUntrusted is true ONLY for a sticky mismatch (single-op gate)", async () => {
+    const ops = getActiveOperators();
+    // Unprobed → false (the liveness fast-path proceeds; recovery preserved).
+    expect(operatorDefinitivelyUntrusted(ops[0]!.rpc)).toBe(false);
+    // Definitive genesis mismatch → true (the fast-path must skip this op).
+    await seedAll(() => FORK);
+    expect(operatorDefinitivelyUntrusted(ops[0]!.rpc)).toBe(true);
   });
 });

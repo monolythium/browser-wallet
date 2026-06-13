@@ -201,6 +201,7 @@ import {
   verifyOperatorGenesis,
   snapshotGenesisCache,
   classifyNoOperatorReason,
+  operatorDefinitivelyUntrusted,
   clearGenesisCache,
   rehydrateGenesisCache,
 } from "./networks.js";
@@ -7506,7 +7507,16 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         cachedOperator.rpc !== null &&
         now - cachedOperator.checkedAt < OPERATOR_CACHE_TTL_MS;
 
-      if (cachedOperator?.rpc) {
+      // C7 (Caveat B): never let the liveness fast-path read a block from a
+      // definitively-untrusted operator (a re-genesis'd / wrong-chain op that
+      // would still answer eth_blockNumber and falsely show LIVE). Pure cache
+      // read — no genesis RTT on the health path. An untrusted cached op falls
+      // through to the gated fresh probe below, which surfaces the regenesis
+      // cause so the banner says "network reset — paused" instead of LIVE.
+      if (
+        cachedOperator?.rpc &&
+        !operatorDefinitivelyUntrusted(cachedOperator.rpc)
+      ) {
         const r = await readChainBlock(cachedOperator.rpc, cachedOperator.name);
         if (r.ok) {
           // Promote a successful stale/rehydrated candidate to a fresh hit so

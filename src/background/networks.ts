@@ -575,6 +575,22 @@ export function allActiveOperatorsDefinitivelyUntrusted(): boolean {
 }
 
 /**
+ * C7: pure-cache, no-RPC check — is this ONE operator definitively untrusted (a
+ * sticky genesis MISMATCH, or a recorded wrong-chain-id)? Used to gate the
+ * liveness block-poll's cached-operator fast-path so the CONNECTING / LIVE
+ * indicator never reflects a re-genesis'd operator that would still answer
+ * `eth_blockNumber`, WITHOUT re-adding a genesis round-trip to the health fast
+ * path. Unknown / `observed:null` / trusted → false (the caller proceeds
+ * normally; recovery is preserved).
+ */
+export function operatorDefinitivelyUntrusted(rpc: string): boolean {
+  const e = operatorGenesisCache.get(rpc);
+  const genesisMismatch =
+    e !== undefined && e.ok === false && e.observed !== null;
+  return genesisMismatch || operatorWrongChainId.has(rpc);
+}
+
+/**
  * Classify why no operator is serviceable (probeFirstAliveOperator returned
  * null) for the chain-status banner — WITHOUT a new RPC. An ACTIVE operator is
  * "untrusted" (reachable but wrong) when EITHER it answered net_version with a
