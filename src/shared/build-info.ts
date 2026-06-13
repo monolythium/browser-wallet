@@ -33,14 +33,16 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value tracks protocore v0.1.44-testnet (2026-06-08), where
- *  `lyth_chainStats.genesisHash`
- *  reports the registry identity hash below. Bumping this security pin is
- *  a human-reviewer decision; the About-page drift banner surfaces the
- *  mismatch and the live-registry fetch shows the current GitHub-registry
- *  value alongside it. */
+ *  Re-pinned 2026-06-14 to the testnet's re-genesis. The value below is the
+ *  canonical chain-registry `genesis_hash` for testnet-69420 (the registry's own
+ *  TRUST NOTE names genesis_hash the authoritative pin), CORROBORATED by all 3
+ *  canonical operators' `lyth_chainStats.genesisHash` (unanimous) — never
+ *  operator-echo alone. chainId 69420 is unchanged. The bundled SDK (0.4.9) still
+ *  ships the prior `0x4327b7e8…` value, so `SDK_REGISTRY_GENESIS_HASH` below is
+ *  stale until an SDK sync; the About-page drift banner correctly surfaces that
+ *  gap. Bumping this security pin is a human-reviewer decision. */
 export const TESTNET_GENESIS_HASH =
-  "0x4327b7e8d1c06eed00194152f8235acaec5ba84a01487c885d9933840dc36fa5";
+  "0x11774775b5c3bfc36ecb9c37e7252b49898caaacdb55668de3913fe60c660258";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
