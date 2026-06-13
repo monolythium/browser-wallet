@@ -74,13 +74,72 @@ export class ChainGenesisMismatchError extends Error {
   }
 }
 
+// C2: collapse concurrent IDENTICAL reads onto one in-flight walk. Default-DENY
+// allow-list — only known idempotent reads coalesce; submits and any UNLISTED
+// method bypass to the uncoalesced path, so two sends NEVER share a promise (R4)
+// and an unknown method keeps today's behavior. Keyed on method+params; cleared
+// on SETTLE (not a TTL) so only truly-concurrent reads merge — a later identical
+// read launches a fresh walk and never serves a stale result.
+const inflightReads = new Map<
+  string,
+  Promise<{ result: unknown; via: string }>
+>();
+const COALESCED_READ_METHODS = new Set<string>([
+  "eth_blockNumber",
+  "eth_getBalance",
+  "eth_getBlockByNumber",
+  "eth_getTransactionCount",
+  "eth_call",
+  "eth_gasPrice",
+  "lyth_chainStats",
+  "lyth_executionUnitPrice",
+  "lyth_decodeTx",
+  "lyth_nativeReceipt",
+  "lyth_getTokenBalances",
+  "lyth_getAddressActivity",
+  "lyth_bridgeRoutes",
+  "lyth_mrcAccount",
+  "lyth_nativeAgentState",
+  "lyth_getAddressLabel",
+  "lyth_getDelegationHistory",
+  "lyth_signingActivity",
+  "lyth_operatorRisk",
+  "lyth_upcomingDuties",
+  "lyth_getDelegations",
+]);
+
+/**
+ * Public entry: coalesces concurrent identical READ calls onto one in-flight
+ * operator walk (see above). Submits / unlisted methods go straight to the
+ * uncoalesced walk. See `_testnetJsonRpcUncoalesced` for the walk itself.
+ */
+export async function testnetJsonRpc<T>(
+  method: string,
+  params: unknown[],
+  opts?: { timeoutMs?: number },
+): Promise<{ result: T; via: string }> {
+  if (!COALESCED_READ_METHODS.has(method)) {
+    return _testnetJsonRpcUncoalesced<T>(method, params, opts);
+  }
+  const key = `${method}|${JSON.stringify(params)}`;
+  const existing = inflightReads.get(key);
+  if (existing !== undefined) {
+    return existing as Promise<{ result: T; via: string }>;
+  }
+  const p = _testnetJsonRpcUncoalesced<T>(method, params, opts).finally(() => {
+    inflightReads.delete(key);
+  });
+  inflightReads.set(key, p as Promise<{ result: unknown; via: string }>);
+  return p;
+}
+
 /**
  * Iterate the published testnet operators in order, returning the
  * first one that produces a non-error JSON-RPC response. Transport-level
  * failures trigger fallback to the next operator; RPC-level rejections
  * propagate immediately because they are state-level consensus answers.
  */
-export async function testnetJsonRpc<T>(
+async function _testnetJsonRpcUncoalesced<T>(
   method: string,
   params: unknown[],
   opts?: { timeoutMs?: number },

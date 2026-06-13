@@ -317,3 +317,62 @@ describe("testnetJsonRpc — C1 all-untrusted short-circuit (T1)", () => {
     expect(err?.message).toContain("See Operators.");
   });
 });
+
+describe("testnetJsonRpc — C2 read coalescing (T4/T5)", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("T4: two concurrent identical reads share ONE walk; a later read re-walks", async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      // Small delay so the two concurrent calls genuinely overlap in-flight.
+      await new Promise((r) => setTimeout(r, 5));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jsonrpc: "2.0",
+          id: 1,
+          result: "0x" + calls.toString(16),
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    const [a, b] = await Promise.all([
+      testnetJsonRpc<string>("eth_blockNumber", []),
+      testnetJsonRpc<string>("eth_blockNumber", []),
+    ]);
+    expect(calls).toBe(1); // ONE underlying walk/fetch for both callers
+    expect(a.result).toBe(b.result);
+
+    // After settle the key is cleared → a later identical read re-walks (no
+    // stale serving).
+    const c = await testnetJsonRpc<string>("eth_blockNumber", []);
+    expect(calls).toBe(2);
+    expect(c.result).not.toBe(a.result);
+  });
+
+  it("T5: two concurrent submits are NOT coalesced (each a distinct call)", async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 5));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jsonrpc: "2.0", id: 1, result: "0xok" }),
+      };
+    }) as unknown as typeof fetch;
+
+    // mesh_submitTx is NOT in COALESCED_READ_METHODS → bypasses the map, so two
+    // sends never share a promise (no-double-send invariant, R4).
+    await Promise.all([
+      testnetJsonRpc("mesh_submitTx", ["0xraw"]),
+      testnetJsonRpc("mesh_submitTx", ["0xraw"]),
+    ]);
+    expect(calls).toBe(2);
+  });
+});

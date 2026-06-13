@@ -340,6 +340,13 @@ interface GenesisCacheEntry {
 
 const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
 
+// C2: coalesce concurrent genesis probes to the SAME operator. During the first
+// cold walk (or a 60 s-TTL re-probe) N concurrent reads would each launch an
+// independent probe to a given rpc — the cache only dedups AFTER the first
+// settles. This collapses them to one in-flight probe per rpc. Cleared on
+// settle; cache TTL / verdict semantics are unchanged.
+const inflightProbes = new Map<string, Promise<GenesisCacheEntry>>();
+
 /**
  * Operators that answered `net_version` but reported a DIFFERENT chain id than
  * the wallet expects — reachable, but serving the wrong chain (a regenesis
@@ -452,7 +459,15 @@ export async function verifyOperatorGenesis(
     }
     // TTL expired on a non-definitive entry — fall through and re-probe.
   }
-  const result = await probeOperatorGenesis(rpc, timeoutMs);
+  // Share one in-flight probe per rpc across concurrent callers (C2).
+  let pending = inflightProbes.get(rpc);
+  if (pending === undefined) {
+    pending = probeOperatorGenesis(rpc, timeoutMs).finally(() => {
+      inflightProbes.delete(rpc);
+    });
+    inflightProbes.set(rpc, pending);
+  }
+  const result = await pending;
   operatorGenesisCache.set(rpc, result);
   // A definitive verdict is immutable per chain — persist it so the next SW
   // wake skips the genesis round-trips instead of re-probing from an empty
