@@ -189,7 +189,7 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // operator is on a different chain than the wallet expects.
         color: "var(--err)",
         tooltip:
-          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network.",
+          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network. Click to see operators.",
         tappable: true,
       };
     case "regenesis":
@@ -200,7 +200,7 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         // actions stay paused. Scrolls as a marquee (the long label).
         color: "var(--err)",
         tooltip:
-          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. You can check your balance on Monoscan.",
+          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. Click to see operators.",
         tappable: true,
       };
     case "offline":

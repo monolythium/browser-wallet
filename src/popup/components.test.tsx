@@ -1254,7 +1254,12 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       tappable: true,
     });
     expect(chainHealthPresentation("regenesis").tooltip).toMatch(
-      /genesis|monoscan|network/i,
+      /genesis|operators|network/i,
+    );
+    // The "check your balance on Monoscan" CTA lives on the balance card, not
+    // the banner tooltip — the banner taps through to Operators.
+    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
+      /Click to see operators/,
     );
   });
 
