@@ -18,6 +18,9 @@ vi.mock("./networks.js", () => ({
     { name: "operator-seal", region: "x", rpc: "http://seal.example" },
   ],
   verifyOperatorGenesis: async () => true,
+  // C1: testnetJsonRpc's pre-loop short-circuit reads this predicate. Default
+  // false so the seal tests run the real gated walk (operator trusted above).
+  allActiveOperatorsDefinitivelyUntrusted: () => false,
 }));
 
 // getUnlockedBackendV4 returns a real MlDsa65Backend the tests set per-case.
