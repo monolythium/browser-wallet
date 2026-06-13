@@ -209,6 +209,7 @@ import {
   snapshotGenesisCache,
   classifyNoOperatorReason,
   clearGenesisCache,
+  rehydrateGenesisCache,
 } from "./networks.js";
 import { clampToSaneBound } from "../shared/operator-bounds.js";
 import {
@@ -875,6 +876,12 @@ const bootHydrated: Promise<void> = (async () => {
   // chain-block poll after this boot can skip the operator-probe RTT and go
   // LIVE faster instead of lingering on CONNECTING….
   await rehydrateCachedOperator();
+
+  // Seed the genesis-verdict cache from the prior SW lifetime so the first
+  // operator probe after this wake skips the genesis round-trips (immutable
+  // per chain) instead of re-probing from empty — the per-reopen cost the
+  // audit's orphan-fork pinning added on top of the old net_version probe.
+  await rehydrateGenesisCache();
 
   // Restore origins the user has previously approved. Without this, every
   // SW hibernation (~30 s idle) drops connectedOrigins back to empty and

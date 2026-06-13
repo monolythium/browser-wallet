@@ -351,6 +351,67 @@ const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
  */
 const operatorWrongChainId = new Set<string>();
 
+// Persist the genesis cache across SW hibernation. The in-memory map above is
+// wiped every ~30 s idle, so before this every wallet reopen re-paid the extra
+// genesis round-trips the audit's orphan-fork pinning (be73670) added on top of
+// the old net_version-only probe. Only DEFINITIVE verdicts (observed !== null)
+// are persisted: a real genesis/block-0 hash is immutable per chain, so it may
+// safely survive a wake. NON-definitive "couldn't read" verdicts (observed ===
+// null) and the wrong-chain-id set are deliberately NOT persisted — they carry
+// a short TTL / are reachability-derived and must re-probe so a transient blip
+// self-heals. chrome.storage.session is SW-scope and clears on browser restart
+// / extension reload — the right tier for a chain-identity fact (never on disk).
+const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v1";
+
+/** Best-effort persist the DEFINITIVE subset of the genesis cache. Overwrites
+ *  the whole blob (a handful of operators) so an eviction in clearGenesisCache
+ *  is mirrored too. Synchronous guard covers a missing chrome.storage in tests. */
+function persistGenesisCache(): void {
+  try {
+    const defs: Record<string, GenesisCacheEntry> = {};
+    for (const [rpc, e] of operatorGenesisCache) {
+      if (e.observed !== null) defs[rpc] = e;
+    }
+    void chrome.storage.session
+      .set({ [SESSION_KEY_GENESIS_CACHE]: defs })
+      .catch(() => {});
+  } catch {
+    // best-effort — no persistence just means the next wake re-probes as before
+  }
+}
+
+/** Seed the in-memory genesis cache from the verdicts a prior SW lifetime
+ *  persisted, so the first probe after a cold wake skips the genesis round-trips
+ *  instead of re-probing from empty. Only seeds well-formed DEFINITIVE entries
+ *  the current lifetime hasn't already learned. Call once at SW boot. */
+export async function rehydrateGenesisCache(): Promise<void> {
+  try {
+    const s = await chrome.storage.session.get(SESSION_KEY_GENESIS_CACHE);
+    const raw = s?.[SESSION_KEY_GENESIS_CACHE] as
+      | Record<string, unknown>
+      | undefined;
+    if (!raw || typeof raw !== "object") return;
+    for (const [rpc, v] of Object.entries(raw)) {
+      if (operatorGenesisCache.has(rpc)) continue; // a live probe already won
+      const e = v as Partial<GenesisCacheEntry> | null;
+      if (
+        e &&
+        typeof e.ok === "boolean" &&
+        typeof e.observed === "string" &&
+        typeof e.checkedAt === "number"
+      ) {
+        operatorGenesisCache.set(rpc, {
+          ok: e.ok,
+          observed: e.observed,
+          checkedAt: e.checkedAt,
+        });
+      }
+    }
+  } catch {
+    // best-effort — a read failure just means the first probe re-checks genesis
+  }
+}
+
 /**
  * Verify an operator's chain genesis identity matches TESTNET_GENESIS_HASH.
  * Returns true on match (or cache-hit "true"); false on mismatch,
@@ -393,6 +454,10 @@ export async function verifyOperatorGenesis(
   }
   const result = await probeOperatorGenesis(rpc, timeoutMs);
   operatorGenesisCache.set(rpc, result);
+  // A definitive verdict is immutable per chain — persist it so the next SW
+  // wake skips the genesis round-trips instead of re-probing from an empty
+  // in-memory cache. Non-definitive reads keep their short TTL and re-probe.
+  if (result.observed !== null) persistGenesisCache();
   return result.ok;
 }
 
@@ -412,6 +477,9 @@ export function clearGenesisCache(rpc?: string): void {
     operatorGenesisCache.delete(rpc);
     operatorWrongChainId.delete(rpc);
   }
+  // Mirror the eviction into the persisted blob so a force-refresh after a
+  // regenesis can't leave a stale verdict to be rehydrated on the next wake.
+  persistGenesisCache();
 }
 
 /** Snapshot of operators seen reachable-but-on-the-wrong-chain-id. Used by

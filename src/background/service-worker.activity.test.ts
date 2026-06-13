@@ -347,6 +347,9 @@ vi.mock("./networks.js", () => ({
   getDefaultOperators: vi.fn(() => []),
   getActiveOperators: vi.fn(() => []),
   classifyNoOperatorReason: vi.fn(() => "unreachable"),
+  // Called once on SW boot (genesis-cache rehydrate); a no-op here is fine —
+  // these tests don't exercise the persisted-genesis fast path.
+  rehydrateGenesisCache: vi.fn(async () => undefined),
 }));
 
 // Keystore (v4) — fixed unlocked address, never actually signs. The
