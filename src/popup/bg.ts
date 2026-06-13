@@ -248,8 +248,19 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
 export async function bgPing(): Promise<void> {
   try {
     await rawSendMessage({ kind: "ping" });
-  } catch {
-    /* swallow — followup calls carry their own retry. */
+  } catch (e) {
+    // One retry against the MV3 wake race. The first ping is itself the message
+    // that *triggers* the wake and can be dropped before the worker is up; an
+    // un-retried warm-up then silently no-ops and the next real call pays the
+    // full cold start (the lag the pre-warm exists to hide). A second failure
+    // is safely swallowed — followup real calls carry their own retry.
+    if (!isSwIdleError((e as Error).message ?? "")) return;
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      await rawSendMessage({ kind: "ping" });
+    } catch {
+      /* swallow — followup calls carry their own retry. */
+    }
   }
 }
 
