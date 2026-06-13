@@ -580,20 +580,8 @@ function OperatorRow({
           autoComplete="off"
           style={{ ...inputStyle, flex: 1 }}
         />
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <FieldLabel>RPC</FieldLabel>
-        <input
-          type="text"
-          value={entry.rpc}
-          onChange={(e) => onPatch({ rpc: e.target.value })}
-          placeholder="http://… or https://…"
-          spellCheck={false}
-          autoComplete="off"
-          style={{ ...inputStyle, flex: 1 }}
-        />
-        {/* Inline with the RPC it probes — a compact secondary action rather
-            than an oversized button on its own row. */}
+        {/* A compact secondary action. Sits next to the short Region field so
+            the long RPC URL below keeps the full field width to itself. */}
         <button
           onClick={onUse}
           disabled={busy || !rowUsable}
@@ -606,6 +594,18 @@ function OperatorRow({
         >
           {using ? "Checking…" : "Use this operator"}
         </button>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <FieldLabel>RPC</FieldLabel>
+        <input
+          type="text"
+          value={entry.rpc}
+          onChange={(e) => onPatch({ rpc: e.target.value })}
+          placeholder="http://… or https://…"
+          spellCheck={false}
+          autoComplete="off"
+          style={{ ...inputStyle, flex: 1 }}
+        />
       </div>
       {(rpcInvalid || nameMissing) && (
         <div
