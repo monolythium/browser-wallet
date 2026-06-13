@@ -224,7 +224,35 @@ function rawSendMessage(message: unknown): Promise<unknown> {
   });
 }
 
+// C4: collapse concurrent IDENTICAL read IPCs. The popup fires balance/activity
+// from several independent component mounts + effects per open (App + Send +
+// Stake + Delegations; App + useActivity), each launching its own SW round-trip
+// → its own operator walk. Default-DENY allow-list — only these idempotent reads
+// coalesce; writes / keystore / locals / any unlisted op bypass, so no submit is
+// ever shared. Keyed on op+payload; cleared on SETTLE (not a TTL), so only
+// truly-concurrent reads merge and a later read is always a fresh round-trip.
+// The per-account/chain token-refs in App.tsx / useActivity stay — they discard
+// STALE results across account/chain switches, a different concern.
+const inflightPopupSends = new Map<string, Promise<unknown>>();
+const COALESCED_POPUP_OPS = new Set<string>([
+  "wallet-balance",
+  "wallet-activity-get",
+  "wallet-indexer-snapshot",
+]);
+
 function send<T>(op: string, payload?: unknown): Promise<T> {
+  if (!COALESCED_POPUP_OPS.has(op)) return sendUncoalesced<T>(op, payload);
+  const key = `${op}|${JSON.stringify(payload ?? null)}`;
+  const existing = inflightPopupSends.get(key);
+  if (existing !== undefined) return existing as Promise<T>;
+  const p = sendUncoalesced<T>(op, payload).finally(() => {
+    inflightPopupSends.delete(key);
+  });
+  inflightPopupSends.set(key, p as Promise<unknown>);
+  return p;
+}
+
+function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
   // Single retry against the MV3 idle/wake race. Pure transport-
   // level retry — application-level errors (`{ ok: false, ... }`
   // payloads) reach the caller unchanged on the first attempt.
