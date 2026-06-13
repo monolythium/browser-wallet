@@ -17,6 +17,7 @@ import {
   seedReconnectingHealth,
   shouldLabelBalanceStale,
   shouldPauseBalanceDisplay,
+  pausedBalanceMonoscanUrl,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
@@ -1379,5 +1380,23 @@ describe("shouldPauseBalanceDisplay (C5 / T10 — no bare 0.00 on re-genesis)", 
 
   it("never pauses the private (hidden) balance", () => {
     expect(shouldPauseBalanceDisplay(true, null, "regenesis")).toBe(false);
+  });
+});
+
+describe("pausedBalanceMonoscanUrl (C2 — trusted Monoscan balance link)", () => {
+  it("builds the trusted Monoscan wallet URL (mono1… over the wallet-constant base) from a 0x address", () => {
+    const url = pausedBalanceMonoscanUrl(
+      "0x1111111111111111111111111111111111111111",
+    );
+    expect(url).not.toBeNull();
+    // Trusted base + the wallet's own eoa/user (mono) bech32m — never operator-echoed.
+    expect(url!.startsWith("https://monoscan.xyz/#/wallet/mono1")).toBe(true);
+  });
+
+  it("returns null for a missing / non-0x address (no broken link rendered)", () => {
+    expect(pausedBalanceMonoscanUrl(null)).toBeNull();
+    expect(pausedBalanceMonoscanUrl(undefined)).toBeNull();
+    expect(pausedBalanceMonoscanUrl("")).toBeNull();
+    expect(pausedBalanceMonoscanUrl("not-an-address")).toBeNull();
   });
 });

@@ -23,7 +23,9 @@ import {
 } from "@monolythium/core-sdk";
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
-import { bech32mDisplay } from "../shared/bech32m";
+import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
+import { monoscanAddressUrl } from "../shared/build-info";
+import { ExternalLink } from "./components/ExternalLink";
 import { clusterLabel, formatWeightBpsPercent } from "../shared/staking";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
@@ -294,6 +296,30 @@ export function shouldPauseBalanceDisplay(
     balance == null &&
     (cause === "regenesis" || cause === "untrusted")
   );
+}
+
+/**
+ * C2: the Monoscan "check your balance" URL for the paused-balance state. Builds
+ * `MONOSCAN_ADDRESS_BASE/{bech32m}` — a TRUSTED wallet constant
+ * (`shared/build-info.ts`), never operator-echoed — from the user's OWN active
+ * address, converted with the wallet's canonical `eoa` (`mono1…`) encoding so it
+ * matches the displayed address. Returns null for a missing / non-0x address so
+ * the link is only rendered when valid (never a broken URL). Pure + exported.
+ */
+export function pausedBalanceMonoscanUrl(
+  activeAddr0x: string | null | undefined,
+): string | null {
+  if (
+    !activeAddr0x ||
+    !(activeAddr0x.startsWith("0x") || activeAddr0x.startsWith("0X"))
+  ) {
+    return null;
+  }
+  try {
+    return monoscanAddressUrl(addressToBech32m(activeAddr0x, "eoa"));
+  } catch {
+    return null;
+  }
 }
 
 interface ChainStatusBannerProps {
@@ -1908,6 +1934,11 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
     account.balance,
     balanceCause,
   );
+  // C2: the Monoscan "check your balance" external link for the paused state
+  // (the user's own address over the trusted base; null on a bad/non-0x addr).
+  const pausedMonoscanUrl = balancePaused
+    ? pausedBalanceMonoscanUrl(account.addr)
+    : null;
   const totalStr =
     account.balance != null
       ? fmt(account.balance, 2)
@@ -1974,14 +2005,34 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               style={{
                 fontFamily: "var(--f-mono)",
                 fontSize: 10,
-                color: "var(--err)",
                 letterSpacing: "0.04em",
                 marginTop: 2,
+                lineHeight: 1.5,
               }}
             >
-              {balanceCause === "regenesis"
-                ? "network may have reset · balance paused"
-                : "operator on a different chain · balance paused"}
+              <div style={{ color: "var(--warn)", fontWeight: 600 }}>
+                Untrusted operators
+              </div>
+              <div
+                style={{
+                  color: "var(--fg-400)",
+                  letterSpacing: 0,
+                  marginTop: 1,
+                }}
+              >
+                Your wallet&apos;s pinned genesis doesn&apos;t match the
+                operators&apos; — they may be on a different chain.
+              </div>
+              {pausedMonoscanUrl && (
+                <div style={{ marginTop: 3, letterSpacing: 0 }}>
+                  <ExternalLink
+                    href={pausedMonoscanUrl}
+                    title="Open your wallet address on Monoscan"
+                  >
+                    Check your balance on Monoscan
+                  </ExternalLink>
+                </div>
+              )}
             </div>
           )}
           {showStaleBalance && (
