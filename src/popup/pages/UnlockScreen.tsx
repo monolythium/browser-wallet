@@ -9,6 +9,11 @@ import { Modal } from "../components/Modal";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bech32mDisplay } from "../../shared/bech32m";
 
+/** The exact word the user must type to confirm the destructive unauthenticated
+ *  wipe — same gate as ResetWallet / ForgotPassword, so an irreversible action
+ *  always demands a deliberate keystroke, not a single click. */
+const RESET_CONFIRM_WORD = "DELETE";
+
 interface UnlockScreenProps {
   /** Truncated address chip rendered above the password field, in bech32m form (e.g. "mono1abc…wxyz"). */
   address: string | null;
@@ -59,6 +64,10 @@ export function UnlockScreen({
   const [idkOpen, setIdkOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
+  // Type-DELETE-to-confirm gate for the I-don't-know-my-phrase wipe.
+  const [resetConfirmInput, setResetConfirmInput] = useState("");
+  const resetConfirmOk =
+    resetConfirmInput.trim().toUpperCase() === RESET_CONFIRM_WORD;
 
   // The Forgot link is only meaningful when the parent provided the
   // routing callbacks. In the approval-window unlock prompt neither is
@@ -125,11 +134,14 @@ export function UnlockScreen({
   const handleOpenIdk = () => {
     setForgotOpen(false);
     setResetError(null);
+    setResetConfirmInput("");
     setIdkOpen(true);
   };
 
   const handleConfirmReset = async () => {
-    if (resetting) return;
+    // Defense-in-depth behind the disabled button: never wipe without the
+    // typed confirmation, even if the button gate is somehow bypassed.
+    if (resetting || !resetConfirmOk) return;
     setResetting(true);
     setResetError(null);
     try {
@@ -142,6 +154,7 @@ export function UnlockScreen({
         );
         return;
       }
+      setResetConfirmInput("");
       setIdkOpen(false);
       onForgotReset?.();
     } catch (e) {
@@ -365,6 +378,7 @@ export function UnlockScreen({
           if (!resetting) {
             setIdkOpen(false);
             setResetError(null);
+            setResetConfirmInput("");
           }
         }}
       >
@@ -425,6 +439,48 @@ export function UnlockScreen({
             It will not impact the assets within your wallet on-chain.
           </strong>
         </div>
+        <label
+          htmlFor="idk-reset-confirm-input"
+          style={{ fontSize: 11.5, color: "var(--fg-300)", marginTop: 2 }}
+        >
+          Type{" "}
+          <strong style={{ color: "var(--fg-100)" }}>
+            {RESET_CONFIRM_WORD}
+          </strong>{" "}
+          to confirm
+        </label>
+        <input
+          id="idk-reset-confirm-input"
+          type="text"
+          value={resetConfirmInput}
+          onChange={(e) => setResetConfirmInput(e.target.value)}
+          disabled={resetting}
+          autoFocus
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          placeholder={RESET_CONFIRM_WORD}
+          aria-label={`Type ${RESET_CONFIRM_WORD} to confirm resetting this wallet`}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && resetConfirmOk && !resetting) {
+              void handleConfirmReset();
+            }
+          }}
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "1px solid var(--fg-700)",
+            background: "rgba(255,255,255,0.04)",
+            color: "var(--fg-100)",
+            fontFamily: "var(--f-mono)",
+            fontSize: 13,
+            letterSpacing: "0.1em",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
         {resetError && (
           <div
             style={{
@@ -450,6 +506,7 @@ export function UnlockScreen({
               if (resetting) return;
               setIdkOpen(false);
               setResetError(null);
+              setResetConfirmInput("");
             }}
             disabled={resetting}
             style={{
@@ -470,7 +527,7 @@ export function UnlockScreen({
           <button
             type="button"
             onClick={() => void handleConfirmReset()}
-            disabled={resetting}
+            disabled={resetting || !resetConfirmOk}
             style={{
               flex: 1,
               padding: "11px 12px",
@@ -481,8 +538,8 @@ export function UnlockScreen({
               fontFamily: "var(--f-sans)",
               fontSize: 13,
               fontWeight: 600,
-              cursor: resetting ? "default" : "pointer",
-              opacity: resetting ? 0.7 : 1,
+              cursor: resetting || !resetConfirmOk ? "default" : "pointer",
+              opacity: resetting || !resetConfirmOk ? 0.5 : 1,
             }}
           >
             {resetting ? "Resetting…" : "Yes, reset wallet"}
