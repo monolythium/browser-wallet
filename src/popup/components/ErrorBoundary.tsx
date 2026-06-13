@@ -13,6 +13,8 @@
 import { Component } from "react";
 import type { CSSProperties, ErrorInfo, ReactNode } from "react";
 
+import { useFeature } from "../hooks/useFeature.js";
+
 interface ErrorBoundaryProps {
   children: ReactNode;
   /** Optional fallback override. Defaults to the built-in card. */
@@ -52,6 +54,24 @@ export class ErrorBoundary extends Component<
   }
 }
 
+// Build the "Copy details" clipboard payload. The full stack trace is
+// developer-only diagnostic surface (call-site frames, internal module
+// names + file paths); outside developer mode the copy is scrubbed to
+// name + message so a crash never spills the build's internal structure
+// to a non-developer (#38 — hardening parity with the dev-mode-gated
+// Send/Stake raw-error views). Pure + exported for tests.
+export function buildErrorReport(error: Error, devMode: boolean): string {
+  const head = `Monolythium Wallet error\n\n${error.name}: ${error.message}`;
+  if (!devMode) return head;
+  return `${head}\n\n${error.stack ?? "(no stack)"}`;
+}
+
+// Thin wrapper: resolves the DEVELOPER_MODE flag (via chrome.storage, NOT
+// any in-tree context — so it still reads correctly after the app subtree
+// crashed) and hands a plain boolean to the presentational card. useFeature
+// defaults OFF until the first storage read resolves, so the stack stays
+// hidden by default and only reveals if dev-mode is confirmed ON — the safe
+// direction for an info-leak surface.
 function DefaultFallback({
   error,
   onReset,
@@ -59,11 +79,25 @@ function DefaultFallback({
   error: Error;
   onReset: () => void;
 }) {
+  const devMode = useFeature("DEVELOPER_MODE");
+  return <FallbackCard error={error} onReset={onReset} devMode={devMode} />;
+}
+
+// Presentational fallback card. `devMode` is a plain prop (no hooks) so it is
+// trivially testable via renderToStaticMarkup. The reassurance copy and "Try
+// again" are ALWAYS shown; the error.stack is shown only in developer mode.
+export function FallbackCard({
+  error,
+  onReset,
+  devMode,
+}: {
+  error: Error;
+  onReset: () => void;
+  devMode: boolean;
+}) {
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(
-        `Monolythium Wallet error\n\n${error.name}: ${error.message}\n\n${error.stack ?? "(no stack)"}`,
-      );
+      await navigator.clipboard.writeText(buildErrorReport(error, devMode));
     } catch {
       // clipboard may be unavailable; user can still screenshot
     }
@@ -116,8 +150,12 @@ function DefaultFallback({
           }}
         >
           {error.name}: {error.message}
-          {"\n\n"}
-          {error.stack ?? "(no stack)"}
+          {devMode && (
+            <>
+              {"\n\n"}
+              {error.stack ?? "(no stack)"}
+            </>
+          )}
         </div>
       </details>
       <div style={{ display: "flex", gap: 8 }}>

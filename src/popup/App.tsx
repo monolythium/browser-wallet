@@ -35,7 +35,7 @@ import "./themes.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Accounts, Networks, Bridge,
+  Home, Networks, Bridge,
   ReqConnect,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -84,7 +84,8 @@ import { explainImportError } from "./lib/import-error";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { useFeature } from "./hooks/useFeature";
-import { ACCOUNTS, type Account } from "./demo-data";
+import { type Account } from "./demo-data";
+import { runMountHydrationLoads } from "./mount-hydration";
 import {
   bgListPending,
   bgKeystoreStatus,
@@ -127,7 +128,6 @@ type Screen =
   | "forgot-password"
   | "locked"
   | "home"
-  | "accounts"
   | "networks"
   | "network-detail"
   | "network-add"
@@ -349,8 +349,32 @@ export default function App() {
   // Cleared after successful vault creation or when the user backs out.
   const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
 
-  const initialAccount: Account = ACCOUNTS[0]!;
+  // Neutral, non-fabricated seed: no real-looking address, null balance (→ the
+  // hero shows "0.00", the address line shows "—") until loadActiveAccount
+  // resolves the real identity. The wallet must NEVER paint a fake balance or
+  // address — the prior `ACCOUNTS[0]` demo fixture (John Doe / 4,128.42 /
+  // sentinel addr) was removed precisely because it leaked through whenever the
+  // account/chain was slow or unreachable.
+  const initialAccount: Account = {
+    id: "pending",
+    label: "",
+    denom: "public",
+    addr: "",
+    algo: "mldsa",
+    balance: null,
+    custody: "sw",
+    pinned: false,
+  };
   const [acc, setAcc] = useState<Account>(initialAccount);
+  // #42: true when the displayed balance is a RETAINED last-known value because
+  // the latest refresh couldn't reach the chain (offline/untrusted). Home only
+  // LABELS the retained value as stale — never fabricates or zeros it.
+  const [balanceStale, setBalanceStale] = useState(false);
+  // C5: the typed reason the last balance refresh failed, so Home can pause
+  // honestly on a re-genesis / wrong-chain operator instead of a bare 0.00.
+  const [balanceCause, setBalanceCause] = useState<
+    "unreachable" | "untrusted" | "regenesis" | null
+  >(null);
   const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
@@ -412,6 +436,11 @@ export default function App() {
   const loadActiveAccount = async () => {
     const r = await bgWalletActiveAccount();
     if (!r.ok) return;
+    // On an account SWITCH the balance is nulled below and a fresh fetch is
+    // coming, so clear any stale flag carried from the prior account.
+    if (r.account.address.toLowerCase() !== acc.addr.toLowerCase()) {
+      setBalanceStale(false);
+    }
     setAcc((prev) => ({
       ...prev,
       id: "v3-active",
@@ -455,11 +484,16 @@ export default function App() {
   const refreshKeystoreStatus = useCallback(async () => {
     const ks = await bgKeystoreStatus();
     setKeystore(ks);
-    if (ks.algo === "mldsa") {
-      await loadActiveAccount();
-      await loadActiveVaultSummary();
-    }
-    await loadChainState();
+    // The active-account, vault-summary, and chain-state loads are mutually
+    // independent (see mount-hydration.ts) — run them concurrently with
+    // per-load isolation instead of serially, so the mount gate costs one
+    // round-trip latency instead of three. Contract is unchanged: still
+    // returns only after all settle, so every caller stays fully hydrated.
+    await runMountHydrationLoads(ks.algo, {
+      loadActiveAccount,
+      loadActiveVaultSummary,
+      loadChainState,
+    });
     return ks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -475,19 +509,34 @@ export default function App() {
   const refreshBalance = useCallback(async () => {
     if (!acc.addr.startsWith("0x")) return;
     const myToken = ++balanceTokenRef.current;
-    const r = await bgWalletBalance(acc.addr, activeChain.chainId);
+    const fetchOnce = () => bgWalletBalance(acc.addr, activeChain.chainId);
+    let r = await fetchOnce();
     if (myToken !== balanceTokenRef.current) return;
     if (!r.ok) {
-      // Leave the existing balance in place; Home renders "0.00" when
-      // null which is acceptable until we surface a load error.
+      // One quiet retry before flagging — a single transient blip shouldn't
+      // label the balance stale.
+      await new Promise((res) => setTimeout(res, 1_200));
+      if (myToken !== balanceTokenRef.current) return;
+      r = await fetchOnce();
+      if (myToken !== balanceTokenRef.current) return;
+    }
+    if (!r.ok) {
+      // Both attempts failed (chain unreachable/untrusted): retain the existing
+      // balance but flag it stale so Home can label it. Never zero/fabricate.
+      setBalanceStale(true);
+      // C5: keep the typed cause so Home can pause honestly on a re-genesis /
+      // wrong-chain operator instead of a misleading bare 0.00.
+      setBalanceCause(r.cause ?? "unreachable");
       return;
     }
     try {
       const lyth = hexLythoshiToLythNumber(r.balanceHex);
       if (lyth === null) return;
+      setBalanceStale(false);
+      setBalanceCause(null);
       setAcc((prev) => ({ ...prev, balance: lyth }));
     } catch {
-      // Malformed hex — ignore, balance stays null.
+      // Malformed hex — ignore, balance stays as-is.
     }
   }, [acc.addr, activeChain.chainId]);
 
@@ -558,6 +607,7 @@ export default function App() {
 
   // ---- mount-time bootstrap ----
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       const url = new URL(window.location.href);
       const approvalId = url.searchParams.get("approval");
@@ -565,8 +615,10 @@ export default function App() {
         // Approval window: just hydrate keystore (so the unlock prompt
         // can render correctly) and route to the approval screen.
         const ks = await bgKeystoreStatus();
+        if (cancelled) return;
         setKeystore(ks);
         const list = await bgListPending();
+        if (cancelled) return;
         const found = list.find((p) => p.id === approvalId);
         if (found) {
           setActiveApproval({ approval: found });
@@ -578,15 +630,42 @@ export default function App() {
         return;
       }
 
-      const ks = await refreshKeystoreStatus();
-      if (!ks.hasVault) {
-        setScreen("welcome");
-      } else if (!ks.unlocked) {
-        setScreen("locked");
-      } else {
-        setScreen("home");
+      // Self-healing keystore-status gate. The ENTIRE UI is blocked on this
+      // first reply, so a thrown reply used to leave the popup stuck on
+      // "loading" forever — there was no try/catch and no recovery path, and
+      // on a cold MV3 wake the SW can drop the first message(s) (send()'s
+      // single 100 ms retry isn't always enough before the worker finishes its
+      // ~438 KB cold boot). Retry with capped backoff until the SW answers
+      // with a well-shaped status, so the popup self-heals the instant the
+      // worker is up instead of hanging. A malformed / {error} reply (e.g. the
+      // router's catch-all) is treated as TRANSIENT — retried, never read as
+      // "no wallet" and false-routed to Welcome. The cancelled guard stops a
+      // late reply from clobbering a screen the user has already moved past.
+      for (let attempt = 0; !cancelled; attempt++) {
+        try {
+          const ks = await refreshKeystoreStatus();
+          if (cancelled) return;
+          if (
+            typeof ks?.hasVault !== "boolean" ||
+            typeof ks?.unlocked !== "boolean"
+          ) {
+            throw new Error("malformed keystore-status reply");
+          }
+          if (!ks.hasVault) setScreen("welcome");
+          else if (!ks.unlocked) setScreen("locked");
+          else setScreen("home");
+          return;
+        } catch {
+          if (cancelled) return;
+          await new Promise((r) =>
+            setTimeout(r, Math.min(200 * 2 ** attempt, 1500)),
+          );
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [refreshKeystoreStatus]);
 
   // SW-pushed lock/unlock signal — chrome.storage.session.walletLocked is
@@ -916,6 +995,11 @@ export default function App() {
     const r = await bgKeystoreCreateFromMnemonic(password, pendingMnemonic);
     if (!r.ok) {
       setImportError(explainImportError(r.reason ?? "Could not import wallet."));
+      // #35: clear the captured mnemonic on the commit-error exit (it otherwise
+      // lingered in App state after navigating back to "import"). Never
+      // displayed or persisted, but clear it explicitly to mirror the
+      // wipe-on-exit discipline; a retry re-captures it from ImportWallet.
+      setPendingMnemonic(null);
       setScreen("import");
       return;
     }
@@ -932,13 +1016,16 @@ export default function App() {
 
   const showBannerStrip =
     screen === "home" ||
-    screen === "accounts" ||
     screen === "networks" ||
     screen === "network-detail" ||
     screen === "network-add" ||
     screen === "network-edit" ||
     screen === "settings" ||
     screen === "operators" ||
+    // operator-directory is the banner's OWN tap-through target
+    // (onOpenOperators); keep the banner mounted there so tapping it and
+    // backing out doesn't remount the banner and re-flash CONNECTING.
+    screen === "operator-directory" ||
     screen === "notification-settings" ||
     screen === "mrv-native" ||
     screen === "receive" ||
@@ -980,6 +1067,12 @@ export default function App() {
           // stack at both entry pushers (top-bar + MainMenu).
           onOpenNetworks={() => navigateTo("networks")}
           unreadCount={bannerUnread}
+          // Tap-through for the not-online banner states (#42) — available on
+          // every main-strip screen, not just home. Routes to the Operators
+          // DIRECTORY (per-operator health + risk legend: untrusted-genesis /
+          // wrong-chain / offline counts), not the manage-operators editor, so
+          // the user sees WHY the banner is degraded.
+          onOpenOperators={() => navigateTo("operator-directory")}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),
@@ -1125,7 +1218,12 @@ export default function App() {
       {screen === "set-password-import" && (
         <SetPassword
           title="Set wallet password"
-          onBack={() => setScreen("import")}
+          onBack={() => {
+            // #35: clear the captured mnemonic when backing out of the
+            // set-password step (it otherwise lingered in App state).
+            setPendingMnemonic(null);
+            setScreen("import");
+          }}
           onSubmit={handleImportSubmitPassword}
           error={importError}
         />
@@ -1164,7 +1262,17 @@ export default function App() {
           account={acc}
           network={activeChain}
           indexer={indexerSnapshot}
-          onOpenAccounts={() => setScreen("accounts")}
+          balanceStale={balanceStale}
+          balanceCause={balanceCause}
+          // Seed the vault chip's label from the already-fetched active vault
+          // summary so the picker renders the real name immediately instead of
+          // flashing the "—" placeholder until its own bgVaultsList resolves.
+          // Sourced from the vault summary (never activeAccount.label — see the
+          // leak warning at loadActiveAccount). Conditional spread so an
+          // unresolved summary omits the prop (exactOptionalPropertyTypes).
+          {...(activeVaultSummary?.label
+            ? { activeVaultLabel: activeVaultSummary.label }
+            : {})}
           onSettings={() => setScreen("settings")}
           onOpenReceive={() => setScreen("receive")}
           onOpenSend={() => setScreen("send")}
@@ -1197,14 +1305,6 @@ export default function App() {
               </>
             ) : undefined
           }
-        />
-      )}
-
-      {screen === "accounts" && (
-        <Accounts
-          current={acc}
-          onBack={() => setScreen("home")}
-          onPick={(a) => { setAcc(a); setScreen("home"); }}
         />
       )}
 
@@ -1522,10 +1622,16 @@ export default function App() {
           onOpenRiscv={() => navigateTo("mrv-native")}
           onLockWallet={() => {
             void bgKeystoreLock();
-            // The SW writes walletLocked=true and the
-            // chrome.storage.onChanged listener (App.tsx mount-
-            // effect) flips screen → "locked" on its own. Local
-            // setScreen is belt-and-braces against IPC race.
+            // Optimistically reflect the lock in popup STATE, not just the
+            // screen. Otherwise the belt-and-braces unlocked→home effect (see
+            // mount effects) sees keystore.unlocked still true and immediately
+            // reverts screen→"home", flashing the unlocked UI until the (now-
+            // slow) SW round-trip writes walletLocked=true. Clearing unlocked
+            // here makes that guard a no-op; the later walletLocked onChanged
+            // refresh just re-confirms (idempotent). The key material is
+            // already cleared by bgKeystoreLock above — this only fixes the
+            // visible screen flash.
+            setKeystore((k) => (k ? { ...k, unlocked: false, address: null } : k));
             setScreen("locked");
           }}
           // Destructive reset reached from the

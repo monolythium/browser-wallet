@@ -8,6 +8,20 @@
 
 import { keccak_256 } from "@noble/hashes/sha3.js";
 
+/**
+ * Thrown by the EIP-712 encoder when a field cannot be encoded faithfully to
+ * its declared type. The encoder REJECTS rather than coerces (#29): silently
+ * coercing a malformed field would sign a digest that differs from what the
+ * dApp asked the user to approve — an invisible WYSIWYS break. The caller
+ * (approval-preview + sign path) catches this and surfaces it as a rejection.
+ */
+export class TypedDataError extends Error {
+  constructor(detail: string) {
+    super(`invalid typed-data field: ${detail}`);
+    this.name = "TypedDataError";
+  }
+}
+
 /** Decode a personal_sign payload: a `0x`-prefixed even-length hex string
  *  becomes raw bytes, anything else is UTF-8. Matches the lenient wallet
  *  behaviour dapp libraries expect. */
@@ -135,50 +149,102 @@ function encodeValue(
   value: unknown,
   types: Record<string, Array<{ name: string; type: string }>>,
 ): Uint8Array {
-  // Arrays
+  // Arrays — T[] dynamic, T[N] fixed.
   const arr = type.match(/^(.+)\[(\d*)\]$/);
   if (arr) {
     const inner = arr[1]!;
-    const items = Array.isArray(value) ? value : [];
-    const parts = items.map((v) => encodeValue(inner, v, types));
+    if (!Array.isArray(value)) {
+      throw new TypedDataError(`expected an array for type "${type}"`);
+    }
+    const fixed = arr[2]!;
+    if (fixed !== "" && value.length !== Number(fixed)) {
+      throw new TypedDataError(
+        `array "${type}" expects ${fixed} items, got ${value.length}`,
+      );
+    }
+    const parts = value.map((v) => encodeValue(inner, v, types));
     return keccak_256(concat(parts));
   }
   // Nested struct
   if (types[type]) {
-    return hashStruct(type, (value as Record<string, unknown>) ?? {}, types);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TypedDataError(`expected an object for struct "${type}"`);
+    }
+    return hashStruct(type, value as Record<string, unknown>, types);
   }
   if (type === "string") {
-    const s = typeof value === "string" ? value : String(value ?? "");
-    return keccak_256(new TextEncoder().encode(s));
+    if (typeof value !== "string") {
+      throw new TypedDataError(`expected a string for a "string" field`);
+    }
+    return keccak_256(new TextEncoder().encode(value));
   }
   if (type === "bytes") {
-    const b = parseBytes(value);
-    return keccak_256(b);
+    return keccak_256(parseBytesStrict(value, type));
   }
   if (type === "bool") {
+    // Tolerance (iv): JS booleans only. Truthiness coercion is the dangerous
+    // status quo (the string "false" is truthy → would sign as true).
+    if (typeof value !== "boolean") {
+      throw new TypedDataError(`expected a boolean for a "bool" field`);
+    }
     return leftPad32(new Uint8Array([value ? 1 : 0]));
   }
   if (type === "address") {
-    const s = typeof value === "string" ? value : "0x0";
-    return leftPad32(parseHexBytes(s));
+    // Tolerance (i): any-case 20-byte hex. NO lowercase-only requirement (would
+    // reject every EIP-55 mixed-case address) and NO EIP-55 checksum enforcement
+    // (the contract only ever sees the 20 bytes).
+    if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) {
+      throw new TypedDataError(`expected a 20-byte 0x-hex address (any case)`);
+    }
+    return leftPad32(parseHexBytes(value));
   }
-  if (type.startsWith("bytes")) {
-    // bytesN — right-pad to 32.
-    const b = parseBytes(value);
+  // Fixed-size byte arrays bytes1..bytes32.
+  const bytesN = type.match(/^bytes([0-9]+)$/);
+  if (bytesN) {
+    const n = Number(bytesN[1]!);
+    if (n < 1 || n > 32) {
+      throw new TypedDataError(`invalid fixed-bytes width "${type}"`);
+    }
+    const b = parseBytesStrict(value, type);
+    if (b.length !== n) {
+      throw new TypedDataError(`"${type}" expects ${n} bytes, got ${b.length}`);
+    }
     return rightPad32(b);
   }
-  if (type.startsWith("uint") || type.startsWith("int")) {
-    return leftPad32(intToBytesBE(value));
+  // Integers uint / uintN / int / intN.
+  const numMatch = type.match(/^(u?int)([0-9]*)$/);
+  if (numMatch) {
+    const signed = numMatch[1] === "int";
+    return leftPad32(intToBytesBEStrict(value, signed, type));
   }
-  // Fallback: treat as string
-  const fallback = typeof value === "string" ? value : String(value ?? "");
-  return keccak_256(new TextEncoder().encode(fallback));
+  // Unknown / unresolved type — REJECT (no String() coercion fallback). This is
+  // the highest-severity coercion: it would otherwise hash an arbitrary field as
+  // free text and sign a digest unrelated to the declared type.
+  throw new TypedDataError(`unsupported or unknown EIP-712 type "${type}"`);
 }
 
-function parseBytes(v: unknown): Uint8Array {
-  if (typeof v === "string") return parseHexBytes(v);
-  if (v instanceof Uint8Array) return v;
-  return new Uint8Array(0);
+function parseBytesStrict(value: unknown, type: string): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (typeof value === "string") return parseHexBytesStrict(value, type);
+  throw new TypedDataError(
+    `expected 0x-hex or a byte array for a "${type}" field`,
+  );
+}
+
+function parseHexBytesStrict(s: string, type: string): Uint8Array {
+  // Even number of hex digits after 0x. "0x" (empty) is valid for dynamic
+  // `bytes`; a bytesN length check rejects it where a fixed width is required.
+  if (!/^0x([0-9a-fA-F]{2})*$/.test(s)) {
+    throw new TypedDataError(
+      `malformed hex for "${type}" (need 0x + an even number of hex digits)`,
+    );
+  }
+  const r = s.slice(2);
+  const out = new Uint8Array(r.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(r.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
 }
 
 function parseHexBytes(s: string): Uint8Array {
@@ -192,18 +258,54 @@ function parseHexBytes(s: string): Uint8Array {
   return out;
 }
 
-function intToBytesBE(v: unknown): Uint8Array {
+function intToBytesBEStrict(
+  value: unknown,
+  signed: boolean,
+  type: string,
+): Uint8Array {
   let n: bigint;
-  if (typeof v === "bigint") n = v;
-  else if (typeof v === "number") n = BigInt(v);
-  else if (typeof v === "string") {
-    n = v.startsWith("0x") || v.startsWith("0X")
-      ? BigInt(v)
-      : BigInt(v.length === 0 ? "0" : v);
-  } else n = 0n;
-  if (n < 0n) {
-    // Two's-complement for signed types; sufficient for typical EIP-712 payloads.
-    n = (1n << 256n) + n;
+  if (typeof value === "bigint") {
+    n = value;
+  } else if (typeof value === "number") {
+    if (!Number.isInteger(value)) {
+      throw new TypedDataError(`"${type}" value is not an integer: ${value}`);
+    }
+    n = BigInt(value);
+  } else if (typeof value === "string") {
+    // Tolerance (ii): representation-agnostic. Accept decimal or 0x-hex strings;
+    // BigInt() tolerates surrounding whitespace, so " 5 " === "5" stays
+    // digest-identical with the pre-strict encoder. Empty string keeps its
+    // legacy meaning of 0. Anything BigInt cannot parse is rejected.
+    try {
+      n = BigInt(value === "" ? "0" : value);
+    } catch {
+      throw new TypedDataError(`"${type}" value is not a valid integer: ${value}`);
+    }
+  } else {
+    throw new TypedDataError(
+      `"${type}" value has an unsupported type: ${value === null ? "null" : typeof value}`,
+    );
+  }
+  // Tolerance (iii): ceiling-only range + signedness. Per-declared-width N is
+  // intentionally NOT enforced — a real Solidity verifier does not range-check
+  // per width at abi.encode time, so rejecting e.g. uint8=300 could reject a
+  // contract-valid signature.
+  if (signed) {
+    const min = -(1n << 255n);
+    const max = (1n << 255n) - 1n;
+    if (n < min || n > max) {
+      throw new TypedDataError(`"${type}" value out of int256 range: ${n}`);
+    }
+    if (n < 0n) {
+      n = (1n << 256n) + n; // two's-complement for signed types
+    }
+  } else {
+    if (n < 0n) {
+      throw new TypedDataError(`negative value for unsigned "${type}": ${n}`);
+    }
+    if (n > (1n << 256n) - 1n) {
+      throw new TypedDataError(`"${type}" value out of uint256 range: ${n}`);
+    }
   }
   let hex = n.toString(16);
   if (hex.length % 2 === 1) hex = "0" + hex;

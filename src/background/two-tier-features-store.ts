@@ -1,16 +1,14 @@
-// chrome.storage round-trip for two-tier UX feature toggles.
+// chrome.storage READ for two-tier UX feature toggles (service-worker side).
 //
 // Single namespace at `chrome.storage.local["mono.two-tier-features.v1"]`.
-// Read paths fan out across components (`useFeature(flag)` is hot), so
-// the get-all-flip-one shape is the right primitive — one storage hit
-// per toggle change, one cached read per popup load.
+// This is the SW's read side, used by the `two-tier-get-state` IPC. The WRITE
+// is applied popup-side (bg.ts `bgTwoTierSetFeature`) directly to the same key,
+// so a toggle flips instantly without waking the worker — see the note in
+// shared/two-tier-features.ts.
 
 import {
   STORAGE_KEY_TWO_TIER_FEATURES,
-  defaultTwoTierState,
   normaliseTwoTierState,
-  setFeature,
-  type FeatureFlag,
   type TwoTierState,
 } from "../shared/two-tier-features.js";
 
@@ -20,28 +18,5 @@ export async function loadTwoTierState(): Promise<TwoTierState> {
       const raw = got?.[STORAGE_KEY_TWO_TIER_FEATURES];
       resolve(normaliseTwoTierState(raw));
     });
-  });
-}
-
-export async function setTwoTierFeature(
-  flag: FeatureFlag,
-  enabled: boolean,
-): Promise<TwoTierState> {
-  const current = await loadTwoTierState();
-  const next = setFeature(current, flag, enabled, Date.now());
-  return new Promise((resolve) => {
-    chrome.storage.local.set(
-      { [STORAGE_KEY_TWO_TIER_FEATURES]: next },
-      () => resolve(next),
-    );
-  });
-}
-
-export async function resetTwoTierFeatures(): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.storage.local.set(
-      { [STORAGE_KEY_TWO_TIER_FEATURES]: defaultTwoTierState() },
-      () => resolve(),
-    );
   });
 }

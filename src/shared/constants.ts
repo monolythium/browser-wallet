@@ -111,21 +111,9 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   // (used by the activity feed to render empty-state context).
   "wallet-activity-kind",
   "list-pending",
-  "get-pending",
   "focus-approval",
-  // ConnectedSites: list is the passive surface mount; revoke ops
-  // are USER ACTIONS — they are excluded from the exempt set.
-  "list-connected-sites",
-  // contacts-list + contacts-check stay exempt
-  // (read-only surface mounts: contact list rendering, address-book
-  // lookup during send-tx address resolution). contacts-add /
-  // contacts-rename / contacts-remove are USER ACTIONS and are
-  // excluded from the exempt set.
-  "contacts-list",
-  "contacts-check",
   "keystore-unlock",
   "keystore-lock",
-  "keystore-create-new",
   "keystore-create-from-mnemonic",
   "keystore-export-seed",
   "keystore-reset",

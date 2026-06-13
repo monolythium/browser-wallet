@@ -28,7 +28,7 @@ import { useMemo } from "react";
 import { Icon } from "../Icon";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { effectiveWeightWei, percentToBps } from "../../shared/staking-tx";
-import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
+import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface StakeFormProps {
   /** Cluster the user is about to delegate to. */
@@ -37,10 +37,9 @@ export interface StakeFormProps {
    *  it survives state transitions back to the picker. */
   amountStr: string;
   onAmountChange: (next: string) => void;
-  /** Compatibility prop name retained for existing callers. Value is
-   *  v4.1 native lythoshi, not 18-decimal EVM wei. `null` while the
-   *  SW `wallet-balance` fetch is in flight. */
-  balanceWei: bigint | null;
+  /** Native lythoshi balance (18-decimal); null while the SW
+   *  wallet-balance fetch is in flight. */
+  balanceLythoshi: bigint | null;
   /** Already-delegated weight to THIS cluster (bps). Used for the
    *  cap-headroom check — additions stack on top of existing weight. */
   existingWeightBps: number;
@@ -54,9 +53,7 @@ export interface StakeFormProps {
   onBack: () => void;
 }
 
-// Native LYTH precision sourced from the SDK (chain migrated 8 → 18 decimals;
-// 1 lythoshi == 1 wei). `NATIVE_LYTH_DECIMALS = 18` ⇒ `LYTHOSHI_PER_LYTH = 10^18`.
-const LYTHOSHI_PER_LYTH = 10n ** BigInt(NATIVE_LYTH_DECIMALS);
+// LYTHOSHI_PER_LYTH (10^18) is imported from the SDK above — single source of truth.
 
 /** Parse a percent-of-balance string (0–100, optional decimals) into a
  *  number, or `null` when it isn't a valid percent. */
@@ -86,7 +83,7 @@ export function StakeForm({
   cluster,
   amountStr,
   onAmountChange,
-  balanceWei,
+  balanceLythoshi,
   existingWeightBps,
   capBps,
   onContinue,
@@ -100,7 +97,7 @@ export function StakeForm({
 
   // Live effective weight this percent represents at the current balance.
   const effectiveWeightLythoshi =
-    balanceWei !== null ? effectiveWeightWei(additionalBps, balanceWei) : null;
+    balanceLythoshi !== null ? effectiveWeightWei(additionalBps, balanceLythoshi) : null;
 
   const overCap = capBps !== null && totalAfterBps > capBps;
   const percentIsZero = percent === null || additionalBps === 0;
@@ -109,7 +106,7 @@ export function StakeForm({
     percent !== null &&
     additionalBps > 0 &&
     !overCap &&
-    balanceWei !== null;
+    balanceLythoshi !== null;
 
   const handleMax = () => {
     // Cap-aware max: fill up to the per-cluster cap headroom (or 100% when
@@ -200,10 +197,10 @@ export function StakeForm({
           />
           <button
             onClick={handleMax}
-            disabled={balanceWei === null}
+            disabled={balanceLythoshi === null}
             style={{
               ...inlineBtnStyle,
-              opacity: balanceWei === null ? 0.5 : 1,
+              opacity: balanceLythoshi === null ? 0.5 : 1,
             }}
             type="button"
           >
@@ -227,7 +224,7 @@ export function StakeForm({
           </div>
         )}
         <div style={fromHint}>
-          {balanceWei === null ? (
+          {balanceLythoshi === null ? (
             "Balance loading…"
           ) : (
             <>
@@ -238,7 +235,7 @@ export function StakeForm({
                   ? "—"
                   : `${lythoshiToLyth(effectiveWeightLythoshi)} LYTH`}
               </strong>{" "}
-              ({(additionalBps / 100).toFixed(2)}% of {lythoshiToLyth(balanceWei)} LYTH)
+              ({(additionalBps / 100).toFixed(2)}% of {lythoshiToLyth(balanceLythoshi)} LYTH)
               {existingWeightBps > 0 && (
                 <>
                   {" "}

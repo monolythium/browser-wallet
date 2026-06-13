@@ -114,9 +114,9 @@ export interface NotificationRecord {
    *  address for contract calls). */
   counterparty: string;
   /** Total tx fee in lythoshi (decimal string), captured at the confirmed
-   *  terminal transition from `lyth_nativeReceipt.fee.total_lythoshi`
+   *  terminal transition from `lyth_decodeTx.fee.total_lythoshi`
    *  (lythoshi, NOT wei). OPTIONAL + only set for confirmed self-paid txs
-   *  with a non-zero fee: failed/reverted/pruned txs have no native receipt,
+   *  with a non-zero fee: a not-decodable tx leaves it unset,
    *  and a zero-fee (near-zero-gas testnet) tx leaves it unset. Display
    *  formats it as `- <amount> LYTH`; absent ⇒ no fee line (no-mock).
    *  Migration-safe: records written before this field just omit it. */

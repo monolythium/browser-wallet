@@ -25,7 +25,7 @@ import {
 } from "react";
 import { Icon } from "../Icon";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
-import { classifySendError, errorLinksOperators } from "../../shared/send-error";
+import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { ClipboardIcon, CheckIcon } from "../components/AddressLine";
@@ -349,7 +349,10 @@ export function Stake({
       ]);
       if (cancelled) return;
       if (delR.ok) setDelegations(delR.data);
-      if (capR.ok) setCapBps(capR.data.capBps);
+      // F-3.8/#25: only adopt a LIVE cap; a via:"mock" (offline) read carries a
+      // fabricated 50% launch cap that must not render as real (capBps stays
+      // null → cap badge hidden; the 0x100A precompile enforces the true cap).
+      if (capR.ok) setCapBps(capBpsFromCapResult(capR));
       if (balR.ok) {
         const parsedBalance = parseHexQuantity(balR.balanceHex);
         if (parsedBalance !== null) setBalanceLythoshi(parsedBalance);
@@ -774,7 +777,7 @@ export function Stake({
           <UnstakeForm
             cluster={selectedCluster}
             currentWeightBps={existingWeightBps}
-            balanceWei={balanceLythoshi}
+            balanceLythoshi={balanceLythoshi}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -797,7 +800,7 @@ export function Stake({
             amountStr={amountStr}
             onAmountChange={setAmountStr}
             onPickDestination={() => setStep("redelegate-dst-pick")}
-            balanceWei={balanceLythoshi}
+            balanceLythoshi={balanceLythoshi}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
           />
@@ -866,7 +869,7 @@ export function Stake({
             cluster={selectedCluster}
             amountStr={amountStr}
             onAmountChange={setAmountStr}
-            balanceWei={balanceLythoshi}
+            balanceLythoshi={balanceLythoshi}
             existingWeightBps={existingWeightBps}
             capBps={capBps}
             onContinue={() => setStep("preview")}
@@ -1510,6 +1513,10 @@ function ErrorView({
   onOpenOperators,
 }: ErrorViewProps) {
   const classified = classifySendError(error.message);
+  // S6 INFO #9: tint the error surface from classified.severity (shared with
+  // Send.tsx) so a warn-severity transient (e.g. spending-policy-unavailable)
+  // renders amber, not error-red.
+  const colours = severityColours(classified.severity);
   const devMode = useFeature("DEVELOPER_MODE");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1517,7 +1524,7 @@ function ErrorView({
         style={{
           padding: "40px 20px",
           textAlign: "center",
-          color: "var(--err)",
+          color: colours.fg,
         }}
       >
         <Icon name="warn" size={40} />
@@ -1531,15 +1538,15 @@ function ErrorView({
         style={{
           padding: 12,
           borderRadius: 10,
-          background: "rgba(220,80,80,0.08)",
-          border: "1px solid rgba(220,80,80,0.4)",
+          background: colours.cardBg,
+          border: `1px solid ${colours.borderRgba}`,
         }}
       >
         <div
           style={{
             fontFamily: "var(--f-mono)",
             fontSize: 11,
-            color: "var(--err)",
+            color: colours.fg,
             wordBreak: "break-word",
             lineHeight: 1.5,
           }}
@@ -1595,6 +1602,28 @@ function ErrorView({
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers + styles
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * F-3.8 / #25 — resolve the per-cluster delegation cap (bps) for DISPLAY from a
+ * `staking-delegation-cap` read, honoring the no-mock-fallback principle. A
+ * `via:"mock"` result (chain offline) carries a fabricated §23.6 launch cap
+ * (5000 bps = 50%); rendering that as a real percentage is forbidden, so a
+ * non-live read yields `null` — the cap badge is hidden (StakeForm /
+ * RedelegateForm already gate on `capBps !== null`) and the 0x100A delegation
+ * precompile still enforces the true cap chain-side. Only a live read sets a
+ * concrete cap. (Mirrors the existing `via === "mock"` idiom used for the
+ * rewards / redemption-queue mock flags.)
+ */
+export function capBpsFromCapResult(capR: {
+  ok: boolean;
+  via?: string | null;
+  data?: { capBps: number | null };
+}): number | null {
+  if (!capR.ok || capR.via === "mock") return null;
+  // capBps === null is the legitimate "cap disabled (u32::MAX)" state; either
+  // way a non-concrete cap collapses to null (badge hidden / unlimited).
+  return capR.data?.capBps ?? null;
+}
 
 export function parseLythAmountToLythoshi(s: string): bigint | null {
   if (!/^\d+(\.\d+)?$/.test(s)) return null;

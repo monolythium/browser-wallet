@@ -7,7 +7,7 @@
 // depends on the body.error branch carrying the method that threw;
 // these tests are the regression-catcher that pins that contract.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Stub getActiveOperators to a single deterministic entry. With a
 // real list the post-regenesis defaults (operator-1 through operator-6)
@@ -21,7 +21,13 @@ vi.mock("./networks.js", () => ({
   getActiveOperators: () => [
     { name: "operator-test", region: "x", rpc: "http://test.example" },
   ],
-  verifyOperatorGenesis: async () => true,
+  // vi.fn so the C1 short-circuit test can assert the gated walk was NOT
+  // entered; default returns true (operator trusted) so the existing dispatch
+  // error-stamping suite runs the walk unchanged.
+  verifyOperatorGenesis: vi.fn(async () => true),
+  // C1: pre-loop short-circuit predicate. Default false → existing tests run
+  // the real gated walk; the C1 suite flips it to true for one call.
+  allActiveOperatorsDefinitivelyUntrusted: vi.fn(() => false),
 }));
 
 // Canonical-hash threading needs the SDK submission builder + keystore
@@ -47,13 +53,25 @@ vi.mock("@monolythium/core-sdk/crypto", () => ({
 
 vi.mock("./keystore-mldsa.js", () => ({
   getUnlockedBackendV4: () => ({}),
+  // NN-01: the builders assert getActiveVaultIdV4() === boundVaultId before the
+  // backend read; default it to the id the happy-path tests pass ("v1"). A
+  // vi.fn so the TOCTOU test can override it to a mismatching id.
+  getActiveVaultIdV4: vi.fn(() => "v1"),
 }));
 
 import {
   testnetJsonRpc,
   submitPlaintextMlDsaTx,
+  buildPlaintextSubmission,
   broadcastPlaintextTransaction,
+  ChainGenesisMismatchError,
 } from "./tx-mldsa.js";
+import {
+  allActiveOperatorsDefinitivelyUntrusted,
+  verifyOperatorGenesis,
+} from "./networks.js";
+import { buildPlaintextSubmission as sdkBuildPlaintextSubmission } from "@monolythium/core-sdk/crypto";
+import { getActiveVaultIdV4 } from "./keystore-mldsa.js";
 import { CANONICAL_INNER_TX_HASH } from "../shared/__fixtures__/golden.js";
 
 describe("testnetJsonRpc — method/via/code stamping", () => {
@@ -201,7 +219,7 @@ describe("submitPlaintextMlDsaTx — default plaintext path (mesh_submitTx)", ()
       gasPrice: "0x7d0",
       nonce: "0x0",
       chainIdHex: "0x10F2C",
-    });
+    }, "v1");
     expect(r.txHash).toBe(CANONICAL_TX_HASH);
     expect(r.via).toBe("operator-test");
     // The DEFAULT path is plaintext: mesh_submitTx, never lyth_submitEncrypted.
@@ -223,5 +241,138 @@ describe("submitPlaintextMlDsaTx — default plaintext path (mesh_submitTx)", ()
     await expect(broadcastPlaintextTransaction("0xcafe", CANONICAL_TX_HASH)).rejects.toThrow(
       /non-canonical tx hash/,
     );
+  });
+});
+
+describe("NN-01 — vault-binding fail-closed assert (plaintext builder)", () => {
+  const TX_REQ = {
+    to: "0x0102030405060708090a0b0c0d0e0f1011121314",
+    value: "0xf4240",
+    gas: "0x7530",
+    gasPrice: "0x7d0",
+    nonce: "0x0",
+    chainIdHex: "0x10F2C",
+  };
+  beforeEach(() => {
+    // Reset the swap-simulating mock + clear SDK-signer call history accumulated
+    // by other tests in this file, so not.toHaveBeenCalled() reflects only this
+    // test (the SDK builder mock is module-shared).
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
+    vi.mocked(sdkBuildPlaintextSubmission).mockClear();
+  });
+
+  it("aborts BEFORE signing when the active vault != boundVaultId (fail-closed)", async () => {
+    // Simulate a concurrent selectActiveVaultV4 that swapped the active vault
+    // to "v2" while the send was bound to "v1".
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v2");
+    await expect(
+      buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" }),
+    ).rejects.toThrow(/active account changed/);
+    // The SDK signer was NEVER reached — nothing was signed.
+    expect(sdkBuildPlaintextSubmission).not.toHaveBeenCalled();
+  });
+
+  it("signs when the active vault == boundVaultId (no false abort)", async () => {
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
+    await buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" });
+    expect(sdkBuildPlaintextSubmission).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("testnetJsonRpc — C1 all-untrusted short-circuit (T1)", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(false);
+    vi.mocked(verifyOperatorGenesis).mockClear();
+  });
+
+  it("T1: fast-fails with ChainGenesisMismatchError WITHOUT walking the fleet", async () => {
+    // Every operator already definitively untrusted → the pre-loop predicate
+    // fires; the gated walk (verifyOperatorGenesis) must NOT run and no fetch
+    // goes out. Proves the fix is a pre-loop predicate, not a probe-count cut.
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(true);
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    vi.mocked(verifyOperatorGenesis).mockClear();
+
+    const err = await testnetJsonRpc("eth_getBalance", ["0x0", "latest"]).then(
+      () => null,
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(ChainGenesisMismatchError);
+    expect((err as ChainGenesisMismatchError).kind).toBe("untrusted-chain");
+    expect(verifyOperatorGenesis).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("T1b: short-circuit message is byte-identical to the post-loop aggregate", async () => {
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(true);
+    const err = await testnetJsonRpc("eth_getBalance", ["0x0", "latest"]).then(
+      () => null,
+      (e) => e as Error,
+    );
+    // The mocked getActiveOperators returns 1 op → "all 1 operators…".
+    expect(err?.message).toContain("Chain genesis mismatch — all 1 operators");
+    expect(err?.message).toContain("See Operators.");
+  });
+});
+
+describe("testnetJsonRpc — C2 read coalescing (T4/T5)", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("T4: two concurrent identical reads share ONE walk; a later read re-walks", async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      // Small delay so the two concurrent calls genuinely overlap in-flight.
+      await new Promise((r) => setTimeout(r, 5));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jsonrpc: "2.0",
+          id: 1,
+          result: "0x" + calls.toString(16),
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    const [a, b] = await Promise.all([
+      testnetJsonRpc<string>("eth_blockNumber", []),
+      testnetJsonRpc<string>("eth_blockNumber", []),
+    ]);
+    expect(calls).toBe(1); // ONE underlying walk/fetch for both callers
+    expect(a.result).toBe(b.result);
+
+    // After settle the key is cleared → a later identical read re-walks (no
+    // stale serving).
+    const c = await testnetJsonRpc<string>("eth_blockNumber", []);
+    expect(calls).toBe(2);
+    expect(c.result).not.toBe(a.result);
+  });
+
+  it("T5: two concurrent submits are NOT coalesced (each a distinct call)", async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 5));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jsonrpc: "2.0", id: 1, result: "0xok" }),
+      };
+    }) as unknown as typeof fetch;
+
+    // mesh_submitTx is NOT in COALESCED_READ_METHODS → bypasses the map, so two
+    // sends never share a promise (no-double-send invariant, R4).
+    await Promise.all([
+      testnetJsonRpc("mesh_submitTx", ["0xraw"]),
+      testnetJsonRpc("mesh_submitTx", ["0xraw"]),
+    ]);
+    expect(calls).toBe(2);
   });
 });

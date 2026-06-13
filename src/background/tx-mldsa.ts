@@ -6,13 +6,34 @@
 // operator RPCs, and surface wallet-friendly errors.
 
 import {
+  buildEncryptedSubmission as sdkBuildEncryptedSubmission,
   buildPlaintextSubmission as sdkBuildPlaintextSubmission,
+  parseClusterSealKeys,
+  type ClusterSealKeys,
+  type ClusterSealKeysSource,
   type NativeEvmTxFields,
   type NativeTxExtensionLike,
 } from "@monolythium/core-sdk/crypto";
-import { getUnlockedBackendV4 } from "./keystore-mldsa.js";
-import { getActiveOperators, verifyOperatorGenesis } from "./networks.js";
+import {
+  getActiveVaultIdV4,
+  getUnlockedBackendV4,
+} from "./keystore-mldsa.js";
+import {
+  allActiveOperatorsDefinitivelyUntrusted,
+  getActiveOperators,
+  verifyOperatorGenesis,
+} from "./networks.js";
 import { isWithinSaneBound } from "../shared/operator-bounds.js";
+
+/** Sentinel thrown by the fail-closed vault-binding assert when the active
+ *  vault changed between approval and the synchronous pre-sign read (NN-01
+ *  TOCTOU). Fail-closed: nothing was signed or broadcast. send-error.ts keys
+ *  on the stable "active account changed" substring to classify it as the
+ *  warn-level "active-vault-changed" kind. Mechanism-agnostic — catches any
+ *  active-vault change (selectActiveVaultV4 AND vault-add), since it compares
+ *  the live getActiveVaultIdV4() to the bound id rather than a mechanism. */
+export const VAULT_BINDING_CHANGED_MESSAGE =
+  "active account changed during signing — transaction cancelled for safety";
 
 /** EIP-1193 `eth_sendTransaction` hex-quantity inputs this bridge accepts. */
 export interface EthSendTxFields {
@@ -32,13 +53,93 @@ export interface EthSendTxFields {
   chainIdHex: string;
 }
 
+/** Message for the all-operators-untrusted aggregate. Kept byte-identical to
+ *  the prior plain-Error string so message-keyed callers (send-error
+ *  classification, the chain-status banner) are unchanged; new callers can
+ *  `instanceof ChainGenesisMismatchError` instead of substring-matching. */
+function genesisMismatchMessage(operatorCount: number): string {
+  return `Chain genesis mismatch — all ${operatorCount} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See Operators.`;
+}
+
+/** Thrown when EVERY active operator fails the genesis gate — by the pre-loop
+ *  short-circuit (all operators already cached definitively-untrusted) OR the
+ *  post-loop aggregate. `kind` lets callers distinguish a chain-identity
+ *  rejection from a transport failure without string-matching. Subclass of
+ *  Error with the UNCHANGED message, so existing message-keyed handling holds. */
+export class ChainGenesisMismatchError extends Error {
+  readonly kind = "untrusted-chain" as const;
+  constructor(operatorCount: number) {
+    super(genesisMismatchMessage(operatorCount));
+    this.name = "ChainGenesisMismatchError";
+  }
+}
+
+// C2: collapse concurrent IDENTICAL reads onto one in-flight walk. Default-DENY
+// allow-list — only known idempotent reads coalesce; submits and any UNLISTED
+// method bypass to the uncoalesced path, so two sends NEVER share a promise (R4)
+// and an unknown method keeps today's behavior. Keyed on method+params; cleared
+// on SETTLE (not a TTL) so only truly-concurrent reads merge — a later identical
+// read launches a fresh walk and never serves a stale result.
+const inflightReads = new Map<
+  string,
+  Promise<{ result: unknown; via: string }>
+>();
+const COALESCED_READ_METHODS = new Set<string>([
+  "eth_blockNumber",
+  "eth_getBalance",
+  "eth_getBlockByNumber",
+  "eth_getTransactionCount",
+  "eth_call",
+  "eth_gasPrice",
+  "lyth_chainStats",
+  "lyth_executionUnitPrice",
+  "lyth_decodeTx",
+  "lyth_nativeReceipt",
+  "lyth_getTokenBalances",
+  "lyth_getAddressActivity",
+  "lyth_bridgeRoutes",
+  "lyth_mrcAccount",
+  "lyth_nativeAgentState",
+  "lyth_getAddressLabel",
+  "lyth_getDelegationHistory",
+  "lyth_signingActivity",
+  "lyth_operatorRisk",
+  "lyth_upcomingDuties",
+  "lyth_getDelegations",
+]);
+
+/**
+ * Public entry: coalesces concurrent identical READ calls onto one in-flight
+ * operator walk (see above). Submits / unlisted methods go straight to the
+ * uncoalesced walk. See `_testnetJsonRpcUncoalesced` for the walk itself.
+ */
+export async function testnetJsonRpc<T>(
+  method: string,
+  params: unknown[],
+  opts?: { timeoutMs?: number },
+): Promise<{ result: T; via: string }> {
+  if (!COALESCED_READ_METHODS.has(method)) {
+    return _testnetJsonRpcUncoalesced<T>(method, params, opts);
+  }
+  const key = `${method}|${JSON.stringify(params)}`;
+  const existing = inflightReads.get(key);
+  if (existing !== undefined) {
+    return existing as Promise<{ result: T; via: string }>;
+  }
+  const p = _testnetJsonRpcUncoalesced<T>(method, params, opts).finally(() => {
+    inflightReads.delete(key);
+  });
+  inflightReads.set(key, p as Promise<{ result: unknown; via: string }>);
+  return p;
+}
+
 /**
  * Iterate the published testnet operators in order, returning the
  * first one that produces a non-error JSON-RPC response. Transport-level
  * failures trigger fallback to the next operator; RPC-level rejections
  * propagate immediately because they are state-level consensus answers.
  */
-export async function testnetJsonRpc<T>(
+async function _testnetJsonRpcUncoalesced<T>(
   method: string,
   params: unknown[],
   opts?: { timeoutMs?: number },
@@ -54,6 +155,19 @@ export async function testnetJsonRpc<T>(
   // user this is a chain-side issue (operator binaries stale, or
   // a regenesis the wallet pin hasn't been bumped for) rather than
   // a wallet bug.
+  // Fast-fail: when EVERY active operator already carries a sticky definitive
+  // untrusted verdict (re-genesis / wrong chain), don't re-walk the whole fleet
+  // on every read — that exhaustive re-loop-per-read is what turned a re-genesis
+  // into a multi-second UI hang. Pure cache read (~0 ms, no probe); throws the
+  // SAME typed error the post-loop aggregate would, with a byte-identical
+  // message, so message-keyed callers are unchanged. Falls through to the real
+  // gated walk below for any unprobed / 60 s-TTL / trusted operator, so a
+  // recovering fleet is still tried. The gate is unchanged — this only
+  // fast-paths the outcome the gate would reach anyway, and serves zero data.
+  if (allActiveOperatorsDefinitivelyUntrusted()) {
+    throw new ChainGenesisMismatchError(getActiveOperators().length);
+  }
+
   let untrustedCount = 0;
   let totalOperators = 0;
   for (const v of getActiveOperators()) {
@@ -62,7 +176,10 @@ export async function testnetJsonRpc<T>(
     // match TESTNET_GENESIS_HASH are skipped — they're either on a fork
     // or a different chain entirely, and routing any request to them
     // leaks reads / writes onto an untrusted ledger.
-    if (!(await verifyOperatorGenesis(v.rpc))) {
+    // C3: bound the genesis probe so a hung / slow operator fails fast. The read
+    // path left this unbounded, so a dead operator stalled a reopen for the full
+    // 3 s probe default. A caller's own timeoutMs takes precedence; default 2 s.
+    if (!(await verifyOperatorGenesis(v.rpc, opts?.timeoutMs ?? 2_000))) {
       untrustedCount++;
       lastTransportErr = new Error(`${v.name}: untrusted genesis`);
       continue;
@@ -118,9 +235,7 @@ export async function testnetJsonRpc<T>(
   // raw "name: untrusted genesis" message. See Operators for
   // per-operator status the user can act on.
   if (untrustedCount > 0 && untrustedCount === totalOperators) {
-    throw new Error(
-      `Chain genesis mismatch — all ${totalOperators} operators reported untrusted genesis. The chain may have undergone a regenesis since the wallet's pin was last updated, or operator binaries are stale. See Operators.`,
-    );
+    throw new ChainGenesisMismatchError(totalOperators);
   }
   throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
 }
@@ -158,8 +273,16 @@ const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
  * buggy operator, so its entry is DROPPED rather than allowed to win the MAX
  * reduce. A de-trust rail, NOT an economic claim. Shared sane-bound primitive
  * with the fee ceiling (Item D) via `operator-bounds`.
+ *
+ * UNIT NOTE: this value is in 18-decimal lythoshi (1 LYTH = 10^18 lythoshi) and
+ * MUST track the native decimal domain. The original 8-decimal-era value
+ * (2 x 10^16 = 0.02 LYTH) survived the 18-decimal migration unchanged, so it
+ * silently DROPPED every real balance (anything above 0.02 LYTH) as "exceeds
+ * total supply" — leaving `contributing` empty, throwing the consensus, and
+ * stranding the entire balance UI (Home/Send/Stake) on "loading" indefinitely.
+ * See balance-consensus.test.ts for the realistic-balance regression guard.
  */
-const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 20_000_000_000_000_000n; // 2 x 10^16
+export const MAX_PLAUSIBLE_BALANCE_LYTHOSHI = 200_000_000_000_000_000_000_000_000n; // 2 x 10^26 (2x genesis supply @ 18 dec)
 
 /** Accept both the proof-envelope shape `{ value, blockNumber, proof,
  *  stateRoot }` and the plain hex-string shape; reject everything else.
@@ -356,17 +479,29 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
 
 /** Build a PLAINTEXT submission for the ML-DSA-65 mesh_submitTx path. Signs
  *  over the canonical chain-side sighash with the unlocked ML-DSA-65 backend
- *  and bincode-serializes the result. (The encrypted-mempool / Ferveo
- *  threshold-decrypt path was removed; a LythiumSeal encrypted path may
- *  return later.) */
+ *  and bincode-serializes the result. (The legacy Ferveo threshold-decrypt
+ *  path was removed; the LythiumSeal seal path is live in submitMlDsaTx — it
+ *  seals when the operator cluster serves a roster, else this plaintext path
+ *  is the fallback.) */
 export async function buildPlaintextSubmission(args: {
   txReq: EthSendTxFields;
+  boundVaultId: string;
 }): Promise<{
   signedTxWireHex: string;
   innerSighashHex: string;
   innerTxHashHex: string;
   innerWireBytes: number;
 }> {
+  // NN-01 fail-closed: assert the active vault still equals the approved/
+  // displayed vault IMMEDIATELY before the live backend read. This statement
+  // and the getUnlockedBackendV4() read below are consecutive SYNCHRONOUS reads
+  // of the same module-global (unlocked/activeContainerVaultId) — there is NO
+  // await between them, and sdkBuildPlaintextSubmission signs synchronously once
+  // `backend` is captured as a local — so a concurrent selectActiveVaultV4 /
+  // vault-add cannot interleave between the check and the sign.
+  if (getActiveVaultIdV4() !== args.boundVaultId) {
+    throw new Error(VAULT_BINDING_CHANGED_MESSAGE);
+  }
   const backend = getUnlockedBackendV4();
   if (backend === null) {
     throw new Error("v3 wallet is locked");
@@ -410,15 +545,279 @@ export async function broadcastPlaintextTransaction(
  *  on the live optional-encryption chain. `txHash` is the CANONICAL inner-tx
  *  hash the chain indexes (`eth_getTransactionByHash` / `lyth_txStatus`
  *  resolve it), validated against the node echo before it is surfaced. */
-export async function submitPlaintextMlDsaTx(req: EthSendTxFields): Promise<{
+export async function submitPlaintextMlDsaTx(
+  req: EthSendTxFields,
+  boundVaultId: string,
+): Promise<{
   txHash: string;
   via: string;
   innerSighashHex: string;
 }> {
-  const built = await buildPlaintextSubmission({ txReq: req });
+  const built = await buildPlaintextSubmission({ txReq: req, boundVaultId });
   const { txHash, via } = await broadcastPlaintextTransaction(
     built.signedTxWireHex,
     built.innerTxHashHex,
   );
   return { txHash, via, innerSighashHex: built.innerSighashHex };
+}
+
+// ----- LythiumSeal encrypted (scheme-3) submission path -----
+//
+// On a chain running with the encrypted-mempool milestone ON (v0.1.44+),
+// `mesh_submitTx` is rejected ("-32047 plaintext mempool entry not allowed:
+// encrypted envelope required"). The wallet then seals the *already-signed*
+// inner tx to the operator cluster's ML-KEM-768 roster and submits the envelope
+// via `lyth_submitEncrypted`. The seal is confidentiality only — the inner
+// ML-DSA-65 signature + the canonical inner-tx hash are unchanged, so the
+// receipt is still keyed on the same hash the plaintext path produces.
+//
+// Roster trust — IMPORTANT, read before relying on this for PRIVACY:
+// `fetchClusterSealKeys` reads `lyth_getClusterSealKeys` via `testnetJsonRpc`,
+// which skips any operator whose chain identity != the genesis pin
+// (`verifyOperatorGenesis`), and the SDK's `parseClusterSealKeys` recomputes the
+// roster hash from the served ek set and rejects a mismatched supplied hash.
+// That gives INTEGRITY (the seal binds to exactly the ek set the operator
+// served) — but NOT AUTHENTICITY: the recompute is self-referential, so it
+// cannot distinguish a genuine cluster roster from an all-attacker-ek roster a
+// malicious (or MITM'd) operator substitutes. Adversarial review (2026-06-09)
+// CONFIRMED that a single malicious-but-genesis-trusted operator — or a
+// cleartext-HTTP MITM, since the default operators are http:// — can make the
+// wallet seal to a roster IT ALONE decrypts, defeating the t-of-n privacy. The
+// wallet does NOT yet anchor the roster to an authoritative source. REQUIRED
+// hardening before this is trusted for privacy (the user owns the design call):
+// pin the genesis cluster roster hash + require the recompute to equal it,
+// and/or cross-check each served ek against the on-chain node-registry seal-EK
+// from a QUORUM of independent genesis-trusted operators, plus close the
+// `probeOperatorGenesis` null-probe fail-open and move operators to TLS. Until
+// then this re-enables SENDING on the encrypted-mempool chain but does NOT
+// guarantee privacy against a hostile operator. See
+// `_dev-notes/browser-wallet/2026-06-09_lythiumseal-encrypted-send-impl-FIX.md`.
+
+/** Soft TTL for the cluster seal roster cache. The roster rotates on cluster
+ *  membership / epoch changes (infrequent); a short TTL bounds staleness while
+ *  avoiding an extra RPC on every send. A stale roster the chain rejects
+ *  surfaces honestly and the next attempt re-fetches a fresh, re-validated one.
+ *  (Tune once the live rotation cadence is observed — see the FIX report.) */
+const SEAL_ROSTER_TTL_MS = 30_000;
+
+interface CachedClusterSealKeys {
+  clusterId: number;
+  epoch: bigint;
+  keys: ClusterSealKeys;
+  fetchedAtMs: number;
+}
+let cachedClusterSealKeys: CachedClusterSealKeys | null = null;
+
+/** Force-fetch + validate the cluster seal roster for `clusterId` from a
+ *  genesis-trusted operator, and refresh the cache. `parseClusterSealKeys`
+ *  validates the shape (ek lengths, contiguous `1..=n` indices, `2<=t<=n`) and
+ *  the roster hash; a malformed/forged roster throws here rather than being
+ *  sealed to. Prefer {@link getClusterSealKeys} in the hot path. */
+export async function fetchClusterSealKeys(
+  clusterId = 0,
+): Promise<ClusterSealKeys> {
+  const { result } = await testnetJsonRpc<
+    ClusterSealKeysSource & { clusterId?: number }
+  >("lyth_getClusterSealKeys", [clusterId]);
+  const keys = parseClusterSealKeys({
+    ...result,
+    clusterId: result.clusterId ?? clusterId,
+  });
+  cachedClusterSealKeys = {
+    clusterId: keys.clusterId,
+    epoch: keys.epoch,
+    keys,
+    fetchedAtMs: Date.now(),
+  };
+  return keys;
+}
+
+/** Cached cluster seal roster accessor (TTL `SEAL_ROSTER_TTL_MS`). Returns the
+ *  cached, already-validated roster within the TTL; otherwise force-fetches +
+ *  re-validates, which also picks up an epoch rotation. */
+export async function getClusterSealKeys(
+  clusterId = 0,
+): Promise<ClusterSealKeys> {
+  const cached = cachedClusterSealKeys;
+  if (
+    cached !== null &&
+    cached.clusterId === clusterId &&
+    Date.now() - cached.fetchedAtMs < SEAL_ROSTER_TTL_MS
+  ) {
+    return cached.keys;
+  }
+  return fetchClusterSealKeys(clusterId);
+}
+
+/** Build a SEALED (LythiumSeal scheme-3) submission for the `lyth_submitEncrypted`
+ *  path — the encrypted counterpart of {@link buildPlaintextSubmission}. Signs
+ *  the inner ML-DSA-65 tx with the UNCHANGED signing path (the same `signEvmTx`
+ *  the plaintext path uses), then seals the signed bytes to the cluster roster
+ *  via the SDK. The seal is confidentiality only: `innerTxHashHex` /
+ *  `innerSighashHex` are derived from the inner signed tx exactly as the
+ *  plaintext path derives them, so the canonical inner-tx hash the chain indexes
+ *  is identical — the receipt is keyed on the same hash (invariant 3 + the
+ *  canonical-hash invariant; the seal wraps, it does not re-key). */
+export async function buildSealedSubmission(args: {
+  txReq: EthSendTxFields;
+  clusterSealKeys: ClusterSealKeys;
+  boundVaultId: string;
+}): Promise<{
+  envelopeWireHex: string;
+  innerSighashHex: string;
+  innerTxHashHex: string;
+  innerWireBytes: number;
+}> {
+  // NN-01 fail-closed: same consecutive-synchronous assert as the plaintext
+  // builder — getActiveVaultIdV4() and getUnlockedBackendV4() read the same
+  // module-global with no intervening await, and sdkBuildEncryptedSubmission
+  // signs synchronously after `backend` is captured.
+  if (getActiveVaultIdV4() !== args.boundVaultId) {
+    throw new Error(VAULT_BINDING_CHANGED_MESSAGE);
+  }
+  const backend = getUnlockedBackendV4();
+  if (backend === null) {
+    throw new Error("v3 wallet is locked");
+  }
+  return sdkBuildEncryptedSubmission({
+    backend,
+    tx: normalizeFields(args.txReq),
+    clusterSealKeys: args.clusterSealKeys,
+  });
+}
+
+/** Submit a sealed `EncryptedEnvelope` (`0x`-hex) through the LythiumSeal
+ *  `lyth_submitEncrypted` path, with the same operator-failover testnetJsonRpc
+ *  gives the plaintext path.
+ *
+ *  Node-echo (deliberately NOT a hash-compare): unlike the plaintext path, the
+ *  node CANNOT echo the inner canonical tx hash — the inner tx is encrypted, so
+ *  the node never sees it. We therefore do NOT compare the response to
+ *  `expectedTxHashHex` (that would always fail); we mirror the SDK's
+ *  `submitTransactionWithPrivacy`, which only sanity-checks the response is a
+ *  32-byte hash and then returns the LOCAL canonical inner-tx hash for the
+ *  receipt lookup. testnetJsonRpc has already rejected any JSON-RPC `error`
+ *  response, so reaching here is a genuine node acceptance — we never reject a
+ *  successful submit on a response-shape guess (that would risk a double-send).
+ *  The exact success-response shape is unverified until a live sealed submit —
+ *  see the FIX report's live-verification checklist. */
+export async function broadcastEncryptedTransaction(
+  envelopeWireHex: string,
+  expectedTxHashHex: string,
+): Promise<{ txHash: string; via: string }> {
+  const { result, via } = await testnetJsonRpc<unknown>(
+    "lyth_submitEncrypted",
+    [envelopeWireHex],
+  );
+  const echoed = typeof result === "string" ? result.toLowerCase() : "";
+  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
+    // The node accepted (testnetJsonRpc already confirmed a non-error result);
+    // its response just isn't the 32-byte hash we expected. Trust the local
+    // canonical hash for receipt lookup and note the unexpected shape — do NOT
+    // throw, which would false-fail a landed tx and invite a double-send.
+    console.info(
+      "lyth_submitEncrypted accepted the envelope with a non-32-byte-hash response; trusting the locally computed canonical inner-tx hash for receipt lookup",
+    );
+  }
+  return { txHash: expectedTxHashHex, via };
+}
+
+/** One-shot SEALED helper — the encrypted counterpart of
+ *  {@link submitPlaintextMlDsaTx}. `txHash` is the CANONICAL inner-tx hash the
+ *  chain indexes (the same value the plaintext path returns), so the caller's
+ *  existing receipt poll resolves it unchanged. */
+export async function submitSealedMlDsaTx(
+  req: EthSendTxFields,
+  clusterSealKeys: ClusterSealKeys,
+  boundVaultId: string,
+): Promise<{ txHash: string; via: string; innerSighashHex: string }> {
+  const built = await buildSealedSubmission({
+    txReq: req,
+    clusterSealKeys,
+    boundVaultId,
+  });
+  const { txHash, via } = await broadcastEncryptedTransaction(
+    built.envelopeWireHex,
+    built.innerTxHashHex,
+  );
+  return { txHash, via, innerSighashHex: built.innerSighashHex };
+}
+
+/** Encrypted submissions carry a much higher intrinsic execution-unit floor than
+ *  plaintext: the chain must ML-KEM-decrypt + threshold-reconstruct + verify the
+ *  sealed envelope before it can execute the inner tx (~227k units of fixed seal
+ *  overhead; observed floors ~248–250k). The wallet's per-tx-type limits (e.g.
+ *  30k send, 100k delegate) are calibrated for plaintext and fall below that
+ *  floor, so the chain rejects a sealed tx with "execution-unit limit X below
+ *  intrinsic floor Y" (-32047). Raise the limit by the seal overhead so EVERY tx
+ *  type clears the floor. Additive (base + overhead, not a flat floor) so a tx
+ *  that already needs a high base — e.g. an MRV deploy with large calldata —
+ *  still clears it. The fee is charged on units CONSUMED, so the extra headroom
+ *  is a cap, not a charge; the genuine cost rise is the chain's encrypted-
+ *  execution overhead, which the fee surfaces should reflect (a follow-up — see
+ *  the FIX report). Applied only on the sealed path (in the dispatcher) so
+ *  buildSealedSubmission stays a pure "seal this exact tx" and the canonical-hash
+ *  invariant is intact. */
+const ENCRYPTED_SEAL_OVERHEAD_UNITS = 250_000n;
+
+export function withEncryptedExecutionUnitFloor(
+  req: EthSendTxFields,
+): EthSendTxFields {
+  let base: bigint;
+  try {
+    base = BigInt(req.gas);
+  } catch {
+    base = 0n;
+  }
+  const raised = base + ENCRYPTED_SEAL_OVERHEAD_UNITS;
+  return { ...req, gas: `0x${raised.toString(16)}` };
+}
+
+/** Submit dispatcher — the SINGLE chokepoint every wallet tx type funnels
+ *  through (send / stake / delegate / redelegate / claim / complete-redemption /
+ *  spending-policy / multisig / MRV plan+call / emergency). Chooses the
+ *  LythiumSeal encrypted path when the operator cluster serves a seal roster,
+ *  else the plaintext path. Returns the identical shape as
+ *  {@link submitPlaintextMlDsaTx} so all callers are a drop-in swap.
+ *
+ *  Fail-closed (invariant 5): on a chain with the encrypted-mempool milestone
+ *  ON, the operators serve a roster → seal. If the roster can't be fetched (RPC
+ *  disabled / transport failure), we fall back to the plaintext path — which
+ *  that chain REJECTS (-32047) → the honest "Encrypted transactions required"
+ *  classifier message. We never claim privacy and silently send plaintext: a
+ *  roster-present send is always sealed; a roster-absent send is plaintext the
+ *  encrypted chain refuses. On a chain that does NOT require encryption, the
+ *  roster fetch failing → plaintext is the correct (no-privacy-promised)
+ *  behavior. The plaintext path (invariant 2) is untouched and stays the
+ *  fallback. */
+export async function submitMlDsaTx(
+  req: EthSendTxFields,
+  boundVaultId: string,
+): Promise<{
+  txHash: string;
+  via: string;
+  innerSighashHex: string;
+}> {
+  let roster: ClusterSealKeys | null = null;
+  try {
+    roster = await getClusterSealKeys();
+  } catch {
+    // Roster unavailable (lyth_getClusterSealKeys disabled on this node profile,
+    // or a transport failure) → plaintext fallback. On an encrypted-required
+    // chain the chain rejects the plaintext tx and the classifier surfaces the
+    // honest message; on a plaintext chain it is admitted normally.
+    roster = null;
+  }
+  if (roster !== null) {
+    // Sealed submissions need a higher execution-unit limit (the seal-decrypt +
+    // verify overhead pushes the chain's intrinsic floor to ~248–250k); raise it
+    // here so every tx type clears the floor. The plaintext fallback below keeps
+    // its original (lower) limit.
+    return submitSealedMlDsaTx(
+      withEncryptedExecutionUnitFloor(req),
+      roster,
+      boundVaultId,
+    );
+  }
+  return submitPlaintextMlDsaTx(req, boundVaultId);
 }

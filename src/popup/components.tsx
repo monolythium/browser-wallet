@@ -23,13 +23,12 @@ import {
 } from "@monolythium/core-sdk";
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
-import { bech32mDisplay } from "../shared/bech32m";
+import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
+import { monoscanAddressUrl } from "../shared/build-info";
+import { ExternalLink } from "./components/ExternalLink";
 import { clusterLabel, formatWeightBpsPercent } from "../shared/staking";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
-import {
-  ACCOUNTS,
-} from "./demo-data";
 import type {
   Account, Custody,
 } from "./demo-data";
@@ -110,13 +109,217 @@ import {
 // on the loading-to-live transition itself.
 type ChainHealth =
   | { kind: "loading" }
+  // Warm-start: a block we persisted in a PRIOR session (poll tick or WS push)
+  // is shown on reopen as "last seen #N · reconnecting…" so the banner has a
+  // concrete datapoint instead of a bare CONNECTING… — WITHOUT asserting
+  // connectivity. Strictly distinct from `live`: a persisted block proves we
+  // once saw the chain, not that we are connected THIS session. The live tick
+  // supersedes it the instant a fresh block is confirmed.
+  | { kind: "reconnecting"; blockHex: string }
   | { kind: "live"; blockHex: string }
   | { kind: "stalled"; blockHex: string }
+  | { kind: "untrusted" }
+  // C5: operators answered with the RIGHT chain id but a DIFFERENT genesis hash
+  // — the network re-genesised. Distinct from `untrusted` (wrong chain id) so the
+  // banner can say "network may have reset" and Home can pause honestly.
+  | { kind: "regenesis" }
   | { kind: "offline"; reason: string };
 
 const HEALTH_TICK_MS = 8_000;
 const STALL_THRESHOLD_MS = 30_000;
 const OPERATOR_TICK_MS = 10_000;
+// Session key holding the last block hex we observed (written by the SW on a WS
+// newHeads push AND by the poll tick below). Read on mount to seed the honest
+// "reconnecting" warm-start so a reopen shows the last-seen block instead of a
+// bare CONNECTING…. Lives in chrome.storage.session (survives SW hibernation;
+// cleared on browser close / extension reload).
+const WS_BLOCK_KEY = "mono.ws.lastBlockHex";
+
+/**
+ * Map a FAILED bgWalletChainBlockNumber poll to a banner health state. The
+ * typed `cause:"untrusted"` (all active operators answered but returned a
+ * mismatching genesis hash — #42) renders the distinct UNTRUSTED state; every
+ * other failure stays OFFLINE. Pure + exported for unit tests.
+ */
+export function chainHealthForFailedPoll(r: {
+  reason?: string;
+  cause?: "unreachable" | "untrusted" | "regenesis";
+}): ChainHealth {
+  // C5: a genesis MISMATCH on the right chain id (the network re-genesised)
+  // renders the distinct "network reset — paused" banner; a wrong-chain-id
+  // operator stays UNTRUSTED; every other failure stays OFFLINE.
+  if (r.cause === "regenesis") return { kind: "regenesis" };
+  if (r.cause === "untrusted") return { kind: "untrusted" };
+  return { kind: "offline", reason: r.reason ?? "unreachable" };
+}
+
+/**
+ * Banner label + dot/text color + hover tooltip + tap-through flag per health
+ * kind. Pure + exported so the rendered banner and the tested contract can't
+ * drift. Untrusted is amber (the STALLED token), distinct from red OFFLINE.
+ * `tappable` is true for the not-online states (stalled / untrusted / offline)
+ * so the label routes to Operators; the callsite still gates on onOpenOperators.
+ */
+export function chainHealthPresentation(kind: ChainHealth["kind"]): {
+  label: string;
+  color: string;
+  tooltip: string;
+  tappable: boolean;
+} {
+  switch (kind) {
+    case "live":
+      return {
+        label: "LIVE",
+        color: "var(--ok)",
+        tooltip: "Connected — an operator is serving your pinned chain.",
+        tappable: false,
+      };
+    case "stalled":
+      return {
+        label: "STALLED",
+        color: "var(--warn)",
+        tooltip:
+          "The chain hasn't advanced for a while. Tap to review your operators.",
+        tappable: true,
+      };
+    case "untrusted":
+      return {
+        label: "UNTRUSTED OPERATOR",
+        // Red (same hard-trust token as ALL OPERATORS UNTRUSTED / OFFLINE) — the
+        // operator is on a different chain than the wallet expects.
+        color: "var(--err)",
+        tooltip:
+          "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network. Click to see operators.",
+        tappable: true,
+      };
+    case "regenesis":
+      return {
+        label: "ALL OPERATORS UNTRUSTED",
+        // Red (same hard-trust token as UNTRUSTED OPERATOR / OFFLINE) — every
+        // operator is on a different chain than the wallet expects, so on-chain
+        // actions stay paused. Scrolls as a marquee (the long label).
+        color: "var(--err)",
+        tooltip:
+          "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. Click to see operators.",
+        tappable: true,
+      };
+    case "offline":
+      return {
+        label: "OFFLINE",
+        color: "var(--err)",
+        tooltip:
+          "Can't reach any operator right now. Tap to review your operators.",
+        tappable: true,
+      };
+    case "reconnecting":
+      return {
+        // Amber (the STALLED token) — deliberately NOT the green LIVE token:
+        // the seeded block is unverified this session. The visible label is
+        // rendered via reconnectingBannerLabel (with the block number); this
+        // base label is the aria/fallback text. Not tappable (no operator
+        // action implied while we re-establish the read).
+        label: "RECONNECTING…",
+        color: "var(--warn)",
+        tooltip:
+          "Showing the last block seen — reconnecting to an operator to confirm.",
+        tappable: false,
+      };
+    case "loading":
+    default:
+      return {
+        label: "CONNECTING…",
+        color: "var(--fg-500)",
+        tooltip: "Connecting to an operator…",
+        tappable: false,
+      };
+  }
+}
+
+/**
+ * Visible banner label for the reconnecting warm-start: the last-seen block
+ * NUMBER (decimal) with a reconnecting marker. The number is honest — labelled
+ * "last seen", never presented as the current head — and this NEVER renders the
+ * "LIVE" word: a persisted block proves we once saw the chain, not that we are
+ * connected this session. Pure + exported so the honest-label contract is
+ * tested independently of the banner render.
+ */
+export function reconnectingBannerLabel(blockHex: string): string {
+  return `LAST SEEN #${parseInt(blockHex, 16)} · RECONNECTING…`;
+}
+
+/**
+ * Validate a persisted block-hex seed (from chrome.storage.session) and lift it
+ * to a `reconnecting` health. Returns null for a missing/malformed seed, so the
+ * banner stays on CONNECTING… rather than rendering "#NaN". The result is
+ * ALWAYS `reconnecting`, NEVER `live` — the seed is unverified this session.
+ * Pure + exported for unit tests.
+ */
+export function seedReconnectingHealth(seed: unknown): ChainHealth | null {
+  if (typeof seed === "string" && /^0x[0-9a-fA-F]+$/.test(seed)) {
+    return { kind: "reconnecting", blockHex: seed };
+  }
+  return null;
+}
+
+/**
+ * #42: whether to label the Home hero balance as a retained last-known value.
+ * True only when the balance is real (not the pending "0.00" / null) and the
+ * latest refresh couldn't reach the chain. Pure + exported for unit tests; it
+ * gates only the LABEL — the balance value itself is never changed.
+ */
+export function shouldLabelBalanceStale(
+  isPriv: boolean,
+  balanceStale: boolean | undefined,
+  balance: number | null,
+): boolean {
+  return !isPriv && balanceStale === true && balance != null;
+}
+
+/**
+ * C5 (no-mock / R2): whether the Home hero should PAUSE the balance display
+ * instead of rendering a misleading bare "0.00". True only when the balance is
+ * genuinely UNKNOWN (null/undefined — never a real value, which is shown as-is)
+ * AND the last refresh failed because operators are untrusted: a re-genesis
+ * (`regenesis`) or a wrong-chain operator (`untrusted`). On an unreachable /
+ * transient failure the existing "last known" stale label handles it; this is
+ * the harder "operators serve a different chain, the value is unknowable"
+ * state. Honest absence — the value is never fabricated or zeroed.
+ */
+export function shouldPauseBalanceDisplay(
+  isPriv: boolean,
+  balance: number | null | undefined,
+  cause: "unreachable" | "untrusted" | "regenesis" | null | undefined,
+): boolean {
+  return (
+    !isPriv &&
+    balance == null &&
+    (cause === "regenesis" || cause === "untrusted")
+  );
+}
+
+/**
+ * C2: the Monoscan "check your balance" URL for the paused-balance state. Builds
+ * `MONOSCAN_ADDRESS_BASE/{bech32m}` — a TRUSTED wallet constant
+ * (`shared/build-info.ts`), never operator-echoed — from the user's OWN active
+ * address, converted with the wallet's canonical `eoa` (`mono1…`) encoding so it
+ * matches the displayed address. Returns null for a missing / non-0x address so
+ * the link is only rendered when valid (never a broken URL). Pure + exported.
+ */
+export function pausedBalanceMonoscanUrl(
+  activeAddr0x: string | null | undefined,
+): string | null {
+  if (
+    !activeAddr0x ||
+    !(activeAddr0x.startsWith("0x") || activeAddr0x.startsWith("0X"))
+  ) {
+    return null;
+  }
+  try {
+    return monoscanAddressUrl(addressToBech32m(activeAddr0x, "eoa"));
+  } catch {
+    return null;
+  }
+}
 
 interface ChainStatusBannerProps {
   /** Active chain display data. Required — every callsite threads its
@@ -154,7 +357,23 @@ interface ChainStatusBannerProps {
    *  Renders a 3-line hamburger icon on the far right when provided;
    *  caller routes to the MainMenu screen. */
   onMenu?: () => void;
+  /** Tap-through target for the UNTRUSTED OPERATOR banner state — routes to the
+   *  Operators screen so the user can see which operators are untrusted and
+   *  why the pinned genesis may be stale. Optional; omitted on the secondary
+   *  approval/unlock banners, where the label renders non-tappable. */
+  onOpenOperators?: () => void;
 }
+
+// Last chain-health snapshot, cached at MODULE scope so it survives a banner
+// REMOUNT within the same popup session. The banner is rendered conditionally
+// (App's showBannerStrip) and the popup re-creates the component whenever the
+// user navigates to a screen that hides it and back — without this cache each
+// such remount cold-started health at {loading} = "CONNECTING…", which is why
+// the status re-flashed every time the user returned to Home. Seeding useState
+// from this snapshot shows the last-known LIVE/OFFLINE/etc. instantly instead.
+// Popup-session-scoped: a true reopen re-initializes the module to null (→ the
+// chrome.storage.session warm-start seed covers the cross-session case).
+let lastKnownHealth: ChainHealth | null = null;
 
 export function ChainStatusBanner({
   network,
@@ -164,9 +383,18 @@ export function ChainStatusBanner({
   onNotifications,
   unreadCount,
   onMenu,
+  onOpenOperators,
 }: ChainStatusBannerProps) {
-  const [health, setHealth] = useState<ChainHealth>({ kind: "loading" });
+  const [health, setHealth] = useState<ChainHealth>(
+    () => lastKnownHealth ?? { kind: "loading" },
+  );
   const [operator, setOperator] = useState<string | null>(null);
+
+  // Persist every health change to the module-scoped snapshot so the next
+  // in-session remount seeds from it (above) rather than re-showing CONNECTING.
+  useEffect(() => {
+    lastKnownHealth = health;
+  }, [health]);
 
   // Chain-health poll. Tracks `lastBlockHex` and `lastBlockObservedAt` so
   // we can distinguish "RPC reachable but chain stalled" from "RPC down".
@@ -186,7 +414,7 @@ export function ChainStatusBanner({
         const r = await bgWalletChainBlockNumber();
         if (cancelled) return;
         if (!r.ok) {
-          setHealth({ kind: "offline", reason: r.reason ?? "unreachable" });
+          setHealth(chainHealthForFailedPoll(r));
           return;
         }
         const now = Date.now();
@@ -194,6 +422,14 @@ export function ChainStatusBanner({
           lastBlockHex = r.blockHex;
           lastBlockObservedAt = now;
           setHealth({ kind: "live", blockHex: r.blockHex });
+          // Persist the freshly-confirmed block so a later reopen can seed the
+          // honest reconnecting warm-start even if WS never pushed (e.g. the
+          // operator has no ws_url). Same key the SW writes on a WS head, so
+          // there's one source of "last seen block". Best-effort; a failed
+          // write just means the next open falls back to CONNECTING….
+          void chrome.storage.session
+            .set({ [WS_BLOCK_KEY]: r.blockHex })
+            .catch(() => {});
         } else if (now - lastBlockObservedAt >= STALL_THRESHOLD_MS) {
           setHealth({ kind: "stalled", blockHex: r.blockHex });
         }
@@ -207,6 +443,23 @@ export function ChainStatusBanner({
     const visHandler = () => {
       if (document.visibilityState === "visible") void tick();
     };
+
+    // Honest warm-start: seed the banner from the block we persisted in a prior
+    // session so the reopen shows "last seen #N · reconnecting…" instead of a
+    // bare CONNECTING…. Applied ONLY while still loading — the functional
+    // update yields to a live/offline/etc. state the tick may have set first,
+    // and the live tick supersedes it the instant a fresh block is confirmed.
+    // Never maps to live: the seed is unverified this session.
+    void chrome.storage.session
+      .get(WS_BLOCK_KEY)
+      .then((s) => {
+        if (cancelled) return;
+        const seeded = seedReconnectingHealth(s?.[WS_BLOCK_KEY]);
+        if (seeded) {
+          setHealth((prev) => (prev.kind === "loading" ? seeded : prev));
+        }
+      })
+      .catch(() => {});
 
     void tick();
     const intervalId = setInterval(tick, HEALTH_TICK_MS);
@@ -224,14 +477,13 @@ export function ChainStatusBanner({
       // ws-subscribe-new-heads is best-effort; failure means the
       // 8 s poll covers us alone (the existing behaviour).
     });
-    const wsKey = "mono.ws.lastBlockHex";
     const wsListener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
       changes,
       area,
     ) => {
       if (area !== "session") return;
       if (cancelled) return;
-      const change = changes[wsKey];
+      const change = changes[WS_BLOCK_KEY];
       if (!change || typeof change.newValue !== "string") return;
       const blockHex = change.newValue;
       const now = Date.now();
@@ -337,42 +589,67 @@ export function ChainStatusBanner({
   // a future surface — kept rather than ripped out so we don't
   // churn the visibility-gated effect just to delete a setState).
   void operator;
-  let dotColor: string;
-  let body: ReactNode;
-  switch (health.kind) {
-    case "live":
-      dotColor = "var(--ok)";
-      body = (
-        <>
-          <span style={{ color: "var(--ok)", fontWeight: 500 }}>LIVE</span>
-          {networkChip}
-        </>
-      );
-      break;
-    case "stalled":
-      dotColor = "var(--warn)";
-      body = (
-        <>
-          <span style={{ color: "var(--warn)", fontWeight: 500 }}>STALLED</span>
-          {networkChip}
-        </>
-      );
-      break;
-    case "offline":
-      dotColor = "var(--err)";
-      body = (
-        <>
-          <span style={{ color: "var(--err)", fontWeight: 500 }}>OFFLINE</span>
-          {networkChip}
-        </>
-      );
-      break;
-    case "loading":
-    default:
-      dotColor = "var(--fg-500)";
-      body = <span>CONNECTING…</span>;
-      break;
-  }
+  // dotColor + label come from the shared, unit-tested chainHealthPresentation
+  // so the rendered banner and the contract can't drift. The body wraps the
+  // label with the network chip (and, for untrusted, the Operators tap-through).
+  // dotColor + label + tooltip + tap-flag come from the shared, unit-tested
+  // chainHealthPresentation so the rendered banner and the contract can't
+  // drift. Not-online states are a tap-through to Operators (gated on the
+  // optional onOpenOperators — omitted on the approval/unlock banners). The
+  // long UNTRUSTED OPERATOR label scrolls as a marquee so it doesn't crowd the
+  // network chip + action cluster.
+  const pres = chainHealthPresentation(health.kind);
+  const dotColor = pres.color;
+  const tappable = pres.tappable && !!onOpenOperators;
+  const tapProps = tappable
+    ? { onClick: onOpenOperators, role: "button" as const, tabIndex: 0 }
+    : {};
+  // Visible label: for the reconnecting warm-start, surface the last-seen block
+  // NUMBER (honest "last seen", never the LIVE word). Reconnecting is never an
+  // untrusted state, so only the non-marquee branch below consults this.
+  const labelText =
+    health.kind === "reconnecting"
+      ? reconnectingBannerLabel(health.blockHex)
+      : pres.label;
+  const labelEl =
+    health.kind === "untrusted" || health.kind === "regenesis" ? (
+      <span
+        className="ext-banner-marquee"
+        {...tapProps}
+        title={pres.tooltip}
+        style={{
+          color: pres.color,
+          fontWeight: 500,
+          cursor: tappable ? "pointer" : undefined,
+        }}
+      >
+        <span className="ext-banner-marquee-track" aria-label={pres.label}>
+          <span>{pres.label}</span>
+          <span aria-hidden="true">{pres.label}</span>
+        </span>
+      </span>
+    ) : (
+      <span
+        {...tapProps}
+        title={pres.tooltip}
+        style={{
+          color: pres.color,
+          fontWeight: 500,
+          cursor: tappable ? "pointer" : undefined,
+        }}
+      >
+        {labelText}
+      </span>
+    );
+  const body =
+    health.kind === "loading" ? (
+      labelEl
+    ) : (
+      <>
+        {labelEl}
+        {networkChip}
+      </>
+    );
 
   return (
     <div style={containerStyle}>
@@ -383,9 +660,7 @@ export function ChainStatusBanner({
           borderRadius: "50%",
           background: dotColor,
           boxShadow:
-            health.kind === "live" || health.kind === "stalled" || health.kind === "offline"
-              ? `0 0 6px ${dotColor}`
-              : "none",
+            health.kind === "loading" ? "none" : `0 0 6px ${dotColor}`,
           flexShrink: 0,
         }}
       />
@@ -518,8 +793,10 @@ function BannerActionButton({
 // the freed horizontal width to render in 1-2 lines instead of 3-4.
 interface TopProps {
   account: Account;
-  onOpenAccounts: () => void;
   onSettings: () => void;
+  /** Active vault label, forwarded to VaultPicker so the chip shows the real
+   *  name on first paint instead of the "—" placeholder. */
+  activeVaultLabel?: string;
   /** VaultPicker's "New wallet" dropdown entry
    *  dispatches here instead of opening the legacy single-page modal.
    *  Threaded through Home for App-level routing to NewWalletFlow. */
@@ -531,11 +808,9 @@ interface TopProps {
 }
 
 // Chip replaced with <VaultPicker /> (multi-vault
-// dropdown). `onOpenAccounts` is preserved on TopProps for caller
-// compatibility but no longer consumed here — the legacy Accounts
-// screen navigation is vestigial since BIP-32/44 HD derivation was
-// removed. Full deletion of the prop chain (HomeProps + App.tsx)
-// is a future cleanup.
+// dropdown). The legacy `onOpenAccounts` prop chain + the Accounts
+// screen it routed to were deleted along with the demo fixtures (the
+// screen was unreachable since BIP-32/44 HD derivation was removed).
 //
 // `onSettings` is also no longer consumed: the cog
 // migrated to ChainStatusBanner above this row so the VaultPicker
@@ -547,7 +822,7 @@ interface TopProps {
 // The ALGO_PLACEHOLDER strip above the picker is the tiny "ML-DSA-65"
 // label the user requested instead of the algo badge that used to
 // live inside the chip itself (earlier design).
-export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
+export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
       <div
@@ -569,6 +844,7 @@ export function Top({ account, onNewWalletFlow, onVaultComplete }: TopProps) {
       </div>
       <VaultPicker
         activeAccount={account}
+        {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
       />
@@ -1610,7 +1886,13 @@ interface HomeProps {
   account: Account;
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
-  onOpenAccounts: () => void;
+  /** #42: the displayed balance is a RETAINED last-known value (the chain was
+   *  unreachable/untrusted on the latest refresh). When true and a balance is
+   *  present, the hero labels it as stale — it never fabricates/zeros it. */
+  balanceStale?: boolean;
+  /** C5: typed reason the last balance refresh failed, so Home can pause
+   *  honestly on a re-genesis / wrong-chain operator instead of a bare 0.00. */
+  balanceCause?: "unreachable" | "untrusted" | "regenesis" | null;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -1622,6 +1904,12 @@ interface HomeProps {
    *  so test harnesses + callers without the route wired still
    *  render. */
   topSlot?: ReactNode;
+  /** Active vault label, threaded App → Top → VaultPicker so the chip
+   *  renders the real wallet name on first paint (App already fetched it via
+   *  loadActiveVaultSummary) instead of flashing the "—" placeholder until
+   *  the picker's own bgVaultsList resolves. Sourced from the vault summary
+   *  label only — never activeAccount.label. */
+  activeVaultLabel?: string;
   /** Threaded to VaultPicker so the "New wallet"
    *  dropdown entry routes to App's NewWalletFlow screen instead of
    *  opening the legacy single-page VaultAddModal fresh mode. */
@@ -1632,12 +1920,38 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, onOpenAccounts, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, balanceStale, balanceCause, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
   const isPriv = account.denom === "private";
-  const totalStr = account.balance != null ? fmt(account.balance, 2) : "0.00";
+  // C5 (R2 no-mock): pause the display when operators serve a different chain
+  // (re-genesis / wrong chain) and the value is genuinely unknown — never a
+  // misleading bare 0.00. A real balance is always shown as-is.
+  const balancePaused = shouldPauseBalanceDisplay(
+    isPriv,
+    account.balance,
+    balanceCause,
+  );
+  // C2: the Monoscan "check your balance" external link for the paused state
+  // (the user's own address over the trusted base; null on a bad/non-0x addr).
+  const pausedMonoscanUrl = balancePaused
+    ? pausedBalanceMonoscanUrl(account.addr)
+    : null;
+  const totalStr =
+    account.balance != null
+      ? fmt(account.balance, 2)
+      : balancePaused
+        ? "—"
+        : "0.00";
+  // #42: label the hero as a retained last-known value only when the chain
+  // couldn't be reached AND there's a real balance to annotate (never on the
+  // pending "0.00"). Annotate-only — the value itself is untouched.
+  const showStaleBalance = shouldLabelBalanceStale(
+    isPriv,
+    balanceStale,
+    account.balance,
+  );
   // Activity rows now flow through useActivity() inside ActivityList —
   // see src/popup/components/ActivityList.tsx. The Home component no
   // longer reads `indexer?.addressActivity` directly. `liveLabel` is
@@ -1657,8 +1971,8 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
     <>
       <Top
         account={account}
-        onOpenAccounts={onOpenAccounts}
         onSettings={onSettings}
+        {...(activeVaultLabel ? { activeVaultLabel } : {})}
         {...(onNewWalletFlow ? { onNewWalletFlow } : {})}
         {...(onVaultComplete ? { onVaultComplete } : {})}
       />
@@ -1670,10 +1984,68 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
           {isPriv ? (
             <div className="num opaque">— amount hidden by design</div>
           ) : (
-            <div className="num">
+            <div
+              className="num"
+              style={
+                showStaleBalance || balancePaused
+                  ? { opacity: 0.55 }
+                  : undefined
+              }
+            >
               {intPart}
-              <span className="frac">.{fracPart ?? "00"}</span>
+              {fracPart !== undefined && (
+                <span className="frac">.{fracPart}</span>
+              )}
               <span className="d">LYTH</span>
+            </div>
+          )}
+          {balancePaused && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                letterSpacing: "0.04em",
+                marginTop: 2,
+                lineHeight: 1.5,
+              }}
+            >
+              <div style={{ color: "var(--err)", fontWeight: 600 }}>
+                Untrusted operators
+              </div>
+              <div
+                style={{
+                  color: "var(--fg-400)",
+                  letterSpacing: 0,
+                  marginTop: 1,
+                }}
+              >
+                {balanceCause === "untrusted"
+                  ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
+                  : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
+              </div>
+              {pausedMonoscanUrl && (
+                <div style={{ marginTop: 3, letterSpacing: 0 }}>
+                  <ExternalLink
+                    href={pausedMonoscanUrl}
+                    title="Open your wallet address on Monoscan"
+                  >
+                    Check your balance on Monoscan
+                  </ExternalLink>
+                </div>
+              )}
+            </div>
+          )}
+          {showStaleBalance && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--fg-500)",
+                letterSpacing: "0.04em",
+                marginTop: 2,
+              }}
+            >
+              last known · couldn&apos;t reach the chain
             </div>
           )}
           {!isPriv && (
@@ -1810,70 +2182,10 @@ export function Home({ account, network, indexer, onOpenAccounts, onSettings, on
   );
 }
 
-// ---- Accounts picker ----
-interface AccountsProps {
-  current: Account;
-  onBack: () => void;
-  onPick: (a: Account) => void;
-}
-
-export function Accounts({ current, onBack, onPick }: AccountsProps) {
-  return (
-    <>
-      <div className="ext-top">
-        <button className="ext-iconbtn" onClick={onBack}><Icon name="back" size={15} /></button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>Accounts</div>
-        <button className="ext-iconbtn"><Icon name="plus" size={15} /></button>
-      </div>
-      <div className="ext-body">
-        <div className="ext-card" style={{ padding: "6px 10px" }}>
-          {ACCOUNTS.map((a) => (
-            <div
-              key={a.id}
-              className="ext-asset"
-              onClick={() => onPick(a)}
-              style={{ position: "relative", cursor: "pointer" }}
-            >
-              <div className={`ext-asset__ico ${a.denom === "private" ? "priv" : "native"}`}>
-                {a.label.slice(0, 1).toUpperCase()}
-              </div>
-              <div className="ext-asset__main">
-                <div className="sym">
-                  {a.label}{" "}
-                  {a.custody === "hw" && (
-                    <span
-                      className="ext-badge-att"
-                      style={{ background: "rgba(88,160,220,0.14)", color: "#78b0dc", borderColor: "rgba(88,160,220,0.3)" }}
-                    >
-                      <Icon name="hw" size={8} /> Ledger
-                    </span>
-                  )}
-                </div>
-                <div className="chain">{shortAddr(bech32mDisplay(a.addr), 18)} · {a.denom} · {a.algo === "slhdsa" ? "SLH-DSA" : "ML-DSA"}</div>
-              </div>
-              <div className="ext-asset__right">
-                {a.balance == null
-                  ? <div className="opaque">hidden</div>
-                  : <div className="amt">{fmt(a.balance, 0)}</div>}
-                <div className="sym" style={{ color: "var(--fg-400)", fontFamily: "var(--f-mono)", fontSize: 9, marginTop: 2 }}>
-                  {a.denom === "private" ? "LYTH-p" : "LYTH"}
-                </div>
-              </div>
-              {a.id === current.id && (
-                <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: "var(--gold)" }}>
-                  <Icon name="check" size={14} />
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-        <button className="ext-act" style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}>
-          <Icon name="plus" size={13} /> Import or create
-        </button>
-      </div>
-    </>
-  );
-}
+// The legacy "Accounts" picker (a static mock of the ACCOUNTS demo
+// fixtures) was removed with the demo data: vault switching is the
+// VaultPicker's job now, and the screen was unreachable (onOpenAccounts
+// was threaded but never invoked).
 
 // Stake page moved to src/popup/pages/Stake.tsx.
 // The placeholder static-strategy mock that used to live here was
@@ -4513,6 +4825,25 @@ export function ReqTypedSign({
 
       <OriginWarningPanel warnings={originWarnings} />
 
+      {parsed && !digest && (
+        <div
+          className="req-section"
+          style={{
+            padding: "8px 10px",
+            borderRadius: 10,
+            background: "rgba(220, 70, 70, 0.12)",
+            border: "1px solid rgba(220, 70, 70, 0.45)",
+            color: "#ff9b9b",
+            fontSize: 11,
+            lineHeight: 1.4,
+          }}
+        >
+          Cannot encode this typed data — a field does not match its declared
+          type. Signing is disabled so the wallet never signs a digest that
+          differs from what is shown.
+        </div>
+      )}
+
       <div className="req-section">
         <div className="req-section__h">Signing as</div>
         <div className="req-kv">
@@ -4582,7 +4913,7 @@ export function ReqTypedSign({
         <button
           className={hasOriginDanger ? "danger" : "prim"}
           onClick={onApprove}
-          disabled={!parsed}
+          disabled={!parsed || !digest}
         >
           {custody === "hw"
             ? "Confirm on device"

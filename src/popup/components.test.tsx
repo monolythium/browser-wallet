@@ -11,6 +11,13 @@ import {
 import {
   applyFeeTier,
   AssetList,
+  chainHealthForFailedPoll,
+  chainHealthPresentation,
+  reconnectingBannerLabel,
+  seedReconnectingHealth,
+  shouldLabelBalanceStale,
+  shouldPauseBalanceDisplay,
+  pausedBalanceMonoscanUrl,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
@@ -1194,5 +1201,213 @@ describe("bridge route disclosure display", () => {
     expect(html).not.toContain("Asset</div>");
     expect(html).toContain("Request quote");
     expect(html).toContain("disabled");
+  });
+});
+
+describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
+  it("maps cause:'untrusted' to the untrusted state", () => {
+    expect(chainHealthForFailedPoll({ cause: "untrusted" })).toEqual({
+      kind: "untrusted",
+    });
+  });
+
+  it("maps a failure without an untrusted cause to offline (unchanged)", () => {
+    expect(chainHealthForFailedPoll({ reason: "no operator" })).toEqual({
+      kind: "offline",
+      reason: "no operator",
+    });
+    expect(chainHealthForFailedPoll({ cause: "unreachable" })).toEqual({
+      kind: "offline",
+      reason: "unreachable",
+    });
+    expect(chainHealthForFailedPoll({})).toEqual({
+      kind: "offline",
+      reason: "unreachable",
+    });
+  });
+
+  it("T9 (C5): maps cause:'regenesis' to the regenesis state (distinct from untrusted/offline)", () => {
+    expect(chainHealthForFailedPoll({ cause: "regenesis" })).toEqual({
+      kind: "regenesis",
+    });
+  });
+});
+
+describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
+  it("presents untrusted as red 'UNTRUSTED OPERATOR', tappable (same red as OFFLINE)", () => {
+    expect(chainHealthPresentation("untrusted")).toMatchObject({
+      label: "UNTRUSTED OPERATOR",
+      color: "var(--err)",
+      tappable: true,
+    });
+    expect(chainHealthPresentation("offline")).toMatchObject({
+      label: "OFFLINE",
+      color: "var(--err)",
+      tappable: true,
+    });
+  });
+
+  it("T9: presents regenesis as red 'ALL OPERATORS UNTRUSTED', tappable (hard trust failure)", () => {
+    expect(chainHealthPresentation("regenesis")).toMatchObject({
+      label: "ALL OPERATORS UNTRUSTED",
+      color: "var(--err)",
+      tappable: true,
+    });
+    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
+      /genesis|operators|network/i,
+    );
+    // The "check your balance on Monoscan" CTA lives on the balance card, not
+    // the banner tooltip — the banner taps through to Operators.
+    expect(chainHealthPresentation("regenesis").tooltip).toMatch(
+      /Click to see operators/,
+    );
+  });
+
+  it("regenesis + untrusted share the red hard-trust token (both 'on a different chain')", () => {
+    expect(chainHealthPresentation("regenesis").color).toBe("var(--err)");
+    expect(chainHealthPresentation("untrusted").color).toBe("var(--err)");
+    // distinct copy: all-operators vs this-operator
+    expect(chainHealthPresentation("regenesis").tooltip).toMatch(/^All operators/);
+    expect(chainHealthPresentation("untrusted").tooltip).toMatch(/^This operator/);
+  });
+
+  it("makes the not-online states tappable, live + loading not", () => {
+    expect(chainHealthPresentation("offline").tappable).toBe(true);
+    expect(chainHealthPresentation("stalled").tappable).toBe(true);
+    expect(chainHealthPresentation("untrusted").tappable).toBe(true);
+    expect(chainHealthPresentation("live").tappable).toBe(false);
+    expect(chainHealthPresentation("loading").tappable).toBe(false);
+  });
+
+  it("every state carries a non-empty hover tooltip", () => {
+    for (const k of [
+      "live",
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "offline",
+      "loading",
+      "reconnecting",
+    ] as const) {
+      expect(chainHealthPresentation(k).tooltip.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("leaves live / stalled / loading labels + colors unchanged", () => {
+    expect(chainHealthPresentation("live")).toMatchObject({
+      label: "LIVE",
+      color: "var(--ok)",
+    });
+    expect(chainHealthPresentation("stalled")).toMatchObject({
+      label: "STALLED",
+      color: "var(--warn)",
+    });
+    expect(chainHealthPresentation("loading")).toMatchObject({
+      label: "CONNECTING…",
+      color: "var(--fg-500)",
+    });
+  });
+
+  it("presents reconnecting as amber, not tappable, and NOT the green LIVE token", () => {
+    const pres = chainHealthPresentation("reconnecting");
+    expect(pres.color).toBe("var(--warn)"); // amber, distinct from LIVE green / OFFLINE red
+    expect(pres.color).not.toBe("var(--ok)"); // never the LIVE token
+    expect(pres.tappable).toBe(false);
+    expect(pres.label).not.toBe("LIVE");
+    expect(pres.tooltip.length).toBeGreaterThan(0);
+  });
+});
+
+describe("reconnectingBannerLabel (D honest warm-start label)", () => {
+  it("shows the last-seen block NUMBER (decimal) with a reconnecting marker", () => {
+    expect(reconnectingBannerLabel("0x10")).toBe(
+      "LAST SEEN #16 · RECONNECTING…",
+    );
+    expect(reconnectingBannerLabel("0x1a2b")).toBe(
+      "LAST SEEN #6699 · RECONNECTING…",
+    );
+  });
+
+  it("never renders the word LIVE — a seeded block is not a confirmed connection", () => {
+    expect(reconnectingBannerLabel("0xff")).not.toContain("LIVE");
+  });
+});
+
+describe("seedReconnectingHealth (D seed validation — never asserts connectivity)", () => {
+  it("lifts a valid block-hex seed to a reconnecting health (never live)", () => {
+    const h = seedReconnectingHealth("0x1a2b");
+    expect(h).toEqual({ kind: "reconnecting", blockHex: "0x1a2b" });
+    // The hard honesty invariant: a persisted seed can NEVER produce a live
+    // state — connectivity is asserted only after a this-session fetch.
+    expect(h?.kind).not.toBe("live");
+  });
+
+  it("returns null for a missing or malformed seed (banner stays on CONNECTING…)", () => {
+    expect(seedReconnectingHealth(undefined)).toBeNull();
+    expect(seedReconnectingHealth(null)).toBeNull();
+    expect(seedReconnectingHealth("")).toBeNull();
+    expect(seedReconnectingHealth("not-hex")).toBeNull();
+    expect(seedReconnectingHealth("0xZZZ")).toBeNull();
+    expect(seedReconnectingHealth(123)).toBeNull();
+    expect(seedReconnectingHealth({})).toBeNull();
+  });
+});
+
+describe("shouldLabelBalanceStale (#42 balance staleness)", () => {
+  it("labels a retained real balance when the chain is unreachable", () => {
+    expect(shouldLabelBalanceStale(false, true, 12.5)).toBe(true);
+  });
+
+  it("never labels the pending null balance", () => {
+    expect(shouldLabelBalanceStale(false, true, null)).toBe(false);
+  });
+
+  it("does not label when the balance is fresh", () => {
+    expect(shouldLabelBalanceStale(false, false, 12.5)).toBe(false);
+    expect(shouldLabelBalanceStale(false, undefined, 12.5)).toBe(false);
+  });
+
+  it("does not label the private (hidden) balance", () => {
+    expect(shouldLabelBalanceStale(true, true, 12.5)).toBe(false);
+  });
+});
+
+describe("shouldPauseBalanceDisplay (C5 / T10 — no bare 0.00 on re-genesis)", () => {
+  it("T10: pauses (no bare 0.00) when the balance is unknown and operators re-genesised", () => {
+    expect(shouldPauseBalanceDisplay(false, null, "regenesis")).toBe(true);
+    expect(shouldPauseBalanceDisplay(false, undefined, "untrusted")).toBe(true);
+  });
+
+  it("never pauses a REAL balance (it is always shown as-is, honest absence only)", () => {
+    expect(shouldPauseBalanceDisplay(false, 12.5, "regenesis")).toBe(false);
+    expect(shouldPauseBalanceDisplay(false, 0, "regenesis")).toBe(false);
+  });
+
+  it("does not pause on an unreachable / transient failure (the stale label handles that)", () => {
+    expect(shouldPauseBalanceDisplay(false, null, "unreachable")).toBe(false);
+    expect(shouldPauseBalanceDisplay(false, null, null)).toBe(false);
+    expect(shouldPauseBalanceDisplay(false, null, undefined)).toBe(false);
+  });
+
+  it("never pauses the private (hidden) balance", () => {
+    expect(shouldPauseBalanceDisplay(true, null, "regenesis")).toBe(false);
+  });
+});
+
+describe("pausedBalanceMonoscanUrl (C2 — trusted Monoscan balance link)", () => {
+  it("builds the trusted Monoscan wallet URL (mono1… over the wallet-constant base) from a 0x address", () => {
+    const url = pausedBalanceMonoscanUrl(
+      "0x1111111111111111111111111111111111111111",
+    );
+    expect(url).not.toBeNull();
+    // Trusted base + the wallet's own eoa/user (mono) bech32m — never operator-echoed.
+    expect(url!.startsWith("https://monoscan.xyz/#/wallet/mono1")).toBe(true);
+  });
+
+  it("returns null for a missing / non-0x address (no broken link rendered)", () => {
+    expect(pausedBalanceMonoscanUrl(null)).toBeNull();
+    expect(pausedBalanceMonoscanUrl(undefined)).toBeNull();
+    expect(pausedBalanceMonoscanUrl("")).toBeNull();
+    expect(pausedBalanceMonoscanUrl("not-an-address")).toBeNull();
   });
 });

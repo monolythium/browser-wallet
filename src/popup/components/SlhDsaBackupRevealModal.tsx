@@ -24,9 +24,10 @@
 // accidental tap (e.g. fat-fingered) does not flash the seed. The
 // timer cancels cleanly on mouseup / pointerup / blur.
 //
-// Clipboard: copying auto-clears after 60 seconds. Per the
-// convention, we overwrite the clipboard with an empty string so a
-// later paste in another window can't recover the mnemonic.
+// Clipboard: copying auto-clears after 30 seconds (consistent with every
+// other recovery-phrase copy in the wallet). Per the convention, we
+// overwrite the clipboard with an empty string so a later paste in another
+// window can't recover the mnemonic.
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -39,17 +40,21 @@ import {
   bgSlhDsaBackupGenerate,
   bgSlhDsaBackupRecoverMnemonic,
 } from "../bg";
+import {
+  clearClipboardNow,
+  copyWithAutoClear,
+  flushClipboardAutoClear,
+} from "../../lib/clipboard-with-clear";
 
 /** Duration the user must hold the reveal button before the
  *  mnemonic renders. 1.5 s — short enough to feel responsive,
  *  long enough to prevent accidental taps from leaking the seed. */
 const HOLD_REVEAL_MS = 1_500;
 
-/** Auto-clear delay after a successful clipboard copy. Mirrors
- *  the RevealPhrase surface (60 s — long enough for the user to
- *  paste into a password manager, short enough that an unattended
- *  popup doesn't sit with the seed in the buffer). */
-const CLIPBOARD_AUTO_CLEAR_MS = 60_000;
+/** Auto-clear delay after a successful clipboard copy. 30 s — matches
+ *  the RevealPhrase + MnemonicGrid recovery-phrase surfaces so every copy
+ *  button in the wallet clears the clipboard on the same schedule. */
+const CLIPBOARD_AUTO_CLEAR_MS = 30_000;
 
 /** Entry mode discriminant — see module header. */
 export type RevealMode = "generate" | "re-export";
@@ -90,8 +95,10 @@ export function SlhDsaBackupRevealModal({
   const [screen, setScreen] = useState<ScreenState>({ kind: "explainer" });
   const [checkboxOn, setCheckboxOn] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
+    "idle",
+  );
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clipboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [confirmInFlight, setConfirmInFlight] = useState(false);
 
   // Reset every closed→open cycle so a re-open never inherits a
@@ -101,24 +108,22 @@ export function SlhDsaBackupRevealModal({
     setScreen({ kind: "explainer" });
     setCheckboxOn(false);
     setCopied(false);
+    setClearState("idle");
     setConfirmInFlight(false);
     if (holdTimerRef.current !== null) {
       clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
     }
-    if (clipboardTimerRef.current !== null) {
-      clearTimeout(clipboardTimerRef.current);
-      clipboardTimerRef.current = null;
-    }
+    // Flush any pending clipboard auto-clear (best-effort wipe NOW) so the
+    // mnemonic doesn't linger on the OS clipboard after the modal is closed.
+    void flushClipboardAutoClear();
   }, [open]);
 
-  // Cleanup pending timers on unmount.
+  // Cleanup pending timers on unmount + flush any pending clipboard wipe.
   useEffect(() => {
     return () => {
       if (holdTimerRef.current !== null) clearTimeout(holdTimerRef.current);
-      if (clipboardTimerRef.current !== null) {
-        clearTimeout(clipboardTimerRef.current);
-      }
+      void flushClipboardAutoClear();
     };
   }, []);
 
@@ -167,22 +172,22 @@ export function SlhDsaBackupRevealModal({
   const handleCopy = async () => {
     if (screen.kind !== "reveal" || !screen.held) return;
     try {
-      await navigator.clipboard.writeText(screen.mnemonic);
+      // Route through the shared auto-clear helper (readText-confirmed wipe
+      // + flush-on-close/unmount) rather than a self-managed timer that a
+      // modal close would strand. 30 s window. The "Copied" badge resets on
+      // the next close cycle.
+      await copyWithAutoClear(screen.mnemonic, CLIPBOARD_AUTO_CLEAR_MS);
       setCopied(true);
-      if (clipboardTimerRef.current !== null) {
-        clearTimeout(clipboardTimerRef.current);
-      }
-      clipboardTimerRef.current = setTimeout(() => {
-        // Auto-clear: overwrite with an empty string. Same
-        // RevealPhrase discipline — best-effort; clipboard.writeText
-        // can fail under focus-loss, swallow the rejection.
-        void navigator.clipboard.writeText("").catch(() => {});
-        setCopied(false);
-        clipboardTimerRef.current = null;
-      }, CLIPBOARD_AUTO_CLEAR_MS);
+      setClearState("idle");
     } catch {
       // Clipboard write can fail in restricted contexts; stay quiet.
     }
+  };
+
+  const handleClear = async () => {
+    const ok = await clearClipboardNow();
+    setClearState(ok ? "cleared" : "failed");
+    if (ok) setCopied(false);
   };
 
   const handleDownload = () => {
@@ -319,14 +324,43 @@ export function SlhDsaBackupRevealModal({
                  semantics. */}
               <MnemonicGrid mnemonic={screen.mnemonic} showCopyButton={false} />
               <div
-                style={{ display: "flex", gap: 8, marginTop: 10 }}
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  marginTop: 10,
+                  flexWrap: "wrap",
+                }}
               >
                 <button onClick={() => void handleCopy()} style={btnGhost}>
-                  <Icon name="eye" size={11} /> {copied ? "Copied (60 s)" : "Copy"}
+                  <Icon name="eye" size={11} />{" "}
+                  {copied ? "Copied — auto-clears in ~30 s" : "Copy"}
                 </button>
                 <button onClick={handleDownload} style={btnGhost}>
                   Download .txt
                 </button>
+                <button onClick={() => void handleClear()} style={btnGhost}>
+                  <Icon
+                    name={clearState === "cleared" ? "check" : "trash"}
+                    size={11}
+                  />{" "}
+                  {clearState === "cleared"
+                    ? "Cleared"
+                    : clearState === "failed"
+                      ? "Clear failed"
+                      : "Clear clipboard"}
+                </button>
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 10,
+                  color: "var(--fg-500)",
+                  lineHeight: 1.5,
+                  marginTop: 8,
+                }}
+              >
+                Copy only clears while this window stays open — clear your
+                clipboard yourself if you paste it elsewhere.
               </div>
             </>
           )}

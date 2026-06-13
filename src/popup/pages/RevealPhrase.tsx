@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "../Icon";
 import { MnemonicGrid } from "../components/MnemonicGrid";
+import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bgKeystoreExportSeed } from "../bg";
-import { formatPhraseForClipboard } from "../../lib/clipboard-with-clear";
+import {
+  clearClipboardNow,
+  copyWithAutoClear,
+  flushClipboardAutoClear,
+  formatPhraseForClipboard,
+} from "../../lib/clipboard-with-clear";
 
 interface RevealPhraseProps {
   /** Returns to Settings. Called on Cancel, on auto-hide expiry, and after
@@ -25,14 +31,13 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
   const [autoHideRemaining, setAutoHideRemaining] = useState(AUTO_HIDE_SECONDS);
   const [autoHideStarted, setAutoHideStarted] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
+    "idle",
+  );
   // Tap-to-reveal toggle. `revealed` flips on click anywhere on the
   // grid/overlay click target; first transition to `true` arms the
   // sticky `autoHideStarted` flag below.
   const [revealed, setRevealed] = useState(false);
-
-  // Keep timer handles in refs so the unmount cleanup can clear them
-  // without re-running the effect on every state tick.
-  const clipboardClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Lockout countdown — mirrors UnlockScreen.
   useEffect(() => {
@@ -70,17 +75,17 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     return () => clearInterval(t);
   }, [autoHideStarted, onBack]);
 
-  // Cleanup on unmount: drop the mnemonic from React state and cancel any
-  // pending clipboard-clear timer. The mnemonic string itself can't be
-  // deterministically zeroed in JS, but releasing the reference is what
-  // we can do.
+  // Cleanup on unmount: drop the mnemonic from React state and FLUSH the
+  // shared clipboard auto-clear (best-effort wipe NOW). This screen
+  // auto-hides after 30 s — which unmounts it — so a self-managed timer
+  // would have been cancelled and left the copied phrase on the OS
+  // clipboard; the flush wipes it on the way out instead. The mnemonic
+  // string itself can't be deterministically zeroed in JS, but releasing
+  // the reference is what we can do.
   useEffect(() => {
     return () => {
       setMnemonic(null);
-      if (clipboardClearTimer.current !== null) {
-        clearTimeout(clipboardClearTimer.current);
-        clipboardClearTimer.current = null;
-      }
+      void flushClipboardAutoClear();
     };
   }, []);
 
@@ -133,22 +138,25 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
     try {
       // Bare words, no ordinals — shared with the onboarding grid via the
       // single `formatPhraseForClipboard` join so the two can't drift.
-      await navigator.clipboard.writeText(formatPhraseForClipboard(mnemonic));
+      // Routed through the shared auto-clear helper so it gets the
+      // readText-confirmed wipe AND the flush-on-unmount path (this screen
+      // auto-hides after 30 s, which unmounts and would otherwise strand
+      // the phrase on the clipboard).
+      await copyWithAutoClear(
+        formatPhraseForClipboard(mnemonic),
+        CLIPBOARD_CLEAR_MS,
+      );
       setCopied(true);
-      if (clipboardClearTimer.current !== null) {
-        clearTimeout(clipboardClearTimer.current);
-      }
-      clipboardClearTimer.current = setTimeout(() => {
-        // navigator.clipboard.writeText("") wipes whatever is currently
-        // on the clipboard from this origin's perspective. Browsers may
-        // still expose the value to other origins until they next read,
-        // but it's the best we can do from a popup.
-        void navigator.clipboard.writeText("").catch(() => {});
-        clipboardClearTimer.current = null;
-      }, CLIPBOARD_CLEAR_MS);
+      setClearState("idle");
     } catch {
       // Clipboard write can fail in iframes / focus-loss races. Stay quiet.
     }
+  };
+
+  const handleClear = async () => {
+    const ok = await clearClipboardNow();
+    setClearState(ok ? "cleared" : "failed");
+    if (ok) setCopied(false);
   };
 
   // ---- render ----
@@ -176,23 +184,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         </div>
 
         <div style={{ padding: "32px 22px 8px", textAlign: "center" }}>
-          <div
-            style={{
-              width: 56,
-              height: 56,
-              margin: "0 auto 14px",
-              display: "grid",
-              placeItems: "center",
-              borderRadius: "var(--r-xl)",
-              background: "rgba(124,127,255,0.1)",
-              border: "1px solid var(--fg-700)",
-              color: "var(--fg-200)",
-              fontSize: 24,
-            }}
-            aria-hidden="true"
-          >
-            🔒
-          </div>
+          <WalletLockLogo size={56} />
           <div
             style={{
               fontSize: 13,
@@ -341,9 +333,9 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           >
             On the next screen, tap the words to reveal them. Tap
             again to hide. The phrase auto-hides after{" "}
-            {AUTO_HIDE_SECONDS} seconds. If you copy it, your
-            clipboard will be cleared after another{" "}
-            {AUTO_HIDE_SECONDS} seconds.
+            {AUTO_HIDE_SECONDS} seconds. If you copy it, your clipboard
+            auto-clears about {AUTO_HIDE_SECONDS} s later while the wallet
+            stays open — clear it yourself if you paste it somewhere else.
           </div>
         </div>
 
@@ -387,6 +379,13 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
       <div
         className="ext-body"
         style={{
+          // Force the scroll inline too (not just via the .ext-body class):
+          // this screen makes .ext-body its own flex column, and a flex item
+          // that is also a flex container can otherwise grow past its
+          // allocation and clip the 24-word grid instead of scrolling.
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
           display: "flex",
           flexDirection: "column",
           gap: 12,
@@ -425,6 +424,23 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           </div>
         </div>
 
+        {/* Handwrite-first guidance (primary safe path). The copy button
+           below stays available but reads as the secondary convenience. */}
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(242,180,65,0.08)",
+            border: "1px solid rgba(242,180,65,0.4)",
+            color: "var(--fg-100)",
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          Write these words down on paper, in order, and keep them offline.
+          Don&apos;t screenshot them or save them to a file or the cloud.
+        </div>
+
         {/* Copy button moved ABOVE the reveal-toggle
            wrapper. Previously RevealPhrase rendered TWO copy buttons:
            one inside MnemonicGrid (default-on, embedded under the
@@ -439,13 +455,14 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         <button
           onClick={() => void handleCopy()}
           style={{
-            padding: "10px 12px",
+            padding: "8px 12px",
             borderRadius: 10,
+            // Secondary affordance — quiet outline, not a primary action.
             border: "1px solid var(--fg-700)",
-            background: "rgba(255,255,255,0.04)",
-            color: copied ? "var(--ok)" : "var(--fg-100)",
+            background: "transparent",
+            color: copied ? "var(--ok)" : "var(--fg-400)",
             fontFamily: "var(--f-sans)",
-            fontSize: 12.5,
+            fontSize: 12,
             fontWeight: 500,
             cursor: "pointer",
             display: "flex",
@@ -456,9 +473,50 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
         >
           <Icon name={copied ? "check" : "copy"} size={13} />
           {copied
-            ? "Copied — clears in 30 s"
+            ? "Copied — auto-clears in ~30 s"
             : "Copy to clipboard"}
         </button>
+        <button
+          onClick={() => void handleClear()}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 10,
+            border: "1px solid var(--fg-700)",
+            background: "transparent",
+            color: clearState === "cleared" ? "var(--ok)" : "var(--fg-400)",
+            fontFamily: "var(--f-sans)",
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          <Icon
+            name={clearState === "cleared" ? "check" : "trash"}
+            size={13}
+          />
+          {clearState === "cleared"
+            ? "Clipboard cleared"
+            : clearState === "failed"
+              ? "Couldn't clear — clear manually"
+              : "Clear clipboard"}
+        </button>
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-500)",
+            letterSpacing: "0.04em",
+            lineHeight: 1.5,
+            textAlign: "center",
+          }}
+        >
+          Only clears while the wallet stays open — clear it yourself if you
+          paste it elsewhere.
+        </div>
 
         {/* Tap-to-reveal click target. The grid is blurred (~12 px) by
             default; tapping anywhere on the area toggles `revealed`.
@@ -485,6 +543,11 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
               overflow: "hidden",
               cursor: "pointer",
               userSelect: "none",
+              // Don't let this tall, overflow:hidden grid shrink as a flex
+              // child of the scrolling .ext-body — otherwise it compresses to a
+              // few rows and nothing overflows/scrolls. Keep full height so
+              // .ext-body scrolls to reveal all 24 words.
+              flexShrink: 0,
             }}
           >
             <div

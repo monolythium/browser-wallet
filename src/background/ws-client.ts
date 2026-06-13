@@ -36,7 +36,11 @@
 // 3 s deterministic finality — so a WS subscription seeing one new
 // head every 3 s is the upper bound on signal velocity.
 
-import { getActiveOperators } from "./networks.js";
+import {
+  getActiveOperators,
+  snapshotGenesisCache,
+  verifyOperatorGenesis,
+} from "./networks.js";
 import type { OperatorEntry } from "../shared/operators.js";
 
 /** Public connection status surfaced to callers. */
@@ -106,6 +110,15 @@ export function deriveWsUrl(operator: OperatorEntry): string {
   }
   // Non-standard port — preserve the legacy same-port conversion.
   return httpUrlToWss(operator.rpc);
+}
+
+/** True when `v` is a well-formed block-number hex: "0x" followed by 1..16 hex
+ *  digits (a u64 block height is at most 16 hex digits). Rejects null, objects,
+ *  empty "0x", non-hex, and oversized strings — so a connected operator cannot
+ *  push a malformed/garbage block number into the latest-block banner state
+ *  (F-2.4/#21). Callers writing the WS `newHeads` height MUST gate on this. */
+export function isWellFormedBlockNumberHex(v: unknown): v is string {
+  return typeof v === "string" && /^0x[0-9a-fA-F]{1,16}$/.test(v);
 }
 
 /** Backoff schedule for reconnect. Doubles up to 60 s ceiling. */
@@ -191,6 +204,9 @@ export class WsClient {
   /** First-occurrence guard for the console.warn on factory-throw, so
    *  repeated subscribe calls into a broken environment don't spam. */
   private factoryWarnedOnce = false;
+  /** Guards the cold-cache genesis warm-probe so concurrent subscribe calls
+   *  don't fan out duplicate probes (F-2.4/#21). */
+  private genesisWarmInFlight = false;
 
   /** Override the factory in tests. Production uses the global
    *  `WebSocket` constructor. */
@@ -269,6 +285,7 @@ export class WsClient {
     this.subscriptionIdToChannel.clear();
     this.openedOnce = false;
     this.currentWsUrl = null;
+    this.genesisWarmInFlight = false;
     this.setStatus("disconnected");
   }
 
@@ -291,16 +308,30 @@ export class WsClient {
       this.setStatus("unavailable");
       return;
     }
-    // Use the first operator. Per-operator failover for WS is more
-    // complex than HTTP (a WS session is stateful — failover means
-    // re-subscribing every channel). v1 picks the first operator and
-    // reconnects on drop; multi-operator WS failover is post-mainnet.
-    //
-    // `deriveWsUrl` knows about the `wsRpc`
-    // override + the :8546 Geth convention. Previously we used the
-    // naive `httpUrlToWss` which kept the HTTP port, causing 303
-    // handshake-failure spam against the testnet operators.
-    const wsUrl = deriveWsUrl(ops[0]!);
+    // F-2.4/#21: genesis-gate the WS operator the SAME way the HTTP
+    // read/poll paths do — never trust a WS push from an operator the HTTP
+    // paths would reject. The decision is read from the shared genesis cache
+    // that `verifyOperatorGenesis` populates (the genesis-gated 8 s HTTP poll
+    // warms it); the fail-open "probe not supported" posture is inherited
+    // as-is (PING-S3-01 — do NOT flip here). Pick the FIRST genesis-trusted
+    // operator (mirrors the HTTP skip-untrusted iteration); multi-operator WS
+    // failover after a drop remains post-mainnet.
+    const chosen = this.firstGenesisTrustedOperator(ops);
+    if (chosen === null) {
+      // No operator is confirmed genesis-trusted in the cache yet. Do NOT
+      // connect — a WS push would be from an unverified operator. The
+      // genesis-gated HTTP poll stays source of truth, so this is a benign
+      // "no live WS" banner state, not an error. Warm the cache so a later
+      // attempt can gate, and retry once the probe resolves.
+      this.warmGenesisAndRetry(ops);
+      this.setStatus("unavailable");
+      return;
+    }
+    // `deriveWsUrl` knows about the `wsRpc` override + the :8546 Geth
+    // convention. Previously we used the naive `httpUrlToWss` which kept the
+    // HTTP port, causing 303 handshake-failure spam against the testnet
+    // operators.
+    const wsUrl = deriveWsUrl(chosen);
     // Failure-cache short-circuit. If the URL is in the failure cache
     // within TTL, skip the connection attempt entirely + go straight
     // to "unavailable" so callers fall back to polling without spam.
@@ -332,6 +363,45 @@ export class WsClient {
     ws.onmessage = (ev) => this.onMessage(ev);
     ws.onerror = () => this.onError();
     ws.onclose = () => this.onClose();
+  }
+
+  /** First operator the genesis cache marks trusted (`ok === true`), or null
+   *  when none is confirmed yet. Reads the SAME cache the HTTP path populates
+   *  via `verifyOperatorGenesis`; the fail-open "probe not supported" case is
+   *  already cached as `ok:true`, so the posture matches the HTTP path exactly
+   *  (F-2.4/#21). */
+  private firstGenesisTrustedOperator(
+    ops: ReadonlyArray<OperatorEntry>,
+  ): OperatorEntry | null {
+    const cache = snapshotGenesisCache();
+    for (const op of ops) {
+      if (cache.get(op.rpc)?.ok === true) return op;
+    }
+    return null;
+  }
+
+  /** Cold-cache path: no operator is confirmed genesis-trusted yet. Probe
+   *  (reusing `verifyOperatorGenesis`, which warms the shared cache) and, once
+   *  a trusted operator is known, retry the connection. Guarded so concurrent
+   *  subscribe calls don't fan out duplicate probes. Keeps the WS connect path
+   *  itself synchronous — the probe is fire-and-forget. */
+  private warmGenesisAndRetry(ops: ReadonlyArray<OperatorEntry>): void {
+    if (this.genesisWarmInFlight) return;
+    this.genesisWarmInFlight = true;
+    void (async () => {
+      try {
+        for (const op of ops) {
+          if (await verifyOperatorGenesis(op.rpc)) break;
+        }
+      } finally {
+        this.genesisWarmInFlight = false;
+      }
+      // Retry only if a subscriber still wants the connection and we're not
+      // already connected; ensureConnection re-reads the now-warm cache.
+      if (this.ws === null && this.subscriptions.size > 0) {
+        this.ensureConnection();
+      }
+    })();
   }
 
   private onOpen(): void {

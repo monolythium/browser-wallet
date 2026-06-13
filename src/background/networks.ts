@@ -39,16 +39,48 @@ export const TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
 /**
  * T4-04 (Item D) — absolute sane upper bound on an operator-reported (or
- * popup-supplied) per-execution-unit price, in lythoshi. A de-trust BACKSTOP,
- * not an economic claim: the wallet signs the fee the user saw (T4-04 b1), but
- * a malicious/MITM operator (or a tampered popup) could still supply an absurd
- * `maxFeePerGas`; clamp it here so a single unit can never be priced above this
- * physically-impossible line. 1e15 lythoshi/unit = 10,000,000 LYTH/unit — many
- * orders of magnitude above any honest testnet price, so a legitimate fee is
- * never blocked, while a 1e30-style inflation is capped. Paired with the
- * balance ceiling (Item C) via the shared `operator-bounds` helper.
+ * popup-supplied) per-execution-unit PRICE. A de-trust BACKSTOP, not an
+ * economic claim: the wallet signs the fee the user saw (T4-04 b1), but a
+ * malicious/MITM operator (or a tampered popup) could still supply an absurd
+ * `maxFeePerGas`; `clampToSaneBound` caps it here so a single unit can never be
+ * priced above this line. Paired with the balance ceiling (Item C) via the
+ * shared `operator-bounds` helper.
+ *
+ * UNIT NOTE: lythoshi-per-execution-unit, 18-decimal domain (1 LYTH = 10^18
+ * lythoshi = LYTHOSHI_PER_LYTH). The realistic price is ~1e9–1e10 lythoshi/unit
+ * (idle testnet; the Send page shows ~1e9), so 1e15 sits ~1e5–1e6× above real.
+ * It therefore NEVER clamps a legitimate price — the dangerous direction would
+ * be a too-LOW ceiling that clamps a real high price down and underprices/stalls
+ * the tx — while bounding the worst-case malicious-induced fee to
+ * 1e15 × 30000 units = 3e19 lythoshi = 30 LYTH per transfer (and that fee is
+ * shown to the user via display==signed). The value MUST track the 18-decimal
+ * domain: at the prior 8-decimal scale 1e15 read as ~10,000,000 LYTH/unit; at 18
+ * decimals it means 0.001 LYTH/unit — still a safe loose ceiling, but the
+ * magnitude intent changed, so the stale comment was corrected.
+ *
+ * VALUE-DECISION (needs-decision — deliberately NOT changed here): 1e15 is
+ * loose-but-safe. Tightening toward realistic-peak-price × margin (e.g. 1e12–
+ * 1e13 → ~0.03–0.3 LYTH max fee) would shrink the malicious-overpay window, but
+ * is only safe if it stays comfortably above the network's realistic PEAK price
+ * under congestion — which the wallet cannot observe (a fee-policy call). Kept
+ * loose-but-safe pending that decision; never lower it below a wide margin over
+ * the real ~1e9–1e10 price.
  */
-export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15
+export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15 lythoshi/unit (18-dec; loose-but-safe — see VALUE-DECISION)
+
+/**
+ * F-3.11 (#28) — absolute sane upper bound on the resolved execution-unit
+ * LIMIT signed into a tx, in execution units. Companion to
+ * MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: the per-unit price was already clamped,
+ * but the limit (from a popup `signedFee` bound or a caller hint) was not, so
+ * a future non-UI caller could sign an absurd limit. A de-trust BACKSTOP, not
+ * an economic claim: 30,000,000 is ~Ethereum-block-gas-limit order of
+ * magnitude and ≥60× the largest legitimate wallet budget (the spending-policy
+ * claim precompile, 500000 = 0x7A120), so it never alters a real native
+ * transfer (30000), precompile call, or large MRV submission while capping a
+ * physically-absurd value.
+ */
+export const MAX_EXECUTION_UNIT_LIMIT = 30_000_000n; // 0x1C9C380
 
 /**
  * Monolythium Testnet operator RPC endpoints — sourced from the SDK-bundled chain
@@ -209,49 +241,90 @@ export function chainRequiresMlDsa(chainIdHex: string): boolean {
  * to reconfigure).
  *
  * Operators with a mismatched genesis hash (orphan-
- * fork attack surface) are also skipped. The genesis check is cached
- * forever in-memory per RPC URL — genesis is immutable per chain, so a
- * one-time probe per operator suffices for the SW lifetime.
+ * fork attack surface) are also skipped. A DEFINITIVE genesis verdict is
+ * cached in-memory per RPC URL — genesis is immutable per chain — while a
+ * "couldn't read" verdict (unreachable/timeout) expires on a short TTL so a
+ * transient outage self-heals (see verifyOperatorGenesis).
  */
+/**
+ * Probe ONE operator: reachable + right chain id + genesis match. Resolves to
+ * `{name, rpc}` on a full pass; THROWS on any failure (unreachable, timeout,
+ * wrong chain id, or genesis mismatch) so `Promise.any` in
+ * `probeFirstAliveOperator` selects the first operator that fully passes and
+ * treats every failure as a rejection. Records the wrong-chain-id set as a
+ * side effect so `classifyNoOperatorReason` can distinguish UNTRUSTED from
+ * OFFLINE.
+ */
+async function probeOneOperator(
+  v: { name: string; rpc: string },
+  expectedChainIdDec: number,
+  timeoutMs: number,
+): Promise<{ name: string; rpc: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(v.rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "net_version",
+        params: [],
+      }),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`net_version http ${res.status}`);
+  const body = (await res.json()) as { result?: string };
+  const reportedChainId = Number(body?.result ?? 0);
+  if (reportedChainId !== expectedChainIdDec) {
+    // Reachable, but serving a different chain id. Remember it so the banner
+    // can say UNTRUSTED OPERATOR ("online but wrong chain") rather than
+    // OFFLINE — the operator answered, it's just not our chain.
+    operatorWrongChainId.add(v.rpc);
+    throw new Error(`wrong chain id ${reportedChainId}`);
+  }
+  operatorWrongChainId.delete(v.rpc);
+  // Genesis check (orphan-fork defense). On mismatch the operator is excluded
+  // from RPC dispatch (cached per the verifyOperatorGenesis policy).
+  const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
+  if (!genesisOk) throw new Error("genesis mismatch");
+  return { name: v.name, rpc: v.rpc };
+}
+
 export async function probeFirstAliveOperator(
   expectedChainIdDec: number = TESTNET_CHAIN_ID,
   timeoutMs: number = 3_000,
 ): Promise<{ name: string; rpc: string } | null> {
-  for (const v of getActiveOperators()) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      const res = await fetch(v.rpc, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "net_version",
-          params: [],
-        }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-      if (!res.ok) continue;
-      const body = (await res.json()) as { result?: string };
-      const reportedChainId = Number(body?.result ?? 0);
-      if (reportedChainId !== expectedChainIdDec) continue;
-      // Genesis check. On mismatch the operator is excluded
-      // from RPC dispatch for the rest of the SW lifetime.
-      const genesisOk = await verifyOperatorGenesis(v.rpc, timeoutMs);
-      if (!genesisOk) continue;
-      return { name: v.name, rpc: v.rpc };
-    } catch {
-      // unreachable / timeout — try next
-    }
+  const operators = getActiveOperators();
+  if (operators.length === 0) return null;
+  // Probe all operators CONCURRENTLY (was a serial for-loop). A dead or slow
+  // operator can no longer add head-of-line latency: worst-case wall-clock is
+  // ONE timeout (~timeoutMs), not the sum across the whole fleet — this is the
+  // fix for the multi-second "freeze" the user hit when the testnet was
+  // unreachable. Promise.any resolves with the FIRST operator that fully passes
+  // (reachable + right chain id + genesis); if EVERY operator rejects (all
+  // dead / untrusted) it throws AggregateError and we return null, so the
+  // banner shows a fast OFFLINE/UNTRUSTED instead of hanging on CONNECTING.
+  // The losing probes run to their own timeout in the background, warming the
+  // genesis cache + wrong-chain set (used by classifyNoOperatorReason) — the
+  // same entries the old serial loop populated, just without blocking.
+  try {
+    return await Promise.any(
+      operators.map((v) => probeOneOperator(v, expectedChainIdDec, timeoutMs)),
+    );
+  } catch {
+    return null;
   }
-  return null;
 }
 
 /**
  * Per-operator genesis-hash cache. Key is the RPC URL; value is the
- * verification result. Entries are written once and never expired:
+ * verification result. A DEFINITIVE entry (observed !== null) never expires;
  * genesis is immutable per chain, so a cached `false` survives across
  * reconnects until the user clears the operator override or the SW
  * restarts.
@@ -267,12 +340,113 @@ interface GenesisCacheEntry {
 
 const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
 
+// C2: coalesce concurrent genesis probes to the SAME operator. During the first
+// cold walk (or a 60 s-TTL re-probe) N concurrent reads would each launch an
+// independent probe to a given rpc — the cache only dedups AFTER the first
+// settles. This collapses them to one in-flight probe per rpc. Cleared on
+// settle; cache TTL / verdict semantics are unchanged.
+const inflightProbes = new Map<string, Promise<GenesisCacheEntry>>();
+
+/**
+ * Operators that answered `net_version` but reported a DIFFERENT chain id than
+ * the wallet expects — reachable, but serving the wrong chain (a regenesis
+ * that bumped the id, or an operator pointed at another network). Tracked
+ * separately from the genesis cache (chain-id reachability is not immutable
+ * the way a genesis hash is) so classifyNoOperatorReason can report UNTRUSTED
+ * OPERATOR ("online but wrong chain") instead of a misleading OFFLINE. A
+ * successful chain-id match deletes the entry; clearGenesisCache resets it.
+ */
+const operatorWrongChainId = new Set<string>();
+
+// Persist the genesis cache across SW hibernation. The in-memory map above is
+// wiped every ~30 s idle, so before this every wallet reopen re-paid the extra
+// genesis round-trips the audit's orphan-fork pinning (be73670) added on top of
+// the old net_version-only probe. Only DEFINITIVE verdicts (observed !== null)
+// are persisted: a real genesis/block-0 hash is immutable per chain, so it may
+// safely survive a wake. NON-definitive "couldn't read" verdicts (observed ===
+// null) and the wrong-chain-id set are deliberately NOT persisted — they carry
+// a short TTL / are reachability-derived and must re-probe so a transient blip
+// self-heals. chrome.storage.session is SW-scope and clears on browser restart
+// / extension reload — the right tier for a chain-identity fact (never on disk).
+// C6 (R3): bumped to v2 — the persisted blob is now pin-QUALIFIED
+// (`{ pin, entries }`). A pre-C6 v1 blob (un-qualified) lives at the old key and
+// is never read, so it can never be rehydrated as trusted.
+const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v2";
+
+/** Identity the persisted genesis blob is qualified by. If EITHER pin changes
+ *  (a re-pin build), a blob persisted under the old identity is DROPPED on
+ *  rehydrate → full re-probe against the new pin, so a stale-pin verdict can
+ *  never be silently re-trusted (R3). */
+function currentGenesisPinTag(): string {
+  return `${TESTNET_GENESIS_HASH.toLowerCase()}|${TESTNET_BLOCK0_HASH.toLowerCase()}`;
+}
+
+/** Best-effort persist the DEFINITIVE subset of the genesis cache. Overwrites
+ *  the whole blob (a handful of operators) so an eviction in clearGenesisCache
+ *  is mirrored too. Synchronous guard covers a missing chrome.storage in tests. */
+function persistGenesisCache(): void {
+  try {
+    const entries: Record<string, GenesisCacheEntry> = {};
+    for (const [rpc, e] of operatorGenesisCache) {
+      if (e.observed !== null) entries[rpc] = e;
+    }
+    // C6 (R3): qualify the blob with the current pin identity so a re-pin drops
+    // it on rehydrate instead of trusting a stale-pin verdict.
+    void chrome.storage.session
+      .set({
+        [SESSION_KEY_GENESIS_CACHE]: { pin: currentGenesisPinTag(), entries },
+      })
+      .catch(() => {});
+  } catch {
+    // best-effort — no persistence just means the next wake re-probes as before
+  }
+}
+
+/** Seed the in-memory genesis cache from the verdicts a prior SW lifetime
+ *  persisted, so the first probe after a cold wake skips the genesis round-trips
+ *  instead of re-probing from empty. Only seeds well-formed DEFINITIVE entries
+ *  the current lifetime hasn't already learned. Call once at SW boot. */
+export async function rehydrateGenesisCache(): Promise<void> {
+  try {
+    const s = await chrome.storage.session.get(SESSION_KEY_GENESIS_CACHE);
+    const blob = s?.[SESSION_KEY_GENESIS_CACHE] as
+      | { pin?: unknown; entries?: unknown }
+      | undefined;
+    if (!blob || typeof blob !== "object") return;
+    // C6 (R3): only trust a blob persisted under the CURRENT pin. A re-pin (or
+    // any malformed / pin-less blob) → drop it entirely → full re-probe against
+    // the live pin. A stale-pin verdict can NEVER be rehydrated as trusted.
+    if (blob.pin !== currentGenesisPinTag()) return;
+    const raw = blob.entries as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return;
+    for (const [rpc, v] of Object.entries(raw)) {
+      if (operatorGenesisCache.has(rpc)) continue; // a live probe already won
+      const e = v as Partial<GenesisCacheEntry> | null;
+      if (
+        e &&
+        typeof e.ok === "boolean" &&
+        typeof e.observed === "string" &&
+        typeof e.checkedAt === "number"
+      ) {
+        operatorGenesisCache.set(rpc, {
+          ok: e.ok,
+          observed: e.observed,
+          checkedAt: e.checkedAt,
+        });
+      }
+    }
+  } catch {
+    // best-effort — a read failure just means the first probe re-checks genesis
+  }
+}
+
 /**
  * Verify an operator's chain genesis identity matches TESTNET_GENESIS_HASH.
  * Returns true on match (or cache-hit "true"); false on mismatch,
- * unreachable, or malformed response. Result is cached forever (see
- * cache docstring). The cached false is the load-bearing behavior:
- * one mismatch and we never route RPC to that operator again.
+ * unreachable, or malformed response. A DEFINITIVE verdict is cached forever;
+ * a "couldn't read" verdict (observed === null) expires after a short TTL so a
+ * transient blip self-heals. The cached definitive false is the load-bearing
+ * defense: one real mismatch and we never route RPC to that operator again.
  *
  * Preferred probe: `lyth_chainStats.genesisHash`, which is the chain
  * identity hash used by the registry and p2p binding. Fallback probe:
@@ -290,20 +464,79 @@ export async function verifyOperatorGenesis(
   timeoutMs: number = 3_000,
 ): Promise<boolean> {
   const cached = operatorGenesisCache.get(rpc);
-  if (cached !== undefined) return cached.ok;
-  const result = await probeOperatorGenesis(rpc, timeoutMs);
+  if (cached !== undefined) {
+    // A DEFINITIVE read (observed a genesis / block-0 hash) is immutable per
+    // chain → cache it forever (a real mismatch must never be re-trusted; a
+    // real match never needs re-probing). But a NON-definitive read
+    // (observed === null: the operator was unreachable, timed out, or runs an
+    // old binary that doesn't expose the probe) is TRANSIENT — keep it only
+    // for a short TTL so a momentary blip self-heals on the next probe instead
+    // of de-trusting an otherwise-good operator for the whole SW lifetime.
+    // This was the load-bearing wedge behind the perpetual OFFLINE: one bad
+    // moment cached `false` forever.
+    // C6 (R3): a definitive MISMATCH is sticky forever — it keeps the wallet
+    // paused until the operator/pin is resolved and must never be silently
+    // re-trusted. A definitive PASS is bounded by a re-probe TTL so an operator
+    // that passed once then SILENTLY FORKED within this SW lifetime is
+    // re-detected within a bounded window; within the TTL the cached pass is
+    // trusted. A NON-definitive "couldn't read" keeps its existing short TTL.
+    if (cached.observed !== null) {
+      if (cached.ok === false) return false;
+      if (Date.now() - cached.checkedAt < GENESIS_POSITIVE_TTL_MS) return true;
+      // positive verdict aged out → fall through and re-probe.
+    } else if (Date.now() - cached.checkedAt < GENESIS_OBSERVED_NULL_TTL_MS) {
+      return cached.ok;
+    }
+    // TTL expired (positive or non-definitive) — fall through and re-probe.
+  }
+  // Share one in-flight probe per rpc across concurrent callers (C2).
+  let pending = inflightProbes.get(rpc);
+  if (pending === undefined) {
+    pending = probeOperatorGenesis(rpc, timeoutMs).finally(() => {
+      inflightProbes.delete(rpc);
+    });
+    inflightProbes.set(rpc, pending);
+  }
+  const result = await pending;
   operatorGenesisCache.set(rpc, result);
+  // A definitive verdict is immutable per chain — persist it so the next SW
+  // wake skips the genesis round-trips instead of re-probing from an empty
+  // in-memory cache. Non-definitive reads keep their short TTL and re-probe.
+  if (result.observed !== null) persistGenesisCache();
   return result.ok;
 }
+
+/** TTL for a NON-definitive genesis-cache entry (observed === null:
+ *  unreachable / timeout / probe-unsupported). Definitive reads (a real
+ *  observed hash, match or mismatch) are cached forever; only the
+ *  "couldn't read" verdict expires, so a transient outage self-heals. */
+const GENESIS_OBSERVED_NULL_TTL_MS = 60_000;
+
+/** C6 (R3): re-probe TTL for a DEFINITIVE positive ("passed") verdict. A pass is
+ *  bounded (not forever) so an operator that passed once then silently forked
+ *  while the SW is alive is re-detected within this window. A definitive MISMATCH
+ *  stays sticky (no TTL) — it correctly keeps the wallet paused until resolved. */
+const GENESIS_POSITIVE_TTL_MS = 60_000;
 
 /** Force-refresh a single operator's genesis check. Surfaced via the
  *  About-page probe so the user can re-evaluate after a regenesis. */
 export function clearGenesisCache(rpc?: string): void {
   if (rpc === undefined) {
     operatorGenesisCache.clear();
+    operatorWrongChainId.clear();
   } else {
     operatorGenesisCache.delete(rpc);
+    operatorWrongChainId.delete(rpc);
   }
+  // Mirror the eviction into the persisted blob so a force-refresh after a
+  // regenesis can't leave a stale verdict to be rehydrated on the next wake.
+  persistGenesisCache();
+}
+
+/** Snapshot of operators seen reachable-but-on-the-wrong-chain-id. Used by
+ *  classifyNoOperatorReason (default) and injectable for unit tests. */
+export function snapshotWrongChainOperators(): Set<string> {
+  return new Set(operatorWrongChainId);
 }
 
 /** Snapshot of the current cache state. Used by
@@ -311,6 +544,93 @@ export function clearGenesisCache(rpc?: string): void {
  *  without re-probing when the entry is fresh in-memory. */
 export function snapshotGenesisCache(): Map<string, GenesisCacheEntry> {
   return new Map(operatorGenesisCache);
+}
+
+/**
+ * Non-awaiting, no-RPC predicate: `true` ONLY when the active operator list is
+ * non-empty AND every active operator already carries a sticky DEFINITIVE
+ * verdict against it — either a genesis MISMATCH (`ok === false &&
+ * observed !== null`, the exact test `classifyNoOperatorReason` uses) OR a
+ * recorded wrong-chain-id. Any operator that is absent / `observed === null`
+ * (the 60 s "couldn't read" TTL) / `ok === true` → returns `false`, so the
+ * caller falls through to the real gated walk and a recovering operator is
+ * still tried.
+ *
+ * This reads the SAME live cache the gate writes; it NEVER bypasses the gate.
+ * It only lets a read fast-fail when the gate has ALREADY decided every
+ * operator is untrusted — turning the exhaustive re-walk-per-read (the
+ * re-genesis UI hang) into one cache read. The throw it enables serves zero
+ * chain data (R1). Reads the live module sets (not snapshots) so it reflects
+ * the current verdict at call time.
+ */
+export function allActiveOperatorsDefinitivelyUntrusted(): boolean {
+  const ops = getActiveOperators();
+  if (ops.length === 0) return false;
+  for (const op of ops) {
+    const e = operatorGenesisCache.get(op.rpc);
+    const genesisMismatch = e !== undefined && e.ok === false && e.observed !== null;
+    if (!(genesisMismatch || operatorWrongChainId.has(op.rpc))) return false;
+  }
+  return true;
+}
+
+/**
+ * C7: pure-cache, no-RPC check — is this ONE operator definitively untrusted (a
+ * sticky genesis MISMATCH, or a recorded wrong-chain-id)? Used to gate the
+ * liveness block-poll's cached-operator fast-path so the CONNECTING / LIVE
+ * indicator never reflects a re-genesis'd operator that would still answer
+ * `eth_blockNumber`, WITHOUT re-adding a genesis round-trip to the health fast
+ * path. Unknown / `observed:null` / trusted → false (the caller proceeds
+ * normally; recovery is preserved).
+ */
+export function operatorDefinitivelyUntrusted(rpc: string): boolean {
+  const e = operatorGenesisCache.get(rpc);
+  const genesisMismatch =
+    e !== undefined && e.ok === false && e.observed !== null;
+  return genesisMismatch || operatorWrongChainId.has(rpc);
+}
+
+/**
+ * Classify why no operator is serviceable (probeFirstAliveOperator returned
+ * null) for the chain-status banner — WITHOUT a new RPC. An ACTIVE operator is
+ * "untrusted" (reachable but wrong) when EITHER it answered net_version with a
+ * MISMATCHING chain id (in `wrongChainId`) OR its sticky genesis-cache entry
+ * recorded a MISMATCHING hash (ok===false && observed!==null). Both mean the
+ * operator answered but serves the wrong chain. An absent / observed:null
+ * genesis entry with no wrong-chain mark (truly unreachable, or a block-0 the
+ * probe couldn't read) -> "unreachable". ok===true (incl. the #18
+ * probe-unsupported fail-open) is trusted. Untrusted is sticky and
+ * intentionally OUTRANKS unreachable. Params default to the live sources but
+ * are injectable for unit tests.
+ */
+export function classifyNoOperatorReason(
+  activeOps: ReadonlyArray<{ rpc: string }> = getActiveOperators(),
+  genesis: Map<string, GenesisCacheEntry> = snapshotGenesisCache(),
+  wrongChainId: ReadonlySet<string> = operatorWrongChainId,
+): "unreachable" | "untrusted" | "regenesis" {
+  // C5: split the genesis-MISMATCH case out of the generic "untrusted". An
+  // operator that answered with the right chain id but a DIFFERENT genesis hash
+  // (ok===false && observed!==null, NOT in wrongChainId) means the network
+  // re-genesised — an actionable "update the wallet pin" signal, distinct from
+  // an operator pointed at another chain id ("untrusted"). `regenesis` outranks
+  // `untrusted` (it is the operator-actionable cause); both outrank
+  // `unreachable`. The fund-path gate is unchanged — this only labels WHY no
+  // operator is serviceable, with NO new RPC.
+  let sawWrongChain = false;
+  for (const op of activeOps) {
+    if (wrongChainId.has(op.rpc)) {
+      sawWrongChain = true;
+      continue;
+    }
+    const e = genesis.get(op.rpc);
+    const genesisMismatch =
+      e !== undefined && e.ok === false && e.observed !== null;
+    if (genesisMismatch) {
+      return "regenesis";
+    }
+  }
+  if (sawWrongChain) return "untrusted";
+  return "unreachable";
 }
 
 /** One-shot fetch + compare. Always returns a cache entry — never

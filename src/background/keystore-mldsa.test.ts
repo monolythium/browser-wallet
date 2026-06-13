@@ -344,6 +344,35 @@ describe("keystore-mldsa v4-multi state machine", () => {
   );
 
   it(
+    "lockV4 disposes the held backend, deterministically wiping the ML-DSA-65 secret (S1-01)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "vault-unlock-password";
+      await ks.createVaultFromNewMnemonic(password);
+      expect(ks.isUnlockedV4()).toBe(true);
+
+      // Capture the live backend reference while unlocked.
+      const backend = ks.getUnlockedBackendV4();
+      expect(backend).not.toBeNull();
+      expect(backend!.disposed).toBe(false);
+      // It signs while unlocked.
+      expect(() => backend!.sign(new Uint8Array(32))).not.toThrow();
+
+      // Lock wipes the secret on the very object that was in memory — not just
+      // a dropped reference (Stage-1 #11): a later sign throws rather than
+      // signing with a zeroed key.
+      ks.lockV4();
+      expect(backend!.disposed).toBe(true);
+      expect(() => backend!.sign(new Uint8Array(32))).toThrow(
+        "MlDsa65Backend disposed",
+      );
+      // Public material stays usable (dispose only wipes the secret).
+      expect(typeof backend!.getAddress()).toBe("string");
+    },
+    60_000,
+  );
+
+  it(
     "verifyContainerPasswordV4 confirms the right password and rejects a wrong one without mutating unlock state (T1-04a)",
     async () => {
       const ks = await import("./keystore-mldsa.js");

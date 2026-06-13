@@ -180,10 +180,14 @@ describe("testnetMaxBalanceConsensus", () => {
   });
 
   it("drops an operator whose balance exceeds total supply (T4-03 sanity bound)", async () => {
-    // op-a reports an impossible balance (1e18 lythoshi ~ 50x total supply);
-    // it must be dropped to `failing`, never win the MAX or skew the guard.
+    // op-a reports a physically-impossible balance (10^30 lythoshi ≈ 10000x the
+    // 10^26 genesis supply, well above the 2x10^26 ceiling); it must be dropped
+    // to `failing`, never win the MAX or skew the guard. (NB: at 18 decimals
+    // 10^18 lythoshi is just 1 LYTH — a legitimate balance — so the impossible
+    // fixture must be far larger than the 8-decimal era's value.)
+    const impossible = "0x" + (10n ** 30n).toString(16);
     installFetchPerUrl({
-      "http://op-a.test": async () => envelopeResponse("0xde0b6b3a7640000"), // 1e18
+      "http://op-a.test": async () => envelopeResponse(impossible),
       "http://op-b.test": async () => envelopeResponse("0x5"),
       "http://op-c.test": async () => envelopeResponse("0x3"),
     });
@@ -194,6 +198,24 @@ describe("testnetMaxBalanceConsensus", () => {
     expect(r.failing).toHaveLength(1);
     expect(r.failing[0]?.name).toBe("op-a");
     expect(r.failing[0]?.reason).toContain("exceeds total supply");
+  });
+
+  it("keeps a realistic 18-decimal balance (100 LYTH) — regression: balance no longer stuck loading", async () => {
+    // 100 LYTH = 1e20 lythoshi at 18 decimals. The 8-decimal-era ceiling
+    // (2e16 = 0.02 LYTH) wrongly dropped this as "exceeds total supply",
+    // emptying `contributing`, throwing the consensus, and stranding the
+    // whole balance UI on "loading". With the 2x10^26 (18-dec) ceiling it
+    // contributes normally. Would FAIL under the old 2e16 ceiling.
+    const hundredLyth = "0x" + (100n * 10n ** 18n).toString(16);
+    installFetchPerUrl({
+      "http://op-a.test": async () => envelopeResponse(hundredLyth),
+      "http://op-b.test": async () => envelopeResponse(hundredLyth),
+      "http://op-c.test": async () => envelopeResponse(hundredLyth),
+    });
+    const r = await testnetMaxBalanceConsensus("0xabc");
+    expect(r.balanceHex).toBe(hundredLyth);
+    expect(r.contributing).toHaveLength(3);
+    expect(r.failing).toHaveLength(0);
   });
 
   it("spendGuardHex is the lowest contributing balance, balanceHex the highest", async () => {

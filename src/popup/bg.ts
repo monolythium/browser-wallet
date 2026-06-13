@@ -181,13 +181,25 @@ export interface ChainEntry {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-/** Error-message fragments that indicate the SW was
- *  idle/asleep when sendMessage fired. Chrome MV3 wakes the worker
- *  on demand, but the wake race can drop the first message; the
- *  retry path below catches these classes. */
+/** Error-message fragments that indicate the SW was idle/asleep — or was
+ *  torn down mid-request — when sendMessage fired. Chrome MV3 wakes the
+ *  worker on demand, but the wake/teardown race can drop the first message;
+ *  the retry path below catches these classes.
+ *
+ *  "message channel closed" is the async-listener variant: the SW returned
+ *  `true` (committing to an asynchronous sendResponse) and was then suspended
+ *  before it replied, so Chrome rejects the popup's promise with "A listener
+ *  indicated an asynchronous response by returning true, but the message
+ *  channel closed before a response was received". Without this marker the
+ *  rejection escaped the retry and surfaced as an "Uncaught (in promise)" —
+ *  most visibly in the long-lived side panel, which keeps polling the SW (the
+ *  action popup tears down before most of these land). It is the SAME MV3
+ *  race as "message port closed", just Chrome's wording for the path where
+ *  the handler had already returned `true`. */
 const SW_IDLE_ERROR_MARKERS = [
   "No SW",
   "message port closed",
+  "message channel closed",
   "receiving end does not exist",
   "Could not establish connection",
 ];
@@ -212,7 +224,35 @@ function rawSendMessage(message: unknown): Promise<unknown> {
   });
 }
 
+// C4: collapse concurrent IDENTICAL read IPCs. The popup fires balance/activity
+// from several independent component mounts + effects per open (App + Send +
+// Stake + Delegations; App + useActivity), each launching its own SW round-trip
+// → its own operator walk. Default-DENY allow-list — only these idempotent reads
+// coalesce; writes / keystore / locals / any unlisted op bypass, so no submit is
+// ever shared. Keyed on op+payload; cleared on SETTLE (not a TTL), so only
+// truly-concurrent reads merge and a later read is always a fresh round-trip.
+// The per-account/chain token-refs in App.tsx / useActivity stay — they discard
+// STALE results across account/chain switches, a different concern.
+const inflightPopupSends = new Map<string, Promise<unknown>>();
+const COALESCED_POPUP_OPS = new Set<string>([
+  "wallet-balance",
+  "wallet-activity-get",
+  "wallet-indexer-snapshot",
+]);
+
 function send<T>(op: string, payload?: unknown): Promise<T> {
+  if (!COALESCED_POPUP_OPS.has(op)) return sendUncoalesced<T>(op, payload);
+  const key = `${op}|${JSON.stringify(payload ?? null)}`;
+  const existing = inflightPopupSends.get(key);
+  if (existing !== undefined) return existing as Promise<T>;
+  const p = sendUncoalesced<T>(op, payload).finally(() => {
+    inflightPopupSends.delete(key);
+  });
+  inflightPopupSends.set(key, p as Promise<unknown>);
+  return p;
+}
+
+function sendUncoalesced<T>(op: string, payload?: unknown): Promise<T> {
   // Single retry against the MV3 idle/wake race. Pure transport-
   // level retry — application-level errors (`{ ok: false, ... }`
   // payloads) reach the caller unchanged on the first attempt.
@@ -236,8 +276,19 @@ function send<T>(op: string, payload?: unknown): Promise<T> {
 export async function bgPing(): Promise<void> {
   try {
     await rawSendMessage({ kind: "ping" });
-  } catch {
-    /* swallow — followup calls carry their own retry. */
+  } catch (e) {
+    // One retry against the MV3 wake race. The first ping is itself the message
+    // that *triggers* the wake and can be dropped before the worker is up; an
+    // un-retried warm-up then silently no-ops and the next real call pays the
+    // full cold start (the lag the pre-warm exists to hide). A second failure
+    // is safely swallowed — followup real calls carry their own retry.
+    if (!isSwIdleError((e as Error).message ?? "")) return;
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      await rawSendMessage({ kind: "ping" });
+    } catch {
+      /* swallow — followup calls carry their own retry. */
+    }
   }
 }
 
@@ -261,15 +312,6 @@ export async function bgKeystoreUnlock(
 
 export async function bgKeystoreLock(): Promise<{ ok: boolean }> {
   return send("keystore-lock");
-}
-
-export async function bgKeystoreCreateNew(
-  password: string,
-): Promise<
-  | { ok: true; mnemonic: string; address: string }
-  | { ok: false; reason?: string }
-> {
-  return send("keystore-create-new", { password });
 }
 
 export async function bgKeystoreCreateFromMnemonic(
@@ -367,7 +409,14 @@ export async function bgWalletBalance(
   chainIdHex: string,
 ): Promise<
   | { ok: true; balanceHex: string; spendGuardHex: string }
-  | { ok: false; reason?: string }
+  | {
+      ok: false;
+      reason?: string;
+      // C5: typed cause so Home can label a re-genesis ("network may have reset
+      // — paused") distinctly from an unreachable chain, and suppress a
+      // misleading bare 0.00 when the balance is genuinely unknown.
+      cause?: "unreachable" | "untrusted" | "regenesis";
+    }
 > {
   return send("wallet-balance", { address, chainIdHex });
 }
@@ -386,10 +435,11 @@ export async function bgGetBlockTxValue(
   return send("get-block-tx-value", { blockHeight, txIndex });
 }
 
-/** Best-effort total tx fee in lythoshi for a confirmed self-paid tx, read
- *  from the native receipt (`lyth_nativeReceipt.fee.total_lythoshi`). Used by
+/** Best-effort total tx fee in lythoshi for a confirmed tx, read from the
+ *  comprehensive tx-detail RPC (`lyth_decodeTx.fee.total_lythoshi`, which the
+ *  chain computes for every tx kind incl. native transfers/delegations). Used by
  *  the activity-detail popup, which has no persisted fee field (indexer-sourced
- *  rows). `feeLythoshi` is null when the fee is zero / the native receipt is
+ *  rows). `feeLythoshi` is null when the fee is zero / the decode is
  *  unavailable (failed / reverted / pruned). LYTH not wei. */
 export async function bgWalletTxFee(
   txHash: string,
@@ -844,7 +894,11 @@ export async function bgWalletOperatorStatus(): Promise<
  */
 export async function bgWalletChainBlockNumber(): Promise<
   { ok: true; blockHex: string; operator: string | null }
-  | { ok: false; reason?: string }
+  | {
+      ok: false;
+      reason?: string;
+      cause?: "unreachable" | "untrusted" | "regenesis";
+    }
 > {
   return send("wallet-chain-block-number");
 }
@@ -1249,10 +1303,6 @@ export async function bgListPending(): Promise<PendingApproval[]> {
   return send<PendingApproval[]>("list-pending");
 }
 
-export async function bgGetPending(id: string): Promise<PendingApproval | null> {
-  return send<PendingApproval | null>("get-pending", { id });
-}
-
 export async function bgResolveApproval(
   id: string,
   decision: { ok: boolean; reason?: string },
@@ -1270,10 +1320,6 @@ export interface ConnectedSiteRecord {
 }
 
 export type ConnectedSitesMap = Record<string, ConnectedSiteRecord>;
-
-export async function bgListConnectedSites(): Promise<ConnectedSitesMap> {
-  return send<ConnectedSitesMap>("list-connected-sites");
-}
 
 export async function bgRevokeOrigin(origin: string): Promise<{ ok: boolean }> {
   return send<{ ok: boolean }>("revoke-origin", { origin });
@@ -1358,6 +1404,16 @@ export async function bgOperatorsSet(
   operators: OperatorEntryWire[] | null,
 ): Promise<{ ok: true } | { ok: false; reason?: string }> {
   return send("testnet-operators-set", { operators });
+}
+
+/** Single-operator usability probe for the "Use this operator" button.
+ *  `usable` is true when the operator is reachable AND serving the wallet's
+ *  pinned genesis (i.e. RPC dispatch would actually use it). Read-only — it
+ *  writes no override. */
+export async function bgProbeOperator(
+  rpc: string,
+): Promise<{ ok: true; usable: boolean } | { ok: false; usable: false }> {
+  return send("probe-operator", { rpc });
 }
 
 /** Per-operator health row surfaced by `testnet-operators-health`. `ok`
@@ -1493,13 +1549,6 @@ export interface ContactRecord {
 
 export type ContactsMap = Record<string, ContactRecord>;
 
-export async function bgContactsList(): Promise<
-  | { ok: true; contacts: ContactsMap }
-  | { ok: false; reason?: string }
-> {
-  return send("contacts-list");
-}
-
 export async function bgContactsAdd(input: {
   address: string;
   bech32m?: string;
@@ -1520,13 +1569,6 @@ export async function bgContactsRename(
   name: string,
 ): Promise<{ ok: true } | { ok: false; reason?: string }> {
   return send("contacts-rename", { address, name });
-}
-
-export async function bgContactsCheck(address: string): Promise<boolean> {
-  const r = await send<
-    { ok: true; known: boolean } | { ok: false; reason?: string }
-  >("contacts-check", { address });
-  return r.ok && r.known;
 }
 
 // ---- Multi-vault container surface ----
@@ -1713,15 +1755,8 @@ export async function bgVaultPubkey(
 // multisig vault's meta. The first self-signer in the roster acts as
 // proposer; their vault key signs the canonical proposal hash and
 // the signature lands in approvals[0]. Container must be unlocked.
-//
-// `bgMultisigListProposals` is a thin convenience wrapper around the
-// proposals array — saves callers from pulling the full meta when
-// they only need the proposal list.
 
-import type {
-  PendingProposal,
-  ProposalAction,
-} from "../shared/multisig.js";
+import type { ProposalAction } from "../shared/multisig.js";
 
 export type {
   PendingProposal,
@@ -1738,15 +1773,6 @@ export async function bgMultisigPropose(args: {
   | { ok: false; reason?: string }
 > {
   return send("multisig-propose", args);
-}
-
-export async function bgMultisigListProposals(
-  vaultId: string,
-): Promise<
-  | { ok: true; proposals: PendingProposal[] | null }
-  | { ok: false; reason?: string }
-> {
-  return send("multisig-list-proposals", { vaultId });
 }
 
 /** Add an approval signature to a pending proposal. Returns the new
@@ -2306,6 +2332,11 @@ export async function bgPasskeyRecordUsage(args: {
 }
 
 // Two-tier UX feature toggles
+import {
+  STORAGE_KEY_TWO_TIER_FEATURES,
+  normaliseTwoTierState,
+  setFeature,
+} from "../shared/two-tier-features.js";
 import type {
   FeatureFlag as TwoTierFlag,
   TwoTierState,
@@ -2317,11 +2348,29 @@ export async function bgTwoTierGetState(): Promise<
   return send("two-tier-get-state");
 }
 
+// Optimistic, popup-direct write — no service-worker round-trip.
+//
+// The feature-flag namespace is plain chrome.storage.local; the SW reads it on
+// demand (it caches nothing and runs NO side effect on a flag change), so
+// routing the write through the SW only bought the MV3 cold-wake latency that
+// made the Developer-mode toggle feel laggy. Writing storage directly here
+// fires chrome.storage.local.onChanged immediately, so the switch AND every
+// gated surface (all `useFeature` consumers) flip at once without waking the
+// worker. The merge reuses the SAME pure `setFeature` the SW used, so the
+// stored shape — including the sticky `firstSeenAt` stamp — is identical.
 export async function bgTwoTierSetFeature(
   flag: TwoTierFlag,
   enabled: boolean,
 ): Promise<{ ok: true; state: TwoTierState } | { ok: false; reason: string }> {
-  return send("two-tier-set-feature", { flag, enabled });
+  try {
+    const got = await chrome.storage.local.get(STORAGE_KEY_TWO_TIER_FEATURES);
+    const current = normaliseTwoTierState(got?.[STORAGE_KEY_TWO_TIER_FEATURES]);
+    const next = setFeature(current, flag, enabled, Date.now());
+    await chrome.storage.local.set({ [STORAGE_KEY_TWO_TIER_FEATURES]: next });
+    return { ok: true, state: next };
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message };
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

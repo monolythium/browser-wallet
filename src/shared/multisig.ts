@@ -9,28 +9,37 @@
 // container persistence); the IPC dispatch lives in service-worker.ts;
 // the UI lives in popup/.
 //
-// On-chain reality
+// On-chain reality (corrected 2026-06-08 — supersedes the stale "@ce93d83
+// has no precompile" note)
 // ===========================================
-// mono-core @ce93d83 has NO general-purpose user-multisig precompile.
-// The `0x110x` block is allocated end-to-end (emergency-key, VRF,
-// streaming, cluster-name, agent-commerce primitives, escrow, arbiter,
-// hierarchical name-registry) and "foundation_multisig" is the runtime-
-// internal 3-of-5 ML-DSA-65 roster used for treasury / protocol-upgrade
-// paths — it is NOT exposed to user accounts. ML-DSA-65 itself has no
-// production-grade threshold or aggregation variant. mono-core-sdk has
-// zero multisig surface.
+// mono-core @d42298f6 DOES ship a general-purpose native M-of-N multisig:
+// a `monom…` address = BLAKE3("MONO_MULTISIG_BLAKE3_20_V1" || threshold ||
+// sorted_members)[..20], spent by attaching a 0x40 `MultisigWitness`
+// extension whose `verify_quorum` checks >= threshold member signatures
+// (crates/execution/tx/src/multisig.rs; dispatch signed.rs:170-216). It is
+// exposed in the Rust `protocore_sdk` (MultisigWitness / assemble_multisig_
+// signed / multisig_base_sighash), the CLI spend flow, and RPC (monom nonce
+// support). "foundation_multisig" (genesis 3-of-5 treasury) is one instance
+// of that same facility, not a separate one.
+// THE GAP IS THE TS BINDING: the TS @monolythium/core-sdk exposes the
+// `monom` HRP + address-derivation domain but NOT the witness-assembly API
+// (MultisigWitness / assemble_multisig_signed / multisig_base_sighash → 0
+// hits in the TS source), so a TS wallet cannot build a native M-of-N tx
+// yet. Tracked as Nayiem ping S6-01 (expose the TS witness API + confirm
+// monom multisig is user-facing-stable).
 //
-// Consequence: v1 wallet multisig is **off-chain coordinated, single-
-// executor on-submit**. The wallet enforces the M-of-N policy at the
-// UI/IPC boundary — proposals collect M ML-DSA-65 signatures over a
-// canonical proposal hash, then a designated executor signer signs +
-// submits the underlying EVM transaction with its own single-key
-// envelope. The other (M-1) signatures stay in the proposal record as
-// an off-chain audit trail. A user who bypasses the wallet UI and uses
-// the executor's seed manually CAN bypass the policy; this is a
-// **chain GAP** (`TODO: chain GAP — needs Nayiem`) — a user-multisig
-// precompile that verifies M-of-N pubkey signatures against an on-
-// chain signer roster would close it.
+// Consequence (interim, until the TS witness binding lands): v1 wallet
+// multisig is **off-chain coordinated, single-executor on-submit**. The
+// wallet enforces the M-of-N policy at the UI/IPC boundary — proposals
+// collect M ML-DSA-65 signatures over a canonical proposal hash, then a
+// designated executor signer signs + submits the underlying EVM transaction
+// with its own single-key envelope. The other (M-1) signatures stay in the
+// proposal record as an off-chain audit trail. Because the funds sit at a
+// single-signer `mono…` executor address (NOT the native `monom…` multisig
+// address), a holder of the executor seed CAN move them unilaterally,
+// bypassing the threshold — a **wallet-side gap closeable by adopting the
+// native monom/MultisigWitness path once the TS SDK exposes it**
+// (`TODO — needs Nayiem ping S6-01`).
 //
 // Cross-signer coordination is also off-chain: pending proposals live
 // in chrome.storage.local under the per-vault container, and the

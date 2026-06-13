@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { Icon } from "../Icon";
+import { WalletLockLogo } from "../components/WalletLockLogo";
+import { Modal } from "../components/Modal";
 import { bgKeystoreWipeUnauth } from "../bg";
+
+/** The exact word the user must type to confirm the destructive wipe. */
+const CONFIRM_WORD = "DELETE";
 
 interface ForgotPasswordProps {
   /** Returns to Welcome (Cancel button + back arrow). */
@@ -16,6 +21,16 @@ export function ForgotPassword({
 }: ForgotPasswordProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const confirmOk = confirmText.trim().toUpperCase() === CONFIRM_WORD;
+
+  const closeConfirm = () => {
+    if (submitting) return; // never abandon a wipe mid-flight
+    setConfirmOpen(false);
+    setConfirmText("");
+    setError(null);
+  };
 
   const handleResetAndImport = async () => {
     if (submitting) return;
@@ -61,23 +76,7 @@ export function ForgotPassword({
       </div>
 
       <div style={{ padding: "32px 22px 8px", textAlign: "center" }}>
-        <div
-          style={{
-            width: 56,
-            height: 56,
-            margin: "0 auto 14px",
-            display: "grid",
-            placeItems: "center",
-            borderRadius: "var(--r-xl)",
-            background: "rgba(124,127,255,0.1)",
-            border: "1px solid var(--fg-700)",
-            color: "var(--fg-200)",
-            fontSize: 24,
-          }}
-          aria-hidden="true"
-        >
-          🔑
-        </div>
+        <WalletLockLogo badge="key" />
         <h2
           style={{
             margin: 0,
@@ -122,8 +121,9 @@ export function ForgotPassword({
             lineHeight: 1.6,
           }}
         >
-          Resetting will delete the wallet from this browser. You&apos;ll
-          then re-import using your phrase and choose a new password.
+          Resetting permanently deletes this wallet from this browser.
+          You&apos;ll then re-import from your 24-word phrase and set a new
+          password.
         </div>
 
         {error && (
@@ -147,17 +147,128 @@ export function ForgotPassword({
         <button onClick={onBack} disabled={submitting}>
           Cancel
         </button>
-        <button
-          className="prim"
-          onClick={() => void handleResetAndImport()}
-          disabled={submitting}
-          style={
-            submitting ? { opacity: 0.45, cursor: "not-allowed" } : undefined
-          }
-        >
-          {submitting ? "Resetting…" : "Reset & Import"}
+        <button className="prim" onClick={() => setConfirmOpen(true)}>
+          Reset &amp; Import
         </button>
       </div>
+
+      <Modal
+        open={confirmOpen}
+        onClose={closeConfirm}
+        title="Delete this wallet?"
+        titleAccent="var(--err)"
+        showClose
+      >
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: "var(--fg-200)" }}>
+          This permanently removes this wallet and its keys from this device.
+          It <strong>cannot be undone.</strong>
+        </div>
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: "var(--fg-200)" }}>
+          Your funds stay on the blockchain, but the only way to reach them
+          again is your <strong>24-word recovery phrase</strong>. If you
+          haven&apos;t saved it, deleting this wallet permanently locks you out
+          of your funds.
+        </div>
+        <div
+          style={{ fontSize: 11.5, lineHeight: 1.6, color: "var(--fg-400)" }}
+        >
+          Monolythium is non-custodial: no one — including Monolythium — can
+          recover your wallet, password, keys, or funds for you.
+        </div>
+        <label
+          htmlFor="reset-confirm-input"
+          style={{ fontSize: 11.5, color: "var(--fg-300)", marginTop: 2 }}
+        >
+          Type{" "}
+          <strong style={{ color: "var(--fg-100)" }}>{CONFIRM_WORD}</strong> to
+          confirm
+        </label>
+        <input
+          id="reset-confirm-input"
+          type="text"
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          disabled={submitting}
+          autoFocus
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          placeholder={CONFIRM_WORD}
+          aria-label={`Type ${CONFIRM_WORD} to confirm deleting this wallet`}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && confirmOk && !submitting) {
+              void handleResetAndImport();
+            }
+          }}
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "1px solid var(--fg-700)",
+            background: "rgba(255,255,255,0.04)",
+            color: "var(--fg-100)",
+            fontFamily: "var(--f-mono)",
+            fontSize: 13,
+            letterSpacing: "0.1em",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+        {error && (
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 11,
+              color: "var(--err)",
+              lineHeight: 1.4,
+            }}
+          >
+            {error}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={closeConfirm}
+            disabled={submitting}
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "transparent",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: submitting ? "not-allowed" : "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleResetAndImport()}
+            disabled={!confirmOk || submitting}
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--err)",
+              background: confirmOk ? "var(--err)" : "transparent",
+              color: confirmOk ? "#fff" : "var(--err)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: confirmOk && !submitting ? "pointer" : "not-allowed",
+              opacity: submitting ? 0.6 : 1,
+            }}
+          >
+            {submitting ? "Deleting…" : "Delete wallet"}
+          </button>
+        </div>
+      </Modal>
     </>
   );
 }

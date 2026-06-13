@@ -75,7 +75,7 @@ export interface RecordNotificationInput {
   counterparty: string;
   /** Total tx fee in lythoshi (decimal string) — set by the caller only for
    *  confirmed self-paid txs with a non-zero fee (from
-   *  `lyth_nativeReceipt.fee.total_lythoshi`). Omitted otherwise. */
+   *  `lyth_decodeTx.fee.total_lythoshi`). Omitted otherwise. */
   feeLythoshi?: string;
   /** Cluster the delegation tx targeted (numeric id + optional directory
    *  name), threaded from the pending row. Omitted on non-delegation kinds. */
@@ -230,18 +230,34 @@ export async function markAllRead(
   }
 }
 
-/** GLOBAL inbox read — every `mono.notifications.history.*` envelope's
- *  entries, merged + sorted newest-first. The Notifications page reads this from the
- *  popup-side Notifications page so the user sees one unified list
- *  across all vaults / addresses (matches the toolbar badge
- *  which also aggregates globally via `getUnread()`). Per-active-wallet
- *  scoping is a future refinement; today the badge + page agree. */
-export async function listAllNotifications(): Promise<NotificationRecord[]> {
+/** S6 #44 B3 — 3-way active-address scope shared by every notification
+ *  read/flip loop. `undefined` → legacy global (existing no-arg callers +
+ *  tests behave exactly as before); `null` → locked / no active vault →
+ *  match nothing (empty inbox + zero badge, kept consistent); a lowercased
+ *  0x address → only that address's history across every chain (the trailing
+ *  "." pins the <addr> segment so there is no prefix collision). Display-
+ *  scoping ONLY: the read loops are guarded, on-disk history is never deleted
+ *  or re-keyed, so a different active vault later still sees its own. */
+function keyMatchesActive(k: string, a: string | null | undefined): boolean {
+  if (a === undefined) return true;
+  if (a === null) return false;
+  return k.startsWith("mono.notifications.history." + a + ".");
+}
+
+/** Inbox read — every `mono.notifications.history.*` envelope's entries,
+ *  merged + sorted newest-first, for the Notifications page. Scoped to the
+ *  active vault's address via {@link keyMatchesActive} (`activeAddrLower`),
+ *  so the page, the bell pill, and the toolbar badge — all passed the same
+ *  active address — agree. Pass nothing for the legacy global view. */
+export async function listAllNotifications(
+  activeAddrLower?: string | null,
+): Promise<NotificationRecord[]> {
   try {
     const all = await readAllStorage();
     const merged: NotificationRecord[] = [];
     for (const [k, v] of Object.entries(all)) {
       if (!k.startsWith("mono.notifications.history.")) continue;
+      if (!keyMatchesActive(k, activeAddrLower)) continue;
       const env = parseHistoryEnvelope(v);
       if (!env) continue;
       merged.push(...env.entries);
@@ -265,11 +281,13 @@ export async function listAllNotifications(): Promise<NotificationRecord[]> {
  *  reported as `{ flipped: false }`. */
 export async function markNotificationRead(
   id: string,
+  activeAddrLower?: string | null,
 ): Promise<{ flipped: boolean }> {
   try {
     const all = await readAllStorage();
     for (const [k, v] of Object.entries(all)) {
       if (!k.startsWith("mono.notifications.history.")) continue;
+      if (!keyMatchesActive(k, activeAddrLower)) continue;
       const env = parseHistoryEnvelope(v);
       if (!env) continue;
       let flipped = false;
@@ -295,13 +313,16 @@ export async function markNotificationRead(
  *  "Mark all as read" CTA here, and the toolbar badge clears on the next
  *  `refreshUnreadBadge()`. Best-effort: a scope that fails to write
  *  doesn't prevent the others from succeeding. */
-export async function markAllNotificationsRead(): Promise<{ flipped: number }> {
+export async function markAllNotificationsRead(
+  activeAddrLower?: string | null,
+): Promise<{ flipped: number }> {
   try {
     const all = await readAllStorage();
     let flipped = 0;
     const writes: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(all)) {
       if (!k.startsWith("mono.notifications.history.")) continue;
+      if (!keyMatchesActive(k, activeAddrLower)) continue;
       const env = parseHistoryEnvelope(v);
       if (!env) continue;
       let scopeChanged = false;
@@ -327,12 +348,13 @@ export async function markAllNotificationsRead(): Promise<{ flipped: number }> {
 /** Derived global unread count = sum of `!read` across every
  *  `mono.notifications.history.*` history blob. Single source of truth
  *  (no separate counter key → no sync hazard). */
-export async function getUnread(): Promise<number> {
+export async function getUnread(activeAddrLower?: string | null): Promise<number> {
   try {
     const all = await readAllStorage();
     let total = 0;
     for (const [k, v] of Object.entries(all)) {
       if (!k.startsWith("mono.notifications.history.")) continue;
+      if (!keyMatchesActive(k, activeAddrLower)) continue;
       const env = parseHistoryEnvelope(v);
       if (!env) continue;
       for (const r of env.entries) if (!r.read) total++;

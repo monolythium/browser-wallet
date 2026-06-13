@@ -96,7 +96,7 @@ interface CapturedRpcCall {
   params: unknown[];
 }
 const rpcCalls: CapturedRpcCall[] = [];
-// Capture of submitPlaintextMlDsaTx argument objects — used by the
+// Capture of submitMlDsaTx argument objects — used by the
 // metadata-only invariant test (assert opKind never reaches the signer).
 const submitMlDsaCalls: Record<string, unknown>[] = [];
 let rpcResponses: Record<string, unknown> = {};
@@ -129,7 +129,7 @@ vi.mock("./tx-mldsa.js", () => ({
   // eth_sendTransaction / MRV / multisig paths all route here. It feeds
   // `submitMlDsaCalls` so the metadata-only invariant (`opKind` / cluster
   // never reach the signer) and the arg-shape assertions hold.
-  submitPlaintextMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
+  submitMlDsaTx: vi.fn(async (args: Record<string, unknown>) => {
     submitMlDsaCalls.push(args);
     if (submitFailure !== null) {
       throw submitFailure;
@@ -323,9 +323,14 @@ vi.mock("./networks.js", () => ({
   chainRequiresMlDsa: vi.fn((chainIdHex: string) =>
     chainIdHex.toUpperCase() === TESTNET_CHAIN_ID_HEX.toUpperCase(),
   ),
-  TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x5208",
+  // Real value (0x7530 = 30000, the mempool intrinsic floor). A no-hint
+  // native send resolves its unit limit to this floor; the old wallet-send-tx
+  // fallback literal (0x5208 = 21000) was below it (F-3.9/#26).
+  TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX: "0x7530",
   // T4-04 fee ceiling — real value so the clamp tests are meaningful.
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI: 1_000_000_000_000_000n,
+  // F-3.11/#28 unit-limit ceiling — real value so the limit-clamp test is meaningful.
+  MAX_EXECUTION_UNIT_LIMIT: 30_000_000n,
   probeFirstAliveOperator: vi.fn(async () => ({ name: "mock", rpc: "http://mock" })),
   BUILTIN_CHAINS: [
     {
@@ -341,20 +346,34 @@ vi.mock("./networks.js", () => ({
   readOperatorOverride: vi.fn(async () => null),
   getDefaultOperators: vi.fn(() => []),
   getActiveOperators: vi.fn(() => []),
+  classifyNoOperatorReason: vi.fn(() => "unreachable"),
+  // Called once on SW boot (genesis-cache rehydrate); a no-op here is fine —
+  // these tests don't exercise the persisted-genesis fast path.
+  rehydrateGenesisCache: vi.fn(async () => undefined),
+  // C7: liveness fast-path gate. Default false (operator trusted) so the
+  // chain-block fast-path proceeds as before in these tests.
+  operatorDefinitivelyUntrusted: vi.fn(() => false),
 }));
 
 // Keystore (v4) — fixed unlocked address, never actually signs. The
 // `computeTypedDataDigest` helper now lives in ./typed-data.js (pure, no
 // chrome dependency) and runs for real — no mock needed.
 let unlocked = true;
-// T1-04(a) passkey-cap gate controls. Default INERT (no active passkey
-// vault) so every existing send test behaves exactly as before the gate.
-let activePasskeyVaultId: string | null = null;
+// T1-04(a) passkey-cap gate controls. The cap gate is INERT via
+// passkeyStateForTest.policy.enabled=false (below), NOT via a null vault id —
+// so this defaults to a non-null "v1" to match the production invariant
+// (unlocked ⇒ getActiveVaultIdV4() != null), which the NN-01 boundVaultId
+// capture + non-null guard relies on. Tests that exercise the cap set it
+// explicitly; the multisig-execute test sets "ms1".
+let activePasskeyVaultId: string | null = "v1";
 let passkeyStateForTest: unknown = {
   policy: { enabled: false, mode: "per-tx", limitWei: 0n },
   credentials: [],
 };
 let correctElevatedPassword = "correct-horse-battery-staple";
+// Multisig-execute harness: the meta block readMultisigMetaV4 returns. Default
+// null (no multisig vault) so it is inert for every non-multisig test.
+let multisigMetaForTest: unknown = null;
 
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
@@ -384,10 +403,31 @@ vi.mock("./keystore-mldsa.js", () => ({
     address: DETERMINISTIC_ADDRESS,
   })),
   exportMnemonicV4: vi.fn(async () => ({ mnemonic: "" })),
-  wipeVaultV4: vi.fn(async () => undefined),
   personalSignV4: vi.fn(() => new Uint8Array(65)),
   signTypedDataV4FromV4: vi.fn(() => new Uint8Array(65)),
+  // Multisig-execute seams (used only by the multisig-execute handler test).
+  readMultisigMetaV4: vi.fn(async () => multisigMetaForTest),
+  writeMultisigMetaV4: vi.fn(async () => undefined),
+  listVaultsV4: vi.fn(async () => []),
+  selectActiveVaultV4: vi.fn(async () => undefined),
 }));
+
+// Multisig approval verification (shared/multisig.js): keep everything real
+// except the two checks that need live ML-DSA signatures over a real proposal
+// digest. The multisig-execute fee-clamp test only exercises the broadcast
+// preamble, so isExecutable + signature verification are stubbed to pass; the
+// real approval/signature logic is covered in shared/multisig.test.ts and
+// keystore-mldsa.test.ts.
+vi.mock("../shared/multisig.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/multisig.js")>();
+  return {
+    ...actual,
+    isExecutable: vi.fn(() => true),
+    verifyProposalApprovals: vi.fn(() => ({
+      validApprovals: new Set(["s1"]),
+    })),
+  };
+});
 
 let approvalDecision: { ok: true } | { ok: false; reason?: string } = { ok: true };
 const enqueuedApprovals: Array<{ kind: string; [k: string]: unknown }> = [];
@@ -453,7 +493,7 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitPlaintextMlDsaTx } from "./tx-mldsa.js";
+import { submitMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -653,8 +693,9 @@ beforeEach(() => {
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   unlocked = true;
-  // Reset the passkey-cap gate to inert unless a test opts in.
-  activePasskeyVaultId = null;
+  // Reset to the non-null production-invariant default (see the declaration);
+  // the cap gate is kept inert by policy.enabled=false below, not a null id.
+  activePasskeyVaultId = "v1";
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -672,6 +713,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
+  // S6 closeout C5: unwind any vi.spyOn (e.g. the F-B2V-1 session.remove
+  // rejection) so a spy can't leak across tests. Only affects vi.spyOn spies,
+  // not the vi.fn/vi.mock module mocks.
+  vi.restoreAllMocks();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -701,6 +746,99 @@ describe("keystore-status address privacy", () => {
     expect(r.hasVault).toBe(true);
     expect(r.unlocked).toBe(false);
     expect(r.address).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// keystore wipe-scope — default-deny (S6 #43 B2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
+  // The sensitive families (+ the vault entries) the wipe must remove, per the
+  // audit durable-key inventory. All durable wallet keys are mono.*-prefixed.
+  const SENSITIVE = [
+    "mono.connected-sites",
+    "mono.contacts.v1",
+    "mono.sent-addrs.0xabc.0x10f2c",
+    "mono.activity.0xabc.0x10f2c",
+    "mono.notifications.history.0xabc.0x10f2c.v1",
+    "mono.names.cache",
+    "mono.two-tier-features.v1",
+    "mono.vault.v4",
+    "mono.vaults.v4",
+  ];
+
+  function seedFamilies() {
+    for (const k of SENSITIVE) storageLocal[k] = { seeded: true };
+    // A non-mono local key must SURVIVE — the scan is mono.* default-deny only.
+    storageLocal["nonmono.keep"] = "survives";
+  }
+
+  it("keystore-wipe-unauth removes every mono.* local key, keeps non-mono", async () => {
+    seedFamilies();
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
+    expect(storageLocal["nonmono.keep"]).toBe("survives");
+  });
+
+  it("keystore-reset (password-confirmed) wipes the IDENTICAL set", async () => {
+    seedFamilies();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
+    expect(storageLocal["nonmono.keep"]).toBe("survives");
+  });
+
+  it("closes the connected-sites carryover: a previously-connected origin no longer leaks the address after wipe + re-unlock", async () => {
+    const origin = "https://prior-owner-dapp.example";
+    await dispatchRpc("eth_requestAccounts", [], origin); // connects → session.connectedOrigins has origin
+    const before = await dispatchRpc("eth_accounts", [], origin);
+    expect(before.result).toEqual([DETERMINISTIC_ADDRESS]); // connected → address visible
+
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" }); // clears connectedOrigins + locks
+    unlocked = true; // simulate the NEW owner importing + unlocking a fresh vault
+
+    const after = await dispatchRpc("eth_accounts", [], origin);
+    expect(after.result).toEqual([]); // connectedOrigins cleared → no silent auto-reconnect / address leak
+  });
+
+  it("F-B2V-1: still disposes the in-memory backend when the lockout session.remove rejects", async () => {
+    unlocked = true; // decrypted backend live (beforeEach default; explicit)
+    // Force the lockout-counter session.remove (the await BEFORE triggerAutoLock)
+    // to reject — the exact F-B2V-1 trigger. Pre-fix this skipped lockV4 and left
+    // the decrypted backend + MEK live in the SW heap after the disk was wiped;
+    // the new try/finally must zero it regardless of the rejection.
+    // S6 closeout C5: vi.spyOn + mockRejectedValueOnce is self-limiting (it
+    // rejects exactly once, then delegates to the original) and is unwound by
+    // afterEach's restoreAllMocks — so no rejecting stub can leak into a later
+    // test even if this test aborts (chrome is installed once in beforeAll, so
+    // the manual swap+finally it replaces could leak on a skipped finally).
+    const sessionArea = chrome.storage.session as unknown as {
+      remove: (keys: string | string[], cb?: () => void) => Promise<void>;
+    };
+    vi.spyOn(sessionArea, "remove").mockRejectedValueOnce(
+      new Error("forced session.remove failure"),
+    );
+    // The rejection propagates to the router catch; dispatchPopup resolves with
+    // { error }. What matters is that finally { lockV4() } ran first.
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    expect(unlocked).toBe(false); // lockV4 (mock sets unlocked=false) ran via finally
+  });
+
+  it("C2: clears the toolbar badge on wipe-unauth (no stale unread count for the next owner)", async () => {
+    mockRefreshUnreadBadge.mockClear();
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    // The wipe path's only refreshUnreadBadge call is the C2 clear — locked +
+    // null scope → after the store is wiped it resolves to an empty badge.
+    expect(mockRefreshUnreadBadge).toHaveBeenCalledWith({
+      unlocked: false,
+      activeAddrLower: null,
+    });
   });
 });
 
@@ -1564,6 +1702,55 @@ describe("wallet-activity-get", () => {
     expect(r.pending).toHaveLength(1);
   });
 
+  // F-3.10 / #27 — found = INCLUDED, not confirmed. The row must resolve on the
+  // receipt's status bit only; a found-but-receiptless tx must NOT be
+  // optimistically confirmed. The open-surface bridge stamps confirmedBlockHeight
+  // on a confirmed row but leaves a kept (still-pending) row plain — so that
+  // field is the discriminator.
+  function getActivity() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    }) as Promise<{ ok: true; pending: Array<{ confirmedBlockHeight?: number }> }>;
+  }
+
+  it("found + UNAVAILABLE receipt keeps the row PENDING, not optimistically confirmed (F-3.10/#27)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = null; // receipt unavailable
+    seedPending("0x" + "ef".repeat(32));
+    const r = await getActivity();
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+    // Old behavior would optimistically confirm (stamp confirmedBlockHeight from
+    // the broadcast anchor); the fix leaves it a plain pending row.
+    expect(r.pending[0]?.confirmedBlockHeight).toBeUndefined();
+  });
+
+  it("found + receipt status 0x1 confirms the row (bridged with confirmedBlockHeight) (F-3.10/#27)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "ef".repeat(32));
+    const r = await getActivity();
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200);
+  });
+
+  it("found + receipt status 0x0 marks the row FAILED (dropped from pending) (F-3.10/#27)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "ef".repeat(32));
+    const r = await getActivity();
+    expect(r.ok).toBe(true);
+    // Failed rows are not bridged into the pending list (surfaced via the
+    // failed-row notification path instead).
+    expect(r.pending).toHaveLength(0);
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile
@@ -1828,6 +2015,9 @@ describe("wallet-activity-get", () => {
   it("dedupes across snapshots — the same txHash recorded on two snapshots produces ONE record", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found" };
+    // Readable confirmed receipt so the row genuinely terminalizes and a
+    // notification is recorded (F-3.10/#27: found alone no longer confirms).
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 300 };
     const txHash = "0x" + "44".repeat(32);
     seedPendingCustom({
       txHash,
@@ -1959,6 +2149,9 @@ describe("wallet-activity-get", () => {
   it("snapshot response returns BEFORE notification writes complete (post-write microtask placement)", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found" };
+    // Readable confirmed receipt so the row terminalizes and the notification
+    // I/O is queued (F-3.10/#27: found-without-receipt no longer confirms).
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 400 };
     const txHash = "0x" + "55".repeat(32);
     seedPendingCustom({
       txHash,
@@ -2186,6 +2379,27 @@ describe("wallet-send-tx pending-row prepend", () => {
     };
   }
 
+  it("no-hint native send resolves the unit limit to the 30000 floor, never 21000 (F-3.9/#26)", async () => {
+    seedTestnetNonceAndFee();
+    rpcResponses["eth_blockNumber"] = "0x64";
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x16345785d8a0000",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        // No gasLimitHex, no signedFee → the unit limit resolves to the
+        // mempool intrinsic floor (0x7530 = 30000), not the old 0x5208 (21000).
+      },
+    })) as { ok: true };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x7530" }),
+      "v1",
+    );
+  });
+
   it("successful broadcast writes a pending row", async () => {
     seedTestnetNonceAndFee();
     rpcResponses["eth_blockNumber"] = "0x64"; // 100
@@ -2248,6 +2462,30 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(storageLocal[pendingKey]).toBeUndefined();
   });
 
+  it("NN-01: a vault-binding abort surfaces ok:false and writes NO pending row", async () => {
+    seedTestnetNonceAndFee();
+    // submitMlDsaTx throws the fail-closed sentinel (the builder's pre-sign
+    // assert fired because the active vault changed mid-flight).
+    submitFailure = new Error(
+      "active account changed during signing — transaction cancelled for safety",
+    ) as Error & { code: number };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x989680",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: false; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/active account changed/);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    expect(storageLocal[pendingKey]).toBeUndefined();
+  });
+
   it("passes SDK market plans through with the CLOB mempool class", async () => {
     seedTestnetNonceAndFee();
     const r = (await dispatchPopup({
@@ -2262,8 +2500,8 @@ describe("wallet-send-tx pending-row prepend", () => {
       },
     })) as { ok: true; txHash: string };
     expect(r.ok).toBe(true);
-    // DEFAULT submit = PLAINTEXT (`submitPlaintextMlDsaTx`).
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    // DEFAULT submit = PLAINTEXT (`submitMlDsaTx`).
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: "0x0000000000000000000000000000000000001001",
       value: "0x0",
       data: "0x2468786f" + "00".repeat(192),
@@ -2272,7 +2510,7 @@ describe("wallet-send-tx pending-row prepend", () => {
       maxFeePerGas: "0x2540be401",
       maxPriorityFeePerGas: "0x2540be400",
       chainIdHex: TESTNET_CHAIN_ID_HEX,
-    });
+    }, "v1");
   });
 
   it("fire-and-forget timing: send-tx reply resolves BEFORE pending storage write completes", async () => {
@@ -2337,7 +2575,7 @@ describe("wallet-send-tx pending-row prepend", () => {
 
   // ───────────────────────────────────────────────────────────────────────
   // opKind tagging. opKind is pending-row metadata only; it
-  // must NEVER reach submitPlaintextMlDsaTx's argument object (the signed
+  // must NEVER reach submitMlDsaTx's argument object (the signed
   // tx bytes / ML-DSA-65 signature / encrypted envelope / nonce / fee /
   // gas must be identical with or without opKind).
   // ───────────────────────────────────────────────────────────────────────
@@ -2424,7 +2662,7 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(persisted.pending[0]?.opKind).toBe("contract_call");
   });
 
-  it("METADATA-ONLY INVARIANT — opKind NEVER reaches submitPlaintextMlDsaTx's argument object", async () => {
+  it("METADATA-ONLY INVARIANT — opKind NEVER reaches submitMlDsaTx's argument object", async () => {
     // First dispatch — WITH opKind. Capture the signer arg.
     await dispatchSend({
       to: "0xrecipient",
@@ -2486,7 +2724,7 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect("clusterName" in p2.pending[0]!).toBe(false);
   });
 
-  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitPlaintextMlDsaTx", async () => {
+  it("METADATA-ONLY INVARIANT — cluster fields NEVER reach submitMlDsaTx", async () => {
     submitMlDsaCalls.length = 0;
     storageLocal = {};
     await dispatchSend({
@@ -2539,7 +2777,7 @@ describe("wallet-mrv-submit-plan", () => {
       txHash: SUBMITTED_TX_HASH,
       via: "mock-operator",
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2549,7 +2787,7 @@ describe("wallet-mrv-submit-plan", () => {
       maxPriorityFeePerGas: "0x5",
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
-    });
+    }, "v1");
   });
 
   it("returns the locked-wallet error before signing", async () => {
@@ -2561,7 +2799,7 @@ describe("wallet-mrv-submit-plan", () => {
     })) as { ok: false; reason?: string };
 
     expect(r).toEqual({ ok: false, reason: "wallet locked" });
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("blocks tampered preview plans before encrypted submission", async () => {
@@ -2577,7 +2815,7 @@ describe("wallet-mrv-submit-plan", () => {
 
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/exactly one transaction extension/);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("submits a previewed MRV plan through the dapp provider boundary", async () => {
@@ -2616,7 +2854,7 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Monolythium Testnet",
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2626,7 +2864,7 @@ describe("wallet-mrv-submit-plan", () => {
       maxPriorityFeePerGas: "0x5",
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
-    });
+    }, "v1");
   });
 
   it("builds and submits an MRV native call through the dapp provider boundary", async () => {
@@ -2685,7 +2923,7 @@ describe("wallet-mrv-submit-plan", () => {
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Monolythium Testnet",
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith({
+    expect(submitMlDsaTx).toHaveBeenCalledWith({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
@@ -2695,7 +2933,7 @@ describe("wallet-mrv-submit-plan", () => {
       maxPriorityFeePerGas: "0x2540be400",
       chainIdHex: "0x10f2c",
       extensions: [{ kind: 48, bodyHex: "0x01" }],
-    });
+    }, "v1");
     expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
   });
 
@@ -2732,11 +2970,12 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.error).toBeUndefined();
     // The SIGNED fee is the ceiling, not the absurd quote; the tip is re-clamped
     // to the (capped) max. Display == signed: the approval shows the same caps.
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: CEILING_HEX,
         maxPriorityFeePerGas: CEILING_HEX,
       }),
+      "v1",
     );
     const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
     expect(approval?.tx).toMatchObject({
@@ -2771,7 +3010,7 @@ describe("wallet-mrv-submit-plan", () => {
     });
     expect(rpcCalls.some((c) => c.method === "eth_getTransactionCount")).toBe(false);
     expect(enqueuedApprovals).toHaveLength(0);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("rejects provider MRV submissions from unconnected origins", async () => {
@@ -2784,7 +3023,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4100);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("blocks tampered provider MRV plans before approval", async () => {
@@ -2806,7 +3045,7 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.error?.code).toBe(-32602);
     expect(r.error?.message).toMatch(/exactly one transaction extension/);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
 
@@ -2839,8 +3078,9 @@ describe("dApp eth_sendTransaction fee clamp (T4-04 a1)", () => {
     expect(r.error).toBeUndefined();
     // The 1611-1619 clamp on the MLDSA encrypted submit path caps the signed
     // execution-unit price (gasPrice) at the ceiling, not the absurd dApp quote.
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ gasPrice: CEILING_HEX }),
+      "v1",
     );
   });
 });
@@ -4256,13 +4496,14 @@ describe("get-block-tx-value", () => {
   });
 });
 
-// C3 — wallet-tx-fee: on-demand native-receipt LYTH fee for the activity-detail
-// popup (indexer rows have no persisted fee).
+// C3 — wallet-tx-fee: on-demand lyth_decodeTx LYTH fee for the activity-detail
+// popup (indexer rows have no persisted fee). The chain computes the fee for
+// every tx kind; lyth_nativeReceipt was MRV-only → blank for native txs.
 describe("wallet-tx-fee", () => {
-  it("returns the native-receipt fee (lythoshi) for a tx", async () => {
-    rpcResponses["lyth_nativeReceipt"] = {
-      fee: { total_lythoshi: "600000" },
-      reverted: false,
+  it("returns the lyth_decodeTx fee (lythoshi) for a native tx", async () => {
+    // Live-verified shape: (base 1e9 + tip 1e9) × 21000 = 42000000000000.
+    rpcResponses["lyth_decodeTx"] = {
+      fee: { total_lythoshi: "42000000000000" },
     };
     const r = (await dispatchPopup({
       kind: "popup",
@@ -4270,17 +4511,62 @@ describe("wallet-tx-fee", () => {
       payload: { txHash: "0x" + "1".repeat(64) },
     })) as { ok: true; feeLythoshi: string | null };
     expect(r.ok).toBe(true);
-    expect(r.feeLythoshi).toBe("600000");
+    expect(r.feeLythoshi).toBe("42000000000000");
   });
 
-  it("returns null when the native receipt is unavailable / zero (honest-absence)", async () => {
-    // No seeded lyth_nativeReceipt → the mock throws -32601 → best-effort null.
+  it("returns null when lyth_decodeTx is unavailable (honest-absence)", async () => {
+    // No seeded lyth_decodeTx → the mock throws -32601 → best-effort null.
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-tx-fee",
       payload: { txHash: "0x" + "2".repeat(64) },
     })) as { ok: true; feeLythoshi: string | null };
     expect(r.ok).toBe(true);
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  // No-mock OFF paths — the wallet shows the chain's value or NOTHING; it never
+  // fabricates a fee. Each → null (no fee row).
+  it("returns null when the lyth_decodeTx result is null", async () => {
+    rpcResponses["lyth_decodeTx"] = null;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "3".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  it("returns null when the fee object is absent", async () => {
+    rpcResponses["lyth_decodeTx"] = { fee: null };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "4".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  it("returns null on a zero total_lythoshi (no fabricated 0)", async () => {
+    rpcResponses["lyth_decodeTx"] = { fee: { total_lythoshi: "0" } };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "5".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
+    expect(r.feeLythoshi).toBeNull();
+  });
+
+  it("returns null when the operator does not implement lyth_decodeTx (-32046)", async () => {
+    rpcErrors["lyth_decodeTx"] = {
+      code: -32046,
+      message: "transaction-by-hash capability not implemented",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-tx-fee",
+      payload: { txHash: "0x" + "6".repeat(64) },
+    })) as { ok: true; feeLythoshi: string | null };
     expect(r.feeLythoshi).toBeNull();
   });
 });
@@ -4372,33 +4658,34 @@ describe("pollPendingAndNotify — headless poll-core", () => {
     expect(hist.entries[0]!.blockNumber).toBe(456);
   });
 
-  it("found tx with no available receipt → inclusion stands as confirmed (back-compat)", async () => {
+  it("found tx with no available receipt stays PENDING — no optimistic confirm (F-3.10/#27)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
-    // found + receipt unavailable (null) → can't read a status bit; a
-    // not-yet-available receipt can't reveal a revert, so the indexer's
-    // inclusion stands as confirmed (preserves the prior fast-path).
+    // found + receipt unavailable (null) → no readable status bit. Per #27 the
+    // wallet no longer optimistically confirms (a not-yet-available receipt
+    // can't reveal a revert): the row stays pending and NO terminal
+    // notification is recorded. It resolves on a later poll once the receipt
+    // lands; PENDING_TTL_MS + the heuristic reconciler remain the backstops.
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = null;
 
     await pollPendingAndNotify();
 
-    const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
-      entries: Array<{ status: string }>;
-    };
-    expect(hist.entries).toHaveLength(1);
-    expect(hist.entries[0]!.status).toBe("confirmed");
+    // No terminal transition → no notification-history entry for this tx.
+    expect(storageLocal[historyKey(ADDR, CHAIN)]).toBeUndefined();
+    // The row is written back as still-pending (kept), not dropped/confirmed.
+    const pend = storageLocal[pendingKey(ADDR, CHAIN)] as { pending: unknown[] };
+    expect(pend.pending).toHaveLength(1);
   });
 
-  it("captures the native-receipt LYTH fee on a confirmed tx (feeLythoshi)", async () => {
+  it("captures the lyth_decodeTx LYTH fee on a confirmed tx (feeLythoshi)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 77 };
-    // The eth receipt carries no fee — the LYTH fee comes from the native receipt.
-    rpcResponses["lyth_nativeReceipt"] = {
+    // The eth receipt carries no fee — the LYTH fee comes from lyth_decodeTx.
+    rpcResponses["lyth_decodeTx"] = {
       fee: { total_lythoshi: "600000" },
-      reverted: false,
     };
 
     await pollPendingAndNotify();
@@ -4414,18 +4701,18 @@ describe("pollPendingAndNotify — headless poll-core", () => {
   it("omits the fee on a failed tx and on a zero-fee confirmed tx (no-mock)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     // Failed tx — the fee fetch is skipped (status !== confirmed) even though a
-    // native receipt is seeded, so feeLythoshi stays absent.
+    // lyth_decodeTx fee is seeded, so feeLythoshi stays absent.
     const FAILED = "0x" + "c".repeat(64);
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: FAILED })] };
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 88 };
-    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "600000" } };
+    rpcResponses["lyth_decodeTx"] = { fee: { total_lythoshi: "600000" } };
     await pollPendingAndNotify();
     // Confirmed but ZERO fee → omitted (no fake "0 LYTH").
     const ZEROFEE = "0x" + "d".repeat(64);
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow({ txHash: ZEROFEE })] };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 89 };
-    rpcResponses["lyth_nativeReceipt"] = { fee: { total_lythoshi: "0" } };
+    rpcResponses["lyth_decodeTx"] = { fee: { total_lythoshi: "0" } };
     await pollPendingAndNotify();
 
     const hist = storageLocal[historyKey(ADDR, CHAIN)] as {
@@ -4852,7 +5139,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: false; passkeyElevation?: string };
     expect(r.ok).toBe(false);
     expect(r.passkeyElevation).toBe("required");
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("over-limit value send with the CORRECT password is SW-verified and broadcasts", async () => {
@@ -4865,7 +5152,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
       elevatedPassword: "correct-horse-battery-staple",
     })) as { ok: boolean };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
   it("over-limit value send with a WRONG password → passkeyElevation:wrong_password, no broadcast", async () => {
@@ -4879,7 +5166,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: false; passkeyElevation?: string };
     expect(r.ok).toBe(false);
     expect(r.passkeyElevation).toBe("wrong_password");
-    expect(submitPlaintextMlDsaTx).not.toHaveBeenCalled();
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("under-limit value send broadcasts with no elevation required", async () => {
@@ -4892,7 +5179,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     })) as { ok: boolean; passkeyElevation?: string };
     expect(r.ok).toBe(true);
     expect(r.passkeyElevation).toBeUndefined();
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
   it("policy disabled → gate inert, over-limit value send broadcasts", async () => {
@@ -4908,7 +5195,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     })) as { ok: boolean };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
   it("data (contract-call) send bypasses the value-only cap even when over-limit", async () => {
@@ -4922,7 +5209,130 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     })) as { ok: boolean };
     expect(r.ok).toBe(true);
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("empty-data (0x) over-limit send is treated as a bare value transfer and is capped (#36)", async () => {
+    enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      // "0x" is byte-identical to a native transfer (input normalizes to
+      // "0x"), so it must NOT slip past the value-only cap.
+      data: "0x",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #36 — passkey daily-usage ledger persisted to chrome.storage.session so it
+// survives MV3 SW hibernation instead of resetting the rolling window.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("passkey daily-usage ledger persistence (#36)", () => {
+  const LYTH = 1_000_000_000_000_000_000n; // 1e18 lythoshi
+  const DAILY_CAP = 100n * LYTH;
+  const SESSION_KEY = "mono.session.passkey-usage.v1";
+  const hex = (v: bigint) => "0x" + v.toString(16);
+
+  function enableDailyCap() {
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "daily", dailyCapWei: DAILY_CAP },
+      credentials: [{ credentialId: "c1" }],
+    };
+  }
+
+  function record(vaultId: string, valueWei: bigint) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "passkey-record-usage",
+      payload: { vaultId, valueWeiHex: hex(valueWei) },
+    });
+  }
+  function evaluate(vaultId: string, valueWei: bigint) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "passkey-evaluate",
+      payload: { vaultId, valueWeiHex: hex(valueWei) },
+    }) as Promise<{ ok: boolean; decision?: { kind: string; mode?: string } }>;
+  }
+
+  it("passkey-record-usage persists to chrome.storage.session as a decimal string", async () => {
+    enableDailyCap();
+    await record("v1", 60n * LYTH);
+    const stored = storageSession[SESSION_KEY] as
+      | Record<string, { at: number; valueWei: string }[]>
+      | undefined;
+    const entries = stored?.v1;
+    expect(entries).toBeDefined();
+    expect(entries).toHaveLength(1);
+    // bigint is serialized as a decimal string (survives structured-clone).
+    expect(entries?.[0]?.valueWei).toBe((60n * LYTH).toString());
+    expect(typeof entries?.[0]?.at).toBe("number");
+  });
+
+  it("recorded usage persists in session and counts toward the daily cap (survives SW restart)", async () => {
+    enableDailyCap();
+    await record("v1", 60n * LYTH);
+    // The ledger now lives ONLY in chrome.storage.session, so a fresh read
+    // (as a restarted SW would do) still sees the prior usage.
+    const over = await evaluate("v1", 50n * LYTH); // 60 + 50 = 110 > 100
+    expect(over.ok).toBe(true);
+    expect(over.decision?.kind).toBe("over-limit");
+    expect(over.decision?.mode).toBe("daily");
+
+    const ok = await evaluate("v1", 30n * LYTH); // 60 + 30 = 90 <= 100
+    expect(ok.decision?.kind).toBe("passkey-ok");
+  });
+
+  it("prunes >24h usage entries on read", async () => {
+    enableDailyCap();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    storageSession[SESSION_KEY] = {
+      v1: [
+        // stale (>24h) — must be pruned and not counted.
+        { at: Date.now() - DAY_MS - 60_000, valueWei: (90n * LYTH).toString() },
+        // fresh.
+        { at: Date.now(), valueWei: (30n * LYTH).toString() },
+      ],
+    };
+    // If the stale 90 were counted: 90 + 30 + 50 = 170 > 100 → over-limit.
+    // With pruning: 30 + 50 = 80 <= 100 → passkey-ok.
+    const r = await evaluate("v1", 50n * LYTH);
+    expect(r.decision?.kind).toBe("passkey-ok");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #41 — SW-side password-floor re-validation at the create/import IPC boundary
+// (defense-in-depth: the popup UI gate is not trusted).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("keystore create/import password floor (#41 SW-side gate)", () => {
+  const VALID = "ValidPassw0rd!"; // >=12, upper, lower, digit, special
+  const WEAK = "weak";
+
+  it("keystore-create-from-mnemonic rejects a weak password", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-create-from-mnemonic",
+      payload: { password: WEAK, mnemonic: "abandon abandon" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("weak_password");
+  });
+
+  it("keystore-create-from-mnemonic accepts a valid password", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-create-from-mnemonic",
+      payload: { password: VALID, mnemonic: "abandon abandon" },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
   });
 });
 
@@ -4962,12 +5372,13 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         executionUnitLimitHex: "0x5208",
       },
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: "0x2710",
         maxPriorityFeePerGas: "0x270f",
         gas: "0x5208",
       }),
+      "v1",
     );
   });
 
@@ -4984,12 +5395,67 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
         executionUnitLimitHex: "0x5208",
       },
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({
         maxFeePerGas: CEILING_HEX,
         // tip clamped to <= maxFeePerGas (== ceiling).
         maxPriorityFeePerGas: CEILING_HEX,
       }),
+      "v1",
+    );
+  });
+
+  it("clamps an absurd signedFee execution-unit LIMIT to the sane ceiling (F-3.11/#28)", async () => {
+    seedOperatorFee("0x1", "0x1");
+    const absurdLimit = "0x" + (10n ** 18n).toString(16);
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: absurdLimit,
+      },
+    });
+    // 30,000,000 = MAX_EXECUTION_UNIT_LIMIT (0x1c9c380).
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x1c9c380" }),
+      "v1",
+    );
+  });
+
+  it("passes legitimate budgets (precompile 500000 + native floor 30000) through the limit clamp unchanged (F-3.11/#28)", async () => {
+    seedOperatorFee("0x1", "0x1");
+    // Largest legitimate wallet budget (spending-policy claim, 0x7A120 = 500000).
+    await send({
+      to: "0x000000000000000000000000000000000000110c",
+      valueWeiHex: "0x0",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: "0x7a120",
+      },
+    });
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x7a120" }),
+      "v1",
+    );
+    // Native-transfer floor (0x7530 = 30000) passes through.
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: "0x989680",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      signedFee: {
+        maxFeePerGasHex: "0x2710",
+        maxPriorityFeePerGasHex: "0x270f",
+        executionUnitLimitHex: "0x7530",
+      },
+    });
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({ gas: "0x7530" }),
+      "v1",
     );
   });
 
@@ -5001,8 +5467,120 @@ describe("wallet-send-tx fee binding + ceiling (T4-04)", () => {
       valueWeiHex: "0x989680",
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     });
-    expect(submitPlaintextMlDsaTx).toHaveBeenCalledWith(
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
       expect.objectContaining({ maxFeePerGas: CEILING_HEX }),
+      "v1",
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fee de-trust parity — clamp the multisig-execute signed price to the sane
+// ceiling, mirroring the wallet-send-tx clamp (:8806). The multisig-execute fee
+// is operator-sourced at execute time with no human-in-the-loop review.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("multisig-execute fee ceiling (de-trust parity)", () => {
+  const CEILING = 1_000_000_000_000_000n; // matches the networks mock (1e15)
+  const CEILING_HEX = "0x" + CEILING.toString(16);
+
+  beforeEach(() => {
+    multisigMetaForTest = null;
+  });
+
+  function seedOperatorFee(
+    executionUnitPriceLythoshi: string,
+    priorityTipLythoshi: string,
+  ) {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi,
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi,
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+
+  function seedExecutableProposal() {
+    multisigMetaForTest = {
+      threshold: 1,
+      signers: [{ id: "s1", address: DETERMINISTIC_ADDRESS, pubkey: "0x00" }],
+      proposals: [
+        {
+          id: "prop-1",
+          status: "pending",
+          approvals: [{ signerId: "s1" }],
+          rejections: [],
+          expiresAt: Date.now() + 3_600_000,
+          action: {
+            kind: "send",
+            to: "0xrecipient",
+            valueWeiHex: "0x989680",
+            chainIdHex: TESTNET_CHAIN_ID_HEX,
+          },
+        },
+      ],
+    };
+  }
+
+  function execute() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "multisig-execute",
+      payload: { vaultId: "ms1", proposalId: "prop-1" },
+    });
+  }
+
+  // S6 #45 B1 — the send-bypass guard. With a multisig active vault, the
+  // sanctioned multisig-EXECUTE broadcast (the two fee tests below) still
+  // succeeds, but the normal single-signer wallet-send-tx path is REFUSED.
+  // Same active-multisig state, disjoint outcomes — proves the guard is
+  // entry-layer-only and does NOT block the ceremony.
+  it("B1: refuses wallet-send-tx from a multisig active vault (ceremony unaffected)", async () => {
+    seedExecutableProposal(); // readMultisigMetaV4 now returns a multisig meta
+    activePasskeyVaultId = "ms1"; // getActiveVaultIdV4 returns the active id → guard predicate sees a multisig vault
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0x0000000000000000000000000000000000000001",
+        valueWeiHex: "0x0",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        opKind: "send",
+      },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/multisig wallet/i);
+  });
+
+  it("clamps an absurd operator execution fee (and tip) to the sane ceiling on the multisig-execute path", async () => {
+    const absurd = "0x" + (CEILING * 1000n).toString(16);
+    seedOperatorFee(absurd, absurd);
+    seedExecutableProposal();
+    const r = (await execute()) as { ok: boolean; txHash?: string };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: CEILING_HEX,
+        // tip re-clamped to <= maxFeePerGas (== ceiling), mirroring :8806.
+        maxPriorityFeePerGas: CEILING_HEX,
+      }),
+      "ms1",
+    );
+  });
+
+  it("passes a legitimate operator fee through the multisig clamp unchanged (no-op)", async () => {
+    // 1e10 price, 5e9 tip — both far below the 1e15 ceiling.
+    seedOperatorFee("0x2540be400", "0x12a05f200");
+    seedExecutableProposal();
+    const r = (await execute()) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxFeePerGas: "0x2540be400",
+        maxPriorityFeePerGas: "0x12a05f200",
+      }),
+      "ms1",
     );
   });
 });
@@ -5046,5 +5624,97 @@ describe("SW router sender authentication (T2-02)", () => {
     // A real response object came back (the request was not rejected).
     expect(r).toBeDefined();
     expect(typeof r).toBe("object");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-chain-block-number — #42 typed `cause` on the no-operator path
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-chain-block-number — untrusted/unreachable cause (#42)", () => {
+  it("threads classifyNoOperatorReason into the no-operator ok:false reply", async () => {
+    // No operator is serviceable this tick; the classifier reports untrusted.
+    // (cachedOperator starts null — no prior test populates it.) Resolve the
+    // mocked module dynamically so we don't trigger the vi.mock factory early
+    // at top-level-import time.
+    const networks = await import("./networks.js");
+    vi.mocked(networks.probeFirstAliveOperator).mockResolvedValueOnce(null);
+    vi.mocked(networks.classifyNoOperatorReason).mockReturnValueOnce(
+      "untrusted",
+    );
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-chain-block-number",
+    })) as { ok: boolean; reason?: string; cause?: string };
+
+    expect(r.ok).toBe(false);
+    expect(r.cause).toBe("untrusted");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// purgeDemoAddrCacheKeys once-guard (E) — the full chrome.storage.local.get(null)
+// scan runs ONCE; thereafter a persisted versioned flag short-circuits it so it
+// doesn't repeat on every SW boot. Cleanup correctness (which keys it removes)
+// is preserved; only the per-boot repetition is gated.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("purgeDemoAddrCacheKeys once-guard (E)", () => {
+  const SENTINEL = "0xa9f2000000000000000000000000000000000001"; // ACCOUNTS[0]
+  const sentinelKey = `mono.activity.${SENTINEL}.0x10F2C`;
+  const pendingSentinelKey = `mono.activity.pending.${SENTINEL}.0x10F2C`;
+  const realKey =
+    "mono.activity.0x1111111111111111111111111111111111111111.0x10F2C";
+
+  it("the sentinel constant under test is a real demo-data sentinel", async () => {
+    const { DEMO_ADDR_SENTINELS_LOWER } = await import(
+      "../shared/demo-addr-sentinel.js"
+    );
+    expect(DEMO_ADDR_SENTINELS_LOWER).toContain(SENTINEL);
+  });
+
+  it("flag unset: runs the scan, removes sentinel keys, keeps real keys, sets the flag", async () => {
+    const { purgeDemoAddrCacheKeys, DEMO_ADDR_PURGE_FLAG } = await import(
+      "./service-worker.js"
+    );
+    storageLocal = {
+      [sentinelKey]: { entries: [] },
+      [pendingSentinelKey]: { pending: [] },
+      [realKey]: { entries: [] },
+    };
+    await purgeDemoAddrCacheKeys();
+    expect(sentinelKey in storageLocal).toBe(false);
+    expect(pendingSentinelKey in storageLocal).toBe(false);
+    expect(realKey in storageLocal).toBe(true); // non-sentinel cache untouched
+    expect(storageLocal[DEMO_ADDR_PURGE_FLAG]).toBe(true);
+  });
+
+  it("flag set: early-returns WITHOUT the full get(null) scan, removes nothing", async () => {
+    const { purgeDemoAddrCacheKeys, DEMO_ADDR_PURGE_FLAG } = await import(
+      "./service-worker.js"
+    );
+    storageLocal = {
+      [DEMO_ADDR_PURGE_FLAG]: true,
+      [sentinelKey]: { entries: [] }, // a stray key the guarded path must NOT touch
+    };
+    const getSpy = vi.spyOn(chrome.storage.local, "get");
+    await purgeDemoAddrCacheKeys();
+    // The guard reads ONLY the flag key — never the full-store get(null) scan.
+    expect(getSpy).not.toHaveBeenCalledWith(null, expect.anything());
+    expect(getSpy).not.toHaveBeenCalledWith(null);
+    expect(sentinelKey in storageLocal).toBe(true); // nothing removed
+    getSpy.mockRestore();
+  });
+
+  it("a non-true flag value (stale / pre-version) still triggers a single run", async () => {
+    const { purgeDemoAddrCacheKeys, DEMO_ADDR_PURGE_FLAG } = await import(
+      "./service-worker.js"
+    );
+    storageLocal = {
+      [DEMO_ADDR_PURGE_FLAG]: false, // not === true → guard does not short-circuit
+      [sentinelKey]: { entries: [] },
+    };
+    await purgeDemoAddrCacheKeys();
+    expect(sentinelKey in storageLocal).toBe(false);
+    expect(storageLocal[DEMO_ADDR_PURGE_FLAG]).toBe(true);
   });
 });

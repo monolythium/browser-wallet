@@ -109,8 +109,6 @@ import {
   MEK_REHYDRATE_MAX_MINUTES,
 } from "../shared/constants.js";
 
-const VAULT_KEY_V4 = "mono.vault.v4";
-
 const ARGON2_M_KIB = 64 * 1024; // 64 MiB
 const ARGON2_T = 3;
 const ARGON2_P = 1;
@@ -700,17 +698,6 @@ export async function hasContainerV4(): Promise<boolean> {
   return (await loadVaultsContainerV4()) !== null;
 }
 
-/** Wipe the multi-vault container from chrome.storage.local. Used by
- *  the Settings → Reset wallet path in conjunction with
- *  {@link wipeVaultV4} to remove both the legacy entry and the
- *  container. Also clears the unlocked + MEK cache. */
-export async function wipeContainerV4(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(VAULTS_CONTAINER_KEY_V4, () => resolve());
-  });
-  lockV4();
-}
-
 /** Internal: unwrap a vault's VEK, open its envelope, build the
  *  backend, return the unlocked-state record. Used by both
  *  {@link unlockContainerV4} and {@link selectActiveVaultV4} — both
@@ -999,11 +986,13 @@ export async function signWithVaultV4(
   } finally {
     vek.fill(0);
   }
+  let backend: MlDsa65Backend | null = null;
   try {
-    const backend = MlDsa65Backend.fromSeed(seed);
+    backend = MlDsa65Backend.fromSeed(seed);
     return backend.signPrehash(digest);
   } finally {
     seed.fill(0);
+    backend?.dispose(); // S1-01: wipe the transient signer's secret after use
   }
 }
 
@@ -1026,11 +1015,13 @@ export async function getVaultPubkeyV4(vaultId: string): Promise<string> {
   } finally {
     vek.fill(0);
   }
+  let backend: MlDsa65Backend | null = null;
   try {
-    const backend = MlDsa65Backend.fromSeed(seed);
+    backend = MlDsa65Backend.fromSeed(seed);
     return "0x" + bytesToHex(backend.publicKey());
   } finally {
     seed.fill(0);
+    backend?.dispose(); // S1-01: wipe the transient backend's secret after use
   }
 }
 
@@ -1564,6 +1555,9 @@ async function appendVaultRecord(
 ): Promise<{ vaultId: string; mnemonic: string; address: string }> {
   const container = await loadVaultsContainerV4();
   if (!container) throw new Error("no v4 vaults container");
+  // NOTE: this backend is RETAINED as the held session backend below
+  // (`unlocked = { backend, address }` — adding a fresh vault makes it active),
+  // so it must NOT be disposed here — lockV4() wipes it (S1-01) on lock.
   const backend = MlDsa65Backend.fromSeed(seed);
   const address = await backend.getAddress();
   if (container.vaults.some((v) => v.addr === address)) {
@@ -1676,14 +1670,19 @@ export async function verifyContainerPasswordV4(
   }
 }
 
-/** Lock — drop the in-memory backend reference. The backend's secret key
- * is held by the SDK in private fields; we cannot zero it deterministically,
- * but releasing the reference makes it eligible for GC.
+/** Lock — wipe the in-memory backend, then drop its reference. The backend's
+ * ML-DSA-65 secret key is held by the SDK; `dispose()` deterministically zeroes
+ * the SDK-held copy (S1-01 / Stage-1 #11) before we release the reference for
+ * GC, so the secret does not linger in the JS heap until the next collection.
+ * `dispose()` is idempotent and leaves public material usable; we drop the
+ * reference anyway. (Requires `@monolythium/core-sdk` >= 0.4.9, which ships
+ * `MlDsa65Backend.dispose()`.)
  *
  * Also zeros + drops the cached MEK and forgets the active vault id (Phase
  * 5 multi-vault state). After lock, any vault-switch or vault-add call
  * fails until the user re-unlocks the container. */
 export function lockV4(): void {
+  unlocked?.backend.dispose();
   unlocked = null;
   if (mekCache) {
     mekCache.fill(0);
@@ -1691,27 +1690,12 @@ export function lockV4(): void {
   }
   activeContainerVaultId = null;
   // Fire-and-forget the session-MEK clear — lockV4 is sync to preserve
-  // call-site shape (used by triggerAutoLock, wipeVaultV4, and the
-  // keystore-lock IPC). The session.remove is fast (single key); SW
+  // call-site shape (used by triggerAutoLock and the keystore-lock IPC).
+  // The session.remove is fast (single key); SW
   // boot's rehydrate path tolerates an absent key the same as a
   // present-but-invalid one, so a partial-clear can't unlock a
   // post-lock SW.
   void clearMekFromSessionV4();
-}
-
-/**
- * Wipe the v4 vault from chrome.storage.local and drop the in-memory
- * backend. Used by both the password-confirmed Settings → Reset wallet
- * path and the Welcome → Forgot password? path. Caller is responsible
- * for clearing the lockout counters (`SESSION_KEY_UNLOCK_FAIL_COUNT`,
- * `_UNTIL`) and broadcasting `walletLocked` if the popup needs to
- * route — those live in the SW dispatcher.
- */
-export async function wipeVaultV4(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    chrome.storage.local.remove(VAULT_KEY_V4, () => resolve());
-  });
-  lockV4();
 }
 
 /**
@@ -1769,6 +1753,9 @@ async function commitVaultFromSeed(
   }
 
   // Derive the keypair eagerly for the address that goes in the record.
+  // NOTE: this backend is RETAINED as the held session backend below
+  // (`unlocked = { backend, address }`, unlock-on-create), so it must NOT be
+  // disposed here — lockV4() wipes it (S1-01) when the session ends.
   const backend = MlDsa65Backend.fromSeed(seed);
   const address = await backend.getAddress();
 

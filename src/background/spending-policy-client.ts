@@ -41,7 +41,6 @@ import { testnetJsonRpc } from "./tx-mldsa.js";
 import {
   generatePqm1Mnemonic,
   pqm1MnemonicToMlDsa65Seed,
-  bytesToHex,
 } from "@monolythium/core-sdk/crypto";
 import { MlDsa65Backend } from "@monolythium/core-sdk/crypto";
 import { randomBytes } from "@noble/hashes/utils.js";
@@ -222,6 +221,10 @@ export async function buildSpendingPolicyClaim(
       ok: false,
       reason: (e as Error)?.message ?? "failed to build spending-policy claim",
     };
+  } finally {
+    // S1-01: wipe the fresh sub-account signer's secret after the claim is built
+    // (covers both the success path and the error-return above).
+    backend.dispose();
   }
 
   return {
@@ -233,11 +236,4 @@ export async function buildSpendingPolicyClaim(
     subAccountBech32m,
     subAccountMnemonic: mnemonic,
   };
-}
-
-/** Re-exported for the popup-side preview (the pubkey hex helper isn't
- *  load-bearing for submit, but the page shows a short fingerprint of
- *  the sub-account pubkey in the confirm card). */
-export function pubkeyFingerprintHex(pubkey: Uint8Array): string {
-  return "0x" + bytesToHex(pubkey.slice(0, 8));
 }

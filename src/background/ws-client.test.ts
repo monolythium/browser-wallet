@@ -13,9 +13,11 @@ import {
   deriveWsUrl,
   getWsClient,
   httpUrlToWss,
+  isWellFormedBlockNumberHex,
   isWsKnownDown,
   markWsDown,
 } from "./ws-client.js";
+import { snapshotGenesisCache, verifyOperatorGenesis } from "./networks.js";
 import type { OperatorEntry } from "../shared/operators.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,6 +28,18 @@ vi.mock("./networks.js", () => ({
   getActiveOperators: vi.fn(() => [
     { name: "op-1", region: "lon", rpc: "https://op-1.example.com/rpc" },
   ]),
+  // F-2.4/#21 genesis gate. Default: op-1 is genesis-trusted in the cache, so
+  // the synchronous WS connect path proceeds for the existing tests.
+  snapshotGenesisCache: vi.fn(
+    () =>
+      new Map([
+        [
+          "https://op-1.example.com/rpc",
+          { ok: true, observed: "0xabc", checkedAt: 0 },
+        ],
+      ]),
+  ),
+  verifyOperatorGenesis: vi.fn(async () => true),
 }));
 
 class FakeWebSocket {
@@ -94,6 +108,63 @@ describe("httpUrlToWss", () => {
     expect(httpUrlToWss("wss://op.example.com/rpc")).toBe(
       "wss://op.example.com/rpc",
     );
+  });
+});
+
+describe("isWellFormedBlockNumberHex (F-2.4/#21 pushed-payload shape gate)", () => {
+  // The SW newHeads subscriber writes the latest-block banner IFF this returns
+  // true, so these cases map directly to write (true) vs drop (false).
+  it("accepts a well-formed 0x block hex — these UPDATE the banner", () => {
+    for (const v of [
+      "0x0",
+      "0x1",
+      "0x1a2b3c",
+      "0xdeadbeef",
+      "0xffffffffffffffff", // u64 max — 16 hex digits
+    ]) {
+      expect(isWellFormedBlockNumberHex(v)).toBe(true);
+    }
+  });
+
+  it("rejects malformed/garbage pushes — these are DROPPED, banner unchanged", () => {
+    for (const v of [
+      null,
+      undefined,
+      42,
+      {},
+      { number: "0x1" }, // the wrapper object, not the extracted height
+      "0x", // no digits
+      "0xG1", // non-hex digit
+      "1a2b", // missing 0x prefix
+      "0x" + "f".repeat(17), // oversized — wider than a u64 height
+      "garbage",
+      "",
+    ]) {
+      expect(isWellFormedBlockNumberHex(v)).toBe(false);
+    }
+  });
+});
+
+describe("WsClient genesis gate (F-2.4/#21)", () => {
+  it("connects when the genesis cache marks the operator trusted", () => {
+    const client = getWsClient();
+    client.subscribe("newHeads", vi.fn());
+    expect(FakeWebSocket.lastInstance).not.toBeNull();
+    expect(FakeWebSocket.lastInstance!.url).toBe("wss://op-1.example.com/rpc");
+    expect(client.status).toBe("connecting");
+  });
+
+  it("refuses to connect when no operator is genesis-trusted (HTTP poll stays source of truth)", () => {
+    // Cache reports NO trusted operator, and the cold-cache warm probe also
+    // finds none — the WS connect must be refused.
+    vi.mocked(snapshotGenesisCache).mockReturnValueOnce(new Map());
+    vi.mocked(verifyOperatorGenesis).mockResolvedValueOnce(false);
+    const client = getWsClient();
+    client.subscribe("newHeads", vi.fn());
+    // No WS opened; the banner reflects "unavailable" — not an error, since the
+    // genesis-gated HTTP poll remains authoritative.
+    expect(FakeWebSocket.lastInstance).toBeNull();
+    expect(client.status).toBe("unavailable");
   });
 });
 

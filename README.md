@@ -17,7 +17,7 @@ Functional Manifest V3 extension with substantive crypto + EIP-1193 implementati
 - **Chain target is testnet.** Monolythium mainnet has not launched. Anything you connect to here runs against the public testnet today; mainnet activation is gated on separate protocol milestones.
 - **Live on the Chrome Web Store** (Chromium browsers) — see [Install](#install) above. Firefox (AMO) is not yet published; for Firefox or development, build from source and load `dist/` as an unpacked extension.
 - **Fallback operator RPCs are placeholders** (`192.0.2.0/24` — IETF TEST-NET-1). The wallet's primary chain-config source is the SDK chain-registry; the bundled `FALLBACK_OPERATORS_2026_05_25` array in `src/background/networks.ts` only kicks in when the registry is unreachable. To override with real RPCs, copy [`examples/operators.json.example`](./examples/operators.json.example) to `examples/operators.json` (gitignored).
-- **SDK comes from npm, pinned exact.** `package.json` pins `@monolythium/core-sdk@0.2.0` (exact, not `^0.2.0`) — the SDK is pre-1.0, semver isn't a stability contract there, and a silent patch upgrade could shift wire-format bytes (vault layout, address derivation). Every wallet release bumps the SDK pin deliberately.
+- **SDK comes from npm, pinned exact.** `package.json` pins `@monolythium/core-sdk@0.4.9` (exact, not `^0.4.9`) — the SDK is pre-1.0, semver isn't a stability contract there, and a silent patch upgrade could shift wire-format bytes (vault layout, address derivation). Every wallet release bumps the SDK pin deliberately.
 
 Watch this repo for the first non-preview tag before treating any build as production-grade.
 
@@ -135,10 +135,10 @@ browser-wallet/
 
 ## Crypto stack
 
-- **`@noble/post-quantum`** for ML-DSA-65 (FIPS-204) — the post-quantum signature path
-- **`@noble/secp256k1`** + **`@scure/bip32`** + **`@scure/bip39`** for the EVM-supported chain track
-- **`@noble/ciphers`** + **`@noble/hashes`** for password-derived KEK and AES-GCM vault encryption
-- **`ethers` v6** for EVM-style transaction shaping when needed
+- **`@monolythium/core-sdk`** — the ML-DSA-65 (FIPS-204) backend, PQM-1 seed derivation, address derivation, and tx signing
+- **`@noble/post-quantum`** for the ML-DSA-65 (FIPS-204) signature primitives
+- **`@noble/ciphers`** + **`@noble/hashes`** for the password-derived KEK + AES-GCM vault encryption (and SHAKE256 / keccak)
+- **`@scure/bip39`** for the 24-word recovery mnemonic (PQM-1 derivation — no BIP-32 HD / secp256k1 path)
 
 No custom crypto. All sensitive operations go through the noble/scure stack — audited, well-known, RustCrypto-aligned.
 

@@ -18,6 +18,7 @@ import {
   bgChainUpcomingDuties,
   bgOperatorsGet,
   bgOperatorsSet,
+  bgProbeOperator,
   type ChainOperatorRiskOutcome,
   type ChainSigningActivityOutcome,
   type ChainUpcomingDutiesOutcome,
@@ -82,6 +83,8 @@ export function Operators({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // rid of the operator currently being probed via "Use this operator".
+  const [usingRid, setUsingRid] = useState<string | null>(null);
 
   const refresh = async () => {
     const r = await bgOperatorsGet();
@@ -127,6 +130,22 @@ export function Operators({
     });
   };
 
+  // Move a row to an explicit 1-based position (the number-input reorder).
+  // Clamped to 1..length; same in-list reorder as the ↑/↓ arrows, no
+  // validation/persistence change — order still only affects dispatch priority.
+  const handleMoveTo = (rid: string, pos1Based: number) => {
+    setDraft((prev) => {
+      const from = prev.findIndex((d) => d.rid === rid);
+      if (from < 0) return prev;
+      const to = Math.max(0, Math.min(prev.length - 1, pos1Based - 1));
+      if (to === from) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved!);
+      return next;
+    });
+  };
+
   const handlePatch = (rid: string, patch: Partial<OperatorEntryWire>) => {
     setDraft((prev) =>
       prev.map((d) => (d.rid === rid ? { ...d, ...patch } : d)),
@@ -158,6 +177,47 @@ export function Operators({
       return;
     }
     await refresh();
+  };
+
+  // "Use this operator": probe the chosen operator first; only if it is
+  // reachable AND serving the pinned genesis do we move it to the FRONT of the
+  // list (so RPC dispatch tries it first) and persist — the other operators
+  // stay as fallback, so a later failure can't strand the wallet, and an
+  // unreachable choice leaves everything UNCHANGED. No dispatch/genesis logic
+  // is altered; this only reorders + saves via the existing override path.
+  const handleUseOperator = async (rid: string) => {
+    if (usingRid || submitting) return;
+    const row = draft.find((d) => d.rid === rid);
+    if (!row || !isValidDraftEntry(row)) return;
+    if (!draftValid) {
+      setSubmitError("Fix the invalid operator rows before using one.");
+      return;
+    }
+    setUsingRid(rid);
+    setSubmitError(null);
+    try {
+      const probe = await bgProbeOperator(row.rpc.trim());
+      if (!probe.ok || !probe.usable) {
+        setSubmitError(
+          `Couldn't reach ${row.name.trim() || "that operator"} (or it's on a different chain) — left your operators unchanged.`,
+        );
+        return;
+      }
+      const reordered = [row, ...draft.filter((d) => d.rid !== rid)];
+      const wire = reordered.map((d) => ({
+        name: d.name.trim(),
+        region: d.region.trim(),
+        rpc: d.rpc.trim(),
+      }));
+      const r = await bgOperatorsSet(wire);
+      if (!r.ok) {
+        setSubmitError(r.reason ?? "save failed");
+        return;
+      }
+      await refresh();
+    } finally {
+      setUsingRid(null);
+    }
   };
 
   // The operator-management page (RPC-override editor + chain-signing /
@@ -302,10 +362,16 @@ export function Operators({
                   <OperatorRow
                     key={d.rid}
                     entry={d}
+                    index={idx}
+                    total={draft.length}
                     isFirst={idx === 0}
                     isLast={idx === draft.length - 1}
                     onMoveUp={() => handleMove(d.rid, -1)}
                     onMoveDown={() => handleMove(d.rid, 1)}
+                    onMoveTo={(pos) => handleMoveTo(d.rid, pos)}
+                    onUse={() => void handleUseOperator(d.rid)}
+                    using={usingRid === d.rid}
+                    busy={submitting || usingRid !== null}
                     onDelete={() => handleDeleteRow(d.rid)}
                     onPatch={(patch) => handlePatch(d.rid, patch)}
                   />
@@ -397,25 +463,53 @@ export function Operators({
 
 interface OperatorRowProps {
   entry: DraftOperator;
+  index: number;
+  total: number;
   isFirst: boolean;
   isLast: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onMoveTo: (pos1Based: number) => void;
+  onUse: () => void;
+  using: boolean;
+  busy: boolean;
   onDelete: () => void;
   onPatch: (patch: Partial<OperatorEntryWire>) => void;
 }
 
 function OperatorRow({
   entry,
+  index,
+  total,
   isFirst,
   isLast,
   onMoveUp,
   onMoveDown,
+  onMoveTo,
+  onUse,
+  using,
+  busy,
   onDelete,
   onPatch,
 }: OperatorRowProps) {
   const rpcInvalid = entry.rpc.length > 0 && !isParseableUrl(entry.rpc);
   const nameMissing = entry.name.trim().length === 0;
+  const rowUsable = !nameMissing && !rpcInvalid && entry.rpc.trim().length > 0;
+  // Local draft for the position field so the user can type freely; commit on
+  // blur / Enter. Re-syncs when the row's actual index changes (arrows, another
+  // row's move, add/delete).
+  const [posDraft, setPosDraft] = useState(String(index + 1));
+  useEffect(() => {
+    setPosDraft(String(index + 1));
+  }, [index]);
+  const commitPos = () => {
+    const n = Number.parseInt(posDraft, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= total) {
+      onMoveTo(n);
+    } else {
+      setPosDraft(String(index + 1));
+    }
+  };
   return (
     <div
       style={{
@@ -433,6 +527,23 @@ function OperatorRow({
           spellCheck={false}
           autoComplete="off"
           style={{ ...inputStyle, flex: 1 }}
+        />
+        <input
+          type="number"
+          min={1}
+          max={total}
+          value={posDraft}
+          onChange={(e) => setPosDraft(e.target.value)}
+          onBlur={commitPos}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          aria-label={`Position (1–${total})`}
+          title="Dispatch order — type a position to move this operator there"
+          style={posInputStyle}
         />
         <button
           onClick={onMoveUp}
@@ -469,6 +580,20 @@ function OperatorRow({
           autoComplete="off"
           style={{ ...inputStyle, flex: 1 }}
         />
+        {/* A compact secondary action. Sits next to the short Region field so
+            the long RPC URL below keeps the full field width to itself. */}
+        <button
+          onClick={onUse}
+          disabled={busy || !rowUsable}
+          title="Probe this operator; if reachable + on the right chain, move it to the front so RPC dispatch tries it first (the others stay as fallback)"
+          style={{
+            ...useBtnStyle,
+            opacity: busy || !rowUsable ? 0.4 : 1,
+            cursor: busy || !rowUsable ? "default" : "pointer",
+          }}
+        >
+          {using ? "Checking…" : "Use this operator"}
+        </button>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <FieldLabel>RPC</FieldLabel>
@@ -528,6 +653,34 @@ const inputStyle: CSSProperties = {
   fontFamily: "var(--f-mono)",
   boxSizing: "border-box",
   minWidth: 0,
+};
+
+const posInputStyle: CSSProperties = {
+  width: 34,
+  height: 26,
+  borderRadius: 6,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(0,0,0,0.3)",
+  color: "var(--fg-100)",
+  fontSize: 11,
+  fontFamily: "var(--f-mono)",
+  textAlign: "center",
+  padding: "0 2px",
+  boxSizing: "border-box",
+  flexShrink: 0,
+};
+
+const useBtnStyle: CSSProperties = {
+  padding: "4px 9px",
+  borderRadius: 7,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(124,127,255,0.10)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 10,
+  fontWeight: 500,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 
 const iconBtnStyle: CSSProperties = {

@@ -87,10 +87,12 @@ export const SLH_DSA_SHA2_128S_LENGTHS = {
   publicKey: 32,
   /** Secret key — stored locally encrypted via the vault's VEK. */
   secretKey: 64,
-  /** Signature size — large by design; ~17 KB on the 's' (small,
-   *  slow-signing) variant. Documented for the rotation-flow
-   *  rehearsal UX. */
-  signature: 17088,
+  /** Signature size — 7856 bytes (~7.7 KB) on the 's' (small-
+   *  signature, slow-signing) variant, per FIPS-205 (Table 8) /
+   *  RFC 9909 (`id-slh-dsa-sha2-128s`). NOTE: 17088 is the 128*f*
+   *  (fast) value — do not transcribe it here. Documented for the
+   *  rotation-flow rehearsal UX. */
+  signature: 7856,
   /** Keygen seed length. Noble's `slh_dsa_sha2_128s.keygen(seed)`
    *  accepts exactly this many bytes. We feed it the SHAKE256-
    *  expansion of the 32-byte BIP-39 entropy. */

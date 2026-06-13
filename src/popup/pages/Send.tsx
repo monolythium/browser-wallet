@@ -39,7 +39,7 @@ import {
   type AddressKind,
 } from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
-import { classifySendError, errorLinksOperators } from "../../shared/send-error";
+import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import {
   STORAGE_KEY_NAME_CACHE,
   lookupNameInCache,
@@ -1072,6 +1072,11 @@ export function Send({
                   {estimatedFeeDisplay?.defaultText ?? "—"}
                 </span>
               </div>
+              {/* DEV-ONLY: low-level lythoshi/execution-unit fee breakdown.
+                  The default surface shows a single LYTH-denominated fee
+                  (project_fee_display_posture §22.4.1); these gas-style
+                  internals are gated behind DEVELOPER_MODE. */}
+              {devMode && (
               <details style={{ marginTop: 4 }}>
                 <summary
                   style={{
@@ -1127,6 +1132,7 @@ export function Send({
                   </>
                 )}
               </details>
+              )}
             </div>
           )}
         </FormCard>
@@ -2712,39 +2718,6 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
       {body.slice(i + marker.length)}
     </>
   );
-}
-
-/** Colour palette per severity. User-cancelled prompts use the neutral
- *  treatment so the error screen does not overstate an intentional cancel. */
-function severityColours(severity: "err" | "warn" | "info"): {
-  fg: string;
-  iconBg: string;
-  cardBg: string;
-  borderRgba: string;
-} {
-  switch (severity) {
-    case "err":
-      return {
-        fg: "var(--err)",
-        iconBg: "rgba(220,80,80,0.12)",
-        cardBg: "rgba(220,80,80,0.08)",
-        borderRgba: "rgba(220,80,80,0.4)",
-      };
-    case "warn":
-      return {
-        fg: "var(--warn)",
-        iconBg: "rgba(220,180,80,0.12)",
-        cardBg: "rgba(220,180,80,0.08)",
-        borderRgba: "rgba(220,180,80,0.4)",
-      };
-    case "info":
-      return {
-        fg: "var(--fg-200)",
-        iconBg: "rgba(120,160,220,0.10)",
-        cardBg: "rgba(120,160,220,0.06)",
-        borderRgba: "rgba(120,160,220,0.3)",
-      };
-  }
 }
 
 function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperators }: ErrorViewProps) {

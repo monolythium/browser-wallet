@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import {
-  cancelClipboardAutoClear,
+  clearClipboardNow,
   copyWithAutoClear,
+  flushClipboardAutoClear,
   formatPhraseForClipboard,
 } from "../../lib/clipboard-with-clear";
 import { Icon } from "../Icon";
@@ -38,6 +39,9 @@ export function MnemonicGrid({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
+  const [clearState, setClearState] = useState<"idle" | "cleared" | "failed">(
+    "idle",
+  );
 
   // Reset the "Copied" badge after a few seconds so the button settles
   // back to its default label. The underlying clipboard timer is
@@ -51,18 +55,35 @@ export function MnemonicGrid({
     return () => clearTimeout(t);
   }, [copyState]);
 
-  // On unmount, cancel any pending auto-clear so a re-mounted grid
-  // doesn't race against a stale timer from this instance.
-  useEffect(() => () => cancelClipboardAutoClear(), []);
+  // Same transient style for the manual "Clipboard cleared" confirmation.
+  useEffect(() => {
+    if (clearState === "idle") return;
+    const t = setTimeout(() => setClearState("idle"), FEEDBACK_RESET_MS);
+    return () => clearTimeout(t);
+  }, [clearState]);
+
+  // On unmount, FLUSH the pending auto-clear (best-effort wipe NOW) rather
+  // than merely cancelling the timer — the dominant flow is the user copies
+  // then navigates away before the 30 s timer fires, which would otherwise
+  // leave the phrase on the OS clipboard. The flush only wipes if the
+  // clipboard still holds our phrase (or readText is denied).
+  useEffect(() => () => void flushClipboardAutoClear(), []);
 
   const handleCopy = async () => {
     const text = formatPhraseForClipboard(mnemonic);
     try {
       await copyWithAutoClear(text, CLEAR_AFTER_MS);
       setCopyState("copied");
+      setClearState("idle");
     } catch {
       setCopyState("failed");
     }
+  };
+
+  const handleClear = async () => {
+    const ok = await clearClipboardNow();
+    setClearState(ok ? "cleared" : "failed");
+    if (ok) setCopyState("idle");
   };
 
   return (
@@ -118,17 +139,17 @@ export function MnemonicGrid({
               justifyContent: "center",
               gap: 8,
               width: "100%",
-              padding: "10px 12px",
+              padding: "8px 12px",
               borderRadius: 10,
+              // Secondary affordance: copy is the convenience, handwriting is
+              // the recommended path — so this reads as a quiet outline
+              // button (transparent fill, muted text), not a primary action.
               border: "1px solid var(--fg-700)",
-              background:
-                copyState === "copied"
-                  ? "rgba(88,200,140,0.10)"
-                  : "rgba(255,255,255,0.04)",
+              background: "transparent",
               color:
-                copyState === "copied" ? "var(--ok)" : "var(--fg-100)",
+                copyState === "copied" ? "var(--ok)" : "var(--fg-400)",
               fontFamily: "var(--f-sans)",
-              fontSize: 12.5,
+              fontSize: 12,
               fontWeight: 500,
               cursor: "pointer",
               transition: "all 160ms var(--e-out)",
@@ -139,10 +160,41 @@ export function MnemonicGrid({
               size={13}
             />
             {copyState === "copied"
-              ? "Copied — clears in 30 s"
+              ? "Copied — auto-clears in ~30 s"
               : copyState === "failed"
                 ? "Copy failed — try again"
                 : "Copy to clipboard"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleClear()}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "transparent",
+              color: clearState === "cleared" ? "var(--ok)" : "var(--fg-400)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: "pointer",
+              transition: "all 160ms var(--e-out)",
+            }}
+          >
+            <Icon
+              name={clearState === "cleared" ? "check" : "trash"}
+              size={13}
+            />
+            {clearState === "cleared"
+              ? "Clipboard cleared"
+              : clearState === "failed"
+                ? "Couldn't clear — clear manually"
+                : "Clear clipboard"}
           </button>
           <div
             style={{
@@ -154,8 +206,8 @@ export function MnemonicGrid({
               textAlign: "center",
             }}
           >
-            The clipboard auto-clears after 30 s. Store the phrase in a
-            safe place before then.
+            Auto-clears ~30 s after copy, only while the wallet stays open.
+            Clear your clipboard yourself if you paste the phrase elsewhere.
           </div>
         </>
       )}

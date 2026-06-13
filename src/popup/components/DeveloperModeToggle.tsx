@@ -16,7 +16,7 @@ import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
 import { Modal } from "./Modal";
 import { useFeature } from "../hooks/useFeature";
-import { bgTwoTierSetFeature } from "../bg";
+import { bgPing, bgTwoTierSetFeature } from "../bg";
 
 interface DeveloperModeToggleProps {
   /** Optional spacing/layout override per placement. The icon / label /
@@ -31,6 +31,13 @@ export function DeveloperModeToggle({
 }: DeveloperModeToggleProps) {
   const devMode = useFeature("DEVELOPER_MODE");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [enabling, setEnabling] = useState(false);
+  const [enableError, setEnableError] = useState<string | null>(null);
+
+  const closeConfirm = () => {
+    setConfirmOpen(false);
+    setEnableError(null);
+  };
 
   // OFF -> open the confirm popup (do NOT flip yet). ON -> flip off
   // immediately, no confirm. The switch animates when useFeature
@@ -40,13 +47,37 @@ export function DeveloperModeToggle({
     if (devMode) {
       void bgTwoTierSetFeature("DEVELOPER_MODE", false);
     } else {
+      // The flag write itself is applied popup-side now (instant, no worker
+      // round-trip — see bg.ts). Still wake the MV3 service worker while the
+      // user reads the confirm popup, so the developer surfaces revealed on
+      // enable (About / Operators chain probes, etc.) hit a warm worker
+      // instead of paying the cold start on their first read.
+      void bgPing();
       setConfirmOpen(true);
     }
   };
 
-  const onConfirmEnable = () => {
-    void bgTwoTierSetFeature("DEVELOPER_MODE", true);
-    setConfirmOpen(false);
+  const onConfirmEnable = async () => {
+    setEnabling(true);
+    setEnableError(null);
+    try {
+      const r = await bgTwoTierSetFeature("DEVELOPER_MODE", true);
+      if (!r.ok) {
+        // Keep the modal OPEN and tell the user — instead of the prior
+        // fire-and-forget that closed the modal and left the switch OFF with no
+        // feedback when the write didn't land (a stalled service worker, or a
+        // popup that closed before the storage onChanged echo). On success the
+        // switch still flips via useFeature once the storage echo arrives;
+        // awaiting the write here guarantees it has landed before we close.
+        setEnableError("Couldn't enable developer mode — please try again.");
+        return;
+      }
+      setConfirmOpen(false);
+    } catch {
+      setEnableError("Couldn't reach the wallet service — please try again.");
+    } finally {
+      setEnabling(false);
+    }
   };
 
   return (
@@ -83,7 +114,7 @@ export function DeveloperModeToggle({
 
       <Modal
         open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
+        onClose={closeConfirm}
         title={
           <>
             <Icon name="warn" size={12} /> Enable developer mode?
@@ -98,6 +129,11 @@ export function DeveloperModeToggle({
           needed for everyday use, and some of it is easy to misread. Turn it on
           only if you know what you're looking for.
         </div>
+        {enableError && (
+          <div role="alert" style={errorStyle}>
+            {enableError}
+          </div>
+        )}
         <div
           style={{
             display: "grid",
@@ -106,11 +142,19 @@ export function DeveloperModeToggle({
             marginTop: 6,
           }}
         >
-          <button onClick={() => setConfirmOpen(false)} style={cancelStyle}>
+          <button
+            onClick={closeConfirm}
+            disabled={enabling}
+            style={cancelStyle}
+          >
             Cancel
           </button>
-          <button onClick={onConfirmEnable} style={enableStyle}>
-            Enable developer mode
+          <button
+            onClick={() => void onConfirmEnable()}
+            disabled={enabling}
+            style={{ ...enableStyle, opacity: enabling ? 0.6 : 1 }}
+          >
+            {enabling ? "Enabling…" : "Enable developer mode"}
           </button>
         </div>
       </Modal>
@@ -188,6 +232,18 @@ const cancelStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 500,
   cursor: "pointer",
+};
+
+const errorStyle: CSSProperties = {
+  marginTop: 8,
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid var(--err)",
+  background: "rgba(220,80,80,0.10)",
+  color: "var(--err)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 11,
+  lineHeight: 1.4,
 };
 
 // Gold-accent primary to signal caution (not a destructive red).

@@ -16,8 +16,11 @@
 // transacting, not debugging.
 //
 // Whitepaper alignment:
-//   §21.5  — transparent mempool today (the Ferveo encrypted-submit path
-//            was removed; a LythiumSeal encrypted path may return later)
+//   §21.5  — LythiumSeal encrypted mempool: the wallet seals (scheme-3 ML-KEM)
+//            when the operator cluster serves a seal roster, else falls back to
+//            plaintext (which an encryption-required chain rejects — see the
+//            plaintext-not-allowed branch). The earlier Ferveo threshold-decrypt
+//            path was removed.
 //   §22    — EIP-1559-style fee model (execution-unit estimation failures)
 //   §23.2  — liquid bonding (no nonce/cooldown blockers for delegators
 //            specifically — but nonce-too-low still happens on multi-
@@ -42,7 +45,10 @@ export type SendErrorKind =
   | "user-rejected"
   | "transaction-reverted"
   | "spending-policy-blocked"
+  | "spending-policy-unavailable"
   | "wallet-locked"
+  | "active-vault-changed"
+  | "transaction-rejected"
   | "unknown";
 
 export interface SendErrorClassification {
@@ -69,13 +75,113 @@ export interface SendErrorContext {
   estimatedNetworkFeeLythoshiHex?: string;
 }
 
-/** Best-effort classification. Pattern-matches against the chain-side
- *  error message; ordered from most specific to most generic. */
+/** Best-effort classification of a chain-side send error into a typed kind +
+ *  user copy.
+ *
+ *  Unwrap-inner-first: mono-core's live broadcaster flattens EVERY mempool
+ *  admission failure into `RpcError::UpstreamUnavailable(format!("mempool:
+ *  {e}"))` (mono-core providers.rs:6385), which reaches the wallet as code
+ *  -32047 + "upstream unavailable: mempool: <inner>". The generic "upstream
+ *  unavailable" substring would otherwise let the chain-quarantined branch
+ *  steal whatever specific error the chain wrapped (insufficient-funds,
+ *  nonce-too-low, …) and mis-render it as a warn-level operator outage. So we
+ *  strip the wrapper and classify the INNER reason on the existing predicates;
+ *  chain-quarantined then fires ONLY for a bare wrapper (a genuine operator
+ *  outage with no mempool inner). This is immune to future mono-core admission
+ *  errors — any new inner is classified on its merits, never stolen by the
+ *  wrapper. (Supersedes the three prior "hoist above chain-quarantined" reorder
+ *  patches — those predicates still match, now via the inner.) See
+ *  _dev-notes/browser-wallet/2026-06-09_followup-dispose-classifier-residue-INSPECT.md
+ *  Part 2A. */
 export function classifySendError(
   message: string,
   context?: SendErrorContext,
 ): SendErrorClassification {
+  const inner = extractMempoolInner(message);
+  if (inner !== null) {
+    return classifyInnerError(inner, context, true);
+  }
+  return classifyInnerError(message, context, false);
+}
+
+/** Strip an `upstream unavailable: mempool: ` wrapper and return the inner
+ *  admission-error string, or null when the message is not a has-inner mempool
+ *  wrapper (a bare "upstream unavailable" outage, or a non-wrapped error). The
+ *  locate is case-insensitive; the inner is sliced from the ORIGINAL message so
+ *  display casing is preserved. An empty/whitespace inner returns null (treated
+ *  as a bare wrapper → chain-quarantined). */
+function extractMempoolInner(message: string): string | null {
+  const marker = "upstream unavailable: mempool: ";
+  const idx = message.toLowerCase().indexOf(marker);
+  if (idx === -1) return null;
+  const inner = message.slice(idx + marker.length).trim();
+  return inner.length > 0 ? inner : null;
+}
+
+/** Pattern-matches the (already-unwrapped) chain-side error message against the
+ *  branch chain, ordered from most specific to most generic. `wrapped` is true
+ *  when the caller stripped a mempool wrapper — it only changes the FINAL
+ *  fallback (an unrecognized admission rejection is an honest transaction
+ *  rejection, not "unknown" and not an operator outage). */
+function classifyInnerError(
+  message: string,
+  context: SendErrorContext | undefined,
+  wrapped: boolean,
+): SendErrorClassification {
   const lower = message.toLowerCase();
+
+  // NN-01 fail-closed vault-binding abort (wallet-INTERNAL, never a chain error,
+  // never mempool-wrapped). buildPlaintext/SealedSubmission throw
+  // VAULT_BINDING_CHANGED_MESSAGE ("active account changed …") when the active
+  // vault changed between approval and the synchronous pre-sign read — the tx
+  // was cancelled before anything was signed or broadcast. Checked FIRST so no
+  // chain-side predicate steals it (the "active account changed" substring is
+  // unique — it does NOT match "user rejected"/"cancelled by user"); without
+  // this it would fall through to the wrapped=false "unknown" red box. warn
+  // (transient, user-actionable retry — re-pick the account and resubmit), not
+  // err → amber via severityColours, rendered identically on Send + Stake.
+  if (lower.includes("active account changed")) {
+    return {
+      kind: "active-vault-changed",
+      headline: "Account changed — transaction cancelled",
+      body:
+        "Your active account changed while this transaction was being prepared, " +
+        "so the wallet cancelled it for safety. Nothing was sent and your funds " +
+        "are unaffected. Re-check the account shown, then try again.",
+      severity: "warn",
+    };
+  }
+
+  // Transient admission-time backend fault while the chain READS the spending
+  // policy — mono-core SpendingPolicyStorageRead, Display
+  // "spending-policy: admission-time storage read failed: <reason>". The user's
+  // policy is fine; this is a rare I/O glitch, not a violation — classify it as
+  // a retryable transient so we don't mis-advise "adjust your policy".
+  //
+  // CHECKED FIRST (above genesis-mismatch / plaintext-not-allowed / operator /
+  // gas / nonce / the generic spending-policy block): the <reason> tail is
+  // arbitrary mono-core text that may incidentally contain another branch's
+  // trigger substring (a storage "timeout" → operator-offline, or a reason that
+  // mentions "genesis" / "plaintext … not allowed"), which would otherwise
+  // steal it. The predicate stays maximally SPECIFIC — "storage read failed"
+  // AND a spending-policy context — so it never steals a genuine genesis /
+  // plaintext / operator / gas / nonce error (none carry that signature), and a
+  // real policy violation still reads as spending-policy-blocked (whose
+  // predicate lacks "storage read failed"). Runs after the unwrap-inner-first
+  // step in classifySendError, so the 2A chain-quarantined ordering is intact.
+  if (
+    lower.includes("storage read failed") &&
+    (lower.includes("spending-policy") || lower.includes("spending policy"))
+  ) {
+    return {
+      kind: "spending-policy-unavailable",
+      headline: "Couldn't check your spending policy",
+      body:
+        "A temporary network issue interrupted the spending-policy check — " +
+        "your policy is unchanged. Try again in a moment.",
+      severity: "warn",
+    };
+  }
 
   // Chain genesis mismatch — the wallet's pinned genesis no longer matches
   // the network (likely a regenesis). The Send ErrorView renders this kind's
@@ -96,6 +202,83 @@ export function classifySendError(
     };
   }
 
+  // Chain requires encrypted transactions and the wallet's encrypted (LythiumSeal)
+  // submission wasn't used for this tx: the dispatcher seals when the operator
+  // cluster serves a seal roster, but here the roster was unavailable, so it fell
+  // back to plaintext, which the encrypted-mempool milestone rejects ("plaintext
+  // mempool entry not allowed: encrypted envelope required"; code -32040
+  // PlaintextNotAllowed, or -32047 on v0.1.44-testnet). Classify it so the user
+  // sees an honest explanation instead of a raw debugger string. This branch only
+  // explains the rejection; the encrypted path itself lives in submitMlDsaTx.
+  //
+  // MUST precede the chain-quarantined branch below: the chain wraps this as
+  // "upstream unavailable: mempool: plaintext … not allowed …", so the generic
+  // "upstream unavailable" match would otherwise intercept it and show the wrong
+  // (operator-outage) message. The predicate stays SPECIFIC (the plaintext /
+  // encrypted-envelope substring) so a genuine "upstream unavailable" outage
+  // WITHOUT that substring still falls through to chain-quarantined — see the
+  // send-error.test ordering regression guard.
+  if (
+    (lower.includes("plaintext") &&
+      (lower.includes("not allowed") || lower.includes("encrypted envelope"))) ||
+    lower.includes("encrypted mempool required")
+  ) {
+    return {
+      kind: "plaintext-not-allowed",
+      headline: "Encrypted transactions required",
+      body:
+        "This network requires encrypted transactions, but the encrypted " +
+        "submission path was unavailable for this transaction, so the network " +
+        "rejected it. Your funds are unaffected — nothing was transferred. " +
+        "Try again in a moment.",
+      severity: "err",
+    };
+  }
+
+  // Execution-unit limit below the chain's intrinsic floor. The chain wraps it
+  // as "upstream unavailable: mempool: tx execution-unit limit X below intrinsic
+  // floor Y" (-32047), which the chain-quarantined branch below would otherwise
+  // steal — so it MUST be checked first. Encrypted (sealed) submissions carry a
+  // much higher floor (~250k); the wallet raises the limit automatically for
+  // them, so a residual hit here is rare and means the raise was still short.
+  if (
+    lower.includes("below intrinsic floor") ||
+    (lower.includes("execution-unit limit") && lower.includes("intrinsic"))
+  ) {
+    return {
+      kind: "gas-estimation",
+      headline: "Transaction limit too low",
+      body:
+        "The network rejected the transaction's execution-unit limit as below " +
+        "its minimum for this transaction. Your funds are unaffected — it was " +
+        "rejected before inclusion.",
+      severity: "err",
+    };
+  }
+
+  // Replacement / already-pending: the chain wraps "upstream unavailable:
+  // mempool: replace underpriced" — a duplicate-nonce submission whose fee does
+  // not outbid the tx already pending at that nonce. Encrypted (sealed) txs sit
+  // in the mailbox longer before reveal, so a retry while the first is still
+  // pending lands here. Checked above chain-quarantined, which would otherwise
+  // steal the "upstream unavailable" wrapper.
+  if (
+    lower.includes("replace underpriced") ||
+    lower.includes("replacement transaction underpriced") ||
+    lower.includes("already known")
+  ) {
+    return {
+      kind: "nonce-conflict",
+      headline: "Transaction already pending",
+      body:
+        "A transaction at this nonce is already pending. Encrypted transactions " +
+        "take longer to confirm — wait for it to complete, or resubmit with a " +
+        "higher fee to replace it. Your funds are unaffected: this was rejected " +
+        "before inclusion.",
+      severity: "warn",
+    };
+  }
+
   // Operator node quarantined / PQ-checkpoint or state-root mismatch / upstream
   // unavailable. The operator's node has stopped serving RPC (a checkpoint
   // state-root divergence, or its upstream is down). The raw message is a
@@ -103,7 +286,8 @@ export function classifySendError(
   // checkpoint state roots, signer pubkey prefixes, a `protocore quarantine
   // clear` command — useless and alarming to a normal user. Plain body +
   // "See Operators"; the raw detail is shown only in developer mode at the
-  // render sites.
+  // render sites. (Checked AFTER plaintext-not-allowed above so a wrapped
+  // encrypted-required rejection routes to the specific message.)
   if (
     lower.includes("quarantin") ||
     lower.includes("checkpointstaterootmismatch") ||
@@ -121,29 +305,6 @@ export function classifySendError(
         "automatically and uses other operators — your funds are unaffected. " +
         "See Operators.",
       severity: "warn",
-    };
-  }
-
-  // Chain requires encrypted transactions but this wallet submits plaintext
-  // only. When the encrypted-mempool milestone is ON, mempool admission rejects
-  // every plaintext tx pre-signature with -32040 PlaintextNotAllowed ("plaintext
-  // mempool entry not allowed: encrypted envelope required"). Classify it so the
-  // user sees an honest explanation instead of a raw debugger string. This does
-  // NOT add an encrypted-send path — it only explains the rejection.
-  if (
-    (lower.includes("plaintext") &&
-      (lower.includes("not allowed") || lower.includes("encrypted envelope"))) ||
-    lower.includes("encrypted mempool required")
-  ) {
-    return {
-      kind: "plaintext-not-allowed",
-      headline: "Encrypted transactions required",
-      body:
-        "This network currently requires encrypted transactions, and this " +
-        "wallet version sends plaintext ones only — so sends are unavailable " +
-        "here until an encrypted-send-capable build ships. Your funds are " +
-        "unaffected: the transaction was rejected before it was signed.",
-      severity: "err",
     };
   }
 
@@ -171,9 +332,9 @@ export function classifySendError(
       kind: "gas-estimation",
       headline: "Could not estimate network fee",
       body:
-        "The wallet could not estimate the execution units for this " +
-        "transaction. The recipient contract may reject it. Check the " +
-        "recipient address and amount, then try again.",
+        "The wallet couldn't estimate the execution units for this " +
+        "transaction — it may be rejected when executed. Re-check the " +
+        "transaction details, then try again.",
       severity: "err",
     };
   }
@@ -227,17 +388,21 @@ export function classifySendError(
     };
   }
 
-  // Generic EVM revert — recipient contract chose to abort.
+  // Generic execution revert — the transaction aborted during execution (a
+  // contract call, or a native module rejecting the operation). Reached by the
+  // staking surface too (delegate/undelegate/redelegate/claim funnel through
+  // the same classifier), so the copy stays tx-type-neutral.
   if (
     lower.includes("execution reverted") ||
     lower.includes("revert")
   ) {
     return {
       kind: "transaction-reverted",
-      headline: "Recipient contract rejected the transaction",
+      headline: "Transaction reverted",
       body:
-        "The destination contract reverted execution. Check that the " +
-        "function arguments are correct.",
+        "The network reverted this transaction during execution. If it calls " +
+        "a contract, re-check the call arguments; otherwise re-check the " +
+        "transaction details and try again.",
       severity: "err",
     };
   }
@@ -276,7 +441,21 @@ export function classifySendError(
     };
   }
 
-  // Unrecognised — preserve the raw message in body.
+  // Unrecognised. When the caller stripped a mempool wrapper (`wrapped`), the
+  // chain explicitly rejected the tx at admission — surface that honestly as a
+  // transaction rejection (NOT an operator outage; before the unwrap the
+  // "upstream unavailable" wrapper made these read as chain-quarantined). A
+  // non-wrapped unknown keeps the prior raw-message behaviour.
+  if (wrapped) {
+    return {
+      kind: "transaction-rejected",
+      headline: "Transaction rejected",
+      body:
+        `The network rejected this transaction: ${message}. Your funds are ` +
+        "unaffected — it was rejected before inclusion.",
+      severity: "err",
+    };
+  }
   return {
     kind: "unknown",
     headline: "Transaction failed",
@@ -294,6 +473,42 @@ export function errorLinksOperators(kind: SendErrorKind): boolean {
     kind === "chain-quarantined" ||
     kind === "operator-offline"
   );
+}
+
+/** Colour palette per `SendErrorClassification.severity`, shared by the Send +
+ *  Stake error surfaces so they stay consistent. `warn` (e.g. the transient
+ *  spending-policy-unavailable) renders amber rather than the error-red of
+ *  `err`, so a retryable condition doesn't read as a hard failure; `info` is
+ *  neutral (e.g. a user-cancelled prompt). */
+export function severityColours(severity: "err" | "warn" | "info"): {
+  fg: string;
+  iconBg: string;
+  cardBg: string;
+  borderRgba: string;
+} {
+  switch (severity) {
+    case "err":
+      return {
+        fg: "var(--err)",
+        iconBg: "rgba(220,80,80,0.12)",
+        cardBg: "rgba(220,80,80,0.08)",
+        borderRgba: "rgba(220,80,80,0.4)",
+      };
+    case "warn":
+      return {
+        fg: "var(--warn)",
+        iconBg: "rgba(220,180,80,0.12)",
+        cardBg: "rgba(220,180,80,0.08)",
+        borderRgba: "rgba(220,180,80,0.4)",
+      };
+    case "info":
+      return {
+        fg: "var(--fg-200)",
+        iconBg: "rgba(120,160,220,0.10)",
+        cardBg: "rgba(120,160,220,0.06)",
+        borderRgba: "rgba(120,160,220,0.3)",
+      };
+  }
 }
 
 // Native LYTH precision sourced from the SDK (single source of truth). Chain

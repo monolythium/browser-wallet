@@ -231,8 +231,9 @@ function ExportBlobModal({ blob, onClose }: ExportBlobModalProps) {
             lineHeight: 1.4,
           }}
         >
-          Send this to co-signers. They paste it into Import shared on
-          their wallet to add signatures.
+          Send this to your co-signers — they paste it into Import shared
+          on their wallet to add signatures. It contains this transaction's
+          details, so share it only with them.
         </div>
         <textarea
           readOnly

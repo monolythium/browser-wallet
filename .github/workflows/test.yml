@@ -1,0 +1,37 @@
+name: Test
+
+# PR + default-branch test gate (S7 #51). release.yml only runs typecheck+build
+# on tag push, so a logic/policy regression could merge + ship green. This runs
+# the full suite on every PR (and on master as a backstop). Making it a REQUIRED
+# merge check is a separate GitHub branch-protection setting (repo admin).
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm build
+
+      - run: pnpm test

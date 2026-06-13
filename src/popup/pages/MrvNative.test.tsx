@@ -312,6 +312,13 @@ describe("MrvNative", () => {
     expect(html).not.toContain("Native contract preview");
     expect(html).not.toContain("MRV native");
     expect(html).not.toContain("Native market replay");
+    // #31: the native-market replay-readiness surface (fed by the on-mount
+    // chain-head + 128-block orderbook-delta probe) is not rendered either; the
+    // effect that issues those RPCs is now gated on devMode so it does not fire
+    // behind the stub. (Effect-level fetch suppression isn't observable under
+    // renderToStaticMarkup — it never runs effects; the !devMode early-return +
+    // devMode dep enforce it. See the FIX report.)
+    expect(html).not.toContain("Checking recent orderbook replay status");
   });
 
   it("renders native market replay readiness from returned deltas only", () => {

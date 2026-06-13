@@ -70,8 +70,12 @@ export function validateOperatorList(input: unknown): OperatorEntry[] | null {
     }
     if (typeof e.rpc !== "string") return null;
     try {
-      // eslint-disable-next-line no-new
-      new URL(e.rpc);
+      const u = new URL(e.rpc);
+      // Scheme allow-list: only http(s) is a valid operator RPC endpoint.
+      // Rejects file:/data:/javascript:/etc so a tampered override (or a
+      // dev-mode operator-add) cannot install a non-http RPC (mirrors the
+      // ws:/wss: constraint on wsRpc below). (F-3.3/#20)
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
     } catch {
       return null;
     }

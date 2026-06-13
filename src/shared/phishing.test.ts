@@ -111,6 +111,27 @@ describe("detectOriginWarnings — risky TLD", () => {
   });
 });
 
+describe("detectOriginWarnings — ASCII-confusable lookalikes (#40)", () => {
+  it("flags an rn->m lookalike (rnetamask.io)", () => {
+    const r = detectOriginWarnings("https://rnetamask.io");
+    expect(r.map((w) => w.code)).toContain("brand-lookalike");
+  });
+
+  it("flags a leetspeak lookalike (met4mask.io)", () => {
+    const r = detectOriginWarnings("https://met4mask.io");
+    expect(r.map((w) => w.code)).toContain("brand-lookalike");
+  });
+
+  it("does not flag the canonical brand host", () => {
+    expect(detectOriginWarnings("https://metamask.io")).toEqual([]);
+  });
+
+  it("still recognizes the 'click' risky TLD after the duplicate dedupe", () => {
+    const r = detectOriginWarnings("https://example.click");
+    expect(r.map((w) => w.code)).toContain("risky-tld");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // detectMessageWarnings
 // ─────────────────────────────────────────────────────────────────────────────

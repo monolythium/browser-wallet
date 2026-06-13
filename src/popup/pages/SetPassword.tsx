@@ -1,10 +1,8 @@
 import { useState } from "react";
 import { Icon } from "../Icon";
 import { PasswordStrengthMeter } from "../components/PasswordStrengthMeter";
-import {
-  getPasswordStrength,
-  isPasswordValid,
-} from "../../lib/password-validation";
+import { isPasswordValid } from "../../lib/password-validation";
+import { isCommonPassword } from "../../lib/common-passwords";
 
 interface SetPasswordProps {
   onSubmit: (password: string) => void;
@@ -29,12 +27,11 @@ export function SetPassword({
   // strength + match requirements.
   const [acknowledged, setAcknowledged] = useState(false);
 
-  const strength = getPasswordStrength(password);
+  // isPasswordValid requires all five rules (incl. the 12-char floor), which
+  // already implies a "strong" meter — the old `strength !== "weak"` clause
+  // was dead. The binding gate is isPasswordValid + match + acknowledgement.
   const canSubmit =
-    isPasswordValid(password) &&
-    strength !== "weak" &&
-    password === confirm &&
-    acknowledged;
+    isPasswordValid(password) && password === confirm && acknowledged;
 
   return (
     <>
@@ -90,6 +87,22 @@ export function SetPassword({
           password={password}
           confirmPassword={confirm}
         />
+
+        {/* Common-password denylist hint (#41): a denylisted password can
+            pass the composition meter yet still be rejected by isPasswordValid,
+            which would otherwise disable Continue with no explanation. */}
+        {password.length > 0 && isCommonPassword(password) && (
+          <div
+            style={{
+              fontSize: "var(--fs-11)",
+              color: "var(--err)",
+              fontFamily: "var(--f-mono)",
+              lineHeight: 1.45,
+            }}
+          >
+            This password is too common — choose a less guessable one.
+          </div>
+        )}
 
         {/* Acknowledgement gate. The entire row is a
            label so a tap anywhere on the box toggles the checkbox. */}
