@@ -176,7 +176,10 @@ async function _testnetJsonRpcUncoalesced<T>(
     // match TESTNET_GENESIS_HASH are skipped — they're either on a fork
     // or a different chain entirely, and routing any request to them
     // leaks reads / writes onto an untrusted ledger.
-    if (!(await verifyOperatorGenesis(v.rpc))) {
+    // C3: bound the genesis probe so a hung / slow operator fails fast. The read
+    // path left this unbounded, so a dead operator stalled a reopen for the full
+    // 3 s probe default. A caller's own timeoutMs takes precedence; default 2 s.
+    if (!(await verifyOperatorGenesis(v.rpc, opts?.timeoutMs ?? 2_000))) {
       untrustedCount++;
       lastTransportErr = new Error(`${v.name}: untrusted genesis`);
       continue;

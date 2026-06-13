@@ -165,6 +165,24 @@ describe("verifyOperatorGenesis", () => {
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
   });
 
+  it("T6 (C3): bounds the genesis probe — a hung operator aborts at the given timeout, not the 3s default", async () => {
+    // fetch never resolves on its own; it rejects ONLY when the AbortController
+    // fires, proving the bounded timeout drives the probe to a fast `false`.
+    globalThis.fetch = vi.fn(
+      (_url: unknown, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          );
+        }),
+    ) as unknown as typeof fetch;
+    const start = Date.now();
+    const ok = await verifyOperatorGenesis(RPC, 20);
+    expect(ok).toBe(false);
+    // Resolved via the ~20 ms abort(s), nowhere near the 3000 ms default.
+    expect(Date.now() - start).toBeLessThan(1_500);
+  });
+
   it("uses cached result on subsequent calls (forever-cache)", async () => {
     const fetchSpy = vi.fn(async () => ({
       ok: true,
