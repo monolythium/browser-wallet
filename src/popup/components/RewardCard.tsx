@@ -49,6 +49,10 @@ interface RewardCardProps {
    *  that haven't been retrofitted with the feature flag render as
    *  before. */
   showAdvancedAnalytics?: boolean;
+  /** Compact side-by-side layout: a narrow vertical mini-card (label /
+   *  amount / Claim-all button), hiding the per-cluster breakdown + mock
+   *  footer. Default `false` (the full card). */
+  compact?: boolean;
 }
 
 export function RewardCard({
@@ -59,19 +63,21 @@ export function RewardCard({
   onClaim,
   claimDisabled,
   showAdvancedAnalytics = true,
+  compact = false,
 }: RewardCardProps) {
   const clusterById = useMemo(() => {
     const m = new Map<number, ClusterDirectoryEntry>();
     for (const c of clusters) m.set(c.clusterId, c);
     return m;
   }, [clusters]);
+  const pad = compact ? 10 : 12;
 
   // Hard fetch failure (ok:false) → honest absence per no-mock-fallback:
   // never perpetual "Loading…" and never illustrative mock figures. Takes
   // precedence over the null/loading check so a stuck fetch can't hide it.
   if (error != null) {
     return (
-      <div className="ext-card" style={{ padding: 12 }}>
+      <div className="ext-card" style={{ padding: pad }}>
         <div style={cardLabel}>Pending rewards</div>
         <div style={errorBannerStyle}>Pending rewards unavailable.</div>
       </div>
@@ -80,7 +86,7 @@ export function RewardCard({
 
   if (rewards === null) {
     return (
-      <div className="ext-card" style={{ padding: 12 }}>
+      <div className="ext-card" style={{ padding: pad }}>
         <div style={cardLabel}>Pending rewards</div>
         <div
           style={{
@@ -105,8 +111,81 @@ export function RewardCard({
   })();
   const totalIsZero = totalLythoshi === 0n;
 
+  // Compact side-by-side variant: vertical mini-card (label / amount /
+  // Claim-all). No per-cluster breakdown or mock footer — those stay on the
+  // full card. Returns early so the full layout below is left untouched.
+  if (compact) {
+    return (
+      <div className="ext-card" style={{ padding: pad }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={cardLabel}>Pending rewards</div>
+          {isMock && (
+            <span
+              style={mockBadgeStyle}
+              title="Live pending-rewards read is unavailable from this operator; figures are derived locally from active delegations × cluster APR."
+            >
+              illustrative
+            </span>
+          )}
+        </div>
+        <div
+          style={{
+            marginTop: 6,
+            fontFamily: "var(--f-mono)",
+            fontSize: 15,
+            fontWeight: 600,
+            color: totalIsZero ? "var(--fg-400)" : "var(--gold)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {formatLythoshiAsLyth(totalLythoshi, 4)}{" "}
+          <span style={{ fontSize: 9.5, color: "var(--fg-400)" }}>LYTH</span>
+        </div>
+        <button
+          onClick={onClaim}
+          disabled={claimDisabled || totalIsZero}
+          className={totalIsZero ? undefined : "ext-act prim"}
+          style={{
+            marginTop: 8,
+            width: "100%",
+            padding: "7px 10px",
+            ...(totalIsZero
+              ? {
+                  borderRadius: 8,
+                  border: "1px solid var(--fg-700)",
+                  background: "rgba(255,255,255,0.04)",
+                  color: "var(--fg-400)",
+                  fontFamily: "var(--f-sans)",
+                  fontSize: 10.5,
+                  cursor: "default",
+                }
+              : {
+                  flexDirection: "row" as const,
+                  justifyContent: "center",
+                  gap: 6,
+                  fontSize: 11,
+                  opacity: claimDisabled ? 0.5 : 1,
+                  cursor: claimDisabled ? "default" : "pointer",
+                }),
+          }}
+        >
+          {!totalIsZero && <Icon name="check" size={11} />}
+          {totalIsZero ? "No rewards" : "Claim all"}
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="ext-card" style={{ padding: 12 }}>
+    <div className="ext-card" style={{ padding: pad }}>
       {/* Header */}
       <div
         style={{

@@ -80,6 +80,7 @@ type Step =
   | "unstake-form"
   | "redelegate-form"
   | "redelegate-dst-pick"
+  | "unstake-all"
   | "preview"
   | "submitting"
   | "success"
@@ -288,6 +289,15 @@ export function Stake({
     method: string | null;
     via: string | null;
   } | null>(null);
+
+  // "Unstake all" sequential flow. The chain has no bulk undelegate, so we
+  // walk the wallet's clusters one review-form at a time (biggest stake
+  // first). `unstakeAllQueue` is a snapshot of cluster ids; `unstakeAllIndex`
+  // is the current position.
+  const [unstakeAllQueue, setUnstakeAllQueue] = useState<number[]>([]);
+  const [unstakeAllIndex, setUnstakeAllIndex] = useState(0);
+  const [unstakeAllBusy, setUnstakeAllBusy] = useState(false);
+  const [unstakeAllError, setUnstakeAllError] = useState<string | null>(null);
 
   // Persist key form / selection state on every change so a
   // round-trip through ClusterDetail returns the user to the same
@@ -531,6 +541,79 @@ export function Stake({
     }
   };
 
+  // ── "Unstake all" sequential flow ──────────────────────────────────────
+  // No bulk undelegate on-chain (undelegate is single-cluster), so this walks
+  // the clusters one review-form at a time, biggest stake first.
+  const handleUnstakeAll = () => {
+    if (delegations === null || delegations.rows.length === 0) return;
+    // Effective weight desc == weightBps desc (same balance across rows).
+    const queue = [...delegations.rows]
+      .sort((a, b) => b.weightBps - a.weightBps)
+      .map((r) => r.cluster);
+    setUnstakeAllQueue(queue);
+    setUnstakeAllIndex(0);
+    setUnstakeAllError(null);
+    setUnstakeAllBusy(false);
+    setAction("undelegate");
+    setSelectedClusterId(queue[0] ?? null);
+    setStep("unstake-all");
+  };
+
+  // Advance to the next cluster in the queue, or finish (back to the picker).
+  const goToNextUnstake = (currentIndex: number) => {
+    setUnstakeAllError(null);
+    setUnstakeAllBusy(false);
+    const next = currentIndex + 1;
+    if (next >= unstakeAllQueue.length) {
+      setUnstakeAllQueue([]);
+      setUnstakeAllIndex(0);
+      setSelectedClusterId(null);
+      setStep("pick");
+    } else {
+      setUnstakeAllIndex(next);
+      setSelectedClusterId(unstakeAllQueue[next] ?? null);
+      setStep("unstake-all");
+    }
+  };
+
+  const handleUnstakeAllCancel = () => {
+    setUnstakeAllQueue([]);
+    setUnstakeAllIndex(0);
+    setUnstakeAllError(null);
+    setUnstakeAllBusy(false);
+    setSelectedClusterId(null);
+    setStep("pick");
+  };
+
+  const handleUnstakeAllConfirm = async () => {
+    const cluster = unstakeAllQueue[unstakeAllIndex];
+    if (cluster === undefined) return;
+    setUnstakeAllBusy(true);
+    setUnstakeAllError(null);
+    try {
+      const meta = clusters.find((c) => c.clusterId === cluster);
+      const r = await bgWalletSendTx({
+        to: DELEGATION_PRECOMPILE,
+        valueWeiHex: "0x0",
+        chainIdHex: chainId,
+        data: encodeUndelegate(cluster),
+        executionUnitLimitHex: "0x186A0",
+        opKind: "undelegate",
+        clusterId: cluster,
+        ...(meta?.name ? { clusterName: meta.name } : {}),
+      });
+      if (r.ok) {
+        goToNextUnstake(unstakeAllIndex);
+      } else {
+        setUnstakeAllBusy(false);
+        setUnstakeAllError(r.reason ?? "undelegate rejected");
+      }
+    } catch (e) {
+      setUnstakeAllBusy(false);
+      setUnstakeAllError((e as Error).message ?? "undelegate failed");
+    }
+  };
+
   /** Initiate a claim — skips the preview step because a claim has
    *  no parameters to confirm (it claims across every active
    *  delegation). Submit fires directly. Inlined rather than routing
@@ -639,18 +722,38 @@ export function Stake({
               balanceLythoshi={balanceLythoshi}
             />
 
-            {/* Pending rewards — surfaces only when there's something
-                to claim or an active delegation that could accrue. */}
+            {/* Pending rewards (left) + effective weight / Unstake-all
+                (right), side by side. Surfaces only with an active
+                delegation that could accrue. */}
             {delegations !== null && delegations.rows.length > 0 && (
-              <RewardCard
-                rewards={rewards}
-                error={rewardsError}
-                isMock={rewardsMock}
-                clusters={clusters}
-                onClaim={() => void handleClaim()}
-                claimDisabled={false}
-                showAdvancedAnalytics={tradingInterfaceOn}
-              />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 8,
+                  marginBottom: 4,
+                }}
+              >
+                <RewardCard
+                  compact
+                  rewards={rewards}
+                  error={rewardsError}
+                  isMock={rewardsMock}
+                  clusters={clusters}
+                  onClaim={() => void handleClaim()}
+                  claimDisabled={false}
+                  showAdvancedAnalytics={tradingInterfaceOn}
+                />
+                <UnstakeAllCard
+                  effectiveWeightLythoshi={effectiveWeightWei(
+                    delegations.totalBps,
+                    balanceLythoshi ?? 0n,
+                  )}
+                  totalBps={delegations.totalBps}
+                  balanceLythoshi={balanceLythoshi}
+                  onUnstakeAll={handleUnstakeAll}
+                />
+              </div>
             )}
 
             {/* Existing delegations — manage Unstake / Redelegate per row */}
@@ -909,6 +1012,27 @@ export function Stake({
           />
         )}
 
+        {step === "unstake-all" && selectedCluster !== null && (
+          <PreviewView
+            cluster={selectedCluster}
+            action="undelegate"
+            destCluster={null}
+            amountStr=""
+            balanceLythoshi={balanceLythoshi}
+            existingWeightBps={existingWeightBps}
+            onConfirm={() => void handleUnstakeAllConfirm()}
+            onBack={handleUnstakeAllCancel}
+            sequence={{
+              index: unstakeAllIndex,
+              total: unstakeAllQueue.length,
+              busy: unstakeAllBusy,
+              error: unstakeAllError,
+              onSkip: () => goToNextUnstake(unstakeAllIndex),
+              onCancel: handleUnstakeAllCancel,
+            }}
+          />
+        )}
+
         {step === "submitting" && <SubmittingView />}
 
         {step === "success" && txHash !== null && (
@@ -1029,6 +1153,79 @@ function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
   );
 }
 
+interface UnstakeAllCardProps {
+  effectiveWeightLythoshi: bigint;
+  totalBps: number;
+  balanceLythoshi: bigint | null;
+  onUnstakeAll: () => void;
+}
+
+// Right-hand mini-card mirroring the compact RewardCard: total effective
+// weight + an "Unstake all" button that walks every cluster's unstake review
+// one at a time (the chain has no bulk undelegate).
+function UnstakeAllCard({
+  effectiveWeightLythoshi,
+  totalBps,
+  balanceLythoshi,
+  onUnstakeAll,
+}: UnstakeAllCardProps) {
+  return (
+    <div
+      className="ext-card"
+      style={{ padding: 10, display: "flex", flexDirection: "column" }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          color: "var(--fg-400)",
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+        }}
+      >
+        Effective weight
+      </div>
+      <div
+        style={{
+          marginTop: 6,
+          fontFamily: "var(--f-mono)",
+          fontSize: 15,
+          fontWeight: 600,
+          color: "var(--gold)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {balanceLythoshi === null
+          ? "—"
+          : formatLythoshi(effectiveWeightLythoshi)}{" "}
+        <span style={{ fontSize: 9.5, color: "var(--fg-400)" }}>
+          LYTH ({(totalBps / 100).toFixed(2)}%)
+        </span>
+      </div>
+      <button
+        onClick={onUnstakeAll}
+        style={{
+          marginTop: 8,
+          width: "100%",
+          padding: "7px 10px",
+          borderRadius: 8,
+          border: "1px solid var(--err)",
+          background: "rgba(255,255,255,0.03)",
+          color: "var(--err)",
+          fontFamily: "var(--f-sans)",
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: "pointer",
+        }}
+      >
+        Unstake all
+      </button>
+    </div>
+  );
+}
+
 function KvStack({
   label,
   value,
@@ -1079,6 +1276,17 @@ interface PreviewViewProps {
   existingWeightBps: number;
   onConfirm: () => void;
   onBack: () => void;
+  /** When set, this preview is one step of the "Unstake all" sequence:
+   *  shows a progress header + a Cancel / Skip / Confirm trio (instead of
+   *  Back / Confirm) with an inline error/busy state. */
+  sequence?: {
+    index: number;
+    total: number;
+    busy: boolean;
+    error: string | null;
+    onSkip: () => void;
+    onCancel: () => void;
+  };
 }
 
 function PreviewView({
@@ -1090,6 +1298,7 @@ function PreviewView({
   existingWeightBps,
   onConfirm,
   onBack,
+  sequence,
 }: PreviewViewProps) {
   const devMode = useFeature("DEVELOPER_MODE");
   const aprBps = cluster.aprBps ?? null;
@@ -1112,6 +1321,19 @@ function PreviewView({
       : Math.max(0, existingWeightBps - moveBps); // source after undelegate/redelegate
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {sequence && (
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            color: "var(--fg-300)",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          }}
+        >
+          Unstake all · cluster {sequence.index + 1} of {sequence.total}
+        </div>
+      )}
       <div className="ext-card" style={{ padding: 14 }}>
         <Row
           k={action === "redelegate" ? "Source cluster" : "Cluster"}
@@ -1221,28 +1443,104 @@ function PreviewView({
         </div>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 8,
-        }}
-      >
-        <button onClick={onBack} style={secondaryBtn}>
-          Back
-        </button>
-        <button
-          className="ext-act prim"
-          onClick={onConfirm}
+      {sequence ? (
+        <>
+          {sequence.error !== null && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                color: "var(--err)",
+                lineHeight: 1.5,
+                wordBreak: "break-word",
+              }}
+            >
+              {sequence.error}
+            </div>
+          )}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1.3fr",
+              gap: 8,
+            }}
+          >
+            <button
+              onClick={sequence.onCancel}
+              disabled={sequence.busy}
+              style={{ ...secondaryBtn, opacity: sequence.busy ? 0.6 : 1 }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={sequence.onSkip}
+              disabled={sequence.busy}
+              style={{ ...secondaryBtn, opacity: sequence.busy ? 0.6 : 1 }}
+            >
+              Skip
+            </button>
+            <button
+              className="ext-act prim"
+              onClick={onConfirm}
+              disabled={sequence.busy}
+              style={{
+                padding: 12,
+                flexDirection: "row",
+                justifyContent: "center",
+                gap: 6,
+                opacity: sequence.busy ? 0.6 : 1,
+                cursor: sequence.busy ? "default" : "pointer",
+              }}
+            >
+              {sequence.busy ? (
+                "Submitting…"
+              ) : (
+                <>
+                  <Icon name="check" size={12} /> Unstake
+                </>
+              )}
+            </button>
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 9,
+              color: "var(--fg-500)",
+              lineHeight: 1.6,
+            }}
+          >
+            <strong style={{ color: "var(--err)" }}>Unstake</strong> removes
+            this cluster, then continues ·{" "}
+            <strong style={{ color: "var(--fg-300)" }}>Skip</strong> keeps it
+            staked and moves on ·{" "}
+            <strong style={{ color: "var(--fg-300)" }}>Cancel</strong> stops
+            here.
+          </div>
+        </>
+      ) : (
+        <div
           style={{
-            padding: 12,
-            flexDirection: "row",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
             gap: 8,
           }}
         >
-          <Icon name="check" size={12} /> Confirm
-        </button>
-      </div>
+          <button onClick={onBack} style={secondaryBtn}>
+            Back
+          </button>
+          <button
+            className="ext-act prim"
+            onClick={onConfirm}
+            style={{
+              padding: 12,
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            <Icon name="check" size={12} /> Confirm
+          </button>
+        </div>
+      )}
     </div>
   );
 }
