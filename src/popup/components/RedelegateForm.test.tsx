@@ -62,3 +62,15 @@ describe("RedelegateForm — >100% validation", () => {
     expect(html).not.toContain("Enter a percent between 0.01% and 100%");
   });
 });
+
+describe("RedelegateForm — quick-fill buttons", () => {
+  it("renders 25/50/75 quick-fills (not 100 — Max covers that)", () => {
+    const html = renderToStaticMarkup(
+      <RedelegateForm {...baseProps} amountStr="" />,
+    );
+    expect(html).toContain(">25%</button>");
+    expect(html).toContain(">50%</button>");
+    expect(html).toContain(">75%</button>");
+    expect(html).not.toContain(">100%</button>");
+  });
+});

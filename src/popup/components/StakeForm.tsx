@@ -199,6 +199,16 @@ export function StakeForm({
             inputMode="decimal"
             style={amountInputStyle}
           />
+          {[25, 50, 75].map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onAmountChange(String(p))}
+              style={{ ...inlineBtnStyle, padding: "8px 10px" }}
+            >
+              {p}%
+            </button>
+          ))}
           <button
             onClick={handleMax}
             disabled={balanceLythoshi === null}
@@ -326,6 +336,8 @@ const cardLabel: CSSProperties = {
 
 const amountInputStyle: CSSProperties = {
   flex: 1,
+  minWidth: 0,
+  maxWidth: 110,
   padding: "10px 12px",
   borderRadius: 10,
   background: "rgba(0,0,0,0.3)",
