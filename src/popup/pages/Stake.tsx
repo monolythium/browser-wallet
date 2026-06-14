@@ -930,6 +930,22 @@ export function Stake({
             error={submitError}
             onRetry={() => {
               setSubmitError(null);
+              // Route the retry to a step that actually renders for the
+              // current action. A claim has no "form" step (it never selects
+              // a cluster), so re-run it directly; undelegate/redelegate have
+              // their own gated form steps; delegate uses "form".
+              if (action === "claim") {
+                void handleClaim();
+                return;
+              }
+              if (action === "undelegate") {
+                setStep("unstake-form");
+                return;
+              }
+              if (action === "redelegate") {
+                setStep("redelegate-form");
+                return;
+              }
               setStep("form");
             }}
             onCancel={onBack}

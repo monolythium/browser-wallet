@@ -8275,6 +8275,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-mrv-build-deploy-plan": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         artifactBytes?: string;
         artifactHash?: string;
@@ -8330,6 +8333,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-mrv-build-call-plan": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         contractAddress?: string;
         input?: string;
@@ -8389,6 +8395,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-mrv-submit-plan": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         plan?: WalletMrvNativeSubmissionPlan;
         chainIdHex?: string;
@@ -8824,6 +8833,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readClusterDelegators(p.clusterId);
     }
     case "staking-autovote-seed": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       // Per-user entropy: derive a 32-byte seed from the unlocked
       // ML-DSA-65 public key + a domain tag. The public key is already
       // public state, so this leaks no secret material; different users
@@ -8893,6 +8905,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readSpendingPolicy(p.subAccount);
     }
     case "spending-policy-build-claim": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       // §18.8 fresh-claim path. Derives a brand-new agent sub-account
       // ML-DSA-65 keypair, signs the chain-id-bound claim message with
       // it, and returns the setPolicyClaim calldata + the sub-account
@@ -8997,6 +9012,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, status: client.status };
     }
     case "wallet-send-tx": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         to?: string;
         valueWeiHex?: string;

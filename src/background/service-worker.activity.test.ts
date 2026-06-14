@@ -35,6 +35,9 @@ import {
 } from "@monolythium/core-sdk";
 import { MlDsa65Backend, hexToBytes } from "@monolythium/core-sdk/crypto";
 import { keccak_256 } from "@noble/hashes/sha3.js";
+// keystore-mldsa is mocked below (vi.mock); import the mocked namespace so the
+// P7a self-heal test can reprogram tryRestoreFromSessionV4 for one call.
+import * as keystoreMldsaMock from "./keystore-mldsa.js";
 
 const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
 const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
@@ -3109,6 +3112,66 @@ describe("fired auto-lock clears the session-MEK rehydrate cap (#17)", () => {
     expect(storageSession[SESSION_KEY_MEK_V4]).toBeUndefined();
     expect(storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE]).toBeUndefined();
     expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// submit/sign self-heals a false "locked" from an MV3 SW cold-restart (P7a)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("submit/sign self-heals a false-locked SW cold-restart (P7a)", () => {
+  it("wallet-send-tx rehydrates within the auto-lock window instead of false-locking", async () => {
+    // MV3 SW cold-restart mid-prep: the in-memory backend reset to locked, but
+    // the session MEK is still valid AND we're within the auto-lock deadline.
+    unlocked = false;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() + 60_000;
+    vi.mocked(keystoreMldsaMock.tryRestoreFromSessionV4).mockImplementationOnce(
+      async () => {
+        unlocked = true; // a valid session MEK rehydrates the backend
+        return { ok: true, address: DETERMINISTIC_ADDRESS, vaultId: "v1" };
+      },
+    );
+    // Broadcast preamble so the rehydrated submit completes (mirrors the
+    // wallet-send-tx happy-path seeding above).
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x16345785d8a0000",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: boolean; reason?: string };
+
+    expect(keystoreMldsaMock.tryRestoreFromSessionV4).toHaveBeenCalled();
+    expect(r).not.toEqual({ ok: false, reason: "wallet locked" });
+    expect(r.ok).toBe(true);
+  });
+
+  it("stays locked (fail-closed) when the auto-lock deadline has elapsed", async () => {
+    unlocked = false;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() - 1; // elapsed
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x16345785d8a0000",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: false; reason?: string };
+
+    expect(r).toEqual({ ok: false, reason: "wallet locked" });
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
 
