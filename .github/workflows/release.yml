@@ -111,17 +111,37 @@ jobs:
           PY
           )
           ZIP=$(ls browser-wallet-*.zip | head -1)
-          curl -sf -X PUT \
+          echo "Uploading $ZIP …"
+          UP=$(curl -sS -X PUT \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "x-goog-api-version: 2" \
             -T "$ZIP" \
-            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$EXTENSION_ID"
-          curl -sf -X POST \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$EXTENSION_ID")
+          echo "upload response: $UP"
+          if ! echo "$UP" | grep -q '"uploadState": *"SUCCESS"'; then
+            rm -f /tmp/sa.json
+            echo "::error::Chrome Web Store upload did not reach SUCCESS"
+            exit 1
+          fi
+          echo "Publishing to the default (public) channel …"
+          PUB=$(curl -sS -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "x-goog-api-version: 2" \
             -H "Content-Length: 0" \
-            "https://www.googleapis.com/chromewebstore/v1.1/items/$EXTENSION_ID/publish"
-          rm /tmp/sa.json
+            -w $'\n__HTTP__%{http_code}' \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$EXTENSION_ID/publish")
+          rm -f /tmp/sa.json
+          CODE=${PUB##*__HTTP__}
+          BODY=${PUB%__HTTP__*}
+          echo "publish HTTP $CODE"
+          echo "publish response: $BODY"
+          case "$CODE" in
+            2*) echo "Publish request accepted by the Chrome Web Store." ;;
+            *)
+              echo "::error::Chrome Web Store publish failed (HTTP $CODE): $BODY"
+              exit 1
+              ;;
+          esac
 
   sign:
     needs: build
