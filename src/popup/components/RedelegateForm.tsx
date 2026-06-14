@@ -96,6 +96,17 @@ export function RedelegateForm({
   }, [amountStr]);
   const moveBps = movePercent !== null ? percentToBps(movePercent) : 0;
 
+  // Derived for the in-form amount preview (additive). Mirrors the
+  // UnstakeForm derivation: balance × weightBps / 10000, in lythoshi.
+  const stakedInSrcLythoshi =
+    balanceLythoshi !== null && srcWeightBps > 0
+      ? (balanceLythoshi * BigInt(srcWeightBps)) / 10_000n
+      : 0n;
+  const moveLythoshi =
+    balanceLythoshi !== null && moveBps > 0
+      ? (balanceLythoshi * BigInt(moveBps)) / 10_000n
+      : 0n;
+
   const exceedsSource = moveBps > srcWeightBps;
   const totalAtDstAfter = dstExistingWeightBps + moveBps;
   const exceedsDstCap = capBps !== null && totalAtDstAfter > capBps;
@@ -293,6 +304,13 @@ export function RedelegateForm({
             Would push the destination over the per-cluster cap (
             {(capBps / 100).toFixed(0)}%) by{" "}
             {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
+          </div>
+        )}
+        {moveBps > 0 && balanceLythoshi !== null && (
+          <div style={{ ...fromHint, color: "var(--fg-200)" }}>
+            Moving {lythoshiToLyth(moveLythoshi)} LYTH of{" "}
+            {lythoshiToLyth(stakedInSrcLythoshi)} LYTH staked in{" "}
+            {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
           </div>
         )}
         <div style={fromHint}>
