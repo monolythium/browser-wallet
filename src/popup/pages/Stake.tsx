@@ -1693,8 +1693,8 @@ function ExistingDelegations({
         <span>Active delegations</span>
         <span
           style={{
-            fontSize: 9,
-            color: "var(--fg-500)",
+            fontSize: 10,
+            color: "var(--fg-300)",
             letterSpacing: "0.06em",
             textTransform: "none",
           }}
@@ -1752,8 +1752,8 @@ function ExistingDelegations({
                   <div
                     style={{
                       fontFamily: "var(--f-mono)",
-                      fontSize: 9.5,
-                      color: "var(--fg-400)",
+                      fontSize: 11,
+                      color: "var(--fg-200)",
                       marginTop: 2,
                     }}
                   >
