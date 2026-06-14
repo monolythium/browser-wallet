@@ -2,7 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { ClusterDirectoryEntry } from "../../shared/staking.js";
-import { RedelegateForm } from "./RedelegateForm.js";
+import {
+  RedelegateForm,
+  redelegateQuickFillPercent,
+} from "./RedelegateForm.js";
 
 const srcCluster: ClusterDirectoryEntry = {
   clusterId: 0,
@@ -72,5 +75,14 @@ describe("RedelegateForm — quick-fill buttons", () => {
     expect(html).toContain(">50%</button>");
     expect(html).toContain(">75%</button>");
     expect(html).not.toContain(">100%</button>");
+  });
+
+  it("quick-fills compute a fraction of the SOURCE weight, not % of balance", () => {
+    // Source staked = 10.50% (1050 bps). 25% of source = 2.63%; Max = 100% = 10.5%.
+    expect(redelegateQuickFillPercent(1050, 25)).toBe("2.63");
+    expect(redelegateQuickFillPercent(1050, 50)).toBe("5.25");
+    expect(redelegateQuickFillPercent(1050, 75)).toBe("7.88");
+    expect(redelegateQuickFillPercent(1050, 100)).toBe("10.5"); // == Max
+    expect(redelegateQuickFillPercent(0, 25)).toBe("0");
   });
 });

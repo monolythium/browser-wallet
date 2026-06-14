@@ -75,6 +75,19 @@ export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
   return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
 }
 
+/** Redelegate quick-fill value: `fraction` percent (e.g. 25) of the SOURCE
+ *  weight, returned as a percent-of-balance string. Mirrors Max (= 100% of
+ *  source), so "25%" moves a quarter of what's CURRENTLY STAKED at the source
+ *  — not a quarter of the whole balance. Rounded to bps (the chain's weight
+ *  unit) so the displayed percent is clean. */
+export function redelegateQuickFillPercent(
+  srcWeightBps: number,
+  fraction: number,
+): string {
+  if (srcWeightBps <= 0) return "0";
+  return (Math.round((srcWeightBps * fraction) / 100) / 100).toString();
+}
+
 export function RedelegateForm({
   srcCluster,
   srcWeightBps,
@@ -279,8 +292,17 @@ export function RedelegateForm({
             <button
               key={p}
               type="button"
-              onClick={() => onAmountChange(String(p))}
-              style={{ ...inlineBtnStyle, padding: "8px 10px" }}
+              // Fraction of the SOURCE weight (like Max = 100% of source),
+              // NOT % of balance — "25%" = a quarter of what's staked here.
+              onClick={() =>
+                onAmountChange(redelegateQuickFillPercent(srcWeightBps, p))
+              }
+              disabled={srcWeightBps <= 0}
+              style={{
+                ...inlineBtnStyle,
+                padding: "8px 10px",
+                opacity: srcWeightBps <= 0 ? 0.5 : 1,
+              }}
             >
               {p}%
             </button>
