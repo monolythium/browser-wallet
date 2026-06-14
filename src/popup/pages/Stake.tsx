@@ -1015,11 +1015,11 @@ function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
       </div>
       <div
         style={{
-          marginTop: 8,
+          marginTop: 10,
           fontFamily: "var(--f-mono)",
-          fontSize: 9,
-          color: "var(--fg-500)",
-          lineHeight: 1.5,
+          fontSize: 11,
+          color: "var(--fg-300)",
+          lineHeight: 1.6,
         }}
       >
         Delegating is non-custodial — your full balance stays liquid and
