@@ -148,6 +148,28 @@ describe("verifyOperatorGenesis", () => {
     expect(snapshotGenesisCache().get(RPC)?.ok).toBe(true);
   });
 
+  it("returns false (skipped, not fail-open) when the operator is quarantined", async () => {
+    // A self-quarantined operator (CheckpointStateRootMismatch) rejects every
+    // RPC with a -32047 "chain quarantined" error. It must NOT be pin-skipped
+    // to ok:true — that would let probeFirstAliveOperator select it, then the
+    // liveness eth_blockNumber it also rejects shows a false OFFLINE while the
+    // healthy operators sit unused.
+    installFetch(async () => ({
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32047,
+        message:
+          "upstream unavailable: chain quarantined: chain_id=69420 reason=CheckpointStateRootMismatch",
+      },
+    }));
+    expect(await verifyOperatorGenesis(RPC)).toBe(false);
+    // Non-definitive (observed:null) so it self-heals on the short TTL once the
+    // operator clears the quarantine.
+    expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
+    expect(snapshotGenesisCache().get(RPC)?.ok).toBe(false);
+  });
+
   it("returns false on a malformed fallback response (result exists but no hash field)", async () => {
     installFetch(async ({ method }) =>
       method === "lyth_chainStats"

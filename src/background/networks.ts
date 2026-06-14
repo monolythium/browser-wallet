@@ -635,6 +635,22 @@ export function classifyNoOperatorReason(
 
 /** One-shot fetch + compare. Always returns a cache entry — never
  *  throws — so the cache write path is non-throwing too. */
+/** True when a JSON-RPC body is an operator self-quarantine error
+ *  (CheckpointStateRootMismatch / "chain quarantined"). A quarantined node
+ *  knowingly serves stale/forked state and rejects RPC, so it must NOT be
+ *  fail-open-trusted (pin-skipped) or selected as the active operator — it
+ *  rejects the liveness eth_blockNumber the same way, which otherwise shows a
+ *  false OFFLINE while the healthy operators sit unused. Resolves to a
+ *  non-definitive verdict (short TTL) so the operator self-heals once it
+ *  clears the quarantine. */
+function isQuarantineError(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const err = (body as { error?: { message?: unknown } }).error;
+  if (typeof err !== "object" || err === null) return false;
+  const msg = (err as { message?: unknown }).message;
+  return typeof msg === "string" && /quarantin/i.test(msg);
+}
+
 async function probeOperatorGenesis(
   rpc: string,
   timeoutMs: number,
@@ -643,6 +659,9 @@ async function probeOperatorGenesis(
 
   const stats = await rpcCall(rpc, timeoutMs, "lyth_chainStats", []);
   if (stats.ok) {
+    if (isQuarantineError(stats.body)) {
+      return { ok: false, observed: null, checkedAt: now };
+    }
     const result = readObject(stats.body, "result");
     const observed = normaliseHash(result?.genesisHash);
     if (observed !== null) {
@@ -659,6 +678,9 @@ async function probeOperatorGenesis(
     false,
   ]);
   if (!block0.ok) {
+    return { ok: false, observed: null, checkedAt: now };
+  }
+  if (isQuarantineError(block0.body)) {
     return { ok: false, observed: null, checkedAt: now };
   }
   const body = block0.body as {
