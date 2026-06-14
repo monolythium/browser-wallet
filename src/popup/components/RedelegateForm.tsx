@@ -114,6 +114,9 @@ export function RedelegateForm({
   const amountIsZero = movePercent === null || moveBps === 0;
   const dstChosen = dstCluster !== null;
   const sameAsSrc = dstCluster?.clusterId === srcCluster.clusterId;
+  // Additive >100% feedback (see StakeForm) — read raw input, parser untouched.
+  const exceedsHundred =
+    /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
   const canContinue =
     !amountIsZero &&
     !exceedsSource &&
@@ -304,6 +307,11 @@ export function RedelegateForm({
             Would push the destination over the per-cluster cap (
             {(capBps / 100).toFixed(0)}%) by{" "}
             {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
+          </div>
+        )}
+        {exceedsHundred && (
+          <div style={inlineErr}>
+            Enter a percent between 0.01% and 100% of your balance.
           </div>
         )}
         {moveBps > 0 && balanceLythoshi !== null && (

@@ -101,6 +101,10 @@ export function StakeForm({
 
   const overCap = capBps !== null && totalAfterBps > capBps;
   const percentIsZero = percent === null || additionalBps === 0;
+  // Additive >100% feedback: parsePercent collapses >100 to null (= empty),
+  // so read the raw input to disambiguate WITHOUT touching the parser.
+  const exceedsHundred =
+    /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
 
   const canContinue =
     percent !== null &&
@@ -221,6 +225,11 @@ export function StakeForm({
             Delegation would exceed the per-cluster cap (
             {(capBps / 100).toFixed(0)}%) by{" "}
             {((totalAfterBps - capBps) / 100).toFixed(2)}%.
+          </div>
+        )}
+        {exceedsHundred && (
+          <div style={inlineErr}>
+            Enter a percent between 0.01% and 100% of your balance.
           </div>
         )}
         <div style={fromHint}>

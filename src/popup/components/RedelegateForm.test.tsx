@@ -44,3 +44,21 @@ describe("RedelegateForm — in-form amount preview", () => {
     expect(html).not.toContain("Moving");
   });
 });
+
+describe("RedelegateForm — >100% validation", () => {
+  it("warns when the percent exceeds 100", () => {
+    const html = renderToStaticMarkup(
+      <RedelegateForm {...baseProps} amountStr="150" />,
+    );
+    expect(html).toContain(
+      "Enter a percent between 0.01% and 100% of your balance.",
+    );
+  });
+
+  it("does not warn for a valid percent", () => {
+    const html = renderToStaticMarkup(
+      <RedelegateForm {...baseProps} amountStr="50" />,
+    );
+    expect(html).not.toContain("Enter a percent between 0.01% and 100%");
+  });
+});
