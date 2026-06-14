@@ -1637,11 +1637,11 @@ function SuccessView({
 }: SuccessViewProps) {
   const title =
     action === "claim"
-      ? "Rewards claim submitted"
+      ? "Claim submitted"
       : action === "undelegate"
-        ? "Unstake submitted (instant)"
+        ? "Unstake submitted"
         : action === "redelegate"
-          ? "Cluster swap submitted (instant)"
+          ? "Cluster swap submitted"
           : "Delegation submitted";
   const walletBech = bech32mDisplay(walletAddr0x);
   return (
@@ -1650,12 +1650,30 @@ function SuccessView({
         style={{
           padding: "40px 20px 12px",
           textAlign: "center",
-          color: "var(--ok)",
+          color: "var(--warn)",
         }}
       >
-        <Icon name="check" size={40} />
-        <div style={{ marginTop: 16, fontSize: 13.5, fontWeight: 600 }}>
+        <Icon name="clock" size={40} />
+        <div
+          style={{
+            marginTop: 16,
+            fontSize: 13.5,
+            fontWeight: 600,
+            color: "var(--fg-100)",
+          }}
+        >
           {title}
+        </div>
+        <div
+          style={{
+            marginTop: 6,
+            fontFamily: "var(--f-mono)",
+            fontSize: 11,
+            color: "var(--fg-400)",
+            lineHeight: 1.5,
+          }}
+        >
+          Waiting for on-chain confirmation — track it in Activity.
         </div>
       </div>
       <div className="ext-card" style={{ padding: 12 }}>
