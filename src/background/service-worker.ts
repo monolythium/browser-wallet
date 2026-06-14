@@ -1351,6 +1351,98 @@ async function testnetTransactionCountHex(address: string): Promise<string> {
   return rpcQuantityToHex(result, "lyth_getTransactionCount");
 }
 
+// ── Local pending-nonce tracker ──────────────────────────────────────────────
+// This chain has NO pending-nonce surface: `lyth_getTransactionCount` returns
+// the COMMITTED nonce and the runtime ignores any block tag, so a 2nd tx sent
+// before the 1st commits would reuse the same nonce → the operator mempool
+// rejects it ("replace underpriced"). The encrypted (sealed) mempool widens the
+// window because sealed txs commit later. We therefore remember the highest
+// nonce THIS wallet successfully submitted per (address, chainId) and advance
+// past it. Strictly LOCAL (we never trust an operator's pending count — there
+// is none), and TTL-healed so a dropped/never-committed tx cannot wedge the
+// nonce: past the TTL we fall back to the committed nonce.
+const PENDING_NONCE_KEY = "mono.nonce.pending"; // chrome.storage.session
+// Must exceed the encrypted-mempool reveal/commit latency (~12s) with margin so
+// a still-pending nonce isn't reused prematurely; short enough to self-heal a
+// dropped tx quickly.
+const PENDING_NONCE_TTL_MS = 5 * 60 * 1000;
+
+interface PendingNonceEntry {
+  /** Highest nonce successfully submitted for this (address, chainId). */
+  nonce: number;
+  /** Recorded-at (ms epoch); entries past PENDING_NONCE_TTL_MS are ignored. */
+  ts: number;
+}
+
+function pendingNonceKey(address: string, chainIdHex: string): string {
+  return `${address.toLowerCase()}:${chainIdHex.toLowerCase()}`;
+}
+
+async function readPendingNonceMap(): Promise<Record<string, PendingNonceEntry>> {
+  try {
+    const ses = await chrome.storage.session.get(PENDING_NONCE_KEY);
+    const m = ses[PENDING_NONCE_KEY];
+    return m !== null && typeof m === "object"
+      ? (m as Record<string, PendingNonceEntry>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Nonce hex to sign: max(committed-from-chain, local-pending + 1), TTL-healed.
+ *  Falls back to the committed nonce on any error or a stale/absent entry. */
+async function nextNonceHex(address: string, chainIdHex: string): Promise<string> {
+  const committedHex = await testnetTransactionCountHex(address);
+  let next: bigint;
+  try {
+    next = BigInt(committedHex);
+  } catch {
+    return committedHex;
+  }
+  try {
+    const entry = (await readPendingNonceMap())[
+      pendingNonceKey(address, chainIdHex)
+    ];
+    if (
+      entry !== undefined &&
+      typeof entry.nonce === "number" &&
+      typeof entry.ts === "number" &&
+      Date.now() - entry.ts < PENDING_NONCE_TTL_MS
+    ) {
+      const localNext = BigInt(entry.nonce) + 1n;
+      if (localNext > next) next = localNext;
+    }
+  } catch {
+    // fall through to the committed nonce
+  }
+  return "0x" + next.toString(16);
+}
+
+/** Record a successfully-submitted nonce so the next tx advances past it. Only
+ *  the SUCCESS path calls this (a rejected submit must NOT advance the nonce). */
+async function recordSubmittedNonce(
+  address: string,
+  chainIdHex: string,
+  nonceHex: string,
+): Promise<void> {
+  try {
+    const used = Number(BigInt(nonceHex));
+    if (!Number.isFinite(used) || used < 0) return;
+    const map = await readPendingNonceMap();
+    const key = pendingNonceKey(address, chainIdHex);
+    const prev = map[key];
+    const highest =
+      prev !== undefined && Date.now() - prev.ts < PENDING_NONCE_TTL_MS
+        ? Math.max(prev.nonce, used)
+        : used;
+    map[key] = { nonce: highest, ts: Date.now() };
+    await chrome.storage.session.set({ [PENDING_NONCE_KEY]: map });
+  } catch {
+    // best-effort — a write failure just means the next tx re-reads committed
+  }
+}
+
 interface ExecutionUnitPriceQuoteHex {
   executionUnitPriceHex: string;
   basePriceHex: string;
@@ -9216,7 +9308,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
       }
       try {
-        const nonceHex = await testnetTransactionCountHex(fromAddr);
+        // Local pending-nonce: max(committed, last-submitted+1) so a 2nd tx
+        // sent before the 1st commits gets the NEXT nonce instead of reusing
+        // it (the chain has no pending-nonce read). See nextNonceHex.
+        const nonceHex = await nextNonceHex(fromAddr, p.chainIdHex);
         const fee = await suggestFee(p.chainIdHex);
         // T4-04 (Item D, b1): if the popup bound the exact fee it displayed,
         // sign THAT instead of a second operator read (closes the display-vs-
@@ -9266,6 +9361,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           chainIdHex: p.chainIdHex,
         };
         const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
+        // Advance the local pending-nonce now that the submit was accepted, so
+        // a 2nd tx sent before this one commits doesn't reuse this nonce.
+        // Awaited (small session write) so the next send sees it immediately.
+        // Only the success path reaches here — a reject throws to the catch.
+        await recordSubmittedNonce(fromAddr, p.chainIdHex, nonceHex);
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are

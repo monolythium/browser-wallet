@@ -2685,6 +2685,11 @@ describe("wallet-send-tx pending-row prepend", () => {
     // / signature / envelope / fee / nonce do not depend on opKind.
     submitMlDsaCalls.length = 0;
     storageLocal = {};
+    // Clear the local pending-nonce tracker too, so the 2nd identical send
+    // reads the same committed nonce. Without this the tracker advances it to
+    // nonce+1 (see nextNonceHex/recordSubmittedNonce); the invariant under
+    // test (opKind never reaches the signer) is independent of the nonce.
+    delete storageSession["mono.nonce.pending"];
     await dispatchSend({
       to: "0xrecipient",
       valueWeiHex: "0x989680",
