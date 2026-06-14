@@ -123,35 +123,76 @@ export function RewardCard({
         )}
       </div>
 
-      {/* Total */}
+      {/* Total + Claim — same row, button to the right of the amount */}
       <div
         style={{
           marginTop: 8,
           display: "flex",
-          alignItems: "baseline",
+          alignItems: "center",
+          justifyContent: "space-between",
           gap: 8,
         }}
       >
-        <span
+        <div
           style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 20,
-            fontWeight: 600,
-            color: totalIsZero ? "var(--fg-400)" : "var(--gold)",
+            display: "flex",
+            alignItems: "baseline",
+            gap: 6,
+            minWidth: 0,
           }}
         >
-          {formatLythoshiAsLyth(totalLythoshi, NATIVE_LYTH_DECIMALS)}
-        </span>
-        <span
+          <span
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 20,
+              fontWeight: 600,
+              color: totalIsZero ? "var(--fg-400)" : "var(--gold)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {formatLythoshiAsLyth(totalLythoshi, 4)}
+          </span>
+          <span
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10.5,
+              color: "var(--fg-400)",
+              letterSpacing: "0.06em",
+            }}
+          >
+            LYTH
+          </span>
+        </div>
+        <button
+          onClick={onClaim}
+          disabled={claimDisabled || totalIsZero}
+          className={totalIsZero ? undefined : "ext-act prim"}
           style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10.5,
-            color: "var(--fg-400)",
-            letterSpacing: "0.06em",
+            flexShrink: 0,
+            padding: "7px 12px",
+            ...(totalIsZero
+              ? {
+                  borderRadius: 8,
+                  border: "1px solid var(--fg-700)",
+                  background: "rgba(255,255,255,0.04)",
+                  color: "var(--fg-400)",
+                  fontFamily: "var(--f-sans)",
+                  fontSize: 11,
+                  cursor: "default",
+                }
+              : {
+                  flexDirection: "row" as const,
+                  gap: 6,
+                  fontSize: 11.5,
+                  opacity: claimDisabled ? 0.5 : 1,
+                  cursor: claimDisabled ? "default" : "pointer",
+                }),
           }}
         >
-          LYTH
-        </span>
+          {!totalIsZero && <Icon name="check" size={11} />}
+          {totalIsZero ? "No rewards yet" : "Claim all"}
+        </button>
       </div>
 
       {/* Per-cluster breakdown — gated behind TRADING_INTERFACE
@@ -208,7 +249,7 @@ export function RewardCard({
                     color: "var(--fg-200)",
                   }}
                 >
-                  {formatLythoshiAsLyth(rowLythoshi, NATIVE_LYTH_DECIMALS)} LYTH
+                  {formatLythoshiAsLyth(rowLythoshi, 4)} LYTH
                   {row.effectiveAprBps !== null && (
                     <span style={{ color: "var(--fg-500)", marginLeft: 6 }}>
                       · APR {(row.effectiveAprBps / 100).toFixed(2)}%
@@ -220,37 +261,6 @@ export function RewardCard({
           })}
         </div>
       )}
-
-      {/* Claim button */}
-      <button
-        onClick={onClaim}
-        disabled={claimDisabled || totalIsZero}
-        className={totalIsZero ? undefined : "ext-act prim"}
-        style={{
-          marginTop: 10,
-          width: "100%",
-          padding: 10,
-          ...(totalIsZero
-            ? {
-                borderRadius: 8,
-                border: "1px solid var(--fg-700)",
-                background: "rgba(255,255,255,0.04)",
-                color: "var(--fg-400)",
-                fontFamily: "var(--f-sans)",
-                fontSize: 11.5,
-                cursor: "default",
-              }
-            : {
-                flexDirection: "row" as const,
-                gap: 8,
-                opacity: claimDisabled ? 0.5 : 1,
-                cursor: claimDisabled ? "default" : "pointer",
-              }),
-        }}
-      >
-        {!totalIsZero && <Icon name="check" size={12} />}
-        {totalIsZero ? "No rewards yet" : "Claim all"}
-      </button>
 
       {isMock && (
         <div

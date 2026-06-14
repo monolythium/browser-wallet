@@ -78,7 +78,7 @@ describe("RewardCard — pending-rewards states", () => {
     const html = renderToStaticMarkup(
       <RewardCard
         {...baseProps}
-        rewards={rewardsView({ totalAmountWei: "0x5f5e100" })} // 1 LYTH
+        rewards={rewardsView({ totalAmountWei: "0xde0b6b3a7640000" })} // 1 LYTH (1e18 lythoshi)
         error={null}
       />,
     );
