@@ -347,10 +347,16 @@ export function RedelegateForm({
           </div>
         )}
         {moveBps > 0 && balanceLythoshi !== null && (
-          <div style={{ ...fromHint, color: "var(--fg-200)" }}>
-            Moving {lythoshiToLyth(moveLythoshi)} LYTH of{" "}
-            {lythoshiToLyth(stakedInSrcLythoshi)} LYTH staked in{" "}
-            {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
+          <div style={{ ...fromHint, color: "var(--fg-300)" }}>
+            Moving{" "}
+            <strong style={amountStrong}>
+              {lythoshiToLyth(moveLythoshi)} LYTH
+            </strong>{" "}
+            of{" "}
+            <strong style={amountStrongMuted}>
+              {lythoshiToLyth(stakedInSrcLythoshi)} LYTH
+            </strong>{" "}
+            staked in {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
           </div>
         )}
         <div style={fromHint}>
@@ -451,6 +457,20 @@ const fromHint: CSSProperties = {
   color: "var(--fg-500)",
   marginTop: 8,
   lineHeight: 1.5,
+};
+
+// Emphasized LYTH amounts inside the move preview — bigger + the wallet's
+// mono numeric font so the figures stand out from the prose.
+const amountStrong: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 13,
+  color: "var(--gold)",
+};
+
+const amountStrongMuted: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 11,
+  color: "var(--fg-200)",
 };
 
 const pickDstBtnStyle: CSSProperties = {

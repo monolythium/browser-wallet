@@ -37,7 +37,10 @@ describe("RedelegateForm — in-form amount preview", () => {
       <RedelegateForm {...baseProps} amountStr="5" />,
     );
     // 5% of 100 LYTH = 5 LYTH moved; 10% source weight of 100 LYTH = 10 LYTH staked.
-    expect(html).toContain("Moving 5 LYTH of 10 LYTH staked in alpha");
+    // Amounts are wrapped in emphasized <strong> spans.
+    expect(html).toContain(">5 LYTH</strong>");
+    expect(html).toContain(">10 LYTH</strong>");
+    expect(html).toContain("staked in alpha");
   });
 
   it("omits the preview when the amount is empty/zero", () => {

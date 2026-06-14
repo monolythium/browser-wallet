@@ -249,16 +249,27 @@ export function StakeForm({
             <>
               {/* Live effective weight = balance × weightBps. */}
               effective weight{" "}
-              <strong style={{ color: "var(--gold)" }}>
+              <strong style={amountStrong}>
                 {effectiveWeightLythoshi === null
                   ? "—"
                   : `${lythoshiToLyth(effectiveWeightLythoshi)} LYTH`}
               </strong>{" "}
-              ({(additionalBps / 100).toFixed(2)}% of {lythoshiToLyth(balanceLythoshi)} LYTH)
+              ({(additionalBps / 100).toFixed(2)}% of{" "}
+              <strong style={amountStrongMuted}>
+                {lythoshiToLyth(balanceLythoshi)} LYTH
+              </strong>
+              )
               {existingWeightBps > 0 && (
                 <>
                   {" "}
-                  · existing {(existingWeightBps / 100).toFixed(2)}% in this cluster
+                  · existing {(existingWeightBps / 100).toFixed(2)}%{" "}
+                  <strong style={amountStrongMuted}>
+                    ({lythoshiToLyth(
+                      effectiveWeightWei(existingWeightBps, balanceLythoshi),
+                    )}{" "}
+                    LYTH)
+                  </strong>{" "}
+                  in this cluster
                 </>
               )}
               {capBps !== null && (
@@ -373,6 +384,20 @@ const fromHint: CSSProperties = {
   color: "var(--fg-500)",
   marginTop: 8,
   lineHeight: 1.5,
+};
+
+// Emphasized LYTH amounts inside the effective-weight hint — bigger + the
+// wallet's mono numeric font so the figures stand out from the prose.
+const amountStrong: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 13,
+  color: "var(--gold)",
+};
+
+const amountStrongMuted: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 11,
+  color: "var(--fg-200)",
 };
 
 const liquidNote: CSSProperties = {
