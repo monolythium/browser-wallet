@@ -396,13 +396,14 @@ const fromHint: CSSProperties = {
 const pickDstBtnStyle: CSSProperties = {
   padding: "12px 10px",
   borderRadius: 8,
-  border: "1px dashed var(--fg-700)",
-  background: "transparent",
-  color: "var(--fg-300)",
-  fontFamily: "var(--f-mono)",
-  fontSize: 11,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontWeight: 600,
+  fontSize: 12,
   cursor: "pointer",
-  textAlign: "left",
+  textAlign: "center",
   width: "100%",
 };
 
