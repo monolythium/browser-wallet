@@ -21,7 +21,13 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon } from "../Icon";
 import { useFeature } from "../hooks/useFeature";
-import { bgOperatorsHealth, type OperatorHealthRow } from "../bg";
+import {
+  bgOperatorsHealth,
+  bgOperatorsGet,
+  bgOperatorsSet,
+  bgProbeOperator,
+  type OperatorHealthRow,
+} from "../bg";
 import {
   classifyOperatorRisk,
   OPERATOR_RISK_LEGEND,
@@ -57,6 +63,15 @@ export function OperatorDirectory({
   // "couldn't reach the wallet service" from a genuine "no operators".
   const [probeError, setProbeError] = useState(false);
 
+  // The operator a prior "Use this operator" pinned to the FRONT of the
+  // override (null = automatic across all operators). Drives the "In use" mark.
+  const [activeRpc, setActiveRpc] = useState<string | null>(null);
+  // The rpc currently being switched to (button spinner) + any switch error.
+  const [usingRpc, setUsingRpc] = useState<string | null>(null);
+  const [useError, setUseError] = useState<string | null>(null);
+  // Bumped after a switch / reset to re-probe health + re-read the override.
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
     let cancelled = false;
     // Bounded probe: a non-resolving bgOperatorsHealth() (a wedged SW) must not
@@ -68,11 +83,15 @@ export function OperatorDirectory({
     }, OPERATOR_PROBE_TIMEOUT_MS);
     void (async () => {
       try {
-        const r = await bgOperatorsHealth();
+        const [health, ov] = await Promise.all([
+          bgOperatorsHealth(),
+          bgOperatorsGet().catch(() => null),
+        ]);
         if (cancelled) return;
         clearTimeout(timer);
         setProbeError(false);
-        setOperators(r.ok ? r.operators : []);
+        setOperators(health.ok ? health.operators : []);
+        setActiveRpc(ov && ov.ok ? (ov.override?.[0]?.rpc ?? null) : null);
       } catch {
         if (cancelled) return;
         clearTimeout(timer);
@@ -84,11 +103,63 @@ export function OperatorDirectory({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, []);
+  }, [reloadKey]);
+
+  // "Use this operator": probe the choice first; only a reachable + genesis-
+  // trusted operator is moved to the FRONT of the override (the rest stay as
+  // fallback, so a later quarantine can't strand the wallet). Mirrors the
+  // Operators editor's handler — same bgProbeOperator + bgOperatorsSet path.
+  const handleUse = async (op: OperatorHealthRow) => {
+    if (usingRpc || operators === null) return;
+    setUsingRpc(op.rpc);
+    setUseError(null);
+    try {
+      const probe = await bgProbeOperator(op.rpc);
+      if (!probe.ok || !probe.usable) {
+        setUseError(
+          `Couldn't switch to ${op.name} — it's unreachable or on a different chain. Left your operator unchanged.`,
+        );
+        return;
+      }
+      const reordered = [op, ...operators.filter((o) => o.rpc !== op.rpc)];
+      const wire = reordered.map((o) => ({
+        name: o.name,
+        region: o.region,
+        rpc: o.rpc,
+      }));
+      const r = await bgOperatorsSet(wire);
+      if (!r.ok) {
+        setUseError(r.reason ?? "Couldn't save the operator choice.");
+        return;
+      }
+      setReloadKey((k) => k + 1);
+    } finally {
+      setUsingRpc(null);
+    }
+  };
+
+  // Revert to automatic round-robin across all published operators.
+  const handleAuto = async () => {
+    if (usingRpc) return;
+    setUseError(null);
+    await bgOperatorsSet(null);
+    setReloadKey((k) => k + 1);
+  };
 
   const total = operators?.length ?? 0;
   const live = operators?.filter((o) => o.ok).length ?? 0;
   const trusted = operators?.filter((o) => o.trustedGenesis).length ?? 0;
+
+  // Best-first ordering for the picker: healthy + genesis-trusted operators
+  // by latency (fastest first), then everything degraded (untrusted / offline /
+  // quarantined) after them. Pure display — RPC dispatch order is unchanged.
+  const sortedOperators = useMemo(() => {
+    if (operators === null) return null;
+    const rank = (o: OperatorHealthRow) => (o.ok && o.trustedGenesis ? 0 : 1);
+    const lat = (o: OperatorHealthRow) =>
+      o.ok ? o.latencyMs : Number.POSITIVE_INFINITY;
+    return [...operators].sort((a, b) => rank(a) - rank(b) || lat(a) - lat(b));
+  }, [operators]);
 
   // Group operators by the risk kinds they currently exhibit (drives the
   // per-legend-entry "N affected" badge + expandable list).
@@ -152,8 +223,54 @@ export function OperatorDirectory({
             <Muted>No operators configured.</Muted>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {operators.map((op) => (
-                <OperatorAccordionRow key={op.rpc} op={op} />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  fontSize: 10.5,
+                  color: "var(--fg-400)",
+                  padding: "0 2px 2px",
+                }}
+              >
+                <span>
+                  {activeRpc === null
+                    ? "Automatic — fastest verified operator"
+                    : "Pinned to your chosen operator"}
+                </span>
+                {activeRpc !== null && (
+                  <button
+                    type="button"
+                    onClick={handleAuto}
+                    disabled={usingRpc !== null}
+                    style={pickerResetBtn}
+                  >
+                    Use automatic
+                  </button>
+                )}
+              </div>
+              {useError && (
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    color: "var(--err)",
+                    lineHeight: 1.4,
+                    padding: "0 2px",
+                  }}
+                >
+                  {useError}
+                </div>
+              )}
+              {sortedOperators!.map((op) => (
+                <OperatorAccordionRow
+                  key={op.rpc}
+                  op={op}
+                  isActive={op.rpc === activeRpc}
+                  using={usingRpc === op.rpc}
+                  busy={usingRpc !== null}
+                  onUse={() => handleUse(op)}
+                />
               ))}
             </div>
           )}
@@ -324,14 +441,63 @@ export function Section({
   );
 }
 
+const pickerUseBtn: CSSProperties = {
+  padding: "5px 10px",
+  borderRadius: 7,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 10.5,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const pickerResetBtn: CSSProperties = {
+  padding: "3px 8px",
+  borderRadius: 6,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.04)",
+  color: "var(--fg-200)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 10,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
 /** A single operator row: summary line by default, expands to the operator's
  *  reported capability surfaces + genesis/probe detail. */
-function OperatorAccordionRow({ op }: { op: OperatorHealthRow }) {
+function OperatorAccordionRow({
+  op,
+  isActive,
+  using,
+  busy,
+  onUse,
+}: {
+  op: OperatorHealthRow;
+  isActive: boolean;
+  using: boolean;
+  busy: boolean;
+  onUse: () => void;
+}) {
   const devMode = useFeature("DEVELOPER_MODE");
   const [open, setOpen] = useState(false);
   const badges = classifyOperatorRisk(toRiskInput(op));
   const danger = !op.trustedGenesis || !op.ok;
   const host = op.rpc.replace(/^https?:\/\//, "");
+  // Plain-language status shown to every user (the host/latency line below is
+  // developer-only). Quarantined = the operator self-reported a checkpoint
+  // state-root mismatch and refuses RPC, so it must not be chosen.
+  const quarantined = !op.ok && /quarantin/i.test(op.reason);
+  const status = op.ok
+    ? op.trustedGenesis
+      ? { label: `Live · ${op.latencyMs} ms`, color: "var(--ok)" }
+      : { label: "Untrusted", color: "var(--err)" }
+    : quarantined
+      ? { label: "Quarantined", color: "#d9a441" }
+      : { label: "Offline", color: "var(--err)" };
+  const canUse = op.ok && op.trustedGenesis && !isActive;
   return (
     <div
       style={{
@@ -419,6 +585,52 @@ function OperatorAccordionRow({ op }: { op: OperatorHealthRow }) {
           <Icon name={open ? "chev-d" : "chev"} size={12} />
         </span>
       </button>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginTop: 8,
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            fontWeight: 600,
+            color: status.color,
+            letterSpacing: "0.02em",
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: status.color,
+            }}
+          />
+          {status.label}
+        </span>
+        {isActive ? (
+          <span style={{ fontSize: 10, fontWeight: 600, color: "var(--ok)" }}>
+            ✓ In use
+          </span>
+        ) : canUse ? (
+          <button
+            type="button"
+            onClick={onUse}
+            disabled={busy}
+            style={{ ...pickerUseBtn, opacity: busy ? 0.5 : 1 }}
+          >
+            {using ? "Switching…" : "Use this operator"}
+          </button>
+        ) : null}
+      </div>
       {open && <OperatorDetail op={op} />}
     </div>
   );
