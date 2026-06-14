@@ -659,6 +659,13 @@ export function Stake({
                 delegations={delegations}
                 clusters={clusters}
                 balanceLythoshi={balanceLythoshi}
+                onStake={(clusterId) => {
+                  setAction("delegate");
+                  setSelectedClusterId(clusterId);
+                  setRedelegateDstClusterId(null);
+                  setAmountStr("");
+                  setStep("form");
+                }}
                 onUnstake={(clusterId) => {
                   setAction("undelegate");
                   setSelectedClusterId(clusterId);
@@ -1674,6 +1681,7 @@ interface ExistingDelegationsProps {
   delegations: DelegationsView;
   clusters: ReadonlyArray<ClusterDirectoryEntry>;
   balanceLythoshi: bigint | null;
+  onStake: (clusterId: number) => void;
   onUnstake: (clusterId: number) => void;
   onRedelegate: (clusterId: number) => void;
 }
@@ -1682,6 +1690,7 @@ function ExistingDelegations({
   delegations,
   clusters,
   balanceLythoshi,
+  onStake,
   onUnstake,
   onRedelegate,
 }: ExistingDelegationsProps) {
@@ -1710,14 +1719,16 @@ function ExistingDelegations({
         <span
           style={{
             fontSize: 10,
-            color: "var(--fg-300)",
+            color: "var(--fg-400)",
             letterSpacing: "0.06em",
             textTransform: "none",
           }}
         >
           {delegations.rows.length} cluster
           {delegations.rows.length === 1 ? "" : "s"} ·{" "}
-          {(delegations.totalBps / 100).toFixed(2)}% total
+          <strong style={{ color: "var(--gold)" }}>
+            {(delegations.totalBps / 100).toFixed(2)}% total
+          </strong>
         </span>
       </div>
       <div
@@ -1746,58 +1757,71 @@ function ExistingDelegations({
               <div
                 style={{
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
+                  alignItems: "baseline",
                   gap: 8,
-                  marginBottom: 6,
+                  marginBottom: 8,
                 }}
               >
-                <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: "var(--fg-100)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {c?.name ?? `cluster-${row.cluster}`}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "var(--f-mono)",
-                      fontSize: 11,
-                      color: "var(--fg-200)",
-                      marginTop: 2,
-                    }}
-                  >
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--fg-100)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                  }}
+                >
+                  {c?.name ?? `cluster-${row.cluster}`}
+                </span>
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    flexShrink: 0,
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 12,
+                    color: "var(--fg-100)",
+                  }}
+                >
+                  <strong style={{ color: "var(--gold)" }}>
                     {(row.weightBps / 100).toFixed(2)}%
-                    {amountLythoshi !== null && (
-                      <> · {formatLythoshi(amountLythoshi)} LYTH</>
-                    )}
-                  </div>
-                </div>
+                  </strong>
+                  {amountLythoshi !== null && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      <strong style={{ color: "var(--fg-100)" }}>
+                        {formatLythoshi(amountLythoshi)} LYTH
+                      </strong>
+                    </>
+                  )}
+                </span>
               </div>
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns: "1fr 1fr 1fr",
                   gap: 6,
                 }}
               >
                 <button
-                  onClick={() => onUnstake(row.cluster)}
-                  style={delegationActionBtnStyle}
+                  onClick={() => onStake(row.cluster)}
+                  style={stakeMoreBtnStyle}
                 >
-                  Unstake
+                  Stake
                 </button>
                 <button
                   onClick={() => onRedelegate(row.cluster)}
-                  style={delegationActionBtnStyle}
+                  style={redelegateBtnStyle}
                 >
                   Redelegate
+                </button>
+                <button
+                  onClick={() => onUnstake(row.cluster)}
+                  style={unstakeBtnStyle}
+                >
+                  Unstake
                 </button>
               </div>
             </div>
@@ -1808,17 +1832,37 @@ function ExistingDelegations({
   );
 }
 
-const delegationActionBtnStyle: CSSProperties = {
+// Per-row delegation actions, semantically coloured (all theme tokens that
+// re-theme): Stake = green (add), Redelegate = gold/accent (move), Unstake =
+// red (remove).
+const delegationActionBtnBase: CSSProperties = {
   padding: "6px 8px",
   borderRadius: 6,
-  border: "1px solid var(--fg-700)",
-  background: "rgba(255,255,255,0.04)",
-  color: "var(--fg-100)",
+  background: "rgba(255,255,255,0.03)",
   fontFamily: "var(--f-mono)",
   fontSize: 10,
   cursor: "pointer",
   letterSpacing: "0.06em",
   textTransform: "uppercase",
+};
+
+const stakeMoreBtnStyle: CSSProperties = {
+  ...delegationActionBtnBase,
+  border: "1px solid var(--ok)",
+  color: "var(--ok)",
+};
+
+const redelegateBtnStyle: CSSProperties = {
+  ...delegationActionBtnBase,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg)",
+  color: "var(--gold)",
+};
+
+const unstakeBtnStyle: CSSProperties = {
+  ...delegationActionBtnBase,
+  border: "1px solid var(--err)",
+  color: "var(--err)",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
