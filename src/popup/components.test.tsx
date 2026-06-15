@@ -13,6 +13,7 @@ import {
   AssetList,
   chainHealthForFailedPoll,
   chainHealthPresentation,
+  chainKindNotLive,
   reconnectingBannerLabel,
   seedReconnectingHealth,
   shouldLabelBalanceStale,
@@ -681,6 +682,63 @@ describe("indexed token balance display", () => {
         holders: [],
       }),
     ).toBe("Vault share holders");
+  });
+});
+
+describe("chainKindNotLive (#3 hide balance/activity on non-live chain)", () => {
+  it("is true for settled non-live kinds", () => {
+    expect(chainKindNotLive("offline")).toBe(true);
+    expect(chainKindNotLive("quarantined")).toBe(true);
+    expect(chainKindNotLive("untrusted")).toBe(true);
+    expect(chainKindNotLive("regenesis")).toBe(true);
+    expect(chainKindNotLive("stalled")).toBe(true);
+  });
+  it("is false for live, the transient connecting states, and unknown", () => {
+    // Excludes loading/reconnecting so a healthy open doesn't flash '—' before
+    // the first poll lands; null/undefined (no banner verdict yet) is not-hidden.
+    expect(chainKindNotLive("live")).toBe(false);
+    expect(chainKindNotLive("loading")).toBe(false);
+    expect(chainKindNotLive("reconnecting")).toBe(false);
+    expect(chainKindNotLive(null)).toBe(false);
+    expect(chainKindNotLive(undefined)).toBe(false);
+  });
+});
+
+describe("AssetList hideBalance (#3 — hide the LYTH amount when non-live)", () => {
+  const account = {
+    id: "a",
+    label: "a",
+    denom: "public",
+    addr: "0x1111111111111111111111111111111111111111",
+    algo: "slhdsa",
+    balance: 12.5,
+    custody: "sw",
+  } satisfies Account;
+  const network = {
+    chainId: "0x1",
+    name: "Monolythium Testnet",
+    rpc: "http://localhost:8545",
+    chainIdNum: 1,
+    builtin: true,
+    active: true,
+  } satisfies ChainEntry;
+
+  it("shows the LYTH amount when live (hideBalance omitted)", () => {
+    const html = renderToStaticMarkup(
+      <AssetList account={account} network={network} indexer={null} />,
+    );
+    // Locale-robust: the amount cell carries the formatted number (comma OR dot
+    // decimal), NOT the em-dash placeholder.
+    expect(html).toMatch(/<div class="amt">12[.,]50<\/div>/);
+    expect(html).not.toContain('<div class="amt">—</div>');
+  });
+
+  it("hides the LYTH amount ('—') when the chain is non-live", () => {
+    const html = renderToStaticMarkup(
+      <AssetList account={account} network={network} indexer={null} hideBalance />,
+    );
+    expect(html).toMatch(/<div class="amt">—<\/div>/);
+    expect(html).not.toMatch(/<div class="amt">12[.,]50<\/div>/);
   });
 });
 

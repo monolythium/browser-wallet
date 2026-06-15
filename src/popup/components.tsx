@@ -129,6 +129,29 @@ type ChainHealth =
   | { kind: "quarantined" }
   | { kind: "offline"; reason: string };
 
+/** The discriminant of {@link ChainHealth}, lifted out so App can hold the
+ *  banner's health kind in state (via `onHealthChange`) and pass a derived
+ *  "chain not live" boolean down to Home. */
+export type ChainHealthKind = ChainHealth["kind"];
+
+/** Whether a banner health kind represents a SETTLED non-live chain — i.e. the
+ *  balance + activity should be hidden because the wallet can't currently stand
+ *  behind on-chain data. True for offline / quarantined / untrusted / regenesis
+ *  / stalled. The transient connecting states (loading, reconnecting) and a
+ *  null/unknown kind return FALSE so a healthy open doesn't flash "—" before the
+ *  first poll lands; the balance-fetch `balanceCause` path covers any degraded
+ *  case during that brief window. Pure + exported for tests. */
+export function chainKindNotLive(
+  kind: ChainHealthKind | null | undefined,
+): boolean {
+  return (
+    kind != null &&
+    kind !== "live" &&
+    kind !== "loading" &&
+    kind !== "reconnecting"
+  );
+}
+
 const HEALTH_TICK_MS = 8_000;
 const STALL_THRESHOLD_MS = 30_000;
 const OPERATOR_TICK_MS = 10_000;
@@ -386,6 +409,10 @@ interface ChainStatusBannerProps {
    *  why the pinned genesis may be stale. Optional; omitted on the secondary
    *  approval/unlock banners, where the label renders non-tappable. */
   onOpenOperators?: () => void;
+  /** Fired whenever the banner's health KIND changes. The main popup lifts this
+   *  to App so Home can hide the balance + activity for all non-live states
+   *  (see `chainKindNotLive`). Optional — secondary banners omit it. */
+  onHealthChange?: (kind: ChainHealthKind) => void;
 }
 
 // Last chain-health snapshot, cached at MODULE scope so it survives a banner
@@ -408,6 +435,7 @@ export function ChainStatusBanner({
   unreadCount,
   onMenu,
   onOpenOperators,
+  onHealthChange,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>(
     () => lastKnownHealth ?? { kind: "loading" },
@@ -415,10 +443,13 @@ export function ChainStatusBanner({
   const [operator, setOperator] = useState<string | null>(null);
 
   // Persist every health change to the module-scoped snapshot so the next
-  // in-session remount seeds from it (above) rather than re-showing CONNECTING.
+  // in-session remount seeds from it (above) rather than re-showing CONNECTING,
+  // and lift the kind to the parent (App → Home) so non-live states can hide the
+  // balance + activity. onHealthChange is expected to be a stable callback.
   useEffect(() => {
     lastKnownHealth = health;
-  }, [health]);
+    onHealthChange?.(health.kind);
+  }, [health, onHealthChange]);
 
   // Chain-health poll. Tracks `lastBlockHex` and `lastBlockObservedAt` so
   // we can distinguish "RPC reachable but chain stalled" from "RPC down".
@@ -914,13 +945,38 @@ export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplet
 // bridged / wrapped entries — those were demo-mock pairs and the
 // wallet doesn't have authoritative data for them.
 
+/** A muted, theme-driven placeholder for a Home section (Assets/Activity) whose
+ *  on-chain content is suppressed while the chain is non-live. */
+function DegradedSectionNote({ text }: { text: string }) {
+  return (
+    <div
+      style={{
+        fontFamily: "var(--f-mono)",
+        fontSize: 10.5,
+        lineHeight: 1.6,
+        color: "var(--fg-500)",
+        letterSpacing: "0.02em",
+        padding: "16px 4px",
+        textAlign: "center",
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
 interface AssetListProps {
   account: Account;
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
+  /** When true the chain is non-live (offline / quarantined / untrusted /
+   *  regenesis / stalled): hide the LYTH balance amount ("—") so the Assets row
+   *  matches the hidden hero value instead of showing a figure the wallet can't
+   *  currently confirm. */
+  hideBalance?: boolean;
 }
 
-export function AssetList({ account, network, indexer }: AssetListProps) {
+export function AssetList({ account, network, indexer, hideBalance }: AssetListProps) {
   const lythAmount = account.balance;
   const liveRows = indexer?.tokenBalances ?? [];
   return (
@@ -963,7 +1019,9 @@ export function AssetList({ account, network, indexer }: AssetListProps) {
         </div>
         <div className="ext-asset__spark" />
         <div className="ext-asset__right">
-          <div className="amt">{lythAmount != null ? fmt(lythAmount, 2) : "0.00"}</div>
+          <div className="amt">
+            {hideBalance ? "—" : lythAmount != null ? fmt(lythAmount, 2) : "0.00"}
+          </div>
           <div className="chg">—</div>
         </div>
       </div>
@@ -1947,6 +2005,13 @@ interface HomeProps {
   /** C5: typed reason the last balance refresh failed, so Home can pause
    *  honestly on a re-genesis / wrong-chain operator instead of a bare 0.00. */
   balanceCause?: "unreachable" | "untrusted" | "regenesis" | "quarantined" | null;
+  /** Lifted from the chain-status banner (App → Home): true when the chain is in
+   *  a SETTLED non-live state (offline / quarantined / untrusted / regenesis /
+   *  stalled). Hides the balance value EVERYWHERE (hero + Assets row) and the
+   *  Activity list, so the wallet never shows on-chain data it can't currently
+   *  stand behind. Distinct from `balanceCause` (which only fires when the
+   *  balance FETCH fails); the two are OR'd. */
+  chainNotLive?: boolean;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -1974,7 +2039,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, balanceStale, balanceCause, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2006,14 +2071,22 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
   const pausedMonoscanUrl = balanceDegraded
     ? pausedBalanceMonoscanUrl(account.addr)
     : null;
-  // Hide the value entirely whenever the balance is degraded — even when a
-  // last-known number is retained. The wallet isn't connected, so showing a
-  // stale figure would imply a confirmed balance it can't stand behind; the
-  // rich block below explains why and links to Monoscan. Honest absence, never
-  // a misleading 0.00. (`balancePaused` ⊆ `balanceDegraded`; kept for the
+  // Hide the balance VALUE everywhere (hero + Assets row) when EITHER the last
+  // balance refresh failed (`balanceDegraded`, which carries the cause-specific
+  // rich block) OR the chain-status banner reports a settled non-live state
+  // (`chainNotLive` — offline / quarantined / untrusted / regenesis / stalled).
+  // The latter closes the window where the chain is down but the balance fetch
+  // hasn't failed yet (cached value). Never applies to the private balance,
+  // which is always hidden by design.
+  const hideBalanceValue = balanceDegraded || (!isPriv && chainNotLive === true);
+  // Hide the value entirely whenever degraded/non-live — even when a last-known
+  // number is retained. The wallet isn't connected, so showing a stale figure
+  // would imply a confirmed balance it can't stand behind; the rich block below
+  // explains why (when there's a cause) and links to Monoscan. Honest absence,
+  // never a misleading 0.00. (`balancePaused` ⊆ `balanceDegraded`; kept for the
   // value-unknown sub-case the exported helper documents/tests.)
   const totalStr =
-    balanceDegraded || balancePaused
+    hideBalanceValue || balancePaused
       ? "—"
       : account.balance != null
         ? fmt(account.balance, 2)
@@ -2061,7 +2134,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
             <div
               className="num"
               style={
-                showStaleBalance || balanceDegraded
+                showStaleBalance || hideBalanceValue
                   ? { opacity: 0.55 }
                   : undefined
               }
@@ -2228,7 +2301,12 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               id="ext-tabpanel-assets"
               aria-labelledby="ext-tab-assets"
             >
-              <AssetList account={account} network={network} indexer={indexer} />
+              <AssetList
+                account={account}
+                network={network}
+                indexer={indexer}
+                hideBalance={hideBalanceValue}
+              />
             </div>
           )}
           {tab === "activity" && (
@@ -2237,10 +2315,18 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               id="ext-tabpanel-activity"
               aria-labelledby="ext-tab-activity"
             >
-              <ActivityList
-                addr={account.addr.startsWith("0x") ? account.addr : null}
-                chainIdHex={network.chainId}
-              />
+              {hideBalanceValue ? (
+                // Hide the activity stream too while the chain is non-live —
+                // showing a (possibly stale) history alongside a hidden balance
+                // would be inconsistent and could imply confirmed on-chain
+                // state the wallet can't currently stand behind.
+                <DegradedSectionNote text="Activity is hidden while the wallet can't reach the chain. It reappears automatically once an operator is back." />
+              ) : (
+                <ActivityList
+                  addr={account.addr.startsWith("0x") ? account.addr : null}
+                  chainIdHex={network.chainId}
+                />
+              )}
             </div>
           )}
         </div>
