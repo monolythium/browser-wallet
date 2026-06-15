@@ -137,15 +137,20 @@ describe("verifyOperatorGenesis", () => {
     );
   });
 
-  it("returns true (probe-not-supported) when fallback block 0 result is null", async () => {
+  it("returns FALSE (fail-closed) when the operator exposes neither probe (block 0 result null)", async () => {
+    // F-3.1 / #18 / S3-01: an operator that exposes NEITHER
+    // lyth_chainStats.genesisHash NOR a block-0 hash proves nothing about its
+    // chain identity, so it must be UNTRUSTED — not fail-open-trusted (which let
+    // a fake net_version-only endpoint show a false LIVE). The live fleet all
+    // expose lyth_chainStats.genesisHash, so no honest operator is bricked.
     installFetch(async ({ method }) =>
       method === "lyth_chainStats"
         ? unsupportedStats()
         : { jsonrpc: "2.0", id: 1, result: null },
     );
-    expect(await verifyOperatorGenesis(RPC)).toBe(true);
+    expect(await verifyOperatorGenesis(RPC)).toBe(false);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
-    expect(snapshotGenesisCache().get(RPC)?.ok).toBe(true);
+    expect(snapshotGenesisCache().get(RPC)?.ok).toBe(false);
   });
 
   it("returns false (skipped, not fail-open) when the operator is quarantined", async () => {

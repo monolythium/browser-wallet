@@ -708,11 +708,19 @@ async function probeOperatorGenesis(
   // supported" instead of orphan-fork evidence; newer binaries are
   // verified against TESTNET_BLOCK0_HASH.
   if (body?.result == null) {
+    // Fail-CLOSED (was fail-open). An operator that exposes NEITHER
+    // lyth_chainStats.genesisHash NOR a block-0 hash proves nothing about its
+    // chain identity, so it must NOT be trusted — otherwise a fake / partial
+    // endpoint that merely answers net_version (right chain id) + eth_blockNumber
+    // is selected as alive and shows a false LIVE while serving an unverified
+    // chain. The live fleet all expose lyth_chainStats.genesisHash (checked
+    // 2026-06-15), so no honest operator is bricked by this (F-3.1 / #18 /
+    // S3-01).
     console.info(
-      "[probe] genesis probes unsupported on operator (ok=true, pin skipped):",
+      "[probe] operator exposes no genesis proof — UNTRUSTED (fail-closed):",
       rpc,
     );
-    return { ok: true, observed: null, checkedAt: now };
+    return { ok: false, observed: null, checkedAt: now };
   }
   const observed = normaliseHash(body.result.hash);
   if (observed === null) {
