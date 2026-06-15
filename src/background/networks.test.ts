@@ -137,15 +137,20 @@ describe("verifyOperatorGenesis", () => {
     );
   });
 
-  it("returns true (probe-not-supported) when fallback block 0 result is null", async () => {
+  it("returns FALSE (fail-closed) when the operator exposes neither probe (block 0 result null)", async () => {
+    // F-3.1 / #18 / S3-01: an operator that exposes NEITHER
+    // lyth_chainStats.genesisHash NOR a block-0 hash proves nothing about its
+    // chain identity, so it must be UNTRUSTED — not fail-open-trusted (which let
+    // a fake net_version-only endpoint show a false LIVE). The live fleet all
+    // expose lyth_chainStats.genesisHash, so no honest operator is bricked.
     installFetch(async ({ method }) =>
       method === "lyth_chainStats"
         ? unsupportedStats()
         : { jsonrpc: "2.0", id: 1, result: null },
     );
-    expect(await verifyOperatorGenesis(RPC)).toBe(true);
+    expect(await verifyOperatorGenesis(RPC)).toBe(false);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
-    expect(snapshotGenesisCache().get(RPC)?.ok).toBe(true);
+    expect(snapshotGenesisCache().get(RPC)?.ok).toBe(false);
   });
 
   it("returns false (skipped, not fail-open) when the operator is quarantined", async () => {
@@ -186,6 +191,24 @@ describe("verifyOperatorGenesis", () => {
     }) as unknown as typeof fetch;
     expect(await verifyOperatorGenesis(RPC)).toBe(false);
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
+  });
+
+  it("an UNREACHABLE operator makes ONE call (chainStats), not a doubled block-0 timeout", async () => {
+    // Latency fix: a transport-failed chainStats means the op is down, so the
+    // block-0 fallback (which would time out a SECOND time) is skipped. This is
+    // what kept a fake/offline operator from dragging the balance consensus +
+    // first liveness poll out to ~2x the probe timeout.
+    const spy = vi.fn(async (_url: unknown, _init?: { body?: unknown }) => {
+      throw new TypeError("network unreachable");
+    });
+    globalThis.fetch = spy as unknown as typeof fetch;
+    expect(await verifyOperatorGenesis(RPC)).toBe(false);
+    // Exactly one fetch (lyth_chainStats) — NOT a second eth_getBlockByNumber.
+    expect(spy).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(String(spy.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      method?: string;
+    };
+    expect(sent.method).toBe("lyth_chainStats");
   });
 
   it("T6 (C3): bounds the genesis probe — a hung operator aborts at the given timeout, not the 3s default", async () => {
@@ -366,6 +389,26 @@ describe("classifyNoOperatorReason (#42 untrusted vs unreachable)", () => {
   it("#18 fail-open op (ok:true, observed:null) → unreachable (stays trusted)", () => {
     const g = new Map([["a", entry(true, null)]]);
     expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("unreachable");
+  });
+
+  it("b-ii: every active op quarantined → quarantined (all-quarantined banner)", () => {
+    const g = new Map([
+      ["a", { ...entry(false, null), quarantined: true }],
+      ["b", { ...entry(false, null), quarantined: true }],
+    ]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g)).toBe(
+      "quarantined",
+    );
+  });
+
+  it("b-ii: a mixed fleet (one quarantined, one plain-unreachable) is NOT all-quarantined → unreachable", () => {
+    const g = new Map([
+      ["a", { ...entry(false, null), quarantined: true }],
+      ["b", { ...entry(false, null), quarantined: false }],
+    ]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g)).toBe(
+      "unreachable",
+    );
   });
 
   it("a stale untrusted entry for a REMOVED operator (not active) → unreachable", () => {

@@ -20,6 +20,7 @@ import {
 } from "./keystore-mldsa.js";
 import {
   allActiveOperatorsDefinitivelyUntrusted,
+  classifyNoOperatorReason,
   getActiveOperators,
   verifyOperatorGenesis,
 } from "./networks.js";
@@ -71,6 +72,26 @@ export class ChainGenesisMismatchError extends Error {
   constructor(operatorCount: number) {
     super(genesisMismatchMessage(operatorCount));
     this.name = "ChainGenesisMismatchError";
+  }
+}
+
+/** Message for the all-operators-QUARANTINED aggregate — same chain, but every
+ *  active operator self-quarantined on a checkpoint state-root mismatch and is
+ *  refusing RPC. Distinct from a genesis mismatch: the remedy is "wait for an
+ *  operator to recover / switch operators", NOT "bump the pin". The
+ *  "operators quarantined" phrasing is what send-error classification keys on. */
+function quarantinedAggregateMessage(operatorCount: number): string {
+  return `Operators quarantined — all ${operatorCount} active operator${operatorCount === 1 ? "" : "s"} reported a checkpoint state-root mismatch and are refusing requests. They're on your chain but temporarily can't be trusted; the wallet reconnects automatically once one recovers. See Operators.`;
+}
+
+/** Thrown when EVERY active operator fails the genesis gate AND all of them are
+ *  quarantined (not a genuine genesis mismatch). Lets the Send/Stake screens
+ *  show quarantine copy instead of the misleading re-genesis copy. */
+export class ChainQuarantinedError extends Error {
+  readonly kind = "all-quarantined" as const;
+  constructor(operatorCount: number) {
+    super(quarantinedAggregateMessage(operatorCount));
+    this.name = "ChainQuarantinedError";
   }
 }
 
@@ -235,7 +256,27 @@ async function _testnetJsonRpcUncoalesced<T>(
   // raw "name: untrusted genesis" message. See Operators for
   // per-operator status the user can act on.
   if (untrustedCount > 0 && untrustedCount === totalOperators) {
-    throw new ChainGenesisMismatchError(totalOperators);
+    // `untrustedCount` counts EVERY operator that failed verifyOperatorGenesis —
+    // which is false for BOTH a definitive genesis mismatch (observed!==null)
+    // AND a transient "couldn't read" verdict (observed:null, i.e. the operator
+    // was simply unreachable). Treating all of them as a genesis mismatch made
+    // an OFFLINE fleet surface "Chain genesis mismatch" on Send/Stake while the
+    // banner (which reads classifyNoOperatorReason) correctly showed OFFLINE.
+    // Defer to the SAME classifier the banner uses so the two never disagree:
+    // only a definitive re-genesis / wrong-chain fleet throws the genesis error;
+    // an all-quarantined fleet throws the quarantine error; an unreachable fleet
+    // falls through to the honest offline message below.
+    const reason = classifyNoOperatorReason();
+    if (reason === "quarantined") {
+      throw new ChainQuarantinedError(totalOperators);
+    }
+    if (reason === "regenesis" || reason === "untrusted") {
+      throw new ChainGenesisMismatchError(totalOperators);
+    }
+    // reason === "unreachable": throw a CLEAN offline error, NOT lastTransportErr
+    // (which carries the misleading "<name>: untrusted genesis" text that
+    // classifySendError would mis-key as genesis-mismatch).
+    throw new Error("no Monolythium Testnet operator reachable");
   }
   throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
 }
@@ -260,8 +301,20 @@ export interface BalanceConsensusResult {
   failing: ReadonlyArray<{ name: string; reason: string }>;
 }
 
-/** Per-operator timeout for the parallel balance probe. */
-const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
+/** Per-operator timeout for the parallel balance probe. Kept tight: a healthy
+ *  operator answers eth_getBalance in well under a second, so 5 s only ever
+ *  served to make an unreachable/fake operator drag the whole Promise.all
+ *  consensus out for that long (the balance card then lingered on a stale
+ *  "couldn't reach" while the banner — on its own 1.5 s liveness path — already
+ *  read LIVE). 2.5 s is generous for a real op and fails a dead one fast. */
+const BALANCE_CONSENSUS_TIMEOUT_MS = 2_500;
+
+/** Bound the per-operator genesis check inside the balance consensus so an
+ *  unreachable/fake operator's probe can't block Promise.all. Matches the
+ *  dispatch path's 2 s bound; with the block-0-fallback fast-fail in
+ *  probeOperatorGenesis a dead op now resolves its genesis verdict in ~one
+ *  timeout instead of two. */
+const BALANCE_GENESIS_PROBE_TIMEOUT_MS = 2_000;
 
 /**
  * T4-03 (Item C) — absolute sane upper bound on a single-account balance, in
@@ -350,7 +403,7 @@ export async function testnetMaxBalanceConsensus(
     // Treated as a "failing" entry so the consensus result still
     // reports the skipped operator's name and reason — distinct from
     // a network error, and visible in the SW console balance log.
-    if (!(await verifyOperatorGenesis(op.rpc))) {
+    if (!(await verifyOperatorGenesis(op.rpc, BALANCE_GENESIS_PROBE_TIMEOUT_MS))) {
       return { name: op.name, balanceHex: null, reason: "untrusted genesis" };
     }
     const ctrl = new AbortController();
@@ -797,6 +850,9 @@ export async function submitMlDsaTx(
   txHash: string;
   via: string;
   innerSighashHex: string;
+  // Whether this tx went through the sealed (encrypted-mempool) path. Pending-row
+  // metadata only — lets the UI label the sealed "awaiting reveal" window.
+  sealed: boolean;
 }> {
   let roster: ClusterSealKeys | null = null;
   try {
@@ -813,11 +869,14 @@ export async function submitMlDsaTx(
     // verify overhead pushes the chain's intrinsic floor to ~248–250k); raise it
     // here so every tx type clears the floor. The plaintext fallback below keeps
     // its original (lower) limit.
-    return submitSealedMlDsaTx(
-      withEncryptedExecutionUnitFloor(req),
-      roster,
-      boundVaultId,
-    );
+    return {
+      ...(await submitSealedMlDsaTx(
+        withEncryptedExecutionUnitFloor(req),
+        roster,
+        boundVaultId,
+      )),
+      sealed: true,
+    };
   }
-  return submitPlaintextMlDsaTx(req, boundVaultId);
+  return { ...(await submitPlaintextMlDsaTx(req, boundVaultId)), sealed: false };
 }

@@ -415,7 +415,7 @@ export async function bgWalletBalance(
       // C5: typed cause so Home can label a re-genesis ("network may have reset
       // — paused") distinctly from an unreachable chain, and suppress a
       // misleading bare 0.00 when the balance is genuinely unknown.
-      cause?: "unreachable" | "untrusted" | "regenesis";
+      cause?: "unreachable" | "untrusted" | "regenesis" | "quarantined";
     }
 > {
   return send("wallet-balance", { address, chainIdHex });
@@ -897,7 +897,7 @@ export async function bgWalletChainBlockNumber(): Promise<
   | {
       ok: false;
       reason?: string;
-      cause?: "unreachable" | "untrusted" | "regenesis";
+      cause?: "unreachable" | "untrusted" | "regenesis" | "quarantined";
     }
 > {
   return send("wallet-chain-block-number");
@@ -1433,6 +1433,11 @@ export interface OperatorHealthRowCommon {
   /** Observed genesis identity or fallback block-0 hash; null when the
    *  probe shape is unsupported or malformed. */
   observedGenesis: string | null;
+  /** True when the operator self-reported a -32047 "chain quarantined"
+   *  (checkpoint state-root mismatch). Same chain, excluded until it recovers;
+   *  drives the distinct "Quarantined" status/badge instead of the misleading
+   *  "Untrusted genesis". */
+  quarantined: boolean;
   /** Operator-surface availability from `lyth_operatorCapabilities`.
    *  Keys are the chain's surface names (e.g. "operator_info",
    *  "cluster_status", "cluster_directory", "indexer_history"); values are

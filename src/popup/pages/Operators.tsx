@@ -11,6 +11,7 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { Modal } from "../components/Modal";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgChainOperatorRisk,
@@ -85,6 +86,18 @@ export function Operators({
   const [loaded, setLoaded] = useState(false);
   // rid of the operator currently being probed via "Use this operator".
   const [usingRid, setUsingRid] = useState<string | null>(null);
+  // B (dev connect-flow): the in-popup confirm → checking → result flow.
+  type ConnectFlow =
+    | { rid: string; name: string; phase: "confirm" }
+    | { rid: string; name: string; phase: "checking" }
+    | {
+        rid: string;
+        name: string;
+        phase: "result";
+        ok: boolean;
+        message: string;
+      };
+  const [connectFlow, setConnectFlow] = useState<ConnectFlow | null>(null);
 
   const refresh = async () => {
     const r = await bgOperatorsGet();
@@ -185,7 +198,8 @@ export function Operators({
   // stay as fallback, so a later failure can't strand the wallet, and an
   // unreachable choice leaves everything UNCHANGED. No dispatch/genesis logic
   // is altered; this only reorders + saves via the existing override path.
-  const handleUseOperator = async (rid: string) => {
+  // B1: open the confirm phase; the probe + switch run only on Confirm.
+  const handleUseOperator = (rid: string) => {
     if (usingRid || submitting) return;
     const row = draft.find((d) => d.rid === rid);
     if (!row || !isValidDraftEntry(row)) return;
@@ -193,14 +207,36 @@ export function Operators({
       setSubmitError("Fix the invalid operator rows before using one.");
       return;
     }
-    setUsingRid(rid);
     setSubmitError(null);
+    setConnectFlow({ rid, name: row.name.trim() || "this operator", phase: "confirm" });
+  };
+
+  const confirmUseOperator = async (rid: string) => {
+    if (usingRid || submitting) return;
+    const row = draft.find((d) => d.rid === rid);
+    const name = row?.name.trim() || "this operator";
+    if (!row || !isValidDraftEntry(row)) {
+      setConnectFlow(null);
+      return;
+    }
+    setUsingRid(rid);
+    setConnectFlow({ rid, name, phase: "checking" });
     try {
+      // B2/B3: reachability + genesis check. A draft (possibly newly-added)
+      // operator has no probed health row to classify, so the gate is
+      // bgProbeOperator — unreachable / different-chain / quarantined all fail
+      // `usable` and BLOCK the switch (operators left unchanged). The richer
+      // legend-reason block lives on the operator directory (probed rows). The
+      // result shows IN the modal (popup continuation), not a bottom card.
       const probe = await bgProbeOperator(row.rpc.trim());
       if (!probe.ok || !probe.usable) {
-        setSubmitError(
-          `Couldn't reach ${row.name.trim() || "that operator"} (or it's on a different chain) — left your operators unchanged.`,
-        );
+        setConnectFlow({
+          rid,
+          name,
+          phase: "result",
+          ok: false,
+          message: `Couldn't connect to ${name} — it's unreachable, on a different chain, or quarantined.`,
+        });
         return;
       }
       const reordered = [row, ...draft.filter((d) => d.rid !== rid)];
@@ -211,9 +247,23 @@ export function Operators({
       }));
       const r = await bgOperatorsSet(wire);
       if (!r.ok) {
-        setSubmitError(r.reason ?? "save failed");
+        setConnectFlow({
+          rid,
+          name,
+          phase: "result",
+          ok: false,
+          message: r.reason ?? "Couldn't save the operator choice.",
+        });
         return;
       }
+      // B4: success.
+      setConnectFlow({
+        rid,
+        name,
+        phase: "result",
+        ok: true,
+        message: `Connected to ${name}.`,
+      });
       await refresh();
     } finally {
       setUsingRid(null);
@@ -406,6 +456,107 @@ export function Operators({
               >
                 {submitError}
               </div>
+            )}
+
+            {connectFlow && (
+              <Modal
+                open
+                onClose={
+                  connectFlow.phase === "checking"
+                    ? () => undefined
+                    : () => setConnectFlow(null)
+                }
+                title={
+                  connectFlow.phase === "result"
+                    ? connectFlow.ok
+                      ? "Connected"
+                      : "Can't connect"
+                    : "Connect to this operator?"
+                }
+                {...(connectFlow.phase === "result"
+                  ? {
+                      titleAccent: connectFlow.ok ? "var(--ok)" : "var(--err)",
+                    }
+                  : {})}
+                showClose={connectFlow.phase !== "checking"}
+              >
+                {connectFlow.phase === "confirm" && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--fg-300)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Connect to{" "}
+                      <strong style={{ color: "var(--fg-100)" }}>
+                        {connectFlow.name}
+                      </strong>
+                      ? The wallet runs a health &amp; security check first and
+                      won&apos;t switch if it fails.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => setConnectFlow(null)}
+                        style={{ ...modalGhostBtn, flex: 1 }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void confirmUseOperator(connectFlow.rid)}
+                        style={{ ...modalPrimaryBtn, flex: 1 }}
+                      >
+                        Connect
+                      </button>
+                    </div>
+                  </>
+                )}
+                {connectFlow.phase === "checking" && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--fg-300)",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Running a health &amp; security check on{" "}
+                    <strong style={{ color: "var(--fg-100)" }}>
+                      {connectFlow.name}
+                    </strong>
+                    …
+                  </div>
+                )}
+                {connectFlow.phase === "result" && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: connectFlow.ok ? "var(--ok)" : "var(--err)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {connectFlow.message}
+                      {!connectFlow.ok &&
+                        " Your operators were left unchanged."}
+                    </div>
+                    <div style={{ display: "flex", marginTop: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => setConnectFlow(null)}
+                        style={{
+                          ...(connectFlow.ok ? modalPrimaryBtn : modalGhostBtn),
+                          marginLeft: "auto",
+                        }}
+                      >
+                        {connectFlow.ok ? "Done" : "Close"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </Modal>
             )}
 
             <div
@@ -708,6 +859,39 @@ const secondaryBtn: CSSProperties = {
   fontSize: 12,
   fontWeight: 500,
   cursor: "pointer",
+};
+
+// Connect-flow Modal buttons. The primary CTA mirrors the wallet's main action
+// button (`.ext-act.prim`): a gold gradient with `--ink-000` text and the same
+// glow shadow. All four tokens (--gold, --gold-hi, --gold-glow, --ink-000) are
+// redefined per theme in themes.css, so the button recolors with the active
+// theme (indigo / teal / …) instead of the hardcoded green it used before.
+const modalPrimaryBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--gold)",
+  background: "linear-gradient(180deg, var(--gold-hi), var(--gold))",
+  color: "var(--ink-000)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  boxShadow:
+    "0 4px 14px rgba(var(--gold-glow), 0.3), inset 0 1px 0 rgba(255,255,255,0.35)",
+};
+
+const modalGhostBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--fg-700)",
+  background: "transparent",
+  color: "var(--fg-200)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 
 // ---- helpers ----

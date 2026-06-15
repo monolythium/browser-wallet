@@ -2418,17 +2418,25 @@ function SuccessView({
               display: "grid",
               placeItems: "center",
               borderRadius: "50%",
-              background: "rgba(80,200,120,0.12)",
-              border: "1px solid rgba(80,200,120,0.4)",
-              color: "var(--ok)",
-              fontSize: 28,
+              background: "rgba(244,201,122,0.12)",
+              border: "1px solid rgba(244,201,122,0.4)",
+              color: "var(--warn)",
             }}
             aria-hidden="true"
           >
-            ✓
+            <Icon name="clock" size={26} />
           </div>
           <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-100)" }}>
             {isProposal ? "Proposal submitted" : "Transaction submitted"}
+          </div>
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 11,
+              color: "var(--fg-400)",
+            }}
+          >
+            Waiting for on-chain confirmation.
           </div>
         </div>
 

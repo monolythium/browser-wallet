@@ -39,6 +39,7 @@ import {
   ReqConnect,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
+  chainKindNotLive, type ChainHealthKind,
 } from "./components";
 import { Receive } from "./pages/Receive";
 import { Send } from "./pages/Send";
@@ -373,8 +374,23 @@ export default function App() {
   // C5: the typed reason the last balance refresh failed, so Home can pause
   // honestly on a re-genesis / wrong-chain operator instead of a bare 0.00.
   const [balanceCause, setBalanceCause] = useState<
-    "unreachable" | "untrusted" | "regenesis" | null
+    "unreachable" | "untrusted" | "regenesis" | "quarantined" | null
   >(null);
+  // Lifted from ChainStatusBanner's liveness poll (its onHealthChange callback)
+  // so Home can hide the balance + activity for ALL settled non-live states —
+  // including the case where the chain is down but the balance fetch hasn't
+  // failed yet (a cached value would otherwise stay visible). Distinct from
+  // balanceCause (which fires only on a balance-fetch failure).
+  const [chainHealthKind, setChainHealthKind] = useState<ChainHealthKind | null>(
+    null,
+  );
+  // Stable identity so the banner's health effect (deps [health, onHealthChange])
+  // doesn't re-subscribe every render.
+  const handleChainHealthChange = useCallback(
+    (kind: ChainHealthKind) => setChainHealthKind(kind),
+    [],
+  );
+  const chainNotLive = chainKindNotLive(chainHealthKind);
   const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
@@ -1030,6 +1046,11 @@ export default function App() {
     screen === "mrv-native" ||
     screen === "receive" ||
     screen === "send" ||
+    // Stake joins the strip so the offline / quarantined / untrusted chain
+    // warning is visible here too (it was previously absent on this screen) —
+    // the same degraded indicator Send and Home already carry, with the
+    // tap-through to the operator directory.
+    screen === "stake" ||
     screen === "reveal-phrase" ||
     screen === "reset-wallet" ||
     // Banner shows on the new menu + contacts
@@ -1066,6 +1087,9 @@ export default function App() {
           // matched), masking the bug — the actual fix is using the
           // stack at both entry pushers (top-bar + MainMenu).
           onOpenNetworks={() => navigateTo("networks")}
+          // Lift the banner's liveness verdict to App so Home can hide the
+          // balance + activity for all non-live states (see chainNotLive).
+          onHealthChange={handleChainHealthChange}
           unreadCount={bannerUnread}
           // Tap-through for the not-online banner states (#42) — available on
           // every main-strip screen, not just home. Routes to the Operators
@@ -1264,6 +1288,7 @@ export default function App() {
           indexer={indexerSnapshot}
           balanceStale={balanceStale}
           balanceCause={balanceCause}
+          chainNotLive={chainNotLive}
           // Seed the vault chip's label from the already-fetched active vault
           // summary so the picker renders the real name immediately instead of
           // flashing the "—" placeholder until its own bgVaultsList resolves.

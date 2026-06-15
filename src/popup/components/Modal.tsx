@@ -79,11 +79,14 @@ export function Modal({ open, onClose, title, titleAccent, showClose, children }
         style={{
           width: "100%",
           maxWidth: 340,
-          background: "var(--ink-100, #15161a)",
-          border: "1px solid rgba(255,255,255,0.1)",
+          // Theme-driven surface tokens (was a hardcoded dark bg + white border
+          // that didn't follow the active theme). --surface-1 = card surface,
+          // --fg-700 = divider, --shadow-3 = elevated shadow.
+          background: "var(--surface-1)",
+          border: "1px solid var(--fg-700)",
           borderRadius: 12,
           padding: "14px 14px 12px",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
+          boxShadow: "var(--shadow-3)",
           display: "flex",
           flexDirection: "column",
           gap: 10,

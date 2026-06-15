@@ -13,6 +13,7 @@ import {
   AssetList,
   chainHealthForFailedPoll,
   chainHealthPresentation,
+  chainKindNotLive,
   reconnectingBannerLabel,
   seedReconnectingHealth,
   shouldLabelBalanceStale,
@@ -684,6 +685,63 @@ describe("indexed token balance display", () => {
   });
 });
 
+describe("chainKindNotLive (#3 hide balance/activity on non-live chain)", () => {
+  it("is true for settled non-live kinds", () => {
+    expect(chainKindNotLive("offline")).toBe(true);
+    expect(chainKindNotLive("quarantined")).toBe(true);
+    expect(chainKindNotLive("untrusted")).toBe(true);
+    expect(chainKindNotLive("regenesis")).toBe(true);
+    expect(chainKindNotLive("stalled")).toBe(true);
+  });
+  it("is false for live, the transient connecting states, and unknown", () => {
+    // Excludes loading/reconnecting so a healthy open doesn't flash '—' before
+    // the first poll lands; null/undefined (no banner verdict yet) is not-hidden.
+    expect(chainKindNotLive("live")).toBe(false);
+    expect(chainKindNotLive("loading")).toBe(false);
+    expect(chainKindNotLive("reconnecting")).toBe(false);
+    expect(chainKindNotLive(null)).toBe(false);
+    expect(chainKindNotLive(undefined)).toBe(false);
+  });
+});
+
+describe("AssetList hideBalance (#3 — hide the LYTH amount when non-live)", () => {
+  const account = {
+    id: "a",
+    label: "a",
+    denom: "public",
+    addr: "0x1111111111111111111111111111111111111111",
+    algo: "slhdsa",
+    balance: 12.5,
+    custody: "sw",
+  } satisfies Account;
+  const network = {
+    chainId: "0x1",
+    name: "Monolythium Testnet",
+    rpc: "http://localhost:8545",
+    chainIdNum: 1,
+    builtin: true,
+    active: true,
+  } satisfies ChainEntry;
+
+  it("shows the LYTH amount when live (hideBalance omitted)", () => {
+    const html = renderToStaticMarkup(
+      <AssetList account={account} network={network} indexer={null} />,
+    );
+    // Locale-robust: the amount cell carries the formatted number (comma OR dot
+    // decimal), NOT the em-dash placeholder.
+    expect(html).toMatch(/<div class="amt">12[.,]50<\/div>/);
+    expect(html).not.toContain('<div class="amt">—</div>');
+  });
+
+  it("hides the LYTH amount ('—') when the chain is non-live", () => {
+    const html = renderToStaticMarkup(
+      <AssetList account={account} network={network} indexer={null} hideBalance />,
+    );
+    expect(html).toMatch(/<div class="amt">—<\/div>/);
+    expect(html).not.toMatch(/<div class="amt">12[.,]50<\/div>/);
+  });
+});
+
 describe("MRC account summary display", () => {
   const account = addressToTypedBech32(
     "smartAccount",
@@ -1231,6 +1289,12 @@ describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
       kind: "regenesis",
     });
   });
+
+  it("maps cause:'quarantined' to the quarantined state (b-ii all-quarantined banner)", () => {
+    expect(chainHealthForFailedPoll({ cause: "quarantined" })).toEqual({
+      kind: "quarantined",
+    });
+  });
 });
 
 describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
@@ -1285,6 +1349,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       "stalled",
       "untrusted",
       "regenesis",
+      "quarantined",
       "offline",
       "loading",
       "reconnecting",
@@ -1314,6 +1379,14 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.color).not.toBe("var(--ok)"); // never the LIVE token
     expect(pres.tappable).toBe(false);
     expect(pres.label).not.toBe("LIVE");
+    expect(pres.tooltip.length).toBeGreaterThan(0);
+  });
+
+  it("presents quarantined as the red 'OPERATOR QUARANTINED' tappable banner", () => {
+    const pres = chainHealthPresentation("quarantined");
+    expect(pres.label).toBe("OPERATOR QUARANTINED");
+    expect(pres.color).toBe("var(--err)");
+    expect(pres.tappable).toBe(true);
     expect(pres.tooltip.length).toBeGreaterThan(0);
   });
 });
@@ -1387,6 +1460,13 @@ describe("shouldPauseBalanceDisplay (C5 / T10 — no bare 0.00 on re-genesis)", 
     expect(shouldPauseBalanceDisplay(false, null, "unreachable")).toBe(false);
     expect(shouldPauseBalanceDisplay(false, null, null)).toBe(false);
     expect(shouldPauseBalanceDisplay(false, null, undefined)).toBe(false);
+  });
+
+  it("pauses on an all-quarantined fleet (no serviceable operator → value unknowable)", () => {
+    expect(shouldPauseBalanceDisplay(false, null, "quarantined")).toBe(true);
+    // never pauses a real retained balance, and never the private balance.
+    expect(shouldPauseBalanceDisplay(false, 12.5, "quarantined")).toBe(false);
+    expect(shouldPauseBalanceDisplay(true, null, "quarantined")).toBe(false);
   });
 
   it("never pauses the private (hidden) balance", () => {

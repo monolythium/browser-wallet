@@ -336,6 +336,12 @@ interface GenesisCacheEntry {
    *  operator does not expose either probe shape. */
   observed: string | null;
   checkedAt: number;
+  /** True when the operator answered with a -32047 "chain quarantined" error
+   *  (same chain, self-quarantined on a checkpoint state-root mismatch).
+   *  Distinct from a different-genesis (observed !== null) and from plain
+   *  unreachable (no flag). In-memory only — observed is null on quarantine,
+   *  so this entry is never persisted (the persist gate is `observed !== null`). */
+  quarantined?: boolean;
 }
 
 const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
@@ -607,7 +613,7 @@ export function classifyNoOperatorReason(
   activeOps: ReadonlyArray<{ rpc: string }> = getActiveOperators(),
   genesis: Map<string, GenesisCacheEntry> = snapshotGenesisCache(),
   wrongChainId: ReadonlySet<string> = operatorWrongChainId,
-): "unreachable" | "untrusted" | "regenesis" {
+): "unreachable" | "untrusted" | "regenesis" | "quarantined" {
   // C5: split the genesis-MISMATCH case out of the generic "untrusted". An
   // operator that answered with the right chain id but a DIFFERENT genesis hash
   // (ok===false && observed!==null, NOT in wrongChainId) means the network
@@ -616,10 +622,19 @@ export function classifyNoOperatorReason(
   // `untrusted` (it is the operator-actionable cause); both outrank
   // `unreachable`. The fund-path gate is unchanged — this only labels WHY no
   // operator is serviceable, with NO new RPC.
+  //
+  // "quarantined" (every active op self-quarantined on a checkpoint state-root
+  // mismatch — same chain, refusing RPC) is surfaced ONLY when the WHOLE fleet
+  // is quarantined, so the banner reads "OPERATOR QUARANTINED" instead of a
+  // generic OFFLINE. A single quarantined op with a healthy failover never
+  // reaches here (the poll resolves healthy). Reuses the per-op quarantine flag
+  // the genesis probe already records; still NO new RPC.
   let sawWrongChain = false;
+  let allQuarantined = activeOps.length > 0;
   for (const op of activeOps) {
     if (wrongChainId.has(op.rpc)) {
       sawWrongChain = true;
+      allQuarantined = false;
       continue;
     }
     const e = genesis.get(op.rpc);
@@ -628,8 +643,10 @@ export function classifyNoOperatorReason(
     if (genesisMismatch) {
       return "regenesis";
     }
+    if (e?.quarantined !== true) allQuarantined = false;
   }
   if (sawWrongChain) return "untrusted";
+  if (allQuarantined) return "quarantined";
   return "unreachable";
 }
 
@@ -660,7 +677,7 @@ async function probeOperatorGenesis(
   const stats = await rpcCall(rpc, timeoutMs, "lyth_chainStats", []);
   if (stats.ok) {
     if (isQuarantineError(stats.body)) {
-      return { ok: false, observed: null, checkedAt: now };
+      return { ok: false, observed: null, checkedAt: now, quarantined: true };
     }
     const result = readObject(stats.body, "result");
     const observed = normaliseHash(result?.genesisHash);
@@ -671,6 +688,19 @@ async function probeOperatorGenesis(
         checkedAt: now,
       };
     }
+  } else {
+    // Fail fast on an UNREACHABLE operator. `stats.ok === false` means the
+    // chainStats call had a TRANSPORT failure (timeout / connection refused) —
+    // the operator is down. The block-0 fallback below exists only for an
+    // operator that ANSWERED chainStats (stats.ok) but is too old to expose
+    // `genesisHash`; against a dead operator it would just time out a SECOND
+    // time, DOUBLING an unreachable op's probe latency (~timeoutMs → ~2×). That
+    // doubled latency is what dragged the balance consensus + the first liveness
+    // poll past their budgets when a fake/offline operator was in the set, so a
+    // dead operator now costs one timeout, not two. (A real operator missing
+    // chainStats replies with a method-not-found ERROR, i.e. stats.ok === true,
+    // so it still reaches the block-0 fallback.)
+    return { ok: false, observed: null, checkedAt: now };
   }
 
   const block0 = await rpcCall(rpc, timeoutMs, "eth_getBlockByNumber", [
@@ -681,7 +711,7 @@ async function probeOperatorGenesis(
     return { ok: false, observed: null, checkedAt: now };
   }
   if (isQuarantineError(block0.body)) {
-    return { ok: false, observed: null, checkedAt: now };
+    return { ok: false, observed: null, checkedAt: now, quarantined: true };
   }
   const body = block0.body as {
     result?: { hash?: unknown } | null;
@@ -691,11 +721,19 @@ async function probeOperatorGenesis(
   // supported" instead of orphan-fork evidence; newer binaries are
   // verified against TESTNET_BLOCK0_HASH.
   if (body?.result == null) {
+    // Fail-CLOSED (was fail-open). An operator that exposes NEITHER
+    // lyth_chainStats.genesisHash NOR a block-0 hash proves nothing about its
+    // chain identity, so it must NOT be trusted — otherwise a fake / partial
+    // endpoint that merely answers net_version (right chain id) + eth_blockNumber
+    // is selected as alive and shows a false LIVE while serving an unverified
+    // chain. The live fleet all expose lyth_chainStats.genesisHash (checked
+    // 2026-06-15), so no honest operator is bricked by this (F-3.1 / #18 /
+    // S3-01).
     console.info(
-      "[probe] genesis probes unsupported on operator (ok=true, pin skipped):",
+      "[probe] operator exposes no genesis proof — UNTRUSTED (fail-closed):",
       rpc,
     );
-    return { ok: true, observed: null, checkedAt: now };
+    return { ok: false, observed: null, checkedAt: now };
   }
   const observed = normaliseHash(body.result.hash);
   if (observed === null) {

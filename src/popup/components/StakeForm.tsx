@@ -101,6 +101,10 @@ export function StakeForm({
 
   const overCap = capBps !== null && totalAfterBps > capBps;
   const percentIsZero = percent === null || additionalBps === 0;
+  // Additive >100% feedback: parsePercent collapses >100 to null (= empty),
+  // so read the raw input to disambiguate WITHOUT touching the parser.
+  const exceedsHundred =
+    /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
 
   const canContinue =
     percent !== null &&
@@ -195,6 +199,16 @@ export function StakeForm({
             inputMode="decimal"
             style={amountInputStyle}
           />
+          {[25, 50, 75].map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onAmountChange(String(p))}
+              style={{ ...inlineBtnStyle, padding: "8px 10px" }}
+            >
+              {p}%
+            </button>
+          ))}
           <button
             onClick={handleMax}
             disabled={balanceLythoshi === null}
@@ -223,6 +237,11 @@ export function StakeForm({
             {((totalAfterBps - capBps) / 100).toFixed(2)}%.
           </div>
         )}
+        {exceedsHundred && (
+          <div style={inlineErr}>
+            Enter a percent between 0.01% and 100% of your balance.
+          </div>
+        )}
         <div style={fromHint}>
           {balanceLythoshi === null ? (
             "Balance loading…"
@@ -230,16 +249,27 @@ export function StakeForm({
             <>
               {/* Live effective weight = balance × weightBps. */}
               effective weight{" "}
-              <strong style={{ color: "var(--gold)" }}>
+              <strong style={amountStrong}>
                 {effectiveWeightLythoshi === null
                   ? "—"
                   : `${lythoshiToLyth(effectiveWeightLythoshi)} LYTH`}
               </strong>{" "}
-              ({(additionalBps / 100).toFixed(2)}% of {lythoshiToLyth(balanceLythoshi)} LYTH)
+              ({(additionalBps / 100).toFixed(2)}% of{" "}
+              <strong style={amountStrongMuted}>
+                {lythoshiToLyth(balanceLythoshi)} LYTH
+              </strong>
+              )
               {existingWeightBps > 0 && (
                 <>
                   {" "}
-                  · existing {(existingWeightBps / 100).toFixed(2)}% in this cluster
+                  · existing {(existingWeightBps / 100).toFixed(2)}%{" "}
+                  <strong style={amountStrongMuted}>
+                    ({lythoshiToLyth(
+                      effectiveWeightWei(existingWeightBps, balanceLythoshi),
+                    )}{" "}
+                    LYTH)
+                  </strong>{" "}
+                  in this cluster
                 </>
               )}
               {capBps !== null && (
@@ -317,6 +347,8 @@ const cardLabel: CSSProperties = {
 
 const amountInputStyle: CSSProperties = {
   flex: 1,
+  minWidth: 0,
+  maxWidth: 110,
   padding: "10px 12px",
   borderRadius: 10,
   background: "rgba(0,0,0,0.3)",
@@ -352,6 +384,20 @@ const fromHint: CSSProperties = {
   color: "var(--fg-500)",
   marginTop: 8,
   lineHeight: 1.5,
+};
+
+// Emphasized LYTH amounts inside the effective-weight hint — bigger + the
+// wallet's mono numeric font so the figures stand out from the prose.
+const amountStrong: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 13,
+  color: "var(--gold)",
+};
+
+const amountStrongMuted: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 11,
+  color: "var(--fg-200)",
 };
 
 const liquidNote: CSSProperties = {

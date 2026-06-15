@@ -279,6 +279,26 @@ function classifyInnerError(
     };
   }
 
+  // ALL active operators quarantined (the testnetJsonRpc aggregate — same
+  // chain, every operator self-quarantined on a checkpoint state-root
+  // mismatch). Distinct from a SINGLE operator quarantined (below): no operator
+  // is serviceable, so sends are paused — err severity + "wait / switch" copy,
+  // NOT the misleading re-genesis copy. Keyed on the ChainQuarantinedError
+  // "operators quarantined" phrasing; MUST precede the single-op branch (which
+  // matches the bare "quarantin").
+  if (lower.includes("operators quarantined")) {
+    return {
+      kind: "chain-quarantined",
+      headline: "Operators quarantined",
+      body:
+        "Every operator you're connected to is temporarily quarantined " +
+        "(a checkpoint state-root mismatch) and isn't serving requests right " +
+        "now. They're on your chain — the wallet reconnects automatically once " +
+        "an operator recovers, or you can switch operators. See Operators.",
+      severity: "err",
+    };
+  }
+
   // Operator node quarantined / PQ-checkpoint or state-root mismatch / upstream
   // unavailable. The operator's node has stopped serving RPC (a checkpoint
   // state-root divergence, or its upstream is down). The raw message is a
@@ -356,20 +376,26 @@ function classifyInnerError(
     };
   }
 
-  // Operator transport failures.
+  // Operator transport failures. Reaching this from the send/stake dispatch
+  // means EVERY active operator failed transport (testnetJsonRpc only throws the
+  // aggregate once the whole fleet is exhausted) — so the network is down or the
+  // connection dropped, NOT "we'll just use another operator". The explicit
+  // "no … operator reachable" aggregate message routes here too.
   if (
     lower.includes("unreachable") ||
     lower.includes("timeout") ||
     lower.includes("network error") ||
-    lower.includes("rpc error")
+    lower.includes("rpc error") ||
+    lower.includes("no monolythium testnet operator reachable") ||
+    lower.includes("no operator reachable")
   ) {
     return {
       kind: "operator-offline",
-      headline: "Operator unreachable",
+      headline: "Can't reach the network",
       body:
-        "The current operator isn't responding. The wallet skips it and " +
-        "uses other operators automatically — nothing for you to do. " +
-        "See Operators.",
+        "The wallet couldn't reach any operator right now — the network may be " +
+        "temporarily down, or your connection dropped. Your funds are safe and " +
+        "nothing was sent. Try again in a moment, or check Operators.",
       severity: "warn",
     };
   }

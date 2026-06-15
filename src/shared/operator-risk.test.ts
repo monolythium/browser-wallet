@@ -7,12 +7,14 @@ import {
   INDEXER_STALE_LAG,
   OPERATOR_RISK_LEGEND,
   classifyOperatorRisk,
+  operatorConnectBlockReason,
   type OperatorRiskInput,
 } from "./operator-risk.js";
 
 const HEALTHY: OperatorRiskInput = {
   ok: true,
   trustedGenesis: true,
+  quarantined: false,
   capabilities: Object.fromEntries(
     EXPECTED_CAPABILITY_SURFACES.map((s) => [s, "available"]),
   ),
@@ -50,6 +52,44 @@ describe("classifyOperatorRisk — untrusted genesis", () => {
     const flag = r.find((b) => b.kind === "untrusted-genesis");
     expect(flag).toBeDefined();
     expect(flag!.severity).toBe("err");
+  });
+});
+
+describe("classifyOperatorRisk — quarantined", () => {
+  it("flags quarantined (severity: err) and NOT untrusted-genesis", () => {
+    // A quarantined operator answers net_version (ok:true) but its genesis
+    // probe returned -32047 → trustedGenesis:false + quarantined:true. It must
+    // read as "quarantined", not the misleading "untrusted-genesis".
+    const r = classifyOperatorRisk({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: true,
+    });
+    const flag = r.find((b) => b.kind === "quarantined");
+    expect(flag).toBeDefined();
+    expect(flag!.severity).toBe("err");
+    expect(r.some((b) => b.kind === "untrusted-genesis")).toBe(false);
+  });
+
+  it("a genuine different-genesis op stays untrusted-genesis (not quarantined)", () => {
+    const r = classifyOperatorRisk({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    expect(r.some((b) => b.kind === "untrusted-genesis")).toBe(true);
+    expect(r.some((b) => b.kind === "quarantined")).toBe(false);
+  });
+
+  it("an unreachable operator stays transport-error (not quarantined)", () => {
+    const r = classifyOperatorRisk({
+      ...HEALTHY,
+      ok: false,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    expect(r.length).toBe(1);
+    expect(r[0]!.kind).toBe("transport-error");
   });
 });
 
@@ -160,6 +200,7 @@ describe("classifyOperatorRisk — composite cases", () => {
     const r = classifyOperatorRisk({
       ok: true,
       trustedGenesis: false,
+      quarantined: false,
       capabilities: null,
       indexerHeight: null,
       indexerLatest: null,
@@ -177,6 +218,7 @@ describe("OPERATOR_RISK_LEGEND", () => {
   it("has one entry per risk kind the classifier emits", () => {
     const emittedKinds = new Set([
       "untrusted-genesis",
+      "quarantined",
       "transport-error",
       "indexer-stale",
       "indexer-disabled",
@@ -194,5 +236,53 @@ describe("OPERATOR_RISK_LEGEND", () => {
       expect(e.label.length).toBeGreaterThan(0);
       expect(e.body.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("operatorConnectBlockReason (B3 — block a manual connect to a bad op)", () => {
+  it("returns null for a healthy operator (connectable)", () => {
+    expect(operatorConnectBlockReason(HEALTHY)).toBeNull();
+  });
+
+  it("blocks a quarantined operator with the quarantine legend body", () => {
+    const reason = operatorConnectBlockReason({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: true,
+    });
+    expect(reason).not.toBeNull();
+    const legend = OPERATOR_RISK_LEGEND.find((e) => e.kind === "quarantined");
+    expect(reason).toBe(legend!.body);
+  });
+
+  it("blocks a different-genesis operator with the untrusted-genesis legend body", () => {
+    const reason = operatorConnectBlockReason({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    const legend = OPERATOR_RISK_LEGEND.find(
+      (e) => e.kind === "untrusted-genesis",
+    );
+    expect(reason).toBe(legend!.body);
+  });
+
+  it("blocks an unreachable operator (transport-error)", () => {
+    const reason = operatorConnectBlockReason({
+      ...HEALTHY,
+      ok: false,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    const legend = OPERATOR_RISK_LEGEND.find(
+      (e) => e.kind === "transport-error",
+    );
+    expect(reason).toBe(legend!.body);
+  });
+
+  it("does NOT block on a warn/info-only operator (e.g. high latency)", () => {
+    expect(
+      operatorConnectBlockReason({ ...HEALTHY, latencyMs: HIGH_LATENCY_MS }),
+    ).toBeNull();
   });
 });

@@ -144,7 +144,13 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
               row — show it as Confirmed at the receipt's inclusion block. */}
           <DRow
             label="Status"
-            value={row.confirmedBlockHeight !== undefined ? "Confirmed" : "Pending"}
+            value={
+              row.confirmedBlockHeight !== undefined
+                ? "Confirmed"
+                : row.sealed
+                  ? "Pending — awaiting reveal"
+                  : "Pending"
+            }
           />
           <DRow label="Amount" value={`${row.amountDecimal} LYTH`} />
           <DRow label="From" value={<CopyableAddress addr0x={walletAddr} />} />
@@ -152,9 +158,18 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
           <DRow
             label="Tx hash"
             value={
-              <ExternalLink href={monoscanTxUrl(row.txHash)} title={row.txHash} style={{ fontFamily: "var(--f-mono)" }}>
-                {truncMiddle(row.txHash)}
-              </ExternalLink>
+              // A sealed tx is hidden from the indexer/Monoscan until reveal —
+              // hold the link (it would 404) until it's confirmed; keep the
+              // truncated hash visible meanwhile.
+              !row.sealed || row.confirmedBlockHeight !== undefined ? (
+                <ExternalLink href={monoscanTxUrl(row.txHash)} title={row.txHash} style={{ fontFamily: "var(--f-mono)" }}>
+                  {truncMiddle(row.txHash)}
+                </ExternalLink>
+              ) : (
+                <span style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }} title={row.txHash}>
+                  {truncMiddle(row.txHash)} · available after reveal
+                </span>
+              )
             }
           />
           {row.confirmedBlockHeight !== undefined ? (
@@ -165,7 +180,9 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
             )
           )}
           <DRow label="Submitted" value={relativeMs(row.broadcastedAtMs)} />
-          <MonoscanTxButton hash={row.txHash} />
+          {(!row.sealed || row.confirmedBlockHeight !== undefined) && (
+            <MonoscanTxButton hash={row.txHash} />
+          )}
         </div>
       </Modal>
     );

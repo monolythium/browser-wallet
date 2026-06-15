@@ -201,7 +201,6 @@ import {
   verifyOperatorGenesis,
   snapshotGenesisCache,
   classifyNoOperatorReason,
-  operatorDefinitivelyUntrusted,
   clearGenesisCache,
   rehydrateGenesisCache,
 } from "./networks.js";
@@ -1007,6 +1006,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
   void loadOperatorOverride().then(prefillUnknownWsEndpointsDown);
   cachedOperator = null;
+  // Drop the persisted liveness hint too — a since-removed operator must not be
+  // rehydrated + polled (it would falsely show LIVE). The next poll re-probes
+  // against the new list.
+  void chrome.storage.session.remove(SESSION_KEY_LAST_OPERATOR).catch(() => {});
   // Genesis-pin trust: a fresh override list may add an operator that was never
   // probed for genesis; drop the cache so the next dispatch re-probes
   // and the About-page health view reflects fresh trust state.
@@ -1349,6 +1352,98 @@ async function testnetTransactionCountHex(address: string): Promise<string> {
     [userAddressForNativeRpc(address)],
   );
   return rpcQuantityToHex(result, "lyth_getTransactionCount");
+}
+
+// ── Local pending-nonce tracker ──────────────────────────────────────────────
+// This chain has NO pending-nonce surface: `lyth_getTransactionCount` returns
+// the COMMITTED nonce and the runtime ignores any block tag, so a 2nd tx sent
+// before the 1st commits would reuse the same nonce → the operator mempool
+// rejects it ("replace underpriced"). The encrypted (sealed) mempool widens the
+// window because sealed txs commit later. We therefore remember the highest
+// nonce THIS wallet successfully submitted per (address, chainId) and advance
+// past it. Strictly LOCAL (we never trust an operator's pending count — there
+// is none), and TTL-healed so a dropped/never-committed tx cannot wedge the
+// nonce: past the TTL we fall back to the committed nonce.
+const PENDING_NONCE_KEY = "mono.nonce.pending"; // chrome.storage.session
+// Must exceed the encrypted-mempool reveal/commit latency (~12s) with margin so
+// a still-pending nonce isn't reused prematurely; short enough to self-heal a
+// dropped tx quickly.
+const PENDING_NONCE_TTL_MS = 5 * 60 * 1000;
+
+interface PendingNonceEntry {
+  /** Highest nonce successfully submitted for this (address, chainId). */
+  nonce: number;
+  /** Recorded-at (ms epoch); entries past PENDING_NONCE_TTL_MS are ignored. */
+  ts: number;
+}
+
+function pendingNonceKey(address: string, chainIdHex: string): string {
+  return `${address.toLowerCase()}:${chainIdHex.toLowerCase()}`;
+}
+
+async function readPendingNonceMap(): Promise<Record<string, PendingNonceEntry>> {
+  try {
+    const ses = await chrome.storage.session.get(PENDING_NONCE_KEY);
+    const m = ses[PENDING_NONCE_KEY];
+    return m !== null && typeof m === "object"
+      ? (m as Record<string, PendingNonceEntry>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Nonce hex to sign: max(committed-from-chain, local-pending + 1), TTL-healed.
+ *  Falls back to the committed nonce on any error or a stale/absent entry. */
+async function nextNonceHex(address: string, chainIdHex: string): Promise<string> {
+  const committedHex = await testnetTransactionCountHex(address);
+  let next: bigint;
+  try {
+    next = BigInt(committedHex);
+  } catch {
+    return committedHex;
+  }
+  try {
+    const entry = (await readPendingNonceMap())[
+      pendingNonceKey(address, chainIdHex)
+    ];
+    if (
+      entry !== undefined &&
+      typeof entry.nonce === "number" &&
+      typeof entry.ts === "number" &&
+      Date.now() - entry.ts < PENDING_NONCE_TTL_MS
+    ) {
+      const localNext = BigInt(entry.nonce) + 1n;
+      if (localNext > next) next = localNext;
+    }
+  } catch {
+    // fall through to the committed nonce
+  }
+  return "0x" + next.toString(16);
+}
+
+/** Record a successfully-submitted nonce so the next tx advances past it. Only
+ *  the SUCCESS path calls this (a rejected submit must NOT advance the nonce). */
+async function recordSubmittedNonce(
+  address: string,
+  chainIdHex: string,
+  nonceHex: string,
+): Promise<void> {
+  try {
+    const used = Number(BigInt(nonceHex));
+    if (!Number.isFinite(used) || used < 0) return;
+    const map = await readPendingNonceMap();
+    const key = pendingNonceKey(address, chainIdHex);
+    const prev = map[key];
+    const highest =
+      prev !== undefined && Date.now() - prev.ts < PENDING_NONCE_TTL_MS
+        ? Math.max(prev.nonce, used)
+        : used;
+    map[key] = { nonce: highest, ts: Date.now() };
+    await chrome.storage.session.set({ [PENDING_NONCE_KEY]: map });
+  } catch {
+    // best-effort — a write failure just means the next tx re-reads committed
+  }
 }
 
 interface ExecutionUnitPriceQuoteHex {
@@ -2299,7 +2394,15 @@ async function rehydrateCachedOperator(): Promise<void> {
     const hint = s?.[SESSION_KEY_LAST_OPERATOR] as
       | { name?: unknown; rpc?: unknown }
       | undefined;
-    if (hint && typeof hint.rpc === "string") {
+    // Only seed a hint that is STILL in the active operator list. Otherwise a
+    // since-removed operator (deleted from the override) whose server is still
+    // alive would be polled and falsely show LIVE — never falling through to
+    // the fresh probe that surfaces a quarantined / offline remaining fleet.
+    if (
+      hint &&
+      typeof hint.rpc === "string" &&
+      getActiveOperators().some((o) => o.rpc === hint.rpc)
+    ) {
       cachedOperator = {
         name: typeof hint.name === "string" ? hint.name : null,
         rpc: hint.rpc,
@@ -2352,10 +2455,16 @@ async function readChainBlock(
       error?: { message?: string };
     };
     if (body.error) {
+      // A -32047 "chain quarantined" from the active operator is named
+      // distinctly so the banner can read "OPERATOR QUARANTINED" once no
+      // healthy operator remains. A single quarantined op with a healthy
+      // failover never surfaces it (the handler falls through to a fresh
+      // probe — see the wallet-chain-block-number case).
+      const quarantined = /quarantin/i.test(body.error.message ?? "");
       return {
         ok: false,
         reason: body.error.message ?? "rpc error",
-        cause: classifyNoOperatorReason(),
+        cause: quarantined ? "quarantined" : classifyNoOperatorReason(),
       };
     }
     if (typeof body.result !== "string") {
@@ -4818,6 +4927,9 @@ async function persistPendingRowBackground(args: {
   /** Cluster metadata for delegation sends — same metadata-only invariant. */
   clusterId?: number;
   clusterName?: string;
+  /** Whether the tx went sealed (encrypted-mempool) — drives the UI's
+   *  "awaiting reveal" pending label + the held Monoscan link. */
+  sealed?: boolean;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -4854,6 +4966,7 @@ async function persistPendingRowBackground(args: {
       ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
       ...(args.clusterId !== undefined ? { clusterId: args.clusterId } : {}),
       ...(args.clusterName !== undefined ? { clusterName: args.clusterName } : {}),
+      ...(args.sealed !== undefined ? { sealed: args.sealed } : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -5580,6 +5693,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           const genesisEntry = snapshotGenesisCache().get(op.rpc);
           const trustedGenesis = genesisEntry?.ok ?? false;
           const observedGenesis = genesisEntry?.observed ?? null;
+          // -32047 "chain quarantined" verdict from the genesis probe (same
+          // chain, self-quarantined on a checkpoint state-root mismatch). The
+          // op still answers net_version, so the row is ok:true — this flag is
+          // what lets the UI label it "Quarantined" rather than "Untrusted".
+          const quarantined = genesisEntry?.quarantined ?? false;
 
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), PROBE_BUDGET_MS);
@@ -5612,6 +5730,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 reason: `HTTP ${res.status}`,
                 trustedGenesis,
                 observedGenesis,
+                quarantined,
                 capabilities: null,
                 indexerHeight: null,
                 indexerLatest: null,
@@ -5653,6 +5772,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               latencyMs: Date.now() - startedAt,
               trustedGenesis,
               observedGenesis,
+              quarantined,
               capabilities,
               indexerHeight: indexerSnapshot.height,
               indexerLatest: indexerSnapshot.latest,
@@ -5667,6 +5787,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               reason: (e as Error)?.name === "AbortError" ? "timeout" : "unreachable",
               trustedGenesis,
               observedGenesis,
+              quarantined,
               capabilities: null,
               indexerHeight: null,
               indexerLatest: null,
@@ -7500,6 +7621,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // probe was the bulk of the "stuck on CONNECTING…" on every reopen.
       // rehydrateCachedOperator no-ops once populated; one session read cold.
       if (cachedOperator === null) await rehydrateCachedOperator();
+      // Load the persisted genesis verdicts BEFORE the fast path so the cached
+      // operator can be gated on POSITIVE genesis trust (below). Cheap session
+      // read; no-ops once loaded.
+      await rehydrateGenesisCache();
 
       const now = Date.now();
       const cacheFresh =
@@ -7507,16 +7632,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         cachedOperator.rpc !== null &&
         now - cachedOperator.checkedAt < OPERATOR_CACHE_TTL_MS;
 
-      // C7 (Caveat B): never let the liveness fast-path read a block from a
-      // definitively-untrusted operator (a re-genesis'd / wrong-chain op that
-      // would still answer eth_blockNumber and falsely show LIVE). Pure cache
-      // read — no genesis RTT on the health path. An untrusted cached op falls
-      // through to the gated fresh probe below, which surfaces the regenesis
-      // cause so the banner says "network reset — paused" instead of LIVE.
-      if (
-        cachedOperator?.rpc &&
-        !operatorDefinitivelyUntrusted(cachedOperator.rpc)
-      ) {
+      // C7 (Caveat B) + fail-closed liveness: the fast path may ONLY read a
+      // block from a POSITIVELY genesis-trusted operator (cache ok===true). Both
+      // a re-genesis'd / wrong-chain op (definitively untrusted) AND a fake /
+      // partial endpoint with no genesis proof (observed:null, ok:false — which
+      // still answers eth_blockNumber) fail this check and fall through to the
+      // gated fresh probe, so the banner shows the real OFFLINE / QUARANTINED /
+      // regenesis state instead of a FALSE LIVE (and stops flapping LIVE↔OFFLINE
+      // as such an op intermittently answers). Pure cache read — no genesis RTT.
+      const cachedGenesisTrusted =
+        cachedOperator?.rpc != null &&
+        snapshotGenesisCache().get(cachedOperator.rpc)?.ok === true;
+      if (cachedOperator?.rpc && cachedGenesisTrusted) {
         const r = await readChainBlock(cachedOperator.rpc, cachedOperator.name);
         if (r.ok) {
           // Promote a successful stale/rehydrated candidate to a fresh hit so
@@ -7530,16 +7657,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           }
           return r;
         }
-        if (cacheFresh) return r;
-        // stale candidate failed → fall through to a fresh probe
+        // A quarantined cached op must NOT short-circuit here — fall through to
+        // the fresh probe so a healthy failover resolves to LIVE (no banner).
+        // Only when NO healthy operator remains does the all-quarantined cause
+        // surface (rpc===null branch → classifyNoOperatorReason → "quarantined").
+        if (cacheFresh && r.cause !== "quarantined") return r;
+        // stale (or quarantined) candidate failed → fall through to a fresh probe
       }
 
       let rpc: string | null;
       let operatorName: string | null;
-      // Falling through to a fresh probe — load the persisted genesis verdicts
-      // first (same boot race) so the probe's genesis check hits cache instead
-      // of re-paying its round-trip.
-      await rehydrateGenesisCache();
+      // (Genesis verdicts were rehydrated above, so the probe's genesis check
+      // hits cache instead of re-paying its round-trip.)
       try {
         const hit = await probeFirstAliveOperator(undefined, 1_000);
         setCachedOperator({
@@ -8275,6 +8404,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-mrv-build-deploy-plan": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         artifactBytes?: string;
         artifactHash?: string;
@@ -8330,6 +8462,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-mrv-build-call-plan": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         contractAddress?: string;
         input?: string;
@@ -8389,6 +8524,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "wallet-mrv-submit-plan": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         plan?: WalletMrvNativeSubmissionPlan;
         chainIdHex?: string;
@@ -8824,6 +8962,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readClusterDelegators(p.clusterId);
     }
     case "staking-autovote-seed": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       // Per-user entropy: derive a 32-byte seed from the unlocked
       // ML-DSA-65 public key + a domain tag. The public key is already
       // public state, so this leaks no secret material; different users
@@ -8893,6 +9034,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return readSpendingPolicy(p.subAccount);
     }
     case "spending-policy-build-claim": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       // §18.8 fresh-claim path. Derives a brand-new agent sub-account
       // ML-DSA-65 keypair, signs the chain-id-bound claim message with
       // it, and returns the setPolicyClaim calldata + the sub-account
@@ -8997,6 +9141,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true, status: client.status };
     }
     case "wallet-send-tx": {
+      // Self-heal a false "locked" after an MV3 SW cold-restart mid-prep
+      // (no-op + fail-closed outside the live auto-lock window).
+      await ensureUnlockRestored();
       const p = message.payload as {
         to?: string;
         valueWeiHex?: string;
@@ -9198,7 +9345,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
       }
       try {
-        const nonceHex = await testnetTransactionCountHex(fromAddr);
+        // Local pending-nonce: max(committed, last-submitted+1) so a 2nd tx
+        // sent before the 1st commits gets the NEXT nonce instead of reusing
+        // it (the chain has no pending-nonce read). See nextNonceHex.
+        const nonceHex = await nextNonceHex(fromAddr, p.chainIdHex);
         const fee = await suggestFee(p.chainIdHex);
         // T4-04 (Item D, b1): if the popup bound the exact fee it displayed,
         // sign THAT instead of a second operator read (closes the display-vs-
@@ -9247,7 +9397,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
+        const { txHash, via, sealed } = await submitMlDsaTx(txReq, boundVaultId);
+        // Advance the local pending-nonce now that the submit was accepted, so
+        // a 2nd tx sent before this one commits doesn't reuse this nonce.
+        // Awaited (small session write) so the next send sees it immediately.
+        // Only the success path reaches here — a reject throws to the catch.
+        await recordSubmittedNonce(fromAddr, p.chainIdHex, nonceHex);
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are
@@ -9262,6 +9417,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
+          sealed,
           // Metadata-only: opKind never reached submitPlaintextMlDsaTx —
           // it travels straight from the popup → here → the pending-row
           // record for the notifications hook to read back.

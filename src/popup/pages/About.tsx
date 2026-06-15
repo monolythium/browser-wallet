@@ -1204,6 +1204,7 @@ function OperatorRow({ row }: { row: OperatorHealthRow }) {
   const riskBadges = classifyOperatorRisk({
     ok: row.ok,
     trustedGenesis: row.trustedGenesis,
+    quarantined: row.quarantined,
     capabilities: row.capabilities,
     indexerHeight: row.indexerHeight,
     indexerLatest: row.indexerLatest,
@@ -1498,6 +1499,7 @@ function OperatorRiskLegendCard({
     for (const badge of classifyOperatorRisk({
       ok: op.ok,
       trustedGenesis: op.trustedGenesis,
+      quarantined: op.quarantined,
       capabilities: op.capabilities,
       indexerHeight: op.indexerHeight,
       indexerLatest: op.indexerLatest,

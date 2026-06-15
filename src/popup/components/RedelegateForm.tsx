@@ -75,6 +75,19 @@ export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
   return trimmed.length === 0 ? whole.toString() : `${whole}.${trimmed}`;
 }
 
+/** Redelegate quick-fill value: `fraction` percent (e.g. 25) of the SOURCE
+ *  weight, returned as a percent-of-balance string. Mirrors Max (= 100% of
+ *  source), so "25%" moves a quarter of what's CURRENTLY STAKED at the source
+ *  — not a quarter of the whole balance. Rounded to bps (the chain's weight
+ *  unit) so the displayed percent is clean. */
+export function redelegateQuickFillPercent(
+  srcWeightBps: number,
+  fraction: number,
+): string {
+  if (srcWeightBps <= 0) return "0";
+  return (Math.round((srcWeightBps * fraction) / 100) / 100).toString();
+}
+
 export function RedelegateForm({
   srcCluster,
   srcWeightBps,
@@ -96,6 +109,17 @@ export function RedelegateForm({
   }, [amountStr]);
   const moveBps = movePercent !== null ? percentToBps(movePercent) : 0;
 
+  // Derived for the in-form amount preview (additive). Mirrors the
+  // UnstakeForm derivation: balance × weightBps / 10000, in lythoshi.
+  const stakedInSrcLythoshi =
+    balanceLythoshi !== null && srcWeightBps > 0
+      ? (balanceLythoshi * BigInt(srcWeightBps)) / 10_000n
+      : 0n;
+  const moveLythoshi =
+    balanceLythoshi !== null && moveBps > 0
+      ? (balanceLythoshi * BigInt(moveBps)) / 10_000n
+      : 0n;
+
   const exceedsSource = moveBps > srcWeightBps;
   const totalAtDstAfter = dstExistingWeightBps + moveBps;
   const exceedsDstCap = capBps !== null && totalAtDstAfter > capBps;
@@ -103,6 +127,9 @@ export function RedelegateForm({
   const amountIsZero = movePercent === null || moveBps === 0;
   const dstChosen = dstCluster !== null;
   const sameAsSrc = dstCluster?.clusterId === srcCluster.clusterId;
+  // Additive >100% feedback (see StakeForm) — read raw input, parser untouched.
+  const exceedsHundred =
+    /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
   const canContinue =
     !amountIsZero &&
     !exceedsSource &&
@@ -261,6 +288,25 @@ export function RedelegateForm({
             inputMode="decimal"
             style={amountInputStyle}
           />
+          {[25, 50, 75].map((p) => (
+            <button
+              key={p}
+              type="button"
+              // Fraction of the SOURCE weight (like Max = 100% of source),
+              // NOT % of balance — "25%" = a quarter of what's staked here.
+              onClick={() =>
+                onAmountChange(redelegateQuickFillPercent(srcWeightBps, p))
+              }
+              disabled={srcWeightBps <= 0}
+              style={{
+                ...inlineBtnStyle,
+                padding: "8px 10px",
+                opacity: srcWeightBps <= 0 ? 0.5 : 1,
+              }}
+            >
+              {p}%
+            </button>
+          ))}
           <button
             onClick={handleMax}
             disabled={srcWeightBps <= 0 || dstCluster === null}
@@ -293,6 +339,24 @@ export function RedelegateForm({
             Would push the destination over the per-cluster cap (
             {(capBps / 100).toFixed(0)}%) by{" "}
             {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
+          </div>
+        )}
+        {exceedsHundred && (
+          <div style={inlineErr}>
+            Enter a percent between 0.01% and 100% of your balance.
+          </div>
+        )}
+        {moveBps > 0 && balanceLythoshi !== null && (
+          <div style={{ ...fromHint, color: "var(--fg-300)" }}>
+            Moving{" "}
+            <strong style={amountStrong}>
+              {lythoshiToLyth(moveLythoshi)} LYTH
+            </strong>{" "}
+            of{" "}
+            <strong style={amountStrongMuted}>
+              {lythoshiToLyth(stakedInSrcLythoshi)} LYTH
+            </strong>{" "}
+            staked in {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
           </div>
         )}
         <div style={fromHint}>
@@ -356,6 +420,8 @@ const cardLabel: CSSProperties = {
 
 const amountInputStyle: CSSProperties = {
   flex: 1,
+  minWidth: 0,
+  maxWidth: 110,
   padding: "10px 12px",
   borderRadius: 10,
   background: "rgba(0,0,0,0.3)",
@@ -393,16 +459,31 @@ const fromHint: CSSProperties = {
   lineHeight: 1.5,
 };
 
+// Emphasized LYTH amounts inside the move preview — bigger + the wallet's
+// mono numeric font so the figures stand out from the prose.
+const amountStrong: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 13,
+  color: "var(--gold)",
+};
+
+const amountStrongMuted: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 11,
+  color: "var(--fg-200)",
+};
+
 const pickDstBtnStyle: CSSProperties = {
   padding: "12px 10px",
   borderRadius: 8,
-  border: "1px dashed var(--fg-700)",
-  background: "transparent",
-  color: "var(--fg-300)",
-  fontFamily: "var(--f-mono)",
-  fontSize: 11,
+  border: "1px solid var(--gold)",
+  background: "var(--gold-bg)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontWeight: 600,
+  fontSize: 12,
   cursor: "pointer",
-  textAlign: "left",
+  textAlign: "center",
   width: "100%",
 };
 

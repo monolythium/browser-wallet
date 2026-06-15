@@ -123,7 +123,34 @@ type ChainHealth =
   // — the network re-genesised. Distinct from `untrusted` (wrong chain id) so the
   // banner can say "network may have reset" and Home can pause honestly.
   | { kind: "regenesis" }
+  // Every active operator self-quarantined (checkpoint state-root mismatch) —
+  // same chain, refusing RPC. Distinct red banner; balance is NOT paused (the
+  // value stays knowable once an operator recovers / via Monoscan).
+  | { kind: "quarantined" }
   | { kind: "offline"; reason: string };
+
+/** The discriminant of {@link ChainHealth}, lifted out so App can hold the
+ *  banner's health kind in state (via `onHealthChange`) and pass a derived
+ *  "chain not live" boolean down to Home. */
+export type ChainHealthKind = ChainHealth["kind"];
+
+/** Whether a banner health kind represents a SETTLED non-live chain — i.e. the
+ *  balance + activity should be hidden because the wallet can't currently stand
+ *  behind on-chain data. True for offline / quarantined / untrusted / regenesis
+ *  / stalled. The transient connecting states (loading, reconnecting) and a
+ *  null/unknown kind return FALSE so a healthy open doesn't flash "—" before the
+ *  first poll lands; the balance-fetch `balanceCause` path covers any degraded
+ *  case during that brief window. Pure + exported for tests. */
+export function chainKindNotLive(
+  kind: ChainHealthKind | null | undefined,
+): boolean {
+  return (
+    kind != null &&
+    kind !== "live" &&
+    kind !== "loading" &&
+    kind !== "reconnecting"
+  );
+}
 
 const HEALTH_TICK_MS = 8_000;
 const STALL_THRESHOLD_MS = 30_000;
@@ -143,13 +170,15 @@ const WS_BLOCK_KEY = "mono.ws.lastBlockHex";
  */
 export function chainHealthForFailedPoll(r: {
   reason?: string;
-  cause?: "unreachable" | "untrusted" | "regenesis";
+  cause?: "unreachable" | "untrusted" | "regenesis" | "quarantined";
 }): ChainHealth {
   // C5: a genesis MISMATCH on the right chain id (the network re-genesised)
   // renders the distinct "network reset — paused" banner; a wrong-chain-id
-  // operator stays UNTRUSTED; every other failure stays OFFLINE.
+  // operator stays UNTRUSTED; an all-quarantined fleet renders the distinct
+  // "OPERATOR QUARANTINED" banner; every other failure stays OFFLINE.
   if (r.cause === "regenesis") return { kind: "regenesis" };
   if (r.cause === "untrusted") return { kind: "untrusted" };
+  if (r.cause === "quarantined") return { kind: "quarantined" };
   return { kind: "offline", reason: r.reason ?? "unreachable" };
 }
 
@@ -201,6 +230,18 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         color: "var(--err)",
         tooltip:
           "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. Click to see operators.",
+        tappable: true,
+      };
+    case "quarantined":
+      return {
+        label: "OPERATOR QUARANTINED",
+        // Red (same hard-trust token as UNTRUSTED / OFFLINE) — every operator
+        // self-quarantined on a checkpoint state-root mismatch and refuses RPC.
+        // Scrolls as a marquee (the long label). Balance is NOT paused: the
+        // value stays knowable once an operator recovers / via Monoscan.
+        color: "var(--err)",
+        tooltip:
+          "Every operator self-quarantined (a checkpoint state-root mismatch) and won't serve RPC — they're on your chain but temporarily can't be trusted. The wallet reconnects automatically once one recovers. Click to see operators.",
         tappable: true,
       };
     case "offline":
@@ -288,12 +329,18 @@ export function shouldLabelBalanceStale(
 export function shouldPauseBalanceDisplay(
   isPriv: boolean,
   balance: number | null | undefined,
-  cause: "unreachable" | "untrusted" | "regenesis" | null | undefined,
+  cause: "unreachable" | "untrusted" | "regenesis" | "quarantined" | null | undefined,
 ): boolean {
+  // An all-quarantined fleet (no serviceable operator) makes the live balance
+  // unknowable too, same as untrusted/regenesis — pause + Monoscan rather than a
+  // bare 0.00. (A SINGLE quarantined op with a healthy failover never produces
+  // cause:"quarantined", so this only fires when no operator is serviceable.)
   return (
     !isPriv &&
     balance == null &&
-    (cause === "regenesis" || cause === "untrusted")
+    (cause === "regenesis" ||
+      cause === "untrusted" ||
+      cause === "quarantined")
   );
 }
 
@@ -362,6 +409,10 @@ interface ChainStatusBannerProps {
    *  why the pinned genesis may be stale. Optional; omitted on the secondary
    *  approval/unlock banners, where the label renders non-tappable. */
   onOpenOperators?: () => void;
+  /** Fired whenever the banner's health KIND changes. The main popup lifts this
+   *  to App so Home can hide the balance + activity for all non-live states
+   *  (see `chainKindNotLive`). Optional — secondary banners omit it. */
+  onHealthChange?: (kind: ChainHealthKind) => void;
 }
 
 // Last chain-health snapshot, cached at MODULE scope so it survives a banner
@@ -384,6 +435,7 @@ export function ChainStatusBanner({
   unreadCount,
   onMenu,
   onOpenOperators,
+  onHealthChange,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>(
     () => lastKnownHealth ?? { kind: "loading" },
@@ -391,10 +443,13 @@ export function ChainStatusBanner({
   const [operator, setOperator] = useState<string | null>(null);
 
   // Persist every health change to the module-scoped snapshot so the next
-  // in-session remount seeds from it (above) rather than re-showing CONNECTING.
+  // in-session remount seeds from it (above) rather than re-showing CONNECTING,
+  // and lift the kind to the parent (App → Home) so non-live states can hide the
+  // balance + activity. onHealthChange is expected to be a stable callback.
   useEffect(() => {
     lastKnownHealth = health;
-  }, [health]);
+    onHealthChange?.(health.kind);
+  }, [health, onHealthChange]);
 
   // Chain-health poll. Tracks `lastBlockHex` and `lastBlockObservedAt` so
   // we can distinguish "RPC reachable but chain stalled" from "RPC down".
@@ -407,16 +462,34 @@ export function ChainStatusBanner({
     let cancelled = false;
     let lastBlockHex: string | null = null;
     let lastBlockObservedAt = Date.now();
+    // The genesis-gated HTTP poll is the source of truth for whether the chain
+    // is serviceable. The WS `newHeads` push is only a faster freshness signal
+    // and must NOT independently flip the banner to LIVE when the poll says the
+    // chain is degraded: a still-up-but-quarantined operator keeps relaying
+    // heads (and its genesis verdict is forever-cached as ok:true), which would
+    // otherwise flap the banner LIVE↔OFFLINE against the poll. Latched by the
+    // poll below; the WS listener honors it.
+    let pollDegraded = false;
+    // Cold-start race guard. On a popup refocus Chrome remounts this banner, so
+    // pollDegraded resets to false; the SW's persistent WS connection can push a
+    // head BEFORE this mount's first poll resolves, briefly flashing LIVE over a
+    // chain that's actually offline. So the WS listener is honored ONLY AFTER the
+    // first poll of THIS mount has established a baseline — WS never INITIATES a
+    // live transition from a cold/unknown state; only the gated poll does.
+    let pollResolvedThisMount = false;
 
     const tick = async () => {
       if (cancelled || document.visibilityState === "hidden") return;
       try {
         const r = await bgWalletChainBlockNumber();
         if (cancelled) return;
+        pollResolvedThisMount = true;
         if (!r.ok) {
+          pollDegraded = true;
           setHealth(chainHealthForFailedPoll(r));
           return;
         }
+        pollDegraded = false;
         const now = Date.now();
         if (lastBlockHex === null || r.blockHex !== lastBlockHex) {
           lastBlockHex = r.blockHex;
@@ -436,6 +509,8 @@ export function ChainStatusBanner({
         // else: same block but within fresh window — keep current state
       } catch (e) {
         if (cancelled) return;
+        pollResolvedThisMount = true;
+        pollDegraded = true;
         setHealth({ kind: "offline", reason: (e as Error).message });
       }
     };
@@ -483,6 +558,14 @@ export function ChainStatusBanner({
     ) => {
       if (area !== "session") return;
       if (cancelled) return;
+      // Defer to the genesis-gated poll. (1) Until THIS mount's first poll has
+      // resolved, ignore WS heads entirely — otherwise a head buffered on the
+      // SW's persistent WS connection flashes LIVE on refocus before the poll
+      // can confirm the real state. (2) Once resolved, while the poll says the
+      // chain is degraded (offline / quarantined / untrusted / re-genesis),
+      // keep ignoring heads so a still-relaying quarantined operator can't flap
+      // us to LIVE. The next poll re-confirms recovery and re-opens the gate.
+      if (!pollResolvedThisMount || pollDegraded) return;
       const change = changes[WS_BLOCK_KEY];
       if (!change || typeof change.newValue !== "string") return;
       const blockHex = change.newValue;
@@ -612,7 +695,9 @@ export function ChainStatusBanner({
       ? reconnectingBannerLabel(health.blockHex)
       : pres.label;
   const labelEl =
-    health.kind === "untrusted" || health.kind === "regenesis" ? (
+    health.kind === "untrusted" ||
+    health.kind === "regenesis" ||
+    health.kind === "quarantined" ? (
       <span
         className="ext-banner-marquee"
         {...tapProps}
@@ -864,9 +949,14 @@ interface AssetListProps {
   account: Account;
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
+  /** When true the chain is non-live (offline / quarantined / untrusted /
+   *  regenesis / stalled): hide the LYTH balance amount ("—") so the Assets row
+   *  matches the hidden hero value instead of showing a figure the wallet can't
+   *  currently confirm. */
+  hideBalance?: boolean;
 }
 
-export function AssetList({ account, network, indexer }: AssetListProps) {
+export function AssetList({ account, network, indexer, hideBalance }: AssetListProps) {
   const lythAmount = account.balance;
   const liveRows = indexer?.tokenBalances ?? [];
   return (
@@ -909,7 +999,9 @@ export function AssetList({ account, network, indexer }: AssetListProps) {
         </div>
         <div className="ext-asset__spark" />
         <div className="ext-asset__right">
-          <div className="amt">{lythAmount != null ? fmt(lythAmount, 2) : "0.00"}</div>
+          <div className="amt">
+            {hideBalance ? "—" : lythAmount != null ? fmt(lythAmount, 2) : "0.00"}
+          </div>
           <div className="chg">—</div>
         </div>
       </div>
@@ -1892,7 +1984,14 @@ interface HomeProps {
   balanceStale?: boolean;
   /** C5: typed reason the last balance refresh failed, so Home can pause
    *  honestly on a re-genesis / wrong-chain operator instead of a bare 0.00. */
-  balanceCause?: "unreachable" | "untrusted" | "regenesis" | null;
+  balanceCause?: "unreachable" | "untrusted" | "regenesis" | "quarantined" | null;
+  /** Lifted from the chain-status banner (App → Home): true when the chain is in
+   *  a SETTLED non-live state (offline / quarantined / untrusted / regenesis /
+   *  stalled). Hides the balance value EVERYWHERE (hero + Assets row) and the
+   *  Activity list, so the wallet never shows on-chain data it can't currently
+   *  stand behind. Distinct from `balanceCause` (which only fires when the
+   *  balance FETCH fails); the two are OR'd. */
+  chainNotLive?: boolean;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -1920,7 +2019,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, balanceStale, balanceCause, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -1933,16 +2032,44 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
     account.balance,
     balanceCause,
   );
-  // C2: the Monoscan "check your balance" external link for the paused state
-  // (the user's own address over the trusted base; null on a bad/non-0x addr).
-  const pausedMonoscanUrl = balancePaused
+  // The balance is "degraded" — the wallet is NOT connected to a trusted,
+  // reachable operator: a trust mismatch (untrusted / re-genesis), an all-
+  // quarantined fleet, OR the chain is unreachable (offline). In every one of
+  // these the live balance can't be confirmed, so we HIDE the value (below) and
+  // show the rich cause-specific explanation + Monoscan link, instead of a
+  // retained number the wallet can't currently stand behind. `unreachable` is
+  // only ever set after a quiet retry (App.refreshBalance), so this is a
+  // sustained offline state, not a single-tick blip.
+  const balanceDegraded =
+    !isPriv &&
+    (balanceCause === "untrusted" ||
+      balanceCause === "regenesis" ||
+      balanceCause === "quarantined" ||
+      balanceCause === "unreachable");
+  // C2: the Monoscan "check your balance" external link for the paused/degraded
+  // state (the user's own address over the trusted base; null on a bad addr).
+  const pausedMonoscanUrl = balanceDegraded
     ? pausedBalanceMonoscanUrl(account.addr)
     : null;
+  // Hide the balance VALUE everywhere (hero + Assets row) when EITHER the last
+  // balance refresh failed (`balanceDegraded`, which carries the cause-specific
+  // rich block) OR the chain-status banner reports a settled non-live state
+  // (`chainNotLive` — offline / quarantined / untrusted / regenesis / stalled).
+  // The latter closes the window where the chain is down but the balance fetch
+  // hasn't failed yet (cached value). Never applies to the private balance,
+  // which is always hidden by design.
+  const hideBalanceValue = balanceDegraded || (!isPriv && chainNotLive === true);
+  // Hide the value entirely whenever degraded/non-live — even when a last-known
+  // number is retained. The wallet isn't connected, so showing a stale figure
+  // would imply a confirmed balance it can't stand behind; the rich block below
+  // explains why (when there's a cause) and links to Monoscan. Honest absence,
+  // never a misleading 0.00. (`balancePaused` ⊆ `balanceDegraded`; kept for the
+  // value-unknown sub-case the exported helper documents/tests.)
   const totalStr =
-    account.balance != null
-      ? fmt(account.balance, 2)
-      : balancePaused
-        ? "—"
+    hideBalanceValue || balancePaused
+      ? "—"
+      : account.balance != null
+        ? fmt(account.balance, 2)
         : "0.00";
   // #42: label the hero as a retained last-known value only when the chain
   // couldn't be reached AND there's a real balance to annotate (never on the
@@ -1987,7 +2114,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
             <div
               className="num"
               style={
-                showStaleBalance || balancePaused
+                showStaleBalance || hideBalanceValue
                   ? { opacity: 0.55 }
                   : undefined
               }
@@ -1999,7 +2126,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               <span className="d">LYTH</span>
             </div>
           )}
-          {balancePaused && (
+          {balanceDegraded && (
             <div
               style={{
                 fontFamily: "var(--f-mono)",
@@ -2010,7 +2137,11 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               }}
             >
               <div style={{ color: "var(--err)", fontWeight: 600 }}>
-                Untrusted operators
+                {balanceCause === "quarantined"
+                  ? "Operators quarantined"
+                  : balanceCause === "unreachable"
+                    ? "Can't reach the network"
+                    : "Untrusted operators"}
               </div>
               <div
                 style={{
@@ -2019,9 +2150,13 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
                   marginTop: 1,
                 }}
               >
-                {balanceCause === "untrusted"
-                  ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
-                  : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
+                {balanceCause === "quarantined"
+                  ? "Every operator self-quarantined (a checkpoint state-root mismatch) and isn't serving requests right now. They're on your chain — the app reconnects automatically once one recovers, or switch to another operator. Your funds are safe."
+                  : balanceCause === "unreachable"
+                    ? "No operator is responding right now, so the wallet can't confirm your live balance. Your funds are safe and nothing changed — the app reconnects automatically once an operator is back, or switch to another operator on your wallet's network."
+                    : balanceCause === "untrusted"
+                      ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
+                      : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
               </div>
               {pausedMonoscanUrl && (
                 <div style={{ marginTop: 3, letterSpacing: 0 }}>
@@ -2035,7 +2170,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               )}
             </div>
           )}
-          {showStaleBalance && (
+          {showStaleBalance && !balanceDegraded && (
             <div
               style={{
                 fontFamily: "var(--f-mono)",
@@ -2146,7 +2281,12 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               id="ext-tabpanel-assets"
               aria-labelledby="ext-tab-assets"
             >
-              <AssetList account={account} network={network} indexer={indexer} />
+              <AssetList
+                account={account}
+                network={network}
+                indexer={indexer}
+                hideBalance={hideBalanceValue}
+              />
             </div>
           )}
           {tab === "activity" && (
@@ -2155,9 +2295,15 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               id="ext-tabpanel-activity"
               aria-labelledby="ext-tab-activity"
             >
+              {/* Suppress the CONFIRMED on-chain history while the chain is
+                  non-live (it's stale/untrusted right now), but keep the user's
+                  own pending + failed rows visible — hiding an in-flight tx at
+                  the moment the chain blips would be worse than the stale-
+                  history problem this addresses. ActivityList owns the note. */}
               <ActivityList
                 addr={account.addr.startsWith("0x") ? account.addr : null}
                 chainIdHex={network.chainId}
+                hideConfirmed={hideBalanceValue}
               />
             </div>
           )}

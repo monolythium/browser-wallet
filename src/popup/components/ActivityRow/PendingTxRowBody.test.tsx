@@ -102,3 +102,26 @@ describe("PendingTxRowBody — suppress meaningless 0-value amount", () => {
     expect(pending).toContain("5 LYTH");
   });
 });
+
+describe("PendingTxRowBody — sealed 'awaiting reveal' label", () => {
+  it("labels a sealed, unrevealed pending row 'awaiting reveal'", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ sealed: true, opKind: "send", amountDecimal: "5" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("awaiting reveal");
+  });
+
+  it("a plaintext pending row stays a plain 'Pending' (no 'awaiting reveal')", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ sealed: false, opKind: "send", amountDecimal: "5" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Pending");
+    expect(html).not.toContain("awaiting reveal");
+  });
+});

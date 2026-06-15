@@ -35,6 +35,9 @@ import {
 } from "@monolythium/core-sdk";
 import { MlDsa65Backend, hexToBytes } from "@monolythium/core-sdk/crypto";
 import { keccak_256 } from "@noble/hashes/sha3.js";
+// keystore-mldsa is mocked below (vi.mock); import the mocked namespace so the
+// P7a self-heal test can reprogram tryRestoreFromSessionV4 for one call.
+import * as keystoreMldsaMock from "./keystore-mldsa.js";
 
 const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
 const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
@@ -138,6 +141,7 @@ vi.mock("./tx-mldsa.js", () => ({
       txHash: SUBMITTED_TX_HASH,
       via: "mock-operator",
       innerSighashHex: "0x" + "b".repeat(64),
+      ...(submitSealedReturn !== undefined ? { sealed: submitSealedReturn } : {}),
     };
   }),
 }));
@@ -315,6 +319,10 @@ function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
   };
 }
 let submitFailure: (Error & { code?: number }) | null = null;
+// Controls the mock submitMlDsaTx return's `sealed` field. undefined → omit it
+// (default; backward-compatible). Set true/false in a test to exercise the
+// sealed-pending-row plumbing.
+let submitSealedReturn: boolean | undefined;
 
 // Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
@@ -690,6 +698,7 @@ beforeEach(() => {
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
+  submitSealedReturn = undefined;
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   unlocked = true;
@@ -2438,6 +2447,40 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(persisted.pending[0]?.broadcastBlockHeight).toBe(100);
   });
 
+  it("carries the sealed-submission flag onto the pending row (true and false)", async () => {
+    seedTestnetNonceAndFee();
+    rpcResponses["eth_blockNumber"] = "0x64";
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    const sendOnce = async () => {
+      await dispatchPopup({
+        kind: "popup",
+        op: "wallet-send-tx",
+        payload: {
+          to: "0xrecipient",
+          valueWeiHex: "0x16345785d8a0000",
+          chainIdHex: TESTNET_CHAIN_ID_HEX,
+        },
+      });
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      return (
+        storageLocal[pendingKey] as { pending: Array<{ sealed?: boolean }> }
+      ).pending[0];
+    };
+
+    // Sealed submit → row tagged sealed:true.
+    submitSealedReturn = true;
+    expect((await sendOnce())?.sealed).toBe(true);
+
+    // Plaintext submit → row tagged sealed:false. Reset rows + the local
+    // nonce so the 2nd send is a clean first-nonce send.
+    storageLocal = {};
+    delete storageSession["mono.nonce.pending"];
+    submitSealedReturn = false;
+    expect((await sendOnce())?.sealed).toBe(false);
+  });
+
   it("FAILED broadcast does NOT write a pending row", async () => {
     seedTestnetNonceAndFee();
     submitFailure = new Error("broadcast rejected") as Error & { code: number };
@@ -2682,6 +2725,11 @@ describe("wallet-send-tx pending-row prepend", () => {
     // / signature / envelope / fee / nonce do not depend on opKind.
     submitMlDsaCalls.length = 0;
     storageLocal = {};
+    // Clear the local pending-nonce tracker too, so the 2nd identical send
+    // reads the same committed nonce. Without this the tracker advances it to
+    // nonce+1 (see nextNonceHex/recordSubmittedNonce); the invariant under
+    // test (opKind never reaches the signer) is independent of the nonce.
+    delete storageSession["mono.nonce.pending"];
     await dispatchSend({
       to: "0xrecipient",
       valueWeiHex: "0x989680",
@@ -3109,6 +3157,66 @@ describe("fired auto-lock clears the session-MEK rehydrate cap (#17)", () => {
     expect(storageSession[SESSION_KEY_MEK_V4]).toBeUndefined();
     expect(storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE]).toBeUndefined();
     expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// submit/sign self-heals a false "locked" from an MV3 SW cold-restart (P7a)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("submit/sign self-heals a false-locked SW cold-restart (P7a)", () => {
+  it("wallet-send-tx rehydrates within the auto-lock window instead of false-locking", async () => {
+    // MV3 SW cold-restart mid-prep: the in-memory backend reset to locked, but
+    // the session MEK is still valid AND we're within the auto-lock deadline.
+    unlocked = false;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() + 60_000;
+    vi.mocked(keystoreMldsaMock.tryRestoreFromSessionV4).mockImplementationOnce(
+      async () => {
+        unlocked = true; // a valid session MEK rehydrates the backend
+        return { ok: true, address: DETERMINISTIC_ADDRESS, vaultId: "v1" };
+      },
+    );
+    // Broadcast preamble so the rehydrated submit completes (mirrors the
+    // wallet-send-tx happy-path seeding above).
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x16345785d8a0000",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: boolean; reason?: string };
+
+    expect(keystoreMldsaMock.tryRestoreFromSessionV4).toHaveBeenCalled();
+    expect(r).not.toEqual({ ok: false, reason: "wallet locked" });
+    expect(r.ok).toBe(true);
+  });
+
+  it("stays locked (fail-closed) when the auto-lock deadline has elapsed", async () => {
+    unlocked = false;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() - 1; // elapsed
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x16345785d8a0000",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: false; reason?: string };
+
+    expect(r).toEqual({ ok: false, reason: "wallet locked" });
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
 
