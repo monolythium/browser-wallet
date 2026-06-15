@@ -346,14 +346,14 @@ export function OperatorDirectory({
                         <button
                           type="button"
                           onClick={() => setConnectFlow(null)}
-                          style={pickerResetBtn}
+                          style={modalGhostBtn}
                         >
                           Cancel
                         </button>
                         <button
                           type="button"
                           onClick={() => void confirmUse(connectFlow.op)}
-                          style={pickerUseBtn}
+                          style={modalPrimaryBtn}
                         >
                           Connect
                         </button>
@@ -391,7 +391,10 @@ export function OperatorDirectory({
                         <button
                           type="button"
                           onClick={() => setConnectFlow(null)}
-                          style={{ ...pickerUseBtn, marginLeft: "auto" }}
+                          style={{
+                            ...(connectFlow.ok ? modalPrimaryBtn : modalGhostBtn),
+                            marginLeft: "auto",
+                          }}
                         >
                           {connectFlow.ok ? "Done" : "Close"}
                         </button>
@@ -600,6 +603,39 @@ const pickerResetBtn: CSSProperties = {
   color: "var(--fg-200)",
   fontFamily: "var(--f-sans)",
   fontSize: 10,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+// Connect-flow Modal buttons. The primary CTA mirrors the wallet's main action
+// button (`.ext-act.prim`): a gold gradient with `--ink-000` text and the same
+// glow shadow. All four tokens (--gold, --gold-hi, --gold-glow, --ink-000) are
+// redefined per theme in themes.css, so the button recolors with the active
+// theme. Distinct from the row-level `pickerUseBtn` (a softer list affordance).
+const modalPrimaryBtn: CSSProperties = {
+  padding: "7px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--gold)",
+  background: "linear-gradient(180deg, var(--gold-hi), var(--gold))",
+  color: "var(--ink-000)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 11,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  boxShadow:
+    "0 4px 14px rgba(var(--gold-glow), 0.3), inset 0 1px 0 rgba(255,255,255,0.35)",
+};
+
+const modalGhostBtn: CSSProperties = {
+  padding: "7px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--fg-700)",
+  background: "transparent",
+  color: "var(--fg-200)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 11,
+  fontWeight: 600,
   cursor: "pointer",
   whiteSpace: "nowrap",
 };

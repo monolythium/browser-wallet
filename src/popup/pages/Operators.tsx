@@ -500,33 +500,14 @@ export function Operators({
                       <button
                         type="button"
                         onClick={() => setConnectFlow(null)}
-                        style={{
-                          flex: 1,
-                          padding: "8px 10px",
-                          borderRadius: 8,
-                          border: "1px solid var(--fg-700)",
-                          background: "transparent",
-                          color: "var(--fg-200)",
-                          fontSize: 12,
-                          cursor: "pointer",
-                        }}
+                        style={{ ...modalGhostBtn, flex: 1 }}
                       >
                         Cancel
                       </button>
                       <button
                         type="button"
                         onClick={() => void confirmUseOperator(connectFlow.rid)}
-                        style={{
-                          flex: 1,
-                          padding: "8px 10px",
-                          borderRadius: 8,
-                          border: "none",
-                          background: "var(--ok)",
-                          color: "#06210f",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: "pointer",
-                        }}
+                        style={{ ...modalPrimaryBtn, flex: 1 }}
                       >
                         Connect
                       </button>
@@ -566,15 +547,8 @@ export function Operators({
                         type="button"
                         onClick={() => setConnectFlow(null)}
                         style={{
+                          ...(connectFlow.ok ? modalPrimaryBtn : modalGhostBtn),
                           marginLeft: "auto",
-                          padding: "8px 16px",
-                          borderRadius: 8,
-                          border: "1px solid var(--fg-700)",
-                          background: "transparent",
-                          color: "var(--fg-200)",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: "pointer",
                         }}
                       >
                         {connectFlow.ok ? "Done" : "Close"}
@@ -885,6 +859,39 @@ const secondaryBtn: CSSProperties = {
   fontSize: 12,
   fontWeight: 500,
   cursor: "pointer",
+};
+
+// Connect-flow Modal buttons. The primary CTA mirrors the wallet's main action
+// button (`.ext-act.prim`): a gold gradient with `--ink-000` text and the same
+// glow shadow. All four tokens (--gold, --gold-hi, --gold-glow, --ink-000) are
+// redefined per theme in themes.css, so the button recolors with the active
+// theme (indigo / teal / …) instead of the hardcoded green it used before.
+const modalPrimaryBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--gold)",
+  background: "linear-gradient(180deg, var(--gold-hi), var(--gold))",
+  color: "var(--ink-000)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  boxShadow:
+    "0 4px 14px rgba(var(--gold-glow), 0.3), inset 0 1px 0 rgba(255,255,255,0.35)",
+};
+
+const modalGhostBtn: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--fg-700)",
+  background: "transparent",
+  color: "var(--fg-200)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 
 // ---- helpers ----
