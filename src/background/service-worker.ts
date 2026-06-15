@@ -1007,6 +1007,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (!(STORAGE_KEY_OPERATOR_OVERRIDE in changes)) return;
   void loadOperatorOverride().then(prefillUnknownWsEndpointsDown);
   cachedOperator = null;
+  // Drop the persisted liveness hint too — a since-removed operator must not be
+  // rehydrated + polled (it would falsely show LIVE). The next poll re-probes
+  // against the new list.
+  void chrome.storage.session.remove(SESSION_KEY_LAST_OPERATOR).catch(() => {});
   // Genesis-pin trust: a fresh override list may add an operator that was never
   // probed for genesis; drop the cache so the next dispatch re-probes
   // and the About-page health view reflects fresh trust state.
@@ -2391,7 +2395,15 @@ async function rehydrateCachedOperator(): Promise<void> {
     const hint = s?.[SESSION_KEY_LAST_OPERATOR] as
       | { name?: unknown; rpc?: unknown }
       | undefined;
-    if (hint && typeof hint.rpc === "string") {
+    // Only seed a hint that is STILL in the active operator list. Otherwise a
+    // since-removed operator (deleted from the override) whose server is still
+    // alive would be polled and falsely show LIVE — never falling through to
+    // the fresh probe that surfaces a quarantined / offline remaining fleet.
+    if (
+      hint &&
+      typeof hint.rpc === "string" &&
+      getActiveOperators().some((o) => o.rpc === hint.rpc)
+    ) {
       cachedOperator = {
         name: typeof hint.name === "string" ? hint.name : null,
         rpc: hint.rpc,
