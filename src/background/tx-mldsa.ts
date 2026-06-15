@@ -301,8 +301,20 @@ export interface BalanceConsensusResult {
   failing: ReadonlyArray<{ name: string; reason: string }>;
 }
 
-/** Per-operator timeout for the parallel balance probe. */
-const BALANCE_CONSENSUS_TIMEOUT_MS = 5_000;
+/** Per-operator timeout for the parallel balance probe. Kept tight: a healthy
+ *  operator answers eth_getBalance in well under a second, so 5 s only ever
+ *  served to make an unreachable/fake operator drag the whole Promise.all
+ *  consensus out for that long (the balance card then lingered on a stale
+ *  "couldn't reach" while the banner — on its own 1.5 s liveness path — already
+ *  read LIVE). 2.5 s is generous for a real op and fails a dead one fast. */
+const BALANCE_CONSENSUS_TIMEOUT_MS = 2_500;
+
+/** Bound the per-operator genesis check inside the balance consensus so an
+ *  unreachable/fake operator's probe can't block Promise.all. Matches the
+ *  dispatch path's 2 s bound; with the block-0-fallback fast-fail in
+ *  probeOperatorGenesis a dead op now resolves its genesis verdict in ~one
+ *  timeout instead of two. */
+const BALANCE_GENESIS_PROBE_TIMEOUT_MS = 2_000;
 
 /**
  * T4-03 (Item C) — absolute sane upper bound on a single-account balance, in
@@ -391,7 +403,7 @@ export async function testnetMaxBalanceConsensus(
     // Treated as a "failing" entry so the consensus result still
     // reports the skipped operator's name and reason — distinct from
     // a network error, and visible in the SW console balance log.
-    if (!(await verifyOperatorGenesis(op.rpc))) {
+    if (!(await verifyOperatorGenesis(op.rpc, BALANCE_GENESIS_PROBE_TIMEOUT_MS))) {
       return { name: op.name, balanceHex: null, reason: "untrusted genesis" };
     }
     const ctrl = new AbortController();

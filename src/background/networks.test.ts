@@ -193,6 +193,24 @@ describe("verifyOperatorGenesis", () => {
     expect(snapshotGenesisCache().get(RPC)?.observed).toBeNull();
   });
 
+  it("an UNREACHABLE operator makes ONE call (chainStats), not a doubled block-0 timeout", async () => {
+    // Latency fix: a transport-failed chainStats means the op is down, so the
+    // block-0 fallback (which would time out a SECOND time) is skipped. This is
+    // what kept a fake/offline operator from dragging the balance consensus +
+    // first liveness poll out to ~2x the probe timeout.
+    const spy = vi.fn(async (_url: unknown, _init?: { body?: unknown }) => {
+      throw new TypeError("network unreachable");
+    });
+    globalThis.fetch = spy as unknown as typeof fetch;
+    expect(await verifyOperatorGenesis(RPC)).toBe(false);
+    // Exactly one fetch (lyth_chainStats) — NOT a second eth_getBlockByNumber.
+    expect(spy).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(String(spy.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      method?: string;
+    };
+    expect(sent.method).toBe("lyth_chainStats");
+  });
+
   it("T6 (C3): bounds the genesis probe — a hung operator aborts at the given timeout, not the 3s default", async () => {
     // fetch never resolves on its own; it rejects ONLY when the AbortController
     // fires, proving the bounded timeout drives the probe to a fast `false`.

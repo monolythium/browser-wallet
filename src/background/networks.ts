@@ -688,6 +688,19 @@ async function probeOperatorGenesis(
         checkedAt: now,
       };
     }
+  } else {
+    // Fail fast on an UNREACHABLE operator. `stats.ok === false` means the
+    // chainStats call had a TRANSPORT failure (timeout / connection refused) —
+    // the operator is down. The block-0 fallback below exists only for an
+    // operator that ANSWERED chainStats (stats.ok) but is too old to expose
+    // `genesisHash`; against a dead operator it would just time out a SECOND
+    // time, DOUBLING an unreachable op's probe latency (~timeoutMs → ~2×). That
+    // doubled latency is what dragged the balance consensus + the first liveness
+    // poll past their budgets when a fake/offline operator was in the set, so a
+    // dead operator now costs one timeout, not two. (A real operator missing
+    // chainStats replies with a method-not-found ERROR, i.e. stats.ok === true,
+    // so it still reaches the block-0 fallback.)
+    return { ok: false, observed: null, checkedAt: now };
   }
 
   const block0 = await rpcCall(rpc, timeoutMs, "eth_getBlockByNumber", [
