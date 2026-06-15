@@ -20,6 +20,7 @@ import {
 } from "./keystore-mldsa.js";
 import {
   allActiveOperatorsDefinitivelyUntrusted,
+  classifyNoOperatorReason,
   getActiveOperators,
   verifyOperatorGenesis,
 } from "./networks.js";
@@ -71,6 +72,26 @@ export class ChainGenesisMismatchError extends Error {
   constructor(operatorCount: number) {
     super(genesisMismatchMessage(operatorCount));
     this.name = "ChainGenesisMismatchError";
+  }
+}
+
+/** Message for the all-operators-QUARANTINED aggregate — same chain, but every
+ *  active operator self-quarantined on a checkpoint state-root mismatch and is
+ *  refusing RPC. Distinct from a genesis mismatch: the remedy is "wait for an
+ *  operator to recover / switch operators", NOT "bump the pin". The
+ *  "operators quarantined" phrasing is what send-error classification keys on. */
+function quarantinedAggregateMessage(operatorCount: number): string {
+  return `Operators quarantined — all ${operatorCount} active operator${operatorCount === 1 ? "" : "s"} reported a checkpoint state-root mismatch and are refusing requests. They're on your chain but temporarily can't be trusted; the wallet reconnects automatically once one recovers. See Operators.`;
+}
+
+/** Thrown when EVERY active operator fails the genesis gate AND all of them are
+ *  quarantined (not a genuine genesis mismatch). Lets the Send/Stake screens
+ *  show quarantine copy instead of the misleading re-genesis copy. */
+export class ChainQuarantinedError extends Error {
+  readonly kind = "all-quarantined" as const;
+  constructor(operatorCount: number) {
+    super(quarantinedAggregateMessage(operatorCount));
+    this.name = "ChainQuarantinedError";
   }
 }
 
@@ -235,6 +256,12 @@ async function _testnetJsonRpcUncoalesced<T>(
   // raw "name: untrusted genesis" message. See Operators for
   // per-operator status the user can act on.
   if (untrustedCount > 0 && untrustedCount === totalOperators) {
+    // Distinguish an all-QUARANTINED fleet (same chain, operators self-
+    // quarantined on a checkpoint state-root mismatch) from a genuine genesis
+    // mismatch / re-genesis — the user-facing copy + remedy differ.
+    if (classifyNoOperatorReason() === "quarantined") {
+      throw new ChainQuarantinedError(totalOperators);
+    }
     throw new ChainGenesisMismatchError(totalOperators);
   }
   throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");

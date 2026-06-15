@@ -7,6 +7,13 @@ describe("classifySendError — kind detection", () => {
   it.each([
     ["Chain genesis mismatch — all 14 operators reported untrusted genesis. See Operators.", "genesis-mismatch"],
     ["operator-3: untrusted genesis", "genesis-mismatch"],
+    // ALL-operators-quarantined aggregate (ChainQuarantinedError): no genesis
+    // phrase, so NOT genesis-mismatch; the "operators quarantined" phrasing wins
+    // over the bare single-op chain-quarantined ("quarantin").
+    [
+      "Operators quarantined — all 1 active operator reported a checkpoint state-root mismatch and are refusing requests. See Operators.",
+      "chain-quarantined",
+    ],
     ["Chain rejected: plaintext mempool entry not allowed: encrypted envelope required", "plaintext-not-allowed"],
     ["plaintext not allowed", "plaintext-not-allowed"],
     ["encrypted mempool required", "plaintext-not-allowed"],
@@ -90,6 +97,19 @@ describe("classifySendError — kind detection", () => {
     ["random garbage message no one recognises", "unknown"],
   ])("classifies %j as %s", (msg, expected) => {
     expect(classifySendError(msg).kind).toBe(expected);
+  });
+});
+
+describe("classifySendError — all-operators-quarantined aggregate", () => {
+  const msg =
+    "Operators quarantined — all 2 active operators reported a checkpoint state-root mismatch and are refusing requests. See Operators.";
+  it("is err-severity + 'Operators quarantined' headline, NOT re-genesis copy, links Operators", () => {
+    const c = classifySendError(msg);
+    expect(c.kind).toBe("chain-quarantined");
+    expect(c.severity).toBe("err");
+    expect(c.headline).toBe("Operators quarantined");
+    expect(c.body.toLowerCase()).not.toContain("re-genes");
+    expect(errorLinksOperators(c.kind)).toBe(true);
   });
 });
 

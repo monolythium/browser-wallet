@@ -279,6 +279,26 @@ function classifyInnerError(
     };
   }
 
+  // ALL active operators quarantined (the testnetJsonRpc aggregate — same
+  // chain, every operator self-quarantined on a checkpoint state-root
+  // mismatch). Distinct from a SINGLE operator quarantined (below): no operator
+  // is serviceable, so sends are paused — err severity + "wait / switch" copy,
+  // NOT the misleading re-genesis copy. Keyed on the ChainQuarantinedError
+  // "operators quarantined" phrasing; MUST precede the single-op branch (which
+  // matches the bare "quarantin").
+  if (lower.includes("operators quarantined")) {
+    return {
+      kind: "chain-quarantined",
+      headline: "Operators quarantined",
+      body:
+        "Every operator you're connected to is temporarily quarantined " +
+        "(a checkpoint state-root mismatch) and isn't serving requests right " +
+        "now. They're on your chain — the wallet reconnects automatically once " +
+        "an operator recovers, or you can switch operators. See Operators.",
+      severity: "err",
+    };
+  }
+
   // Operator node quarantined / PQ-checkpoint or state-root mismatch / upstream
   // unavailable. The operator's node has stopped serving RPC (a checkpoint
   // state-root divergence, or its upstream is down). The raw message is a
