@@ -1959,25 +1959,36 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
     account.balance,
     balanceCause,
   );
-  // The balance is "degraded" (operators present but not serviceable — a trust
-  // mismatch or an all-quarantined fleet) → show the rich explanation + Monoscan
-  // and dim the value, instead of the bare "last known" stale label. A plain
-  // `unreachable` (transient blip) keeps the lightweight stale label.
+  // The balance is "degraded" — the wallet is NOT connected to a trusted,
+  // reachable operator: a trust mismatch (untrusted / re-genesis), an all-
+  // quarantined fleet, OR the chain is unreachable (offline). In every one of
+  // these the live balance can't be confirmed, so we HIDE the value (below) and
+  // show the rich cause-specific explanation + Monoscan link, instead of a
+  // retained number the wallet can't currently stand behind. `unreachable` is
+  // only ever set after a quiet retry (App.refreshBalance), so this is a
+  // sustained offline state, not a single-tick blip.
   const balanceDegraded =
     !isPriv &&
     (balanceCause === "untrusted" ||
       balanceCause === "regenesis" ||
-      balanceCause === "quarantined");
+      balanceCause === "quarantined" ||
+      balanceCause === "unreachable");
   // C2: the Monoscan "check your balance" external link for the paused/degraded
   // state (the user's own address over the trusted base; null on a bad addr).
   const pausedMonoscanUrl = balanceDegraded
     ? pausedBalanceMonoscanUrl(account.addr)
     : null;
+  // Hide the value entirely whenever the balance is degraded — even when a
+  // last-known number is retained. The wallet isn't connected, so showing a
+  // stale figure would imply a confirmed balance it can't stand behind; the
+  // rich block below explains why and links to Monoscan. Honest absence, never
+  // a misleading 0.00. (`balancePaused` ⊆ `balanceDegraded`; kept for the
+  // value-unknown sub-case the exported helper documents/tests.)
   const totalStr =
-    account.balance != null
-      ? fmt(account.balance, 2)
-      : balancePaused
-        ? "—"
+    balanceDegraded || balancePaused
+      ? "—"
+      : account.balance != null
+        ? fmt(account.balance, 2)
         : "0.00";
   // #42: label the hero as a retained last-known value only when the chain
   // couldn't be reached AND there's a real balance to annotate (never on the
@@ -2047,7 +2058,9 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               <div style={{ color: "var(--err)", fontWeight: 600 }}>
                 {balanceCause === "quarantined"
                   ? "Operators quarantined"
-                  : "Untrusted operators"}
+                  : balanceCause === "unreachable"
+                    ? "Can't reach the network"
+                    : "Untrusted operators"}
               </div>
               <div
                 style={{
@@ -2058,9 +2071,11 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               >
                 {balanceCause === "quarantined"
                   ? "Every operator self-quarantined (a checkpoint state-root mismatch) and isn't serving requests right now. They're on your chain — the app reconnects automatically once one recovers, or switch to another operator. Your funds are safe."
-                  : balanceCause === "untrusted"
-                    ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
-                    : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
+                  : balanceCause === "unreachable"
+                    ? "No operator is responding right now, so the wallet can't confirm your live balance. Your funds are safe and nothing changed — the app reconnects automatically once an operator is back, or switch to another operator on your wallet's network."
+                    : balanceCause === "untrusted"
+                      ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
+                      : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
               </div>
               {pausedMonoscanUrl && (
                 <div style={{ marginTop: 3, letterSpacing: 0 }}>

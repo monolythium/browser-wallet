@@ -1030,6 +1030,11 @@ export default function App() {
     screen === "mrv-native" ||
     screen === "receive" ||
     screen === "send" ||
+    // Stake joins the strip so the offline / quarantined / untrusted chain
+    // warning is visible here too (it was previously absent on this screen) —
+    // the same degraded indicator Send and Home already carry, with the
+    // tap-through to the operator directory.
+    screen === "stake" ||
     screen === "reveal-phrase" ||
     screen === "reset-wallet" ||
     // Banner shows on the new menu + contacts
