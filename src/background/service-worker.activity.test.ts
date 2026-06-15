@@ -141,6 +141,7 @@ vi.mock("./tx-mldsa.js", () => ({
       txHash: SUBMITTED_TX_HASH,
       via: "mock-operator",
       innerSighashHex: "0x" + "b".repeat(64),
+      ...(submitSealedReturn !== undefined ? { sealed: submitSealedReturn } : {}),
     };
   }),
 }));
@@ -318,6 +319,10 @@ function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
   };
 }
 let submitFailure: (Error & { code?: number }) | null = null;
+// Controls the mock submitMlDsaTx return's `sealed` field. undefined → omit it
+// (default; backward-compatible). Set true/false in a test to exercise the
+// sealed-pending-row plumbing.
+let submitSealedReturn: boolean | undefined;
 
 // Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
@@ -693,6 +698,7 @@ beforeEach(() => {
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
+  submitSealedReturn = undefined;
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   unlocked = true;
@@ -2439,6 +2445,40 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(persisted.pending[0]?.to).toBe("0xrecipient");
     expect(persisted.pending[0]?.amountDecimal).toBe("0.1");
     expect(persisted.pending[0]?.broadcastBlockHeight).toBe(100);
+  });
+
+  it("carries the sealed-submission flag onto the pending row (true and false)", async () => {
+    seedTestnetNonceAndFee();
+    rpcResponses["eth_blockNumber"] = "0x64";
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    const sendOnce = async () => {
+      await dispatchPopup({
+        kind: "popup",
+        op: "wallet-send-tx",
+        payload: {
+          to: "0xrecipient",
+          valueWeiHex: "0x16345785d8a0000",
+          chainIdHex: TESTNET_CHAIN_ID_HEX,
+        },
+      });
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      return (
+        storageLocal[pendingKey] as { pending: Array<{ sealed?: boolean }> }
+      ).pending[0];
+    };
+
+    // Sealed submit → row tagged sealed:true.
+    submitSealedReturn = true;
+    expect((await sendOnce())?.sealed).toBe(true);
+
+    // Plaintext submit → row tagged sealed:false. Reset rows + the local
+    // nonce so the 2nd send is a clean first-nonce send.
+    storageLocal = {};
+    delete storageSession["mono.nonce.pending"];
+    submitSealedReturn = false;
+    expect((await sendOnce())?.sealed).toBe(false);
   });
 
   it("FAILED broadcast does NOT write a pending row", async () => {

@@ -4910,6 +4910,9 @@ async function persistPendingRowBackground(args: {
   /** Cluster metadata for delegation sends — same metadata-only invariant. */
   clusterId?: number;
   clusterName?: string;
+  /** Whether the tx went sealed (encrypted-mempool) — drives the UI's
+   *  "awaiting reveal" pending label + the held Monoscan link. */
+  sealed?: boolean;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -4946,6 +4949,7 @@ async function persistPendingRowBackground(args: {
       ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
       ...(args.clusterId !== undefined ? { clusterId: args.clusterId } : {}),
       ...(args.clusterName !== undefined ? { clusterName: args.clusterName } : {}),
+      ...(args.sealed !== undefined ? { sealed: args.sealed } : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -9360,7 +9364,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
+        const { txHash, via, sealed } = await submitMlDsaTx(txReq, boundVaultId);
         // Advance the local pending-nonce now that the submit was accepted, so
         // a 2nd tx sent before this one commits doesn't reuse this nonce.
         // Awaited (small session write) so the next send sees it immediately.
@@ -9380,6 +9384,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
+          sealed,
           // Metadata-only: opKind never reached submitPlaintextMlDsaTx —
           // it travels straight from the popup → here → the pending-row
           // record for the notifications hook to read back.

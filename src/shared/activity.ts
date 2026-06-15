@@ -131,6 +131,12 @@ export interface PendingTxRow {
    *  indexer's canonical row by (block, txIndex) for ANY kind (transfer OR
    *  delegate / undelegate / redelegate), not just `tx_send`. */
   confirmedTxIndex?: number;
+  /** Whether the tx went through the sealed (encrypted-mempool) path. While
+   *  sealed-and-unrevealed (no confirmedBlockHeight yet), the UI labels the row
+   *  "Pending · awaiting reveal" and holds the Monoscan link (the inner tx is
+   *  hidden from the indexer until threshold reveal). Absent on plaintext +
+   *  legacy rows. Pending-row metadata only — never part of the signed tx. */
+  sealed?: boolean;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -310,6 +316,9 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       const confirmedTxIndex = isFiniteNumber(r.confirmedTxIndex)
         ? r.confirmedTxIndex
         : undefined;
+      // Sealed-submission marker (encrypted-mempool). Optional; coerce a
+      // non-boolean to undefined rather than rejecting the row.
+      const sealed = typeof r.sealed === "boolean" ? r.sealed : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -323,6 +332,7 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(clusterName !== undefined ? { clusterName } : {}),
         ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
         ...(confirmedTxIndex !== undefined ? { confirmedTxIndex } : {}),
+        ...(sealed !== undefined ? { sealed } : {}),
       };
     }
 

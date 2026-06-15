@@ -797,6 +797,9 @@ export async function submitMlDsaTx(
   txHash: string;
   via: string;
   innerSighashHex: string;
+  // Whether this tx went through the sealed (encrypted-mempool) path. Pending-row
+  // metadata only — lets the UI label the sealed "awaiting reveal" window.
+  sealed: boolean;
 }> {
   let roster: ClusterSealKeys | null = null;
   try {
@@ -813,11 +816,14 @@ export async function submitMlDsaTx(
     // verify overhead pushes the chain's intrinsic floor to ~248–250k); raise it
     // here so every tx type clears the floor. The plaintext fallback below keeps
     // its original (lower) limit.
-    return submitSealedMlDsaTx(
-      withEncryptedExecutionUnitFloor(req),
-      roster,
-      boundVaultId,
-    );
+    return {
+      ...(await submitSealedMlDsaTx(
+        withEncryptedExecutionUnitFloor(req),
+        roster,
+        boundVaultId,
+      )),
+      sealed: true,
+    };
   }
-  return submitPlaintextMlDsaTx(req, boundVaultId);
+  return { ...(await submitPlaintextMlDsaTx(req, boundVaultId)), sealed: false };
 }
