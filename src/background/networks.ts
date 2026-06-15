@@ -613,7 +613,7 @@ export function classifyNoOperatorReason(
   activeOps: ReadonlyArray<{ rpc: string }> = getActiveOperators(),
   genesis: Map<string, GenesisCacheEntry> = snapshotGenesisCache(),
   wrongChainId: ReadonlySet<string> = operatorWrongChainId,
-): "unreachable" | "untrusted" | "regenesis" {
+): "unreachable" | "untrusted" | "regenesis" | "quarantined" {
   // C5: split the genesis-MISMATCH case out of the generic "untrusted". An
   // operator that answered with the right chain id but a DIFFERENT genesis hash
   // (ok===false && observed!==null, NOT in wrongChainId) means the network
@@ -622,10 +622,19 @@ export function classifyNoOperatorReason(
   // `untrusted` (it is the operator-actionable cause); both outrank
   // `unreachable`. The fund-path gate is unchanged — this only labels WHY no
   // operator is serviceable, with NO new RPC.
+  //
+  // "quarantined" (every active op self-quarantined on a checkpoint state-root
+  // mismatch — same chain, refusing RPC) is surfaced ONLY when the WHOLE fleet
+  // is quarantined, so the banner reads "OPERATOR QUARANTINED" instead of a
+  // generic OFFLINE. A single quarantined op with a healthy failover never
+  // reaches here (the poll resolves healthy). Reuses the per-op quarantine flag
+  // the genesis probe already records; still NO new RPC.
   let sawWrongChain = false;
+  let allQuarantined = activeOps.length > 0;
   for (const op of activeOps) {
     if (wrongChainId.has(op.rpc)) {
       sawWrongChain = true;
+      allQuarantined = false;
       continue;
     }
     const e = genesis.get(op.rpc);
@@ -634,8 +643,10 @@ export function classifyNoOperatorReason(
     if (genesisMismatch) {
       return "regenesis";
     }
+    if (e?.quarantined !== true) allQuarantined = false;
   }
   if (sawWrongChain) return "untrusted";
+  if (allQuarantined) return "quarantined";
   return "unreachable";
 }
 

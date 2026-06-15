@@ -123,6 +123,10 @@ type ChainHealth =
   // — the network re-genesised. Distinct from `untrusted` (wrong chain id) so the
   // banner can say "network may have reset" and Home can pause honestly.
   | { kind: "regenesis" }
+  // Every active operator self-quarantined (checkpoint state-root mismatch) —
+  // same chain, refusing RPC. Distinct red banner; balance is NOT paused (the
+  // value stays knowable once an operator recovers / via Monoscan).
+  | { kind: "quarantined" }
   | { kind: "offline"; reason: string };
 
 const HEALTH_TICK_MS = 8_000;
@@ -143,13 +147,15 @@ const WS_BLOCK_KEY = "mono.ws.lastBlockHex";
  */
 export function chainHealthForFailedPoll(r: {
   reason?: string;
-  cause?: "unreachable" | "untrusted" | "regenesis";
+  cause?: "unreachable" | "untrusted" | "regenesis" | "quarantined";
 }): ChainHealth {
   // C5: a genesis MISMATCH on the right chain id (the network re-genesised)
   // renders the distinct "network reset — paused" banner; a wrong-chain-id
-  // operator stays UNTRUSTED; every other failure stays OFFLINE.
+  // operator stays UNTRUSTED; an all-quarantined fleet renders the distinct
+  // "OPERATOR QUARANTINED" banner; every other failure stays OFFLINE.
   if (r.cause === "regenesis") return { kind: "regenesis" };
   if (r.cause === "untrusted") return { kind: "untrusted" };
+  if (r.cause === "quarantined") return { kind: "quarantined" };
   return { kind: "offline", reason: r.reason ?? "unreachable" };
 }
 
@@ -201,6 +207,18 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         color: "var(--err)",
         tooltip:
           "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network. Click to see operators.",
+        tappable: true,
+      };
+    case "quarantined":
+      return {
+        label: "OPERATOR QUARANTINED",
+        // Red (same hard-trust token as UNTRUSTED / OFFLINE) — every operator
+        // self-quarantined on a checkpoint state-root mismatch and refuses RPC.
+        // Scrolls as a marquee (the long label). Balance is NOT paused: the
+        // value stays knowable once an operator recovers / via Monoscan.
+        color: "var(--err)",
+        tooltip:
+          "Every operator self-quarantined (a checkpoint state-root mismatch) and won't serve RPC — they're on your chain but temporarily can't be trusted. The wallet reconnects automatically once one recovers. Click to see operators.",
         tappable: true,
       };
     case "offline":
@@ -288,8 +306,11 @@ export function shouldLabelBalanceStale(
 export function shouldPauseBalanceDisplay(
   isPriv: boolean,
   balance: number | null | undefined,
-  cause: "unreachable" | "untrusted" | "regenesis" | null | undefined,
+  cause: "unreachable" | "untrusted" | "regenesis" | "quarantined" | null | undefined,
 ): boolean {
+  // NOTE: "quarantined" is deliberately NOT a pause cause — a quarantine of
+  // (even all) operators doesn't make the balance unknowable; it stays knowable
+  // once an operator recovers or via Monoscan. Type-only widening below.
   return (
     !isPriv &&
     balance == null &&
@@ -612,7 +633,9 @@ export function ChainStatusBanner({
       ? reconnectingBannerLabel(health.blockHex)
       : pres.label;
   const labelEl =
-    health.kind === "untrusted" || health.kind === "regenesis" ? (
+    health.kind === "untrusted" ||
+    health.kind === "regenesis" ||
+    health.kind === "quarantined" ? (
       <span
         className="ext-banner-marquee"
         {...tapProps}

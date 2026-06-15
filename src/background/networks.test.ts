@@ -368,6 +368,26 @@ describe("classifyNoOperatorReason (#42 untrusted vs unreachable)", () => {
     expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("unreachable");
   });
 
+  it("b-ii: every active op quarantined → quarantined (all-quarantined banner)", () => {
+    const g = new Map([
+      ["a", { ...entry(false, null), quarantined: true }],
+      ["b", { ...entry(false, null), quarantined: true }],
+    ]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g)).toBe(
+      "quarantined",
+    );
+  });
+
+  it("b-ii: a mixed fleet (one quarantined, one plain-unreachable) is NOT all-quarantined → unreachable", () => {
+    const g = new Map([
+      ["a", { ...entry(false, null), quarantined: true }],
+      ["b", { ...entry(false, null), quarantined: false }],
+    ]);
+    expect(classifyNoOperatorReason([{ rpc: "a" }, { rpc: "b" }], g)).toBe(
+      "unreachable",
+    );
+  });
+
   it("a stale untrusted entry for a REMOVED operator (not active) → unreachable", () => {
     const g = new Map([["removed", entry(false, "0xstale")]]);
     expect(classifyNoOperatorReason([{ rpc: "a" }], g)).toBe("unreachable");

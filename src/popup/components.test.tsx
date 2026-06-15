@@ -1231,6 +1231,12 @@ describe("chainHealthForFailedPoll (#42 untrusted mapping)", () => {
       kind: "regenesis",
     });
   });
+
+  it("maps cause:'quarantined' to the quarantined state (b-ii all-quarantined banner)", () => {
+    expect(chainHealthForFailedPoll({ cause: "quarantined" })).toEqual({
+      kind: "quarantined",
+    });
+  });
 });
 
 describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
@@ -1285,6 +1291,7 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
       "stalled",
       "untrusted",
       "regenesis",
+      "quarantined",
       "offline",
       "loading",
       "reconnecting",
@@ -1314,6 +1321,14 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.color).not.toBe("var(--ok)"); // never the LIVE token
     expect(pres.tappable).toBe(false);
     expect(pres.label).not.toBe("LIVE");
+    expect(pres.tooltip.length).toBeGreaterThan(0);
+  });
+
+  it("presents quarantined as the red 'OPERATOR QUARANTINED' tappable banner", () => {
+    const pres = chainHealthPresentation("quarantined");
+    expect(pres.label).toBe("OPERATOR QUARANTINED");
+    expect(pres.color).toBe("var(--err)");
+    expect(pres.tappable).toBe(true);
     expect(pres.tooltip.length).toBeGreaterThan(0);
   });
 });
@@ -1387,6 +1402,10 @@ describe("shouldPauseBalanceDisplay (C5 / T10 — no bare 0.00 on re-genesis)", 
     expect(shouldPauseBalanceDisplay(false, null, "unreachable")).toBe(false);
     expect(shouldPauseBalanceDisplay(false, null, null)).toBe(false);
     expect(shouldPauseBalanceDisplay(false, null, undefined)).toBe(false);
+  });
+
+  it("does NOT pause on quarantine — the balance stays knowable (other ops / Monoscan)", () => {
+    expect(shouldPauseBalanceDisplay(false, null, "quarantined")).toBe(false);
   });
 
   it("never pauses the private (hidden) balance", () => {

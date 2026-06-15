@@ -2444,10 +2444,16 @@ async function readChainBlock(
       error?: { message?: string };
     };
     if (body.error) {
+      // A -32047 "chain quarantined" from the active operator is named
+      // distinctly so the banner can read "OPERATOR QUARANTINED" once no
+      // healthy operator remains. A single quarantined op with a healthy
+      // failover never surfaces it (the handler falls through to a fresh
+      // probe — see the wallet-chain-block-number case).
+      const quarantined = /quarantin/i.test(body.error.message ?? "");
       return {
         ok: false,
         reason: body.error.message ?? "rpc error",
-        cause: classifyNoOperatorReason(),
+        cause: quarantined ? "quarantined" : classifyNoOperatorReason(),
       };
     }
     if (typeof body.result !== "string") {
@@ -7634,8 +7640,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           }
           return r;
         }
-        if (cacheFresh) return r;
-        // stale candidate failed → fall through to a fresh probe
+        // A quarantined cached op must NOT short-circuit here — fall through to
+        // the fresh probe so a healthy failover resolves to LIVE (no banner).
+        // Only when NO healthy operator remains does the all-quarantined cause
+        // surface (rpc===null branch → classifyNoOperatorReason → "quarantined").
+        if (cacheFresh && r.cause !== "quarantined") return r;
+        // stale (or quarantined) candidate failed → fall through to a fresh probe
       }
 
       let rpc: string | null;

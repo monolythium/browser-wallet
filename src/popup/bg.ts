@@ -897,7 +897,7 @@ export async function bgWalletChainBlockNumber(): Promise<
   | {
       ok: false;
       reason?: string;
-      cause?: "unreachable" | "untrusted" | "regenesis";
+      cause?: "unreachable" | "untrusted" | "regenesis" | "quarantined";
     }
 > {
   return send("wallet-chain-block-number");
