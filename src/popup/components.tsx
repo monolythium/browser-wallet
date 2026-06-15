@@ -945,26 +945,6 @@ export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplet
 // bridged / wrapped entries — those were demo-mock pairs and the
 // wallet doesn't have authoritative data for them.
 
-/** A muted, theme-driven placeholder for a Home section (Assets/Activity) whose
- *  on-chain content is suppressed while the chain is non-live. */
-function DegradedSectionNote({ text }: { text: string }) {
-  return (
-    <div
-      style={{
-        fontFamily: "var(--f-mono)",
-        fontSize: 10.5,
-        lineHeight: 1.6,
-        color: "var(--fg-500)",
-        letterSpacing: "0.02em",
-        padding: "16px 4px",
-        textAlign: "center",
-      }}
-    >
-      {text}
-    </div>
-  );
-}
-
 interface AssetListProps {
   account: Account;
   network: ChainEntry;
@@ -2315,18 +2295,16 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
               id="ext-tabpanel-activity"
               aria-labelledby="ext-tab-activity"
             >
-              {hideBalanceValue ? (
-                // Hide the activity stream too while the chain is non-live —
-                // showing a (possibly stale) history alongside a hidden balance
-                // would be inconsistent and could imply confirmed on-chain
-                // state the wallet can't currently stand behind.
-                <DegradedSectionNote text="Activity is hidden while the wallet can't reach the chain. It reappears automatically once an operator is back." />
-              ) : (
-                <ActivityList
-                  addr={account.addr.startsWith("0x") ? account.addr : null}
-                  chainIdHex={network.chainId}
-                />
-              )}
+              {/* Suppress the CONFIRMED on-chain history while the chain is
+                  non-live (it's stale/untrusted right now), but keep the user's
+                  own pending + failed rows visible — hiding an in-flight tx at
+                  the moment the chain blips would be worse than the stale-
+                  history problem this addresses. ActivityList owns the note. */}
+              <ActivityList
+                addr={account.addr.startsWith("0x") ? account.addr : null}
+                chainIdHex={network.chainId}
+                hideConfirmed={hideBalanceValue}
+              />
             </div>
           )}
         </div>

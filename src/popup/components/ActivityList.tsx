@@ -33,6 +33,13 @@ export interface ActivityListProps {
   addr: string | null;
   /** Active chain id hex. Null briefly during initial bootstrap. */
   chainIdHex: string | null;
+  /** When true the chain is non-live (offline / quarantined / untrusted /
+   *  regenesis / stalled): suppress the CONFIRMED on-chain history (it's stale /
+   *  untrusted right now) but KEEP the user's own pending + failed rows — those
+   *  are wallet-tracked, not untrusted chain reads, and hiding an in-flight tx
+   *  at the moment it matters most would be worse than the stale-history problem
+   *  this whole change addresses. A short note explains the suppression. */
+  hideConfirmed?: boolean;
 }
 
 function counterpartyOf(row: ActivityRowType): string | null {
@@ -206,7 +213,32 @@ function errorState(onRetry: () => void) {
   );
 }
 
-export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
+/** Note shown in the Activity tab while the chain is non-live (hideConfirmed):
+ *  the confirmed on-chain history is suppressed (stale/untrusted right now), but
+ *  the user's own pending + failed rows still render below when present. Copy is
+ *  phrased as "unavailable" so it reads correctly for every non-live kind
+ *  (offline / quarantined / untrusted / regenesis / stalled), not just offline. */
+function SuppressedHistoryNote({ hasOwnRows }: { hasOwnRows: boolean }) {
+  return (
+    <div
+      style={{
+        fontFamily: "var(--f-mono)",
+        fontSize: 10.5,
+        lineHeight: 1.6,
+        color: "var(--fg-500)",
+        letterSpacing: "0.02em",
+        padding: hasOwnRows ? "10px 4px" : "20px 4px",
+        textAlign: "center",
+      }}
+    >
+      {hasOwnRows
+        ? "Confirmed history is hidden while the chain is unavailable — your pending and failed transactions are still shown below."
+        : "Activity is hidden while the chain is unavailable. It reappears automatically once the wallet reconnects."}
+    </div>
+  );
+}
+
+export function ActivityList({ addr, chainIdHex, hideConfirmed }: ActivityListProps) {
   const { cache, pending, failed, loading, errors, refresh } = useActivity(
     addr,
     chainIdHex,
@@ -251,16 +283,23 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
 
   const { labels } = useNameResolution(counterpartyAddrs, chainIdHex);
 
+  // Confirmed on-chain history — SUPPRESSED while the chain is non-live
+  // (hideConfirmed) since it's stale/untrusted right now. Pending + failed
+  // (the wallet's own in-flight / failed sends) are always kept.
+  const confirmed = useMemo(
+    () => (hideConfirmed ? [] : cache?.confirmed ?? []),
+    [hideConfirmed, cache],
+  );
   // Single chronological list (newest-first), pending + confirmed + failed
   // interleaved — failed rows no longer pin to the top. `rows` (pending +
   // confirmed) is kept for the loading/empty/error guards below.
-  const rows: ActivityRowType[] = useMemo(() => {
-    if (!cache) return [...pending];
-    return [...pending, ...cache.confirmed];
-  }, [cache, pending]);
+  const rows: ActivityRowType[] = useMemo(
+    () => [...pending, ...confirmed],
+    [pending, confirmed],
+  );
   const merged = useMemo(
-    () => mergeActivityNewestFirst(pending, cache?.confirmed ?? [], failed),
-    [pending, cache, failed],
+    () => mergeActivityNewestFirst(pending, confirmed, failed),
+    [pending, confirmed, failed],
   );
 
   const hasIndexerError = !!errors.ipc || !!errors.addressActivity;
@@ -280,8 +319,13 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
           />
         )}
       {(() => {
+        // While the chain is non-live we suppress confirmed history but still
+        // show the user's pending/failed rows, so the loading/error/empty guards
+        // (all about the confirmed indexer stream) must NOT fire — fall straight
+        // through to the note + merged (pending+failed) render below.
         // Loading: first fetch hasn't returned AND nothing to show yet.
         if (
+          !hideConfirmed &&
           loading &&
           cache === null &&
           pending.length === 0 &&
@@ -290,14 +334,14 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
           return loadingSkeleton();
         }
         // IPC failure / total indexer outage with nothing to fall back to.
-        if (hasIndexerError && rows.length === 0 && failed.length === 0) {
+        if (!hideConfirmed && hasIndexerError && rows.length === 0 && failed.length === 0) {
           return errorState(() => void refresh());
         }
         // Empty state. The kind probe (useActivityKind) discriminates
         // not_found / indexer_disabled / pruned / private / unknown
         // so the user sees context-aware copy rather than the historical
         // generic "no transactions yet" for every absence reason.
-        if (rows.length === 0 && failed.length === 0) {
+        if (!hideConfirmed && rows.length === 0 && failed.length === 0) {
           return emptyState(activityKind.envelope);
         }
         // Live rows — pending + confirmed + failed merged into ONE list sorted
@@ -306,6 +350,7 @@ export function ActivityList({ addr, chainIdHex }: ActivityListProps) {
         // and render via NotificationRow; the rest via ActivityRow.
         return (
           <div>
+            {hideConfirmed && <SuppressedHistoryNote hasOwnRows={merged.length > 0} />}
             {merged.map((item) => {
               if (item.tag === "failed") {
                 const rec = item.record;
