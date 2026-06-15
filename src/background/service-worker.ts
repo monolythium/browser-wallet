@@ -201,7 +201,6 @@ import {
   verifyOperatorGenesis,
   snapshotGenesisCache,
   classifyNoOperatorReason,
-  operatorDefinitivelyUntrusted,
   clearGenesisCache,
   rehydrateGenesisCache,
 } from "./networks.js";
@@ -7622,6 +7621,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // probe was the bulk of the "stuck on CONNECTING…" on every reopen.
       // rehydrateCachedOperator no-ops once populated; one session read cold.
       if (cachedOperator === null) await rehydrateCachedOperator();
+      // Load the persisted genesis verdicts BEFORE the fast path so the cached
+      // operator can be gated on POSITIVE genesis trust (below). Cheap session
+      // read; no-ops once loaded.
+      await rehydrateGenesisCache();
 
       const now = Date.now();
       const cacheFresh =
@@ -7629,16 +7632,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         cachedOperator.rpc !== null &&
         now - cachedOperator.checkedAt < OPERATOR_CACHE_TTL_MS;
 
-      // C7 (Caveat B): never let the liveness fast-path read a block from a
-      // definitively-untrusted operator (a re-genesis'd / wrong-chain op that
-      // would still answer eth_blockNumber and falsely show LIVE). Pure cache
-      // read — no genesis RTT on the health path. An untrusted cached op falls
-      // through to the gated fresh probe below, which surfaces the regenesis
-      // cause so the banner says "network reset — paused" instead of LIVE.
-      if (
-        cachedOperator?.rpc &&
-        !operatorDefinitivelyUntrusted(cachedOperator.rpc)
-      ) {
+      // C7 (Caveat B) + fail-closed liveness: the fast path may ONLY read a
+      // block from a POSITIVELY genesis-trusted operator (cache ok===true). Both
+      // a re-genesis'd / wrong-chain op (definitively untrusted) AND a fake /
+      // partial endpoint with no genesis proof (observed:null, ok:false — which
+      // still answers eth_blockNumber) fail this check and fall through to the
+      // gated fresh probe, so the banner shows the real OFFLINE / QUARANTINED /
+      // regenesis state instead of a FALSE LIVE (and stops flapping LIVE↔OFFLINE
+      // as such an op intermittently answers). Pure cache read — no genesis RTT.
+      const cachedGenesisTrusted =
+        cachedOperator?.rpc != null &&
+        snapshotGenesisCache().get(cachedOperator.rpc)?.ok === true;
+      if (cachedOperator?.rpc && cachedGenesisTrusted) {
         const r = await readChainBlock(cachedOperator.rpc, cachedOperator.name);
         if (r.ok) {
           // Promote a successful stale/rehydrated candidate to a fresh hit so
@@ -7662,10 +7667,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
 
       let rpc: string | null;
       let operatorName: string | null;
-      // Falling through to a fresh probe — load the persisted genesis verdicts
-      // first (same boot race) so the probe's genesis check hits cache instead
-      // of re-paying its round-trip.
-      await rehydrateGenesisCache();
+      // (Genesis verdicts were rehydrated above, so the probe's genesis check
+      // hits cache instead of re-paying its round-trip.)
       try {
         const hit = await probeFirstAliveOperator(undefined, 1_000);
         setCachedOperator({
