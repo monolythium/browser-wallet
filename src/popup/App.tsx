@@ -373,7 +373,7 @@ export default function App() {
   // C5: the typed reason the last balance refresh failed, so Home can pause
   // honestly on a re-genesis / wrong-chain operator instead of a bare 0.00.
   const [balanceCause, setBalanceCause] = useState<
-    "unreachable" | "untrusted" | "regenesis" | null
+    "unreachable" | "untrusted" | "regenesis" | "quarantined" | null
   >(null);
   const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
   // Active-chain state. The service worker is the source of truth

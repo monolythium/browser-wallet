@@ -1404,8 +1404,11 @@ describe("shouldPauseBalanceDisplay (C5 / T10 — no bare 0.00 on re-genesis)", 
     expect(shouldPauseBalanceDisplay(false, null, undefined)).toBe(false);
   });
 
-  it("does NOT pause on quarantine — the balance stays knowable (other ops / Monoscan)", () => {
-    expect(shouldPauseBalanceDisplay(false, null, "quarantined")).toBe(false);
+  it("pauses on an all-quarantined fleet (no serviceable operator → value unknowable)", () => {
+    expect(shouldPauseBalanceDisplay(false, null, "quarantined")).toBe(true);
+    // never pauses a real retained balance, and never the private balance.
+    expect(shouldPauseBalanceDisplay(false, 12.5, "quarantined")).toBe(false);
+    expect(shouldPauseBalanceDisplay(true, null, "quarantined")).toBe(false);
   });
 
   it("never pauses the private (hidden) balance", () => {

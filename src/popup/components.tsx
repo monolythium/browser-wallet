@@ -308,13 +308,16 @@ export function shouldPauseBalanceDisplay(
   balance: number | null | undefined,
   cause: "unreachable" | "untrusted" | "regenesis" | "quarantined" | null | undefined,
 ): boolean {
-  // NOTE: "quarantined" is deliberately NOT a pause cause — a quarantine of
-  // (even all) operators doesn't make the balance unknowable; it stays knowable
-  // once an operator recovers or via Monoscan. Type-only widening below.
+  // An all-quarantined fleet (no serviceable operator) makes the live balance
+  // unknowable too, same as untrusted/regenesis — pause + Monoscan rather than a
+  // bare 0.00. (A SINGLE quarantined op with a healthy failover never produces
+  // cause:"quarantined", so this only fires when no operator is serviceable.)
   return (
     !isPriv &&
     balance == null &&
-    (cause === "regenesis" || cause === "untrusted")
+    (cause === "regenesis" ||
+      cause === "untrusted" ||
+      cause === "quarantined")
   );
 }
 
@@ -1915,7 +1918,7 @@ interface HomeProps {
   balanceStale?: boolean;
   /** C5: typed reason the last balance refresh failed, so Home can pause
    *  honestly on a re-genesis / wrong-chain operator instead of a bare 0.00. */
-  balanceCause?: "unreachable" | "untrusted" | "regenesis" | null;
+  balanceCause?: "unreachable" | "untrusted" | "regenesis" | "quarantined" | null;
   onSettings: () => void;
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
@@ -1956,9 +1959,18 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
     account.balance,
     balanceCause,
   );
-  // C2: the Monoscan "check your balance" external link for the paused state
-  // (the user's own address over the trusted base; null on a bad/non-0x addr).
-  const pausedMonoscanUrl = balancePaused
+  // The balance is "degraded" (operators present but not serviceable — a trust
+  // mismatch or an all-quarantined fleet) → show the rich explanation + Monoscan
+  // and dim the value, instead of the bare "last known" stale label. A plain
+  // `unreachable` (transient blip) keeps the lightweight stale label.
+  const balanceDegraded =
+    !isPriv &&
+    (balanceCause === "untrusted" ||
+      balanceCause === "regenesis" ||
+      balanceCause === "quarantined");
+  // C2: the Monoscan "check your balance" external link for the paused/degraded
+  // state (the user's own address over the trusted base; null on a bad addr).
+  const pausedMonoscanUrl = balanceDegraded
     ? pausedBalanceMonoscanUrl(account.addr)
     : null;
   const totalStr =
@@ -2010,7 +2022,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
             <div
               className="num"
               style={
-                showStaleBalance || balancePaused
+                showStaleBalance || balanceDegraded
                   ? { opacity: 0.55 }
                   : undefined
               }
@@ -2022,7 +2034,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               <span className="d">LYTH</span>
             </div>
           )}
-          {balancePaused && (
+          {balanceDegraded && (
             <div
               style={{
                 fontFamily: "var(--f-mono)",
@@ -2033,7 +2045,9 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               }}
             >
               <div style={{ color: "var(--err)", fontWeight: 600 }}>
-                Untrusted operators
+                {balanceCause === "quarantined"
+                  ? "Operators quarantined"
+                  : "Untrusted operators"}
               </div>
               <div
                 style={{
@@ -2042,9 +2056,11 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
                   marginTop: 1,
                 }}
               >
-                {balanceCause === "untrusted"
-                  ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
-                  : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
+                {balanceCause === "quarantined"
+                  ? "Every operator self-quarantined (a checkpoint state-root mismatch) and isn't serving requests right now. They're on your chain — the app reconnects automatically once one recovers, or switch to another operator. Your funds are safe."
+                  : balanceCause === "untrusted"
+                    ? "This operator reports a different genesis hash than your wallet app expects — it may be on a different chain. The app reconnects once it matches again, or switch to another operator on your wallet's network."
+                    : "All operators report a different genesis hash than your wallet app expects — they may be on a different chain. The app reconnects automatically once the operators are back on your wallet's network."}
               </div>
               {pausedMonoscanUrl && (
                 <div style={{ marginTop: 3, letterSpacing: 0 }}>
@@ -2058,7 +2074,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ac
               )}
             </div>
           )}
-          {showStaleBalance && (
+          {showStaleBalance && !balanceDegraded && (
             <div
               style={{
                 fontFamily: "var(--f-mono)",

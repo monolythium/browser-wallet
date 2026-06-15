@@ -415,7 +415,7 @@ export async function bgWalletBalance(
       // C5: typed cause so Home can label a re-genesis ("network may have reset
       // — paused") distinctly from an unreachable chain, and suppress a
       // misleading bare 0.00 when the balance is genuinely unknown.
-      cause?: "unreachable" | "untrusted" | "regenesis";
+      cause?: "unreachable" | "untrusted" | "regenesis" | "quarantined";
     }
 > {
   return send("wallet-balance", { address, chainIdHex });
