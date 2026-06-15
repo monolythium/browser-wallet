@@ -256,13 +256,27 @@ async function _testnetJsonRpcUncoalesced<T>(
   // raw "name: untrusted genesis" message. See Operators for
   // per-operator status the user can act on.
   if (untrustedCount > 0 && untrustedCount === totalOperators) {
-    // Distinguish an all-QUARANTINED fleet (same chain, operators self-
-    // quarantined on a checkpoint state-root mismatch) from a genuine genesis
-    // mismatch / re-genesis — the user-facing copy + remedy differ.
-    if (classifyNoOperatorReason() === "quarantined") {
+    // `untrustedCount` counts EVERY operator that failed verifyOperatorGenesis —
+    // which is false for BOTH a definitive genesis mismatch (observed!==null)
+    // AND a transient "couldn't read" verdict (observed:null, i.e. the operator
+    // was simply unreachable). Treating all of them as a genesis mismatch made
+    // an OFFLINE fleet surface "Chain genesis mismatch" on Send/Stake while the
+    // banner (which reads classifyNoOperatorReason) correctly showed OFFLINE.
+    // Defer to the SAME classifier the banner uses so the two never disagree:
+    // only a definitive re-genesis / wrong-chain fleet throws the genesis error;
+    // an all-quarantined fleet throws the quarantine error; an unreachable fleet
+    // falls through to the honest offline message below.
+    const reason = classifyNoOperatorReason();
+    if (reason === "quarantined") {
       throw new ChainQuarantinedError(totalOperators);
     }
-    throw new ChainGenesisMismatchError(totalOperators);
+    if (reason === "regenesis" || reason === "untrusted") {
+      throw new ChainGenesisMismatchError(totalOperators);
+    }
+    // reason === "unreachable": throw a CLEAN offline error, NOT lastTransportErr
+    // (which carries the misleading "<name>: untrusted genesis" text that
+    // classifySendError would mis-key as genesis-mismatch).
+    throw new Error("no Monolythium Testnet operator reachable");
   }
   throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
 }

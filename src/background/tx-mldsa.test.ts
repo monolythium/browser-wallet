@@ -28,6 +28,10 @@ vi.mock("./networks.js", () => ({
   // C1: pre-loop short-circuit predicate. Default false → existing tests run
   // the real gated walk; the C1 suite flips it to true for one call.
   allActiveOperatorsDefinitivelyUntrusted: vi.fn(() => false),
+  // Post-loop all-untrusted aggregate defers to this to distinguish a genuine
+  // re-genesis from an OFFLINE fleet. Default "unreachable" (the common case);
+  // the regression suite overrides it per case.
+  classifyNoOperatorReason: vi.fn(() => "unreachable"),
 }));
 
 // Canonical-hash threading needs the SDK submission builder + keystore
@@ -69,6 +73,7 @@ import {
 import {
   allActiveOperatorsDefinitivelyUntrusted,
   verifyOperatorGenesis,
+  classifyNoOperatorReason,
 } from "./networks.js";
 import { buildPlaintextSubmission as sdkBuildPlaintextSubmission } from "@monolythium/core-sdk/crypto";
 import { getActiveVaultIdV4 } from "./keystore-mldsa.js";
@@ -315,6 +320,53 @@ describe("testnetJsonRpc — C1 all-untrusted short-circuit (T1)", () => {
     // The mocked getActiveOperators returns 1 op → "all 1 operators…".
     expect(err?.message).toContain("Chain genesis mismatch — all 1 operators");
     expect(err?.message).toContain("See Operators.");
+  });
+});
+
+describe("testnetJsonRpc — post-loop all-untrusted aggregate defers to the reason", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(false);
+    vi.mocked(verifyOperatorGenesis).mockReset();
+    vi.mocked(verifyOperatorGenesis).mockResolvedValue(true);
+    vi.mocked(classifyNoOperatorReason).mockReturnValue("unreachable");
+  });
+
+  it("OFFLINE fleet (genesis probe couldn't read, reason=unreachable) → honest offline error, NOT a genesis mismatch", async () => {
+    // Every operator fails the genesis probe because it's UNREACHABLE (the probe
+    // returns false with observed:null), so the pre-loop definitive predicate is
+    // false but untrustedCount === totalOperators. The aggregate must NOT throw
+    // ChainGenesisMismatchError — classifyNoOperatorReason says "unreachable",
+    // so the user (and classifySendError) gets the offline message instead.
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(false);
+    vi.mocked(verifyOperatorGenesis).mockResolvedValue(false);
+    vi.mocked(classifyNoOperatorReason).mockReturnValue("unreachable");
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const err = await testnetJsonRpc("eth_getBalance", ["0x0", "latest"]).then(
+      () => null,
+      (e) => e as Error,
+    );
+    expect(err).not.toBeInstanceOf(ChainGenesisMismatchError);
+    expect(err?.message).toBe("no Monolythium Testnet operator reachable");
+    // The misleading "<name>: untrusted genesis" lastTransportErr must NOT leak.
+    expect(err?.message).not.toContain("untrusted genesis");
+    // Genesis failed before any fetch went out.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("definitive re-genesis fleet (reason=regenesis) → still throws ChainGenesisMismatchError", async () => {
+    vi.mocked(allActiveOperatorsDefinitivelyUntrusted).mockReturnValue(false);
+    vi.mocked(verifyOperatorGenesis).mockResolvedValue(false);
+    vi.mocked(classifyNoOperatorReason).mockReturnValue("regenesis");
+
+    const err = await testnetJsonRpc("eth_getBalance", ["0x0", "latest"]).then(
+      () => null,
+      (e) => e as Error,
+    );
+    expect(err).toBeInstanceOf(ChainGenesisMismatchError);
   });
 });
 
