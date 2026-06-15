@@ -107,6 +107,13 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       </div>
     );
   }
+  // Sealed (encrypted-mempool) txs are hidden from the indexer/Monoscan until
+  // threshold reveal (~12–25s) — label that window explicitly so the row reads
+  // as "in progress" rather than a bare, seemingly-stuck "Pending".
+  const pendingPrefix =
+    row.sealed && row.confirmedBlockHeight === undefined
+      ? "Pending · awaiting reveal"
+      : "Pending";
   return (
     <div className="ext-act-row">
       <div className="dir out" style={{ position: "relative" }}>
@@ -118,10 +125,10 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           {suppressAmount ? (
             // No "0 LYTH to <precompile>" — the send-shaped template doesn't
             // fit a 0-value precompile call. Name it by its operation instead.
-            <>Pending · {txTypeLabel(row)}</>
+            <>{pendingPrefix} · {txTypeLabel(row)}</>
           ) : (
             <>
-              Pending · {row.amountDecimal} LYTH to{" "}
+              {pendingPrefix} · {row.amountDecimal} LYTH to{" "}
               {renderCounterparty(row.to, counterpartyLabel)}
             </>
           )}
