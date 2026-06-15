@@ -5676,6 +5676,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           const genesisEntry = snapshotGenesisCache().get(op.rpc);
           const trustedGenesis = genesisEntry?.ok ?? false;
           const observedGenesis = genesisEntry?.observed ?? null;
+          // -32047 "chain quarantined" verdict from the genesis probe (same
+          // chain, self-quarantined on a checkpoint state-root mismatch). The
+          // op still answers net_version, so the row is ok:true — this flag is
+          // what lets the UI label it "Quarantined" rather than "Untrusted".
+          const quarantined = genesisEntry?.quarantined ?? false;
 
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), PROBE_BUDGET_MS);
@@ -5708,6 +5713,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 reason: `HTTP ${res.status}`,
                 trustedGenesis,
                 observedGenesis,
+                quarantined,
                 capabilities: null,
                 indexerHeight: null,
                 indexerLatest: null,
@@ -5749,6 +5755,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               latencyMs: Date.now() - startedAt,
               trustedGenesis,
               observedGenesis,
+              quarantined,
               capabilities,
               indexerHeight: indexerSnapshot.height,
               indexerLatest: indexerSnapshot.latest,
@@ -5763,6 +5770,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               reason: (e as Error)?.name === "AbortError" ? "timeout" : "unreachable",
               trustedGenesis,
               observedGenesis,
+              quarantined,
               capabilities: null,
               indexerHeight: null,
               indexerLatest: null,

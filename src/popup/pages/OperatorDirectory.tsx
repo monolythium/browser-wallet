@@ -489,11 +489,13 @@ function OperatorAccordionRow({
   // Plain-language status shown to every user (the host/latency line below is
   // developer-only). Quarantined = the operator self-reported a checkpoint
   // state-root mismatch and refuses RPC, so it must not be chosen.
-  const quarantined = !op.ok && /quarantin/i.test(op.reason);
+  const quarantined = op.quarantined || (!op.ok && /quarantin/i.test(op.reason));
   const status = op.ok
-    ? op.trustedGenesis
-      ? { label: `Live · ${op.latencyMs} ms`, color: "var(--ok)" }
-      : { label: "Untrusted", color: "var(--err)" }
+    ? op.quarantined
+      ? { label: "Quarantined", color: "#d9a441" }
+      : op.trustedGenesis
+        ? { label: `Live · ${op.latencyMs} ms`, color: "var(--ok)" }
+        : { label: "Untrusted", color: "var(--err)" }
     : quarantined
       ? { label: "Quarantined", color: "#d9a441" }
       : { label: "Offline", color: "var(--err)" };
@@ -955,6 +957,7 @@ function toRiskInput(op: OperatorHealthRow): OperatorRiskInput {
   return {
     ok: op.ok,
     trustedGenesis: op.trustedGenesis,
+    quarantined: op.quarantined,
     capabilities: op.capabilities,
     indexerHeight: op.indexerHeight,
     indexerLatest: op.indexerLatest,

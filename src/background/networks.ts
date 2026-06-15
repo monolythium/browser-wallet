@@ -336,6 +336,12 @@ interface GenesisCacheEntry {
    *  operator does not expose either probe shape. */
   observed: string | null;
   checkedAt: number;
+  /** True when the operator answered with a -32047 "chain quarantined" error
+   *  (same chain, self-quarantined on a checkpoint state-root mismatch).
+   *  Distinct from a different-genesis (observed !== null) and from plain
+   *  unreachable (no flag). In-memory only — observed is null on quarantine,
+   *  so this entry is never persisted (the persist gate is `observed !== null`). */
+  quarantined?: boolean;
 }
 
 const operatorGenesisCache = new Map<string, GenesisCacheEntry>();
@@ -660,7 +666,7 @@ async function probeOperatorGenesis(
   const stats = await rpcCall(rpc, timeoutMs, "lyth_chainStats", []);
   if (stats.ok) {
     if (isQuarantineError(stats.body)) {
-      return { ok: false, observed: null, checkedAt: now };
+      return { ok: false, observed: null, checkedAt: now, quarantined: true };
     }
     const result = readObject(stats.body, "result");
     const observed = normaliseHash(result?.genesisHash);
@@ -681,7 +687,7 @@ async function probeOperatorGenesis(
     return { ok: false, observed: null, checkedAt: now };
   }
   if (isQuarantineError(block0.body)) {
-    return { ok: false, observed: null, checkedAt: now };
+    return { ok: false, observed: null, checkedAt: now, quarantined: true };
   }
   const body = block0.body as {
     result?: { hash?: unknown } | null;

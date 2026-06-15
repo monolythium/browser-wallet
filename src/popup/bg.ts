@@ -1433,6 +1433,11 @@ export interface OperatorHealthRowCommon {
   /** Observed genesis identity or fallback block-0 hash; null when the
    *  probe shape is unsupported or malformed. */
   observedGenesis: string | null;
+  /** True when the operator self-reported a -32047 "chain quarantined"
+   *  (checkpoint state-root mismatch). Same chain, excluded until it recovers;
+   *  drives the distinct "Quarantined" status/badge instead of the misleading
+   *  "Untrusted genesis". */
+  quarantined: boolean;
   /** Operator-surface availability from `lyth_operatorCapabilities`.
    *  Keys are the chain's surface names (e.g. "operator_info",
    *  "cluster_status", "cluster_directory", "indexer_history"); values are

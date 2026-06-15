@@ -28,6 +28,7 @@
  *  surfaces the badges throughout). */
 export type OperatorRiskKind =
   | "untrusted-genesis"
+  | "quarantined"
   | "transport-error"
   | "indexer-stale"
   | "indexer-disabled"
@@ -52,6 +53,11 @@ export interface OperatorRiskBadge {
 export interface OperatorRiskInput {
   ok: boolean;
   trustedGenesis: boolean;
+  /** True when the operator self-reported a -32047 "chain quarantined"
+   *  (checkpoint state-root mismatch). Same chain, but excluded until it
+   *  recovers — surfaced as a distinct "quarantined" badge rather than the
+   *  misleading "untrusted-genesis". */
+  quarantined: boolean;
   capabilities: Record<string, string> | null;
   indexerHeight: number | null;
   indexerLatest: number | null;
@@ -99,7 +105,21 @@ export function classifyOperatorRisk(
     return out;
   }
 
-  if (!input.trustedGenesis) {
+  if (input.quarantined) {
+    // Same chain, but the operator self-quarantined on a checkpoint state-root
+    // mismatch and refuses RPC. Distinct from untrusted-genesis (different
+    // chain) — the exclusion is identical, the cause is not. Mirrors the
+    // send-error.ts `chain-quarantined` class.
+    out.push({
+      kind: "quarantined",
+      label: "quarantined",
+      tooltip:
+        "Operator self-quarantined (checkpoint state-root mismatch) and " +
+        "refuses RPC. It's on your chain but temporarily can't be trusted, " +
+        "so RPC dispatch excludes it until it recovers.",
+      severity: "err",
+    });
+  } else if (!input.trustedGenesis) {
     out.push({
       kind: "untrusted-genesis",
       label: "untrusted",
@@ -195,6 +215,14 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
     body:
       "This operator is on a different chain — the wallet won't trust its " +
       "data and excludes it from every request.",
+  },
+  {
+    kind: "quarantined",
+    label: "Quarantined",
+    body:
+      "This operator reported a checkpoint state-root mismatch and refuses " +
+      "RPC. It's on your chain but temporarily can't be trusted, so the " +
+      "wallet excludes it until it recovers.",
   },
   {
     kind: "transport-error",

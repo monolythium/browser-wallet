@@ -13,6 +13,7 @@ import {
 const HEALTHY: OperatorRiskInput = {
   ok: true,
   trustedGenesis: true,
+  quarantined: false,
   capabilities: Object.fromEntries(
     EXPECTED_CAPABILITY_SURFACES.map((s) => [s, "available"]),
   ),
@@ -50,6 +51,44 @@ describe("classifyOperatorRisk — untrusted genesis", () => {
     const flag = r.find((b) => b.kind === "untrusted-genesis");
     expect(flag).toBeDefined();
     expect(flag!.severity).toBe("err");
+  });
+});
+
+describe("classifyOperatorRisk — quarantined", () => {
+  it("flags quarantined (severity: err) and NOT untrusted-genesis", () => {
+    // A quarantined operator answers net_version (ok:true) but its genesis
+    // probe returned -32047 → trustedGenesis:false + quarantined:true. It must
+    // read as "quarantined", not the misleading "untrusted-genesis".
+    const r = classifyOperatorRisk({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: true,
+    });
+    const flag = r.find((b) => b.kind === "quarantined");
+    expect(flag).toBeDefined();
+    expect(flag!.severity).toBe("err");
+    expect(r.some((b) => b.kind === "untrusted-genesis")).toBe(false);
+  });
+
+  it("a genuine different-genesis op stays untrusted-genesis (not quarantined)", () => {
+    const r = classifyOperatorRisk({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    expect(r.some((b) => b.kind === "untrusted-genesis")).toBe(true);
+    expect(r.some((b) => b.kind === "quarantined")).toBe(false);
+  });
+
+  it("an unreachable operator stays transport-error (not quarantined)", () => {
+    const r = classifyOperatorRisk({
+      ...HEALTHY,
+      ok: false,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    expect(r.length).toBe(1);
+    expect(r[0]!.kind).toBe("transport-error");
   });
 });
 
@@ -160,6 +199,7 @@ describe("classifyOperatorRisk — composite cases", () => {
     const r = classifyOperatorRisk({
       ok: true,
       trustedGenesis: false,
+      quarantined: false,
       capabilities: null,
       indexerHeight: null,
       indexerLatest: null,
@@ -177,6 +217,7 @@ describe("OPERATOR_RISK_LEGEND", () => {
   it("has one entry per risk kind the classifier emits", () => {
     const emittedKinds = new Set([
       "untrusted-genesis",
+      "quarantined",
       "transport-error",
       "indexer-stale",
       "indexer-disabled",
