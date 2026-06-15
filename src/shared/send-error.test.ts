@@ -76,6 +76,8 @@ describe("classifySendError — kind detection", () => {
     ["operator unreachable", "operator-offline"],
     ["request timeout after 5000ms", "operator-offline"],
     ["rpc error: -32603", "operator-offline"],
+    // the all-down aggregate (testnetJsonRpc, whole fleet failed transport)
+    ["no Monolythium Testnet operator reachable", "operator-offline"],
     ["User rejected the request", "user-rejected"],
     ["user denied transaction signature", "user-rejected"],
     ["execution reverted: insufficient allowance", "transaction-reverted"],
