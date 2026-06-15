@@ -439,12 +439,20 @@ export function ChainStatusBanner({
     // otherwise flap the banner LIVE↔OFFLINE against the poll. Latched by the
     // poll below; the WS listener honors it.
     let pollDegraded = false;
+    // Cold-start race guard. On a popup refocus Chrome remounts this banner, so
+    // pollDegraded resets to false; the SW's persistent WS connection can push a
+    // head BEFORE this mount's first poll resolves, briefly flashing LIVE over a
+    // chain that's actually offline. So the WS listener is honored ONLY AFTER the
+    // first poll of THIS mount has established a baseline — WS never INITIATES a
+    // live transition from a cold/unknown state; only the gated poll does.
+    let pollResolvedThisMount = false;
 
     const tick = async () => {
       if (cancelled || document.visibilityState === "hidden") return;
       try {
         const r = await bgWalletChainBlockNumber();
         if (cancelled) return;
+        pollResolvedThisMount = true;
         if (!r.ok) {
           pollDegraded = true;
           setHealth(chainHealthForFailedPoll(r));
@@ -470,6 +478,7 @@ export function ChainStatusBanner({
         // else: same block but within fresh window — keep current state
       } catch (e) {
         if (cancelled) return;
+        pollResolvedThisMount = true;
         pollDegraded = true;
         setHealth({ kind: "offline", reason: (e as Error).message });
       }
@@ -518,11 +527,14 @@ export function ChainStatusBanner({
     ) => {
       if (area !== "session") return;
       if (cancelled) return;
-      // Defer to the genesis-gated poll's verdict: while it says the chain is
-      // degraded (offline / quarantined / untrusted / re-genesis), ignore WS
-      // heads so a still-relaying quarantined operator can't flap us to LIVE.
-      // The next poll re-confirms recovery and clears the latch.
-      if (pollDegraded) return;
+      // Defer to the genesis-gated poll. (1) Until THIS mount's first poll has
+      // resolved, ignore WS heads entirely — otherwise a head buffered on the
+      // SW's persistent WS connection flashes LIVE on refocus before the poll
+      // can confirm the real state. (2) Once resolved, while the poll says the
+      // chain is degraded (offline / quarantined / untrusted / re-genesis),
+      // keep ignoring heads so a still-relaying quarantined operator can't flap
+      // us to LIVE. The next poll re-confirms recovery and re-opens the gate.
+      if (!pollResolvedThisMount || pollDegraded) return;
       const change = changes[WS_BLOCK_KEY];
       if (!change || typeof change.newValue !== "string") return;
       const blockHex = change.newValue;
