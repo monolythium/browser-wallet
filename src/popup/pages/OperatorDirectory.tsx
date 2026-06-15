@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Icon } from "../Icon";
+import { Modal } from "../components/Modal";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgOperatorsHealth,
@@ -30,6 +31,7 @@ import {
 } from "../bg";
 import {
   classifyOperatorRisk,
+  operatorConnectBlockReason,
   OPERATOR_RISK_LEGEND,
   type OperatorRiskBadge,
   type OperatorRiskInput,
@@ -69,6 +71,10 @@ export function OperatorDirectory({
   // The rpc currently being switched to (button spinner) + any switch error.
   const [usingRpc, setUsingRpc] = useState<string | null>(null);
   const [useError, setUseError] = useState<string | null>(null);
+  // B (dev connect-flow): the operator awaiting a "Connect?" confirm, plus a
+  // success banner after a clean switch.
+  const [pendingUse, setPendingUse] = useState<OperatorHealthRow | null>(null);
+  const [useSuccess, setUseSuccess] = useState<string | null>(null);
   // Bumped after a switch / reset to re-probe health + re-read the override.
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -109,11 +115,34 @@ export function OperatorDirectory({
   // trusted operator is moved to the FRONT of the override (the rest stay as
   // fallback, so a later quarantine can't strand the wallet). Mirrors the
   // Operators editor's handler — same bgProbeOperator + bgOperatorsSet path.
-  const handleUse = async (op: OperatorHealthRow) => {
+  // B1: clicking "Use this operator" opens a confirm — the health/security
+  // check + switch run only on Confirm (confirmUse).
+  const handleUse = (op: OperatorHealthRow) => {
     if (usingRpc || operators === null) return;
+    setUseError(null);
+    setUseSuccess(null);
+    setPendingUse(op);
+  };
+
+  const confirmUse = async (op: OperatorHealthRow) => {
+    if (usingRpc || operators === null) return;
+    setPendingUse(null);
     setUsingRpc(op.rpc);
     setUseError(null);
+    setUseSuccess(null);
     try {
+      // B3: block an err-severity operator (quarantined / untrusted-genesis /
+      // transport-error) with the reason from the risk legend — never PIN a bad
+      // operator. Dispatch re-verifies genesis on every call regardless; this
+      // is the UI guard, not the security boundary.
+      const block = operatorConnectBlockReason(toRiskInput(op));
+      if (block) {
+        setUseError(
+          `Can't connect to ${op.name} — ${block} Left your operator unchanged.`,
+        );
+        return;
+      }
+      // B2: fresh reachability + genesis check.
       const probe = await bgProbeOperator(op.rpc);
       if (!probe.ok || !probe.usable) {
         setUseError(
@@ -132,6 +161,8 @@ export function OperatorDirectory({
         setUseError(r.reason ?? "Couldn't save the operator choice.");
         return;
       }
+      // B4: success feedback.
+      setUseSuccess(`Connected to ${op.name}.`);
       setReloadKey((k) => k + 1);
     } finally {
       setUsingRpc(null);
@@ -261,6 +292,60 @@ export function OperatorDirectory({
                 >
                   {useError}
                 </div>
+              )}
+              {useSuccess && (
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    color: "var(--ok)",
+                    lineHeight: 1.4,
+                    padding: "0 2px",
+                  }}
+                >
+                  {useSuccess}
+                </div>
+              )}
+              {pendingUse && (
+                <Modal
+                  open
+                  onClose={() => setPendingUse(null)}
+                  title="Connect to this operator?"
+                  showClose
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--fg-300)",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    You&apos;re{" "}
+                    {activeRpc
+                      ? "on another operator"
+                      : "on automatic operator selection"}
+                    . Connect to{" "}
+                    <strong style={{ color: "var(--fg-100)" }}>
+                      {pendingUse.name}
+                    </strong>
+                    ? The wallet runs a health &amp; security check first.
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => setPendingUse(null)}
+                      style={pickerResetBtn}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void confirmUse(pendingUse)}
+                      style={pickerUseBtn}
+                    >
+                      Connect
+                    </button>
+                  </div>
+                </Modal>
               )}
               {sortedOperators!.map((op) => (
                 <OperatorAccordionRow

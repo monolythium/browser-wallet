@@ -11,6 +11,7 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../Icon";
+import { Modal } from "../components/Modal";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgChainOperatorRisk,
@@ -85,6 +86,10 @@ export function Operators({
   const [loaded, setLoaded] = useState(false);
   // rid of the operator currently being probed via "Use this operator".
   const [usingRid, setUsingRid] = useState<string | null>(null);
+  // B (dev connect-flow): the draft row awaiting a "Connect?" confirm + a
+  // success banner after a clean switch.
+  const [pendingUseRid, setPendingUseRid] = useState<string | null>(null);
+  const [useSuccess, setUseSuccess] = useState<string | null>(null);
 
   const refresh = async () => {
     const r = await bgOperatorsGet();
@@ -185,7 +190,8 @@ export function Operators({
   // stay as fallback, so a later failure can't strand the wallet, and an
   // unreachable choice leaves everything UNCHANGED. No dispatch/genesis logic
   // is altered; this only reorders + saves via the existing override path.
-  const handleUseOperator = async (rid: string) => {
+  // B1: open a confirm; the probe + switch run only on Confirm.
+  const handleUseOperator = (rid: string) => {
     if (usingRid || submitting) return;
     const row = draft.find((d) => d.rid === rid);
     if (!row || !isValidDraftEntry(row)) return;
@@ -193,13 +199,29 @@ export function Operators({
       setSubmitError("Fix the invalid operator rows before using one.");
       return;
     }
+    setSubmitError(null);
+    setUseSuccess(null);
+    setPendingUseRid(rid);
+  };
+
+  const confirmUseOperator = async (rid: string) => {
+    if (usingRid || submitting) return;
+    const row = draft.find((d) => d.rid === rid);
+    setPendingUseRid(null);
+    if (!row || !isValidDraftEntry(row)) return;
     setUsingRid(rid);
     setSubmitError(null);
+    setUseSuccess(null);
     try {
+      // B2/B3: reachability + genesis check. A draft (possibly newly-added)
+      // operator has no probed health row to classify, so the gate is
+      // bgProbeOperator — unreachable / different-chain / quarantined all fail
+      // `usable` and BLOCK the switch (operators left unchanged). The richer
+      // legend-reason block lives on the operator directory (probed rows).
       const probe = await bgProbeOperator(row.rpc.trim());
       if (!probe.ok || !probe.usable) {
         setSubmitError(
-          `Couldn't reach ${row.name.trim() || "that operator"} (or it's on a different chain) — left your operators unchanged.`,
+          `Couldn't connect to ${row.name.trim() || "that operator"} — it's unreachable, on a different chain, or quarantined. Left your operators unchanged.`,
         );
         return;
       }
@@ -214,6 +236,8 @@ export function Operators({
         setSubmitError(r.reason ?? "save failed");
         return;
       }
+      // B4: success feedback.
+      setUseSuccess(`Connected to ${row.name.trim() || "operator"}.`);
       await refresh();
     } finally {
       setUsingRid(null);
@@ -406,6 +430,81 @@ export function Operators({
               >
                 {submitError}
               </div>
+            )}
+
+            {useSuccess && (
+              <div
+                className="ext-card"
+                style={{
+                  padding: "10px 12px",
+                  background: "rgba(80,200,120,0.08)",
+                  border: "1px solid rgba(80,200,120,0.4)",
+                  fontSize: 12,
+                  color: "var(--ok)",
+                }}
+              >
+                {useSuccess}
+              </div>
+            )}
+
+            {pendingUseRid && (
+              <Modal
+                open
+                onClose={() => setPendingUseRid(null)}
+                title="Connect to this operator?"
+                showClose
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--fg-300)",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Connect to{" "}
+                  <strong style={{ color: "var(--fg-100)" }}>
+                    {draft.find((d) => d.rid === pendingUseRid)?.name.trim() ||
+                      "this operator"}
+                  </strong>
+                  ? The wallet runs a health &amp; security check first and
+                  won&apos;t switch if it fails.
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button
+                    type="button"
+                    onClick={() => setPendingUseRid(null)}
+                    style={{
+                      flex: 1,
+                      padding: "8px 10px",
+                      borderRadius: 8,
+                      border: "1px solid var(--fg-700)",
+                      background: "transparent",
+                      color: "var(--fg-200)",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmUseOperator(pendingUseRid)}
+                    style={{
+                      flex: 1,
+                      padding: "8px 10px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: "var(--ok)",
+                      color: "#06210f",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Connect
+                  </button>
+                </div>
+              </Modal>
             )}
 
             <div

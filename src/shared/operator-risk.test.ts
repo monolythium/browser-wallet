@@ -7,6 +7,7 @@ import {
   INDEXER_STALE_LAG,
   OPERATOR_RISK_LEGEND,
   classifyOperatorRisk,
+  operatorConnectBlockReason,
   type OperatorRiskInput,
 } from "./operator-risk.js";
 
@@ -235,5 +236,53 @@ describe("OPERATOR_RISK_LEGEND", () => {
       expect(e.label.length).toBeGreaterThan(0);
       expect(e.body.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("operatorConnectBlockReason (B3 — block a manual connect to a bad op)", () => {
+  it("returns null for a healthy operator (connectable)", () => {
+    expect(operatorConnectBlockReason(HEALTHY)).toBeNull();
+  });
+
+  it("blocks a quarantined operator with the quarantine legend body", () => {
+    const reason = operatorConnectBlockReason({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: true,
+    });
+    expect(reason).not.toBeNull();
+    const legend = OPERATOR_RISK_LEGEND.find((e) => e.kind === "quarantined");
+    expect(reason).toBe(legend!.body);
+  });
+
+  it("blocks a different-genesis operator with the untrusted-genesis legend body", () => {
+    const reason = operatorConnectBlockReason({
+      ...HEALTHY,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    const legend = OPERATOR_RISK_LEGEND.find(
+      (e) => e.kind === "untrusted-genesis",
+    );
+    expect(reason).toBe(legend!.body);
+  });
+
+  it("blocks an unreachable operator (transport-error)", () => {
+    const reason = operatorConnectBlockReason({
+      ...HEALTHY,
+      ok: false,
+      trustedGenesis: false,
+      quarantined: false,
+    });
+    const legend = OPERATOR_RISK_LEGEND.find(
+      (e) => e.kind === "transport-error",
+    );
+    expect(reason).toBe(legend!.body);
+  });
+
+  it("does NOT block on a warn/info-only operator (e.g. high latency)", () => {
+    expect(
+      operatorConnectBlockReason({ ...HEALTHY, latencyMs: HIGH_LATENCY_MS }),
+    ).toBeNull();
   });
 });

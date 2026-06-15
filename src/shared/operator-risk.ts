@@ -276,3 +276,21 @@ export const OPERATOR_RISK_LEGEND: ReadonlyArray<{
     devOnly: true,
   },
 ];
+
+/** B3 — the user-facing reason to BLOCK a manual "use this operator" connect,
+ *  or `null` when the operator is connectable. An err-severity risk badge
+ *  (untrusted-genesis / quarantined / transport-error) blocks the switch; the
+ *  message is pulled from the same legend the badge explains, so the block copy
+ *  matches what the user already sees on the operator row. Pure + testable.
+ *
+ *  This is a UI guard so the wallet never *pins* a bad operator — the real
+ *  security boundary is RPC dispatch, which re-verifies every operator's
+ *  genesis on every call regardless of the override order. */
+export function operatorConnectBlockReason(
+  input: OperatorRiskInput,
+): string | null {
+  const blocker = classifyOperatorRisk(input).find((b) => b.severity === "err");
+  if (!blocker) return null;
+  const legend = OPERATOR_RISK_LEGEND.find((e) => e.kind === blocker.kind);
+  return legend?.body ?? blocker.tooltip;
+}
