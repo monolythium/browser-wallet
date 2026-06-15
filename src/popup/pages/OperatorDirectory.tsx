@@ -46,6 +46,14 @@ interface OperatorDirectoryProps {
 
 type OpenSection = "list" | "attrs" | "legend" | null;
 
+// Dev "use this operator" in-popup flow: confirm → checking → result. The block
+// warning AND the success live IN the modal (a popup continuation) so the user
+// can't miss them at the bottom of the page.
+type ConnectFlow =
+  | { op: OperatorHealthRow; phase: "confirm" }
+  | { op: OperatorHealthRow; phase: "checking" }
+  | { op: OperatorHealthRow; phase: "result"; ok: boolean; message: string };
+
 // Upper bound on the operator-health probe. The SW probe is parallel +
 // timeout-bounded now, so this rarely fires — but a wedged SW used to leave
 // this page stuck on "Probing…" forever; the deadline forces a definite state.
@@ -70,11 +78,8 @@ export function OperatorDirectory({
   const [activeRpc, setActiveRpc] = useState<string | null>(null);
   // The rpc currently being switched to (button spinner) + any switch error.
   const [usingRpc, setUsingRpc] = useState<string | null>(null);
-  const [useError, setUseError] = useState<string | null>(null);
-  // B (dev connect-flow): the operator awaiting a "Connect?" confirm, plus a
-  // success banner after a clean switch.
-  const [pendingUse, setPendingUse] = useState<OperatorHealthRow | null>(null);
-  const [useSuccess, setUseSuccess] = useState<string | null>(null);
+  // B (dev connect-flow): the in-popup confirm → checking → result flow.
+  const [connectFlow, setConnectFlow] = useState<ConnectFlow | null>(null);
   // Bumped after a switch / reset to re-probe health + re-read the override.
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -115,39 +120,42 @@ export function OperatorDirectory({
   // trusted operator is moved to the FRONT of the override (the rest stay as
   // fallback, so a later quarantine can't strand the wallet). Mirrors the
   // Operators editor's handler — same bgProbeOperator + bgOperatorsSet path.
-  // B1: clicking "Use this operator" opens a confirm — the health/security
-  // check + switch run only on Confirm (confirmUse).
+  // B1: clicking "Use this operator" opens the confirm phase — the health /
+  // security check + switch run only on Confirm (confirmUse).
   const handleUse = (op: OperatorHealthRow) => {
     if (usingRpc || operators === null) return;
-    setUseError(null);
-    setUseSuccess(null);
-    setPendingUse(op);
+    setConnectFlow({ op, phase: "confirm" });
   };
 
   const confirmUse = async (op: OperatorHealthRow) => {
     if (usingRpc || operators === null) return;
-    setPendingUse(null);
     setUsingRpc(op.rpc);
-    setUseError(null);
-    setUseSuccess(null);
+    setConnectFlow({ op, phase: "checking" });
     try {
       // B3: block an err-severity operator (quarantined / untrusted-genesis /
       // transport-error) with the reason from the risk legend — never PIN a bad
       // operator. Dispatch re-verifies genesis on every call regardless; this
-      // is the UI guard, not the security boundary.
+      // is the UI guard, not the security boundary. The reason shows IN the
+      // modal (popup continuation), not a bottom banner.
       const block = operatorConnectBlockReason(toRiskInput(op));
       if (block) {
-        setUseError(
-          `Can't connect to ${op.name} — ${block} Left your operator unchanged.`,
-        );
+        setConnectFlow({
+          op,
+          phase: "result",
+          ok: false,
+          message: `Can't connect to ${op.name} — ${block}`,
+        });
         return;
       }
       // B2: fresh reachability + genesis check.
       const probe = await bgProbeOperator(op.rpc);
       if (!probe.ok || !probe.usable) {
-        setUseError(
-          `Couldn't switch to ${op.name} — it's unreachable or on a different chain. Left your operator unchanged.`,
-        );
+        setConnectFlow({
+          op,
+          phase: "result",
+          ok: false,
+          message: `Couldn't connect to ${op.name} — it's unreachable or on a different chain.`,
+        });
         return;
       }
       const reordered = [op, ...operators.filter((o) => o.rpc !== op.rpc)];
@@ -158,11 +166,21 @@ export function OperatorDirectory({
       }));
       const r = await bgOperatorsSet(wire);
       if (!r.ok) {
-        setUseError(r.reason ?? "Couldn't save the operator choice.");
+        setConnectFlow({
+          op,
+          phase: "result",
+          ok: false,
+          message: r.reason ?? "Couldn't save the operator choice.",
+        });
         return;
       }
-      // B4: success feedback.
-      setUseSuccess(`Connected to ${op.name}.`);
+      // B4: success.
+      setConnectFlow({
+        op,
+        phase: "result",
+        ok: true,
+        message: `Connected to ${op.name}.`,
+      });
       setReloadKey((k) => k + 1);
     } finally {
       setUsingRpc(null);
@@ -172,7 +190,7 @@ export function OperatorDirectory({
   // Revert to automatic round-robin across all published operators.
   const handleAuto = async () => {
     if (usingRpc) return;
-    setUseError(null);
+    setConnectFlow(null);
     await bgOperatorsSet(null);
     setReloadKey((k) => k + 1);
   };
@@ -281,70 +299,105 @@ export function OperatorDirectory({
                   </button>
                 )}
               </div>
-              {useError && (
-                <div
-                  style={{
-                    fontSize: 10.5,
-                    color: "var(--err)",
-                    lineHeight: 1.4,
-                    padding: "0 2px",
-                  }}
-                >
-                  {useError}
-                </div>
-              )}
-              {useSuccess && (
-                <div
-                  style={{
-                    fontSize: 10.5,
-                    color: "var(--ok)",
-                    lineHeight: 1.4,
-                    padding: "0 2px",
-                  }}
-                >
-                  {useSuccess}
-                </div>
-              )}
-              {pendingUse && (
+              {connectFlow && (
                 <Modal
                   open
-                  onClose={() => setPendingUse(null)}
-                  title="Connect to this operator?"
-                  showClose
+                  onClose={
+                    connectFlow.phase === "checking"
+                      ? () => undefined
+                      : () => setConnectFlow(null)
+                  }
+                  title={
+                    connectFlow.phase === "result"
+                      ? connectFlow.ok
+                        ? "Connected"
+                        : "Can't connect"
+                      : "Connect to this operator?"
+                  }
+                  {...(connectFlow.phase === "result"
+                    ? {
+                        titleAccent: connectFlow.ok
+                          ? "var(--ok)"
+                          : "var(--err)",
+                      }
+                    : {})}
+                  showClose={connectFlow.phase !== "checking"}
                 >
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "var(--fg-300)",
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    You&apos;re{" "}
-                    {activeRpc
-                      ? "on another operator"
-                      : "on automatic operator selection"}
-                    . Connect to{" "}
-                    <strong style={{ color: "var(--fg-100)" }}>
-                      {pendingUse.name}
-                    </strong>
-                    ? The wallet runs a health &amp; security check first.
-                  </div>
-                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                    <button
-                      type="button"
-                      onClick={() => setPendingUse(null)}
-                      style={pickerResetBtn}
+                  {connectFlow.phase === "confirm" && (
+                    <>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--fg-300)",
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        You&apos;re{" "}
+                        {activeRpc
+                          ? "on another operator"
+                          : "on automatic operator selection"}
+                        . Connect to{" "}
+                        <strong style={{ color: "var(--fg-100)" }}>
+                          {connectFlow.op.name}
+                        </strong>
+                        ? The wallet runs a health &amp; security check first.
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() => setConnectFlow(null)}
+                          style={pickerResetBtn}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void confirmUse(connectFlow.op)}
+                          style={pickerUseBtn}
+                        >
+                          Connect
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {connectFlow.phase === "checking" && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--fg-300)",
+                        lineHeight: 1.5,
+                      }}
                     >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void confirmUse(pendingUse)}
-                      style={pickerUseBtn}
-                    >
-                      Connect
-                    </button>
-                  </div>
+                      Running a health &amp; security check on{" "}
+                      <strong style={{ color: "var(--fg-100)" }}>
+                        {connectFlow.op.name}
+                      </strong>
+                      …
+                    </div>
+                  )}
+                  {connectFlow.phase === "result" && (
+                    <>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: connectFlow.ok ? "var(--ok)" : "var(--err)",
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {connectFlow.message}
+                        {!connectFlow.ok && " Your operator was left unchanged."}
+                      </div>
+                      <div style={{ display: "flex", marginTop: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() => setConnectFlow(null)}
+                          style={{ ...pickerUseBtn, marginLeft: "auto" }}
+                        >
+                          {connectFlow.ok ? "Done" : "Close"}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </Modal>
               )}
               {sortedOperators!.map((op) => (

@@ -86,10 +86,18 @@ export function Operators({
   const [loaded, setLoaded] = useState(false);
   // rid of the operator currently being probed via "Use this operator".
   const [usingRid, setUsingRid] = useState<string | null>(null);
-  // B (dev connect-flow): the draft row awaiting a "Connect?" confirm + a
-  // success banner after a clean switch.
-  const [pendingUseRid, setPendingUseRid] = useState<string | null>(null);
-  const [useSuccess, setUseSuccess] = useState<string | null>(null);
+  // B (dev connect-flow): the in-popup confirm → checking → result flow.
+  type ConnectFlow =
+    | { rid: string; name: string; phase: "confirm" }
+    | { rid: string; name: string; phase: "checking" }
+    | {
+        rid: string;
+        name: string;
+        phase: "result";
+        ok: boolean;
+        message: string;
+      };
+  const [connectFlow, setConnectFlow] = useState<ConnectFlow | null>(null);
 
   const refresh = async () => {
     const r = await bgOperatorsGet();
@@ -190,7 +198,7 @@ export function Operators({
   // stay as fallback, so a later failure can't strand the wallet, and an
   // unreachable choice leaves everything UNCHANGED. No dispatch/genesis logic
   // is altered; this only reorders + saves via the existing override path.
-  // B1: open a confirm; the probe + switch run only on Confirm.
+  // B1: open the confirm phase; the probe + switch run only on Confirm.
   const handleUseOperator = (rid: string) => {
     if (usingRid || submitting) return;
     const row = draft.find((d) => d.rid === rid);
@@ -200,29 +208,35 @@ export function Operators({
       return;
     }
     setSubmitError(null);
-    setUseSuccess(null);
-    setPendingUseRid(rid);
+    setConnectFlow({ rid, name: row.name.trim() || "this operator", phase: "confirm" });
   };
 
   const confirmUseOperator = async (rid: string) => {
     if (usingRid || submitting) return;
     const row = draft.find((d) => d.rid === rid);
-    setPendingUseRid(null);
-    if (!row || !isValidDraftEntry(row)) return;
+    const name = row?.name.trim() || "this operator";
+    if (!row || !isValidDraftEntry(row)) {
+      setConnectFlow(null);
+      return;
+    }
     setUsingRid(rid);
-    setSubmitError(null);
-    setUseSuccess(null);
+    setConnectFlow({ rid, name, phase: "checking" });
     try {
       // B2/B3: reachability + genesis check. A draft (possibly newly-added)
       // operator has no probed health row to classify, so the gate is
       // bgProbeOperator — unreachable / different-chain / quarantined all fail
       // `usable` and BLOCK the switch (operators left unchanged). The richer
-      // legend-reason block lives on the operator directory (probed rows).
+      // legend-reason block lives on the operator directory (probed rows). The
+      // result shows IN the modal (popup continuation), not a bottom card.
       const probe = await bgProbeOperator(row.rpc.trim());
       if (!probe.ok || !probe.usable) {
-        setSubmitError(
-          `Couldn't connect to ${row.name.trim() || "that operator"} — it's unreachable, on a different chain, or quarantined. Left your operators unchanged.`,
-        );
+        setConnectFlow({
+          rid,
+          name,
+          phase: "result",
+          ok: false,
+          message: `Couldn't connect to ${name} — it's unreachable, on a different chain, or quarantined.`,
+        });
         return;
       }
       const reordered = [row, ...draft.filter((d) => d.rid !== rid)];
@@ -233,11 +247,23 @@ export function Operators({
       }));
       const r = await bgOperatorsSet(wire);
       if (!r.ok) {
-        setSubmitError(r.reason ?? "save failed");
+        setConnectFlow({
+          rid,
+          name,
+          phase: "result",
+          ok: false,
+          message: r.reason ?? "Couldn't save the operator choice.",
+        });
         return;
       }
-      // B4: success feedback.
-      setUseSuccess(`Connected to ${row.name.trim() || "operator"}.`);
+      // B4: success.
+      setConnectFlow({
+        rid,
+        name,
+        phase: "result",
+        ok: true,
+        message: `Connected to ${name}.`,
+      });
       await refresh();
     } finally {
       setUsingRid(null);
@@ -432,78 +458,130 @@ export function Operators({
               </div>
             )}
 
-            {useSuccess && (
-              <div
-                className="ext-card"
-                style={{
-                  padding: "10px 12px",
-                  background: "rgba(80,200,120,0.08)",
-                  border: "1px solid rgba(80,200,120,0.4)",
-                  fontSize: 12,
-                  color: "var(--ok)",
-                }}
-              >
-                {useSuccess}
-              </div>
-            )}
-
-            {pendingUseRid && (
+            {connectFlow && (
               <Modal
                 open
-                onClose={() => setPendingUseRid(null)}
-                title="Connect to this operator?"
-                showClose
+                onClose={
+                  connectFlow.phase === "checking"
+                    ? () => undefined
+                    : () => setConnectFlow(null)
+                }
+                title={
+                  connectFlow.phase === "result"
+                    ? connectFlow.ok
+                      ? "Connected"
+                      : "Can't connect"
+                    : "Connect to this operator?"
+                }
+                {...(connectFlow.phase === "result"
+                  ? {
+                      titleAccent: connectFlow.ok ? "var(--ok)" : "var(--err)",
+                    }
+                  : {})}
+                showClose={connectFlow.phase !== "checking"}
               >
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: "var(--fg-300)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Connect to{" "}
-                  <strong style={{ color: "var(--fg-100)" }}>
-                    {draft.find((d) => d.rid === pendingUseRid)?.name.trim() ||
-                      "this operator"}
-                  </strong>
-                  ? The wallet runs a health &amp; security check first and
-                  won&apos;t switch if it fails.
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                  <button
-                    type="button"
-                    onClick={() => setPendingUseRid(null)}
+                {connectFlow.phase === "confirm" && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--fg-300)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Connect to{" "}
+                      <strong style={{ color: "var(--fg-100)" }}>
+                        {connectFlow.name}
+                      </strong>
+                      ? The wallet runs a health &amp; security check first and
+                      won&apos;t switch if it fails.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => setConnectFlow(null)}
+                        style={{
+                          flex: 1,
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid var(--fg-700)",
+                          background: "transparent",
+                          color: "var(--fg-200)",
+                          fontSize: 12,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void confirmUseOperator(connectFlow.rid)}
+                        style={{
+                          flex: 1,
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "none",
+                          background: "var(--ok)",
+                          color: "#06210f",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Connect
+                      </button>
+                    </div>
+                  </>
+                )}
+                {connectFlow.phase === "checking" && (
+                  <div
                     style={{
-                      flex: 1,
-                      padding: "8px 10px",
-                      borderRadius: 8,
-                      border: "1px solid var(--fg-700)",
-                      background: "transparent",
-                      color: "var(--fg-200)",
-                      fontSize: 12,
-                      cursor: "pointer",
+                      fontSize: 11,
+                      color: "var(--fg-300)",
+                      lineHeight: 1.5,
                     }}
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void confirmUseOperator(pendingUseRid)}
-                    style={{
-                      flex: 1,
-                      padding: "8px 10px",
-                      borderRadius: 8,
-                      border: "none",
-                      background: "var(--ok)",
-                      color: "#06210f",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Connect
-                  </button>
-                </div>
+                    Running a health &amp; security check on{" "}
+                    <strong style={{ color: "var(--fg-100)" }}>
+                      {connectFlow.name}
+                    </strong>
+                    …
+                  </div>
+                )}
+                {connectFlow.phase === "result" && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: connectFlow.ok ? "var(--ok)" : "var(--err)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {connectFlow.message}
+                      {!connectFlow.ok &&
+                        " Your operators were left unchanged."}
+                    </div>
+                    <div style={{ display: "flex", marginTop: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => setConnectFlow(null)}
+                        style={{
+                          marginLeft: "auto",
+                          padding: "8px 16px",
+                          borderRadius: 8,
+                          border: "1px solid var(--fg-700)",
+                          background: "transparent",
+                          color: "var(--fg-200)",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {connectFlow.ok ? "Done" : "Close"}
+                      </button>
+                    </div>
+                  </>
+                )}
               </Modal>
             )}
 
