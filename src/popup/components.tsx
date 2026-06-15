@@ -431,6 +431,14 @@ export function ChainStatusBanner({
     let cancelled = false;
     let lastBlockHex: string | null = null;
     let lastBlockObservedAt = Date.now();
+    // The genesis-gated HTTP poll is the source of truth for whether the chain
+    // is serviceable. The WS `newHeads` push is only a faster freshness signal
+    // and must NOT independently flip the banner to LIVE when the poll says the
+    // chain is degraded: a still-up-but-quarantined operator keeps relaying
+    // heads (and its genesis verdict is forever-cached as ok:true), which would
+    // otherwise flap the banner LIVE↔OFFLINE against the poll. Latched by the
+    // poll below; the WS listener honors it.
+    let pollDegraded = false;
 
     const tick = async () => {
       if (cancelled || document.visibilityState === "hidden") return;
@@ -438,9 +446,11 @@ export function ChainStatusBanner({
         const r = await bgWalletChainBlockNumber();
         if (cancelled) return;
         if (!r.ok) {
+          pollDegraded = true;
           setHealth(chainHealthForFailedPoll(r));
           return;
         }
+        pollDegraded = false;
         const now = Date.now();
         if (lastBlockHex === null || r.blockHex !== lastBlockHex) {
           lastBlockHex = r.blockHex;
@@ -460,6 +470,7 @@ export function ChainStatusBanner({
         // else: same block but within fresh window — keep current state
       } catch (e) {
         if (cancelled) return;
+        pollDegraded = true;
         setHealth({ kind: "offline", reason: (e as Error).message });
       }
     };
@@ -507,6 +518,11 @@ export function ChainStatusBanner({
     ) => {
       if (area !== "session") return;
       if (cancelled) return;
+      // Defer to the genesis-gated poll's verdict: while it says the chain is
+      // degraded (offline / quarantined / untrusted / re-genesis), ignore WS
+      // heads so a still-relaying quarantined operator can't flap us to LIVE.
+      // The next poll re-confirms recovery and clears the latch.
+      if (pollDegraded) return;
       const change = changes[WS_BLOCK_KEY];
       if (!change || typeof change.newValue !== "string") return;
       const blockHex = change.newValue;
