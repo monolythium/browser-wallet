@@ -80,7 +80,7 @@ export interface SendErrorContext {
  *
  *  Unwrap-inner-first: mono-core's live broadcaster flattens EVERY mempool
  *  admission failure into `RpcError::UpstreamUnavailable(format!("mempool:
- *  {e}"))` (mono-core providers.rs:6385), which reaches the wallet as code
+ *  {e}"))` (mono-core providers.rs:6734/6794/6835), which reaches the wallet as code
  *  -32047 + "upstream unavailable: mempool: <inner>". The generic "upstream
  *  unavailable" substring would otherwise let the chain-quarantined branch
  *  steal whatever specific error the chain wrapped (insufficient-funds,
@@ -206,8 +206,9 @@ function classifyInnerError(
   // submission wasn't used for this tx: the dispatcher seals when the operator
   // cluster serves a seal roster, but here the roster was unavailable, so it fell
   // back to plaintext, which the encrypted-mempool milestone rejects ("plaintext
-  // mempool entry not allowed: encrypted envelope required"; code -32040
-  // PlaintextNotAllowed, or -32047 on v0.1.44-testnet). Classify it so the user
+  // mempool entry not allowed: encrypted envelope required"; native code -32040
+  // PlaintextNotAllowed, surfaced on the wire as -32047 because the broadcaster
+  // flattens it into UpstreamUnavailable — see the unwrap-inner note above). Classify it so the user
   // sees an honest explanation instead of a raw debugger string. This branch only
   // explains the rejection; the encrypted path itself lives in submitMlDsaTx.
   //

@@ -41,11 +41,11 @@ export function formatWeightBpsPercent(bps: number | null): string {
  *  `*.cluster.mono` name when one was captured at send time (threaded onto the
  *  confirmed row via `applyCapturedClusterNames`), otherwise an honest
  *  `Cluster #<id>` using the RAW numeric id. NEVER fabricates a name: the
- *  chain/indexer ships no cluster name (§C — `cluster` is a numeric id only;
- *  no `lyth_resolveName` / `lyth_clusterName` reader and no `monok1` cluster
- *  address in mono-core), so an indexer-sourced (non-originated) stake honestly
- *  shows `Cluster #<id>` until a chain name source exists. Mirrors the
- *  NotificationRow / NotificationDetail real-name-or-#id treatment. */
+ *  indexer row ships no cluster name (§C — `cluster` is a numeric id only). A
+ *  chain name source DOES exist (`lyth_getClusterName`, cluster-name registry
+ *  0x1104) but isn't wired here, so an indexer-sourced (non-originated) stake
+ *  honestly shows `Cluster #<id>` unless a name was captured at send time.
+ *  Matches the NotificationRow / NotificationDetail real-name-or-#id treatment. */
 export function clusterLabel(cluster: number, clusterName?: string | null): string {
   if (typeof clusterName === "string" && clusterName.length > 0) return clusterName;
   return `Cluster #${cluster}`;
@@ -59,12 +59,11 @@ export interface ClusterDirectoryEntry {
   /** Numeric cluster id used by every chain-side delegation precompile. */
   clusterId: number;
   /** §22.4 cluster-name-registry display name (e.g. `halcyon.cluster.mono`).
-   *  chain GAP — no chain-side cluster-name reader yet.
-   *  (cluster name registry). No `lyth_resolveName` /
-   *  `lyth_clusterName` reader exists in mono-core protocore.rs as of
-   *  HEAD f7236197. Wallet displays mock names from
-   *  `MOCK_CLUSTERS[*].name` below; replace with a real lookup when the
-   *  chain ships the primitive. */
+   *  The chain DOES ship a cluster-name reader — `lyth_getClusterName`
+   *  (cluster-name registry 0x1104), with `lyth_resolveName` for the
+   *  hierarchical 0x110E registry — both wrapped by the SDK. Not wired here
+   *  yet: the wallet still displays mock names from `MOCK_CLUSTERS[*].name`
+   *  below; replace with the real lookup when this surface adopts it. */
   name: string | null;
   /** Member count (`ClusterDirectoryEntryResponse.size`). Whitepaper §14
    *  fixes this at 10 for v1; surfaced from the chain so future
@@ -600,11 +599,14 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //      The testnet is offline. Current core tickets are maturity-height
 //      and weight-bps based; token amount remains optional.
 //
-//   ❌ `lyth_clusterApr` — STILL no chain reader. MOCK_CLUSTER_APR_BPS
-//      stays the wallet's authoritative APR source.
+//   ✅ `lyth_clusterApr` — chain reader exists and the wallet consumes it
+//      (readClusterApr → per-cluster aprBps). MOCK_CLUSTER_APR_BPS is now
+//      only a pending-rewards mock fallback, NOT the directory APR source.
 //
-//   ❌ `lyth_namingRegistry` (§22.8) — STILL no chain reader. Cluster
-//      names display `cluster-<id>` until the chain wires the resolver.
+//   ✅ naming registry — readers exist: `lyth_resolveName` (hierarchical
+//      0x110E, §22.8) and `lyth_getClusterName` (cluster-name 0x1104), both
+//      SDK-wrapped. Not wired here yet, so cluster names still display
+//      `cluster-<id>` until this surface adopts the reader.
 //
 // The above is the binding wallet-side view; the testnet deploy status
 // of each method is checked at runtime via `withChainFallback` rather

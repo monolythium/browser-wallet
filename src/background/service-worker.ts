@@ -1326,7 +1326,8 @@ const ERR_INTERNAL = -32603;
 // single-signer ENTRY handlers; multisig-execute reaches submitMlDsaTx
 // directly with a multisig active vault and is intentionally NOT guarded (it
 // IS the sanctioned broadcast). This closes the in-wallet bypass; the executor
-// seed-export bypass remains chain-blocked (native monom M-of-N — ping S6-01).
+// seed-export bypass is closeable by moving funds to a native monom M-of-N
+// address (chain enforces it; SDK now exposes the witness encoders — S6-01 resolved).
 const MULTISIG_SEND_REFUSAL =
   "This is a multisig wallet — transactions go through the multisig propose/approve flow.";
 

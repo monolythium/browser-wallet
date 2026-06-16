@@ -162,10 +162,12 @@ function normaliseDirectoryEntry(
   const diversity = diversityByCluster.get(raw.clusterId) ?? null;
   return {
     clusterId: raw.clusterId,
-    // §22.8 namingRegistry precompile (0x1106) hasn't surfaced a reader
-    // in the SDK as of 0fd8a79. Once `lythResolveName(".cluster.mono")`
-    // (or equivalent) lands, swap this null for a per-cluster lookup
-    // batched with the entity fanout below. UI falls back to `cluster-<id>`.
+    // Cluster names come from the cluster-name registry (0x1104), read via the
+    // SDK's `lythGetClusterName(clusterId)` (forward names use the hierarchical
+    // name registry at 0x110E via `lythResolveName`; 0x1106 is the consent
+    // precompile, NOT naming). The reader exists but isn't wired here yet — left
+    // null so the UI falls back to `cluster-<id>`. Wire a per-cluster lookup
+    // batched with the entity fanout below to populate it.
     name: null,
     size: typeof raw.size === "number" ? raw.size : 0,
     threshold: typeof raw.threshold === "number" ? raw.threshold : 0,

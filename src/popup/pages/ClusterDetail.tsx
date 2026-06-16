@@ -12,16 +12,17 @@
 //   - `lyth_getDelegationHistory` cluster-relevant rows from the
 //      user's perspective (filtered by cluster id)
 //
-// Cluster-name registry (§22.8) and per-cluster APR have no SDK reader
-// yet. The page renders `cluster-<id>` as the honest id-derived
-// fallback for name; APR is omitted entirely per
-// `_dev-notes/_principles/no-mock-fallbacks.md` (chain silence ↦ field
-// absent — no placeholder).
+// Cluster-name registry (§22.8) and per-cluster APR DO have SDK readers
+// (`lythGetClusterName` at 0x1104, `lythClusterApr`); APR is already wired
+// elsewhere. This page renders `cluster-<id>` as the honest id-derived
+// fallback for name until the name reader is wired here; absent values stay
+// absent per `_dev-notes/_principles/no-mock-fallbacks.md` (chain silence ↦
+// field absent — no placeholder).
 //
 // Whitepaper alignment:
 //   §14    — cluster marketplace (this page IS the marketplace surface)
-//   §22.4  — cluster-name registry (TODO: wire when SDK lands)
-//   §22.8  — naming registry (same)
+//   §22.4  — cluster-name registry (reader exists: lythGetClusterName; wire here)
+//   §22.8  — hierarchical naming registry 0x110E (reader: lythResolveName)
 //   §23.5  — service-proved reward share (renders cluster's effective
 //            reward rate: rewards come from services the cluster proves,
 //            split across delegators by weight; stake is not rewarded)

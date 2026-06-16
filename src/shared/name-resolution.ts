@@ -180,8 +180,9 @@ export function mergeNameCache(
 // §22.8 hierarchical naming — TLD parser + reverse lookup
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Whitepaper §22.8 defines five TLDs on the naming-registry precompile
-// (0x1106):
+// Whitepaper §22.8 defines five TLDs on the hierarchical naming registry
+// precompile (0x110E — Law §5.4 pins it there; 0x1106 is the consent
+// precompile, and cluster names live in the 0x1104 cluster-name registry):
 //
 //   <label>.mono                    — human (primary)
 //   <label>.agent.<human>.mono      — agent (sub-account under a human parent)
@@ -290,10 +291,11 @@ export function parseMonoName(input: string): MonoNameParse | null {
 }
 
 /**
- * Reverse name → address using only the local name cache. The wallet
- * does not have a `lyth_resolveName` RPC yet (§22.8 registry is forward-
- * looking), so this only finds matches the user has already encountered
- * via reverse-resolve (address → label).
+ * Reverse name → address using only the local name cache. A forward
+ * `lyth_resolveName` reader exists (SDK `lythResolveName`, hierarchical
+ * registry 0x110E) but isn't wired here yet, so for now this only finds
+ * matches the user has already encountered via reverse-resolve
+ * (address → label).
  *
  * Returns the lowercased 0x address on a hit, or null when the name
  * isn't in cache (UI should surface "name not in cache — paste address

@@ -22,11 +22,11 @@
 // mnemonic, so we use the same backup-checkbox gate.
 //
 // Whitepaper §28.5 (multisig built-in for Beta) is the binding
-// requirement. mono-core ships a native M-of-N multisig, but the TS SDK
-// doesn't expose its witness-assembly API yet (see shared/multisig.ts +
-// Nayiem ping S6-01), so for now the policy is enforced at the wallet
-// boundary; the bgVaultAddMultisig IPC just persists the roster +
-// threshold for the per-vault meta block.
+// requirement. mono-core ships a native M-of-N multisig and the TS SDK now
+// exposes its witness-assembly API (see shared/multisig.ts — S6-01 resolved),
+// but this wallet hasn't adopted that path yet, so for now the policy is
+// enforced at the wallet boundary; the bgVaultAddMultisig IPC just persists
+// the roster + threshold for the per-vault meta block.
 
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";

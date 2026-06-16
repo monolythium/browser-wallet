@@ -934,9 +934,10 @@ export async function addVaultImportV4(
  *  roster + threshold as the M-of-N policy.
  *
  *  Whitepaper §28.5 (wallet portfolio / multisig policy) — N up to
- *  {@link MAX_SIGNERS} (16); threshold in [1, N]. The wallet enforces the policy at the IPC boundary;
- *  chain enforcement is a GAP (`TODO: chain GAP — needs Nayiem`),
- *  see shared/multisig.ts module doc-block for the off-chain story.
+ *  {@link MAX_SIGNERS} (16); threshold in [1, N]. The wallet enforces the policy at the IPC boundary.
+ *  The chain DOES enforce M-of-N natively (unconditional `verify_quorum` on the
+ *  0x40 multisig witness) and the SDK exposes the witness encoders; the gap is
+ *  wallet adoption — see shared/multisig.ts module doc-block for the off-chain story.
  *
  *  Returns the new vault id, the multisig vault's mnemonic (the
  *  "executor" recovery phrase — treat like a single-vault mnemonic),

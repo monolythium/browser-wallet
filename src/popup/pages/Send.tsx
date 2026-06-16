@@ -1246,8 +1246,9 @@ const fromHint: CSSProperties = {
 /**
  * Recipient input parser. Accepts:
  *   - bech32m typed user addresses
- *   - hierarchical names ending in `.mono` (forward-resolved
- *     against the local name cache; no `lyth_resolveName` RPC yet)
+ *   - hierarchical names ending in `.mono` (forward-resolved against the
+ *     local name cache; a `lyth_resolveName` reader exists in the SDK but
+ *     isn't wired here yet)
  *
  * The IPC contract stays 0x-only; the popup is the typed-address + name-
  * resolution boundary and rejects raw 0x input at the public surface.
@@ -1400,11 +1401,11 @@ const IDLE_RESOLUTION: NameResolutionState = { status: "idle", addr0x: null };
  * is no name to resolve, loading while the storage read is in flight,
  * hit when the cache had a match, miss when it didn't.
  *
- * The cache is the only forward-resolve source today — the SDK doesn't
- * expose `lyth_resolveName` yet (§22.8 registry is forward-looking). When
- * the SDK ships the RPC, this hook becomes the place to add the network
- * fallback; the surface (idle / loading / hit / miss + addr0x) stays
- * stable so callers don't change.
+ * The cache is the only forward-resolve source today — the SDK already
+ * exposes `lyth_resolveName` (hierarchical registry 0x110E), but this hook
+ * hasn't wired the network fallback yet. This hook is the place to add it;
+ * the surface (idle / loading / hit / miss + addr0x) stays stable so callers
+ * don't change.
  *
  * Subscribes to chrome.storage.onChanged so a fresh reverse-resolve
  * elsewhere in the popup (e.g. activity feed pulling a new label) makes
@@ -1469,8 +1470,8 @@ function useNameForwardResolve(
  * `displayName` string when the cache holds a non-null label for the
  * address, else null. Subscribes to chrome.storage.onChanged so a fresh
  * label resolved elsewhere lights up the preview without a re-render
- * loop. No forward registry/RPC path — the SDK exposes no
- * `lyth_resolveName`, so this is cache-only.
+ * loop. No forward registry/RPC path is wired here — the SDK does expose
+ * `lyth_resolveName`, but this preview stays cache-only for now.
  */
 function useRegisteredName(addr0x: string | null): string | null {
   const [name, setName] = useState<string | null>(null);

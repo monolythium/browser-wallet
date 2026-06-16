@@ -21,12 +21,12 @@
 // signed / multisig_base_sighash), the CLI spend flow, and RPC (monom nonce
 // support). "foundation_multisig" (genesis 3-of-5 treasury) is one instance
 // of that same facility, not a separate one.
-// THE GAP IS THE TS BINDING: the TS @monolythium/core-sdk exposes the
-// `monom` HRP + address-derivation domain but NOT the witness-assembly API
-// (MultisigWitness / assemble_multisig_signed / multisig_base_sighash → 0
-// hits in the TS source), so a TS wallet cannot build a native M-of-N tx
-// yet. Tracked as Nayiem ping S6-01 (expose the TS witness API + confirm
-// monom multisig is user-facing-stable).
+// THE TS WITNESS API IS NOW AVAILABLE (S6-01 resolved): the TS
+// @monolythium/core-sdk exposes the `monom` HRP + address-derivation domain
+// AND the witness-assembly API (MultisigWitness / assembleMultisigSigned /
+// multisigBaseSighash / assembleMultisigWitness / encodeMultisigWitnessBody).
+// So a TS wallet CAN build a native M-of-N tx; the remaining gap is wallet
+// ADOPTION — this wallet hasn't wired those encoders yet.
 //
 // Consequence (interim, until the TS witness binding lands): v1 wallet
 // multisig is **off-chain coordinated, single-executor on-submit**. The
@@ -38,8 +38,8 @@
 // single-signer `mono…` executor address (NOT the native `monom…` multisig
 // address), a holder of the executor seed CAN move them unilaterally,
 // bypassing the threshold — a **wallet-side gap closeable by adopting the
-// native monom/MultisigWitness path once the TS SDK exposes it**
-// (`TODO — needs Nayiem ping S6-01`).
+// native monom/MultisigWitness path the TS SDK already exposes**
+// (`TODO — wire the SDK witness-assembly encoders`).
 //
 // Cross-signer coordination is also off-chain: pending proposals live
 // in chrome.storage.local under the per-vault container, and the
