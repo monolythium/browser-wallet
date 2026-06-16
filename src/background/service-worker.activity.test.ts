@@ -492,9 +492,11 @@ import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  AUTO_LOCK_MINUTES_DEFAULT,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
   SESSION_KEY_MEK_V4,
+  STORAGE_KEY_AUTO_LOCK_MINUTES,
 } from "../shared/constants.js";
 import {
   DETERMINISTIC_TEST_ADDRESS,
@@ -5824,5 +5826,67 @@ describe("purgeDemoAddrCacheKeys once-guard (E)", () => {
     await purgeDemoAddrCacheKeys();
     expect(sentinelKey in storageLocal).toBe(false);
     expect(storageLocal[DEMO_ADDR_PURGE_FLAG]).toBe(true);
+  });
+});
+
+describe("auto-lock honors the persisted timeout at consume time", () => {
+  it("readAutoLockMinutes returns the persisted value; defaults on absent/invalid/read-failure (never throws)", async () => {
+    const { readAutoLockMinutes } = await import("./service-worker.js");
+
+    storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = 60;
+    expect(await readAutoLockMinutes()).toBe(60);
+
+    delete storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES];
+    expect(await readAutoLockMinutes()).toBe(AUTO_LOCK_MINUTES_DEFAULT);
+
+    storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = 7; // not in AUTO_LOCK_OPTIONS
+    expect(await readAutoLockMinutes()).toBe(AUTO_LOCK_MINUTES_DEFAULT);
+
+    storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = "60"; // non-number
+    expect(await readAutoLockMinutes()).toBe(AUTO_LOCK_MINUTES_DEFAULT);
+
+    // A storage read failure must fall back to the default, never throw
+    // (the lock-always-arms security invariant).
+    storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = 60;
+    const localArea = (
+      globalThis as unknown as {
+        chrome: { storage: { local: { get: unknown } } };
+      }
+    ).chrome.storage.local;
+    const origGet = localArea.get;
+    localArea.get = () => {
+      throw new Error("boom");
+    };
+    try {
+      expect(await readAutoLockMinutes()).toBe(AUTO_LOCK_MINUTES_DEFAULT);
+    } finally {
+      localArea.get = origGet;
+    }
+  });
+
+  it("get-auto-lock-minutes returns the persisted value, not the in-memory default", async () => {
+    // The persisted 60 lives only on disk; the freshly-imported SW's in-memory
+    // session.autoLockMinutes is the 15 default (the fresh-unlock-after-update
+    // state). The display must reflect the on-disk value.
+    storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = 60;
+    const res = (await dispatchPopup({
+      kind: "popup",
+      op: "get-auto-lock-minutes",
+    })) as { autoLockMinutes: number };
+    expect(res.autoLockMinutes).toBe(60);
+  });
+
+  it("a fresh keystore-unlock arms the lock from the persisted value (not the default)", async () => {
+    storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = 60; // persisted on disk
+    unlocked = true;
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-unlock",
+      payload: { password: "pw" },
+    });
+    const armed = alarmCreateCalls.filter((c) => c.name === ALARM_AUTO_LOCK);
+    expect(armed.length).toBeGreaterThan(0); // the lock ALWAYS arms when unlocked
+    const last = armed[armed.length - 1]!.info as { delayInMinutes: number };
+    expect(last.delayInMinutes).toBe(60); // from persisted, not the 15 default
   });
 });

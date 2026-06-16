@@ -1030,13 +1030,37 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 // *while the SW is awake* (e.g. popup open + user idle) so the popup can
 // re-render the Unlock screen at the user-set duration.
 
+/** Read the user's persisted auto-lock timeout (minutes) from
+ *  chrome.storage.local at call time. Arming + the Settings display read this
+ *  rather than the in-memory `session.autoLockMinutes`, which on a fresh-unlock
+ *  boot can still be AUTO_LOCK_MINUTES_DEFAULT — the persisted value is hydrated
+ *  only late in bootHydrated, and an earlier boot await throwing skips it.
+ *  Falls back to the default on an absent/invalid value or any read failure —
+ *  fail-safe: a shorter timeout locks sooner, and the lock always arms. */
+export async function readAutoLockMinutes(): Promise<number> {
+  try {
+    const local = await chrome.storage.local.get(STORAGE_KEY_AUTO_LOCK_MINUTES);
+    const m = local[STORAGE_KEY_AUTO_LOCK_MINUTES];
+    if (
+      typeof m === "number" &&
+      (AUTO_LOCK_OPTIONS as readonly number[]).includes(m)
+    ) {
+      return m;
+    }
+  } catch {
+    // Storage read failed — fall back to the default (fail-safe).
+  }
+  return AUTO_LOCK_MINUTES_DEFAULT;
+}
+
 async function resetAutoLock(): Promise<void> {
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   if (isUnlockedV4()) {
+    const minutes = await readAutoLockMinutes();
     await chrome.alarms.create(ALARM_AUTO_LOCK, {
-      delayInMinutes: session.autoLockMinutes,
+      delayInMinutes: minutes,
     });
-    const deadline = Date.now() + session.autoLockMinutes * 60_000;
+    const deadline = Date.now() + minutes * 60_000;
     await chrome.storage.session.set({
       [SESSION_KEY_AUTO_LOCK_DEADLINE]: deadline,
       [SESSION_KEY_WALLET_LOCKED]: false,
@@ -7446,7 +7470,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "get-auto-lock-minutes": {
       return {
-        autoLockMinutes: session.autoLockMinutes,
+        autoLockMinutes: await readAutoLockMinutes(),
         options: AUTO_LOCK_OPTIONS,
       };
     }
