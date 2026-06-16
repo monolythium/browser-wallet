@@ -583,6 +583,73 @@ describe("keystore-mldsa v4-multi state machine", () => {
     },
     60_000,
   );
+
+  it(
+    "selectActiveVaultV4 disposes the outgoing vault's backend; new active still signs (S1-01)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "switch-dispose-password";
+      const original = await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      // Adding a vault auto-switches active to it; capture its live backend.
+      await ks.addVaultFreshV4();
+      const outgoing = ks.getUnlockedBackendV4();
+      expect(outgoing).not.toBeNull();
+      expect(outgoing!.disposed).toBe(false);
+
+      // Switch away — the outgoing backend's ML-DSA-65 secret must be wiped.
+      const rows = (await ks.listVaultsV4())!;
+      const originalRow = rows.find((v) => v.addr === original.address)!;
+      await ks.selectActiveVaultV4(originalRow.id);
+
+      expect(outgoing!.disposed).toBe(true);
+      expect(() => outgoing!.sign(new Uint8Array(32))).toThrow(
+        "MlDsa65Backend disposed",
+      );
+
+      // The newly installed active backend is a different, live instance.
+      const nowActive = ks.getUnlockedBackendV4();
+      expect(nowActive).not.toBeNull();
+      expect(nowActive).not.toBe(outgoing);
+      expect(nowActive!.disposed).toBe(false);
+      expect(() => nowActive!.sign(new Uint8Array(32))).not.toThrow();
+      expect(ks.getUnlockedAddressV4()).toBe(original.address);
+    },
+    120_000,
+  );
+
+  it(
+    "addVaultFreshV4 auto-switch disposes the previously-active backend; new active still signs (S1-01)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "add-dispose-password";
+      const first = await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+
+      // Capture the first vault's live backend (the current active one).
+      const outgoing = ks.getUnlockedBackendV4();
+      expect(outgoing).not.toBeNull();
+      expect(outgoing!.disposed).toBe(false);
+      expect(ks.getUnlockedAddressV4()).toBe(first.address);
+
+      // Add-vault auto-switches active → the previous backend must be wiped.
+      const second = await ks.addVaultFreshV4();
+
+      expect(outgoing!.disposed).toBe(true);
+      expect(() => outgoing!.sign(new Uint8Array(32))).toThrow(
+        "MlDsa65Backend disposed",
+      );
+
+      const nowActive = ks.getUnlockedBackendV4();
+      expect(nowActive).not.toBeNull();
+      expect(nowActive).not.toBe(outgoing);
+      expect(nowActive!.disposed).toBe(false);
+      expect(() => nowActive!.sign(new Uint8Array(32))).not.toThrow();
+      expect(ks.getUnlockedAddressV4()).toBe(second.address);
+    },
+    120_000,
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -297,8 +297,13 @@ export async function tryRestoreFromSessionV4(): Promise<
   }
   if (mekCache) mekCache.fill(0);
   mekCache = mek;
+  // S1-01 (defensive): `unlocked` is null here in normal flow — the
+  // early-return guard at the top returns first when a live session exists.
+  // Upholds the no-abandoned-secret invariant.
+  const prev = unlocked;
   unlocked = state;
   activeContainerVaultId = active.id;
+  prev?.backend.dispose();
   return { ok: true, address: state.address, vaultId: active.id };
 }
 
@@ -761,8 +766,13 @@ export async function unlockContainerV4(
   // Successful unlock — replace cached state.
   if (mekCache) mekCache.fill(0);
   mekCache = mek;
+  // S1-01 (defensive): no-op in the normal locked→unlock flow (`unlocked` is
+  // null after lockV4). Upholds the no-abandoned-secret invariant if unlock is
+  // ever reached while a session is already live.
+  const prev = unlocked;
   unlocked = state;
   activeContainerVaultId = active.id;
+  prev?.backend.dispose();
   // Mirror MEK to chrome.storage.session so MV3 SW hibernation doesn't
   // force a re-unlock. See `tryRestoreFromSessionV4` for the boot-side
   // read path. SW awaits this before the rate-limit counters get
@@ -793,8 +803,13 @@ export async function selectActiveVaultV4(
   const state = await loadVaultBackend(mekCache, target);
   container.activeVaultId = vaultId;
   await saveVaultsContainerV4(container);
+  // S1-01: deterministically wipe the OUTGOING vault's ML-DSA-65 secret once
+  // the new backend is installed, instead of leaving it for GC. `prev` is the
+  // abandoned instance; `state.backend` (now `unlocked`) is never the target.
+  const prev = unlocked;
   unlocked = state;
   activeContainerVaultId = vaultId;
+  prev?.backend.dispose();
   return { address: state.address };
 }
 
@@ -1617,8 +1632,14 @@ async function appendVaultRecord(
   // refresh.
   container.activeVaultId = record.id;
   await saveVaultsContainerV4(container);
+  // S1-01: dispose the PREVIOUSLY-active vault's backend (the outgoing session
+  // secret) now that the just-added vault becomes active. The new `backend` is
+  // deliberately NOT disposed here (see its construction note above — lockV4
+  // owns it); only the outgoing `prev` instance is wiped.
+  const prev = unlocked;
   unlocked = { backend, address };
   activeContainerVaultId = record.id;
+  prev?.backend.dispose();
   return { vaultId: record.id, mnemonic, address };
 }
 
