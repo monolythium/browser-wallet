@@ -71,6 +71,21 @@ function methodNotFoundError(method = "lyth_pendingRewards"): Error & {
   });
 }
 
+// -32045 METHOD_DISABLED: the method exists in source but is config-disabled
+// on this operator. Semantically the same "method unavailable" signal as
+// -32601, so reads should degrade gracefully the same way.
+function methodDisabledError(method = "lyth_pendingRewards"): Error & {
+  code: number;
+  method: string;
+  via: string;
+} {
+  return Object.assign(new Error(`method disabled: ${method}`), {
+    code: -32045,
+    method,
+    via: "operator-1",
+  });
+}
+
 function expectedMockRewardLythoshi(weightBps: number, aprBps: number): bigint {
   return (
     MOCK_REWARD_PRINCIPAL_LYTHOSHI *
@@ -1099,6 +1114,29 @@ describe("readPendingRewards", () => {
     expect(r.data.rows).toHaveLength(1);
   });
 
+  it("falls back to the mock derivation when lyth_pendingRewards is config-disabled (-32045)", async () => {
+    mockedRpc.mockRejectedValue(methodDisabledError());
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2000 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toHaveLength(1);
+  });
+
+  it("does NOT treat an unrelated server error (-32099) as method-unavailable", async () => {
+    mockedRpc.mockRejectedValue(
+      Object.assign(new Error("internal staking error"), {
+        code: -32099,
+        method: "lyth_pendingRewards",
+        via: "operator-7",
+      }),
+    );
+
+    const r = await readPendingRewards(wallet, [{ cluster: 1, weightBps: 2500 }]);
+    expect(r.ok).toBe(false);
+  });
+
   it("falls back to the mock derivation on transport failure", async () => {
     mockedRpc.mockRejectedValue(new Error("no Monolythium Testnet operator reachable"));
 
@@ -1296,6 +1334,16 @@ describe("readRedemptionQueue", () => {
 
   it("falls back to an empty mock queue when lyth_redemptionQueue is absent", async () => {
     mockedRpc.mockRejectedValue(methodNotFoundError("lyth_redemptionQueue"));
+
+    const r = await readRedemptionQueue(wallet);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe("mock");
+    expect(r.data.rows).toEqual([]);
+  });
+
+  it("falls back to an empty mock queue when lyth_redemptionQueue is config-disabled (-32045)", async () => {
+    mockedRpc.mockRejectedValue(methodDisabledError("lyth_redemptionQueue"));
 
     const r = await readRedemptionQueue(wallet);
     expect(r.ok).toBe(true);

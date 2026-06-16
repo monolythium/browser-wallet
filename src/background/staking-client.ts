@@ -1002,8 +1002,13 @@ function isRpcUnavailableError(e: unknown, method: string): boolean {
     message.includes("unknown method") ||
     message.includes("unsupported method") ||
     message.includes("not implemented") ||
-    message.includes("no such method");
-  if (typeof err.code === "number") return err.code === -32601 || hasAbsenceMessage;
+    message.includes("no such method") ||
+    message.includes("method disabled");
+  // -32601 (method not found) and -32045 (METHOD_DISABLED — the method is
+  // admitted in source but config-disabled on this operator) both mean "this
+  // method is unavailable right now," so both degrade gracefully the same way.
+  if (typeof err.code === "number")
+    return err.code === -32601 || err.code === -32045 || hasAbsenceMessage;
   if (hasAbsenceMessage) return true;
   const isRpcError = typeof err.via === "string" || err.method === method;
   return !isRpcError;

@@ -2233,6 +2233,34 @@ describe("wallet-resolve-names", () => {
     expect(storageLocal["mono.names.method-gate"]).toBeDefined();
   });
 
+  it("trips method-gate on -32045 (config-disabled) identically to -32601", async () => {
+    rpcErrors["lyth_getAddressLabel"] = {
+      code: -32045,
+      message: "method disabled: lyth_getAddressLabel",
+    };
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-names",
+      payload: { addresses: ["0xabc"], chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    const firstCount = rpcCalls.filter(
+      (c) => c.method === "lyth_getAddressLabel",
+    ).length;
+    expect(firstCount).toBe(1);
+    // Second call with a DIFFERENT address (cache miss) — gate short-circuits
+    // exactly as for -32601, no new RPC.
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-names",
+      payload: { addresses: ["0xdef"], chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    const secondCount = rpcCalls.filter(
+      (c) => c.method === "lyth_getAddressLabel",
+    ).length;
+    expect(secondCount).toBe(1); // unchanged — gate prevented RPC
+    expect(storageLocal["mono.names.method-gate"]).toBeDefined();
+  });
+
   it("serves cache hits even when method-gate is tripped", async () => {
     // Populate cache with a real label.
     rpcResponses["lyth_getAddressLabel"] = {
@@ -2320,6 +2348,26 @@ describe("wallet-indexer-status", () => {
     // Method gate is tripped — distinct storage key from names gate.
     expect(storageLocal["mono.indexerStatus.method-gate"]).toBeDefined();
     expect(storageLocal["mono.names.method-gate"]).toBeUndefined();
+  });
+
+  it("config-disabled (-32045) returns the same defensive { stale: false, lagBlocks: null } + trips the gate", async () => {
+    rpcErrors["lyth_indexerStatus"] = {
+      code: -32045,
+      message: "method disabled: lyth_indexerStatus",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-status",
+      payload: { chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      stale: boolean;
+      lagBlocks: number | null;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.stale).toBe(false); // critical: NOT a false-positive banner
+    expect(r.lagBlocks).toBeNull();
+    expect(storageLocal["mono.indexerStatus.method-gate"]).toBeDefined();
   });
 
   it("recovers when method becomes available — gate is cleared on success", async () => {

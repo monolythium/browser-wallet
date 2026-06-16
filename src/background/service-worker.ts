@@ -4901,8 +4901,9 @@ const validateIndexerStatus = validateIndexerStatusWire;
 
 /** Per-address fetch. Returns the resolved label (null = chain has no
  *  entry for this address) or a methodNotFound flag when the operator
- *  returned JSON-RPC -32601. Other RPC errors map to `label: null`
- *  without setting the flag — they're transient, not chain-wide. */
+ *  returned the method as unavailable — JSON-RPC -32601 (method not found)
+ *  or -32045 (METHOD_DISABLED, config-disabled). Other RPC errors map to
+ *  `label: null` without setting the flag — they're transient, not chain-wide. */
 async function fetchOneAddressLabel(
   addr: string,
 ): Promise<{ label: NameLabel; methodNotFound: boolean }> {
@@ -4915,7 +4916,7 @@ async function fetchOneAddressLabel(
     return { label: validateRawNameLabel(result), methodNotFound: false };
   } catch (e) {
     const err = e as Error & { code?: number };
-    if (err.code === -32601) {
+    if (err.code === -32601 || err.code === -32045) {
       return { label: null, methodNotFound: true };
     }
     return { label: null, methodNotFound: false };
@@ -8174,10 +8175,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       } catch (e) {
         const err = e as Error & { code?: number };
-        // method-not-found (-32601) → emit "indexer_disabled" rather
-        // than "not_found" so the user sees the right copy. Other
-        // transport errors get the not_found defensive default.
-        if (err.code === -32601) {
+        // method-unavailable (-32601 not-found or -32045 disabled) → emit
+        // "indexer_disabled" rather than "not_found" so the user sees the
+        // right copy. Other transport errors get the not_found defensive default.
+        if (err.code === -32601 || err.code === -32045) {
           return {
             ok: true,
             envelope: {
@@ -8213,7 +8214,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       //      return absent. Prevents operator hammering on a chain that
       //      doesn't have the method.
       //   4. Otherwise, parallel-fetch every miss via Promise.all.
-      //   5. If ANY per-address call returned JSON-RPC -32601, mark the
+      //   5. If ANY per-address call returned the method as unavailable
+      //      (JSON-RPC -32601 not-found or -32045 disabled), mark the
       //      chain unsupported and skip writing those entries into the
       //      cache (they'd just expire as nulls). If a previously-tripped
       //      chain succeeds, clear the marker.
@@ -8297,7 +8299,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         fresh[addr] = r.label;
         resolved[addr] = r.label;
       }
-      // Method-gate write: trip if any call returned -32601, clear if
+      // Method-gate write: trip if any call returned the method unavailable
+      // (-32601/-32045), clear if
       // we got at least one successful response while the gate was
       // previously set.
       if (anyMethodNotFound) {
@@ -8405,7 +8408,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       } catch (e) {
         const err = e as Error & { code?: number };
-        if (err.code === -32601) {
+        if (err.code === -32601 || err.code === -32045) {
           await setMethodGate(
             STORAGE_KEY_INDEXER_STATUS_METHOD_GATE,
             p.chainIdHex,
