@@ -151,6 +151,23 @@ describe("fetchClusterSealKeys — genesis-trusted roster fetch + validation", (
     expect(sealFetches).toHaveLength(1); // second call is a cache hit
   });
 
+  it("clearClusterSealKeysCache forces a re-fetch on the next getClusterSealKeys (operator-override invalidation)", async () => {
+    rosterToServe = makeRosterSource();
+    const tx = await import("./tx-mldsa.js");
+    await tx.getClusterSealKeys(0);
+    await tx.getClusterSealKeys(0); // cache hit — still one fetch
+    expect(
+      fetchCalls.filter((c) => c.method === "lyth_getClusterSealKeys"),
+    ).toHaveLength(1);
+    // An operator-override invalidates the roster cache, so the next access must
+    // force-fetch a fresh roster instead of sealing to the prior set's keys.
+    tx.clearClusterSealKeysCache();
+    await tx.getClusterSealKeys(0);
+    expect(
+      fetchCalls.filter((c) => c.method === "lyth_getClusterSealKeys"),
+    ).toHaveLength(2);
+  });
+
   it("fetchClusterSealKeys always re-fetches + updates the cached epoch", async () => {
     rosterToServe = makeRosterSource({ epoch: 1 });
     const tx = await import("./tx-mldsa.js");

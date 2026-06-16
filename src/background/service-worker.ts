@@ -245,6 +245,7 @@ import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   submitMlDsaTx,
+  clearClusterSealKeysCache,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   type EthSendTxFields,
@@ -1014,6 +1015,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   // probed for genesis; drop the cache so the next dispatch re-probes
   // and the About-page health view reflects fresh trust state.
   clearGenesisCache();
+  // Seal-roster trust: the new operator set may serve a different cluster seal
+  // roster; drop the cached roster so the next seal re-fetches + re-validates
+  // rather than sealing to the prior set's keys.
+  clearClusterSealKeysCache();
 });
 
 // ---- Auto-lock ----
@@ -5861,6 +5866,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         await setOperatorOverride(null);
         cachedOperator = null;
         clearGenesisCache();
+        clearClusterSealKeysCache();
         return { ok: true };
       }
       const validated = validateOperatorList(raw);
@@ -5870,6 +5876,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await setOperatorOverride(validated);
       cachedOperator = null;
       clearGenesisCache();
+      clearClusterSealKeysCache();
       return { ok: true };
     }
     case "probe-operator": {

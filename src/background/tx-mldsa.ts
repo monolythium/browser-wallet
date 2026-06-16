@@ -702,6 +702,14 @@ export async function getClusterSealKeys(
   return fetchClusterSealKeys(clusterId);
 }
 
+/** Drop the cached cluster seal-key roster so the next seal force-fetches a
+ *  fresh, re-validated roster from the (possibly changed) operator set. Called
+ *  on operator-override — alongside `clearGenesisCache()` — so a roster fetched
+ *  from a prior operator set is never sealed to after the active set changes. */
+export function clearClusterSealKeysCache(): void {
+  cachedClusterSealKeys = null;
+}
+
 /** Build a SEALED (LythiumSeal scheme-3) submission for the `lyth_submitEncrypted`
  *  path — the encrypted counterpart of {@link buildPlaintextSubmission}. Signs
  *  the inner ML-DSA-65 tx with the UNCHANGED signing path (the same `signEvmTx`
