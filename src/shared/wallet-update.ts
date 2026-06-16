@@ -130,3 +130,24 @@ export async function requestWalletUpdateStatus(): Promise<WalletUpdateStatus> {
     return "unavailable";
   }
 }
+
+/** Clear the persisted wallet-update verdict after an applied update (or fresh
+ *  install), driven by `chrome.runtime.onInstalled`. Once an update is applied
+ *  the running version IS the new version, so any prior "update available"
+ *  verdict in {@link STORAGE_KEY_WALLET_UPDATE} is stale by construction.
+ *  Removing it makes the next popup open re-derive cleanly (the fresh-install
+ *  path), instead of the banner persisting behind the 12h check gate +
+ *  `throttled`/`unavailable` stickiness. No-op for other reasons or when
+ *  `chrome.storage` is unavailable. */
+export async function reconcileWalletUpdateOnInstalled(
+  reason: string,
+): Promise<void> {
+  if (reason !== "update" && reason !== "install") return;
+  if (
+    typeof chrome === "undefined" ||
+    typeof chrome.storage?.local?.remove !== "function"
+  ) {
+    return;
+  }
+  await chrome.storage.local.remove(STORAGE_KEY_WALLET_UPDATE);
+}

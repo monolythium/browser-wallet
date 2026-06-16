@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WALLET_UPDATE_CHECK_INTERVAL_MS,
+  STORAGE_KEY_WALLET_UPDATE,
   shouldCheckWalletUpdate,
   nextUpdateAvailable,
   parseWalletUpdateCache,
+  reconcileWalletUpdateOnInstalled,
 } from "./wallet-update.js";
 
 describe("shouldCheckWalletUpdate", () => {
@@ -56,5 +58,34 @@ describe("parseWalletUpdateCache", () => {
         lastStatus: "bogus",
       }),
     ).toEqual({ lastCheckAt: 5, updateAvailable: false });
+  });
+});
+
+describe("reconcileWalletUpdateOnInstalled", () => {
+  let remove: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    remove = vi.fn(() => Promise.resolve());
+    (globalThis as { chrome?: unknown }).chrome = {
+      storage: { local: { remove } },
+    };
+  });
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it("clears the persisted verdict on an applied update", async () => {
+    await reconcileWalletUpdateOnInstalled("update");
+    expect(remove).toHaveBeenCalledWith(STORAGE_KEY_WALLET_UPDATE);
+  });
+
+  it("clears the persisted verdict on a fresh install", async () => {
+    await reconcileWalletUpdateOnInstalled("install");
+    expect(remove).toHaveBeenCalledWith(STORAGE_KEY_WALLET_UPDATE);
+  });
+
+  it("does NOT clear on other onInstalled reasons", async () => {
+    await reconcileWalletUpdateOnInstalled("chrome_update");
+    await reconcileWalletUpdateOnInstalled("shared_module_update");
+    expect(remove).not.toHaveBeenCalled();
   });
 });

@@ -243,6 +243,7 @@ import {
 } from "../shared/name-resolution.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
+import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
   submitMlDsaTx,
   clearClusterSealKeysCache,
@@ -9757,7 +9758,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   return false;
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  // After an applied update (or fresh install) any persisted "update available"
+  // verdict is stale by construction — the running version IS the new version.
+  // Clear it so the next popup open re-derives cleanly (the fresh-install path);
+  // otherwise the banner persists behind the 12h check gate + throttle
+  // stickiness (see the 2026-06-16 update-banner inspect).
+  void reconcileWalletUpdateOnInstalled(details.reason);
 });
 
 if (chrome.windows?.onRemoved) {
