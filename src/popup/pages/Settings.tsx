@@ -496,7 +496,7 @@ export function Settings({
 
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Staking</h3>
+            <h3>Delegation</h3>
           </div>
           <div
             style={{

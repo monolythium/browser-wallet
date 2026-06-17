@@ -682,11 +682,11 @@ export function Stake({
           style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
         >
           {step === "pick"
-            ? "Stake"
+            ? "Delegate"
             : step === "form"
-              ? "Stake — amount"
+              ? "Delegate — amount"
               : step === "unstake-form"
-                ? "Unstake — amount"
+                ? "Undelegate — amount"
                 : step === "redelegate-form"
                   ? "Redelegate"
                   : step === "redelegate-dst-pick"
@@ -695,8 +695,8 @@ export function Stake({
                       ? action === "delegate"
                         ? "Review delegation"
                         : action === "undelegate"
-                          ? "Review unstake"
-                          : "Review swap"
+                          ? "Review undelegation"
+                          : "Review redelegation"
                       : step === "submitting"
                         ? action === "claim"
                           ? "Claiming…"
@@ -705,9 +705,9 @@ export function Stake({
                           ? action === "claim"
                             ? "Claimed"
                             : action === "undelegate"
-                              ? "Unstaked"
+                              ? "Undelegated"
                               : action === "redelegate"
-                                ? "Swapped"
+                                ? "Redelegated"
                                 : "Delegated"
                           : "Error"}
         </div>
@@ -1386,7 +1386,7 @@ function PreviewView({
           v={aprBps === null ? "—" : `${(aprBps / 100).toFixed(2)}%`}
         />
         <Row
-          k={action === "redelegate" ? "Cluster swap" : action === "undelegate" ? "Unstake" : "Custody"}
+          k={action === "redelegate" ? "Cluster redelegation" : action === "undelegate" ? "Undelegate" : "Custody"}
           v={
             action === "redelegate"
               ? "Instant"
@@ -1426,7 +1426,7 @@ function PreviewView({
               {action === "undelegate" &&
                 "Submits `undelegate(uint32 cluster)` — instantly removes your entire delegation row. No redemption queue or cooldown."}
               {action === "redelegate" &&
-                "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
+                "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster redelegation, no cooldown."}{" "}
               Monolythium Testnet may reject the call until the gate is activated.
             </>
           ) : (
@@ -1437,7 +1437,7 @@ function PreviewView({
                 "Removes your delegation instantly. Your tokens were never locked, so there is nothing to wait for. "}
               {action === "redelegate" &&
                 "Moves your delegation to another cluster instantly. "}
-              Monolythium Testnet may reject this until staking is enabled.
+              Monolythium Testnet may reject this until delegation is enabled.
             </>
           )}
         </div>
@@ -1509,10 +1509,10 @@ function PreviewView({
               lineHeight: 1.6,
             }}
           >
-            <strong style={{ color: "var(--err)" }}>Unstake</strong> removes
+            <strong style={{ color: "var(--err)" }}>Undelegate</strong> removes
             this cluster, then continues ·{" "}
             <strong style={{ color: "var(--fg-300)" }}>Skip</strong> keeps it
-            staked and moves on ·{" "}
+            delegated and moves on ·{" "}
             <strong style={{ color: "var(--fg-300)" }}>Cancel</strong> stops
             here.
           </div>
@@ -1639,9 +1639,9 @@ function SuccessView({
     action === "claim"
       ? "Claim submitted"
       : action === "undelegate"
-        ? "Unstake submitted"
+        ? "Undelegate submitted"
         : action === "redelegate"
-          ? "Cluster swap submitted"
+          ? "Cluster redelegation submitted"
           : "Delegation submitted";
   const walletBech = bech32mDisplay(walletAddr0x);
   return (

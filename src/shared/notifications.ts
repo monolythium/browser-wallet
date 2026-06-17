@@ -263,9 +263,9 @@ export const NOTIFICATION_LABELS: Record<
   // Incoming transfers only fire on confirmation; the "failed" string is unused
   // (an inbound transfer the wallet didn't send has no failed state for us).
   receive: { confirmed: "Received", failed: "Received" },
-  delegate: { confirmed: "Staked", failed: "Stake failed" },
-  undelegate: { confirmed: "Unstaked", failed: "Unstake failed" },
-  redelegate: { confirmed: "Restaked", failed: "Restake failed" },
+  delegate: { confirmed: "Delegated", failed: "Delegate failed" },
+  undelegate: { confirmed: "Undelegated", failed: "Undelegate failed" },
+  redelegate: { confirmed: "Redelegated", failed: "Redelegate failed" },
   claim: { confirmed: "Rewards claimed", failed: "Claim failed" },
   "complete-redemption": {
     confirmed: "Redemption completed",

@@ -4835,7 +4835,7 @@ describe("pollPendingAndNotify — headless poll-core", () => {
     // The chain reports a reverted tx as "found" — it WAS included in a block;
     // inclusion is not success. The receipt status bit (0x0) is authoritative,
     // so the row must be recorded FAILED, not "confirmed" (the bug that toasted
-    // "Staked" for a reverted stake).
+    // "Delegated" for a reverted delegate).
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 456 };
 

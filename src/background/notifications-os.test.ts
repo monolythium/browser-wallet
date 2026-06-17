@@ -155,7 +155,7 @@ describe("fireOsNotification", () => {
     expect(call.id).toBe(`${CHAIN}:${HASH}`);
     expect(call.options.type).toBe("basic");
     expect(call.options.iconUrl).toBe("icon-48.png");
-    expect(call.options.title).toBe("Staked");
+    expect(call.options.title).toBe("Delegated");
     // body = amount + " LYTH · " + short bech32m counterparty
     expect(typeof call.options.message).toBe("string");
     expect(call.options.message as string).toContain("0.10 LYTH");
