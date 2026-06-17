@@ -1144,12 +1144,9 @@ export function Send({
           <div style={fromHint}>
             from: {bech32mDisplay(account.addr)}
             {balanceLythoshi !== null && (
-              <>
-                {" · balance: "}
-                <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH
-                </span>
-              </>
+              <div style={fromBalanceLine}>
+                balance: {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH
+              </div>
             )}
           </div>
         </FormCard>
@@ -1396,22 +1393,31 @@ const inlineError: CSSProperties = {
 
 const dualFormatHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 10,
-  color: "var(--fg-400)",
+  fontSize: 11,
+  color: "var(--fg-100)",
   marginTop: 6,
   wordBreak: "break-all",
 };
 
 const fromHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 10,
-  color: "var(--fg-500)",
+  fontSize: 11,
+  color: "var(--fg-100)",
   marginTop: 8,
   // bech32m address is rendered full (no
   // shortAddr truncation). Allow wrap if it doesn't fit on one
   // line at the current popup width; truncation would violate the
   // "no ellipsis" rule.
   wordBreak: "break-all",
+};
+
+// The from-balance sits on its own line under the from-address (same
+// monospace family + bumped size as the address), not inline.
+const fromBalanceLine: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 11,
+  color: "var(--fg-100)",
+  marginTop: 3,
 };
 
 // ---- validation ----
