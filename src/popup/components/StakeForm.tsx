@@ -283,7 +283,7 @@ export function StakeForm({
         </div>
         <div style={liquidNote}>
           Your LYTH stays in your wallet and remains spendable — nothing is
-          locked or sent to a staking contract. The effective weight tracks
+          locked or sent to a delegation contract. The effective weight tracks
           your live balance at the next settlement.
         </div>
       </div>

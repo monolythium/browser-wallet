@@ -5,8 +5,8 @@
 //
 // Per whitepaper §23.2, redelegation is instant for delegators — no
 // unbonding period, no cluster-side cooldown. The form's UX language
-// reflects this explicitly: "Instant cluster swap" rather than the
-// Cosmos-style 21-day-redelegation-window framing.
+// reflects this explicitly: "Instant cluster redelegation" rather than
+// the Cosmos-style 21-day-redelegation-window framing.
 //
 // NON-CUSTODIAL: the move is expressed as a PERCENT of balance (weightBps);
 // no tokens are escrowed at either cluster — the redelegate tx is sent with
@@ -155,7 +155,7 @@ export function RedelegateForm({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {/* Source + destination row */}
       <div className="ext-card" style={{ padding: 12 }}>
-        <div style={cardLabel}>Cluster swap</div>
+        <div style={cardLabel}>Cluster redelegation</div>
         <div
           style={{
             marginTop: 8,
@@ -356,11 +356,11 @@ export function RedelegateForm({
             <strong style={amountStrongMuted}>
               {lythoshiToLyth(stakedInSrcLythoshi)} LYTH
             </strong>{" "}
-            staked in {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
+            delegated to {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
           </div>
         )}
         <div style={fromHint}>
-          Instant cluster swap — no cooldown between source and destination.
+          Instant cluster redelegation — no cooldown between source and destination.
           Your LYTH stays in your wallet the whole time; only the cluster
           weighting moves.
         </div>
@@ -399,7 +399,7 @@ export function RedelegateForm({
                   ? "Reduce amount"
                   : exceedsDstCap
                     ? "Reduce to cap"
-                    : "Review swap"}
+                    : "Review redelegation"}
         </button>
       </div>
     </div>

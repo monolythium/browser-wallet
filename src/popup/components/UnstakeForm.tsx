@@ -130,19 +130,19 @@ export function UnstakeForm({
 
       {/* Full-row removal notice — the chain has no partial unstake. */}
       <div className="ext-card" style={{ padding: 14 }}>
-        <div style={cardLabel}>Unstake all</div>
+        <div style={cardLabel}>Undelegate all</div>
         <div style={fromHint}>
           {hasDelegation ? (
             <>
               Removes your <strong>entire</strong> delegation from this cluster
               (effective weight {lythoshiToLyth(currentDelegationLythoshi)} LYTH ·{" "}
               {(currentWeightBps / 100).toFixed(2)}%). The chain has no partial
-              unstake. This is <strong>instant</strong> — no cooldown or
+              undelegation. This is <strong>instant</strong> — no cooldown or
               redemption queue, because your tokens were never locked. Re-delegate
               any percent afterward.
             </>
           ) : (
-            <>You have no active delegation in this cluster to unstake.</>
+            <>You have no active delegation in this cluster to undelegate.</>
           )}
         </div>
       </div>
@@ -161,7 +161,7 @@ export function UnstakeForm({
         }}
       >
         <Icon name="check" size={12} />
-        {hasDelegation ? "Review unstake (full)" : "No active delegation"}
+        {hasDelegation ? "Review undelegation (full)" : "No active delegation"}
       </button>
     </div>
   );

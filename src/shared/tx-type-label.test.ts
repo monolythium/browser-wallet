@@ -22,11 +22,11 @@ describe("txTypeLabel", () => {
   });
 
   it("names the delegation family", () => {
-    expect(txTypeLabel({ kind: "delegate", cluster: 0, weightBps: 100, ...anchor })).toBe("Stake");
-    expect(txTypeLabel({ kind: "undelegate", cluster: 0, weightBps: 100, ...anchor })).toBe("Unstake");
+    expect(txTypeLabel({ kind: "delegate", cluster: 0, weightBps: 100, ...anchor })).toBe("Delegate");
+    expect(txTypeLabel({ kind: "undelegate", cluster: 0, weightBps: 100, ...anchor })).toBe("Undelegate");
     expect(
       txTypeLabel({ kind: "redelegate", cluster: 0, toCluster: 1, weightBps: 100, ...anchor }),
-    ).toBe("Restake");
+    ).toBe("Redelegate");
   });
 
   it("names rebalance + crossing rows", () => {
@@ -46,7 +46,7 @@ describe("txTypeLabel", () => {
       broadcastBlockHeight: null,
       via: "op",
     };
-    expect(txTypeLabel({ ...base, opKind: "delegate" })).toBe("Stake");
+    expect(txTypeLabel({ ...base, opKind: "delegate" })).toBe("Delegate");
     expect(txTypeLabel({ ...base, opKind: "claim" })).toBe("Claim rewards");
     // Untagged pending broadcast → honest "Outgoing transfer", never "Transaction".
     expect(txTypeLabel(base as ActivityRow)).toBe("Outgoing transfer");
@@ -57,8 +57,8 @@ describe("txTypeLabelForOpKind", () => {
   it("maps every op kind to a friendly noun", () => {
     expect(txTypeLabelForOpKind("send")).toBe("Outgoing transfer");
     expect(txTypeLabelForOpKind("receive")).toBe("Incoming transfer");
-    expect(txTypeLabelForOpKind("undelegate")).toBe("Unstake");
-    expect(txTypeLabelForOpKind("redelegate")).toBe("Restake");
+    expect(txTypeLabelForOpKind("undelegate")).toBe("Undelegate");
+    expect(txTypeLabelForOpKind("redelegate")).toBe("Redelegate");
     expect(txTypeLabelForOpKind("complete-redemption")).toBe("Redemption");
     expect(txTypeLabelForOpKind("emergency-key")).toBe("Backup key");
     expect(txTypeLabelForOpKind("agent-policy")).toBe("Agent policy");

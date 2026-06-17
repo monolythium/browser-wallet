@@ -141,9 +141,9 @@ describe("notificationTitle / NOTIFICATION_LABELS", () => {
   // render, so a one-line table makes drift obvious.
   const expected: Array<[TxOpKind, { confirmed: string; failed: string }]> = [
     ["send", { confirmed: "Sent", failed: "Send failed" }],
-    ["delegate", { confirmed: "Staked", failed: "Stake failed" }],
-    ["undelegate", { confirmed: "Unstaked", failed: "Unstake failed" }],
-    ["redelegate", { confirmed: "Restaked", failed: "Restake failed" }],
+    ["delegate", { confirmed: "Delegated", failed: "Delegate failed" }],
+    ["undelegate", { confirmed: "Undelegated", failed: "Undelegate failed" }],
+    ["redelegate", { confirmed: "Redelegated", failed: "Redelegate failed" }],
     ["claim", { confirmed: "Rewards claimed", failed: "Claim failed" }],
     [
       "complete-redemption",

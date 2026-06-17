@@ -2235,7 +2235,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
             </button>
             <button className="ext-act" onClick={onOpenStake ?? (() => {})}>
               <span className="ico"><Icon name="stake" size={16} /></span>
-              <span>Stake</span>
+              <span>Delegate</span>
             </button>
             <button className="ext-act" onClick={onOpenBridge ?? (() => {})}>
               <span className="ico"><Icon name="bridge" size={16} /></span>

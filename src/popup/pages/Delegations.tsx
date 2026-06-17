@@ -288,7 +288,7 @@ export function Delegations({
                 gap: 8,
               }}
             >
-              <Icon name="stake" size={12} /> Stake LYTH
+              <Icon name="stake" size={12} /> Delegate LYTH
             </button>
           </div>
         ) : (
@@ -409,7 +409,7 @@ export function Delegations({
                 width: "100%",
               }}
             >
-              <Icon name="plus" size={12} /> Stake more
+              <Icon name="plus" size={12} /> Delegate more
             </button>
           </>
         )}

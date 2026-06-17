@@ -40,7 +40,7 @@ describe("RedelegateForm — in-form amount preview", () => {
     // Amounts are wrapped in emphasized <strong> spans.
     expect(html).toContain(">5 LYTH</strong>");
     expect(html).toContain(">10 LYTH</strong>");
-    expect(html).toContain("staked in alpha");
+    expect(html).toContain("delegated to alpha");
   });
 
   it("omits the preview when the amount is empty/zero", () => {

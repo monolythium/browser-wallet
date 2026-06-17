@@ -36,7 +36,7 @@ const MODES: ReadonlyArray<ModeMeta> = [
     mode: "max-decentralization",
     label: "Max Decentralization",
     description:
-      "Actively route stake away from clusters with high correlated-preference scores, geographic concentration, or shared operator membership. Recommended default.",
+      "Actively route delegation away from clusters with high correlated-preference scores, geographic concentration, or shared operator membership. Recommended default.",
     iconHint: "shield",
   },
   {
