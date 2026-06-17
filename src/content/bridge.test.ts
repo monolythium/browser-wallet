@@ -130,3 +130,40 @@ describe("announce state relay (initial provider-state sync)", () => {
     expect(JSON.stringify(posts)).not.toContain("0xaaa");
   });
 });
+
+// CodeQL js/cross-window-information-leak — every outbound post must target the
+// page origin, never "*" (a "*" broadcast leaks accounts/chainId/RPC results to
+// any co-resident or post-redirect cross-origin frame).
+describe("outbound postMessage targets the page origin (not '*')", () => {
+  it("posts the initial-state sync with the page origin as targetOrigin", async () => {
+    announceResponse = { accounts: ["0xaaa0000000000000000000000000000000000001"], chainId: "0x2a" };
+    await loadBridge();
+    const stateCall = stubWindow.postMessage.mock.calls.find(
+      (c: unknown[]) => (c[0] as { state?: unknown })?.state !== undefined,
+    );
+    expect(stateCall).toBeTruthy();
+    expect(stateCall![1]).toBe("https://dapp.example");
+    expect(stateCall![1]).not.toBe("*");
+  });
+
+  it("posts the RPC reply with the page origin as targetOrigin", async () => {
+    await loadBridge();
+    const before = stubWindow.postMessage.mock.calls.length;
+    messageListener!({ source: stubWindow, origin: "https://dapp.example", data: pageEnvelope });
+    const replyCall = stubWindow.postMessage.mock.calls
+      .slice(before)
+      .find((c: unknown[]) => (c[0] as { id?: string })?.id === "req-1");
+    expect(replyCall).toBeTruthy();
+    expect(replyCall![1]).toBe("https://dapp.example");
+    expect(replyCall![1]).not.toBe("*");
+  });
+
+  it("never uses '*' as a targetOrigin on any outbound post", async () => {
+    announceResponse = { accounts: [], chainId: "0x2a" };
+    await loadBridge();
+    messageListener!({ source: stubWindow, origin: "https://dapp.example", data: pageEnvelope });
+    for (const call of stubWindow.postMessage.mock.calls) {
+      expect(call[1]).toBe("https://dapp.example");
+    }
+  });
+});

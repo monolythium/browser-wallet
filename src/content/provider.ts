@@ -177,7 +177,7 @@ class MonolythiumProvider {
         id,
         args,
       };
-      window.postMessage(msg, "*");
+      window.postMessage(msg, window.location.origin);
     });
   }
 
