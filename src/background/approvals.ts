@@ -17,6 +17,7 @@
 // the user's eyeballs on the request, which is the EIP-1193 contract.
 
 import { STORAGE_KEY_PENDING_APPROVALS } from "../shared/constants";
+import type { NativeDevRiskLabel } from "../shared/mrv-native-plan";
 
 export interface ConnectApprovalReq {
   kind: "connect";
@@ -125,13 +126,69 @@ export interface AddChainApprovalReq {
   chain: AddChainSpec;
 }
 
+/**
+ * Pre-computed fee/tx view for an MRV (RISC-V native) approval — the typed
+ * sibling of `SendTxView`. Populated by the service worker so the dedicated MRV
+ * review panel can render real numbers without an RPC client.
+ */
+export interface MrvApprovalView {
+  /** Hex execution-unit limit. */
+  executionUnitLimitHex: string | null;
+  /** Hex lythoshi per execution unit (max fee). */
+  pricePerExecutionUnitLythoshiHex: string | null;
+  /** Hex max priority tip lythoshi. */
+  priorityTipLythoshiHex: string | null;
+  /** Hex native value (lythoshi) moved alongside the contract action. */
+  valueLythoshiHex: string | null;
+  /** Sender's pending nonce, hex quantity. */
+  nonce: string | null;
+  /** Active chain id at enqueue time (hex). */
+  chainId: string;
+  /** Display-ready chain label. */
+  chainLabel: string;
+}
+
+/**
+ * Typed MRV deploy/call approval. Replaces the prior `send_tx` downcast so the
+ * dedicated review panel receives the deploy-vs-call discriminant, the artifact
+ * hash, the expected contract address, the constructor/call calldata, and the
+ * risk labels — the same review-shaped fields DevKit and Studio carry.
+ */
+export interface MrvApprovalReq {
+  kind: "mrv_deploy" | "mrv_call";
+  origin: string;
+  /** Typed user (signer) address, when known at enqueue time. */
+  fromAddress?: string;
+  /** Deploy: derived after deploy / supplied expected address. Call: target. */
+  contractAddress?: string;
+  /** Deploy only — BLAKE3 artifact hash, when supplied. */
+  artifactHash?: string;
+  /** Constructor (deploy) or method (call) calldata, `0x`-hex. */
+  constructorInput?: string;
+  /** Advisory risk labels rendered as chips on the review panel. */
+  riskLabels: NativeDevRiskLabel[];
+  /** Submit-ready tx fields, mirrored from the validated MRV plan. */
+  tx: {
+    to?: string;
+    value: string;
+    data: string;
+    gas: string;
+    nonce: string;
+    maxFeePerGas: string;
+    maxPriorityFeePerGas: string;
+    chainIdHex: string;
+  };
+  view: MrvApprovalView;
+}
+
 export type ApprovalReq =
   | ConnectApprovalReq
   | PersonalSignApprovalReq
   | TypedSignApprovalReq
   | SendTxApprovalReq
   | SwitchChainApprovalReq
-  | AddChainApprovalReq;
+  | AddChainApprovalReq
+  | MrvApprovalReq;
 
 export interface PendingApproval {
   id: string;

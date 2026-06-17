@@ -49,6 +49,11 @@ import {
   type WalletMrvDeployNativePlanInput,
 } from "../shared/mrv-native-plan.js";
 import {
+  readMrvParityCapability,
+  MRV_PARITY_INACTIVE,
+  type MrvParityCapability,
+} from "../shared/mrv-capabilities.js";
+import {
   enqueue as enqueueApproval,
   resolve as resolveApproval,
   rejectByWindow,
@@ -1912,7 +1917,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(-32602, (e as Error).message);
       }
 
-      const decision = await gatedEnqueue(buildMrvNativeSendTxApproval(origin, txReq, chainIdHex));
+      const decision = await gatedEnqueue(buildMrvNativeApproval(origin, plan, txReq, chainIdHex));
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the MRV native transaction");
       }
@@ -2043,7 +2048,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_INTERNAL, `MRV native call planning failed: ${(e as Error).message}`);
       }
 
-      const decision = await gatedEnqueue(buildMrvNativeSendTxApproval(origin, txReq, chainIdHex));
+      const decision = await gatedEnqueue(buildMrvNativeApproval(origin, plan, txReq, chainIdHex));
       if (!decision.ok) {
         return err(ERR_USER_REJECTED, decision.reason ?? "user rejected the MRV native transaction");
       }
@@ -2338,31 +2343,51 @@ async function buildSendTxView(
   return view;
 }
 
-function buildMrvNativeSendTxApproval(
+/**
+ * Build a typed MRV (RISC-V native) deploy/call approval from the validated
+ * plan + submit fields. This replaces the prior `send_tx` downcast (issue #8):
+ * the dedicated review panel now receives the deploy-vs-call discriminant, the
+ * artifact hash, the expected/target contract address, the constructor (or
+ * call) calldata, and the advisory risk labels — the same review-shaped
+ * contract DevKit and Studio carry (see `NativeDevMrvDeployPlan`).
+ */
+function buildMrvNativeApproval(
   origin: string,
+  plan: WalletMrvNativeSubmissionPlan,
   txReq: ReturnType<typeof walletMrvNativePlanToSubmitTx>,
   chainIdHex: string,
 ): Parameters<typeof gatedEnqueue>[0] {
   const chainLabel = lookupChain(chainIdHex)?.name ?? chainIdHex;
+  const contractAddress =
+    plan.kind === "mrv_deploy"
+      ? plan.expectedContractAddress
+      : plan.request.contractAddress ?? txReq.to;
   return {
-    kind: "send_tx",
+    kind: plan.kind,
     origin,
+    ...(plan.request.from !== undefined ? { fromAddress: plan.request.from } : {}),
+    ...(contractAddress !== undefined ? { contractAddress } : {}),
+    ...(plan.artifactHash !== undefined ? { artifactHash: plan.artifactHash } : {}),
+    ...(plan.constructorInput !== undefined
+      ? { constructorInput: plan.constructorInput }
+      : {}),
+    riskLabels: plan.riskLabels ?? [],
     tx: {
       ...(txReq.to !== undefined ? { to: txReq.to } : {}),
       value: txReq.value,
       data: txReq.data,
       gas: txReq.gas,
-      gasPrice: txReq.maxFeePerGas,
+      nonce: txReq.nonce,
       maxFeePerGas: txReq.maxFeePerGas,
       maxPriorityFeePerGas: txReq.maxPriorityFeePerGas,
-      nonce: txReq.nonce,
-      chainId: txReq.chainIdHex,
+      chainIdHex: txReq.chainIdHex,
     },
     view: {
       executionUnitLimitHex: txReq.gas,
       pricePerExecutionUnitLythoshiHex: txReq.maxFeePerGas,
+      priorityTipLythoshiHex: txReq.maxPriorityFeePerGas,
+      valueLythoshiHex: txReq.value,
       nonce: txReq.nonce,
-      simulation: null,
       chainId: chainIdHex,
       chainLabel,
     },
@@ -7728,6 +7753,54 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       }
       return await readChainBlock(rpc, operatorName);
+    }
+    case "wallet-mrv-parity-capability": {
+      // Feature-detect for the MRV EVM-parity milestone. Downstream surfaces
+      // (the call_value row, the 3 new host-syscall allow-list, rich-receipt
+      // rendering) gate on this per the shared CONTRACT: read the capability
+      // keyed `mrv_app_contract_parity` from `lyth_capabilities` and surface
+      // `{ active, activationHeight }` plus the node's sampled height. Pre-N or
+      // older nodes resolve to the inactive default (forward-compatible). N is
+      // NEVER hardcoded — it is always read live, so the UX lights up at N with
+      // no wallet re-release. Only wired for the ML-DSA testnet today.
+      const p = (message.payload ?? {}) as { chainIdHex?: unknown };
+      const chainIdHex =
+        typeof p.chainIdHex === "string" ? canonicalChainKey(p.chainIdHex) : null;
+      if (chainIdHex === null || !chainRequiresMlDsa(chainIdHex)) {
+        return {
+          ok: true as const,
+          capability: MRV_PARITY_INACTIVE,
+          blockNumber: null,
+        };
+      }
+      try {
+        const { result } = await testnetJsonRpc<unknown>("lyth_capabilities", []);
+        const resp = result as
+          | { capabilities?: unknown; blockNumber?: unknown }
+          | null;
+        const capability: MrvParityCapability = readMrvParityCapability(
+          resp as Parameters<typeof readMrvParityCapability>[0],
+        );
+        const rawHeight = resp?.blockNumber;
+        const blockNumber =
+          typeof rawHeight === "number"
+            ? rawHeight
+            : typeof rawHeight === "bigint"
+              ? Number(rawHeight)
+              : typeof rawHeight === "string" && /^[0-9]+$/.test(rawHeight)
+                ? Number(rawHeight)
+                : null;
+        return { ok: true as const, capability, blockNumber };
+      } catch (e) {
+        // A node that does not implement `lyth_capabilities` (older release)
+        // fails closed to the inactive default — parity-dependent UX stays off.
+        return {
+          ok: true as const,
+          capability: MRV_PARITY_INACTIVE,
+          blockNumber: null,
+          reason: (e as Error).message,
+        };
+      }
     }
     case "wallet-active-account": {
       // Surface the unlocked v3 keypair to the popup so Home can render

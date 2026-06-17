@@ -2966,8 +2966,9 @@ describe("wallet-mrv-submit-plan", () => {
       txHash: SUBMITTED_TX_HASH,
       via: "mock-operator",
     });
-    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
-    const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
+    expect(enqueuedApprovals.some((a) => a.kind === "mrv_call")).toBe(true);
+    const approval = enqueuedApprovals.find((a) => a.kind === "mrv_call");
+    expect(approval?.contractAddress).toBe(CONTRACT_TYPED);
     expect(approval?.tx).toMatchObject({
       to: CONTRACT,
       value: "0x2a",
@@ -2976,11 +2977,13 @@ describe("wallet-mrv-submit-plan", () => {
       maxFeePerGas: "0x989680",
       maxPriorityFeePerGas: "0x5",
       nonce: "0x8",
-      chainId: "0x10f2c",
+      chainIdHex: "0x10f2c",
     });
     expect(approval?.view).toMatchObject({
       executionUnitLimitHex: "0x200000",
       pricePerExecutionUnitLythoshiHex: "0x989680",
+      priorityTipLythoshiHex: "0x5",
+      valueLythoshiHex: "0x2a",
       nonce: "0x8",
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Monolythium Testnet",
@@ -3034,22 +3037,22 @@ describe("wallet-mrv-submit-plan", () => {
         },
       },
     });
-    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
-    const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
+    expect(enqueuedApprovals.some((a) => a.kind === "mrv_call")).toBe(true);
+    const approval = enqueuedApprovals.find((a) => a.kind === "mrv_call");
     expect(approval?.tx).toMatchObject({
       to: CONTRACT,
       value: "0x2a",
       data: "0xaabbccdd",
       gas: "0x200000",
-      gasPrice: "0x2540be401",
       maxFeePerGas: "0x2540be401",
       maxPriorityFeePerGas: "0x2540be400",
       nonce: "0x8",
-      chainId: "0x10f2c",
+      chainIdHex: "0x10f2c",
     });
     expect(approval?.view).toMatchObject({
       executionUnitLimitHex: "0x200000",
       pricePerExecutionUnitLythoshiHex: "0x2540be401",
+      priorityTipLythoshiHex: "0x2540be400",
       nonce: "0x8",
       chainId: TESTNET_CHAIN_ID_HEX,
       chainLabel: "Monolythium Testnet",
@@ -3108,11 +3111,10 @@ describe("wallet-mrv-submit-plan", () => {
       }),
       "v1",
     );
-    const approval = enqueuedApprovals.find((a) => a.kind === "send_tx");
+    const approval = enqueuedApprovals.find((a) => a.kind === "mrv_call");
     expect(approval?.tx).toMatchObject({
       maxFeePerGas: CEILING_HEX,
       maxPriorityFeePerGas: CEILING_HEX,
-      gasPrice: CEILING_HEX,
     });
   });
 
@@ -3153,7 +3155,9 @@ describe("wallet-mrv-submit-plan", () => {
 
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4100);
-    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
+    expect(
+      enqueuedApprovals.some((a) => a.kind === "mrv_call" || a.kind === "mrv_deploy"),
+    ).toBe(false);
     expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
@@ -3175,7 +3179,9 @@ describe("wallet-mrv-submit-plan", () => {
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(-32602);
     expect(r.error?.message).toMatch(/exactly one transaction extension/);
-    expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
+    expect(
+      enqueuedApprovals.some((a) => a.kind === "mrv_call" || a.kind === "mrv_deploy"),
+    ).toBe(false);
     expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
