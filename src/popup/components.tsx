@@ -1856,7 +1856,25 @@ function describeApproval(item: PendingApproval): ApprovalDisplay {
       return { title: `Add network · ${host}`, subtitle: req.chain.chainName, letter };
     case "switch_chain":
       return { title: `Switch network · ${host}`, subtitle: req.chainId, letter };
+    case "mrv_deploy":
+      return {
+        title: `Deploy contract · ${host}`,
+        subtitle: req.artifactHash ? `artifact ${shortHash(req.artifactHash)}` : "RISC-V deploy",
+        letter,
+      };
+    case "mrv_call":
+      return {
+        title: `Contract call · ${host}`,
+        subtitle: req.contractAddress ? `to ${shortAddr(req.contractAddress)}` : "RISC-V call",
+        letter,
+      };
   }
+}
+
+/** Compact 0x-hash preview for the pending shelf. */
+function shortHash(hash: string): string {
+  const h = hash.startsWith("0x") ? hash.slice(2) : hash;
+  return h.length <= 12 ? `0x${h}` : `0x${h.slice(0, 6)}…${h.slice(-4)}`;
 }
 
 function PendingShelf() {

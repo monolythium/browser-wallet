@@ -8,7 +8,10 @@ import type {
 } from "../shared/token-balances.js";
 import { legacyChainFeeSuggestionWeiToLythoshi } from "../shared/chain-units.js";
 import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
-import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
+import type {
+  NativeDevRiskLabel,
+  WalletMrvNativeSubmissionPlan,
+} from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
 import type { TxOpKind } from "../shared/notifications.js";
 export type {
@@ -152,13 +155,52 @@ export interface SwitchChainRequest {
   chainId: string;
 }
 
+/** Popup-side mirror of the background `MrvApprovalView`. */
+export interface MrvApprovalView {
+  executionUnitLimitHex: string | null;
+  pricePerExecutionUnitLythoshiHex: string | null;
+  priorityTipLythoshiHex: string | null;
+  valueLythoshiHex: string | null;
+  nonce: string | null;
+  chainId: string;
+  chainLabel: string;
+}
+
+/**
+ * Popup-side mirror of the background `MrvApprovalReq`. Carries the review-shaped
+ * fields the dedicated MRV approval panel renders: deploy-vs-call discriminant,
+ * artifact hash, expected/target contract address, constructor (or call)
+ * calldata, and the risk labels.
+ */
+export interface MrvApprovalRequest {
+  kind: "mrv_deploy" | "mrv_call";
+  origin: string;
+  fromAddress?: string;
+  contractAddress?: string;
+  artifactHash?: string;
+  constructorInput?: string;
+  riskLabels: NativeDevRiskLabel[];
+  tx: {
+    to?: string;
+    value: string;
+    data: string;
+    gas: string;
+    nonce: string;
+    maxFeePerGas: string;
+    maxPriorityFeePerGas: string;
+    chainIdHex: string;
+  };
+  view: MrvApprovalView;
+}
+
 export type ApprovalRequest =
   | ConnectRequest
   | PersonalSignRequest
   | TypedSignRequest
   | SendTxRequest
   | AddChainRequest
-  | SwitchChainRequest;
+  | SwitchChainRequest
+  | MrvApprovalRequest;
 
 export interface PendingApproval {
   id: string;
@@ -901,6 +943,28 @@ export async function bgWalletChainBlockNumber(): Promise<
     }
 > {
   return send("wallet-chain-block-number");
+}
+
+/** Feature-detect result shape, mirrored from `shared/mrv-capabilities`. */
+export interface MrvParityCapability {
+  active: boolean;
+  activationHeight: number | null;
+}
+
+/**
+ * Probe the MRV EVM-parity capability via `lyth_capabilities`. Returns the
+ * `{ active, activationHeight }` contract plus the node's sampled block height
+ * so the popup can evaluate `isMrvParityActive(currentHeight)`. Always resolves
+ * `ok: true` with the inactive default on pre-N / older nodes — never throws,
+ * so parity-dependent UX simply stays off until the milestone activates.
+ */
+export async function bgWalletMrvParityCapability(args: {
+  chainIdHex: string;
+}): Promise<
+  | { ok: true; capability: MrvParityCapability; blockNumber: number | null; reason?: string }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-mrv-parity-capability", { chainIdHex: args.chainIdHex });
 }
 
 /** WS-client status probe. Returns the SW-singleton

@@ -114,9 +114,11 @@ import {
   type PersonalSignRequest,
   type TypedSignRequest,
   type AddChainRequest,
+  type MrvApprovalRequest,
   type ChainEntry,
   type WalletIndexerSnapshot,
 } from "./bg";
+import { MrvApprovalReview } from "./components/MrvApprovalReview";
 
 type Screen =
   | "loading"
@@ -2002,6 +2004,18 @@ function ApprovalRoute({
           request={req as SendTxRequest}
           custody={custody}
           signerAddress={keystore?.address ?? ""}
+          onApprove={onApprove}
+          onReject={onReject}
+          chain={chain}
+        />
+      </ReqSheet>
+    );
+  }
+  if (req.kind === "mrv_deploy" || req.kind === "mrv_call") {
+    return (
+      <ReqSheet onBack={onReject}>
+        <MrvApprovalReview
+          request={req as MrvApprovalRequest}
           onApprove={onApprove}
           onReject={onReject}
           chain={chain}
