@@ -377,7 +377,7 @@ export function RedelegateForm({
           Back
         </button>
         <button
-          className="ext-act prim"
+          className="ext-act prim-soft"
           onClick={onContinue}
           disabled={!canContinue}
           style={{

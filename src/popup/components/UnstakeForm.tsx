@@ -148,7 +148,7 @@ export function UnstakeForm({
       </div>
 
       <button
-        className="ext-act prim"
+        className="ext-act prim-soft"
         onClick={onContinue}
         disabled={!hasDelegation}
         style={{

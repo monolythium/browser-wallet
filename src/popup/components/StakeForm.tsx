@@ -290,7 +290,7 @@ export function StakeForm({
 
       {/* Continue */}
       <button
-        className="ext-act prim"
+        className="ext-act prim-soft"
         onClick={onContinue}
         disabled={!canContinue}
         style={{

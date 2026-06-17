@@ -277,6 +277,25 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-act.prim:hover { filter: brightness(1.05); }
 .ext-act.prim .ico { opacity:1; }
 .ext[data-denom="private"] .ext-act.prim { background: linear-gradient(180deg, oklch(0.78 0.14 240), oklch(0.62 0.18 250)); color:#061025; border-color: oklch(0.62 0.18 250); box-shadow: 0 4px 14px oklch(0.62 0.18 250 / 0.4), inset 0 1px 0 rgba(255,255,255,0.35); }
+/* Stake-scoped muted action button (className "ext-act prim-soft"): the base
+   .ext-act muted look at rest, full .prim gold gradient on hover. Used ONLY by
+   the Stake-flow CTAs — the shared .ext-act.prim is untouched, so claim-all +
+   Send + chains keep their saturated look. */
+.ext-act.prim-soft { font-weight: 600; color: var(--fg-100); }
+.ext-act.prim-soft:not(:disabled):hover {
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold));
+  color: var(--ink-000);
+  border-color: var(--gold);
+  box-shadow: 0 4px 14px rgba(var(--gold-glow), 0.3), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.ext-act.prim-soft:not(:disabled):hover .ico { opacity: 1; }
+/* private-denom parity (mirror .ext[data-denom="private"] .ext-act.prim): restore the blue gradient on hover */
+.ext[data-denom="private"] .ext-act.prim-soft:not(:disabled):hover {
+  background: linear-gradient(180deg, oklch(0.78 0.14 240), oklch(0.62 0.18 250));
+  color: #061025;
+  border-color: oklch(0.62 0.18 250);
+  box-shadow: 0 4px 14px oklch(0.62 0.18 250 / 0.4), inset 0 1px 0 rgba(255,255,255,0.35);
+}
 
 /* --- Tabs (Assets/Activity) — glassy, gold underline glow --- */
 .ext-tabs { display:flex; gap:0; padding: 0; margin: 6px 0 10px; border-bottom:1px solid var(--glass-stroke); position:relative; }

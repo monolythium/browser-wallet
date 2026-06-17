@@ -1480,7 +1480,7 @@ function PreviewView({
               Skip
             </button>
             <button
-              className="ext-act prim"
+              className="ext-act prim-soft"
               onClick={onConfirm}
               disabled={sequence.busy}
               style={{
@@ -1529,7 +1529,7 @@ function PreviewView({
             Back
           </button>
           <button
-            className="ext-act prim"
+            className="ext-act prim-soft"
             onClick={onConfirm}
             style={{
               padding: 12,
@@ -1789,7 +1789,7 @@ function SuccessView({
       >
         <Icon name="globe" size={13} /> View on Monoscan
       </a>
-      <button onClick={onDone} className="ext-act prim" style={{ padding: 12 }}>
+      <button onClick={onDone} className="ext-act prim-soft" style={{ padding: 12 }}>
         Done
       </button>
     </div>
@@ -1930,7 +1930,7 @@ function ErrorView({
         <button onClick={onCancel} style={secondaryBtn}>
           Cancel
         </button>
-        <button onClick={onRetry} className="ext-act prim" style={{ padding: 12 }}>
+        <button onClick={onRetry} className="ext-act prim-soft" style={{ padding: 12 }}>
           Retry
         </button>
       </div>
@@ -2494,7 +2494,7 @@ function AutovotePlanCard({
           </div>
           <button
             onClick={onProceed}
-            className="ext-act prim"
+            className="ext-act prim-soft"
             disabled={plan.allocations.length === 0}
             style={{
               marginTop: 10,
