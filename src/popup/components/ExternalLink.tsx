@@ -16,6 +16,20 @@ export interface ExternalLinkProps {
   style?: CSSProperties;
 }
 
+/** Only well-known navigable schemes may become a clickable link. Anything
+ *  else (javascript:, data:, vbscript:, blob:, …) is rendered inert so an
+ *  untrusted href can never turn into a script-scheme navigation
+ *  (CodeQL js/xss-through-dom defense-in-depth). */
+const SAFE_LINK_SCHEMES = ["https:", "http:", "mailto:"];
+
+function safeHref(href: string): string | undefined {
+  try {
+    return SAFE_LINK_SCHEMES.includes(new URL(href).protocol) ? href : undefined;
+  } catch {
+    return undefined; // unparseable / relative -> inert
+  }
+}
+
 export function ExternalLink({
   href,
   children,
@@ -23,23 +37,40 @@ export function ExternalLink({
   iconSize = 11,
   style,
 }: ExternalLinkProps) {
+  const safe = safeHref(href);
+  const sharedStyle: CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 3,
+    wordBreak: "break-all",
+    ...style,
+  };
+  const inner = (
+    <>
+      <span style={{ minWidth: 0 }}>{children}</span>
+      <Icon name="external" size={iconSize} />
+    </>
+  );
+
+  if (safe === undefined) {
+    // Disallowed scheme: keep the label + glyph visible but non-navigable.
+    return (
+      <span className="ext-extlink" title={title} style={sharedStyle}>
+        {inner}
+      </span>
+    );
+  }
+
   return (
     <a
-      href={href}
+      href={safe}
       target="_blank"
       rel="noopener noreferrer"
       className="ext-extlink"
       title={title}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3,
-        wordBreak: "break-all",
-        ...style,
-      }}
+      style={sharedStyle}
     >
-      <span style={{ minWidth: 0 }}>{children}</span>
-      <Icon name="external" size={iconSize} />
+      {inner}
     </a>
   );
 }
