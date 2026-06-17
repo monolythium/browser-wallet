@@ -6,9 +6,30 @@ import {
   typedBech32ToAddress,
   type MrvCallNativeTxPlan,
   type MrvDeployNativeTxPlan,
+  type NativeDevApprovalKind,
+  type NativeDevRiskLabel,
 } from "@monolythium/core-sdk";
 
 export const WALLET_MRV_TX_EXTENSION_KIND = MRV_TX_EXTENSION_KIND;
+
+// The wallet, DevKit, and Studio all describe an MRV approval with the same
+// review-shaped vocabulary. We re-export the SDK contract types here so the
+// wallet's approval bus, the popup review panel, and any sidecar-originated
+// request stay aligned on one shape rather than the thinner local plan that
+// preceded this. `NativeDevApprovalKind` is the canonical discriminant; the
+// wallet only ever submits the `mrv_deploy` / `mrv_call` arms today.
+export type {
+  NativeDevApprovalKind,
+  NativeDevMrvDeployPlan,
+  NativeDevRiskLabel,
+  NativeDevRiskSeverity,
+  NativeDevWalletApprovalRequest,
+} from "@monolythium/core-sdk";
+
+/** The MRV submission plan discriminant — a strict subset of the SDK's
+ *  `NativeDevApprovalKind` (the wallet never submits token-create or
+ *  verification-publish plans directly). */
+export type WalletMrvApprovalKind = Extract<NativeDevApprovalKind, "mrv_deploy" | "mrv_call">;
 
 export interface WalletMrvNativePlanBaseInput {
   fromAddress: string;
@@ -78,13 +99,26 @@ export interface WalletMrvTransactionExtension {
 }
 
 export interface WalletMrvNativeSubmissionPlan {
-  kind: "mrv_deploy" | "mrv_call";
+  /** Deploy-vs-call discriminant — aligned with `WalletMrvApprovalKind`. */
+  kind: WalletMrvApprovalKind;
   request: WalletMrvSerializedRequest;
   extension: WalletMrvTransactionExtension;
   expectedContractAddress?: string;
   nativeTx: WalletMrvSerializedNativeTx;
   feePreview: WalletMrvSerializedFeePreview;
   tx: WalletMrvSerializedTx;
+  /**
+   * Review-shaped fields shared with DevKit / Studio (see
+   * `NativeDevMrvDeployPlan`). All optional so existing callers and persisted
+   * plans remain valid; the typed MRV approval populates them when available.
+   */
+  /** BLAKE3 artifact hash of the deploy bytecode (deploy only). */
+  artifactHash?: string;
+  /** Constructor / call calldata, `0x`-hex. For deploy this is the constructor
+   *  input appended to the artifact; for call it is the method calldata. */
+  constructorInput?: string;
+  /** Risk labels surfaced to the approver, mirroring the SDK review contract. */
+  riskLabels?: NativeDevRiskLabel[];
 }
 
 export interface WalletMrvNativeSubmitTxFields {
@@ -126,7 +160,9 @@ export function buildWalletMrvDeployNativePlan(
       : {}),
     ...(input.artifactHash !== undefined ? { artifactHash: input.artifactHash } : {}),
   };
-  return serializeSdkPlan("mrv_deploy", buildMrvDeployNativeTxPlan(input.artifactBytes, options));
+  return serializeSdkPlan("mrv_deploy", buildMrvDeployNativeTxPlan(input.artifactBytes, options), {
+    ...(input.artifactHash !== undefined ? { artifactHash: input.artifactHash } : {}),
+  });
 }
 
 export function buildWalletMrvCallNativePlan(
@@ -283,17 +319,26 @@ export function walletMrvNativePlanToSubmitTx(
   };
 }
 
+/** Review-shaped extras the SDK plan does not surface back (they are build
+ *  inputs). Threaded in so the wallet's typed approval carries them. */
+interface MrvPlanReviewExtras {
+  artifactHash?: string;
+}
+
 function serializeSdkPlan(
   kind: "mrv_deploy",
   plan: MrvDeployNativeTxPlan,
+  review?: MrvPlanReviewExtras,
 ): WalletMrvNativeSubmissionPlan;
 function serializeSdkPlan(
   kind: "mrv_call",
   plan: MrvCallNativeTxPlan,
+  review?: MrvPlanReviewExtras,
 ): WalletMrvNativeSubmissionPlan;
 function serializeSdkPlan(
   kind: "mrv_deploy" | "mrv_call",
   plan: MrvDeployNativeTxPlan | MrvCallNativeTxPlan,
+  review: MrvPlanReviewExtras = {},
 ): WalletMrvNativeSubmissionPlan {
   const request: WalletMrvSerializedRequest = {
     valueLythoshi: plan.request.valueLythoshi,
@@ -323,13 +368,27 @@ function serializeSdkPlan(
       request.input = callRequest.input;
     }
   }
+  const expectedContractAddress =
+    kind === "mrv_deploy" && "expectedContractAddress" in plan
+      ? plan.expectedContractAddress
+      : undefined;
+  // The calldata the chain executes: for a deploy this is the artifact (with
+  // any constructor payload appended); for a call it is the method calldata.
+  const constructorInput =
+    kind === "mrv_deploy"
+      ? request.artifactBytes ?? normalizeHexBytes(String(plan.tx.input ?? "0x"), "tx.input")
+      : request.input;
+  const riskLabels = deriveMrvRiskLabels(kind, {
+    valueLythoshi: plan.nativeTx.valueLythoshi,
+  });
   return {
     kind,
     request,
     extension: serializeExtension(plan.extension),
-    ...(kind === "mrv_deploy" && "expectedContractAddress" in plan && plan.expectedContractAddress
-      ? { expectedContractAddress: plan.expectedContractAddress }
-      : {}),
+    ...(expectedContractAddress ? { expectedContractAddress } : {}),
+    ...(review.artifactHash !== undefined ? { artifactHash: review.artifactHash } : {}),
+    ...(constructorInput !== undefined ? { constructorInput } : {}),
+    ...(riskLabels.length > 0 ? { riskLabels } : {}),
     nativeTx: {
       chainId: plan.nativeTx.chainId.toString(),
       nonce: plan.nativeTx.nonce.toString(),
@@ -358,6 +417,54 @@ function serializeSdkPlan(
       extensions: (plan.tx.extensions ?? []).map(serializeExtension),
     },
   };
+}
+
+/**
+ * Derive the risk labels surfaced on the MRV approval. These are intentionally
+ * conservative, schema-aligned signals (same `NativeDevRiskLabel` shape the
+ * DevKit/Studio review path uses) so the wallet can render risk chips without
+ * a sidecar round-trip. The chain remains the authority; these are advisory.
+ */
+function deriveMrvRiskLabels(
+  kind: WalletMrvApprovalKind,
+  ctx: { valueLythoshi: string },
+): NativeDevRiskLabel[] {
+  const labels: NativeDevRiskLabel[] = [];
+  if (kind === "mrv_deploy") {
+    labels.push({
+      id: "mrv.deploy.new-contract",
+      title: "Deploys a new contract",
+      severity: "info",
+      detail:
+        "Publishes RISC-V bytecode to a freshly derived contract address. Review the artifact hash before approving.",
+    });
+  } else {
+    labels.push({
+      id: "mrv.call.executes-code",
+      title: "Executes contract code",
+      severity: "info",
+      detail:
+        "Invokes a method on an existing native contract. Calldata is shown verbatim below.",
+    });
+  }
+  if (isNonZeroDecimal(ctx.valueLythoshi)) {
+    labels.push({
+      id: "mrv.value.transfers-funds",
+      title: "Transfers value",
+      severity: "warning",
+      detail: "This transaction moves a non-zero LYTH value alongside the contract action.",
+    });
+  }
+  return labels;
+}
+
+function isNonZeroDecimal(value: string | undefined): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    return decimalStringToBigint(value, "valueLythoshi") > 0n;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeUserAddress(address: string): string {
