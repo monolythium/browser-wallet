@@ -253,7 +253,6 @@ import {
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   PrivateRosterUnavailableError,
-  RosterVerificationError,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
 import {
@@ -9489,23 +9488,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // instead?" confirm rather than treating it as a hard failure. Nothing
         // was broadcast (we threw before submitting), so a plaintext retry is
         // safe — the same nonce is reused on the re-submit.
-        if (
-          e instanceof RosterVerificationError ||
-          (e as { kind?: unknown } | null)?.kind === "roster-verification-failed"
-        ) {
-          // The served seal roster failed the on-chain authenticity cross-check
-          // (possible substitution). Surface it DISTINCTLY from a benign
-          // roster-unavailable so the popup warns of possible tampering and does
-          // NOT one-click-offer a plaintext downgrade. Nothing was broadcast.
-          // The `kind` discriminant is a belt-and-suspenders alongside instanceof
-          // so the distinct tamper signal survives any cross-bundle class-identity
-          // edge (the surfacing of #5 must never silently fall through to generic).
-          return {
-            ok: false,
-            rosterVerificationFailed: true,
-            reason: (e as { message?: string })?.message ?? "roster verification failed",
-          };
-        }
         if (e instanceof PrivateRosterUnavailableError) {
           return {
             ok: false,
