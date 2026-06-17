@@ -99,6 +99,7 @@ import {
   bgWalletBalance,
   bgWalletActivityGet,
   bgWalletIndexerSnapshot,
+  bgStakingDelegations,
   bgWalletActiveChain,
   bgWalletSetActiveChain,
   bgChainList,
@@ -117,6 +118,7 @@ import {
   type ChainEntry,
   type WalletIndexerSnapshot,
 } from "./bg";
+import type { DelegationsView } from "../shared/staking";
 
 type Screen =
   | "loading"
@@ -397,6 +399,17 @@ export default function App() {
   );
   const chainNotLive = chainKindNotLive(chainHealthKind);
   const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
+  // Active delegations (totalBps) for the Home "Delegated" chip. Best-effort:
+  // null while loading / on fetch failure → Home shows "0.00" (no fabrication).
+  const [delegationsView, setDelegationsView] = useState<DelegationsView | null>(null);
+  const refreshDelegations = useCallback(async () => {
+    if (!acc.addr.startsWith("0x")) {
+      setDelegationsView(null);
+      return;
+    }
+    const r = await bgStakingDelegations(acc.addr);
+    setDelegationsView(r.ok ? r.data : null);
+  }, [acc.addr]);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
   // the balance/fee hooks can dep on it. `activeChain` falls back to
@@ -873,8 +886,9 @@ export default function App() {
     if (screen === "home") {
       void refreshBalance();
       void refreshActivity();
+      void refreshDelegations();
     }
-  }, [screen, refreshBalance, refreshActivity]);
+  }, [screen, refreshBalance, refreshActivity, refreshDelegations]);
 
   // Re-fetch the active vault summary whenever the user
   // navigates. Cheap (one IPC) and covers the cases where the user
@@ -906,6 +920,13 @@ export default function App() {
       cancelled = true;
     };
   }, [acc.addr, activeChain.chainId]);
+
+  // Active-delegations fetch — mirrors the indexer fetch; refires on
+  // account/chain change (the home-nav effect below also refreshes it so the
+  // Delegated chip is fresh after an in-session delegate/undelegate).
+  useEffect(() => {
+    void refreshDelegations();
+  }, [refreshDelegations, activeChain.chainId]);
 
   // Re-skin popup background per active denom (matches designs/src/ext-app.jsx).
   useEffect(() => {
@@ -1311,6 +1332,7 @@ export default function App() {
           account={acc}
           network={activeChain}
           indexer={indexerSnapshot}
+          delegations={delegationsView}
           balanceStale={balanceStale}
           balanceCause={balanceCause}
           chainNotLive={chainNotLive}
