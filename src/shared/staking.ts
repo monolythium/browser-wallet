@@ -59,11 +59,12 @@ export interface ClusterDirectoryEntry {
   /** Numeric cluster id used by every chain-side delegation precompile. */
   clusterId: number;
   /** §22.4 cluster-name-registry display name (e.g. `halcyon.cluster.mono`).
-   *  The chain DOES ship a cluster-name reader — `lyth_getClusterName`
-   *  (cluster-name registry 0x1104), with `lyth_resolveName` for the
-   *  hierarchical 0x110E registry — both wrapped by the SDK. Not wired here
-   *  yet: the wallet still displays mock names from `MOCK_CLUSTERS[*].name`
-   *  below; replace with the real lookup when this surface adopts it. */
+   *  Populated from the chain via `lyth_getClusterName` (cluster-name registry
+   *  0x1104, SDK 0.4.18 `lythGetClusterName`) in the directory fanout
+   *  (`readClusterName`). `null` when the cluster is unnamed or the per-cluster
+   *  lookup failed — the UI falls back to the `cluster-<id>` id-label, never a
+   *  fabricated name. (`lyth_resolveName`, the forward 0x110E hierarchical
+   *  resolver, is a separate reader and is not used here.) */
   name: string | null;
   /** Member count (`ClusterDirectoryEntryResponse.size`). Whitepaper §14
    *  fixes this at 10 for v1; surfaced from the chain so future
@@ -605,8 +606,10 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //
 //   ✅ naming registry — readers exist: `lyth_resolveName` (hierarchical
 //      0x110E, §22.8) and `lyth_getClusterName` (cluster-name 0x1104), both
-//      SDK-wrapped. Not wired here yet, so cluster names still display
-//      `cluster-<id>` until this surface adopts the reader.
+//      SDK-wrapped. `lyth_getClusterName` is consumed in the directory fanout
+//      (readClusterName → per-cluster name), so cluster names display their
+//      canonical on-chain value and fall back to `cluster-<id>` only when
+//      unnamed. `lyth_resolveName` (forward name→address) is not wired yet.
 //
 // The above is the binding wallet-side view; the testnet deploy status
 // of each method is checked at runtime via `withChainFallback` rather

@@ -1,17 +1,16 @@
 // Operator risk classification.
 //
-// Chain commit 017cab9 ("Operator pending-change risk previews")
-// shipped server-side preview computation; the SDK at @0fd8a79 doesn't
-// yet expose a typed helper. Chain commit 7160636 ("Registry public
-// service probe runner") added probe-result data that an
-// `lyth_publicServiceProbe` reader would surface.
+// This module is the wallet's client-side risk-flag classifier: it derives
+// flags from the data the per-operator probe already collects — genesis
+// verification, capability surface, indexer lag, latency, error state. It is
+// the single classification surface; the About page renders the badges, the
+// cluster detail page renders the same badges, and the legend in About
+// explains them.
 //
-// Until those readers land in the SDK, the wallet derives risk flags
-// from the data the per-operator probe already collects:
-// genesis verification, capability surface, indexer lag, latency, error
-// state. This module is the single classification surface; the About
-// page renders the badges, the cluster detail page renders
-// the same badges, and the legend in About explains them.
+// The chain's own operator-risk signals are consumed separately and complement
+// this probe-derived view: `lyth_operatorRisk` (miss-rate / jail-status,
+// MD-CORE-0006) in operator-risk-client.ts, and the `lyth_publicServiceProbe`
+// probe runner (called direct behind withChainFallback).
 //
 // Whitepaper alignment:
 //   §28.1   — Monarch OS substrate (capabilities = surfaces operator
