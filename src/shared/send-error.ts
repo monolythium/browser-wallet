@@ -48,6 +48,7 @@ export type SendErrorKind =
   | "spending-policy-unavailable"
   | "wallet-locked"
   | "active-vault-changed"
+  | "roster-verification-failed"
   | "transaction-rejected"
   | "unknown";
 
@@ -149,6 +150,26 @@ function classifyInnerError(
         "so the wallet cancelled it for safety. Nothing was sent and your funds " +
         "are unaffected. Re-check the account shown, then try again.",
       severity: "warn",
+    };
+  }
+
+  // Seal-roster authenticity cross-check failure (wallet-INTERNAL, never a chain
+  // error, never mempool-wrapped). RosterVerificationError ("…authenticity
+  // verification (possible tampering)…") is thrown when an opted-in private
+  // send's served seal roster does NOT match the on-chain registry across a
+  // quorum of operators — a possible roster substitution. Nothing was signed or
+  // broadcast. err (not warn): this is a security signal, not a transient retry,
+  // and the popup deliberately does NOT offer a one-click plaintext downgrade.
+  if (lower.includes("authenticity verification")) {
+    return {
+      kind: "roster-verification-failed",
+      headline: "Encryption roster failed verification",
+      body:
+        "The wallet could not confirm this network's encryption roster against " +
+        "the on-chain registry — it may have been tampered with. Nothing was " +
+        "sent and your funds are unaffected. Try again later; if it keeps " +
+        "failing, avoid the private send option on this network for now.",
+      severity: "err",
     };
   }
 

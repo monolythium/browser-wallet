@@ -144,11 +144,14 @@ vi.mock("./tx-mldsa.js", () => ({
       ...(submitSealedReturn !== undefined ? { sealed: submitSealedReturn } : {}),
     };
   }),
-  // Real class so the SW's `e instanceof PrivateRosterUnavailableError` check in
-  // the wallet-send-tx catch resolves against the mocked module (an undefined
-  // reference would throw a TypeError out of the catch).
+  // Real classes so the SW's `e instanceof …` checks in the wallet-send-tx catch
+  // resolve against the mocked module (an undefined reference would throw a
+  // TypeError out of the catch).
   PrivateRosterUnavailableError: class PrivateRosterUnavailableError extends Error {
     readonly kind = "private-roster-unavailable" as const;
+  },
+  RosterVerificationError: class RosterVerificationError extends Error {
+    readonly kind = "roster-verification-failed" as const;
   },
 }));
 
@@ -509,7 +512,11 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitMlDsaTx, PrivateRosterUnavailableError } from "./tx-mldsa.js";
+import {
+  submitMlDsaTx,
+  PrivateRosterUnavailableError,
+  RosterVerificationError,
+} from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -2606,6 +2613,37 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(r.privateRosterUnavailable).toBe(true);
     // Nothing broadcast → no pending row, and the nonce was not advanced (a
     // plaintext retry will reuse it).
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    expect(storageLocal[pendingKey]).toBeUndefined();
+  });
+
+  it("an opt-in private send whose roster FAILS the authenticity cross-check surfaces {ok:false, rosterVerificationFailed:true} (distinct from a benign unavailable) and writes NO pending row", async () => {
+    seedTestnetNonceAndFee();
+    // A roster SUBSTITUTION (RosterVerificationError) must map to the DISTINCT
+    // tamper flag — not privateRosterUnavailable — so the popup warns of possible
+    // tampering instead of nudging a casual plaintext downgrade.
+    submitFailure = new RosterVerificationError("forged roster");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x989680",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        private: true,
+      },
+    })) as {
+      ok: false;
+      rosterVerificationFailed?: boolean;
+      privateRosterUnavailable?: boolean;
+      reason?: string;
+    };
+    expect(r.ok).toBe(false);
+    expect(r.rosterVerificationFailed).toBe(true);
+    expect(r.privateRosterUnavailable).toBeUndefined();
+    // Nothing broadcast → no pending row.
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
     const pendingKey =
       `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;

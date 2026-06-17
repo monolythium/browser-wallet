@@ -1003,6 +1003,11 @@ export async function bgWalletSendTx(args: {
        *  The popup turns this into a "send unencrypted instead?" confirm
        *  rather than treating it as a hard failure. */
       privateRosterUnavailable?: boolean;
+      /** Set when an opted-in private send's served seal roster FAILED the
+       *  on-chain authenticity cross-check (possible substitution). Distinct
+       *  from `privateRosterUnavailable`: the popup warns of possible tampering
+       *  and does NOT one-click-offer a plaintext downgrade. */
+      rosterVerificationFailed?: boolean;
     }
 > {
   type Reply =
@@ -1016,6 +1021,7 @@ export async function bgWalletSendTx(args: {
         passkeyElevation?: "required" | "wrong_password" | "rate_limited";
         secondsRemaining?: number;
         privateRosterUnavailable?: boolean;
+        rosterVerificationFailed?: boolean;
       };
   const { executionUnitLimitHex, ...rest } = args;
   const r = await send<Reply>("wallet-send-tx", {
