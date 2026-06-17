@@ -13,21 +13,13 @@ import {
 // One genesis-trusted operator. The per-operator genesis gate inside
 // testnetJsonRpc (verifyOperatorGenesis) is covered by tx-mldsa.test.ts; here it
 // is stubbed true so we exercise the roster fetch + validation, not the gate.
-// Three genesis-trusted operators — the seal-roster authenticity cross-check
-// requires a QUORUM (>=3 byte-identical authoritative ek sets), so the happy
-// path needs >=3 operators that independently agree. The per-operator genesis
-// gate is stubbed true here; the gate itself is covered by tx-mldsa.test.ts.
-const SEAL_TEST_OPERATORS = [
-  { name: "op-1", region: "x", rpc: "http://op1.example" },
-  { name: "op-2", region: "x", rpc: "http://op2.example" },
-  { name: "op-3", region: "x", rpc: "http://op3.example" },
-];
 vi.mock("./networks.js", () => ({
-  // vi.fn so a test can override the operator list (e.g. the RPC-dedup case).
-  getActiveOperators: vi.fn(() => SEAL_TEST_OPERATORS),
+  getActiveOperators: () => [
+    { name: "operator-seal", region: "x", rpc: "http://seal.example" },
+  ],
   verifyOperatorGenesis: async () => true,
   // C1: testnetJsonRpc's pre-loop short-circuit reads this predicate. Default
-  // false so the seal tests run the real gated walk (operators trusted above).
+  // false so the seal tests run the real gated walk (operator trusted above).
   allActiveOperatorsDefinitivelyUntrusted: () => false,
 }));
 
@@ -69,24 +61,9 @@ function makeRosterSource(opts?: {
   return source;
 }
 
-// fetch mock: answers the seal-path RPCs (lyth_getClusterSealKeys /
-// lyth_submitEncrypted / mesh_submitTx) AND the authenticity cross-check reads
-// (lyth_clusterStatus + the getOperatorSealKey eth_call), recording every
-// JSON-RPC (method + params) so cache hits + the submit param shape are
-// assertable.
-//
-// By DEFAULT the cross-check's authoritative view is DERIVED from the served
-// roster: every active member's getOperatorSealKey ek == its served roster ek,
-// so all three operators agree and the served roster passes. Failure tests
-// override `authoritativeMembersOverride` (substitution / jailed / standby /
-// missing-key / cardinality) or `perOperatorBehavior` (quorum disagreement / <3
-// reachable).
-interface XcheckMember {
-  operatorId: string;
-  state: string;
-  /** 0x-hex of the 1184-byte ek, or "MISSING" to make getOperatorSealKey error. */
-  ek: string;
-}
+// fetch mock: answer lyth_getClusterSealKeys with the queued roster source,
+// lyth_submitEncrypted with the queued response, and record every JSON-RPC
+// (method + params) so cache hits + the submit param shape are assertable.
 let fetchCalls: { method: string; params: unknown }[] = [];
 let rosterToServe: unknown = null;
 let rosterError = false; // when true, lyth_getClusterSealKeys returns an error
@@ -95,96 +72,31 @@ let submitEncryptedResponse: {
   result?: unknown;
   error?: { code: number; message: string };
 } = { result: "0x" + "cd".repeat(32) };
-// null → derive the authoritative cross-check view from rosterToServe (happy path).
-let authoritativeMembersOverride: XcheckMember[] | null = null;
-// per-operator-url override: "fail" (operator can't serve the cross-check reads)
-// or a member list that diverges from the others (to break quorum agreement).
-let perOperatorBehavior = new Map<string, "fail" | XcheckMember[]>();
-
-function rosterEntries(): { operatorIndex: number; mlKemEk: string }[] {
-  const r = rosterToServe as {
-    roster?: { operatorIndex: number; mlKemEk: string }[];
-  } | null;
-  return Array.isArray(r?.roster) ? r!.roster : [];
-}
-function synthOperatorId(i: number): string {
-  return "0x" + (i + 1).toString(16).padStart(64, "0");
-}
-function deriveMembersFromRoster(): XcheckMember[] {
-  return rosterEntries().map((e, i) => ({
-    operatorId: synthOperatorId(i),
-    state: "active",
-    ek: e.mlKemEk,
-  }));
-}
-function abiEncodeDynamicBytes(hex: string): string {
-  const data = hex.replace(/^0x/i, "");
-  const offset = (32).toString(16).padStart(64, "0");
-  const lenWord = (data.length / 2).toString(16).padStart(64, "0");
-  return "0x" + offset + lenWord + data;
-}
-function operatorIdFromCalldata(data: string): string {
-  const hex = data.replace(/^0x/i, "");
-  return "0x" + hex.slice(8, 8 + 64).toLowerCase();
-}
-
 function installFetch(): void {
   fetchCalls = [];
   submitEncryptedResponse = { result: "0x" + "cd".repeat(32) };
   rosterError = false;
   meshEcho = "0x" + "ee".repeat(32);
-  authoritativeMembersOverride = null;
-  perOperatorBehavior = new Map();
-  globalThis.fetch = vi.fn(async (url: unknown, init?: { body?: unknown }) => {
+  globalThis.fetch = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
     const body = JSON.parse(String((init as { body?: string })?.body ?? "{}"));
     fetchCalls.push({ method: body.method, params: body.params });
-    const ok200 = (payload: Record<string, unknown>) =>
-      ({
-        ok: true,
-        status: 200,
-        json: async () => ({ jsonrpc: "2.0", id: 1, ...payload }),
-      }) as unknown as Response;
-
+    let payload: Record<string, unknown>;
     if (body.method === "lyth_getClusterSealKeys") {
-      return ok200(
-        rosterError
-          ? { error: { code: -32601, message: "method not found" } }
-          : { result: rosterToServe },
-      );
+      payload = rosterError
+        ? { error: { code: -32601, message: "method not found" } }
+        : { result: rosterToServe };
+    } else if (body.method === "lyth_submitEncrypted") {
+      payload = submitEncryptedResponse;
+    } else if (body.method === "mesh_submitTx") {
+      payload = { result: meshEcho };
+    } else {
+      payload = { result: "0x" };
     }
-    if (body.method === "lyth_submitEncrypted") {
-      return ok200(submitEncryptedResponse);
-    }
-    if (body.method === "mesh_submitTx") return ok200({ result: meshEcho });
-
-    // ----- authenticity cross-check reads (per operator) -----
-    const behavior = perOperatorBehavior.get(String(url));
-    if (behavior === "fail") {
-      return ok200({ error: { code: -32000, message: "operator unavailable" } });
-    }
-    const members = Array.isArray(behavior)
-      ? behavior
-      : (authoritativeMembersOverride ?? deriveMembersFromRoster());
-    if (body.method === "lyth_clusterStatus") {
-      return ok200({
-        result: {
-          members: members.map((m) => ({
-            operatorId: m.operatorId,
-            state: m.state,
-          })),
-        },
-      });
-    }
-    if (body.method === "eth_call") {
-      const params = body.params as [{ data?: string }, ...unknown[]];
-      const opId = operatorIdFromCalldata(params?.[0]?.data ?? "0x");
-      const m = members.find((mm) => mm.operatorId.toLowerCase() === opId);
-      if (!m || m.ek === "MISSING") {
-        return ok200({ error: { code: 3, message: "OperatorSealKeyMissing" } });
-      }
-      return ok200({ result: abiEncodeDynamicBytes(m.ek) });
-    }
-    return ok200({ result: "0x" });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ jsonrpc: "2.0", id: 1, ...payload }),
+    } as unknown as Response;
   }) as unknown as typeof fetch;
 }
 
@@ -404,7 +316,7 @@ describe("broadcastEncryptedTransaction — lyth_submitEncrypted, trust local ha
       "v1",
     );
     expect(r.txHash).toMatch(/^0x[0-9a-f]{64}$/); // the local canonical inner hash
-    expect(r.via).toBe("op-1");
+    expect(r.via).toBe("operator-seal");
     const submit = fetchCalls.find((c) => c.method === "lyth_submitEncrypted");
     expect(Array.isArray(submit?.params)).toBe(true);
     expect((submit?.params as string[])[0]?.startsWith("0x")).toBe(true);
@@ -655,206 +567,5 @@ describe("NN-01 — vault-binding fail-closed assert (real-SDK, both branches)",
       /active account changed/,
     );
     expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
-  });
-});
-
-describe("assertRosterAuthenticQuorum — on-chain seal-roster substitution cross-check", () => {
-  const originalFetch = globalThis.fetch;
-  const TX_REQ = {
-    to: "0x" + "12".repeat(20),
-    value: "0x0",
-    data: "0x",
-    gas: "0x5208",
-    nonce: "0x3",
-    maxFeePerGas: "0x3b9aca00",
-    maxPriorityFeePerGas: "0x3b9aca00",
-    chainIdHex: "0x10f2c",
-  };
-  beforeEach(() => {
-    vi.resetModules();
-    installFetch();
-  });
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  function freshEk(): string {
-    return bytesToHex(generateOperatorSealKeypair().encapsulationKey);
-  }
-  function rosterArr(
-    src: unknown,
-  ): { operatorIndex: number; mlKemEk: string }[] {
-    return (src as { roster: { operatorIndex: number; mlKemEk: string }[] })
-      .roster;
-  }
-  function membersFromRosterArr(
-    roster: { mlKemEk: string }[],
-  ): XcheckMember[] {
-    return roster.map((e, i) => ({
-      operatorId: synthOperatorId(i),
-      state: "active",
-      ek: e.mlKemEk,
-    }));
-  }
-
-  it("served == authoritative across the quorum → seal proceeds (cross-check reads happen)", async () => {
-    rosterToServe = makeRosterSource({ n: 3, t: 2 });
-    const tx = await import("./tx-mldsa.js");
-    const keys = await tx.fetchClusterSealKeys(0);
-    expect(keys.recipientEks).toHaveLength(3);
-    expect(fetchCalls.some((c) => c.method === "lyth_clusterStatus")).toBe(true);
-    expect(fetchCalls.some((c) => c.method === "eth_call")).toBe(true);
-  });
-
-  it("a SUBSTITUTED served roster (one forged ek) → RosterVerificationError (never sealed)", async () => {
-    const real = makeRosterSource({ n: 3, t: 2 });
-    authoritativeMembersOverride = membersFromRosterArr(rosterArr(real));
-    const served = makeRosterSource({ n: 3, t: 2 });
-    // Keep two real eks; the third stays the fresh "attacker" ek.
-    rosterArr(served)[0]!.mlKemEk = rosterArr(real)[0]!.mlKemEk;
-    rosterArr(served)[1]!.mlKemEk = rosterArr(real)[1]!.mlKemEk;
-    rosterToServe = served;
-    const tx = await import("./tx-mldsa.js");
-    await expect(tx.fetchClusterSealKeys(0)).rejects.toBeInstanceOf(
-      tx.RosterVerificationError,
-    );
-  });
-
-  it("a JAILED member (state != standby) stays authoritative → served MATCHES (active-only would have wrongly bricked it)", async () => {
-    rosterToServe = makeRosterSource({ n: 3, t: 2 });
-    const m = deriveMembersFromRoster();
-    m[2]!.state = "jailed"; // still in the served roster; would fail an active-only check
-    authoritativeMembersOverride = m;
-    const tx = await import("./tx-mldsa.js");
-    const keys = await tx.fetchClusterSealKeys(0);
-    expect(keys.recipientEks).toHaveLength(3);
-  });
-
-  it("a STANDBY member is excluded on BOTH sides → served (active only) MATCHES", async () => {
-    rosterToServe = makeRosterSource({ n: 3, t: 2 });
-    const m = deriveMembersFromRoster();
-    // An extra STANDBY member whose ek is NOT in the served roster — the
-    // predicate (state != "standby") must drop it so the count still matches.
-    m.push({ operatorId: synthOperatorId(98), state: "standby", ek: freshEk() });
-    authoritativeMembersOverride = m;
-    const tx = await import("./tx-mldsa.js");
-    const keys = await tx.fetchClusterSealKeys(0);
-    expect(keys.recipientEks).toHaveLength(3);
-  });
-
-  it("a MISSING operator seal key (getOperatorSealKey errors) → RosterVerificationError (fail-LOUD, never skipped)", async () => {
-    rosterToServe = makeRosterSource({ n: 3, t: 2 });
-    const m = deriveMembersFromRoster();
-    m[1]!.ek = "MISSING"; // getOperatorSealKey returns an error for this member
-    authoritativeMembersOverride = m;
-    const tx = await import("./tx-mldsa.js");
-    await expect(tx.fetchClusterSealKeys(0)).rejects.toBeInstanceOf(
-      tx.RosterVerificationError,
-    );
-  });
-
-  it("CARDINALITY: served omits a member the registry has → RosterVerificationError", async () => {
-    const base = makeRosterSource({ n: 3, t: 2 });
-    authoritativeMembersOverride = membersFromRosterArr(rosterArr(base));
-    const served = makeRosterSource({ n: 2, t: 2 });
-    rosterArr(served)[0]!.mlKemEk = rosterArr(base)[0]!.mlKemEk;
-    rosterArr(served)[1]!.mlKemEk = rosterArr(base)[1]!.mlKemEk;
-    rosterToServe = served; // |served| (2) != |non-standby| (3)
-    const tx = await import("./tx-mldsa.js");
-    await expect(tx.fetchClusterSealKeys(0)).rejects.toBeInstanceOf(
-      tx.RosterVerificationError,
-    );
-  });
-
-  it("FEWER than the quorum reachable → RosterVerificationError (fail-closed)", async () => {
-    rosterToServe = makeRosterSource({ n: 3, t: 2 });
-    perOperatorBehavior.set("http://op3.example", "fail"); // only 2 of 3 contribute
-    const tx = await import("./tx-mldsa.js");
-    await expect(tx.fetchClusterSealKeys(0)).rejects.toBeInstanceOf(
-      tx.RosterVerificationError,
-    );
-  });
-
-  it("QUORUM DISAGREEMENT (one operator serves a divergent set) → RosterVerificationError", async () => {
-    rosterToServe = makeRosterSource({ n: 3, t: 2 });
-    const divergent = deriveMembersFromRoster().map((m, i) =>
-      i === 0 ? { ...m, ek: freshEk() } : m,
-    );
-    perOperatorBehavior.set("http://op3.example", divergent); // no >=3 agree
-    const tx = await import("./tx-mldsa.js");
-    await expect(tx.fetchClusterSealKeys(0)).rejects.toBeInstanceOf(
-      tx.RosterVerificationError,
-    );
-  });
-
-  it("dispatcher: a SUBSTITUTION surfaces as RosterVerificationError (tamper), NOT PrivateRosterUnavailableError (outage), and broadcasts NOTHING", async () => {
-    const real = makeRosterSource({ n: 3, t: 2 });
-    authoritativeMembersOverride = membersFromRosterArr(rosterArr(real));
-    rosterToServe = makeRosterSource({ n: 3, t: 2 }); // entirely different eks
-    const ks = await import("./keystore-mldsa.js");
-    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(
-      MlDsa65Backend.fromSeed(new Uint8Array(32).fill(9)),
-    );
-    const tx = await import("./tx-mldsa.js");
-    const err = await tx
-      .submitMlDsaTx(TX_REQ, "v1", { private: true })
-      .then(() => null, (e: unknown) => e);
-    expect(err).toBeInstanceOf(tx.RosterVerificationError);
-    expect(err).not.toBeInstanceOf(tx.PrivateRosterUnavailableError);
-    // Fail-closed: neither a sealed NOR a plaintext broadcast happened.
-    expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
-      false,
-    );
-    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
-  });
-
-  it("dispatcher: a roster-FETCH failure still maps to PrivateRosterUnavailableError (selective catch leaves the no-roster path intact)", async () => {
-    rosterError = true; // lyth_getClusterSealKeys errors → fetch fails BEFORE the cross-check
-    const ks = await import("./keystore-mldsa.js");
-    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(
-      MlDsa65Backend.fromSeed(new Uint8Array(32).fill(9)),
-    );
-    const tx = await import("./tx-mldsa.js");
-    await expect(
-      tx.submitMlDsaTx(TX_REQ, "v1", { private: true }),
-    ).rejects.toBeInstanceOf(tx.PrivateRosterUnavailableError);
-  });
-
-  it("a verified roster is CACHED (no re-verification on a cache hit); clearClusterSealKeysCache forces a re-verify", async () => {
-    rosterToServe = makeRosterSource({ n: 3, t: 2 });
-    const tx = await import("./tx-mldsa.js");
-    await tx.getClusterSealKeys(0); // fetch + cross-check
-    const firstReads = fetchCalls.filter(
-      (c) => c.method === "lyth_clusterStatus",
-    ).length;
-    expect(firstReads).toBeGreaterThan(0);
-    await tx.getClusterSealKeys(0); // cache hit — no new cross-check reads
-    expect(
-      fetchCalls.filter((c) => c.method === "lyth_clusterStatus").length,
-    ).toBe(firstReads);
-    tx.clearClusterSealKeysCache();
-    await tx.getClusterSealKeys(0); // forced re-fetch + re-verify
-    expect(
-      fetchCalls.filter((c) => c.method === "lyth_clusterStatus").length,
-    ).toBeGreaterThan(firstReads);
-  });
-
-  it("dedups operators by RPC URL — a single rogue endpoint listed N times cannot forge the quorum by itself", async () => {
-    const networks = await import("./networks.js");
-    const getOps = vi.mocked(networks.getActiveOperators);
-    const rogue = { name: "rogue", region: "x", rpc: "http://rogue.example" };
-    // A malicious operator-override lists the SAME rogue endpoint 3x. Without
-    // dedup, that one endpoint would serve a roster AND "confirm" it across a
-    // forged quorum of 3. With dedup it counts ONCE → < quorum → fail-closed.
-    getOps.mockReturnValue([rogue, rogue, rogue]);
-    try {
-      rosterToServe = makeRosterSource({ n: 3, t: 2 });
-      const tx = await import("./tx-mldsa.js");
-      await expect(tx.fetchClusterSealKeys(0)).rejects.toBeInstanceOf(
-        tx.RosterVerificationError,
-      );
-    } finally {
-      getOps.mockReturnValue(SEAL_TEST_OPERATORS);
-    }
   });
 });

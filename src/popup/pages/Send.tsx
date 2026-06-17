@@ -582,22 +582,6 @@ export function Send({
               : null,
         );
         if (!opts?.viaElevated) setStep("preview");
-      } else if (r.rosterVerificationFailed) {
-        // Opted into private, and the served seal roster FAILED the on-chain
-        // authenticity cross-check (possible substitution/tampering). Nothing
-        // was broadcast. Surface a hard error with an honest explanation — do
-        // NOT offer a one-click "send unencrypted" downgrade here, so an active
-        // attack isn't casually waved through into a public plaintext send.
-        if (opts?.viaElevated) setElevatedOpen(false);
-        setSubmitError({
-          message:
-            r.reason ??
-            "The encryption roster failed authenticity verification (possible tampering). Nothing was sent.",
-          code: null,
-          method: null,
-          via: null,
-        });
-        setStep("error");
       } else if (r.privateRosterUnavailable) {
         // Opted into private, but the seal roster was unavailable. Nothing was
         // broadcast — surface a confirm so the user can either retry later or

@@ -8,18 +8,12 @@
 import {
   buildEncryptedSubmission as sdkBuildEncryptedSubmission,
   buildPlaintextSubmission as sdkBuildPlaintextSubmission,
-  bytesToHex,
   parseClusterSealKeys,
   type ClusterSealKeys,
   type ClusterSealKeysSource,
   type NativeEvmTxFields,
   type NativeTxExtensionLike,
 } from "@monolythium/core-sdk/crypto";
-import {
-  decodeOperatorSealKey,
-  encodeGetOperatorSealKeyCalldata,
-  nodeRegistryAddressHex,
-} from "@monolythium/core-sdk";
 import {
   getActiveVaultIdV4,
   getUnlockedBackendV4,
@@ -703,11 +697,6 @@ export async function fetchClusterSealKeys(
     ...result,
     clusterId: result.clusterId ?? clusterId,
   });
-  // Authenticity cross-check BEFORE caching: a served roster that fails the
-  // on-chain quorum check (substitution / missing key / sub-quorum) raises
-  // RosterVerificationError here, so a tampered roster is never cached or
-  // sealed to. The cache below therefore only ever holds a verified roster.
-  await assertRosterAuthenticQuorum(keys, keys.clusterId);
   cachedClusterSealKeys = {
     clusterId: keys.clusterId,
     epoch: keys.epoch,
@@ -739,204 +728,7 @@ export async function getClusterSealKeys(
  *  on operator-override — alongside `clearGenesisCache()` — so a roster fetched
  *  from a prior operator set is never sealed to after the active set changes. */
 export function clearClusterSealKeysCache(): void {
-  // The roster is cached only AFTER it passes the authenticity cross-check
-  // (assertRosterAuthenticQuorum runs before the cache-write in
-  // fetchClusterSealKeys), so dropping the cached roster also drops its verified
-  // verdict — no separate verdict cache to clear.
   cachedClusterSealKeys = null;
-}
-
-// ----- Seal-roster authenticity cross-check (roster substitution) -----
-//
-// `lyth_getClusterSealKeys` is integrity-checked (the SDK recomputes the
-// rosterHash from the served ek set) but NOT authenticated — a single rogue or
-// MITM'd genesis-trusted operator can serve an all-attacker-ek roster the wallet
-// would seal to, defeating the t-of-n privacy. Before a served roster is cached
-// or sealed to, derive the authoritative ek set independently from chain state
-// and require the served set to match it: read `lyth_clusterStatus` from a QUORUM
-// of genesis-trusted operators, take each non-standby member (`state != "standby"`
-// — a jailed member stays in the served roster but leaves `active`, so an
-// `active`-only filter would false-positive and brick honest sends during a jail
-// window), read its published `getOperatorSealKey` (the SAME committed registry
-// slot the served roster is built from — see 2026-06-16_getopsealkey-abi-inspect.md),
-// and require the resulting ek set to be byte-identical across at least the quorum.
-// A mismatch — or a missing/unreadable key for any member — raises
-// RosterVerificationError, surfaced DISTINCTLY from a benign "roster unavailable"
-// so an active substitution is not masked as an outage. Closes a single
-// rogue/MITM'd operator; a full RPC MITM still needs operator TLS (out of scope).
-
-const ROSTER_XCHECK_QUORUM = 3;
-const ROSTER_XCHECK_OP_TIMEOUT_MS = 2_500;
-
-/** Thrown when the served seal roster fails the on-chain authenticity cross-check
- *  (substitution / injection / omission, or a missing/unreadable operator seal
- *  key). Fail-LOUD + fail-closed: the tx is never sealed to an unverified roster.
- *  Surfaced as possible tampering, NOT as a benign roster-unavailable, so an
- *  active attack is not nudged toward a casual plaintext downgrade. send-error.ts
- *  keys on the stable "roster authenticity" phrase; handlers can also match the
- *  `kind` discriminant. */
-export class RosterVerificationError extends Error {
-  readonly kind = "roster-verification-failed" as const;
-  constructor(detail: string) {
-    super(
-      `Seal roster failed on-chain authenticity verification (possible tampering): ${detail}. Nothing was sent.`,
-    );
-    this.name = "RosterVerificationError";
-  }
-}
-
-/** Lowercased, 0x-stripped hex of a raw ek — the canonical comparison key shared
- *  by the served roster (Uint8Array) and the decoded registry read (0x-hex). */
-function ekComparisonKey(hexOrBytes: string | Uint8Array): string {
-  const hex =
-    typeof hexOrBytes === "string" ? hexOrBytes : bytesToHex(hexOrBytes);
-  return hex.replace(/^0x/i, "").toLowerCase();
-}
-
-/** Read-only JSON-RPC POST to ONE specific operator (not the first-alive
- *  `testnetJsonRpc`) — the cross-check must hear from independent operators. */
-async function rosterXcheckRpc(
-  rpc: string,
-  method: string,
-  params: unknown[],
-): Promise<unknown> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ROSTER_XCHECK_OP_TIMEOUT_MS);
-  try {
-    const res = await fetch(rpc, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as {
-      result?: unknown;
-      error?: { message?: string };
-    };
-    if (body.error) throw new Error(body.error.message ?? "rpc error");
-    return body.result;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Build ONE operator's authoritative ek set: its `lyth_clusterStatus` non-standby
- *  members → each member's `getOperatorSealKey`. Returns null when this operator
- *  cannot produce a COMPLETE, well-formed set (untrusted genesis, transport
- *  failure, empty/malformed member list, or a missing/unreadable key for ANY
- *  member). A null never counts toward the quorum — so a missing key fails LOUD
- *  via the sub-quorum path rather than being silently dropped. */
-async function authoritativeEkSetFromOperator(
-  rpc: string,
-  clusterId: number,
-): Promise<string[] | null> {
-  try {
-    if (!(await verifyOperatorGenesis(rpc, ROSTER_XCHECK_OP_TIMEOUT_MS))) {
-      return null;
-    }
-    const status = (await rosterXcheckRpc(rpc, "lyth_clusterStatus", [
-      clusterId,
-    ])) as {
-      members?: ReadonlyArray<{ operatorId?: unknown; state?: unknown }>;
-    };
-    const members = Array.isArray(status?.members) ? status.members : null;
-    if (members === null) return null;
-    // state != "standby" (active + jailed + offline) — the anchor-membership
-    // predicate the served roster is built from. operatorId is fed VERBATIM as
-    // the getOperatorSealKey bytes32 (the chain keys the ek on this op_hash).
-    const nonStandby = members.filter(
-      (m) => typeof m.operatorId === "string" && m.state !== "standby",
-    );
-    if (nonStandby.length === 0) return null;
-    const eks: string[] = [];
-    for (const m of nonStandby) {
-      const calldata = encodeGetOperatorSealKeyCalldata({
-        operatorId: m.operatorId as string,
-      });
-      const ret = await rosterXcheckRpc(rpc, "eth_call", [
-        { to: nodeRegistryAddressHex(), data: calldata },
-        "latest",
-      ]);
-      // decodeOperatorSealKey throws on a revert / OperatorSealKeyMissing /
-      // undecodable result; any throw → caught below → null (fail-loud).
-      eks.push(ekComparisonKey(decodeOperatorSealKey(ret as string)));
-    }
-    return eks;
-  } catch {
-    return null;
-  }
-}
-
-/** Derive the authoritative ek set agreed by at least the quorum of independent
- *  genesis-trusted operators, or throw RosterVerificationError (fail-closed: the
- *  wallet refuses to establish authority — and therefore to seal — without it). */
-async function deriveAgreedAuthoritativeSet(
-  clusterId: number,
-): Promise<Set<string>> {
-  // Dedup by RPC URL so the quorum counts DISTINCT endpoints: a (malicious)
-  // operator-override that lists the same rogue RPC multiple times must not let
-  // one endpoint reach the quorum — and "confirm" its own substituted roster —
-  // by itself.
-  const seenRpc = new Set<string>();
-  const operators = getActiveOperators().filter((op) => {
-    if (seenRpc.has(op.rpc)) return false;
-    seenRpc.add(op.rpc);
-    return true;
-  });
-  const sets = (
-    await Promise.all(
-      operators.map((op) => authoritativeEkSetFromOperator(op.rpc, clusterId)),
-    )
-  ).filter((s): s is string[] => s !== null);
-  // Group operators by the canonical signature of their derived set; the
-  // authoritative set is the one at least the quorum agree on byte-for-byte, so
-  // a single rogue (lying on clusterStatus OR getOperatorSealKey) is outvoted.
-  const bySignature = new Map<string, { set: string[]; count: number }>();
-  for (const s of sets) {
-    const sig = [...s].sort().join("|");
-    const e = bySignature.get(sig);
-    if (e) e.count += 1;
-    else bySignature.set(sig, { set: s, count: 1 });
-  }
-  let best: { set: string[]; count: number } | null = null;
-  for (const e of bySignature.values()) {
-    if (best === null || e.count > best.count) best = e;
-  }
-  if (best === null || best.count < ROSTER_XCHECK_QUORUM) {
-    throw new RosterVerificationError(
-      `could not confirm an authoritative roster from a quorum of ${ROSTER_XCHECK_QUORUM} independent operators (best agreement: ${best?.count ?? 0})`,
-    );
-  }
-  return new Set(best.set);
-}
-
-/** Cross-check a served roster against the on-chain registry BEFORE it is cached
- *  or sealed to. Asserts cardinality (`|served| == |non-standby members|`) AND
- *  raw-ek set equality. A substitution/injection/omission, a missing/unreadable
- *  key, or a sub-quorum read → RosterVerificationError. One fresh re-read absorbs
- *  epoch-boundary rotation lag before failing closed. */
-export async function assertRosterAuthenticQuorum(
-  keys: ClusterSealKeys,
-  clusterId = 0,
-): Promise<void> {
-  const served = keys.recipientEks.map((ek) => ekComparisonKey(ek));
-  const servedSet = new Set(served);
-  const matches = (authoritative: Set<string>): boolean =>
-    // cardinality on the wire (n slots) AND distinct-count match (no duplicate
-    // masking an omission) AND every served ek is authoritative → set equality.
-    served.length === authoritative.size &&
-    servedSet.size === authoritative.size &&
-    [...servedSet].every((ek) => authoritative.has(ek));
-  let agreed = await deriveAgreedAuthoritativeSet(clusterId);
-  if (matches(agreed)) return;
-  // One fresh re-read to absorb an epoch-boundary roster rotation between the
-  // served fetch and the cross-check, then fail closed.
-  agreed = await deriveAgreedAuthoritativeSet(clusterId);
-  if (matches(agreed)) return;
-  throw new RosterVerificationError(
-    `served roster (${servedSet.size} keys) does not match the on-chain registry (${agreed.size} keys) by count and membership`,
-  );
 }
 
 /** Build a SEALED (LythiumSeal scheme-3) submission for the `lyth_submitEncrypted`
@@ -1123,12 +915,7 @@ export async function submitMlDsaTx(
   let roster: ClusterSealKeys;
   try {
     roster = await getClusterSealKeys();
-  } catch (e) {
-    // A roster-authenticity failure (possible substitution) must NOT be masked
-    // as a benign roster-unavailable: re-throw it so the handler surfaces it
-    // distinctly (possible tampering) rather than nudging a casual plaintext
-    // downgrade. Any OTHER fetch failure is the no-roster availability case.
-    if (e instanceof RosterVerificationError) throw e;
+  } catch {
     throw new PrivateRosterUnavailableError();
   }
   // Sealed submissions need a higher execution-unit limit (the seal-decrypt +
