@@ -344,13 +344,38 @@ describe("submitMlDsaTx — seal-vs-plaintext decision (single chokepoint, fail-
     globalThis.fetch = originalFetch;
   });
 
-  it("seals when a roster is available (lyth_submitEncrypted, never mesh_submitTx)", async () => {
+  it("a DEFAULT send (no opt-in) goes plaintext and never even probes the seal roster", async () => {
+    rosterToServe = makeRosterSource(); // a roster IS available on this network…
+    const backend = MlDsa65Backend.fromSeed(TEST_SEED);
+    const ks = await import("./keystore-mldsa.js");
+    vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
+    const tx = await import("./tx-mldsa.js");
+    // Echo the correct canonical hash so the plaintext broadcast validates.
+    meshEcho = (
+      await tx.buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" })
+    ).innerTxHashHex;
+    // …but encryption is opt-in + costs more, so without opts.private the
+    // dispatcher must send plaintext and must NOT fetch lyth_getClusterSealKeys.
+    const r = await tx.submitMlDsaTx(TX_REQ, "v1");
+    expect(r.sealed).toBe(false);
+    expect(r.txHash).toBe(meshEcho);
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(true);
+    expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
+      false,
+    );
+    expect(
+      fetchCalls.some((c) => c.method === "lyth_getClusterSealKeys"),
+    ).toBe(false);
+  });
+
+  it("an OPT-IN private send seals when a roster is available (lyth_submitEncrypted, never mesh_submitTx)", async () => {
     rosterToServe = makeRosterSource();
     const backend = MlDsa65Backend.fromSeed(TEST_SEED);
     const ks = await import("./keystore-mldsa.js");
     vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
     const tx = await import("./tx-mldsa.js");
-    const r = await tx.submitMlDsaTx(TX_REQ, "v1");
+    const r = await tx.submitMlDsaTx(TX_REQ, "v1", { private: true });
+    expect(r.sealed).toBe(true);
     expect(r.txHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
       true,
@@ -358,18 +383,17 @@ describe("submitMlDsaTx — seal-vs-plaintext decision (single chokepoint, fail-
     expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
   });
 
-  it("falls back to plaintext when the roster is unavailable (mesh_submitTx, never lyth_submitEncrypted)", async () => {
-    rosterError = true; // lyth_getClusterSealKeys errors → roster absent → plaintext
+  it("an OPT-IN private send whose roster is unavailable throws PrivateRosterUnavailableError and broadcasts NOTHING (no silent downgrade)", async () => {
+    rosterError = true; // lyth_getClusterSealKeys errors → roster absent
     const backend = MlDsa65Backend.fromSeed(TEST_SEED);
     const ks = await import("./keystore-mldsa.js");
     vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
     const tx = await import("./tx-mldsa.js");
-    // Echo the correct canonical hash so the plaintext broadcast validates.
-    meshEcho = (await tx.buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" }))
-      .innerTxHashHex;
-    const r = await tx.submitMlDsaTx(TX_REQ, "v1");
-    expect(r.txHash).toBe(meshEcho);
-    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(true);
+    await expect(
+      tx.submitMlDsaTx(TX_REQ, "v1", { private: true }),
+    ).rejects.toBeInstanceOf(tx.PrivateRosterUnavailableError);
+    // The whole point: it did NOT quietly fall back to a plaintext broadcast.
+    expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);
     expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(
       false,
     );
@@ -421,14 +445,14 @@ describe("withEncryptedExecutionUnitFloor — clears the encrypted intrinsic flo
     expect(BigInt(mrv.gas)).toBe(750000n);
   });
 
-  it("the dispatcher seals the FLOOR-RAISED tx (receipt hash = bumped tx, not original)", async () => {
+  it("an opt-in private send seals the FLOOR-RAISED tx (receipt hash = bumped tx, not original)", async () => {
     rosterToServe = makeRosterSource();
     submitEncryptedResponse = { result: "0x" + "55".repeat(32) };
     const backend = MlDsa65Backend.fromSeed(TEST_SEED);
     const ks = await import("./keystore-mldsa.js");
     vi.mocked(ks.getUnlockedBackendV4).mockReturnValue(backend);
     const tx = await import("./tx-mldsa.js");
-    const r = await tx.submitMlDsaTx(BASE, "v1");
+    const r = await tx.submitMlDsaTx(BASE, "v1", { private: true });
     // The sealed tx's canonical hash equals the plaintext hash of the
     // FLOOR-RAISED tx — proving the dispatcher sealed the bumped tx (and the
     // canonical-hash invariant still holds for the bumped tx).
@@ -491,9 +515,10 @@ describe("NN-01 — vault-binding fail-closed assert (real-SDK, both branches)",
 
   it("SEALED branch: a mid-flight vault swap aborts fail-closed (no lyth_submitEncrypted)", async () => {
     const tx = await setup({ active: "vaultB", sealed: true });
-    await expect(tx.submitMlDsaTx(TX_REQ, "vaultA")).rejects.toThrow(
-      /active account changed/,
-    );
+    // Opt into the private lane so the dispatcher actually takes the seal path.
+    await expect(
+      tx.submitMlDsaTx(TX_REQ, "vaultA", { private: true }),
+    ).rejects.toThrow(/active account changed/);
     // The roster fetch (upstream of the assert) may run, but NOTHING is submitted.
     expect(fetchCalls.some((c) => c.method === "lyth_submitEncrypted")).toBe(false);
     expect(fetchCalls.some((c) => c.method === "mesh_submitTx")).toBe(false);

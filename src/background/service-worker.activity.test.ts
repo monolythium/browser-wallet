@@ -144,6 +144,12 @@ vi.mock("./tx-mldsa.js", () => ({
       ...(submitSealedReturn !== undefined ? { sealed: submitSealedReturn } : {}),
     };
   }),
+  // Real class so the SW's `e instanceof PrivateRosterUnavailableError` check in
+  // the wallet-send-tx catch resolves against the mocked module (an undefined
+  // reference would throw a TypeError out of the catch).
+  PrivateRosterUnavailableError: class PrivateRosterUnavailableError extends Error {
+    readonly kind = "private-roster-unavailable" as const;
+  },
 }));
 
 const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
@@ -503,7 +509,7 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitMlDsaTx } from "./tx-mldsa.js";
+import { submitMlDsaTx, PrivateRosterUnavailableError } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -2573,6 +2579,33 @@ describe("wallet-send-tx pending-row prepend", () => {
     })) as { ok: false; reason?: string };
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/active account changed/);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    expect(storageLocal[pendingKey]).toBeUndefined();
+  });
+
+  it("an opt-in private send whose roster is unavailable surfaces {ok:false, privateRosterUnavailable:true} and writes NO pending row", async () => {
+    seedTestnetNonceAndFee();
+    // The dispatcher throws this BEFORE any broadcast when private was requested
+    // but the seal roster couldn't be fetched. The handler must map it to the
+    // typed flag (not a generic error) so the popup can offer the plaintext
+    // confirm — and `instanceof` must resolve across the mocked module.
+    submitFailure = new PrivateRosterUnavailableError();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-send-tx",
+      payload: {
+        to: "0xrecipient",
+        valueWeiHex: "0x989680",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+        private: true,
+      },
+    })) as { ok: false; privateRosterUnavailable?: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.privateRosterUnavailable).toBe(true);
+    // Nothing broadcast → no pending row, and the nonce was not advanced (a
+    // plaintext retry will reuse it).
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
     const pendingKey =
       `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;

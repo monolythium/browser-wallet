@@ -249,6 +249,7 @@ import {
   clearClusterSealKeysCache,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
+  PrivateRosterUnavailableError,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
 import {
@@ -9215,6 +9216,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // clamp) instead of re-reading the operator, closing the display-vs-
         // sign double-read and the Slow/Fast tier-multiplier desync.
         signedFee?: unknown;
+        // Opt into the encrypted-mempool (private) lane for this send. Default
+        // OFF: a normal send goes plaintext and never fetches the seal roster.
+        // Only a strict `true` engages the sealed (higher-cost) path; any other
+        // value is treated as plaintext (default-deny).
+        private?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -9433,7 +9439,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        const { txHash, via, sealed } = await submitMlDsaTx(txReq, boundVaultId);
+        // Encryption is opt-in + costs more; default-deny — only a strict
+        // boolean `true` engages the sealed lane. Pass the opts object ONLY on
+        // the opt-in path so the default send keeps the unchanged 2-arg call.
+        const { txHash, via, sealed } =
+          p.private === true
+            ? await submitMlDsaTx(txReq, boundVaultId, { private: true })
+            : await submitMlDsaTx(txReq, boundVaultId);
         // Advance the local pending-nonce now that the submit was accepted, so
         // a 2nd tx sent before this one commits doesn't reuse this nonce.
         // Awaited (small session write) so the next send sees it immediately.
@@ -9465,6 +9477,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         });
         return { ok: true, txHash, via };
       } catch (e) {
+        // Opted-in private send whose seal roster was unavailable: surface a
+        // distinct flag so the popup offers an explicit "send unencrypted
+        // instead?" confirm rather than treating it as a hard failure. Nothing
+        // was broadcast (we threw before submitting), so a plaintext retry is
+        // safe — the same nonce is reused on the re-submit.
+        if (e instanceof PrivateRosterUnavailableError) {
+          return {
+            ok: false,
+            privateRosterUnavailable: true,
+            reason: e.message,
+          };
+        }
         // Forward method + via when testnetJsonRpc stamped them onto
         // the error (see tx-mldsa.ts body.error branch). Popup's Send
         // ErrorView uses these for method-aware copy that distinguishes

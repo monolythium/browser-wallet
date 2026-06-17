@@ -140,6 +140,40 @@ const ADMISSION_REJECT_CODE_HI = -32020;
 // doesn't supply one.
 const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
+// Extra execution units a private (encrypted-mempool) send carries — the
+// chain's seal-decrypt + threshold-reconstruct + verify overhead. Mirrors
+// `ENCRYPTED_SEAL_OVERHEAD_UNITS` in background/tx-mldsa.ts, where the dispatcher
+// applies it ADDITIVELY (gas = base + overhead, via withEncryptedExecutionUnitFloor),
+// so the displayed surcharge `(base + tip) × overhead` matches the chain's extra
+// charge rather than being an upper bound. Kept as a local constant so the popup
+// bundle does not import background code; keep it in sync with the canonical value.
+const SEAL_FEE_OVERHEAD_UNITS_ESTIMATE = 250_000n;
+
+/** Extra fee (lythoshi) a private/encrypted send adds on top of the standard
+ *  estimate: the seal overhead units × the per-execution-unit price the user
+ *  pays (base + tier-scaled tip), matching the chain's `(base + tip) × units`
+ *  fee model. The overhead is applied ADDITIVELY by the dispatcher
+ *  (withEncryptedExecutionUnitFloor), so this is an exact match to the chain's
+ *  extra charge, not an upper bound. Returns null when the fee suggestion's
+ *  price fields are absent/malformed (so the UI shows nothing rather than a
+ *  wrong number). Exported for unit tests. */
+export function computeSealSurchargeLythoshi(
+  fee: {
+    basePricePerExecutionUnitLythoshiHex: string | null | undefined;
+    priorityPricePerExecutionUnitLythoshiHex: string | null | undefined;
+  } | null,
+  tierMultiplierBps: bigint,
+): bigint | null {
+  if (fee === null) return null;
+  const base = parseNativeHexQuantity(fee.basePricePerExecutionUnitLythoshiHex);
+  const tip = parseNativeHexQuantity(
+    fee.priorityPricePerExecutionUnitLythoshiHex,
+  );
+  if (base === null || tip === null) return null;
+  const pricePerUnit = base + scaleByBps(tip, tierMultiplierBps);
+  return pricePerUnit * SEAL_FEE_OVERHEAD_UNITS_ESTIMATE;
+}
+
 export function Send({
   account,
   chainId,
@@ -163,6 +197,22 @@ export function Send({
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
+  // Opt-in encrypted-mempool (private) send. Default OFF — encryption is
+  // OPTIONAL and costs more (the seal execution-unit overhead). When on, the
+  // send routes through the LythiumSeal threshold-encrypted path; when off it
+  // is a normal plaintext send and never fetches the seal roster.
+  const [sendPrivate, setSendPrivate] = useState(false);
+  // When an opted-in private send can't fetch the cluster seal roster, the SW
+  // returns `privateRosterUnavailable`; this drives an explicit "send
+  // unencrypted instead?" confirm rather than a silent downgrade or a hard
+  // error. Nothing was broadcast, so a plaintext retry reuses the same nonce.
+  const [privateUnavailableOpen, setPrivateUnavailableOpen] = useState(false);
+  // Threshold-encrypted INCLUSION is not live on-chain yet (sealed txs may not
+  // confirm). So outside Developer Mode the "Send privately" toggle can't stay
+  // on — tapping it bounces back to a normal (plaintext) send and trips this
+  // "not live yet" note. In Developer Mode the toggle is fully usable for
+  // testing the encrypted path. Flip the gate when inclusion goes live.
+  const [privateNotLiveNudge, setPrivateNotLiveNudge] = useState(false);
   // Contacts picker. pickerOpen drives the modal;
   // selectedContact holds the chosen contact so the preview screen can
   // render its name above the address. selectedContact clears when
@@ -264,6 +314,17 @@ export function Send({
       ? estimatedFeeResult.failures.join("; ")
       : null;
   const estimatedFeeLythoshi = estimatedFeeDisplay?.totalLythoshi ?? null;
+
+  // Extra fee a PRIVATE (encrypted-mempool) send carries on top of the standard
+  // estimate: the seal overhead units × the per-unit price the user is paying
+  // (base + tier-scaled tip), matching the chain's `(base + tip) × units` fee
+  // model. Display-only + conservative (see SEAL_FEE_OVERHEAD_UNITS_ESTIMATE);
+  // null when the fee suggestion hasn't resolved. Only added to the shown total
+  // when the private toggle is on.
+  const sealSurchargeLythoshi = useMemo(
+    () => computeSealSurchargeLythoshi(feeSuggestion, tierMultiplierBps),
+    [feeSuggestion, tierMultiplierBps],
+  );
 
   const parsedRecipient = useMemo(() => validateToAddress(to), [to]);
   const nameResolution = useNameForwardResolve(parsedRecipient.monoName);
@@ -391,6 +452,10 @@ export function Send({
   const handleConfirm = async (opts?: {
     elevatedPassword?: string;
     viaElevated?: boolean;
+    // Set on the re-submit after the user accepts the "send unencrypted
+    // instead?" confirm: forces this send plaintext even if the private toggle
+    // is on, so a one-off roster outage doesn't block the send.
+    forcePlaintext?: boolean;
   }) => {
     if (amountLythoshi === null) return;
     if (effectiveAddr0x === null) return; // form button is gated; defensive
@@ -465,6 +530,9 @@ export function Send({
           };
         }
       }
+      // Encryption is opt-in: only request the sealed lane when the user
+      // toggled it on AND this isn't a forced-plaintext downgrade retry.
+      const wantPrivate = sendPrivate && opts?.forcePlaintext !== true;
       const r = await bgWalletSendTx({
         to: effectiveAddr0x,
         valueWeiHex: valueLythoshiHex,
@@ -476,6 +544,7 @@ export function Send({
           ? { elevatedPassword: opts.elevatedPassword }
           : {}),
         ...(signedFee ? { signedFee } : {}),
+        ...(wantPrivate ? { private: true } : {}),
       });
       if (r.ok) {
         if (opts?.viaElevated) setElevatedOpen(false);
@@ -513,6 +582,19 @@ export function Send({
               : null,
         );
         if (!opts?.viaElevated) setStep("preview");
+      } else if (r.privateRosterUnavailable) {
+        // Opted into private, but the seal roster was unavailable. Nothing was
+        // broadcast — surface a confirm so the user can either retry later or
+        // send unencrypted, instead of silently downgrading or hard-failing.
+        if (opts?.viaElevated) {
+          // Close the elevated modal but clear its busy flag too — the elevated
+          // submit has resolved (into this confirm), so a lingering busy flag
+          // would otherwise wedge a later re-prompt's CTA.
+          setElevatedOpen(false);
+          setElevatedBusy(false);
+        }
+        setStep("preview");
+        setPrivateUnavailableOpen(true);
       } else {
         if (opts?.viaElevated) setElevatedOpen(false);
         setSubmitError({
@@ -602,6 +684,23 @@ export function Send({
           recipientContact={recipientContact}
           recipientRegisteredName={recipientRegisteredName}
           finalityPosture={finalityPostureFor(chainId)}
+          privateOn={sendPrivate}
+          onTogglePrivate={() => {
+            if (!devMode) {
+              // Encrypted inclusion isn't live on-chain yet; outside Developer
+              // Mode the toggle can't stay on — bounce it back to a normal
+              // (plaintext) send and surface the "not live yet" note.
+              setSendPrivate(false);
+              setPrivateNotLiveNudge(true);
+              return;
+            }
+            // Developer Mode: fully usable for testing the encrypted path.
+            setPrivateNotLiveNudge(false);
+            setSendPrivate((v) => !v);
+          }}
+          sealSurchargeLythoshi={sealSurchargeLythoshi}
+          privateDevGated={!devMode}
+          privateNotLiveNudge={privateNotLiveNudge}
         />
         {needsPasskey && passkeyDecision?.kind === "passkey-ok" && (
           <PasskeySignModal
@@ -702,6 +801,70 @@ export function Send({
               }}
             >
               {elevatedBusy ? "Confirming…" : "Confirm send"}
+            </button>
+          </div>
+        </Modal>
+        <Modal
+          open={privateUnavailableOpen}
+          onClose={() => setPrivateUnavailableOpen(false)}
+          showClose
+          titleAccent="rgba(242,180,65,1)"
+          title="Private send unavailable"
+        >
+          <div
+            style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}
+          >
+            The encryption roster for this network couldn't be reached, so this
+            transaction can't be sent privately right now. Nothing was sent. You
+            can try again in a moment, or send it unencrypted (standard, lower
+            cost).
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={() => setPrivateUnavailableOpen(false)}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.14)",
+                color: "var(--fg-200)",
+                fontSize: 11.5,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPrivateUnavailableOpen(false);
+                // Re-submit plaintext. If the original attempt cleared an
+                // over-limit passkey cap, `elevatedPw` still holds the
+                // SW-verified password (the roster outage is thrown AFTER the
+                // SW verifies it), so thread it through — otherwise the SW would
+                // re-prompt for the same password. Empty on the normal path.
+                // (The passkey local-presence assertion done on the preview is
+                // popup-side only — never SW-verified today — so the plaintext
+                // retry not re-running it is not a security downgrade; it was
+                // performed seconds ago for this same tx.)
+                void handleConfirm({
+                  forcePlaintext: true,
+                  ...(elevatedPw ? { elevatedPassword: elevatedPw } : {}),
+                });
+              }}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                background: "rgba(242,180,65,0.9)",
+                border: "none",
+                color: "#0c0d10",
+                fontWeight: 600,
+                fontSize: 11.5,
+                cursor: "pointer",
+              }}
+            >
+              Send unencrypted
             </button>
           </div>
         </Modal>
@@ -1739,6 +1902,20 @@ interface PreviewViewProps {
    *  (e.g. "Anchor-level (LythiumDAG-BFT)" for native sends). Rendered as
    *  one SummaryRow below "To". No per-tx finality RPC exists. */
   finalityPosture?: string;
+  /** Opt-in private (encrypted-mempool) send toggle. `privateOn` is the
+   *  current choice (default OFF); `onTogglePrivate` flips it. When on, an
+   *  "Encryption fee" row + the higher total are shown using
+   *  `sealSurchargeLythoshi` (null until the fee suggestion resolves). The
+   *  toggle is hidden on the multisig path (proposals don't seal here). */
+  privateOn?: boolean;
+  onTogglePrivate?: () => void;
+  sealSurchargeLythoshi?: bigint | null;
+  /** Threshold-encrypted inclusion isn't live yet, so outside Developer Mode
+   *  the toggle can't stay on. `privateDevGated` renders the "Dev only / preview"
+   *  treatment; `privateNotLiveNudge` shows the "not live yet" note after a
+   *  non-dev user taps it (the parent bounces the toggle back to off). */
+  privateDevGated?: boolean;
+  privateNotLiveNudge?: boolean;
 }
 
 /** Preview-screen badge that tells the user which unlock
@@ -2064,10 +2241,22 @@ function PreviewView({
   recipientContact,
   recipientRegisteredName,
   finalityPosture,
+  privateOn,
+  onTogglePrivate,
+  sealSurchargeLythoshi,
+  privateDevGated,
+  privateNotLiveNudge,
 }: PreviewViewProps) {
-  const total = amountLythoshi !== null && estimatedFeeLythoshi !== null
-    ? amountLythoshi + estimatedFeeLythoshi
-    : null;
+  // The private toggle is only offered on single-vault sends — the multisig
+  // path creates a proposal that is sealed (or not) at execution time, not here.
+  const showPrivateToggle = !isMultisig && onTogglePrivate !== undefined;
+  // Extra fee shown when private is on (null until the fee suggestion resolves).
+  const surcharge =
+    privateOn === true ? (sealSurchargeLythoshi ?? null) : null;
+  const total =
+    amountLythoshi !== null && estimatedFeeLythoshi !== null
+      ? amountLythoshi + estimatedFeeLythoshi + (surcharge ?? 0n)
+      : null;
   // §25.2 item 6 — prefer the registered §22.8 name, then the contact
   // name, then the bare bech32m. `recipientLabel` is null when neither a
   // registered name nor a contact is known (bare-address render).
@@ -2171,6 +2360,13 @@ function PreviewView({
             }
             mono
           />
+          {surcharge !== null && (
+            <SummaryRow
+              label="Encryption fee"
+              value={`+ ${formatNativeLythAmount(surcharge)}`}
+              mono
+            />
+          )}
           <div
             style={{
               marginTop: 8,
@@ -2186,6 +2382,121 @@ function PreviewView({
             />
           </div>
         </div>
+
+        {showPrivateToggle && (
+          <button
+            type="button"
+            onClick={onTogglePrivate}
+            role="switch"
+            aria-checked={privateOn === true}
+            aria-label="Send privately (encrypted mempool)"
+            className="ext-card"
+            style={{
+              padding: "10px 12px",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              textAlign: "left",
+              width: "100%",
+              cursor: "pointer",
+              background:
+                privateOn === true
+                  ? "rgba(126,227,193,0.08)"
+                  : "rgba(255,255,255,0.02)",
+              border:
+                privateOn === true
+                  ? "1px solid rgba(126,227,193,0.4)"
+                  : "1px solid rgba(255,255,255,0.10)",
+            }}
+          >
+            {/* Switch track */}
+            <span
+              aria-hidden
+              style={{
+                flexShrink: 0,
+                marginTop: 1,
+                width: 30,
+                height: 18,
+                borderRadius: 9,
+                background:
+                  privateOn === true
+                    ? "rgba(126,227,193,0.9)"
+                    : "rgba(255,255,255,0.18)",
+                position: "relative",
+                transition: "background 120ms",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  top: 2,
+                  left: privateOn === true ? 14 : 2,
+                  width: 14,
+                  height: 14,
+                  borderRadius: "50%",
+                  background: "#0c0d10",
+                  transition: "left 120ms",
+                }}
+              />
+            </span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--fg-100)",
+                }}
+              >
+                Send privately
+                <span
+                  className="ext-badge-att"
+                  style={{ fontSize: 9 }}
+                  title={
+                    privateDevGated
+                      ? "Encrypted-mempool inclusion isn't live on-chain yet — available in Developer Mode for testing."
+                      : "Routes through the encrypted mempool (LythiumSeal threshold encryption)."
+                  }
+                >
+                  {privateDevGated ? "dev only" : "costs more"}
+                </span>
+              </span>
+              <span
+                style={{
+                  display: "block",
+                  marginTop: 3,
+                  fontSize: 10.5,
+                  lineHeight: 1.5,
+                  color: "var(--fg-300)",
+                }}
+              >
+                {privateDevGated
+                  ? "Optional. Encrypts the transaction through the mempool so its contents stay hidden until reveal — but encrypted inclusion isn't live on-chain yet, so this sends normally unless Developer Mode is on."
+                  : "Optional. Encrypts this transaction through the mempool so its contents stay hidden until reveal. Adds the encryption fee above."}
+              </span>
+            </span>
+          </button>
+        )}
+        {showPrivateToggle && privateNotLiveNudge && privateOn !== true && (
+          <div
+            role="status"
+            className="ext-card"
+            style={{
+              padding: "8px 12px",
+              background: "rgba(242,180,65,0.08)",
+              border: "1px solid rgba(242,180,65,0.4)",
+              fontSize: 10.5,
+              lineHeight: 1.5,
+              color: "var(--fg-200)",
+            }}
+          >
+            Encrypted send isn't live on-chain yet — your transaction will send
+            normally (unencrypted). Enable Developer Mode to test the encrypted
+            path.
+          </div>
+        )}
 
         <PreviewHooksSection
           fromAddr={fromAddr}

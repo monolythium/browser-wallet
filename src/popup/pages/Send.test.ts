@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeEstimatedFeeLythoshi,
+  computeSealSurchargeLythoshi,
   formatNativeLythAmount,
   formatSendError,
   lythToLythoshiHex,
@@ -235,6 +236,51 @@ describe("native LYTH fee display math", () => {
     const text = formatNativeLythAmount(80n);
     expect(text).toBe("0.00000000000000008 LYTH");
     expect(text).not.toMatch(/gwei|lythoshi|execution unit/i);
+  });
+});
+
+// The opt-in private (encrypted-mempool) send surcharge: the EXTRA fee shown
+// when "Send privately" is on. = (base + tier-scaled tip) × 250,000 seal-overhead
+// units, matching the chain's additive `(base + tip) × units` charge.
+describe("computeSealSurchargeLythoshi — private-send seal overhead estimate", () => {
+  it("null fee suggestion → null (UI shows nothing rather than a wrong number)", () => {
+    expect(computeSealSurchargeLythoshi(null, 10_000n)).toBeNull();
+  });
+
+  it("malformed price fields → null", () => {
+    expect(
+      computeSealSurchargeLythoshi(
+        {
+          basePricePerExecutionUnitLythoshiHex: "not-hex",
+          priorityPricePerExecutionUnitLythoshiHex: "0x0a",
+        },
+        10_000n,
+      ),
+    ).toBeNull();
+  });
+
+  it("Normal tier (1×): (base 100 + tip 10) × 250000 = 27,500,000", () => {
+    expect(
+      computeSealSurchargeLythoshi(
+        {
+          basePricePerExecutionUnitLythoshiHex: "0x64", // 100
+          priorityPricePerExecutionUnitLythoshiHex: "0x0a", // 10
+        },
+        10_000n, // 1.0×
+      ),
+    ).toBe(27_500_000n);
+  });
+
+  it("Slow tier (0.5×) scales only the tip: (100 + 5) × 250000 = 26,250,000", () => {
+    expect(
+      computeSealSurchargeLythoshi(
+        {
+          basePricePerExecutionUnitLythoshiHex: "0x64", // 100
+          priorityPricePerExecutionUnitLythoshiHex: "0x0a", // 10
+        },
+        5_000n, // 0.5×
+      ),
+    ).toBe(26_250_000n);
   });
 });
 

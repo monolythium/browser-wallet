@@ -202,15 +202,19 @@ function classifyInnerError(
     };
   }
 
-  // Chain requires encrypted transactions and the wallet's encrypted (LythiumSeal)
-  // submission wasn't used for this tx: the dispatcher seals when the operator
-  // cluster serves a seal roster, but here the roster was unavailable, so it fell
-  // back to plaintext, which the encrypted-mempool milestone rejects ("plaintext
-  // mempool entry not allowed: encrypted envelope required"; native code -32040
+  // DEFENSIVE: a network that rejects a plaintext tx as "plaintext mempool entry
+  // not allowed: encrypted envelope required" (native code -32040
   // PlaintextNotAllowed, surfaced on the wire as -32047 because the broadcaster
-  // flattens it into UpstreamUnavailable — see the unwrap-inner note above). Classify it so the user
-  // sees an honest explanation instead of a raw debugger string. This branch only
-  // explains the rejection; the encrypted path itself lives in submitMlDsaTx.
+  // flattens it into UpstreamUnavailable — see the unwrap-inner note above).
+  //
+  // This is NOT expected on a Monolythium network: encryption is OPTIONAL and
+  // costs more — the encrypted mempool is never mandatory, so plaintext is always
+  // admitted. The wallet also no longer silently downgrades: an opt-in private
+  // send that can't fetch the seal roster fails before broadcast (the popup
+  // offers an explicit plaintext-fallback confirm), so a plaintext tx never
+  // reaches the chain "by accident". This branch is kept only so that IF some
+  // network were ever configured encrypted-required and a plaintext tx hit it,
+  // the user sees an honest explanation instead of a raw debugger string.
   //
   // MUST precede the chain-quarantined branch below: the chain wraps this as
   // "upstream unavailable: mempool: plaintext … not allowed …", so the generic
