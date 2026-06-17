@@ -20,10 +20,13 @@
 // Chain reads use `RpcClient` from `@monolythium/core-sdk` (root export).
 // The testnet flows route through `testnetJsonRpc()` against the native
 // `lyth_*` namespace directly. User-added chains use the same `RpcClient`
-// transport keyed on their declared RPC URL. Per mono-core `b2f0c498`,
-// the chain no longer serves `eth_call`, `eth_estimateGas`,
-// `eth_sendRawTransaction`, or the six polling-filter methods; the wallet
-// dispatcher rejects those at the boundary with EIP-1193 code 4200.
+// transport keyed on their declared RPC URL. The wallet does NOT proxy
+// arbitrary EVM reads through its dApp surface by design (native / non-EVM
+// chain → dApps use their own RPC); the dispatcher rejects `eth_call`,
+// `eth_estimateGas`, `eth_sendRawTransaction`, and the six polling-filter
+// methods at the boundary with EIP-1193 code 4200. `eth_call` /
+// `eth_estimateGas` ARE served by the chain as read-only native-executor
+// views (not retired — just not proxied here); the six filters ARE retired.
 
 import { RpcClient } from "@monolythium/core-sdk";
 import {
@@ -2141,10 +2144,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return err(4200, "eth_sendRawTransaction is not supported by this wallet");
     }
 
-    // Chain retired EVM simulation + polling filters per mono-core
-    // b2f0c498 (v4.1 §22.9). Reject at the wallet boundary with 4200
-    // instead of letting the call hit the chain just to get
-    // MethodNotFound — friendlier error message, faster round-trip.
+    // Reject these at the wallet boundary with 4200. Two distinct reasons:
+    // eth_call / eth_estimateGas ARE served by the chain (read-only
+    // native-executor views) but the wallet does not proxy arbitrary EVM reads
+    // by design (native / non-EVM chain → dApps use their own RPC); the six
+    // eth_*Filter methods are genuinely retired by the chain. A clear boundary
+    // answer beats a chain round-trip either way.
     case "eth_call":
     case "eth_estimateGas":
     case "eth_newFilter":
@@ -2155,7 +2160,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
     case "eth_getFilterLogs": {
       return err(
         4200,
-        `${method} is unavailable on Monolythium — the chain retired EVM simulation and polling-filter methods. Use native reads or submit via the wallet UI.`,
+        `${method} is not proxied by this wallet. Monolythium is a native (non-EVM) chain — use your own RPC for chain reads, or submit via the wallet UI.`,
       );
     }
 
@@ -2284,13 +2289,14 @@ function parseTypedData(raw: string): TypedDataEnvelope | null {
 }
 
 /**
- * Pre-populate the `SendTxView` shown on the approval popup. Per mono-core
- * `b2f0c498` + v4.1 §22.9, no on-chain simulation is available — the chain
- * retired `eth_call` and `eth_estimateGas`. The approval view shows declared
- * intent (recipient, value, calldata, fee) without a simulated outcome.
- * Fee and nonce reads still go through the chain's curated passive surface
- * (`eth_gasPrice` / `eth_getTransactionCount`) or the testnet native
- * helpers when running against a testnet operator.
+ * Pre-populate the `SendTxView` shown on the approval popup. The wallet does
+ * not run an on-chain simulation for the approval view — it shows declared
+ * intent (recipient, value, calldata, fee) without a simulated outcome. (The
+ * chain DOES serve `eth_call` / `eth_estimateGas` as read-only native-executor
+ * views, but the wallet does not use them for the approval preview.) Fee and
+ * nonce reads still go through the chain's curated passive surface
+ * (`eth_gasPrice` / `eth_getTransactionCount`) or the testnet native helpers
+ * when running against a testnet operator.
  */
 async function buildSendTxView(
   txReq: EthSendTransactionRequest,

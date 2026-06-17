@@ -595,10 +595,12 @@ describe("EIP-1193 conformance — service-worker request router", () => {
 
   it.todo("eth_subscribe('newHeads') yields a subscription id when polling lands (TODO(monolythium-vision): add polling subscription manager)");
 
-  // ---- 8b. Retired methods rejected at the boundary ----
-  // mono-core b2f0c498 retired the EVM simulation + polling-filter
-  // methods. The wallet rejects them with 4200 at the dispatcher rather
-  // than letting them hit the chain just to receive MethodNotFound.
+  // ---- 8b. Boundary-rejected methods (4200) ----
+  // The wallet rejects these at the dispatcher with 4200 rather than letting
+  // them hit the chain. eth_call / eth_estimateGas are served by the chain
+  // (read-only native-executor views) but not proxied by the wallet by design
+  // (native / non-EVM chain); the six eth_*Filter methods are genuinely
+  // retired by the chain.
   it.each([
     "eth_call",
     "eth_estimateGas",
@@ -612,7 +614,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     const r = await dispatch(method, []);
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4200);
-    expect(r.error?.message).toMatch(/retired EVM simulation and polling-filter/);
+    expect(r.error?.message).toMatch(/not proxied by this wallet/);
     // No JSON-RPC traffic should have left the wallet boundary.
     expect(rpcCalls.map((c) => c.method)).not.toContain(method);
   });
