@@ -104,6 +104,11 @@ interface SendProps {
   /** Navigate to the read-only Operators directory. Used by the
    *  genesis-mismatch error view to make "Operators" clickable. */
   onOpenOperators?: () => void;
+  /** Fired once a send is confirmed (broadcast accepted). Lets the parent
+   *  re-fetch the balance immediately so it reflects the spend without the
+   *  user reopening the popup or navigating home. Read-only refetch — does
+   *  not touch the submit/sign path. */
+  onConfirmed?: () => void;
 }
 
 type Step = "form" | "preview" | "sending" | "success" | "error";
@@ -181,6 +186,7 @@ export function Send({
   multisigVaultId,
   singleVaultId,
   onOpenOperators,
+  onConfirmed,
 }: SendProps) {
   const [step, setStep] = useState<Step>("form");
   const [passkeyDecision, setPasskeyDecision] = useState<BgPasskeyDecision | null>(null);
@@ -564,6 +570,10 @@ export function Send({
           });
         }
         setStep("success");
+        // Refresh the parent's balance now that the spend is broadcast, so it
+        // reflects the new value without a popup reopen / home-nav. Read-only
+        // refetch (coalesced upstream); does not touch the submit/sign path.
+        onConfirmed?.();
         // CX4 — the "Add to contacts" affordance now lives inline on the
         // receipt's To row (shown when the recipient is neither a saved
         // contact nor a registered name), so no auto-popup fires here.
