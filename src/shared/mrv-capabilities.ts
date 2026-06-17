@@ -6,18 +6,35 @@
 // N. The plain deploy/call/constructor lane is ALREADY LIVE and is never gated
 // on N — only the parity-dependent UX is.
 //
-// Downstream learns activation through the existing `lyth_capabilities` RPC,
-// which exposes an address-keyed capability map. We read the entry keyed
-// `mrv_app_contract_parity` and surface `{ active, activationHeight }`. This is
-// the single feature-detect contract the wallet, DevKit, and Studio align on.
+// Downstream learns activation through the existing `lyth_capabilities` RPC.
+// Runtime-feature gates that are not bound to a precompile address live in a
+// `runtimeFeatures` map (a sibling to the address-keyed `capabilities` map).
+// We read the entry keyed `mrv_app_contract_parity` and surface
+// `{ active, activationHeight }`. This is the single feature-detect contract
+// the wallet, DevKit, and Studio align on.
 //
 // Forward-compatibility: a pre-N node, or any older node that does not yet
-// publish the capability at all, resolves to `{ active: false,
-// activationHeight: null }`. The activation height (N) is NEVER hardcoded — it
-// is always read from the live node — so parity-dependent UX lights up at N
-// with no wallet re-release.
+// publish the `runtimeFeatures` map (or the feature within it), resolves to
+// `{ active: false, activationHeight: null }`. The activation height (N) is
+// NEVER hardcoded — it is always read from the live node — so parity-dependent
+// UX lights up at N with no wallet re-release.
+//
+// The `runtimeFeatures` map is read structurally: the pinned published SDK
+// `CapabilitiesResponse` type predates the field, so a structural read keeps
+// the wallet type-checking today while remaining correct once the SDK that
+// declares the field ships.
 
-import type { CapabilitiesResponse, CapabilityDescriptor } from "@monolythium/core-sdk";
+import type { CapabilitiesResponse } from "@monolythium/core-sdk";
+
+/**
+ * Structural view of one `runtimeFeatures` entry. Mirrors the node's
+ * `RuntimeFeatureGate` (`{ active, activationHeight }`); kept local so the
+ * reader does not depend on the SDK type declaring the field yet.
+ */
+interface RuntimeFeatureGateView {
+  active?: boolean;
+  activationHeight?: number | bigint | null;
+}
 
 /** Stable capability id the parity milestone publishes in `lyth_capabilities`. */
 export const MRV_APP_CONTRACT_PARITY_CAPABILITY_ID = "mrv_app_contract_parity" as const;
@@ -37,11 +54,11 @@ export const MRV_PARITY_INACTIVE: MrvParityCapability = {
 };
 
 /**
- * Pull the `mrv_app_contract_parity` entry out of a `lyth_capabilities`
- * response. The capability map is keyed by capability id (per the milestone
- * registry); we tolerate either keying-by-id or a descriptor whose
- * `capabilityId` matches, and we fall back to the inactive default whenever the
- * capability is absent (pre-N or older node).
+ * Pull the `mrv_app_contract_parity` gate out of a `lyth_capabilities`
+ * response. Runtime-feature gates live in the `runtimeFeatures` map keyed by
+ * feature id (NOT the address-keyed `capabilities` map). Falls back to the
+ * inactive default whenever the map or the feature is absent (pre-N or older
+ * node).
  */
 export function readMrvParityCapability(
   resp: CapabilitiesResponse | null | undefined,
@@ -49,23 +66,22 @@ export function readMrvParityCapability(
   if (resp === null || resp === undefined || typeof resp !== "object") {
     return MRV_PARITY_INACTIVE;
   }
-  const map = resp.capabilities;
-  if (map === null || map === undefined || typeof map !== "object") {
+  // Structural read: the pinned SDK type predates `runtimeFeatures`.
+  const runtimeFeatures = (
+    resp as {
+      runtimeFeatures?: Record<string, RuntimeFeatureGateView | undefined> | null;
+    }
+  ).runtimeFeatures;
+  if (runtimeFeatures === null || runtimeFeatures === undefined || typeof runtimeFeatures !== "object") {
     return MRV_PARITY_INACTIVE;
   }
-  const direct = map[MRV_APP_CONTRACT_PARITY_CAPABILITY_ID];
-  const descriptor: CapabilityDescriptor | undefined =
-    direct ??
-    Object.values(map).find(
-      (d): d is CapabilityDescriptor =>
-        d !== undefined && d.capabilityId === MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-    );
-  if (descriptor === undefined) {
+  const gate = runtimeFeatures[MRV_APP_CONTRACT_PARITY_CAPABILITY_ID];
+  if (gate === null || gate === undefined || typeof gate !== "object") {
     return MRV_PARITY_INACTIVE;
   }
   return {
-    active: descriptor.active === true,
-    activationHeight: normalizeActivationHeight(descriptor.activationHeight),
+    active: gate.active === true,
+    activationHeight: normalizeActivationHeight(gate.activationHeight),
   };
 }
 

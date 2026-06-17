@@ -7,14 +7,15 @@ import {
   readMrvParityCapability,
 } from "./mrv-capabilities";
 
-function capResponse(descriptor: Record<string, unknown> | null) {
+// The node publishes runtime-feature gates under the `runtimeFeatures` map
+// (sibling to the address-keyed `capabilities` map), keyed by feature id with
+// value `{ active, activationHeight }`.
+function capResponse(gate: Record<string, unknown> | null) {
   return {
     blockNumber: 1000n,
-    capabilities:
-      descriptor === null
-        ? {}
-        : { [MRV_APP_CONTRACT_PARITY_CAPABILITY_ID]: descriptor },
+    capabilities: {},
     nativeModuleForwarders: {},
+    runtimeFeatures: gate === null ? {} : { [MRV_APP_CONTRACT_PARITY_CAPABILITY_ID]: gate },
   } as unknown as Parameters<typeof readMrvParityCapability>[0];
 }
 
@@ -24,54 +25,51 @@ describe("readMrvParityCapability", () => {
     expect(readMrvParityCapability(undefined)).toEqual(MRV_PARITY_INACTIVE);
   });
 
-  it("returns the inactive default when the capability is absent (pre-N / older node)", () => {
+  it("returns the inactive default when the feature is absent (pre-N / older node)", () => {
     expect(readMrvParityCapability(capResponse(null))).toEqual(MRV_PARITY_INACTIVE);
   });
 
-  it("reads an active capability keyed by id with its activation height", () => {
+  it("returns the inactive default when runtimeFeatures is absent entirely", () => {
+    const resp = {
+      blockNumber: 1000n,
+      capabilities: {},
+      nativeModuleForwarders: {},
+    } as unknown as Parameters<typeof readMrvParityCapability>[0];
+    expect(readMrvParityCapability(resp)).toEqual(MRV_PARITY_INACTIVE);
+  });
+
+  it("reads an active gate with its activation height", () => {
     const cap = readMrvParityCapability(
-      capResponse({
-        address: `0x${"11".repeat(20)}`,
-        capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-        capabilityName: "MRV app-contract parity",
-        kind: "gateable",
-        active: true,
-        activationHeight: 5000n,
-      }),
+      capResponse({ active: true, activationHeight: 5000n }),
     );
     expect(cap).toEqual({ active: true, activationHeight: 5000 });
   });
 
-  it("treats a pre-activation descriptor as inactive with a null height", () => {
+  it("treats a pre-activation gate as inactive with a null height", () => {
     const cap = readMrvParityCapability(
-      capResponse({
-        address: `0x${"11".repeat(20)}`,
-        capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-        capabilityName: "MRV app-contract parity",
-        kind: "gateable",
-        active: false,
-        activationHeight: null,
-      }),
+      capResponse({ active: false, activationHeight: null }),
     );
     expect(cap).toEqual({ active: false, activationHeight: null });
   });
 
-  it("matches a descriptor whose capabilityId aligns even under a different map key", () => {
+  it("ignores a same-id descriptor in the address-keyed capabilities map", () => {
+    // Regression: the gate lives in `runtimeFeatures`, never `capabilities`.
     const resp = {
       blockNumber: 1000n,
       capabilities: {
         "0xsomeaddress": {
           address: `0x${"22".repeat(20)}`,
           capabilityId: MRV_APP_CONTRACT_PARITY_CAPABILITY_ID,
-          capabilityName: "MRV app-contract parity",
+          capabilityName: "decoy",
           kind: "gateable",
           active: true,
           activationHeight: 4242n,
         },
       },
       nativeModuleForwarders: {},
+      runtimeFeatures: {},
     } as unknown as Parameters<typeof readMrvParityCapability>[0];
-    expect(readMrvParityCapability(resp)).toEqual({ active: true, activationHeight: 4242 });
+    expect(readMrvParityCapability(resp)).toEqual(MRV_PARITY_INACTIVE);
   });
 });
 
