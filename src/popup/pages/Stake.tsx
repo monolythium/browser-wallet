@@ -1141,7 +1141,7 @@ function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
         style={{
           marginTop: 10,
           fontFamily: "var(--f-mono)",
-          fontSize: 11,
+          fontSize: 10,
           color: "var(--fg-300)",
           lineHeight: 1.6,
         }}
