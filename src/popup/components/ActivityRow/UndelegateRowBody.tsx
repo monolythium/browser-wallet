@@ -15,7 +15,7 @@ export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
-          Withdrew delegation from {clusterLabel(row.cluster, row.clusterName)}
+          Undelegated from {clusterLabel(row.cluster, row.clusterName)}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>
