@@ -157,18 +157,17 @@ function normaliseDirectoryEntry(
   entityByCluster: Map<number, string>,
   aprByCluster: Map<number, number>,
   diversityByCluster: Map<number, ClusterDiversity>,
+  nameByCluster: Map<number, string>,
 ): ClusterDirectoryEntry | null {
   if (typeof raw.clusterId !== "number") return null;
   const diversity = diversityByCluster.get(raw.clusterId) ?? null;
   return {
     clusterId: raw.clusterId,
-    // Cluster names come from the cluster-name registry (0x1104), read via the
-    // SDK's `lythGetClusterName(clusterId)` (forward names use the hierarchical
-    // name registry at 0x110E via `lythResolveName`; 0x1106 is the consent
-    // precompile, NOT naming). The reader exists but isn't wired here yet — left
-    // null so the UI falls back to `cluster-<id>`. Wire a per-cluster lookup
-    // batched with the entity fanout below to populate it.
-    name: null,
+    // Canonical cluster name from the cluster-name registry (0x1104), read via
+    // `lyth_getClusterName` (SDK 0.4.18 `lythGetClusterName`) in the per-cluster
+    // fanout below. An unnamed cluster (no registry entry) stays null so the UI
+    // falls back to the `cluster-<id>` id-label — never a fabricated name.
+    name: nameByCluster.get(raw.clusterId) ?? null,
     size: typeof raw.size === "number" ? raw.size : 0,
     threshold: typeof raw.threshold === "number" ? raw.threshold : 0,
     health: normaliseHealth(raw.aggregateHealth),
@@ -217,6 +216,44 @@ export async function readClusterApr(
     return {
       ok: false,
       reason: (e as Error)?.message ?? "lyth_clusterApr unreachable",
+    };
+  }
+}
+
+interface RawClusterName {
+  clusterId?: number;
+  name?: string | null;
+  block?: string | number;
+}
+
+/** Read a cluster's canonical on-chain name via `lyth_getClusterName`
+ *  (cluster-name registry 0x1104, SDK 0.4.18 `lythGetClusterName`). Returns
+ *  `ok: false` on transport / RPC error or method-absence (incl. `-32045`
+ *  METHOD_DISABLED / `-32601` method-not-found) so the caller can fall back to
+ *  the `cluster-<id>` id-label per no-mock-fallbacks. An unnamed cluster is a
+ *  legitimate success with `name: null` (the registry has no entry yet) and
+ *  falls back the same way — never a fabricated name. The block selector
+ *  mirrors the SDK reader's `"latest"` default. */
+export async function readClusterName(
+  clusterId: number,
+): Promise<StakingResult<{ name: string | null }>> {
+  try {
+    const { result, via } = await testnetJsonRpc<RawClusterName>(
+      "lyth_getClusterName",
+      [clusterId, "latest"],
+    );
+    if (!result || typeof result !== "object") {
+      return { ok: false, reason: "malformed lyth_getClusterName response" };
+    }
+    const name =
+      typeof result.name === "string" && result.name.length > 0
+        ? result.name
+        : null;
+    return { ok: true, via, data: { name } };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: (e as Error)?.message ?? "lyth_getClusterName unreachable",
     };
   }
 }
@@ -294,6 +331,12 @@ export async function readClusterDirectory(
     // autovote scorer + ClusterDetail card fall back to the region-count
     // heuristic rather than failing the whole directory.
     const diversityByCluster = new Map<number, ClusterDiversity>();
+    // Best-effort: fan out per-cluster `lyth_getClusterName` (cluster-name
+    // registry 0x1104, SDK 0.4.18) so each row shows its canonical on-chain
+    // name. Failures / unnamed clusters are silent — name goes null and the UI
+    // falls back to the `cluster-<id>` id-label rather than failing the
+    // directory (and never a fabricated name).
+    const nameByCluster = new Map<number, string>();
     await Promise.all(
       clusterIds.flatMap((clusterId) => [
         (async () => {
@@ -317,11 +360,23 @@ export async function readClusterDirectory(
           const diversity = await readClusterDiversity(clusterId);
           if (diversity.ok) diversityByCluster.set(clusterId, diversity.data);
         })(),
+        (async () => {
+          const name = await readClusterName(clusterId);
+          if (name.ok && name.data.name !== null) {
+            nameByCluster.set(clusterId, name.data.name);
+          }
+        })(),
       ]),
     );
     const clusters = result.clusters
       .map((c) =>
-        normaliseDirectoryEntry(c, entityByCluster, aprByCluster, diversityByCluster),
+        normaliseDirectoryEntry(
+          c,
+          entityByCluster,
+          aprByCluster,
+          diversityByCluster,
+          nameByCluster,
+        ),
       )
       .filter((c): c is ClusterDirectoryEntry => c !== null);
     return {

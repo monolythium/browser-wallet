@@ -40,6 +40,7 @@ import {
   readClusterDelegators,
   readClusterDirectory,
   readClusterDiversity,
+  readClusterName,
   readClusterServiceTiers,
   readClusterStatus,
   readDelegationCap,
@@ -147,6 +148,18 @@ describe("readClusterDirectory", () => {
           result: { clusterId: cluster, aprBps: cluster === 1 ? 820 : 0 },
         };
       }
+      if (method === "lyth_getClusterName") {
+        const cluster = (params as [number])[0];
+        // Cluster 1 is named in the registry; cluster 2 is unnamed (null).
+        return {
+          via: "operator-2",
+          result: {
+            clusterId: cluster,
+            name: cluster === 1 ? "halcyon.cluster.mono" : null,
+            block: "latest",
+          },
+        };
+      }
       throw new Error(`unexpected method ${method}`);
     });
 
@@ -162,9 +175,11 @@ describe("readClusterDirectory", () => {
     // each row. aprBps: 0 is a legitimate "no rewards in window" value.
     expect(r.data.clusters[0]?.aprBps).toBe(820);
     expect(r.data.clusters[1]?.aprBps).toBe(0);
-    // The cluster-name registry is not yet emitted by the SDK; the
-    // wallet normalises name to null on every directory row.
-    expect(r.data.clusters[0]?.name).toBeNull();
+    // The cluster-name fanout (`lyth_getClusterName`) stitches the canonical
+    // on-chain name onto each row; an unnamed cluster stays null so the UI
+    // falls back to the `cluster-<id>` id-label.
+    expect(r.data.clusters[0]?.name).toBe("halcyon.cluster.mono");
+    expect(r.data.clusters[1]?.name).toBeNull();
   });
 
   it("stitches the §25.1 diversity score onto each row from the fanout", async () => {
@@ -454,6 +469,46 @@ describe("readClusterApr", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toMatch(/malformed/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClusterName (cluster-name registry 0x1104, SDK 0.4.18 lythGetClusterName)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClusterName", () => {
+  it("returns the canonical on-chain name on a well-formed response", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-2",
+      result: { clusterId: 3, name: "halcyon.cluster.mono", block: "latest" },
+    });
+    const r = await readClusterName(3);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.name).toBe("halcyon.cluster.mono");
+  });
+
+  it("treats an unnamed cluster (name: null) as a legitimate success → null", async () => {
+    mockedRpc.mockResolvedValue({
+      via: "operator-1",
+      result: { clusterId: 9, name: null, block: "latest" },
+    });
+    const r = await readClusterName(9);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.name).toBeNull();
+  });
+
+  it("degrades to ok:false when the method is absent (-32601)", async () => {
+    mockedRpc.mockRejectedValue(methodNotFoundError("lyth_getClusterName"));
+    const r = await readClusterName(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it("degrades to ok:false when the method is config-disabled (-32045)", async () => {
+    mockedRpc.mockRejectedValue(methodDisabledError("lyth_getClusterName"));
+    const r = await readClusterName(0);
+    expect(r.ok).toBe(false);
   });
 });
 
