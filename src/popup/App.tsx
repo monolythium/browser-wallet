@@ -1800,6 +1800,7 @@ export default function App() {
           chainId={activeChain.chainId}
           onBack={() => setScreen("home")}
           onOpenOperators={() => navigateTo("operator-directory")}
+          onConfirmed={() => void refreshBalance()}
           {...(activeVaultSummary?.kind === "multisig"
             ? { multisigVaultId: activeVaultSummary.id }
             : activeVaultSummary !== null
