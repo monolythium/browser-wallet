@@ -220,6 +220,11 @@ const TESTNET_FALLBACK: ChainEntry = {
  *  heavy reconcile when a pending row exists, so each tick is cheap otherwise. */
 const PENDING_REPOLL_MS = 1_500;
 
+// Keep the balance live on a fixed cadence while the popup is open (~block-time),
+// independent of any pending tx — a SEPARATE effect that never touches the
+// activity pending-poll above.
+const BALANCE_POLL_MS = 3_000;
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
   // v5 pillar surfaces (agent spending-policy page) ship behind the
@@ -839,6 +844,26 @@ export default function App() {
     }, PENDING_REPOLL_MS);
     return () => clearInterval(id);
   }, [hasPendingTx, refreshActivity]);
+
+  // Standalone balance poll — keep the balance live on a fixed cadence while the
+  // popup is open, independent of any pending tx (so a confirmation refreshes the
+  // home balance without a popup reopen / home-nav). The ref holds the latest
+  // refreshBalance so the interval is armed once per account (stable address dep)
+  // and is NOT recreated when refreshBalance's identity changes — no interval
+  // churn. Crucially, this does NOT touch the activity pending-poll above, which
+  // stays activity-only.
+  const refreshBalanceRef = useRef(refreshBalance);
+  useEffect(() => {
+    refreshBalanceRef.current = refreshBalance;
+  }, [refreshBalance]);
+  const balancePollAddress = acc.addr;
+  useEffect(() => {
+    if (!balancePollAddress.startsWith("0x")) return; // active unlocked account only
+    const id = setInterval(() => {
+      void refreshBalanceRef.current();
+    }, BALANCE_POLL_MS);
+    return () => clearInterval(id);
+  }, [balancePollAddress]);
 
   // Refetch balance when the user lands on Home so in-popup navigations
   // (Send → Home, Networks → Home, etc.) reflect a balance that may have
@@ -1800,7 +1825,6 @@ export default function App() {
           chainId={activeChain.chainId}
           onBack={() => setScreen("home")}
           onOpenOperators={() => navigateTo("operator-directory")}
-          onConfirmed={() => void refreshBalance()}
           {...(activeVaultSummary?.kind === "multisig"
             ? { multisigVaultId: activeVaultSummary.id }
             : activeVaultSummary !== null
