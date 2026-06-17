@@ -26,7 +26,7 @@ import type { IconName } from "./Icon";
 import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
-import { clusterLabel, formatWeightBpsPercent } from "../shared/staking";
+import { clusterLabel, type DelegationsView } from "../shared/staking";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import type {
@@ -1978,6 +1978,9 @@ interface HomeProps {
   account: Account;
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
+  /** Active delegations (totalBps) for the Home "Delegated" chip. null while
+   *  loading / on fetch failure → the chip shows "0.00" (no fabrication). */
+  delegations?: DelegationsView | null;
   /** #42: the displayed balance is a RETAINED last-known value (the chain was
    *  unreachable/untrusted on the latest refresh). When true and a balance is
    *  present, the hero labels it as stale — it never fabricates/zeros it. */
@@ -2019,7 +2022,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2085,12 +2088,21 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
   // still used for the Hero card's account-name display.
   const liveLabel = indexer?.addressLabel;
   const latestDelegation = indexer?.delegationHistory[0] ?? null;
-  // Staked is hardcoded zero until the delegation precompile (0x100A)
-  // activates on the testnet — see ADR-0015. The Staked chip is rendered
-  // disabled-style in the meantime; the hero number falls back to
-  // "0.00" when staked is the active view, which is accurate, not a
-  // placeholder.
-  const stakedStr = "0.00";
+  // Delegated effective weight = balance × totalBps/10000 — the live,
+  // non-custodial contribution (the LYTH stays in account.balance and remains
+  // spendable; nothing is escrowed). null delegations / totalBps 0 → "0.00"; the
+  // existing degraded/paused gate still forces "—". Never a fabricated figure.
+  const delegatedBps = delegations?.totalBps ?? 0;
+  const delegatedLyth =
+    account.balance != null && delegatedBps > 0
+      ? (account.balance * delegatedBps) / 10_000
+      : 0;
+  const stakedStr =
+    hideBalanceValue || balancePaused
+      ? "—"
+      : delegatedBps > 0
+        ? fmt(delegatedLyth, 2)
+        : "0.00";
   const heroStr = activeChip === "total" ? totalStr : stakedStr;
   const [intPart, fracPart] = heroStr.split(".");
 
@@ -2187,11 +2199,9 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
             <div className="chg">
               {activeChip === "total"
                 ? "—% · 24h · attested"
-                : latestDelegation
-                  ? devMode
-                    ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
-                    : `${clusterLabel(latestDelegation.cluster)} · ${formatWeightBpsPercent(latestDelegation.weightBps)}`
-                  : "delegated · 0 / 10 clusters"}
+                : devMode && latestDelegation
+                  ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
+                  : `${(delegatedBps / 100).toFixed(2)}% delegated · full balance spendable`}
             </div>
           )}
           {isPriv && (
@@ -2216,10 +2226,10 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
                 onClick={() => setActiveChip("total")}
               />
               <HeroChip
-                label="Staked"
+                label="Delegated"
                 value={stakedStr}
                 active={activeChip === "staked"}
-                disabled
+                onClick={() => setActiveChip("staked")}
               />
             </div>
           )}
