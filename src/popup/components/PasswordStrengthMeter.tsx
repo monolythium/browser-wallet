@@ -10,28 +10,24 @@ interface PasswordStrengthMeterProps {
 }
 
 const REQUIREMENT_LABELS: Record<string, string> = {
-  minLength: "At least 12 characters",
-  uppercase: "Uppercase letter",
-  lowercase: "Lowercase letter",
-  number: "Number",
-  special: "Special character",
+  minLength: "At least 15 characters",
 };
 
 const STRENGTH_BARS: Record<Exclude<PasswordStrength, "none">, number> = {
-  weak: 1,
-  medium: 2,
+  "too-short": 1,
+  fair: 2,
   strong: 3,
 };
 
 const STRENGTH_COLOR: Record<Exclude<PasswordStrength, "none">, string> = {
-  weak: "var(--err)",
-  medium: "var(--warn)",
+  "too-short": "var(--err)",
+  fair: "var(--warn)",
   strong: "var(--ok)",
 };
 
 const STRENGTH_LABEL: Record<Exclude<PasswordStrength, "none">, string> = {
-  weak: "Weak",
-  medium: "Medium",
+  "too-short": "Too short",
+  fair: "Fair",
   strong: "Strong",
 };
 
@@ -117,6 +113,18 @@ export function PasswordStrengthMeter({
             </li>
           ))}
         </ul>
+      )}
+
+      {password.length > 0 && (
+        <div
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--fg-400)",
+            lineHeight: 1.45,
+          }}
+        >
+          A long passphrase of unrelated words beats a short complex one.
+        </div>
       )}
 
       {showConfirmMatch && (

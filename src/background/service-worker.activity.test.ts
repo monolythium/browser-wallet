@@ -5504,7 +5504,7 @@ describe("passkey daily-usage ledger persistence (#36)", () => {
 // (defense-in-depth: the popup UI gate is not trusted).
 // ─────────────────────────────────────────────────────────────────────────────
 describe("keystore create/import password floor (#41 SW-side gate)", () => {
-  const VALID = "ValidPassw0rd!"; // >=12, upper, lower, digit, special
+  const VALID = "ValidLongPassphrase"; // 19 chars — passes the ≥15 floor (no composition rules)
   const WEAK = "weak";
 
   it("keystore-create-from-mnemonic rejects a weak password", async () => {
