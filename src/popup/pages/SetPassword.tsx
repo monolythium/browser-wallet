@@ -27,9 +27,9 @@ export function SetPassword({
   // strength + match requirements.
   const [acknowledged, setAcknowledged] = useState(false);
 
-  // isPasswordValid requires all five rules (incl. the 12-char floor), which
-  // already implies a "strong" meter — the old `strength !== "weak"` clause
-  // was dead. The binding gate is isPasswordValid + match + acknowledgement.
+  // isPasswordValid is the binding gate: ≥15 Unicode code points AND not in the
+  // common-password denylist (no composition rules, per NIST 800-63B-4). The
+  // strength meter is visual-only. Gate = isPasswordValid + match + acknowledgement.
   const canSubmit =
     isPasswordValid(password) && password === confirm && acknowledged;
 
@@ -88,9 +88,9 @@ export function SetPassword({
           confirmPassword={confirm}
         />
 
-        {/* Common-password denylist hint (#41): a denylisted password can
-            pass the composition meter yet still be rejected by isPasswordValid,
-            which would otherwise disable Continue with no explanation. */}
+        {/* Common-password denylist hint (#41): a long-enough password can
+            still be rejected by isPasswordValid when it's in the denylist, which
+            would otherwise disable Continue with no explanation. */}
         {password.length > 0 && isCommonPassword(password) && (
           <div
             style={{

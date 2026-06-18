@@ -1,30 +1,64 @@
 import { describe, expect, it } from "vitest";
 
-import { isPasswordValid, getPasswordStrength } from "./password-validation";
+import {
+  isPasswordValid,
+  passwordRejectReason,
+  getPasswordStrength,
+  codePointLength,
+  MIN_PASSWORD_LENGTH,
+} from "./password-validation";
 import { isCommonPassword } from "./common-passwords";
 
-// A strong password that meets all five rules and is NOT in the denylist.
-const STRONG_UNLISTED = "Zx9!vQ2#mNpL"; // 12 chars: upper/lower/digit/special
-
-describe("isPasswordValid", () => {
-  it("accepts a strong, non-listed password", () => {
-    expect(isPasswordValid(STRONG_UNLISTED)).toBe(true);
-    expect(getPasswordStrength(STRONG_UNLISTED)).toBe("strong");
+describe("isPasswordValid / passwordRejectReason (NIST 800-63B-4 §3.1.1.2)", () => {
+  it("accepts a 15+ code-point password with NO composition variety", () => {
+    // all-lowercase, no digit/symbol — composition rules were removed (§3.1.1.2(5))
+    expect(isPasswordValid("abcdefghijklmno")).toBe(true); // exactly 15
+    expect(isPasswordValid("abcdefghijklmnopqrst")).toBe(true); // 20
+    expect(passwordRejectReason("abcdefghijklmno")).toBeNull();
   });
 
-  it("rejects passwords below the composition floor", () => {
-    expect(isPasswordValid("weak")).toBe(false); // too short, no classes
-    expect(isPasswordValid("alllowercase1!")).toBe(false); // no uppercase
-    expect(isPasswordValid("NoSpecialChar1")).toBe(false); // no special
-    expect(isPasswordValid("NoDigitsHere!!")).toBe(false); // no digit
-    expect(isPasswordValid("Sh0rt!")).toBe(false); // < 12 chars
+  it("allows spaces and does not require any character class", () => {
+    expect(isPasswordValid("this is a passphrase")).toBe(true); // 20 incl. spaces
   });
 
-  it("rejects a common password that otherwise meets all five rules (#41)", () => {
-    // "Password123!" is 12 chars with upper/lower/digit/special — it PASSES
-    // the composition floor but is in the common-password denylist.
-    expect(getPasswordStrength("Password123!")).toBe("strong");
-    expect(isPasswordValid("Password123!")).toBe(false);
+  it("rejects below the 15-char floor → reason 'too_short'", () => {
+    expect(isPasswordValid("abcdefghijklmn")).toBe(false); // 14
+    expect(passwordRejectReason("abcdefghijklmn")).toBe("too_short");
+    expect(passwordRejectReason("Sh0rt!")).toBe("too_short");
+  });
+
+  it("counts by Unicode CODE POINTS, not UTF-16 units (§3.1.1.2(4))", () => {
+    const eightEmoji = "\u{1F600}".repeat(8); // 8 code points = 16 UTF-16 units
+    expect(eightEmoji.length).toBe(16); // UTF-16 units
+    expect(codePointLength(eightEmoji)).toBe(8); // code points
+    expect(isPasswordValid(eightEmoji)).toBe(false); // 8 < 15
+    expect(isPasswordValid("\u{1F600}".repeat(15))).toBe(true); // 15 code points
+  });
+
+  it("checks length BEFORE the denylist", () => {
+    // "Password123!" is denylisted AND 12 chars → reported as too_short, not common
+    expect(isCommonPassword("Password123!")).toBe(true);
+    expect(passwordRejectReason("Password123!")).toBe("too_short");
+  });
+
+  it("pins the floor at 15", () => {
+    expect(MIN_PASSWORD_LENGTH).toBe(15);
+  });
+});
+
+describe("getPasswordStrength (length bands)", () => {
+  it("none for empty input", () => {
+    expect(getPasswordStrength("")).toBe("none");
+  });
+  it("too-short below 15", () => {
+    expect(getPasswordStrength("abcdefghijklmn")).toBe("too-short"); // 14
+  });
+  it("fair at 15–19", () => {
+    expect(getPasswordStrength("abcdefghijklmno")).toBe("fair"); // 15
+    expect(getPasswordStrength("abcdefghijklmnopqrs")).toBe("fair"); // 19
+  });
+  it("strong at 20+", () => {
+    expect(getPasswordStrength("abcdefghijklmnopqrst")).toBe("strong"); // 20
   });
 });
 
@@ -35,7 +69,7 @@ describe("isCommonPassword (#41 denylist)", () => {
     expect(isCommonPassword("  Password123!  ")).toBe(true);
   });
 
-  it("does not flag a non-listed password", () => {
-    expect(isCommonPassword(STRONG_UNLISTED)).toBe(false);
+  it("does not flag an unlisted password", () => {
+    expect(isCommonPassword("abcdefghijklmnopqrst")).toBe(false);
   });
 });
