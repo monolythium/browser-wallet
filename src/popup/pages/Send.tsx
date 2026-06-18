@@ -732,6 +732,7 @@ export function Send({
           </div>
           <input
             type="password"
+            autoComplete="current-password"
             autoFocus
             value={elevatedPw}
             onChange={(e) => {

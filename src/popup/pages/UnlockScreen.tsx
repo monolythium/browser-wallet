@@ -6,6 +6,7 @@ import {
 } from "../bg";
 import { ChainStatusBanner } from "../components";
 import { Modal } from "../components/Modal";
+import { PasswordInput } from "../components/PasswordInput";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bech32mDisplay } from "../../shared/bech32m";
 
@@ -200,43 +201,17 @@ export function UnlockScreen({
           gap: 10,
         }}
       >
-        <label style={{ display: "block" }}>
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 10,
-              color: "var(--fg-400)",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              marginBottom: 6,
-            }}
-          >
-            Password
-          </div>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleSubmit();
-            }}
-            autoFocus
-            disabled={secondsRemaining > 0}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 10,
-              background: "rgba(0,0,0,0.3)",
-              border: "1px solid var(--fg-700)",
-              color: "var(--fg-100)",
-              fontFamily: "var(--f-mono)",
-              fontSize: 13,
-              outline: "none",
-              boxSizing: "border-box",
-              opacity: secondsRemaining > 0 ? 0.5 : 1,
-            }}
-          />
-        </label>
+        <PasswordInput
+          label="Password"
+          value={password}
+          onChange={setPassword}
+          autoComplete="current-password"
+          autoFocus
+          disabled={secondsRemaining > 0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleSubmit();
+          }}
+        />
 
         {error && (
           <div

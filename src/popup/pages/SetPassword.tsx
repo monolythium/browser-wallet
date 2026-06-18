@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Icon } from "../Icon";
 import { PasswordStrengthMeter } from "../components/PasswordStrengthMeter";
+import { PasswordInput } from "../components/PasswordInput";
 import { isPasswordValid } from "../../lib/password-validation";
 import { isCommonPassword } from "../../lib/common-passwords";
 
@@ -75,12 +76,14 @@ export function SetPassword({
           label="Password"
           value={password}
           onChange={setPassword}
+          autoComplete="new-password"
           autoFocus
         />
         <PasswordInput
           label="Confirm password"
           value={confirm}
           onChange={setConfirm}
+          autoComplete="new-password"
         />
 
         <PasswordStrengthMeter
@@ -172,49 +175,5 @@ export function SetPassword({
         </button>
       </div>
     </>
-  );
-}
-
-interface PasswordInputProps {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  autoFocus?: boolean;
-}
-
-function PasswordInput({ label, value, onChange, autoFocus }: PasswordInputProps) {
-  return (
-    <label style={{ display: "block" }}>
-      <div
-        style={{
-          fontFamily: "var(--f-mono)",
-          fontSize: 10,
-          color: "var(--fg-400)",
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          marginBottom: 6,
-        }}
-      >
-        {label}
-      </div>
-      <input
-        type="password"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        autoFocus={autoFocus}
-        style={{
-          width: "100%",
-          padding: "10px 12px",
-          borderRadius: 10,
-          background: "rgba(0,0,0,0.3)",
-          border: "1px solid var(--fg-700)",
-          color: "var(--fg-100)",
-          fontFamily: "var(--f-mono)",
-          fontSize: 13,
-          outline: "none",
-          boxSizing: "border-box",
-        }}
-      />
-    </label>
   );
 }
