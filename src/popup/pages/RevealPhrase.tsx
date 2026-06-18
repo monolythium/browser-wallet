@@ -221,6 +221,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
             </div>
             <input
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => {
