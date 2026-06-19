@@ -1142,14 +1142,11 @@ export function Send({
                 marginTop: 4,
               }}
             >
-              {(() => {
-                const f = formatFiat(
-                  lythoshiToLythDecimal(amountLythoshi, 6),
-                  displayCurrency,
-                  getLythFiatRate(displayCurrency),
-                );
-                return f === "—" ? "—" : `≈ ${f}`;
-              })()}
+              {formatFiat(
+                lythoshiToLythDecimal(amountLythoshi, 6),
+                displayCurrency,
+                getLythFiatRate(displayCurrency),
+              )}
             </div>
           )}
           {amountError && <div style={inlineError}>{amountError}</div>}
@@ -1162,7 +1159,14 @@ export function Send({
             from: {bech32mDisplay(account.addr)}
             {balanceLythoshi !== null && (
               <div style={fromBalanceLine}>
-                balance: {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH
+                balance: {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH{" "}
+                <span style={{ color: "var(--fg-400)" }}>
+                  ({formatFiat(
+                    lythoshiToLythDecimal(balanceLythoshi, 6),
+                    displayCurrency,
+                    getLythFiatRate(displayCurrency),
+                  )})
+                </span>
               </div>
             )}
           </div>
@@ -1258,6 +1262,21 @@ export function Send({
                 <span style={{ fontFamily: "var(--f-mono)" }}>
                   {estimatedFeeDisplay?.defaultText ?? "—"}
                 </span>
+                {/* Fiat equivalent as a SEPARATE sibling — the canonical LYTH
+                   fee string (defaultText) is never touched, so it stays clear
+                   of the fee-display conformance path. "—" until a rate lands. */}
+                {estimatedFeeLythoshi !== null && (
+                  <span
+                    style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }}
+                  >
+                    {" "}
+                    ({formatFiat(
+                      lythoshiToLythDecimal(estimatedFeeLythoshi, 6),
+                      displayCurrency,
+                      getLythFiatRate(displayCurrency),
+                    )})
+                  </span>
+                )}
               </div>
               {/* DEV-ONLY: low-level lythoshi/execution-unit fee breakdown.
                   The default surface shows a single LYTH-denominated fee
@@ -2287,18 +2306,15 @@ function PreviewView({
   const [displayCurrency] = useDisplayCurrencyPref();
   // Renders the fiat equivalent of a lythoshi amount as a sibling span beside
   // (never concatenated into) the canonical LYTH text. "—" when the rate is null.
-  const fiatSuffix = (lythoshi: bigint) => {
-    const f = formatFiat(
-      lythoshiToLythDecimal(lythoshi, 6),
-      displayCurrency,
-      getLythFiatRate(displayCurrency),
-    );
-    return (
-      <span style={{ opacity: 0.6, fontWeight: 400, marginLeft: 4 }}>
-        ({f === "—" ? "—" : `≈ ${f}`})
-      </span>
-    );
-  };
+  const fiatSuffix = (lythoshi: bigint) => (
+    <span style={{ opacity: 0.75, fontWeight: 400, marginLeft: 4 }}>
+      ({formatFiat(
+        lythoshiToLythDecimal(lythoshi, 6),
+        displayCurrency,
+        getLythFiatRate(displayCurrency),
+      )})
+    </span>
+  );
   // The private toggle is only offered on single-vault sends — the multisig
   // path creates a proposal that is sealed (or not) at execution time, not here.
   const showPrivateToggle = !isMultisig && onTogglePrivate !== undefined;
