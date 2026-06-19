@@ -180,8 +180,8 @@ const hintCard: CSSProperties = {
   borderRadius: 10,
   // Themed accent (var(--gold-glow)) so the hint follows the active theme
   // instead of a fixed gold that clashes with the coloured themes.
-  border: "1px solid rgba(var(--gold-glow), 0.4)",
-  background: "rgba(var(--gold-glow), 0.06)",
+  border: "1px solid rgba(var(--gold-glow), 0.24)",
+  background: "rgba(var(--gold-glow), 0.045)",
   color: "var(--fg-100)",
 };
 
