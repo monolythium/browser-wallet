@@ -401,7 +401,7 @@ export function AgentPolicy({
           <div
             style={{
               flex: 1,
-              fontSize: 14,
+              fontSize: 15,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -469,7 +469,7 @@ export function AgentPolicy({
         >
           <Icon name="back" size={15} />
         </button>
-        <div style={{ flex: 1, fontSize: 14, fontWeight: 600, textAlign: "center" }}>
+        <div style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}>
           {step === "overview"
             ? "Agent spending policy"
             : step === "form"

@@ -28,7 +28,7 @@ export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
         <div
           style={{
             flex: 1,
-            fontSize: 14,
+            fontSize: 15,
             fontWeight: 600,
             textAlign: "center",
           }}

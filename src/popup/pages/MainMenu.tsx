@@ -128,7 +128,7 @@ export function MainMenu({
         <div
           style={{
             flex: 1,
-            fontSize: 14,
+            fontSize: 15,
             fontWeight: 600,
             textAlign: "center",
           }}
