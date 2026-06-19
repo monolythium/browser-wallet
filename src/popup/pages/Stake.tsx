@@ -709,7 +709,9 @@ export function Stake({
                               : action === "redelegate"
                                 ? "Redelegated"
                                 : "Delegated"
-                          : "Error"}
+                          : step === "unstake-all"
+                            ? "Undelegate all"
+                            : "Error"}
         </div>
         <div style={{ width: 28 }} />
       </div>
