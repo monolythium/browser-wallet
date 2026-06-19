@@ -10,7 +10,8 @@ export type IconName =
   | "menu" | "book" | "info" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
-  | "mono-mark" | "github" | "grid";
+  | "mono-mark" | "github" | "grid"
+  | "language" | "coins";
 
 interface IconProps {
   name: IconName;
@@ -30,6 +31,28 @@ export function Icon({ name, size = 16 }: IconProps) {
   };
 
   switch (name) {
+    case "language":
+      // Latin "A" stroke crossing a CJK character — language / locale.
+      return (
+        <svg {...props}>
+          <path d="m5 8 6 6" />
+          <path d="m4 14 6-6 2-3" />
+          <path d="M2 5h12" />
+          <path d="M7 2h1" />
+          <path d="m22 22-5-10-5 10" />
+          <path d="M14 18h6" />
+        </svg>
+      );
+    case "coins":
+      // Two overlapping coins — display currency / money.
+      return (
+        <svg {...props}>
+          <circle cx="8" cy="8" r="6" />
+          <path d="M18.09 10.37A6 6 0 1 1 10.34 18" />
+          <path d="M7 6h1v4" />
+          <path d="m16.71 13.88.7.71-2.82 2.82" />
+        </svg>
+      );
     case "send":
       return (
         <svg {...props}>
