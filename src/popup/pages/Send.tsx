@@ -951,7 +951,7 @@ export function Send({
         >
           Send
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -2347,7 +2347,7 @@ function PreviewView({
         >
           {isMultisig ? "Review proposal" : "Review send"}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -2804,7 +2804,7 @@ function SuccessView({
         >
           {isProposal ? "Proposal created" : "Transaction sent"}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -3145,7 +3145,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
         >
           {classified.headline}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">

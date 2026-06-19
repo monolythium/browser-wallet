@@ -290,7 +290,7 @@ export function Operators({
           >
             Operators
           </div>
-          <div style={{ width: 28 }} />
+          <div style={{ width: 36 }} />
         </div>
         <div className="ext-body">
           <div
@@ -348,7 +348,7 @@ export function Operators({
         >
           Monolythium Testnet operators
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">

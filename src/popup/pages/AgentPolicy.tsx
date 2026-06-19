@@ -408,7 +408,7 @@ export function AgentPolicy({
           >
             Automation
           </div>
-          <div style={{ width: 28 }} />
+          <div style={{ width: 36 }} />
         </div>
         <div className="ext-body">
           <div
@@ -482,7 +482,7 @@ export function AgentPolicy({
                     ? "Done"
                     : "Error"}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">

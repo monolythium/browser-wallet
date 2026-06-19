@@ -101,7 +101,7 @@ export function Notifications({ onBack }: NotificationsProps) {
             Mark all as read
           </button>
         ) : (
-          <div style={{ width: 28 }} />
+          <div style={{ width: 36 }} />
         )}
       </div>
 

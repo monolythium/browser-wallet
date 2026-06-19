@@ -21,7 +21,7 @@ export function WhyMonolythium({ onBack }: WhyMonolythiumProps) {
         >
           About Monolythium
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         <div className="ext-card">

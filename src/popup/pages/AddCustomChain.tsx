@@ -86,7 +86,7 @@ export function AddCustomChain({ existingChainIds, onBack, onAdded }: AddCustomC
         >
           Add custom chain
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">

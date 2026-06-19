@@ -122,7 +122,7 @@ export function MultisigGovernance({ vaultId, onBack }: MultisigGovernanceProps)
         <div style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}>
           Multisig governance
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         {!loaded && <Hint>Loading…</Hint>}

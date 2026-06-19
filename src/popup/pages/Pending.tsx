@@ -131,7 +131,7 @@ export function Pending({ vaultId, onBack }: PendingProps) {
         <div style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}>
           Pending proposals
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         {loaded && meta !== null && (

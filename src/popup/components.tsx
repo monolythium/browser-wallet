@@ -2400,7 +2400,7 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
         <div style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}>
           Cross-chain bridge
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         <div className="ext-card" style={{ padding: 14 }}>
@@ -3208,7 +3208,7 @@ export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCusto
       <div className="ext-top">
         <button className="ext-iconbtn" onClick={onBack}><Icon name="back" size={15} /></button>
         <div style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}>Networks</div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         <NetworksSection
