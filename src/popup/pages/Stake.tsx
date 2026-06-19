@@ -34,7 +34,7 @@ import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
-import { RewardCard } from "../components/RewardCard";
+import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
 import { useFeature } from "../hooks/useFeature";
@@ -101,6 +101,10 @@ type EntryMode = "manual" | AutovoteMode;
 // ClusterDetail as sibling screens, so Stake unmounts on navigation).
 // Cleared by App.tsx when the user explicitly leaves Stake via onBack.
 const STAKE_STATE_KEY = "monowallet_stake_state";
+
+// Pending-rewards poll cadence. Matches App.tsx BALANCE_POLL_MS (3 s ≈
+// block-time) so the wallet keeps one refresh rhythm.
+const REWARDS_POLL_MS = 3_000;
 
 interface PersistedStakeState {
   step: Step;
@@ -396,6 +400,25 @@ export function Stake({
     return () => {
       cancelled = true;
     };
+  }, [account.addr, chainId]);
+
+  // Poll pending rewards on the shared cadence (REWARDS_POLL_MS ==
+  // App.BALANCE_POLL_MS) so the Claim amount stays live without a manual
+  // refresh. The live lyth_pendingRewards RPC is keyed on the wallet only; the
+  // rows arg just feeds the never-displayed mock fallback, so [] is fine. A
+  // transient poll failure keeps the last good value (no error/clear on !ok).
+  useEffect(() => {
+    if (!account.addr.startsWith("0x")) return;
+    const id = setInterval(() => {
+      void (async () => {
+        const rewR = await bgStakingPendingRewards(account.addr, []);
+        if (rewR.ok) {
+          setRewards(rewR.data);
+          setRewardsMock(rewR.via === "mock");
+        }
+      })();
+    }, REWARDS_POLL_MS);
+    return () => clearInterval(id);
   }, [account.addr, chainId]);
 
   // Recompute the autovote plan whenever inputs change. The plan
@@ -725,14 +748,20 @@ export function Stake({
               balanceLythoshi={balanceLythoshi}
             />
 
-            {/* Pending rewards (left) + effective weight / Unstake-all
-                (right), side by side. Surfaces only with an active
-                delegation that could accrue. */}
-            {delegations !== null && delegations.rows.length > 0 && (
+            {/* Pending rewards + (for active delegators) the Unstake-all card.
+                The reward card shows whenever there is a LIVE positive pending
+                balance — even with no active delegation, so rewards still
+                accrued after undelegating everything stay claimable. Unstake-all
+                stays gated on having active delegations. */}
+            {(pendingRewardsArePositive(rewards, rewardsMock) ||
+              (delegations !== null && delegations.rows.length > 0)) && (
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns:
+                    delegations !== null && delegations.rows.length > 0
+                      ? "1fr 1fr"
+                      : "1fr",
                   gap: 8,
                   marginBottom: 4,
                 }}
@@ -747,15 +776,17 @@ export function Stake({
                   claimDisabled={false}
                   showAdvancedAnalytics={tradingInterfaceOn}
                 />
-                <UnstakeAllCard
-                  effectiveWeightLythoshi={effectiveWeightWei(
-                    delegations.totalBps,
-                    balanceLythoshi ?? 0n,
-                  )}
-                  totalBps={delegations.totalBps}
-                  balanceLythoshi={balanceLythoshi}
-                  onUnstakeAll={handleUnstakeAll}
-                />
+                {delegations !== null && delegations.rows.length > 0 && (
+                  <UnstakeAllCard
+                    effectiveWeightLythoshi={effectiveWeightWei(
+                      delegations.totalBps,
+                      balanceLythoshi ?? 0n,
+                    )}
+                    totalBps={delegations.totalBps}
+                    balanceLythoshi={balanceLythoshi}
+                    onUnstakeAll={handleUnstakeAll}
+                  />
+                )}
               </div>
             )}
 

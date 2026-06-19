@@ -20,6 +20,22 @@ import {
 } from "../../shared/staking";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
+/** A confirmed-LIVE pending-rewards read with a positive total. Used to decide
+ *  whether to surface the reward card independently of active delegations — a
+ *  user who undelegated everything can still have unclaimed accrued rewards.
+ *  NO-MOCK: a `via:"mock"` (illustrative) read is never treated as positive. */
+export function pendingRewardsArePositive(
+  rewards: PendingRewardsView | null,
+  isMock: boolean,
+): boolean {
+  if (rewards === null || isMock) return false;
+  try {
+    return BigInt(rewards.totalAmountWei) > 0n;
+  } catch {
+    return false;
+  }
+}
+
 interface RewardCardProps {
   /** Compatibility reward fields are still named `*Wei` in
    *  PendingRewardsView; values rendered here are native lythoshi (now

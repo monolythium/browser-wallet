@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
 import { hoverBg } from "../hover";
-import { RewardCard } from "../components/RewardCard";
+import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
 import {
   bgStakingClusterDirectory,
   bgStakingDelegations,
@@ -51,6 +51,10 @@ interface DelegationsProps {
    *  specific cluster. */
   onShowClusterDetail?: (cluster: ClusterDirectoryEntry) => void;
 }
+
+// Pending-rewards poll cadence — matches App.tsx BALANCE_POLL_MS (3 s) so the
+// wallet keeps one refresh rhythm.
+const REWARDS_POLL_MS = 3_000;
 
 export function Delegations({
   account,
@@ -118,6 +122,24 @@ export function Delegations({
     return () => {
       cancelled = true;
     };
+  }, [account.addr, chainId]);
+
+  // Poll pending rewards on the shared cadence so the Claim amount stays live.
+  // The live lyth_pendingRewards RPC is keyed on the wallet only; the rows arg
+  // just feeds the never-displayed mock fallback. A transient poll failure
+  // keeps the last good value (no error/clear on !ok).
+  useEffect(() => {
+    if (!account.addr.startsWith("0x")) return;
+    const id = setInterval(() => {
+      void (async () => {
+        const rewR = await bgStakingPendingRewards(account.addr, []);
+        if (rewR.ok) {
+          setRewards(rewR.data);
+          setRewardsMock(rewR.via === "mock");
+        }
+      })();
+    }, REWARDS_POLL_MS);
+    return () => clearInterval(id);
   }, [account.addr, chainId]);
 
   const clusterById = useMemo(() => {
@@ -202,8 +224,11 @@ export function Delegations({
           </div>
         </div>
 
-        {/* Pending rewards card */}
-        {delegations !== null && delegations.rows.length > 0 && (
+        {/* Pending rewards card — shows on a LIVE positive pending balance even
+            with no active delegation (unclaimed rewards stay claimable), or
+            whenever there are active delegations. */}
+        {(pendingRewardsArePositive(rewards, rewardsMock) ||
+          (delegations !== null && delegations.rows.length > 0)) && (
           <RewardCard
             rewards={rewards}
             error={rewardsError}

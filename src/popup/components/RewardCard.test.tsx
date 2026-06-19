@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { PendingRewardsView } from "../../shared/staking.js";
-import { RewardCard } from "./RewardCard.js";
+import { RewardCard, pendingRewardsArePositive } from "./RewardCard.js";
 
 function rewardsView(partial: Partial<PendingRewardsView>): PendingRewardsView {
   return {
@@ -24,6 +24,32 @@ const baseProps = {
   onClaim: () => {},
   claimDisabled: false,
 } as const;
+
+describe("pendingRewardsArePositive (always-show gate)", () => {
+  it("is false for a null read", () => {
+    expect(pendingRewardsArePositive(null, false)).toBe(false);
+  });
+  it("is false for a mock read even when the amount is positive (no-mock)", () => {
+    expect(
+      pendingRewardsArePositive(rewardsView({ totalAmountWei: "0x64" }), true),
+    ).toBe(false);
+  });
+  it("is false for a live zero read", () => {
+    expect(
+      pendingRewardsArePositive(rewardsView({ totalAmountWei: "0x0" }), false),
+    ).toBe(false);
+  });
+  it("is true for a live positive read", () => {
+    expect(
+      pendingRewardsArePositive(rewardsView({ totalAmountWei: "0x64" }), false),
+    ).toBe(true);
+  });
+  it("is false for an unparseable amount", () => {
+    expect(
+      pendingRewardsArePositive(rewardsView({ totalAmountWei: "nope" }), false),
+    ).toBe(false);
+  });
+});
 
 describe("RewardCard — pending-rewards states", () => {
   it("renders honest absence (not 'Loading…', not mock figures) on a hard ok:false error", () => {
