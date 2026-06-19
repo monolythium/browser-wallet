@@ -19,7 +19,7 @@ export function LanguageSettings({ onBack }: LanguageSettingsProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 14, fontWeight: 600, textAlign: "center" }}
         >
           Language
         </div>

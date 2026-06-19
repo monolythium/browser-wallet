@@ -285,7 +285,7 @@ export function About({ onBack, multisig, phase9, phase10 }: AboutProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 14, fontWeight: 600, textAlign: "center" }}
         >
           About
         </div>

@@ -17,7 +17,7 @@ export function WhyMonolythium({ onBack }: WhyMonolythiumProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 14, fontWeight: 600, textAlign: "center" }}
         >
           About Monolythium
         </div>

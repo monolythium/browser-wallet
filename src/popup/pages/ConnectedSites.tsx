@@ -56,7 +56,7 @@ export function ConnectedSites({ onBack }: ConnectedSitesProps) {
         <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
           <Icon name="back" size={15} />
         </button>
-        <div style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}>
+        <div style={{ flex: 1, fontSize: 14, fontWeight: 600, textAlign: "center" }}>
           Connected sites
         </div>
         <div style={{ width: 36 }} />

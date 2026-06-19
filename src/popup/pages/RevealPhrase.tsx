@@ -173,7 +173,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -288,7 +288,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -367,7 +367,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 14, fontWeight: 600, textAlign: "center" }}
         >
           Recovery phrase
         </div>

@@ -105,7 +105,7 @@ export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -219,7 +219,7 @@ export function ResetWallet({ onBack, onSuccess }: ResetWalletProps) {
         <div
           style={{
             flex: 1,
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: 600,
             textAlign: "center",
           }}
