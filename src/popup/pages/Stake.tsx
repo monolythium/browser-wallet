@@ -1257,7 +1257,7 @@ function UnstakeAllCard({
         }}
         {...hoverBright}
       >
-        Unstake all
+        Undelegate all
       </button>
     </div>
   );
@@ -1368,7 +1368,7 @@ function PreviewView({
             textTransform: "uppercase",
           }}
         >
-          Unstake all · cluster {sequence.index + 1} of {sequence.total}
+          Undelegate all · cluster {sequence.index + 1} of {sequence.total}
         </div>
       )}
       <div className="ext-card" style={{ padding: 14 }}>
@@ -1533,7 +1533,7 @@ function PreviewView({
                 "Submitting…"
               ) : (
                 <>
-                  <Icon name="check" size={12} /> Unstake
+                  <Icon name="check" size={12} /> Undelegate
                 </>
               )}
             </button>
