@@ -80,6 +80,8 @@ import {
   scaleByBps,
 } from "../../shared/native-fee-display";
 import { lythoshiToLythDecimal } from "../../shared/native-amount";
+import { getLythFiatRate, formatFiat } from "../../shared/fiat";
+import { useDisplayCurrencyPref } from "../hooks/useDisplayPrefs";
 
 interface SendProps {
   account: Account;
@@ -197,6 +199,9 @@ export function Send({
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
+  // Display-currency pref (popup-side) for the fiat-equivalent hint below the
+  // amount field. No oracle yet → the rate is null → renders "—".
+  const [displayCurrency] = useDisplayCurrencyPref();
   // Opt-in encrypted-mempool (private) send. Default OFF — encryption is
   // OPTIONAL and costs more (the seal execution-unit overhead). When on, the
   // send routes through the LythiumSeal threshold-encrypted path; when off it
@@ -1126,6 +1131,27 @@ export function Send({
               LYTH
             </div>
           </div>
+          {/* Fiat equivalent of the entered amount (live). No oracle yet →
+             rate null → "—"; never a fabricated value. */}
+          {amountLythoshi !== null && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                color: "var(--fg-400)",
+                marginTop: 4,
+              }}
+            >
+              {(() => {
+                const f = formatFiat(
+                  lythoshiToLythDecimal(amountLythoshi, 6),
+                  displayCurrency,
+                  getLythFiatRate(displayCurrency),
+                );
+                return f === "—" ? "—" : `≈ ${f}`;
+              })()}
+            </div>
+          )}
           {amountError && <div style={inlineError}>{amountError}</div>}
           {!amountError && insufficientFunds && (
             <div style={inlineError}>
@@ -2254,6 +2280,25 @@ function PreviewView({
   privateDevGated,
   privateNotLiveNudge,
 }: PreviewViewProps) {
+  // Display-currency pref for the fiat-equivalent siblings beside the LYTH
+  // amount / fee / total. No oracle yet → rate null → "—". The canonical LYTH
+  // strings (formatNativeLythAmount) stay untouched; fiat is a SEPARATE element
+  // only — it never feeds the fee-display conformance path.
+  const [displayCurrency] = useDisplayCurrencyPref();
+  // Renders the fiat equivalent of a lythoshi amount as a sibling span beside
+  // (never concatenated into) the canonical LYTH text. "—" when the rate is null.
+  const fiatSuffix = (lythoshi: bigint) => {
+    const f = formatFiat(
+      lythoshiToLythDecimal(lythoshi, 6),
+      displayCurrency,
+      getLythFiatRate(displayCurrency),
+    );
+    return (
+      <span style={{ opacity: 0.6, fontWeight: 400, marginLeft: 4 }}>
+        ({f === "—" ? "—" : `≈ ${f}`})
+      </span>
+    );
+  };
   // The private toggle is only offered on single-vault sends — the multisig
   // path creates a proposal that is sealed (or not) at execution time, not here.
   const showPrivateToggle = !isMultisig && onTogglePrivate !== undefined;
@@ -2352,18 +2397,28 @@ function PreviewView({
           <SummaryRow
             label="Amount"
             value={
-              amountLythoshi !== null
-                ? formatNativeLythAmount(amountLythoshi)
-                : "—"
+              amountLythoshi !== null ? (
+                <>
+                  {formatNativeLythAmount(amountLythoshi)}
+                  {fiatSuffix(amountLythoshi)}
+                </>
+              ) : (
+                "—"
+              )
             }
             mono
           />
           <SummaryRow
             label={`Fee (${TIER_LABELS[tier]})`}
             value={
-              estimatedFeeLythoshi !== null
-                ? formatNativeLythAmount(estimatedFeeLythoshi)
-                : "—"
+              estimatedFeeLythoshi !== null ? (
+                <>
+                  {formatNativeLythAmount(estimatedFeeLythoshi)}
+                  {fiatSuffix(estimatedFeeLythoshi)}
+                </>
+              ) : (
+                "—"
+              )
             }
             mono
           />
@@ -2383,7 +2438,16 @@ function PreviewView({
           >
             <SummaryRow
               label="Total"
-              value={total !== null ? formatNativeLythAmount(total) : "—"}
+              value={
+                total !== null ? (
+                  <>
+                    {formatNativeLythAmount(total)}
+                    {fiatSuffix(total)}
+                  </>
+                ) : (
+                  "—"
+                )
+              }
               mono
               emphasis
             />
