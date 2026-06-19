@@ -47,7 +47,9 @@ import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { Theme } from "./pages/Theme";
-import { Preferences } from "./pages/Preferences";
+import { DisplayPreferences } from "./pages/DisplayPreferences";
+import { LanguageSettings } from "./pages/LanguageSettings";
+import { DisplayCurrencySettings } from "./pages/DisplayCurrencySettings";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -162,7 +164,9 @@ type Screen =
   | "security"
   | "features"
   | "theme"
-  | "preferences"
+  | "display-preferences"
+  | "language-settings"
+  | "display-currency-settings"
   | "main-menu"
   | "contacts"
   | "new-wallet-flow"
@@ -1476,11 +1480,10 @@ export default function App() {
           // navigateBack would fall back to home, skipping Settings.
           onOpenAbout={() => navigateTo("about")}
           onOpenDelegations={() => setScreen("delegations")}
-          // Settings → Theme pushes onto the screen stack via navigateTo
-          // so Theme's onBack (navigateBack) returns to Settings — and the
-          // same Theme page is reachable from the hamburger menu.
-          onOpenTheme={() => navigateTo("theme")}
-          onOpenPreferences={() => navigateTo("preferences")}
+          // Settings → Display & Preferences hub (theme / language / display
+          // currency). navigateTo so the hub's back returns to Settings; the
+          // same hub is reachable from the hamburger menu.
+          onOpenDisplayPreferences={() => navigateTo("display-preferences")}
           {...(activeVaultSummary
             ? {
                 onOpenSecurity: () => navigateTo("security"),
@@ -1515,15 +1518,28 @@ export default function App() {
         <Features onBack={navigateBack} />
       )}
 
-      {/* Theme page. Reached from the Settings "Theme" category card AND
-         the hamburger menu, both via navigateTo, so onBack (navigateBack)
-         returns to whichever pushed it. */}
+      {/* Theme page. Reached from the Display & Preferences hub via navigateTo,
+         so onBack (navigateBack) returns to the hub. */}
       {screen === "theme" && <Theme onBack={navigateBack} />}
 
-      {/* Preferences sub-page (language + display-currency). Reached from the
-         Settings "Preferences" card via navigateTo, so onBack (navigateBack)
-         returns to Settings. Theme is omitted here — it has its own card. */}
-      {screen === "preferences" && <Preferences onBack={navigateBack} />}
+      {/* Display & Preferences hub + its three dedicated pages. Each pushes
+         onto the screen stack via navigateTo, so back from a leaf returns to
+         the hub, and back from the hub returns to its opener (Settings or the
+         hamburger menu). */}
+      {screen === "display-preferences" && (
+        <DisplayPreferences
+          onBack={navigateBack}
+          onOpenTheme={() => navigateTo("theme")}
+          onOpenLanguage={() => navigateTo("language-settings")}
+          onOpenCurrency={() => navigateTo("display-currency-settings")}
+        />
+      )}
+      {screen === "language-settings" && (
+        <LanguageSettings onBack={navigateBack} />
+      )}
+      {screen === "display-currency-settings" && (
+        <DisplayCurrencySettings onBack={navigateBack} />
+      )}
 
       {screen === "operators" && (
         <Operators
@@ -1686,9 +1702,9 @@ export default function App() {
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
           onSettings={() => navigateTo("settings")}
-          // Theme — opens the same Theme page the Settings "Theme" category
-          // routes to. navigateTo pushes "main-menu" so back returns here.
-          onTheme={() => navigateTo("theme")}
+          // Display & Preferences — the same hub the Settings page routes to.
+          // navigateTo pushes "main-menu" so back returns here.
+          onDisplayPreferences={() => navigateTo("display-preferences")}
           onAbout={() => navigateTo("about")}
           onResources={() => navigateTo("resources")}
           onWhyMonolythium={() => navigateTo("why-monolythium")}
