@@ -984,6 +984,7 @@ export function Stake({
             onAmountChange={setAmountStr}
             balanceLythoshi={balanceLythoshi}
             existingWeightBps={existingWeightBps}
+            totalDelegatedBps={delegations?.totalBps ?? 0}
             capBps={capBps}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}

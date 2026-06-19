@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { ClusterDirectoryEntry } from "../../shared/staking.js";
-import { StakeForm } from "./StakeForm.js";
+import { StakeForm, bindingHeadroomBps } from "./StakeForm.js";
 
 const cluster: ClusterDirectoryEntry = {
   clusterId: 0,
@@ -20,6 +20,7 @@ const baseProps = {
   onAmountChange: () => {},
   balanceLythoshi: 100n * 10n ** 18n, // 100 LYTH
   existingWeightBps: 0,
+  totalDelegatedBps: 0,
   capBps: null,
   onContinue: () => {},
   onBack: () => {},
@@ -52,5 +53,38 @@ describe("StakeForm — quick-fill buttons", () => {
     expect(html).toContain(">50%</button>");
     expect(html).toContain(">75%</button>");
     expect(html).not.toContain(">100%</button>");
+  });
+});
+
+describe("bindingHeadroomBps", () => {
+  it("is the full 100% when nothing delegated and the cap is disabled", () => {
+    expect(bindingHeadroomBps(null, 0, 0)).toBe(10000);
+  });
+
+  it("uses the global 100% ceiling when the cap is disabled", () => {
+    // 51% already delegated across all clusters → 49% left.
+    expect(bindingHeadroomBps(null, 0, 5100)).toBe(4900);
+  });
+
+  it("takes the smaller of per-cluster cap headroom and global headroom", () => {
+    // cap 50%, 10% in this cluster → cluster headroom 40%; global total 51% → 49%.
+    expect(bindingHeadroomBps(5000, 1000, 5100)).toBe(4000);
+    // cap 50%, 40% in this cluster → cluster 10%; global 90% delegated → 10%.
+    expect(bindingHeadroomBps(5000, 4000, 9000)).toBe(1000);
+  });
+
+  it("never returns negative headroom", () => {
+    expect(bindingHeadroomBps(5000, 6000, 0)).toBe(0); // already past the cap
+    expect(bindingHeadroomBps(null, 0, 10000)).toBe(0); // fully delegated
+  });
+});
+
+describe("StakeForm — active/remaining headroom line", () => {
+  it("shows delegated vs available across all clusters", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} totalDelegatedBps={5100} amountStr="" />,
+    );
+    expect(html).toContain("51.00% delegated");
+    expect(html).toContain("49.00% available");
   });
 });

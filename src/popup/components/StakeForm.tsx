@@ -24,7 +24,7 @@
 // Real fee suggestion arrives from `wallet-fee-suggestion` IPC at the parent.
 
 import type { CSSProperties } from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Icon } from "../Icon";
 import { hoverBg } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
@@ -44,6 +44,9 @@ export interface StakeFormProps {
   /** Already-delegated weight to THIS cluster (bps). Used for the
    *  cap-headroom check — additions stack on top of existing weight. */
   existingWeightBps: number;
+  /** Total weight already delegated across ALL clusters (bps). The global
+   *  100%-of-balance ceiling: requested + total must stay ≤ 10000 bps. */
+  totalDelegatedBps: number;
   /** Per-cluster cap in bps from `lyth_getDelegationCap`. `null` when
    *  the chain has disabled the cap (`u32::MAX`). */
   capBps: number | null;
@@ -63,6 +66,21 @@ export function parsePercent(amountStr: string): number | null {
   const n = Number(amountStr);
   if (!Number.isFinite(n) || n < 0 || n > 100) return null;
   return n;
+}
+
+/** Binding bps headroom for an additional delegation to a cluster: the smaller
+ *  of the per-cluster cap headroom and the global 100%-of-balance headroom
+ *  (total weight across ALL clusters ≤ 10000 bps). Never negative. Pure bps —
+ *  delegation is non-custodial (value = 0), so there is no balance subtraction. */
+export function bindingHeadroomBps(
+  capBps: number | null,
+  existingWeightBps: number,
+  totalDelegatedBps: number,
+): number {
+  const clusterHeadroom =
+    capBps === null ? 10000 - existingWeightBps : capBps - existingWeightBps;
+  const globalHeadroom = 10000 - totalDelegatedBps;
+  return Math.max(0, Math.min(clusterHeadroom, globalHeadroom));
 }
 
 /** Lythoshi → LYTH display string. Used for the
@@ -86,6 +104,7 @@ export function StakeForm({
   onAmountChange,
   balanceLythoshi,
   existingWeightBps,
+  totalDelegatedBps,
   capBps,
   onContinue,
   onBack,
@@ -101,6 +120,15 @@ export function StakeForm({
     balanceLythoshi !== null ? effectiveWeightWei(additionalBps, balanceLythoshi) : null;
 
   const overCap = capBps !== null && totalAfterBps > capBps;
+  // Global ceiling: total delegated weight across ALL clusters ≤ 100%. The
+  // binding headroom is the smaller of the per-cluster cap headroom and this.
+  const globalHeadroomBps = Math.max(0, 10000 - totalDelegatedBps);
+  const headroomBps = bindingHeadroomBps(
+    capBps,
+    existingWeightBps,
+    totalDelegatedBps,
+  );
+  const overGlobal = additionalBps > globalHeadroomBps;
   const percentIsZero = percent === null || additionalBps === 0;
   // Additive >100% feedback: parsePercent collapses >100 to null (= empty),
   // so read the raw input to disambiguate WITHOUT touching the parser.
@@ -111,18 +139,32 @@ export function StakeForm({
     percent !== null &&
     additionalBps > 0 &&
     !overCap &&
+    !overGlobal &&
     balanceLythoshi !== null;
 
+  const [presetWarning, setPresetWarning] = useState<string | null>(null);
+
   const handleMax = () => {
-    // Cap-aware max: fill up to the per-cluster cap headroom (or 100% when
-    // the cap is disabled). Headroom is purely a bps fraction now — no
-    // balance math, because nothing is escrowed.
-    if (capBps === null) {
-      onAmountChange("100");
-      return;
-    }
-    const headroomBps = Math.max(0, capBps - existingWeightBps);
+    // Fill up to the BINDING headroom — the smaller of the per-cluster cap
+    // headroom and the global 100%-of-balance headroom. Purely a bps fraction;
+    // no balance math, because nothing is escrowed.
+    setPresetWarning(null);
     onAmountChange((headroomBps / 100).toString());
+  };
+
+  // A quick-fill preset: enter it as-is when it fits the headroom; otherwise
+  // clamp the INPUT to the headroom and surface a small warning (never
+  // silently rewrite the intent).
+  const handlePreset = (p: number) => {
+    if (percentToBps(p) <= headroomBps) {
+      setPresetWarning(null);
+      onAmountChange(String(p));
+    } else {
+      setPresetWarning(
+        `Only ${(headroomBps / 100).toFixed(2)}% left to delegate — set to max.`,
+      );
+      onAmountChange((headroomBps / 100).toString());
+    }
   };
 
   const aprBps = cluster.aprBps ?? null;
@@ -199,7 +241,10 @@ export function StakeForm({
           <input
             type="text"
             value={amountStr}
-            onChange={(e) => onAmountChange(e.target.value.trim())}
+            onChange={(e) => {
+              setPresetWarning(null);
+              onAmountChange(e.target.value.trim());
+            }}
             placeholder="0"
             inputMode="decimal"
             style={amountInputStyle}
@@ -208,7 +253,7 @@ export function StakeForm({
             <button
               key={p}
               type="button"
-              onClick={() => onAmountChange(String(p))}
+              onClick={() => handlePreset(p)}
               style={{ ...inlineBtnStyle, padding: "8px 10px" }}
               {...hoverBg("rgba(255,255,255,0.04)")}
             >
@@ -249,6 +294,18 @@ export function StakeForm({
             Enter a percent between 0.01% and 100% of your balance.
           </div>
         )}
+        {overGlobal && !overCap && (
+          <div style={inlineErr}>
+            You can delegate at most {(globalHeadroomBps / 100).toFixed(2)}% more
+            — total delegation across all clusters can&apos;t exceed 100%.
+          </div>
+        )}
+        {presetWarning !== null && <div style={inlineErr}>{presetWarning}</div>}
+        {/* Active / remaining delegation headroom across ALL clusters. */}
+        <div style={fromHint}>
+          {(totalDelegatedBps / 100).toFixed(2)}% delegated ·{" "}
+          {(globalHeadroomBps / 100).toFixed(2)}% available
+        </div>
         <div style={fromHint}>
           {balanceLythoshi === null ? (
             "Balance loading…"
@@ -314,7 +371,9 @@ export function StakeForm({
           ? "Enter a percent"
           : overCap
             ? "Reduce to cap"
-            : "Review delegation"}
+            : overGlobal
+              ? "Reduce to available"
+              : "Review delegation"}
       </button>
     </div>
   );
