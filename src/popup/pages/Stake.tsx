@@ -703,7 +703,7 @@ export function Stake({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
         >
           {step === "pick"
             ? "Delegate"

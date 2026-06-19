@@ -128,7 +128,7 @@ export function Pending({ vaultId, onBack }: PendingProps) {
         <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
           <Icon name="back" size={15} />
         </button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+        <div style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}>
           Pending proposals
         </div>
         <div style={{ width: 28 }} />

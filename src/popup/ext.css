@@ -188,8 +188,8 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
    so the algo-placeholder + name-row + address-row stack reads as
    a tighter card. The chip itself (.ext-acc) is unchanged; only
    the container's top/bottom breathing room is reduced. */
-.ext-top { display:flex; align-items:flex-start; gap:8px; padding: 10px 12px; border-bottom:1px solid var(--fg-700); background: rgba(10,10,20,0.35); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); }
-.ext.light .ext-top { background: rgba(255,255,255,0.4); border-bottom:1px solid #e3e3ea; }
+.ext-top { display:flex; align-items:flex-start; gap:8px; padding: 10px 12px; border-bottom:1px solid var(--fg-700); background: rgba(var(--gold-glow), 0.07); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); }
+.ext.light .ext-top { background: rgba(var(--gold-glow), 0.1); border-bottom:1px solid #e3e3ea; }
 
 .ext-acc { display:flex; align-items:center; gap:8px; padding: 3px 8px; border-radius: 999px; background: rgba(var(--gold-glow), 0.06); border:1px solid rgba(var(--gold-glow), 0.25); flex:1; cursor:pointer; transition: background 160ms, border-color 160ms; }
 .ext.light .ext-acc { background: rgba(var(--gold-glow), 0.08); border:1px solid rgba(var(--gold-glow), 0.3); box-shadow: 0 1px 2px rgba(0,0,0,0.03); }

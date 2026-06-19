@@ -947,7 +947,7 @@ export function Send({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
         >
           Send
         </div>
@@ -2343,7 +2343,7 @@ function PreviewView({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
         >
           {isMultisig ? "Review proposal" : "Review send"}
         </div>
@@ -2800,7 +2800,7 @@ function SuccessView({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
         >
           {isProposal ? "Proposal created" : "Transaction sent"}
         </div>
@@ -3141,7 +3141,7 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
         >
           {classified.headline}
         </div>

@@ -402,7 +402,7 @@ export function MrvNative({
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 16,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -465,7 +465,7 @@ export function MrvNative({
         <div
           style={{
             flex: 1,
-            fontSize: 13,
+            fontSize: 16,
             fontWeight: 600,
             textAlign: "center",
             display: "flex",

@@ -283,7 +283,7 @@ export function Operators({
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 16,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -344,7 +344,7 @@ export function Operators({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 16, fontWeight: 600, textAlign: "center" }}
         >
           Monolythium Testnet operators
         </div>

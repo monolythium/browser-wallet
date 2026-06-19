@@ -123,7 +123,7 @@ export function NewWalletFlow({ onCancel, onComplete }: NewWalletFlowProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 16,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -162,7 +162,7 @@ export function NewWalletFlow({ onCancel, onComplete }: NewWalletFlowProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 16,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -227,7 +227,7 @@ export function NewWalletFlow({ onCancel, onComplete }: NewWalletFlowProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 16,
               fontWeight: 600,
               textAlign: "center",
             }}

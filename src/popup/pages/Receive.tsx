@@ -38,7 +38,7 @@ export function Receive({ account, onBack }: ReceiveProps) {
         <div
           style={{
             flex: 1,
-            fontSize: 13,
+            fontSize: 16,
             fontWeight: 600,
             textAlign: "center",
           }}
