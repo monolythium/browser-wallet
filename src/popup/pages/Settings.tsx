@@ -42,6 +42,9 @@ interface SettingsProps {
   /** Routes to the Theme page (appearance / theme picker, promoted to
    *  its own top-level category). Always wired — theme is not vault-gated. */
   onOpenTheme: () => void;
+  /** Routes to the Preferences sub-page (language + display-currency; theme
+   *  has its own dedicated card above). */
+  onOpenPreferences: () => void;
   /** Passed only when the active vault is a multisig vault.
    *  When set, Settings renders the Multisig card with M-of-N pill +
    *  pending count + entry points to the Pending dashboard and
@@ -91,6 +94,7 @@ export function Settings({
   onOpenSecurity,
   onOpenFeatures,
   onOpenTheme,
+  onOpenPreferences,
   multisig,
 }: SettingsProps) {
   const devMode = useFeature("DEVELOPER_MODE");
@@ -489,6 +493,49 @@ export function Settings({
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Icon name="contrast" size={13} />
               Appearance
+            </span>
+            <Icon name="chev" size={12} />
+          </button>
+        </div>
+
+        {/* Preferences — language + display-currency. Theme lives on its own
+           card above; this carries the other display preferences. */}
+        <div className="ext-card">
+          <div className="ext-card__head">
+            <h3>Preferences</h3>
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            Language and display-currency preferences.
+          </div>
+          <button
+            onClick={onOpenPreferences}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon name="sliders" size={13} />
+              Language &amp; currency
             </span>
             <Icon name="chev" size={12} />
           </button>
