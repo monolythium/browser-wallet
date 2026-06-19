@@ -39,12 +39,9 @@ interface SettingsProps {
   /** Routes to the Features page (two-tier UX
    *  toggles per §28.5 Q29). Optional for the same reasons. */
   onOpenFeatures?: () => void;
-  /** Routes to the Theme page (appearance / theme picker, promoted to
-   *  its own top-level category). Always wired — theme is not vault-gated. */
-  onOpenTheme: () => void;
-  /** Routes to the Preferences sub-page (language + display-currency; theme
-   *  has its own dedicated card above). */
-  onOpenPreferences: () => void;
+  /** Routes to the Display & Preferences hub (theme / language / display
+   *  currency, each on its own page). Always wired — not vault-gated. */
+  onOpenDisplayPreferences: () => void;
   /** Passed only when the active vault is a multisig vault.
    *  When set, Settings renders the Multisig card with M-of-N pill +
    *  pending count + entry points to the Pending dashboard and
@@ -93,8 +90,7 @@ export function Settings({
   onOpenDelegations,
   onOpenSecurity,
   onOpenFeatures,
-  onOpenTheme,
-  onOpenPreferences,
+  onOpenDisplayPreferences,
   multisig,
 }: SettingsProps) {
   const devMode = useFeature("DEVELOPER_MODE");
@@ -453,12 +449,11 @@ export function Settings({
           </button>
         </div>
 
-        {/* Theme — promoted out of the Security card into its own
-           top-level category. The picker lives on the Theme sub-page so
-           it stays a single source shared with the hamburger entry. */}
+        {/* Display & Preferences — theme, language, and display currency,
+           each on its own page. Single hub shared with the hamburger menu. */}
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Theme</h3>
+            <h3>Display &amp; Preferences</h3>
           </div>
           <div
             style={{
@@ -468,54 +463,10 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            Choose the wallet&apos;s colour theme — light, dark, and accent
-            palettes.
+            Theme, language, and display currency.
           </div>
           <button
-            onClick={onOpenTheme}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid var(--fg-700)",
-              background: "rgba(255,255,255,0.04)",
-              color: "var(--fg-100)",
-              fontFamily: "var(--f-sans)",
-              fontSize: 12.5,
-              fontWeight: 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Icon name="contrast" size={13} />
-              Appearance
-            </span>
-            <Icon name="chev" size={12} />
-          </button>
-        </div>
-
-        {/* Preferences — language + display-currency. Theme lives on its own
-           card above; this carries the other display preferences. */}
-        <div className="ext-card">
-          <div className="ext-card__head">
-            <h3>Preferences</h3>
-          </div>
-          <div
-            style={{
-              fontSize: 11.5,
-              color: "var(--fg-300)",
-              lineHeight: 1.5,
-              marginBottom: 10,
-            }}
-          >
-            Language and display-currency preferences.
-          </div>
-          <button
-            onClick={onOpenPreferences}
+            onClick={onOpenDisplayPreferences}
             style={{
               width: "100%",
               padding: "10px 12px",
@@ -535,7 +486,7 @@ export function Settings({
           >
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Icon name="sliders" size={13} />
-              Language &amp; currency
+              Theme, language &amp; currency
             </span>
             <Icon name="chev" size={12} />
           </button>
