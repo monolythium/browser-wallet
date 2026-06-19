@@ -241,7 +241,7 @@ export function MainMenu({
             hasChevron
           />
           <MenuItem
-            icon="sliders"
+            icon="palette"
             label="Display & Preferences"
             onClick={onDisplayPreferences}
             hasChevron

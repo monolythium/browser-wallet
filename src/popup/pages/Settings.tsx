@@ -485,7 +485,7 @@ export function Settings({
             }}
           >
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Icon name="sliders" size={13} />
+              <Icon name="palette" size={13} />
               Theme, language &amp; currency
             </span>
             <Icon name="chev" size={12} />
