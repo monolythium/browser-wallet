@@ -1,3 +1,5 @@
+import type { CurrencyCode } from "./iso4217";
+
 export const AUTO_LOCK_MINUTES_DEFAULT = 15;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
 
@@ -30,6 +32,22 @@ export const STORAGE_KEY_UI_OPEN_MODE = "mono.ui.open-mode";
 export const UI_OPEN_MODE_VALUES = ["sidepanel", "popup"] as const;
 export type UiOpenMode = (typeof UI_OPEN_MODE_VALUES)[number];
 export const UI_OPEN_MODE_DEFAULT: UiOpenMode = "sidepanel";
+
+// UI language. Display-only and popup-consumed; no service-worker behavior
+// depends on it (unlike open-mode, which the SW reads on boot to bind the
+// action-icon click). A placeholder for future locales — only English (US)
+// ships today, so there is nothing to switch between yet. Read/validated via
+// src/popup/display-prefs.ts.
+export const STORAGE_KEY_LANGUAGE = "mono.ui.language";
+export const LANGUAGE_VALUES = ["en-US"] as const;
+export type LanguageCode = (typeof LANGUAGE_VALUES)[number];
+export const LANGUAGE_DEFAULT: LanguageCode = "en-US";
+
+// Display currency (ISO-4217). STORED PREFERENCE ONLY — no value renders today
+// (no LYTH->fiat oracle exists). The curated code set + per-currency minor-unit
+// precision live in ./iso4217; this is just the storage key + default.
+export const STORAGE_KEY_DISPLAY_CURRENCY = "mono.ui.display-currency";
+export const DISPLAY_CURRENCY_DEFAULT: CurrencyCode = "USD";
 
 // chrome.storage.session
 export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
