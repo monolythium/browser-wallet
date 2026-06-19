@@ -240,6 +240,14 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-card { background: rgba(255,255,255,0.85); border:1px solid rgba(0,0,0,0.06); box-shadow: 0 4px 20px -8px rgba(0,0,0,0.12); }
 .ext.light .ext-card::before { background: linear-gradient(180deg, rgba(255,255,255,0.8) 0%, transparent 30%); }
 
+/* --- Footer branding strip --- */
+/* Themed surface mirroring .ext-card so the footer tints with the active
+   theme (the glass veil + blur let the themed body background show through)
+   instead of the old fixed dark bar. Colours live here (not inline) so the
+   .ext.light override can apply — inline styles can't be themed. */
+.ext-footer { background: var(--glass-fill); border-top: 1px solid var(--glass-stroke); backdrop-filter: blur(var(--glass-blur)) saturate(160%); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%); }
+.ext.light .ext-footer { background: rgba(255,255,255,0.85); border-top: 1px solid rgba(0,0,0,0.06); }
+
 .ext-card__head { display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
 .ext-card__head h3 { margin:0; font-size:12.5px; font-weight:500; color: var(--fg-100); letter-spacing:-0.01em; display:inline-flex; align-items:baseline; gap:9px; }
 .ext.light .ext-card__head h3 { color:#1a1a24; }

@@ -68,17 +68,17 @@ export function Footer(_props: FooterProps = {}) {
     fontSize: 9,
     color: "var(--fg-400)",
     letterSpacing: "0.02em",
-    borderTop: "1px solid rgba(255,255,255,0.08)",
-    // Solid surface keeps the strip visually distinct from any
-    // content the scrollbar reveals just above it; no backdrop-blur
-    // needed since we're not overlapping anything any more.
-    background: "rgba(10, 10, 20, 0.65)",
-    // The footer now flows as the LAST element INSIDE the scrollable home
-    // body (.ext-body), not as a frame-pinned sibling. Negative horizontal
-    // margins cancel .ext-body's 14px side padding so the divider strip
-    // still spans the full body width; marginTop gives it breathing room
-    // from the last content card. It becomes visible only when the home
-    // content is scrolled to the bottom — by design.
+    // Background + top border live in the `.ext-footer` CSS class (not inline)
+    // so they read theme tokens (var(--glass-fill) / var(--glass-stroke)) and
+    // can be overridden for the light theme. The strip now tints with the
+    // active theme — the themed body background shows through the glass veil —
+    // instead of being a fixed dark bar.
+    // The footer flows as the LAST element INSIDE the scrollable home body
+    // (.ext-body), not as a frame-pinned sibling. Negative horizontal margins
+    // cancel .ext-body's 14px side padding so the divider strip still spans the
+    // full body width; marginTop gives it breathing room from the last content
+    // card. It becomes visible only when the home content is scrolled to the
+    // bottom — by design.
     marginTop: 18,
     marginLeft: -14,
     marginRight: -14,
@@ -90,6 +90,7 @@ export function Footer(_props: FooterProps = {}) {
 
   return (
     <footer
+      className="ext-footer"
       style={baseStyle}
     >
       <a
@@ -115,10 +116,10 @@ export function Footer(_props: FooterProps = {}) {
       <span style={{ opacity: 0.5 }}>·</span>
       {/* Footer text sits at its token tier, not behind an opacity dim: the
           copyright at --fg-400 and the version one quiet step below at
-          --fg-500. The footer bg is the same dark translucent strip in every
-          theme, so both tokens read as light-on-dark (≥AA) regardless of the
-          active theme. (The "·" separators stay opacity-dimmed — decorative,
-          no contrast requirement.) */}
+          --fg-500. Both are theme tokens, so they adapt with the now
+          theme-aware strip (light-on-dark in dark themes, dark-on-light in the
+          light theme) and stay legible. (The "·" separators stay
+          opacity-dimmed — decorative, no contrast requirement.) */}
       <span style={{ color: "var(--fg-400)" }}>© 2026 All rights reserved</span>
       <span style={{ opacity: 0.5 }}>·</span>
       <span style={{ color: "var(--fg-500)", fontFamily: "var(--f-mono)" }}>
