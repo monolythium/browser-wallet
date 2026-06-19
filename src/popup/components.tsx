@@ -960,6 +960,7 @@ interface AssetListProps {
 
 export function AssetList({ account, network, indexer, hideBalance }: AssetListProps) {
   const lythAmount = account.balance;
+  const [displayCurrency] = useDisplayCurrencyPref();
   const liveRows = indexer?.tokenBalances ?? [];
   return (
     <div>
@@ -1004,7 +1005,18 @@ export function AssetList({ account, network, indexer, hideBalance }: AssetListP
           <div className="amt">
             {hideBalance ? "—" : lythAmount != null ? fmt(lythAmount, 2) : "0.00"}
           </div>
-          <div className="chg">—</div>
+          {/* Fiat equivalent of the LYTH balance — sized to match the amount
+             above, neutral (not the green change colour). No oracle → the rate
+             is null → "<symbol>—" (e.g. "$—"), never a fabricated "$0". */}
+          <div className="chg" style={{ fontSize: 13, color: "var(--fg-400)" }}>
+            {hideBalance
+              ? "—"
+              : formatFiat(
+                  lythAmount ?? 0,
+                  displayCurrency,
+                  getLythFiatRate(displayCurrency),
+                )}
+          </div>
         </div>
       </div>
     </div>
