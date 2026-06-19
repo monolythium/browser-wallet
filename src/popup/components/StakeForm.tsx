@@ -26,6 +26,7 @@
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import { Icon } from "../Icon";
+import { hoverBg } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { effectiveWeightWei, percentToBps } from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
@@ -161,7 +162,11 @@ export function StakeForm({
               {cluster.name ?? `cluster-${cluster.clusterId}`}
             </div>
           </div>
-          <button onClick={onBack} style={changeBtnStyle}>
+          <button
+            onClick={onBack}
+            style={changeBtnStyle}
+            {...hoverBg("rgba(255,255,255,0.04)")}
+          >
             Change
           </button>
         </div>
@@ -205,6 +210,7 @@ export function StakeForm({
               type="button"
               onClick={() => onAmountChange(String(p))}
               style={{ ...inlineBtnStyle, padding: "8px 10px" }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               {p}%
             </button>
@@ -216,6 +222,7 @@ export function StakeForm({
               ...inlineBtnStyle,
               opacity: balanceLythoshi === null ? 0.5 : 1,
             }}
+            {...hoverBg("rgba(255,255,255,0.04)")}
             type="button"
           >
             Max
@@ -335,6 +342,7 @@ const changeBtnStyle: CSSProperties = {
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   cursor: "pointer",
+  transition: "background 120ms",
 };
 
 const cardLabel: CSSProperties = {
@@ -369,6 +377,7 @@ const inlineBtnStyle: CSSProperties = {
   fontSize: 11,
   cursor: "pointer",
   whiteSpace: "nowrap",
+  transition: "background 120ms",
 };
 
 const inlineErr: CSSProperties = {

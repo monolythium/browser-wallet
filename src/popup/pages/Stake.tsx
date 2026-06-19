@@ -24,6 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "../Icon";
+import { hoverBright } from "../hover";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
 import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
@@ -1220,7 +1221,9 @@ function UnstakeAllCard({
           fontSize: 11,
           fontWeight: 600,
           cursor: "pointer",
+          transition: "filter 120ms",
         }}
+        {...hoverBright}
       >
         Unstake all
       </button>
@@ -2126,18 +2129,21 @@ function ExistingDelegations({
                 <button
                   onClick={() => onStake(row.cluster)}
                   style={stakeMoreBtnStyle}
+                  {...hoverBright}
                 >
                   Delegate
                 </button>
                 <button
                   onClick={() => onRedelegate(row.cluster)}
                   style={redelegateBtnStyle}
+                  {...hoverBright}
                 >
                   Redelegate
                 </button>
                 <button
                   onClick={() => onUnstake(row.cluster)}
                   style={unstakeBtnStyle}
+                  {...hoverBright}
                 >
                   Undelegate
                 </button>
@@ -2162,6 +2168,7 @@ const delegationActionBtnBase: CSSProperties = {
   cursor: "pointer",
   letterSpacing: "0.06em",
   textTransform: "uppercase",
+  transition: "filter 120ms",
 };
 
 const stakeMoreBtnStyle: CSSProperties = {

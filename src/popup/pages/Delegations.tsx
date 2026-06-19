@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { hoverBg } from "../hover";
 import { RewardCard } from "../components/RewardCard";
 import {
   bgStakingClusterDirectory,
@@ -368,12 +369,14 @@ export function Delegations({
                         <button
                           onClick={() => onUnstake(row.cluster)}
                           style={rowActionBtnStyle}
+                          {...hoverBg("rgba(255,255,255,0.04)")}
                         >
                           Undelegate
                         </button>
                         <button
                           onClick={() => onRedelegate(row.cluster)}
                           style={rowActionBtnStyle}
+                          {...hoverBg("rgba(255,255,255,0.04)")}
                         >
                           Redelegate
                         </button>
@@ -386,6 +389,7 @@ export function Delegations({
                               if (c) onShowClusterDetail(c);
                             }}
                             style={rowActionBtnStyle}
+                            {...hoverBg("rgba(255,255,255,0.04)")}
                             aria-label={`View details for cluster ${row.cluster}`}
                           >
                             Details
@@ -482,4 +486,5 @@ const rowActionBtnStyle: CSSProperties = {
   cursor: "pointer",
   letterSpacing: "0.06em",
   textTransform: "uppercase",
+  transition: "background 120ms",
 };
