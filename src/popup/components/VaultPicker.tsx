@@ -490,14 +490,14 @@ export function VaultPicker({
           style={{
             flex: "1 1 auto",
             minWidth: 0,
-            whiteSpace: "normal",
-            wordBreak: "break-all",
-            lineHeight: 1.4,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
             fontFamily: "var(--f-mono)",
-            fontSize: 15.5,
+            fontSize: 13,
             fontWeight: 500,
             color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
-            letterSpacing: "-0.01em",
+            letterSpacing: "-0.02em",
             cursor: "copy",
           }}
         >

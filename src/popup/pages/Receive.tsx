@@ -114,13 +114,13 @@ export function Receive({ account, onBack }: ReceiveProps) {
                 flex: 1,
                 minWidth: 0,
                 fontFamily: "var(--f-mono)",
-                fontSize: 14.5,
+                fontSize: 12.5,
                 fontWeight: 500,
                 color: copied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
-                letterSpacing: "-0.02em",
-                whiteSpace: "normal",
-                wordBreak: "break-all",
-                lineHeight: 1.45,
+                letterSpacing: "-0.04em",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "clip",
                 userSelect: "all",
               }}
             >
