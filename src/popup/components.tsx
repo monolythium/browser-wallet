@@ -27,6 +27,7 @@ import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
 import { clusterLabel, type DelegationsView } from "../shared/staking";
+import { getLythFiatRate, formatFiat } from "../shared/fiat";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import type {
@@ -68,6 +69,7 @@ import type {
 } from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useFeature } from "./hooks/useFeature";
+import { useDisplayCurrencyPref } from "./hooks/useDisplayPrefs";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
 import {
@@ -2026,6 +2028,7 @@ export function Home({ account, network, indexer, delegations, balanceStale, bal
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
+  const [displayCurrency] = useDisplayCurrencyPref();
   const isPriv = account.denom === "private";
   // C5 (R2 no-mock): pause the display when operators serve a different chain
   // (re-genesis / wrong chain) and the value is genuinely unknown — never a
@@ -2136,6 +2139,28 @@ export function Home({ account, network, indexer, delegations, balanceStale, bal
                 <span className="frac">.{fracPart}</span>
               )}
               <span className="d">LYTH</span>
+            </div>
+          )}
+          {/* Fiat equivalent of the hero balance. Shows beside (under) the
+             LYTH amount whenever a real balance is displayed; hidden when the
+             value is degraded/paused (no fiat under a hidden balance). With no
+             oracle the rate is null, so this renders an honest "—" — never a
+             fabricated "$0". */}
+          {!isPriv && !hideBalanceValue && !balancePaused && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                color: "var(--fg-400)",
+                letterSpacing: "0.02em",
+                marginTop: 2,
+              }}
+            >
+              {formatFiat(
+                activeChip === "total" ? account.balance ?? 0 : delegatedLyth,
+                displayCurrency,
+                getLythFiatRate(displayCurrency),
+              )}
             </div>
           )}
           {balanceDegraded && (
