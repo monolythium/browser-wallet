@@ -1541,17 +1541,26 @@ function PreviewView({
           <div
             style={{
               fontFamily: "var(--f-mono)",
-              fontSize: 9,
-              color: "var(--fg-500)",
-              lineHeight: 1.6,
+              fontSize: 11,
+              color: "var(--fg-400)",
+              lineHeight: 1.7,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
             }}
           >
-            <strong style={{ color: "var(--err)" }}>Undelegate</strong> removes
-            this cluster, then continues ·{" "}
-            <strong style={{ color: "var(--fg-300)" }}>Skip</strong> keeps it
-            delegated and moves on ·{" "}
-            <strong style={{ color: "var(--fg-300)" }}>Cancel</strong> stops
-            here.
+            <div>
+              <strong style={{ color: "var(--err)" }}>Undelegate</strong> removes
+              this cluster, then continues.
+            </div>
+            <div>
+              <strong style={{ color: "var(--fg-300)" }}>Skip</strong> keeps it
+              delegated and moves on.
+            </div>
+            <div>
+              <strong style={{ color: "var(--fg-300)" }}>Cancel</strong> stops
+              here.
+            </div>
           </div>
         </>
       ) : (
