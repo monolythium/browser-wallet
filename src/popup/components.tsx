@@ -2143,16 +2143,17 @@ export function Home({ account, network, indexer, delegations, balanceStale, bal
           )}
           {/* Fiat equivalent of the hero balance. Shows beside (under) the
              LYTH amount whenever a real balance is displayed; hidden when the
-             value is degraded/paused (no fiat under a hidden balance). With no
-             oracle the rate is null, so this renders an honest "—" — never a
-             fabricated "$0". */}
+             value is degraded/paused (no fiat under a hidden balance). Sized to
+             match the "LYTH" unit label (.d) beside the amount. With no oracle
+             the rate is null, so this renders the selected currency's symbol +
+             em-dash (e.g. "$—") — never a fabricated "$0". */}
           {!isPriv && !hideBalanceValue && !balancePaused && (
             <div
               style={{
                 fontFamily: "var(--f-mono)",
-                fontSize: 11,
+                fontSize: 12,
                 color: "var(--fg-400)",
-                letterSpacing: "0.02em",
+                letterSpacing: "0.04em",
                 marginTop: 2,
               }}
             >
