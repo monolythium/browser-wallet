@@ -2125,7 +2125,7 @@ function ExistingDelegations({
                   onClick={() => onStake(row.cluster)}
                   style={stakeMoreBtnStyle}
                 >
-                  Stake
+                  Delegate
                 </button>
                 <button
                   onClick={() => onRedelegate(row.cluster)}
@@ -2137,7 +2137,7 @@ function ExistingDelegations({
                   onClick={() => onUnstake(row.cluster)}
                   style={unstakeBtnStyle}
                 >
-                  Unstake
+                  Undelegate
                 </button>
               </div>
             </div>

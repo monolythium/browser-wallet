@@ -369,7 +369,7 @@ export function Delegations({
                           onClick={() => onUnstake(row.cluster)}
                           style={rowActionBtnStyle}
                         >
-                          Unstake
+                          Undelegate
                         </button>
                         <button
                           onClick={() => onRedelegate(row.cluster)}
