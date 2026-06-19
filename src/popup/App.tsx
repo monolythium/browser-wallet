@@ -47,6 +47,7 @@ import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { Theme } from "./pages/Theme";
+import { Preferences } from "./pages/Preferences";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -161,6 +162,7 @@ type Screen =
   | "security"
   | "features"
   | "theme"
+  | "preferences"
   | "main-menu"
   | "contacts"
   | "new-wallet-flow"
@@ -1478,6 +1480,7 @@ export default function App() {
           // so Theme's onBack (navigateBack) returns to Settings — and the
           // same Theme page is reachable from the hamburger menu.
           onOpenTheme={() => navigateTo("theme")}
+          onOpenPreferences={() => navigateTo("preferences")}
           {...(activeVaultSummary
             ? {
                 onOpenSecurity: () => navigateTo("security"),
@@ -1516,6 +1519,13 @@ export default function App() {
          the hamburger menu, both via navigateTo, so onBack (navigateBack)
          returns to whichever pushed it. */}
       {screen === "theme" && <Theme onBack={navigateBack} />}
+
+      {/* Preferences sub-page (language + display-currency). Reached from the
+         Settings "Preferences" card via navigateTo, so onBack (navigateBack)
+         returns to Settings. Theme is omitted here — it has its own card. */}
+      {screen === "preferences" && (
+        <Preferences includeTheme={false} onBack={navigateBack} />
+      )}
 
       {screen === "operators" && (
         <Operators
