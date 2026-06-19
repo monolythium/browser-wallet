@@ -195,11 +195,10 @@ const hintCard: CSSProperties = {
   padding: "10px 12px",
   marginBottom: 8,
   borderRadius: 10,
-  // Distinct accent colour from the passkey hint bar (which
-  // uses the gold palette) so a user with both hints in their
-  // history can visually distinguish them.
-  border: "1px solid rgba(124,127,255,0.4)",
-  background: "rgba(124,127,255,0.06)",
+  // Themed accent (var(--gold-glow)) so the card follows the active theme
+  // instead of a fixed indigo that clashes with the coloured themes.
+  border: "1px solid rgba(var(--gold-glow), 0.4)",
+  background: "rgba(var(--gold-glow), 0.06)",
   color: "var(--fg-100)",
 };
 

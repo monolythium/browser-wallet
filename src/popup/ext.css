@@ -191,9 +191,9 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-top { display:flex; align-items:flex-start; gap:8px; padding: 10px 12px; border-bottom:1px solid var(--fg-700); background: rgba(10,10,20,0.35); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); }
 .ext.light .ext-top { background: rgba(255,255,255,0.4); border-bottom:1px solid #e3e3ea; }
 
-.ext-acc { display:flex; align-items:center; gap:8px; padding: 5px 10px 5px 5px; border-radius: 999px; background: rgba(255,255,255,0.05); border:1px solid var(--fg-700); flex:1; cursor:pointer; transition: background 160ms; }
-.ext.light .ext-acc { background:#fff; border:1px solid #e0e0e7; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
-.ext-acc:hover { background: rgba(255,255,255,0.08); }
+.ext-acc { display:flex; align-items:center; gap:8px; padding: 3px 8px; border-radius: 999px; background: rgba(var(--gold-glow), 0.06); border:1px solid rgba(var(--gold-glow), 0.25); flex:1; cursor:pointer; transition: background 160ms, border-color 160ms; }
+.ext.light .ext-acc { background: rgba(var(--gold-glow), 0.08); border:1px solid rgba(var(--gold-glow), 0.3); box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+.ext-acc:hover { background: rgba(var(--gold-glow), 0.12); }
 .ext-acc__lbl { flex:1; overflow:hidden; }
 .ext-acc__lbl .n { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:-0.01em; }
 .ext-acc__lbl .a { font-family: var(--f-mono); font-size:9.5px; color: var(--fg-400); margin-top:1px; letter-spacing:0.02em; }
@@ -201,8 +201,8 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 /* Address block — a separate element below the wallet-selector pill (the
    selector and the address read as two distinct surfaces). Full bech32m
    address + copy button. */
-.ext-acc-addr { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:10px; background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); }
-.ext.light .ext-acc-addr { background:#fff; border:1px solid #e0e0e7; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+.ext-acc-addr { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:10px; background: rgba(var(--gold-glow), 0.06); border:1px solid rgba(var(--gold-glow), 0.25); }
+.ext.light .ext-acc-addr { background: rgba(var(--gold-glow), 0.08); border:1px solid rgba(var(--gold-glow), 0.3); box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
 
 .ext-iconbtn { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; color: var(--fg-200); background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); cursor:pointer; transition: all 160ms var(--e-out); }
 .ext-iconbtn:hover, .ext-iconbtn:active { background: rgba(255,255,255,0.09); border-color: var(--fg-500); }
@@ -268,8 +268,9 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-hero .num { font-family: var(--f-mono); font-weight:300; font-size:36px; line-height:1; letter-spacing:-0.025em; margin-top:6px; font-variant-numeric: tabular-nums; color: var(--fg-100); display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; }
 .ext.light .ext-hero .num { color:#1a1a24; }
 .ext-hero .num .d { font-size:12px; color: var(--fg-400); letter-spacing:0.04em; font-weight:400; }
-.ext-hero .num .frac { color: var(--fg-400); }
-.ext.light .ext-hero .num .frac, .ext.light .ext-hero .num .d { color:#606369; }
+.ext-hero .num .frac { color: var(--fg-100); }
+.ext.light .ext-hero .num .frac { color:#1a1a24; }
+.ext.light .ext-hero .num .d { color:#606369; }
 .ext-hero .num.opaque { color: var(--fg-400); font-size:22px; font-family: var(--f-sans); font-style:italic; font-weight:400; }
 .ext-hero .chg { font-family: var(--f-mono); font-size:11px; margin-top:8px; color: var(--ok); }
 .ext.light .ext-hero .chg { color:#2a7a3f; }

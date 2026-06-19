@@ -924,7 +924,9 @@ export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplet
           // removed so the label sits at its token tier. If a quieter step is
           // ever wanted, drop to --fg-500 via token, not opacity.
           color: "var(--fg-400)",
-          paddingLeft: 4,
+          // Align the label's left edge with the wallet-name / address boxes
+          // below (their left border sits at the .ext-top content edge).
+          paddingLeft: 2,
         }}
       >
         ML-DSA-65
