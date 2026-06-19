@@ -124,6 +124,7 @@ import type { DelegationsView } from "../shared/staking";
 type Screen =
   | "loading"
   | "welcome"
+  | "setup-prefs"
   | "set-password-create"
   | "show-phrase"
   | "verify-phrase"
@@ -179,6 +180,7 @@ const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "approval",
   "loading",
   "welcome",
+  "setup-prefs",
   "set-password-create",
   "show-phrase",
   "verify-phrase",
@@ -1202,7 +1204,7 @@ export default function App() {
             // first-setup state from a previous abandoned attempt.
             setGenerated(null);
             setPendingFirstSetupPassword(null);
-            setScreen("set-password-create");
+            setScreen("setup-prefs");
           }}
           onImport={() => {
             setImportError(null);
@@ -1234,6 +1236,18 @@ export default function App() {
             void refreshKeystoreStatus();
             setScreen("import");
           }}
+        />
+      )}
+
+      {/* Setup preferences — a light, skippable first-run step on the CREATE
+         branch only. Runs before any vault exists (pre-commit), so it is
+         lock-exempt and writes only display prefs. Back returns to Welcome,
+         Continue advances to set-password. The import branch never reaches it. */}
+      {screen === "setup-prefs" && (
+        <Preferences
+          includeTheme={true}
+          onBack={() => setScreen("welcome")}
+          onContinue={() => setScreen("set-password-create")}
         />
       )}
 
