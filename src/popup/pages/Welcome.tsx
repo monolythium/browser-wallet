@@ -1,4 +1,5 @@
 import { WalletLogo } from "../components/WalletLogo";
+import { PreferencesPanel } from "../components/PreferencesPanel";
 
 interface WelcomeProps {
   onCreateNew: () => void;
@@ -16,50 +17,61 @@ export function Welcome({
 }: WelcomeProps) {
   return (
     <>
-      <div
-        style={{
-          padding: "44px 22px 24px",
-          textAlign: "center",
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <WalletLogo size={72} />
-        </div>
-        <h1
-          style={{
-            margin: "8px 0 0",
-            fontSize: "var(--fs-20)",
-            fontWeight: 600,
-            color: "var(--fg-100)",
-          }}
-        >
-          Welcome to Monolythium
-        </h1>
+      {/* Intro + first-run display preferences scroll together; the action
+         buttons stay pinned as a footer. The preferences (theme / language /
+         display-currency) are collapsible — tap a row to choose, it collapses
+         again — and apply immediately. They never block onboarding: Create /
+         Import go straight to their forms. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         <div
           style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            color: "var(--fg-400)",
-            letterSpacing: "0.16em",
-            textTransform: "uppercase",
+            padding: "36px 22px 8px",
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
           }}
         >
-          Sovereign post-quantum wallet
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <WalletLogo size={72} />
+          </div>
+          <h1
+            style={{
+              margin: "8px 0 0",
+              fontSize: "var(--fs-20)",
+              fontWeight: 600,
+              color: "var(--fg-100)",
+            }}
+          >
+            Welcome to Monolythium
+          </h1>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--fg-400)",
+              letterSpacing: "0.16em",
+              textTransform: "uppercase",
+            }}
+          >
+            Sovereign post-quantum wallet
+          </div>
+          <p
+            style={{
+              margin: "10px 16px 0",
+              fontSize: "var(--fs-12)",
+              color: "var(--fg-300)",
+              lineHeight: 1.5,
+            }}
+          >
+            ML-DSA-65 keys, signed in your browser. Your phrase never
+            leaves this device.
+          </p>
         </div>
-        <p
-          style={{
-            margin: "10px 16px 0",
-            fontSize: "var(--fs-12)",
-            color: "var(--fg-300)",
-            lineHeight: 1.5,
-          }}
-        >
-          ML-DSA-65 keys, signed in your browser. Your phrase never
-          leaves this device.
-        </p>
+
+        <div style={{ padding: "12px 18px 4px" }}>
+          <PreferencesPanel includeTheme={true} />
+        </div>
       </div>
 
       <div
@@ -68,7 +80,6 @@ export function Welcome({
           display: "flex",
           flexDirection: "column",
           gap: 10,
-          marginTop: "auto",
         }}
       >
         <button

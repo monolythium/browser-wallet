@@ -124,7 +124,6 @@ import type { DelegationsView } from "../shared/staking";
 type Screen =
   | "loading"
   | "welcome"
-  | "setup-prefs"
   | "set-password-create"
   | "show-phrase"
   | "verify-phrase"
@@ -180,7 +179,6 @@ const LOCK_SIGNAL_EXEMPT: ReadonlySet<Screen> = new Set<Screen>([
   "approval",
   "loading",
   "welcome",
-  "setup-prefs",
   "set-password-create",
   "show-phrase",
   "verify-phrase",
@@ -1204,7 +1202,7 @@ export default function App() {
             // first-setup state from a previous abandoned attempt.
             setGenerated(null);
             setPendingFirstSetupPassword(null);
-            setScreen("setup-prefs");
+            setScreen("set-password-create");
           }}
           onImport={() => {
             setImportError(null);
@@ -1236,18 +1234,6 @@ export default function App() {
             void refreshKeystoreStatus();
             setScreen("import");
           }}
-        />
-      )}
-
-      {/* Setup preferences — a light, skippable first-run step on the CREATE
-         branch only. Runs before any vault exists (pre-commit), so it is
-         lock-exempt and writes only display prefs. Back returns to Welcome,
-         Continue advances to set-password. The import branch never reaches it. */}
-      {screen === "setup-prefs" && (
-        <Preferences
-          includeTheme={true}
-          onBack={() => setScreen("welcome")}
-          onContinue={() => setScreen("set-password-create")}
         />
       )}
 
@@ -1537,9 +1523,7 @@ export default function App() {
       {/* Preferences sub-page (language + display-currency). Reached from the
          Settings "Preferences" card via navigateTo, so onBack (navigateBack)
          returns to Settings. Theme is omitted here — it has its own card. */}
-      {screen === "preferences" && (
-        <Preferences includeTheme={false} onBack={navigateBack} />
-      )}
+      {screen === "preferences" && <Preferences onBack={navigateBack} />}
 
       {screen === "operators" && (
         <Operators
