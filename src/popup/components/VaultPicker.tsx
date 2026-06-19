@@ -367,8 +367,26 @@ export function VaultPicker({
               gap: 6,
             }}
           >
-            {/* Col 1 — empty spacer for centering. */}
-            <span />
+            {/* Col 1 — ML-DSA-65 algo label, moved up here from the .ext-top
+               row above so the name sits in the top row and the left isn't
+               wasted empty space. */}
+            <span
+              style={{
+                justifySelf: "start",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontFamily: "var(--f-mono)",
+                fontSize: 8.5,
+                fontWeight: 600,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: "var(--fg-400)",
+              }}
+            >
+              ML-DSA-65
+            </span>
             {/* Col 2 — name + pencil cluster (centered). */}
             <span
               style={{
@@ -434,8 +452,8 @@ export function VaultPicker({
                     fontSize: 9,
                     padding: "1px 4px",
                     borderRadius: 3,
-                    border: "1px solid rgba(124,127,255,0.4)",
-                    background: "rgba(124,127,255,0.08)",
+                    border: "1px solid rgba(var(--gold-glow), 0.4)",
+                    background: "rgba(var(--gold-glow), 0.08)",
                     color: "var(--fg-200)",
                     letterSpacing: "0.05em",
                     flexShrink: 0,
@@ -476,7 +494,7 @@ export function VaultPicker({
             wordBreak: "break-all",
             lineHeight: 1.4,
             fontFamily: "var(--f-mono)",
-            fontSize: 13.5,
+            fontSize: 15.5,
             fontWeight: 500,
             color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
             letterSpacing: "-0.01em",

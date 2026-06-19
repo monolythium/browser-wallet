@@ -912,25 +912,9 @@ interface TopProps {
 export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
-      <div
-        style={{
-          fontFamily: "var(--f-mono)",
-          fontSize: 9,
-          fontWeight: 600,
-          letterSpacing: "0.12em",
-          textTransform: "uppercase",
-          // Reads from the --fg-400 token directly (≈7.0:1 on the body
-          // surface). A prior `opacity: 0.75` dragged it to ~4.4:1 (sub-AA);
-          // removed so the label sits at its token tier. If a quieter step is
-          // ever wanted, drop to --fg-500 via token, not opacity.
-          color: "var(--fg-400)",
-          // Align the label's left edge with the wallet-name / address boxes
-          // below (their left border sits at the .ext-top content edge).
-          paddingLeft: 2,
-        }}
-      >
-        ML-DSA-65
-      </div>
+      {/* The ML-DSA-65 algo label moved INTO the picker pill (its left column)
+         so the wallet name sits up in the top row and the empty space above is
+         gone. */}
       <VaultPicker
         activeAccount={account}
         {...(activeVaultLabel ? { activeVaultLabel } : {})}
