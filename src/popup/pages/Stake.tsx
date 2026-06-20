@@ -2395,8 +2395,8 @@ function AutovotePlanCard({
             color: "var(--warn)",
             padding: "6px 8px",
             borderRadius: 6,
-            background: "rgba(var(--gold-glow), 0.08)",
-            border: "1px solid rgba(var(--gold-glow), 0.4)",
+            background: "rgba(var(--warn-glow), 0.08)",
+            border: "1px solid rgba(var(--warn-glow), 0.4)",
             marginBottom: 8,
             lineHeight: 1.5,
           }}
