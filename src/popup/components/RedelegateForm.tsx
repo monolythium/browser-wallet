@@ -15,6 +15,7 @@
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import { Icon } from "../Icon";
+import { hoverBg, hoverBright } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { percentToBps } from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
@@ -210,7 +211,11 @@ export function RedelegateForm({
 
           {/* Destination */}
           {dstCluster === null ? (
-            <button onClick={onPickDestination} style={pickDstBtnStyle}>
+            <button
+              onClick={onPickDestination}
+              style={pickDstBtnStyle}
+              {...hoverBright}
+            >
               Pick cluster
             </button>
           ) : (
@@ -218,6 +223,7 @@ export function RedelegateForm({
               onClick={onPickDestination}
               style={dstChosenBtnStyle}
               title="Tap to change destination"
+              {...hoverBright}
             >
               <div
                 style={{
@@ -303,6 +309,7 @@ export function RedelegateForm({
                 padding: "8px 10px",
                 opacity: srcWeightBps <= 0 ? 0.5 : 1,
               }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               {p}%
             </button>
@@ -315,6 +322,7 @@ export function RedelegateForm({
               opacity: srcWeightBps <= 0 || dstCluster === null ? 0.5 : 1,
             }}
             type="button"
+            {...hoverBg("rgba(255,255,255,0.04)")}
           >
             Max
           </button>
@@ -373,7 +381,11 @@ export function RedelegateForm({
           gap: 8,
         }}
       >
-        <button onClick={onBack} style={secondaryBtnStyle}>
+        <button
+          onClick={onBack}
+          style={secondaryBtnStyle}
+          {...hoverBg("rgba(255,255,255,0.04)")}
+        >
           Back
         </button>
         <button
@@ -442,6 +454,7 @@ const inlineBtnStyle: CSSProperties = {
   fontSize: 11,
   cursor: "pointer",
   whiteSpace: "nowrap",
+  transition: "background 120ms",
 };
 
 const inlineErr: CSSProperties = {
@@ -485,6 +498,7 @@ const pickDstBtnStyle: CSSProperties = {
   cursor: "pointer",
   textAlign: "center",
   width: "100%",
+  transition: "filter 120ms",
 };
 
 const dstChosenBtnStyle: CSSProperties = {
@@ -495,6 +509,7 @@ const dstChosenBtnStyle: CSSProperties = {
   cursor: "pointer",
   width: "100%",
   minWidth: 0,
+  transition: "filter 120ms",
 };
 
 const secondaryBtnStyle: CSSProperties = {
@@ -506,4 +521,5 @@ const secondaryBtnStyle: CSSProperties = {
   fontFamily: "var(--f-sans)",
   fontSize: 12,
   cursor: "pointer",
+  transition: "background 120ms",
 };

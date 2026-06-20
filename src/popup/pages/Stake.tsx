@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "../Icon";
-import { hoverBright } from "../hover";
+import { hoverBg, hoverBright } from "../hover";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
 import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
@@ -1506,6 +1506,7 @@ function PreviewView({
               onClick={sequence.onCancel}
               disabled={sequence.busy}
               style={{ ...secondaryBtn, opacity: sequence.busy ? 0.6 : 1 }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               Cancel
             </button>
@@ -1513,6 +1514,7 @@ function PreviewView({
               onClick={sequence.onSkip}
               disabled={sequence.busy}
               style={{ ...secondaryBtn, opacity: sequence.busy ? 0.6 : 1 }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               Skip
             </button>
@@ -1571,7 +1573,11 @@ function PreviewView({
             gap: 8,
           }}
         >
-          <button onClick={onBack} style={secondaryBtn}>
+          <button
+            onClick={onBack}
+            style={secondaryBtn}
+            {...hoverBg("rgba(255,255,255,0.04)")}
+          >
             Back
           </button>
           <button
@@ -1761,6 +1767,7 @@ function SuccessView({
           <button
             onClick={onCopy}
             aria-label="Copy transaction hash"
+            {...hoverBg("transparent")}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -1773,6 +1780,8 @@ function SuccessView({
               color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
               cursor: "pointer",
               flexShrink: 0,
+              borderRadius: 6,
+              transition: "background 120ms",
             }}
           >
             {copied ? <CheckIcon /> : <ClipboardIcon />}
@@ -1822,6 +1831,12 @@ function SuccessView({
         href={monoscanTxUrl(txHash)}
         target="_blank"
         rel="noopener noreferrer"
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "rgba(255,255,255,0.09)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+        }}
         style={{
           ...secondaryBtn,
           width: "100%",
@@ -1856,6 +1871,7 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
       <button
         type="button"
         onClick={onOpenOperators}
+        {...hoverBright}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -1867,6 +1883,7 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
           color: "var(--gold)",
           textDecoration: "underline",
           cursor: "pointer",
+          transition: "filter 120ms",
         }}
       >
         {marker}
@@ -1973,7 +1990,11 @@ function ErrorView({
           gap: 8,
         }}
       >
-        <button onClick={onCancel} style={secondaryBtn}>
+        <button
+          onClick={onCancel}
+          style={secondaryBtn}
+          {...hoverBg("rgba(255,255,255,0.04)")}
+        >
           Cancel
         </button>
         <button onClick={onRetry} className="ext-act prim-soft" style={{ padding: 12 }}>
@@ -2255,6 +2276,7 @@ function EntryModeToggle({ entryMode, onChange }: EntryModeToggleProps) {
       >
         <button
           onClick={() => onChange("manual")}
+          {...hoverBright}
           style={{
             ...modeToggleBtn,
             background: isManual ? "var(--gold-bg)" : "rgba(255,255,255,0.03)",
@@ -2268,6 +2290,7 @@ function EntryModeToggle({ entryMode, onChange }: EntryModeToggleProps) {
         </button>
         <button
           onClick={() => onChange("max-decentralization")}
+          {...hoverBright}
           style={{
             ...modeToggleBtn,
             background: !isManual ? "var(--gold-bg)" : "rgba(255,255,255,0.03)",
@@ -2372,8 +2395,8 @@ function AutovotePlanCard({
             color: "var(--warn)",
             padding: "6px 8px",
             borderRadius: 6,
-            background: "rgba(244,201,122,0.08)",
-            border: "1px solid rgba(244,201,122,0.4)",
+            background: "rgba(var(--gold-glow), 0.08)",
+            border: "1px solid rgba(var(--gold-glow), 0.4)",
             marginBottom: 8,
             lineHeight: 1.5,
           }}
@@ -2620,6 +2643,7 @@ const secondaryBtn: CSSProperties = {
   fontFamily: "var(--f-sans)",
   fontSize: 12,
   cursor: "pointer",
+  transition: "background 120ms",
 };
 
 const errBanner: CSSProperties = {

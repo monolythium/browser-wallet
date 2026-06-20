@@ -12,6 +12,7 @@
 
 import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { hoverBg } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
@@ -109,7 +110,11 @@ export function UnstakeForm({
               {cluster.name ?? `cluster-${cluster.clusterId}`}
             </div>
           </div>
-          <button onClick={onBack} style={changeBtnStyle}>
+          <button
+            onClick={onBack}
+            style={changeBtnStyle}
+            {...hoverBg("rgba(255,255,255,0.04)")}
+          >
             Change
           </button>
         </div>
@@ -189,6 +194,7 @@ const changeBtnStyle: CSSProperties = {
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   cursor: "pointer",
+  transition: "background 120ms",
 };
 
 const cardLabel: CSSProperties = {

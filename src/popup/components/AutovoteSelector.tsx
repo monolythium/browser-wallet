@@ -8,6 +8,7 @@
 
 import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { hoverBright } from "../hover";
 import type { AutovoteMode } from "../../shared/autovote";
 
 interface AutovoteSelectorProps {
@@ -124,6 +125,7 @@ function ModePill({ meta, selected, onClick, compact }: ModePillProps) {
     <button
       onClick={onClick}
       title={meta.description}
+      {...hoverBright}
       style={{
         padding: compact ? "6px 10px" : "10px 12px",
         borderRadius: 10,
