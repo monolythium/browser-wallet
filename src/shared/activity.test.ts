@@ -17,6 +17,7 @@ import {
   validateActivityCache,
   validatePendingActivityCache,
   validateLocalClaimsCache,
+  applyLocalClaims,
   mapDelegationHistoryToRows,
   mapAddressActivityToRows,
   delegationKeySet,
@@ -1441,5 +1442,97 @@ describe("validateLocalClaimsCache", () => {
   it("returns null on a structurally invalid input", () => {
     expect(validateLocalClaimsCache(null)).toBeNull();
     expect(validateLocalClaimsCache({})).toBeNull();
+  });
+});
+
+describe("evictExpiredPending — local-claim TTL exemption (C1 edit 2)", () => {
+  it("exempts source:local-claim while an ordinary pending row evicts", () => {
+    const now = 10 * 60 * 1000; // 10 min
+    const ordinary: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xord",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: now - (PENDING_TTL_MS + 1), // past the 5-min TTL
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    const claim = claimRow({ txHash: "0xc", broadcastedAtMs: now - (PENDING_TTL_MS + 1) });
+    const out = evictExpiredPending([ordinary, claim], now);
+    // The two edits are independent: the claim survives PURELY on its source
+    // marker (same age as the evicted ordinary row), proving the exemption is
+    // not the validator change.
+    expect(out.map((p) => p.txHash)).toEqual(["0xc"]);
+  });
+
+  it("still evicts an expired claim-less list normally", () => {
+    const now = 10 * 60 * 1000;
+    const fresh: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xfresh",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: now - 1000,
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    expect(evictExpiredPending([fresh], now).map((p) => p.txHash)).toEqual(["0xfresh"]);
+  });
+});
+
+describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
+  function confirmed(over: Partial<DelegateRow> = {}): ConfirmedRow {
+    return {
+      kind: "delegate",
+      blockHeight: 500,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 0,
+      weightBps: 5000,
+      ...over,
+    };
+  }
+
+  it("re-injects a durable claim the pending cache lost (intra-store by txHash)", () => {
+    const durable = claimRow({ txHash: "0xc1" });
+    const out = applyLocalClaims([], [durable], []);
+    expect(out.map((p) => p.txHash)).toEqual(["0xc1"]);
+  });
+
+  it("dedups a claim resident in BOTH pending and the store (no double-row)", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0 });
+    const durable = claimRow({ txHash: "0xc1" }); // older copy, no anchor
+    const out = applyLocalClaims([bridged], [durable], []);
+    expect(out.filter((p) => p.txHash === "0xc1").length).toBe(1);
+    // The pending-resident (bridged, anchored) copy wins.
+    expect(out[0]!.confirmedBlockHeight).toBe(500);
+  });
+
+  it("CROSS-STREAM: suppresses a claim once a confirmed row shares its (block,txIndex) — NOT txHash", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0 });
+    // A future indexer claim surfaces as a confirmed row at the SAME anchor (it
+    // carries NO txHash). The local claim must auto-retire — no double-row.
+    const out = applyLocalClaims([bridged], [bridged], [confirmed({ blockHeight: 500, txIndex: 0 })]);
+    expect(out.some((p) => p.source === "local-claim")).toBe(false);
+  });
+
+  it("does NOT suppress when the confirmed anchor differs", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0 });
+    const out = applyLocalClaims([bridged], [bridged], [confirmed({ blockHeight: 999, txIndex: 7 })]);
+    expect(out.some((p) => p.txHash === "0xc1")).toBe(true);
+  });
+
+  it("passes non-claim pending rows through untouched", () => {
+    const ordinary: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xord",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: 1,
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    const out = applyLocalClaims([ordinary], [claimRow({ txHash: "0xc1" })], []);
+    expect(out.map((p) => p.txHash).sort()).toEqual(["0xc1", "0xord"]);
   });
 });

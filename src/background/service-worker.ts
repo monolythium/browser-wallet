@@ -218,6 +218,7 @@ import {
   activityLocalClaimsKey,
   mergeIndexerSnapshot,
   evictExpiredPending,
+  applyLocalClaims,
   reconcilePending,
   validateActivityCache,
   validatePendingActivityCache,
@@ -7930,6 +7931,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const addressLower = p.address.toLowerCase();
       const cacheKey = activityCacheKey(addressLower, p.chainIdHex);
       const pendingKey = activityPendingKey(addressLower, p.chainIdHex);
+      const localClaimsKey = activityLocalClaimsKey(addressLower, p.chainIdHex);
       const now = Date.now();
       const { cache: prevCache, pending: prevPending } = await readActivityStorage(
         cacheKey,
@@ -7944,10 +7946,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // non-pending refresh keeps the 30s cache benefit for the common case.
       // Reconcile only flips a confirmed/failed verdict off the receipt
       // (#5117 preserved); it never invents a confirmation.
+      // Durable local-claim rows are TTL-exempt + persistent, so they would keep
+      // prevPending non-empty forever and defeat the 30s cache. Gate freshness on
+      // the NON-claim pending rows only; claim rows still ride through the fresh
+      // path (evictExpiredPending exempts them).
+      const nonClaimPending = prevPending.filter((p) => p.source !== "local-claim");
       const isFresh =
         prevCache !== null &&
         now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS &&
-        prevPending.length === 0;
+        nonClaimPending.length === 0;
       if (isFresh) {
         const pending = evictExpiredPending(prevPending, now);
         if (pending.length !== prevPending.length) {
@@ -8024,8 +8031,38 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               }
             : t.row;
         });
-      const nextPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
+      const evictedPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
+      // Re-inject the durable local-claim rows (the indexer never emits a claim
+      // event, so they exist only here). applyLocalClaims dedups by txHash
+      // (the receipt-bridged pending copy wins) and CROSS-STREAM suppresses a
+      // claim once a confirmed row appears at its (block,txIndex) anchor (C2 —
+      // confirmed rows carry no txHash). Dormant until the indexer ships claims.
+      const localStored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([localClaimsKey], (res) =>
+          resolve(res?.[localClaimsKey]),
+        );
+      });
+      const localClaims = validateLocalClaimsCache(localStored)?.claims ?? [];
+      const nextPending = applyLocalClaims(
+        evictedPending,
+        localClaims,
+        nextCache.confirmed,
+      );
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
+      // Keep the durable store in sync with the merged survivors (anchored copies
+      // + cross-stream-retired claims dropped). Only write when it changed.
+      const liveClaims = nextPending.filter((p) => p.source === "local-claim");
+      const claimsChanged =
+        liveClaims.length !== localClaims.length ||
+        liveClaims.some((c, i) => c !== localClaims[i]);
+      if (claimsChanged) {
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set(
+            { [localClaimsKey]: { claims: liveClaims } },
+            () => resolve(),
+          );
+        });
+      }
       // Notifications hook — post-write microtask. The hook records
       // one notification per row that just reached a TERMINAL state (the
       // confirmed/failed bit from the indexer reconcile or the receipt-RPC

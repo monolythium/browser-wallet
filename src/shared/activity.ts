@@ -779,12 +779,61 @@ function compareConfirmedNewestFirst(a: ConfirmedRow, b: ConfirmedRow): number {
   return b.logIndex - a.logIndex;
 }
 
-/** Drop pending rows past the TTL backstop. */
+/** Drop pending rows past the TTL backstop. Durable reward-claim rows
+ *  (`source:"local-claim"`) are EXEMPT — they are a persistent record, not an
+ *  in-flight tx, and the indexer never surfaces a claim to reconcile them away
+ *  (verification 2026-06-20). The exemption is claim-rows-ONLY: an ordinary
+ *  pending row still evicts at PENDING_TTL_MS (this is a SEPARATE edit from the
+ *  validator field-survival — C1). */
 export function evictExpiredPending(
   pending: PendingTxRow[],
   now: number,
 ): PendingTxRow[] {
-  return pending.filter((p) => now - p.broadcastedAtMs < PENDING_TTL_MS);
+  return pending.filter(
+    (p) => p.source === "local-claim" || now - p.broadcastedAtMs < PENDING_TTL_MS,
+  );
+}
+
+/** Sticky local-claim layer (mirrors applyCapturedClusterNames): a reward-claim
+ *  row exists only locally (the indexer emits no claim event), so re-inject the
+ *  durable claim rows into the pending list each poll so they survive a lost
+ *  pending-cache copy. Returns claims (newest source-of-truth) followed by the
+ *  untouched non-claim pending rows.
+ *
+ *  Two-phase dedup (C2):
+ *   - INTRA-STORE identity: union the durable claims with any claim copy already
+ *     resident in `pending` (the broadcast-written, receipt-bridged copy),
+ *     deduped by `txHash`; the pending-resident copy wins (it carries the
+ *     freshest receipt-bridge (block,txIndex) anchor).
+ *   - CROSS-STREAM: drop a claim once the indexer surfaces a CONFIRMED row at
+ *     its bridged inclusion slot — matched by the `(blockHeight, txIndex)`
+ *     ANCHOR, never `txHash` (confirmed rows + the SDK AddressActivityEntry
+ *     carry no txHash). Dormant until Nayiem ships an indexer claim event; then
+ *     the local copy auto-retires with no double-row. */
+export function applyLocalClaims(
+  pending: PendingTxRow[],
+  localClaims: PendingTxRow[],
+  confirmed: ConfirmedRow[],
+): PendingTxRow[] {
+  const nonClaim = pending.filter((p) => p.source !== "local-claim");
+  const byHash = new Map<string, PendingTxRow>();
+  for (const c of localClaims) {
+    if (c.source === "local-claim") byHash.set(c.txHash, c);
+  }
+  for (const p of pending) {
+    if (p.source === "local-claim") byHash.set(p.txHash, p);
+  }
+  const claims = [...byHash.values()].filter(
+    (c) =>
+      c.confirmedBlockHeight === undefined ||
+      c.confirmedTxIndex === undefined ||
+      !confirmed.some(
+        (r) =>
+          r.blockHeight === c.confirmedBlockHeight &&
+          r.txIndex === c.confirmedTxIndex,
+      ),
+  );
+  return [...claims, ...nonClaim];
 }
 
 /** Heuristic match: returns true when `confirmed` plausibly represents the

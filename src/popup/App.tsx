@@ -864,7 +864,12 @@ export default function App() {
     const apply = (raw: unknown) => {
       if (cancelled) return;
       const v = validatePendingActivityCache(raw);
-      setHasPendingTx((v?.pending.length ?? 0) > 0);
+      // Durable local-claim rows are persistent records, not in-flight txs —
+      // exclude them so a stored claim doesn't keep the 1.5s reconcile poll
+      // armed forever (the claim never reconciles: the indexer emits no claim).
+      setHasPendingTx(
+        (v?.pending.filter((p) => p.source !== "local-claim").length ?? 0) > 0,
+      );
     };
     chrome.storage.local.get([key], (res) => apply(res?.[key]));
     const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
