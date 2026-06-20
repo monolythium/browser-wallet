@@ -30,6 +30,7 @@
 
 import { bech32mToAddress } from "./bech32m.js";
 import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
+import { isCurrencyCode, type CurrencyCode } from "./iso4217.js";
 import { isTxOpKind, type NotificationRecord, type TxOpKind } from "./notifications.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,6 +45,12 @@ export const ACTIVITY_ROLLING_WINDOW = 100;
  *  Five minutes covers slow blocks + bounded indexer lag; longer pending rows
  *  become user-confusing rather than informative. */
 export const PENDING_TTL_MS = 5 * 60 * 1000;
+
+/** Cap on the durable local-claim store per (address, chainId). Reward claims
+ *  are infrequent manual actions, so a small newest-N window bounds the store
+ *  without ever evicting a recent claim. Distinct from ACTIVITY_ROLLING_WINDOW
+ *  (which caps confirmed rows only). */
+export const LOCAL_CLAIMS_CAP = 50;
 
 /** Heuristic match window for pending-row reconciliation: when a confirmed
  *  entry's blockHeight falls within ±this many blocks of the pending row's
@@ -82,6 +89,13 @@ export function activityCacheKey(addressLower: string, chainIdHex: string): stri
 /** Per-address, per-chain pending-row cache key. */
 export function activityPendingKey(addressLower: string, chainIdHex: string): string {
   return `mono.activity.pending.${addressLower}.${chainIdHex}`;
+}
+
+/** Per-address, per-chain durable local-claim store key. Reward-claim rows are
+ *  never emitted by the indexer (verification 2026-06-20), so the wallet keeps
+ *  its own record here, scoped exactly like the two caches above. */
+export function activityLocalClaimsKey(addressLower: string, chainIdHex: string): string {
+  return `mono.activity.localclaims.${addressLower}.${chainIdHex}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +151,24 @@ export interface PendingTxRow {
    *  hidden from the indexer until threshold reveal). Absent on plaintext +
    *  legacy rows. Pending-row metadata only — never part of the signed tx. */
   sealed?: boolean;
+  /** Marks a wallet-local durable reward-claim record (vs an ordinary in-flight
+   *  send). Set ONLY on claim rows. Routes render to `claimedAmount` and exempts
+   *  the row from the 5-min pending TTL (evictExpiredPending). Metadata-only;
+   *  the indexer emits no claim event (verification 2026-06-20) so this is the
+   *  sole persistent claim marker. */
+  source?: "local-claim";
+  /** Claimed reward, decimal LYTH, captured popup-side from
+   *  `settledPendingLythoshi` at claim time (the chain/indexer never surface it;
+   *  a claim's `amountDecimal` is "0"). null = unavailable (rewards mock/offline)
+   *  → render shows bare "Rewards claimed", no figure (no-mock). */
+  claimedAmount?: string | null;
+  /** LYTH→fiat rate frozen at claim time (getLythFiatRate; null until the oracle
+   *  ships). Stored so confirmed-history fiat survives every indexer rebuild;
+   *  null → the fiat sibling renders the honest dash, never a fabricated value. */
+  rateAtClaim?: number | null;
+  /** Display currency the rate was captured in (loadDisplayCurrency) — frozen so
+   *  the historic fiat renders in the currency selected at claim time. */
+  currency?: CurrencyCode;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -259,6 +291,14 @@ export interface PendingActivityCache {
   pending: PendingTxRow[];
 }
 
+/** Persisted shape under `mono.activity.localclaims.<addr>.<chain>`. The wallet's
+ *  durable reward-claim rows (pending_tx-kind, `source:"local-claim"`). The
+ *  indexer emits no claim event, so this is the only persistent claim record;
+ *  capped to LOCAL_CLAIMS_CAP newest by `broadcastedAtMs`. */
+export interface LocalClaimsCache {
+  claims: PendingTxRow[];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Validators
 // ─────────────────────────────────────────────────────────────────────────────
@@ -319,6 +359,21 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       // Sealed-submission marker (encrypted-mempool). Optional; coerce a
       // non-boolean to undefined rather than rejecting the row.
       const sealed = typeof r.sealed === "boolean" ? r.sealed : undefined;
+      // Local-claim marker + captured claim fields (the reward-claim store).
+      // MANDATORY here — without carrying these the fields are silently dropped
+      // on every cache (de)serialization rebuild. Coerce/drop malformed values
+      // rather than rejecting the row, exactly mirroring the metadata idiom above.
+      const source = r.source === "local-claim" ? "local-claim" : undefined;
+      const claimedAmount =
+        typeof r.claimedAmount === "string" || r.claimedAmount === null
+          ? r.claimedAmount
+          : undefined;
+      const rateAtClaim = isFiniteNumber(r.rateAtClaim)
+        ? r.rateAtClaim
+        : r.rateAtClaim === null
+          ? null
+          : undefined;
+      const currency = isCurrencyCode(r.currency) ? r.currency : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -333,6 +388,10 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
         ...(confirmedTxIndex !== undefined ? { confirmedTxIndex } : {}),
         ...(sealed !== undefined ? { sealed } : {}),
+        ...(source !== undefined ? { source } : {}),
+        ...(claimedAmount !== undefined ? { claimedAmount } : {}),
+        ...(rateAtClaim !== undefined ? { rateAtClaim } : {}),
+        ...(currency !== undefined ? { currency } : {}),
       };
     }
 
@@ -481,6 +540,26 @@ export function validatePendingActivityCache(
     if (row && row.kind === "pending_tx") pending.push(row);
   }
   return { pending };
+}
+
+/** Validate the durable local-claim store. Each entry is a `pending_tx` row
+ *  tagged `source:"local-claim"`; anything else is dropped. Caps to the newest
+ *  LOCAL_CLAIMS_CAP by `broadcastedAtMs` so the store can't grow unboundedly
+ *  (claims are infrequent; the cap never trims a recent one). Returns null on
+ *  any structural failure. */
+export function validateLocalClaimsCache(input: unknown): LocalClaimsCache | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!Array.isArray(r.claims)) return null;
+  const claims: PendingTxRow[] = [];
+  for (const raw of r.claims) {
+    const row = validateActivityRow(raw);
+    if (row && row.kind === "pending_tx" && row.source === "local-claim") {
+      claims.push(row);
+    }
+  }
+  claims.sort((a, b) => b.broadcastedAtMs - a.broadcastedAtMs);
+  return { claims: claims.slice(0, LOCAL_CLAIMS_CAP) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

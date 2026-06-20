@@ -9,11 +9,14 @@ import {
   ACTIVITY_ROLLING_WINDOW,
   PENDING_TTL_MS,
   PENDING_MATCH_BLOCK_WINDOW,
+  LOCAL_CLAIMS_CAP,
   activityCacheKey,
   activityPendingKey,
+  activityLocalClaimsKey,
   validateActivityRow,
   validateActivityCache,
   validatePendingActivityCache,
+  validateLocalClaimsCache,
   mapDelegationHistoryToRows,
   mapAddressActivityToRows,
   delegationKeySet,
@@ -1341,5 +1344,102 @@ describe("mergeActivityNewestFirst", () => {
     // Both block=Infinity → newer ms (failed@20) first.
     expect(out[0]!.tag === "failed").toBe(true);
     expect(out[1]!.tag === "row").toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local-claim store (reward-claim persistence #3) — key, validator survival, cap
+// ─────────────────────────────────────────────────────────────────────────────
+
+function claimRow(over: Partial<PendingTxRow> = {}): PendingTxRow {
+  return {
+    kind: "pending_tx",
+    txHash: "0xclaim1",
+    to: "0x000000000000000000000000000000000000110c",
+    amountDecimal: "0",
+    broadcastedAtMs: 1_000,
+    broadcastBlockHeight: 100,
+    via: "op-a",
+    opKind: "claim",
+    source: "local-claim",
+    claimedAmount: "6.51",
+    rateAtClaim: null,
+    currency: "USD",
+    ...over,
+  };
+}
+
+describe("activityLocalClaimsKey", () => {
+  it("formats a per-address per-chain key in its own namespace", () => {
+    expect(activityLocalClaimsKey("0xabc", "0x10f2c")).toBe(
+      "mono.activity.localclaims.0xabc.0x10f2c",
+    );
+    // Distinct from the confirmed + pending namespaces (no cross-key collision).
+    expect(activityLocalClaimsKey("0xabc", "0x10f2c")).not.toBe(
+      activityPendingKey("0xabc", "0x10f2c"),
+    );
+    expect(
+      activityCacheKey("0xabc", "0x10f2c").startsWith("mono.activity.localclaims."),
+    ).toBe(false);
+  });
+});
+
+describe("validateActivityRow — local-claim field survival (C1 edit 1)", () => {
+  it("round-trips a claim row with source/claimedAmount/rateAtClaim/currency intact", () => {
+    const row = claimRow();
+    // The gotcha: validateActivityRow rebuilds from fresh literals, dropping any
+    // field it does not explicitly carry. These MUST survive every rebuild.
+    expect(validateActivityRow(row)).toEqual(row);
+  });
+
+  it("keeps a populated rateAtClaim and a null rateAtClaim (no-mock distinction)", () => {
+    const withRate = claimRow({ rateAtClaim: 1.23 });
+    expect(validateActivityRow(withRate)).toEqual(withRate);
+    const nullRate = claimRow({ rateAtClaim: null });
+    expect((validateActivityRow(nullRate) as PendingTxRow).rateAtClaim).toBeNull();
+  });
+
+  it("drops a malformed source/currency rather than rejecting the row", () => {
+    const bad = validateActivityRow({
+      ...claimRow(),
+      source: "bogus",
+      currency: "NOTACODE",
+    }) as PendingTxRow;
+    expect(bad).not.toBeNull();
+    expect(bad.source).toBeUndefined();
+    expect(bad.currency).toBeUndefined();
+  });
+});
+
+describe("validateLocalClaimsCache", () => {
+  it("keeps only pending_tx rows tagged source:local-claim", () => {
+    const out = validateLocalClaimsCache({
+      claims: [
+        claimRow({ txHash: "0x1" }),
+        // ordinary pending row (no source) — dropped
+        { ...claimRow({ txHash: "0x2" }), source: undefined },
+        // wrong kind — dropped
+        { kind: "tx_send", blockHeight: 1, txIndex: 0, logIndex: 0, counterparty: null, amountDecimal: "1" },
+      ],
+    });
+    expect(out?.claims.map((c) => c.txHash)).toEqual(["0x1"]);
+  });
+
+  it("caps to the newest LOCAL_CLAIMS_CAP by broadcastedAtMs", () => {
+    const many = Array.from({ length: LOCAL_CLAIMS_CAP + 10 }, (_, i) =>
+      claimRow({ txHash: `0x${i}`, broadcastedAtMs: i }),
+    );
+    const out = validateLocalClaimsCache({ claims: many });
+    expect(out?.claims.length).toBe(LOCAL_CLAIMS_CAP);
+    // Newest-first, and the 10 oldest were trimmed.
+    expect(out?.claims[0]!.broadcastedAtMs).toBe(LOCAL_CLAIMS_CAP + 9);
+    expect(
+      out?.claims.some((c) => c.broadcastedAtMs < 10),
+    ).toBe(false);
+  });
+
+  it("returns null on a structurally invalid input", () => {
+    expect(validateLocalClaimsCache(null)).toBeNull();
+    expect(validateLocalClaimsCache({})).toBeNull();
   });
 });
