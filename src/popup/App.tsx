@@ -228,9 +228,11 @@ const TESTNET_FALLBACK: ChainEntry = {
  *  heavy reconcile when a pending row exists, so each tick is cheap otherwise. */
 const PENDING_REPOLL_MS = 1_500;
 
-// Keep the balance live on a fixed cadence while the popup is open (~block-time),
-// independent of any pending tx — a SEPARATE effect that never touches the
-// activity pending-poll above.
+// Keep the balance AND activity live on a fixed cadence while the popup is open
+// (~block-time), independent of any pending tx — a SEPARATE effect from the
+// hasPendingTx reconcile poll above. The unconditional activity refresh here is
+// what surfaces an INCOMING transfer promptly: no pending row exists to arm the
+// reconcile poll, so without this an incoming tx waited for a mount/nav/focus.
 const BALANCE_POLL_MS = 3_000;
 
 export default function App() {
@@ -875,11 +877,25 @@ export default function App() {
   useEffect(() => {
     refreshBalanceRef.current = refreshBalance;
   }, [refreshBalance]);
+  // The same standalone poll also refreshes ACTIVITY unconditionally (NOT gated
+  // on hasPendingTx like the reconcile poll above), so an INCOMING tx surfaces
+  // on the next tick instead of waiting for a mount / home-nav / focus-regain —
+  // the wallet holds no inbound hash to reconcile, so its only signal is the
+  // indexer history snapshot. refreshActivity is race-guarded and never clears
+  // the list on a transient indexer failure (it writes no local state on error),
+  // so riding this existing timer adds no failure mode. Ref-armed like the
+  // balance ref so the interval stays stable per account (no churn). The chain's
+  // commit-then-reveal lag is the remaining (chain-side) floor.
+  const refreshActivityRef = useRef(refreshActivity);
+  useEffect(() => {
+    refreshActivityRef.current = refreshActivity;
+  }, [refreshActivity]);
   const balancePollAddress = acc.addr;
   useEffect(() => {
     if (!balancePollAddress.startsWith("0x")) return; // active unlocked account only
     const id = setInterval(() => {
       void refreshBalanceRef.current();
+      void refreshActivityRef.current();
     }, BALANCE_POLL_MS);
     return () => clearInterval(id);
   }, [balancePollAddress]);
