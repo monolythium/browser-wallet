@@ -51,6 +51,7 @@ import {
   type PendingRewardsView,
 } from "../bg";
 import { buildClaimMeta } from "../claim-meta";
+import { useInFlightClaim } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
@@ -245,6 +246,11 @@ export function Stake({
         ? "redelegate-form"
         : (savedState?.step ?? "pick");
   const [step, setStep] = useState<Step>(initialStep);
+
+  // #2 — guard against a double claim-broadcast. Reads the durable in-flight
+  // signal (persisted), so it holds even if the popup was closed + reopened
+  // mid-claim (local `step` state would be lost).
+  const claimInFlight = useInFlightClaim(account.addr, chainId);
 
   // Cluster directory state.
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
@@ -781,7 +787,7 @@ export function Stake({
                   isMock={rewardsMock}
                   clusters={clusters}
                   onClaim={() => void handleClaim()}
-                  claimDisabled={false}
+                  claimDisabled={claimInFlight}
                   showAdvancedAnalytics={tradingInterfaceOn}
                 />
                 {delegations !== null && delegations.rows.length > 0 && (

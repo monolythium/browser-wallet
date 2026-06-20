@@ -1,0 +1,62 @@
+// In-flight reward-claim detector (popup-side).
+//
+// A claim in flight is a durable `source:"local-claim"` pending row with NO
+// `confirmedBlockHeight` yet (the broadcast landed, the receipt hasn't). The
+// persistence fix (9cfcf0b/34dbdb5) makes that row reliable across the 30s
+// alarm + page-nav, so this is a trustworthy double-submit signal — and because
+// it reads PERSISTED storage (not ephemeral component state), it survives a
+// popup close→reopen. Mirrors the App.tsx hasPendingTx storage-watch idiom.
+
+import { useEffect, useState } from "react";
+
+import {
+  activityPendingKey,
+  validatePendingActivityCache,
+  type PendingTxRow,
+} from "../../shared/activity.js";
+
+/** True when any pending row is an IN-FLIGHT reward claim: a
+ *  `source:"local-claim"` row that has NOT yet been receipt-bridged
+ *  (`confirmedBlockHeight` undefined). Pure + exported for unit coverage; the
+ *  hook below wraps it over the live pending cache. */
+export function hasInFlightClaim(rows: PendingTxRow[]): boolean {
+  return rows.some(
+    (p) => p.source === "local-claim" && p.confirmedBlockHeight === undefined,
+  );
+}
+
+/** True while a reward claim for (addr, chainIdHex) is in flight — a
+ *  `source:"local-claim"` pending row with no `confirmedBlockHeight`. Flips
+ *  false once the receipt bridge stamps `confirmedBlockHeight` (claim confirmed)
+ *  or no such row exists. Used to gate the "Claim all" button against a
+ *  double-broadcast, including after a popup close→reopen. */
+export function useInFlightClaim(addr: string, chainIdHex: string): boolean {
+  const [inFlight, setInFlight] = useState(false);
+  useEffect(() => {
+    if (!addr.startsWith("0x")) {
+      setInFlight(false);
+      return;
+    }
+    const key = activityPendingKey(addr.toLowerCase(), chainIdHex);
+    let cancelled = false;
+    const apply = (raw: unknown) => {
+      if (cancelled) return;
+      const rows = validatePendingActivityCache(raw)?.pending ?? [];
+      setInFlight(hasInFlightClaim(rows));
+    };
+    chrome.storage.local.get([key], (res) => apply(res?.[key]));
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      if (key in changes) apply(changes[key]?.newValue);
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [addr, chainIdHex]);
+  return inFlight;
+}

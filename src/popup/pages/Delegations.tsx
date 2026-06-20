@@ -26,6 +26,7 @@ import {
   type PendingRewardsView,
 } from "../bg";
 import { buildClaimMeta } from "../claim-meta";
+import { useInFlightClaim } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
@@ -75,6 +76,9 @@ export function Delegations({
   // RewardCard's honest-absence state instead of perpetual "Loading…".
   const [rewardsError, setRewardsError] = useState<string | null>(null);
   const [claimSubmitting, setClaimSubmitting] = useState(false);
+  // #2 — durable in-flight claim signal (survives popup close→reopen, unlike the
+  // ephemeral claimSubmitting). OR'd into claimDisabled to block a double-submit.
+  const claimInFlight = useInFlightClaim(account.addr, chainId);
   const [claimResult, setClaimResult] = useState<
     | { ok: true; txHash: string }
     | { ok: false; reason: string }
@@ -242,7 +246,7 @@ export function Delegations({
             isMock={rewardsMock}
             clusters={clusters}
             onClaim={() => void handleClaim()}
-            claimDisabled={claimSubmitting}
+            claimDisabled={claimSubmitting || claimInFlight}
           />
         )}
 
