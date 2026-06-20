@@ -52,7 +52,9 @@ export interface ActivityDetailProps {
 
 /** Rows the queried wallet paid the fee for (it originated the tx). Incoming
  *  transfers + system rebalances were paid by someone else → no fee line. */
-function isSelfPaid(row: ActivityRowType): boolean {
+/** True when the wallet paid this row's fee → the on-demand fee fetch runs and
+ *  a Fee row may render. Exported for unit coverage of the #7 claim case. */
+export function isSelfPaid(row: ActivityRowType): boolean {
   switch (row.kind) {
     case "tx_send":
     case "delegate":
@@ -62,6 +64,11 @@ function isSelfPaid(row: ActivityRowType): boolean {
       return true;
     case "token_transfer":
       return row.direction === "out";
+    case "pending_tx":
+      // A reward claim self-pays its fee (wallet-initiated) and carries its own
+      // txHash, so the on-demand fee fetch can resolve it. Other pending rows
+      // resolve their fee via the confirmed counterpart instead (return false).
+      return row.source === "local-claim";
     default:
       return false;
   }
@@ -102,19 +109,22 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
   // for an indexer-sourced confirmed row. Null on zero-fee / unavailable
   // (failed / reverted / pruned) → no fee line (no-mock).
   const selfPaid = isSelfPaid(row);
+  // A claim row carries its own txHash directly (broadcast capture); confirmed
+  // rows resolve it from the block lookup. Use whichever applies for the fee.
+  const feeTxHash = row.kind === "pending_tx" ? row.txHash : resolvedTxHash;
   const [resolvedFeeLythoshi, setResolvedFeeLythoshi] = useState<string | null>(null);
   useEffect(() => {
-    if (!selfPaid || resolvedTxHash === null) return;
+    if (!selfPaid || feeTxHash === null) return;
     let cancelled = false;
     void (async () => {
-      const r = await bgWalletTxFee(resolvedTxHash);
+      const r = await bgWalletTxFee(feeTxHash);
       if (cancelled || !r.ok) return;
       if (r.feeLythoshi !== null) setResolvedFeeLythoshi(r.feeLythoshi);
     })();
     return () => {
       cancelled = true;
     };
-  }, [selfPaid, resolvedTxHash]);
+  }, [selfPaid, feeTxHash]);
 
   const feeText = (() => {
     if (resolvedFeeLythoshi === null) return null;
@@ -209,6 +219,9 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
             )
           )}
           <DRow label="Submitted" value={relativeMs(row.broadcastedAtMs)} />
+          {/* #7 — a claim self-pays its fee; the on-demand bgWalletTxFee(txHash)
+              resolves once the receipt lands. null → no Fee row (no-mock). */}
+          {feeText && <DRow label="Fee" value={feeText} />}
           {(!row.sealed || row.confirmedBlockHeight !== undefined) && (
             <MonoscanTxButton hash={row.txHash} />
           )}
