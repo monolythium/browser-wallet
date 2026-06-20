@@ -215,17 +215,21 @@ import {
 import {
   activityCacheKey,
   activityPendingKey,
+  activityLocalClaimsKey,
   mergeIndexerSnapshot,
   evictExpiredPending,
   reconcilePending,
   validateActivityCache,
   validatePendingActivityCache,
+  validateLocalClaimsCache,
+  LOCAL_CLAIMS_CAP,
   type ActivityCache,
   type ConfirmedRow,
   type PendingTxRow,
   type RawAddressActivity,
   type RawDelegationHistory,
 } from "../shared/activity.js";
+import { isCurrencyCode, type CurrencyCode } from "../shared/iso4217.js";
 import {
   sentAddressesKey,
   parseSentAddresses,
@@ -4969,6 +4973,13 @@ async function persistPendingRowBackground(args: {
   /** Whether the tx went sealed (encrypted-mempool) — drives the UI's
    *  "awaiting reveal" pending label + the held Monoscan link. */
   sealed?: boolean;
+  /** Reward-claim metadata (opKind:"claim" only) — captured popup-side at
+   *  broadcast. Marks the row source:"local-claim" (TTL-exempt) + mirrors it
+   *  into the durable local-claims store. Metadata-only; never reaches the
+   *  signer. */
+  claimedAmount?: string | null;
+  rateAtClaim?: number | null;
+  currency?: CurrencyCode;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -4994,6 +5005,10 @@ async function persistPendingRowBackground(args: {
       );
     });
     const prev = validatePendingActivityCache(stored)?.pending ?? [];
+    // A reward claim is a durable local record (the indexer never emits a claim
+    // event): mark it source:"local-claim" so it is TTL-exempt + routes render
+    // to claimedAmount, and mirror it into the localclaims store below.
+    const isClaim = args.opKind === "claim";
     const row: PendingTxRow = {
       kind: "pending_tx",
       txHash: args.txHash,
@@ -5006,6 +5021,10 @@ async function persistPendingRowBackground(args: {
       ...(args.clusterId !== undefined ? { clusterId: args.clusterId } : {}),
       ...(args.clusterName !== undefined ? { clusterName: args.clusterName } : {}),
       ...(args.sealed !== undefined ? { sealed: args.sealed } : {}),
+      ...(isClaim ? { source: "local-claim" as const } : {}),
+      ...(isClaim ? { claimedAmount: args.claimedAmount ?? null } : {}),
+      ...(isClaim ? { rateAtClaim: args.rateAtClaim ?? null } : {}),
+      ...(isClaim && args.currency !== undefined ? { currency: args.currency } : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -5015,6 +5034,24 @@ async function persistPendingRowBackground(args: {
         () => resolve(),
       );
     });
+    // Mirror the claim into the durable local-claims store (the source of truth
+    // that survives a lost pending cache; re-injected each poll by
+    // applyLocalClaims). Dedup by txHash (intra-store identity); cap to newest.
+    if (isClaim) {
+      const claimsKey = activityLocalClaimsKey(addrLower, args.chainIdHex);
+      const storedClaims = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([claimsKey], (res) => resolve(res?.[claimsKey]));
+      });
+      const prevClaims = validateLocalClaimsCache(storedClaims)?.claims ?? [];
+      const deduped = prevClaims.filter((c) => c.txHash !== row.txHash);
+      const nextClaims = [row, ...deduped].slice(0, LOCAL_CLAIMS_CAP);
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [claimsKey]: { claims: nextClaims } },
+          () => resolve(),
+        );
+      });
+    }
     // A pending row now exists → arm the headless poll so this tx's
     // terminal transition is observed (toast + badge) even if every wallet
     // surface is closed before it confirms. Idempotent; lock-independent.
@@ -9209,6 +9246,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // opKind): rides only into the pending row, never the signer.
         clusterId?: unknown;
         clusterName?: unknown;
+        // Reward-claim metadata (opKind:"claim") — METADATA ONLY (same as
+        // clusterId): rides into the pending row + local-claims store, never the
+        // signer. claimedAmount = decimal LYTH | null; rateAtClaim = number |
+        // null; currency = ISO-4217 code.
+        claimedAmount?: unknown;
+        rateAtClaim?: unknown;
+        currency?: unknown;
         // T1-04(a) — elevated re-auth for an over-limit passkey send. When
         // the per-vault passkey cap would reject this value-only transfer,
         // the popup re-submits with the account password here; the SW
@@ -9269,6 +9313,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         typeof p.clusterName === "string" && p.clusterName.length > 0
           ? p.clusterName
           : undefined;
+      // Reward-claim metadata — METADATA ONLY (never reaches the signer).
+      // Sanitize: a decimal-string|null amount, a finite|null rate, a valid
+      // ISO-4217 currency; anything else is dropped.
+      const acceptedClaimedAmount =
+        typeof p.claimedAmount === "string" || p.claimedAmount === null
+          ? p.claimedAmount
+          : undefined;
+      const acceptedRateAtClaim =
+        typeof p.rateAtClaim === "number" && Number.isFinite(p.rateAtClaim)
+          ? p.rateAtClaim
+          : p.rateAtClaim === null
+            ? null
+            : undefined;
+      const acceptedCurrency = isCurrencyCode(p.currency) ? p.currency : undefined;
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "send is only wired for Monolythium Testnet today" };
       }
@@ -9480,6 +9538,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(acceptedClusterName !== undefined
             ? { clusterName: acceptedClusterName }
             : {}),
+          // Reward-claim metadata — only meaningful when opKind:"claim"; the
+          // helper gates the local-claim write on opKind. Metadata-only.
+          ...(acceptedClaimedAmount !== undefined
+            ? { claimedAmount: acceptedClaimedAmount }
+            : {}),
+          ...(acceptedRateAtClaim !== undefined
+            ? { rateAtClaim: acceptedRateAtClaim }
+            : {}),
+          ...(acceptedCurrency !== undefined ? { currency: acceptedCurrency } : {}),
         });
         return { ok: true, txHash, via };
       } catch (e) {

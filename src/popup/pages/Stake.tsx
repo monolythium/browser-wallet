@@ -50,6 +50,7 @@ import {
   type DelegationsView,
   type PendingRewardsView,
 } from "../bg";
+import { buildClaimMeta } from "../claim-meta";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
@@ -650,6 +651,10 @@ export function Stake({
     setSubmitError(null);
     setTxHash(null);
     try {
+      // Capture the claimed amount + frozen fiat rate BEFORE broadcast (the
+      // chain/indexer never surface a claim amount). Shared helper — identical
+      // at both claim sites. valueWeiHex stays 0x0; the metadata never signs.
+      const claim = await buildClaimMeta(rewards, rewardsMock);
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -657,6 +662,9 @@ export function Stake({
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
         opKind: "claim",
+        claimedAmount: claim.claimedAmount,
+        rateAtClaim: claim.rateAtClaim,
+        currency: claim.currency,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);

@@ -11,6 +11,7 @@ import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
 import type { TxOpKind } from "../shared/notifications.js";
+import type { CurrencyCode } from "../shared/iso4217.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
@@ -967,6 +968,15 @@ export async function bgWalletSendTx(args: {
    *  the signer. Omit for non-delegation sends. */
   clusterId?: number;
   clusterName?: string;
+  /** Reward-claim metadata captured at broadcast (opKind:"claim" only) —
+   *  PENDING-ROW METADATA ONLY (same invariant as opKind/clusterId): forwarded
+   *  to the durable local-claim store + the pending row so the claimed amount +
+   *  frozen fiat render. Never reaches the signer; `valueWeiHex` stays 0x0.
+   *  `claimedAmount` is decimal LYTH (null = unavailable, no-mock); `rateAtClaim`
+   *  is null until the fiat oracle exists. */
+  claimedAmount?: string | null;
+  rateAtClaim?: number | null;
+  currency?: CurrencyCode;
   /** T1-04(a) — account password supplied to clear an over-limit passkey
    *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
    *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */

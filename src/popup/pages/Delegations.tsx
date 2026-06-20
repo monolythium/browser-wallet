@@ -25,6 +25,7 @@ import {
   type DelegationsView,
   type PendingRewardsView,
 } from "../bg";
+import { buildClaimMeta } from "../claim-meta";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
@@ -160,6 +161,9 @@ export function Delegations({
     setClaimSubmitting(true);
     setClaimResult(null);
     try {
+      // Capture claimed amount + frozen fiat rate before broadcast (shared
+      // helper — identical to the Stake claim site). Metadata-only; value 0x0.
+      const claim = await buildClaimMeta(rewards, rewardsMock);
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -167,6 +171,9 @@ export function Delegations({
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
         opKind: "claim",
+        claimedAmount: claim.claimedAmount,
+        rateAtClaim: claim.rateAtClaim,
+        currency: claim.currency,
       });
       if (r.ok) setClaimResult({ ok: true, txHash: r.result.txHash });
       else setClaimResult({ ok: false, reason: r.reason ?? "claim rejected" });
