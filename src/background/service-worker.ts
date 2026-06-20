@@ -4783,13 +4783,25 @@ function parseIndexerStatus(value: unknown): {
 async function readActivityStorage(
   cacheKey: string,
   pendingKey: string,
-): Promise<{ cache: ActivityCache | null; pending: PendingTxRow[] }> {
+  localClaimsKey: string,
+): Promise<{
+  cache: ActivityCache | null;
+  pending: PendingTxRow[];
+  claims: PendingTxRow[];
+}> {
   const stored = await new Promise<Record<string, unknown>>((resolve) => {
-    chrome.storage.local.get([cacheKey, pendingKey], (res) => resolve(res ?? {}));
+    chrome.storage.local.get(
+      [cacheKey, pendingKey, localClaimsKey],
+      (res) => resolve(res ?? {}),
+    );
   });
   return {
     cache: validateActivityCache(stored[cacheKey]),
     pending: validatePendingActivityCache(stored[pendingKey])?.pending ?? [],
+    // Durable reward-claim store — read on EVERY activity-get path so a claim
+    // missing from the pending cache is always re-injected from the source of
+    // truth (Gap B fix; applyLocalClaims runs on all return paths below).
+    claims: validateLocalClaimsCache(stored[localClaimsKey])?.claims ?? [],
   };
 }
 
@@ -7971,10 +7983,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const pendingKey = activityPendingKey(addressLower, p.chainIdHex);
       const localClaimsKey = activityLocalClaimsKey(addressLower, p.chainIdHex);
       const now = Date.now();
-      const { cache: prevCache, pending: prevPending } = await readActivityStorage(
-        cacheKey,
-        pendingKey,
-      );
+      const {
+        cache: prevCache,
+        pending: prevPending,
+        claims: prevClaims,
+      } = await readActivityStorage(cacheKey, pendingKey, localClaimsKey);
       // Bug A F1 — bypass the staleness short-circuit when pending rows exist
       // so a refocus/nav refresh (and the F2 ~4s re-poll in useActivity) falls
       // through to the authoritative reconcile (dropConfirmedPendingByHash
@@ -7994,8 +8007,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS &&
         nonClaimPending.length === 0;
       if (isFresh) {
-        const pending = evictExpiredPending(prevPending, now);
-        if (pending.length !== prevPending.length) {
+        // Re-inject durable claims even on the fast path (Gap B): if the alarm
+        // or any writer dropped a claim from the pending cache, the durable
+        // store re-surfaces it here. applyLocalClaims dedups by txHash + cross-
+        // stream-suppresses by anchor; belt-2 (claims don't gate isFresh) intact.
+        const pending = applyLocalClaims(
+          evictExpiredPending(prevPending, now),
+          prevClaims,
+          prevCache.confirmed,
+        );
+        if (
+          pending.length !== prevPending.length ||
+          pending.some((row, i) => row !== prevPending[i])
+        ) {
           await new Promise<void>((resolve) => {
             chrome.storage.local.set(
               { [pendingKey]: { pending } },
@@ -8012,9 +8036,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const delegationOk = fresh.errors.delegationHistory === undefined;
       if (!activityOk && !delegationOk && prevCache !== null) {
         // Total indexer outage with a usable prev cache — preserve and
-        // surface. TTL backstop still runs on the pending list.
-        const pending = evictExpiredPending(prevPending, now);
-        if (pending.length !== prevPending.length) {
+        // surface. TTL backstop still runs on the pending list. Re-inject
+        // durable claims here too (Gap B) so an outage never drops a claim.
+        const pending = applyLocalClaims(
+          evictExpiredPending(prevPending, now),
+          prevClaims,
+          prevCache.confirmed,
+        );
+        if (
+          pending.length !== prevPending.length ||
+          pending.some((row, i) => row !== prevPending[i])
+        ) {
           await new Promise<void>((resolve) => {
             chrome.storage.local.set(
               { [pendingKey]: { pending } },
@@ -8075,15 +8107,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // (the receipt-bridged pending copy wins) and CROSS-STREAM suppresses a
       // claim once a confirmed row appears at its (block,txIndex) anchor (C2 —
       // confirmed rows carry no txHash). Dormant until the indexer ships claims.
-      const localStored = await new Promise<unknown>((resolve) => {
-        chrome.storage.local.get([localClaimsKey], (res) =>
-          resolve(res?.[localClaimsKey]),
-        );
-      });
-      const localClaims = validateLocalClaimsCache(localStored)?.claims ?? [];
+      // `prevClaims` was read up-front by readActivityStorage (Gap B) so every
+      // return path shares the same durable read.
       const nextPending = applyLocalClaims(
         evictedPending,
-        localClaims,
+        prevClaims,
         nextCache.confirmed,
       );
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
@@ -8091,8 +8119,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // + cross-stream-retired claims dropped). Only write when it changed.
       const liveClaims = nextPending.filter((p) => p.source === "local-claim");
       const claimsChanged =
-        liveClaims.length !== localClaims.length ||
-        liveClaims.some((c, i) => c !== localClaims[i]);
+        liveClaims.length !== prevClaims.length ||
+        liveClaims.some((c, i) => c !== prevClaims[i]);
       if (claimsChanged) {
         await new Promise<void>((resolve) => {
           chrome.storage.local.set(

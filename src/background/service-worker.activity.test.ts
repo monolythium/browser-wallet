@@ -1623,6 +1623,85 @@ describe("wallet-activity-get", () => {
     expect(r.errors.delegationHistory).toBeDefined();
   });
 
+  // Gap B — a durable claim missing from the pending cache (e.g. dropped by the
+  // 30s alarm) must be re-injected from the localclaims store on EVERY return
+  // path, not just the full path. readActivityStorage now reads the durable
+  // store + applyLocalClaims runs on isFresh + outage + full.
+  function durableClaim(txHash: string) {
+    return {
+      kind: "pending_tx",
+      txHash,
+      to: "0x" + "2".repeat(40),
+      amountDecimal: "0",
+      broadcastedAtMs: Date.now(),
+      broadcastBlockHeight: 100,
+      via: "op",
+      opKind: "claim",
+      source: "local-claim",
+      claimedAmount: "6.51",
+      rateAtClaim: null,
+      currency: "USD",
+    };
+  }
+
+  it("Gap B: isFresh fast path re-injects a durable claim absent from the pending cache (no RPC)", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "c".repeat(64);
+    // Fresh confirmed cache + EMPTY pending (the alarm dropped the claim) + the
+    // claim still in the durable store.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [],
+      lastFetchedAtMs: Date.now(),
+    };
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = { pending: [] };
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    const before = rpcCalls.length;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: Array<Record<string, unknown>> };
+    expect(r.ok).toBe(true);
+    expect(rpcCalls.length).toBe(before); // isFresh fast path — no RPC fired
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]!.txHash).toBe(claimHash);
+    expect(r.pending[0]!.source).toBe("local-claim");
+  });
+
+  it("Gap B: total-outage path re-injects a durable claim absent from the pending cache", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "d".repeat(64);
+    seedEmptyIndexer();
+    // STALE cache (past isFresh) + empty pending + claim in the durable store.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [],
+      lastFetchedAtMs: Date.now() - 600_000,
+    };
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = { pending: [] };
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    // Both indexer streams fail → outage path.
+    rpcErrors["lyth_getDelegationHistory"] = { code: -32603, message: "down" };
+    rpcErrors["lyth_getAddressActivity"] = { code: -32603, message: "down" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      pending: Array<Record<string, unknown>>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined();
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]!.txHash).toBe(claimHash);
+    expect(r.pending[0]!.source).toBe("local-claim");
+  });
+
   // C4 — deterministic pending confirmation via the canonical hash.
   function seedEmptyIndexer() {
     rpcResponses["lyth_getTokenBalances"] = [];
