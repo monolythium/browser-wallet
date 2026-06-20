@@ -26,7 +26,7 @@ import {
   type PendingRewardsView,
 } from "../bg";
 import { buildClaimMeta } from "../claim-meta";
-import { useInFlightClaim } from "../hooks/useInFlightClaim";
+import { useInFlightClaim, useClaimConfirmed } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
@@ -84,6 +84,18 @@ export function Delegations({
     | { ok: false; reason: string }
     | null
   >(null);
+  // #2 — auto-dismiss the claim-submitted toast once the claim confirms on-chain
+  // (its pending row is receipt-bridged), so the user doesn't dismiss manually.
+  const claimConfirmed = useClaimConfirmed(
+    account.addr,
+    chainId,
+    claimResult?.ok ? claimResult.txHash : null,
+  );
+  useEffect(() => {
+    if (!claimConfirmed) return;
+    const t = setTimeout(() => setClaimResult(null), 1500);
+    return () => clearTimeout(t);
+  }, [claimConfirmed]);
 
   // Load active delegations + cluster directory + balance + rewards on
   // mount. The fan-out is identical to the Stake page's pick-step

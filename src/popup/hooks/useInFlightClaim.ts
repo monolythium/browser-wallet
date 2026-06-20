@@ -25,6 +25,23 @@ export function hasInFlightClaim(rows: PendingTxRow[]): boolean {
   );
 }
 
+/** True when the claim with `txHash` has been receipt-bridged
+ *  (`confirmedBlockHeight` set) in the pending cache — the signal to auto-dismiss
+ *  the claim success surface. Pure + exported for unit coverage. Returns false
+ *  when `txHash` is null (no success surface open). */
+export function isClaimConfirmed(
+  rows: PendingTxRow[],
+  txHash: string | null,
+): boolean {
+  if (txHash === null) return false;
+  return rows.some(
+    (p) =>
+      p.txHash === txHash &&
+      p.source === "local-claim" &&
+      p.confirmedBlockHeight !== undefined,
+  );
+}
+
 /** True while a reward claim for (addr, chainIdHex) is in flight — a
  *  `source:"local-claim"` pending row with no `confirmedBlockHeight`. Flips
  *  false once the receipt bridge stamps `confirmedBlockHeight` (claim confirmed)
@@ -59,4 +76,43 @@ export function useInFlightClaim(addr: string, chainIdHex: string): boolean {
     };
   }, [addr, chainIdHex]);
   return inFlight;
+}
+
+/** True once the claim with `txHash` has confirmed (its pending row is
+ *  receipt-bridged with `confirmedBlockHeight`). Watches the pending cache via
+ *  the same storage-watch idiom; pass `txHash = null` to disarm (no open
+ *  success surface). Drives the success-surface auto-dismiss. */
+export function useClaimConfirmed(
+  addr: string,
+  chainIdHex: string,
+  txHash: string | null,
+): boolean {
+  const [confirmed, setConfirmed] = useState(false);
+  useEffect(() => {
+    if (txHash === null || !addr.startsWith("0x")) {
+      setConfirmed(false);
+      return;
+    }
+    const key = activityPendingKey(addr.toLowerCase(), chainIdHex);
+    let cancelled = false;
+    const apply = (raw: unknown) => {
+      if (cancelled) return;
+      const rows = validatePendingActivityCache(raw)?.pending ?? [];
+      setConfirmed(isClaimConfirmed(rows, txHash));
+    };
+    chrome.storage.local.get([key], (res) => apply(res?.[key]));
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      if (key in changes) apply(changes[key]?.newValue);
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [addr, chainIdHex, txHash]);
+  return confirmed;
 }

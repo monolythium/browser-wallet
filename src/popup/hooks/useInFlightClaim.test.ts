@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { hasInFlightClaim } from "./useInFlightClaim.js";
+import { hasInFlightClaim, isClaimConfirmed } from "./useInFlightClaim.js";
 import type { PendingTxRow } from "../../shared/activity.js";
 
 function row(over: Partial<PendingTxRow> = {}): PendingTxRow {
@@ -49,5 +49,45 @@ describe("hasInFlightClaim — #2 double-submit signal", () => {
         row({ txHash: "0xclaim", opKind: "claim", source: "local-claim" }),
       ]),
     ).toBe(true);
+  });
+});
+
+describe("isClaimConfirmed — #2 success auto-dismiss signal", () => {
+  const HASH = "0x" + "c".repeat(64);
+
+  it("true when the claim's row is receipt-bridged (confirmedBlockHeight set)", () => {
+    expect(
+      isClaimConfirmed(
+        [row({ txHash: HASH, opKind: "claim", source: "local-claim", confirmedBlockHeight: 500 })],
+        HASH,
+      ),
+    ).toBe(true);
+  });
+
+  it("false while the claim is still unbridged (no confirmedBlockHeight)", () => {
+    expect(
+      isClaimConfirmed(
+        [row({ txHash: HASH, opKind: "claim", source: "local-claim" })],
+        HASH,
+      ),
+    ).toBe(false);
+  });
+
+  it("false when txHash is null (no open success surface)", () => {
+    expect(
+      isClaimConfirmed(
+        [row({ txHash: HASH, opKind: "claim", source: "local-claim", confirmedBlockHeight: 500 })],
+        null,
+      ),
+    ).toBe(false);
+  });
+
+  it("false when no row matches the txHash", () => {
+    expect(
+      isClaimConfirmed(
+        [row({ txHash: "0xother", opKind: "claim", source: "local-claim", confirmedBlockHeight: 500 })],
+        HASH,
+      ),
+    ).toBe(false);
   });
 });

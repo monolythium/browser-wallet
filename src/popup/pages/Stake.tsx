@@ -51,7 +51,7 @@ import {
   type PendingRewardsView,
 } from "../bg";
 import { buildClaimMeta } from "../claim-meta";
-import { useInFlightClaim } from "../hooks/useInFlightClaim";
+import { useInFlightClaim, useClaimConfirmed } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
@@ -294,6 +294,19 @@ export function Stake({
 
   // Submission state.
   const [txHash, setTxHash] = useState<string | null>(null);
+  // #2 — auto-dismiss the claim SuccessView once the claim confirms on-chain
+  // (its pending row is receipt-bridged), so the user no longer has to tap Done.
+  const claimSuccessConfirmed = useClaimConfirmed(
+    account.addr,
+    chainId,
+    action === "claim" && step === "success" ? txHash : null,
+  );
+  useEffect(() => {
+    if (!claimSuccessConfirmed) return;
+    // Brief grace so the success is visibly seen, then close (== onDone).
+    const t = setTimeout(() => onBack(), 1500);
+    return () => clearTimeout(t);
+  }, [claimSuccessConfirmed, onBack]);
   const [hashCopied, setHashCopied] = useState(false);
   const [submitError, setSubmitError] = useState<{
     message: string;
