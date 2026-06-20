@@ -10,6 +10,8 @@ import { Icon, type IconName } from "../../Icon.js";
 import { useFeature } from "../../hooks/useFeature.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { notificationTitle } from "../../../shared/notifications.js";
+import { formatFiat } from "../../../shared/fiat.js";
+import { DISPLAY_CURRENCY_DEFAULT } from "../../../shared/constants.js";
 import { renderCounterparty } from "../ActivityRow.js";
 import type { PendingTxRow } from "../../../shared/activity.js";
 import type { NameLabel } from "../../../shared/name-resolution.js";
@@ -29,6 +31,23 @@ function relativeMs(ms: number, now: number): string {
 export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyProps) {
   const devMode = useFeature("DEVELOPER_MODE");
   const opKind = row.opKind;
+  // A reward claim's standard `amountDecimal` is "0" (value 0x0) and is
+  // suppressed below; the claimed reward rides on the distinct `claimedAmount`
+  // field (C3). The fiat sibling uses the FROZEN rate + currency captured at
+  // claim time — null rate → the honest dash ("$—"), never a fabricated $0.
+  const isClaim = opKind === "claim";
+  const claimFig =
+    isClaim && row.claimedAmount != null && row.claimedAmount !== "0"
+      ? row.claimedAmount
+      : null;
+  const claimFiat =
+    claimFig !== null
+      ? formatFiat(
+          claimFig,
+          row.currency ?? DISPLAY_CURRENCY_DEFAULT,
+          row.rateAtClaim ?? null,
+        )
+      : null;
   // `complete-redemption` + `emergency-key` are 0-value OUTGOING precompile
   // calls — on THIS row the user neither sends nor receives LYTH, so a
   // "0 LYTH" amount is meaningless and reads as "0 received". Suppress the
@@ -80,7 +99,14 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
             ) : (
               <>
                 {notificationTitle(opKind ?? "send", "confirmed")}
-                {showAmount ? ` ${row.amountDecimal} LYTH` : ""}
+                {claimFig
+                  ? ` ${claimFig} LYTH`
+                  : showAmount
+                    ? ` ${row.amountDecimal} LYTH`
+                    : ""}
+                {claimFiat ? (
+                  <span style={{ opacity: 0.75, marginLeft: 4 }}>({claimFiat})</span>
+                ) : null}
                 {clusterTarget ? ` · ${clusterTarget}` : ""}
               </>
             )}
@@ -95,6 +121,11 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           {isSend ? (
             <>
               <div className="amt">-{row.amountDecimal}</div>
+              <div className="sym">LYTH</div>
+            </>
+          ) : claimFig ? (
+            <>
+              <div className="amt">{claimFig}</div>
               <div className="sym">LYTH</div>
             </>
           ) : showAmount ? (
@@ -117,7 +148,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
   return (
     <div className="ext-act-row">
       <div className="dir out" style={{ position: "relative" }}>
-        <Icon name="send" size={13} />
+        <Icon name={isClaim ? "receive" : "send"} size={13} />
         <span className="ext-pending-dot" aria-label="pending" />
       </div>
       <div className="ext-act-row__main">
@@ -126,6 +157,16 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
             // No "0 LYTH to <precompile>" — the send-shaped template doesn't
             // fit a 0-value precompile call. Name it by its operation instead.
             <>{pendingPrefix} · {txTypeLabel(row)}</>
+          ) : isClaim ? (
+            // A claim's value is 0x0 — show the claimed reward (claimedAmount)
+            // not "0 LYTH to <precompile>". Fiat sibling = dash until the oracle.
+            <>
+              {pendingPrefix} · {notificationTitle("claim", "confirmed")}
+              {claimFig ? ` ${claimFig} LYTH` : ""}
+              {claimFiat ? (
+                <span style={{ opacity: 0.75, marginLeft: 4 }}>({claimFiat})</span>
+              ) : null}
+            </>
           ) : (
             <>
               {pendingPrefix} · {row.amountDecimal} LYTH to{" "}
@@ -146,12 +187,19 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
         </div>
       </div>
       <div className="ext-act-row__right">
-        {!suppressAmount && (
+        {isClaim ? (
+          claimFig ? (
+            <>
+              <div className="amt">{claimFig}</div>
+              <div className="sym">LYTH</div>
+            </>
+          ) : null
+        ) : !suppressAmount ? (
           <>
             <div className="amt">{row.amountDecimal}</div>
             <div className="sym">LYTH</div>
           </>
-        )}
+        ) : null}
       </div>
     </div>
   );

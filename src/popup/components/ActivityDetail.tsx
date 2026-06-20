@@ -30,6 +30,8 @@ import {
 } from "./_detailModalParts";
 import { monoscanTxUrl } from "../../shared/build-info";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
+import { formatFiat } from "../../shared/fiat";
+import { DISPLAY_CURRENCY_DEFAULT } from "../../shared/constants";
 import { resolveClusterLabel, formatWeightBpsPercent } from "../../shared/staking";
 import { txTypeLabel } from "../../shared/tx-type-label";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity";
@@ -155,7 +157,31 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
                   : "Pending"
             }
           />
-          <DRow label="Amount" value={`${row.amountDecimal} LYTH`} />
+          <DRow
+            label="Amount"
+            value={
+              // A reward claim's value is 0x0; show the captured claimedAmount
+              // (C3) + the fiat sibling (frozen rate → dash until the oracle).
+              row.source === "local-claim" &&
+              row.claimedAmount != null &&
+              row.claimedAmount !== "0" ? (
+                <>
+                  {row.claimedAmount} LYTH{" "}
+                  <span style={{ opacity: 0.75 }}>
+                    (
+                    {formatFiat(
+                      row.claimedAmount,
+                      row.currency ?? DISPLAY_CURRENCY_DEFAULT,
+                      row.rateAtClaim ?? null,
+                    )}
+                    )
+                  </span>
+                </>
+              ) : (
+                `${row.amountDecimal} LYTH`
+              )
+            }
+          />
           <DRow label="From" value={<CopyableAddress addr0x={walletAddr} />} />
           <DRow label="To" value={<CopyableAddress addr0x={row.to} name={name} />} />
           <DRow

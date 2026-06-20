@@ -125,3 +125,52 @@ describe("PendingTxRowBody — sealed 'awaiting reveal' label", () => {
     expect(html).not.toContain("awaiting reveal");
   });
 });
+
+// A reward claim's value is 0x0, so its standard amountDecimal is "0" and is
+// suppressed by the regex above; the claimed reward rides on the distinct
+// claimedAmount field (C3). The fiat sibling uses the frozen rate (null today →
+// honest dash, never $0 — no-mock).
+describe("PendingTxRowBody — reward claim claimedAmount + fiat sibling (C3)", () => {
+  function claim(partial: Partial<PendingTxRow> = {}): PendingTxRow {
+    return pendingRow({
+      opKind: "claim",
+      source: "local-claim",
+      amountDecimal: "0",
+      claimedAmount: "6.51",
+      rateAtClaim: null,
+      currency: "USD",
+      ...partial,
+    });
+  }
+
+  it("confirmed claim shows claimedAmount (not the suppressed 0) + $— sibling", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody row={claim({ confirmedBlockHeight: 200 })} counterpartyLabel={undefined} />,
+    );
+    expect(html).toContain("Rewards claimed");
+    expect(html).toContain("6.51 LYTH");
+    expect(html).toContain("$—"); // "$—" — honest dash, never $0
+    expect(html).not.toContain("$0");
+  });
+
+  it("pending (not-yet-bridged) claim reads 'Pending · Rewards claimed 6.51 LYTH'", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody row={claim()} counterpartyLabel={undefined} />,
+    );
+    expect(html).toContain("Pending");
+    expect(html).toContain("Rewards claimed");
+    expect(html).toContain("6.51 LYTH");
+    expect(html).not.toContain("0 LYTH"); // never the suppressed "0 LYTH to <precompile>"
+  });
+
+  it("no-mock: a claim with null claimedAmount shows the bare title, no figure", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={claim({ confirmedBlockHeight: 200, claimedAmount: null })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Rewards claimed");
+    expect(html).not.toContain("LYTH"); // no figure → no fiat, no amount
+  });
+});
