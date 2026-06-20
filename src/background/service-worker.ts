@@ -5449,14 +5449,52 @@ export async function pollPendingAndNotify(): Promise<{
           await fireOsNotification(result.record, { unlocked });
         }
       }
-      // Write back ONLY the still-pending rows (terminal + TTL-expired
-      // dropped) so they aren't re-polled. Change-guard mirrors
-      // writeActivityStorage so we don't fire a spurious onChanged.
-      if (kept.length !== pending.length) {
+      // Write back the still-pending rows. A reward CLAIM (source:"local-claim")
+      // is a DURABLE local record — the indexer emits no claim event, so the
+      // alarm must NOT delete a confirmed claim from the pending cache (that
+      // would vanish it from an open popup via onChanged). Re-bridge a
+      // terminal-confirmed claim back into the written list (stamp the receipt
+      // inclusion slot, mirroring the activity-get bridge); ordinary terminal
+      // rows still drop (they re-surface from the indexer). Order + object refs
+      // are preserved so a settled claim never fires a spurious onChanged.
+      const confirmedClaims = new Map(
+        terminal
+          .filter((t) => t.status === "confirmed" && t.row.source === "local-claim")
+          .map((t) => [t.row.txHash, t] as const),
+      );
+      let writtenPending: PendingTxRow[];
+      if (confirmedClaims.size === 0) {
+        writtenPending = kept;
+      } else {
+        const keptHashes = new Set(kept.map((r) => r.txHash));
+        writtenPending = live
+          .filter((r) => keptHashes.has(r.txHash) || confirmedClaims.has(r.txHash))
+          .map((r) => {
+            const tc = confirmedClaims.get(r.txHash);
+            if (tc === undefined || r.confirmedBlockHeight !== undefined) return r;
+            const block = tc.blockNumber ?? r.broadcastBlockHeight;
+            return block !== null
+              ? {
+                  ...r,
+                  confirmedBlockHeight: block,
+                  ...(tc.txIndex !== null ? { confirmedTxIndex: tc.txIndex } : {}),
+                }
+              : r;
+          });
+      }
+      const writtenChanged =
+        writtenPending.length !== pending.length ||
+        writtenPending.some((row, i) => row !== pending[i]);
+      if (writtenChanged) {
         await new Promise<void>((resolve) => {
-          chrome.storage.local.set({ [key]: { pending: kept } }, () => resolve());
+          chrome.storage.local.set(
+            { [key]: { pending: writtenPending } },
+            () => resolve(),
+          );
         });
       }
+      // A confirmed claim is a settled record, NOT in-flight — exclude it from
+      // `remaining` so it never keeps the alarm armed (kept rows still do).
       remaining += kept.length;
     }
     await refreshUnreadBadge({

@@ -4811,6 +4811,41 @@ describe("pollPendingAndNotify — headless poll-core", () => {
     expect(hist.entries[0]!.blockNumber).toBe(123);
   });
 
+  it("keeps a terminal-confirmed local-claim row (bridged) in the write-back; a non-claim terminal row drops", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    const claimHash = "0x" + "c".repeat(64);
+    const claimRow = pendingRow({
+      txHash: claimHash,
+      opKind: "claim",
+      source: "local-claim",
+      amountDecimal: "0",
+      claimedAmount: "6.51",
+      rateAtClaim: null,
+      currency: "USD",
+    });
+    const ordinaryRow = pendingRow(); // opKind:"send", default hash
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [claimRow, ordinaryRow],
+    };
+    // Both rows confirm (the stub answers per-method, not per-hash).
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 123 };
+
+    const { remaining } = await pollPendingAndNotify();
+
+    const written = (
+      storageLocal[pendingKey(ADDR, CHAIN)] as { pending: Array<Record<string, unknown>> }
+    ).pending;
+    // The claim SURVIVES the alarm (root-cause Gap A fix), bridged with the
+    // receipt block; the ordinary terminal send is dropped (re-surfaces from
+    // the indexer). Confirmed claims aren't counted toward `remaining`.
+    expect(written).toHaveLength(1);
+    expect(written[0]!.txHash).toBe(claimHash);
+    expect(written[0]!.source).toBe("local-claim");
+    expect(written[0]!.confirmedBlockHeight).toBe(123);
+    expect(remaining).toBe(0);
+  });
+
   it("failed pending → recorded as FAILED, never confirmed (#5117)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
