@@ -8,13 +8,16 @@
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { DelegateRow } from "../../../shared/activity.js";
-import { clusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
+import { resolveClusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
 
 export interface DelegateRowBodyProps {
   row: DelegateRow;
+  /** Cluster directory (id → name); falls back to the captured name then
+   *  `Cluster #<id>`. */
+  clusterNameById?: ReadonlyMap<number, string | null> | undefined;
 }
 
-export function DelegateRowBody({ row }: DelegateRowBodyProps) {
+export function DelegateRowBody({ row, clusterNameById }: DelegateRowBodyProps) {
   // weightBps is a delegation WEIGHT share (basis points), not a LYTH amount —
   // render it as a percentage. The LYTH principal is surfaced in the tx-detail
   // popup via a block-lookup of the delegate tx value.
@@ -25,7 +28,7 @@ export function DelegateRowBody({ row }: DelegateRowBodyProps) {
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
-          Delegated to {clusterLabel(row.cluster, row.clusterName)}
+          Delegated to {resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>

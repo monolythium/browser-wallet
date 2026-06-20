@@ -51,6 +51,20 @@ export function clusterLabel(cluster: number, clusterName?: string | null): stri
   return `Cluster #${cluster}`;
 }
 
+/** Resolve a delegation row's cluster display label with the no-mock fallback
+ *  chain: the name the wallet CAPTURED at send time wins, else the live cluster
+ *  directory name (the id→name map threaded from the App-level
+ *  `bgStakingClusterDirectory` fetch), else the honest `Cluster #<id>` via
+ *  `clusterLabel`. Never fabricates a name — a cluster absent from both sources
+ *  shows its raw id. */
+export function resolveClusterLabel(
+  cluster: number,
+  capturedName: string | null | undefined,
+  directory?: ReadonlyMap<number, string | null>,
+): string {
+  return clusterLabel(cluster, capturedName ?? directory?.get(cluster) ?? null);
+}
+
 /** Cluster directory row. Mirrors SDK `ClusterDirectoryEntryResponse` + the
  *  entity flag pulled in via `lyth_getClusterEntity` (so a single popup-
  *  visible cluster card carries the Foundation / community badge per §30.5

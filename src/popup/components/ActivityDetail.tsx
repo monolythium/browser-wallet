@@ -30,7 +30,7 @@ import {
 } from "./_detailModalParts";
 import { monoscanTxUrl } from "../../shared/build-info";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
-import { clusterLabel, formatWeightBpsPercent } from "../../shared/staking";
+import { resolveClusterLabel, formatWeightBpsPercent } from "../../shared/staking";
 import { txTypeLabel } from "../../shared/tx-type-label";
 import type { ActivityRow as ActivityRowType } from "../../shared/activity";
 import type { NameLabel } from "../../shared/name-resolution";
@@ -42,6 +42,9 @@ export interface ActivityDetailProps {
   label: NameLabel | undefined;
   /** The active wallet's own 0x address (the From of sends / Delegator). */
   walletAddr: string;
+  /** Cluster directory (id → name) for delegation rows — resolves the numeric
+   *  cluster id to its real name, else `Cluster #<id>` (no-mock). */
+  clusterNameById?: ReadonlyMap<number, string | null> | undefined;
   onClose: () => void;
 }
 
@@ -68,7 +71,7 @@ function isSelfPaid(row: ActivityRowType): boolean {
 // primitives without duplicating them). Behavior is byte-identical to
 // the prior inlined versions — the existing activity tests pin this.
 
-export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDetailProps) {
+export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClose }: ActivityDetailProps) {
   // Confirmed rows carry a (blockHeight, txIndex) coordinate but no hash/amount
   // in the indexer stream. Resolve the tx on demand from the block so we can:
   //  - show the LYTH principal for delegate rows (tx msg.value), and
@@ -228,7 +231,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
             <DRow label="Amount" value={delegateLyth} />
           )}
           <DRow label="Weight" value={formatWeightBpsPercent(row.weightBps)} />
-          <DRow label="Cluster" value={clusterLabel(row.cluster, row.clusterName)} />
+          <DRow label="Cluster" value={resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)} />
           <DRow label="Delegator" value={<CopyableAddress addr0x={walletAddr} />} />
           {feeText && <DRow label="Fee" value={feeText} />}
           <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />

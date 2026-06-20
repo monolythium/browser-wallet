@@ -103,6 +103,7 @@ import {
   bgWalletActivityGet,
   bgWalletIndexerSnapshot,
   bgStakingDelegations,
+  bgStakingClusterDirectory,
   bgWalletActiveChain,
   bgWalletSetActiveChain,
   bgChainList,
@@ -428,6 +429,34 @@ export default function App() {
   const [chainList, setChainList] = useState<ChainEntry[]>([]);
   const activeChain: ChainEntry =
     chainList.find((c) => c.chainId === activeChainId) ?? TESTNET_FALLBACK;
+  // Cluster name directory (id → name) for the Home Activity rows. Indexer-fed
+  // delegation rows carry only a numeric cluster id; this map lets them show the
+  // real cluster name with a graceful fallback to `Cluster #<id>` (no-mock).
+  // Fetched once per account/chain via the SAME staking-cluster-directory call
+  // the Stake/Delegations pages use, lifted here so the directory resolves in
+  // ONE place and is threaded down (Home → ActivityList → row bodies) rather
+  // than a third per-surface fetch. A transient failure keeps the last good map
+  // (rows fall back to the raw id meanwhile) — never cleared to a mock.
+  const [clusterNameById, setClusterNameById] = useState<Map<number, string | null>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) {
+      setClusterNameById(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const r = await bgStakingClusterDirectory();
+      if (cancelled || !r.ok) return;
+      const m = new Map<number, string | null>();
+      for (const c of r.data.clusters) m.set(c.clusterId, c.name);
+      setClusterNameById(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [acc.addr, activeChain.chainId]);
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
   // taps a row on the Networks list; cleared when they back out.
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
@@ -1355,6 +1384,7 @@ export default function App() {
           network={activeChain}
           indexer={indexerSnapshot}
           delegations={delegationsView}
+          clusterNameById={clusterNameById}
           balanceStale={balanceStale}
           balanceCause={balanceCause}
           chainNotLive={chainNotLive}

@@ -1981,6 +1981,10 @@ interface HomeProps {
   /** Active delegations (totalBps) for the Home "Delegated" chip. null while
    *  loading / on fetch failure → the chip shows "0.00" (no fabrication). */
   delegations?: DelegationsView | null;
+  /** Cluster directory (id → name) for the Activity rows. Threaded to
+   *  ActivityList so an indexer-fed delegation row (numeric id only) resolves
+   *  the real cluster name, falling back to `Cluster #<id>` (no-mock). */
+  clusterNameById?: ReadonlyMap<number, string | null> | undefined;
   /** #42: the displayed balance is a RETAINED last-known value (the chain was
    *  unreachable/untrusted on the latest refresh). When true and a balance is
    *  present, the hero labels it as stale — it never fabricates/zeros it. */
@@ -2022,7 +2026,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, clusterNameById, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2338,6 +2342,7 @@ export function Home({ account, network, indexer, delegations, balanceStale, bal
                 addr={account.addr.startsWith("0x") ? account.addr : null}
                 chainIdHex={network.chainId}
                 hideConfirmed={hideBalanceValue}
+                clusterNameById={clusterNameById}
               />
             </div>
           )}

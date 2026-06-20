@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { clusterLabel, formatWeightBpsPercent } from "./staking.js";
+import {
+  clusterLabel,
+  formatWeightBpsPercent,
+  resolveClusterLabel,
+} from "./staking.js";
 
 describe("formatWeightBpsPercent", () => {
   it("renders basis points as a 2-dp percent (the delegation-weight display)", () => {
@@ -36,5 +40,30 @@ describe("clusterLabel", () => {
     expect(clusterLabel(0)).not.toContain(".cluster.mono");
     // The raw id is preserved exactly (no +1).
     expect(clusterLabel(0)).toBe("Cluster #0");
+  });
+});
+
+describe("resolveClusterLabel", () => {
+  const dir = new Map<number, string | null>([
+    [0, "halcyon.cluster.mono"],
+    [3, null], // present but unnamed
+  ]);
+
+  it("prefers the captured name over the directory name", () => {
+    expect(resolveClusterLabel(0, "captured.cluster.mono", dir)).toBe(
+      "captured.cluster.mono",
+    );
+  });
+
+  it("falls back to the directory name when no captured name", () => {
+    expect(resolveClusterLabel(0, null, dir)).toBe("halcyon.cluster.mono");
+    expect(resolveClusterLabel(0, undefined, dir)).toBe("halcyon.cluster.mono");
+  });
+
+  it("falls back to 'Cluster #<id>' when neither source names it (no-mock)", () => {
+    expect(resolveClusterLabel(3, null, dir)).toBe("Cluster #3"); // present-but-null
+    expect(resolveClusterLabel(9, null, dir)).toBe("Cluster #9"); // absent from dir
+    expect(resolveClusterLabel(9, null, undefined)).toBe("Cluster #9"); // no dir at all
+    expect(resolveClusterLabel(9, "", dir)).toBe("Cluster #9"); // empty captured name
   });
 });
