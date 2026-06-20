@@ -801,6 +801,7 @@ export function Stake({
                   clusters={clusters}
                   onClaim={() => void handleClaim()}
                   claimDisabled={claimInFlight}
+                  claimPending={claimInFlight}
                   showAdvancedAnalytics={tradingInterfaceOn}
                 />
                 {delegations !== null && delegations.rows.length > 0 && (

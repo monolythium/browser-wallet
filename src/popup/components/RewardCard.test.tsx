@@ -115,3 +115,52 @@ describe("RewardCard — pending-rewards states", () => {
     expect(html).not.toContain("No rewards yet");
   });
 });
+
+describe("RewardCard — in-flight claim label + pending tooltip", () => {
+  // Substring without the apostrophe — renderToStaticMarkup escapes ' -> &#x27;.
+  const TIP = "A reward claim is pending confirmation";
+
+  it("claimPending → 'Claiming…' label + the pending tooltip", () => {
+    const html = renderToStaticMarkup(
+      <RewardCard
+        {...baseProps}
+        rewards={rewardsView({ totalAmountWei: "0x64" })}
+        error={null}
+        claimDisabled
+        claimPending
+      />,
+    );
+    expect(html).toContain("Claiming…");
+    expect(html).toContain(TIP);
+    expect(html).not.toContain("Claim all");
+  });
+
+  it("disabled for another reason (NOT pending) → normal label, NO tooltip", () => {
+    const html = renderToStaticMarkup(
+      <RewardCard
+        {...baseProps}
+        rewards={rewardsView({ totalAmountWei: "0x64" })}
+        error={null}
+        claimDisabled
+        claimPending={false}
+      />,
+    );
+    expect(html).toContain("Claim all");
+    expect(html).not.toContain("Claiming…");
+    expect(html).not.toContain(TIP);
+  });
+
+  it("zero rewards (not pending) → 'No rewards yet', no tooltip, no 'Claiming…'", () => {
+    const html = renderToStaticMarkup(
+      <RewardCard
+        {...baseProps}
+        rewards={rewardsView({ totalAmountWei: "0x0" })}
+        error={null}
+        claimPending={false}
+      />,
+    );
+    expect(html).toContain("No rewards yet");
+    expect(html).not.toContain("Claiming…");
+    expect(html).not.toContain(TIP);
+  });
+});

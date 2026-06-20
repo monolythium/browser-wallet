@@ -259,6 +259,7 @@ export function Delegations({
             clusters={clusters}
             onClaim={() => void handleClaim()}
             claimDisabled={claimSubmitting || claimInFlight}
+            claimPending={claimSubmitting || claimInFlight}
           />
         )}
 
