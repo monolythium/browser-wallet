@@ -468,7 +468,7 @@ const inlineErr: CSSProperties = {
 
 const fromHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 10,
+  fontSize: 12,
   color: "var(--fg-500)",
   marginTop: 8,
   lineHeight: 1.5,
@@ -478,13 +478,13 @@ const fromHint: CSSProperties = {
 // mono numeric font so the figures stand out from the prose.
 const amountStrong: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 13,
+  fontSize: 14,
   color: "var(--gold)",
 };
 
 const amountStrongMuted: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 11,
+  fontSize: 13,
   color: "var(--fg-200)",
 };
 
