@@ -1953,6 +1953,89 @@ describe("wallet-activity-get", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
+  // OUTAGE receipt reconcile — when BOTH indexer streams fail, the receipt pass
+  // (indexer-independent: lyth_txStatus + eth_getTransactionReceipt on the chain
+  // RPC, which can be up while the indexer is down) still clears a tx that
+  // confirmed via its receipt instead of stranding it until the 30s alarm. The
+  // Gap B durable-claim re-inject stays intact on this path.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  function seedOutageCache() {
+    storageLocal[
+      `mono.activity.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`
+    ] = { confirmed: [], lastFetchedAtMs: Date.now() - 600_000 };
+  }
+  function failBothIndexerStreams() {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcErrors["lyth_getDelegationHistory"] = { code: -32603, message: "down" };
+    rpcErrors["lyth_getAddressActivity"] = { code: -32603, message: "down" };
+  }
+
+  it("OUTAGE: a sent tx confirmed via receipt is bridged (cleared) without waiting for the 30s alarm", async () => {
+    seedOutageCache();
+    failBothIndexerStreams();
+    // Indexer down, chain RPC up → the receipt resolves.
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "b2".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number }>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined(); // outage path taken
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200); // bridged on the receipt
+  });
+
+  it("OUTAGE: a still-pending sent tx stays pending (no receipt yet)", async () => {
+    seedOutageCache();
+    failBothIndexerStreams();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    seedPending("0x" + "b3".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number }>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined();
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBeUndefined();
+  });
+
+  it("OUTAGE: re-injects a durable claim (Gap B) while bridging a confirmed sent tx", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "e2".repeat(32);
+    seedOutageCache();
+    failBothIndexerStreams();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    // A sent tx_send in the pending cache + a durable claim that the cache lost.
+    seedPending("0x" + "b4".repeat(32));
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ txHash: string; source?: string; confirmedBlockHeight?: number }>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined();
+    // Claim re-injected (Gap B) AND the sent tx bridged (the outage fix).
+    expect(
+      r.pending.some((row) => row.source === "local-claim" && row.txHash === claimHash),
+    ).toBe(true);
+    expect(
+      r.pending.some((row) => row.confirmedBlockHeight === 200 && row.source !== "local-claim"),
+    ).toBe(true);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile
   // (dropConfirmedPendingByHash), so a tx that confirms in ~3-5s clears from

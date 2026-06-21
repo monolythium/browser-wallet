@@ -5249,6 +5249,32 @@ async function dropConfirmedPendingByHash(
   return { kept, terminal, rpcFailures };
 }
 
+/** Stamp the receipt's inclusion slot (block, txIndex) onto each receipt-
+ *  CONFIRMED pending row so it renders confirmed immediately (not "Pending")
+ *  and reconcilePending can later retire it by that exact (block, txIndex) slot
+ *  — for ANY kind (transfer OR delegate/undelegate/redelegate), not just
+ *  tx_send. Falls back to the broadcast anchor for the block; a row with no
+ *  known block stays a plain pending row until the indexer surfaces it. FAILED
+ *  terminals are NOT bridged (they surface via the failed-row notification
+ *  path). Shared by the full path and the indexer-outage path so both bridge
+ *  identically. */
+function bridgeConfirmedTerminals(
+  terminals: TerminalPendingTx[],
+): PendingTxRow[] {
+  return terminals
+    .filter((t) => t.status === "confirmed")
+    .map((t) => {
+      const block = t.blockNumber ?? t.row.broadcastBlockHeight;
+      return block !== null
+        ? {
+            ...t.row,
+            confirmedBlockHeight: block,
+            ...(t.txIndex !== null ? { confirmedTxIndex: t.txIndex } : {}),
+          }
+        : t.row;
+    });
+}
+
 /** Best-effort total tx fee (lythoshi decimal string) for a CONFIRMED tx, read
  *  from `lyth_decodeTx.fee.total_lythoshi` — the "comprehensive tx-detail" RPC
  *  whose `fee` the chain COMPUTES for EVERY tx kind ((block base price + signed
@@ -8048,11 +8074,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const activityOk = fresh.errors.addressActivity === undefined;
       const delegationOk = fresh.errors.delegationHistory === undefined;
       if (!activityOk && !delegationOk && prevCache !== null) {
-        // Total indexer outage with a usable prev cache — preserve and
-        // surface. TTL backstop still runs on the pending list. Re-inject
-        // durable claims here too (Gap B) so an outage never drops a claim.
+        // Total indexer outage with a usable prev cache — preserve and surface.
+        // The receipt pass (above) is indexer-INDEPENDENT, so even with BOTH
+        // indexer streams down we still clear a tx that confirmed via its
+        // receipt instead of stranding it until the 30s alarm: bridge the
+        // receipt-confirmed rows (stamp confirmedBlockHeight) and keep the
+        // still-pending ones. There's no indexer snapshot to anchor-swap against
+        // here, so bridged rows render confirmed until a later (recovered) poll's
+        // reconcilePending retires them. TTL backstop still runs; re-inject
+        // durable claims too (Gap B) so an outage never drops a claim.
         const pending = applyLocalClaims(
-          evictExpiredPending(prevPending, now),
+          evictExpiredPending(
+            [...receiptKept, ...bridgeConfirmedTerminals(terminalByHash)],
+            now,
+          ),
           prevClaims,
           prevCache.confirmed,
         );
@@ -8096,25 +8131,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // then renders — no duplicate, no gap). Failed rows are never in the
       // success-only indexer stream, so they are NOT bridged: they drop here and
       // surface via the notification-history failed-row path.
-      const bridgedConfirmed = terminalByHash
-        .filter((t) => t.status === "confirmed")
-        .map((t) => {
-          // Stamp the receipt's inclusion (block, txIndex) so the row renders as
-          // confirmed immediately (not "Pending") and reconcilePending can match
-          // the indexer's canonical row by that exact slot — for ANY kind
-          // (transfer OR delegate/undelegate/redelegate), not just tx_send.
-          // Fall back to the broadcast anchor for the block; if no block is
-          // known leave it unflagged (a plain pending row until the indexer
-          // surfaces it).
-          const block = t.blockNumber ?? t.row.broadcastBlockHeight;
-          return block !== null
-            ? {
-                ...t.row,
-                confirmedBlockHeight: block,
-                ...(t.txIndex !== null ? { confirmedTxIndex: t.txIndex } : {}),
-              }
-            : t.row;
-        });
+      const bridgedConfirmed = bridgeConfirmedTerminals(terminalByHash);
       // Final pending = the receipt survivors (still-pending + bridged-confirmed)
       // that the indexer ALSO hasn't surfaced yet. The receipt pass ran over ALL
       // prevPending (it raced the fetch), so restrict it to reconciledHashes —
