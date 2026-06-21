@@ -33,14 +33,14 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value tracks protocore v0.1.70-testnet (2026-06-19), where
+ *  Current value tracks protocore v0.1.72-testnet (2026-06-21), where
  *  `lyth_chainStats.genesisHash`
  *  reports the registry identity hash below. Bumping this security pin is
  *  a human-reviewer decision; the About-page drift banner surfaces the
  *  mismatch and the live-registry fetch shows the current GitHub-registry
  *  value alongside it. */
 export const TESTNET_GENESIS_HASH =
-  "0x6c76fe490fab7195fc5821b052ca7a90b8fe96e0b18204d28430e97f57751943";
+  "0x363fb60abd3f481e16fe74d6a3e5afd35d6d3ba9cc26e186f27d4195cd5a7359";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
@@ -48,16 +48,16 @@ export const TESTNET_GENESIS_HASH =
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
  *  header hash. They are not the same value on protocore v0.1.49. */
 export const TESTNET_BLOCK0_HASH =
-  "0x5e17b6a5c47d2b649c5056d5598223fffb6e3e0014138c960a2e1d76822d29fe";
+  "0x374809d6f795397380a7b179143e34243f88abd3f02c434a0b7a1c64f39e6026";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
- *  the v0.1.70-testnet re-genesis value (2026-06-19) so it does not lag
+ *  the v0.1.72-testnet re-genesis value (2026-06-21) so it does not lag
  *  behind the installed SDK snapshot (`TESTNET_69420.genesis_hash`), which
  *  is bumped on the next SDK rebuild/publish. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0x6c76fe490fab7195fc5821b052ca7a90b8fe96e0b18204d28430e97f57751943";
+  "0x363fb60abd3f481e16fe74d6a3e5afd35d6d3ba9cc26e186f27d4195cd5a7359";
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
