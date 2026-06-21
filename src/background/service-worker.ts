@@ -8029,9 +8029,22 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
         return { ok: true, cache: prevCache, pending, errors: {} };
       }
-      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex, {
-        includeMrcAccount: false,
-      });
+      // Receipt classification is indexer-independent — it asks the chain
+      // directly (lyth_txStatus + eth_getTransactionReceipt on the pending
+      // txHashes), so run it CONCURRENTLY with the ~6-7 RPC indexer snapshot
+      // instead of after it. Sequencing the receipt pass after the snapshot
+      // delayed the spinner flip by a full receipt round-trip (~1-3s) behind
+      // the single-RPC balance pill — the visible "balance updated but still
+      // pending" beat. The indexer anchor match (reconcilePending) still runs
+      // AFTER the fetch (it needs the freshly indexed confirmed rows); the
+      // early receipt pass only feeds the indexer-lag bridge below.
+      const [fresh, receiptPass] = await Promise.all([
+        fetchIndexerSnapshot(p.address, p.chainIdHex, {
+          includeMrcAccount: false,
+        }),
+        dropConfirmedPendingByHash(prevPending),
+      ]);
+      const { kept: receiptKept, terminal: terminalByHash } = receiptPass;
       const activityOk = fresh.errors.addressActivity === undefined;
       const delegationOk = fresh.errors.delegationHistory === undefined;
       if (!activityOk && !delegationOk && prevCache !== null) {
@@ -8067,13 +8080,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         confirmed: prevCache?.confirmed ?? [],
       });
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
-      const { kept, terminal: terminalByHash } = await dropConfirmedPendingByHash(reconciled);
+      const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
       // Indexer-lag bridge (open-surface display path). A tx confirmed via the
-      // real-time receipt is dropped from `kept`, but the indexer's success
-      // stream usually hasn't surfaced its canonical row in THIS snapshot yet —
-      // the chain includes the tx a beat before the indexer writes the activity
-      // row, and since reconcilePending ran first without matching it, the
-      // confirmed row is NOT in nextCache. Dropping it now would make the tx
+      // real-time receipt is dropped from `receiptKept`, but the indexer's
+      // success stream usually hasn't surfaced its canonical row in THIS snapshot
+      // yet — the chain includes the tx a beat before the indexer writes the
+      // activity row, and reconcilePending (run over the raw prevPending, which
+      // carries no confirmedBlockHeight on a first-confirm tick) can't match it,
+      // so the confirmed row is NOT in nextCache. Dropping it now would make the tx
       // VANISH (pending gone, confirmed not yet indexed) until a much later
       // refresh — exactly the "sent but not shown in Activity" report. Keep
       // confirmed rows in the pending list so the tx stays visible AND the
@@ -8101,7 +8115,17 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               }
             : t.row;
         });
-      const evictedPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
+      // Final pending = the receipt survivors (still-pending + bridged-confirmed)
+      // that the indexer ALSO hasn't surfaced yet. The receipt pass ran over ALL
+      // prevPending (it raced the fetch), so restrict it to reconciledHashes —
+      // this keeps the result identical to the previous "receipt over indexer-
+      // survivors" ordering: a row the indexer matched THIS tick is dropped (its
+      // canonical confirmed row renders); an unmatched bridged row stays visible
+      // until a later tick's reconcilePending retires it by (block,txIndex).
+      const survivors = [...receiptKept, ...bridgedConfirmed].filter((r) =>
+        reconciledHashes.has(r.txHash),
+      );
+      const evictedPending = evictExpiredPending(survivors, now);
       // Re-inject the durable local-claim rows (the indexer never emits a claim
       // event, so they exist only here). applyLocalClaims dedups by txHash
       // (the receipt-bridged pending copy wins) and CROSS-STREAM suppresses a
@@ -8137,7 +8161,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // notification I/O — a slow/failed notification write must never delay
       // or break activity persistence. See plan §P6.
       {
-        const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
+        // reconciledHashes is computed once in the main body above (the indexer
+        // anchor survivors); reuse it so the heuristic notification set stays
+        // exactly "rows the indexer matched" — unchanged by the receipt reorder.
         const heuristicallyMatched = prevPending.filter(
           (r) => !reconciledHashes.has(r.txHash),
         );

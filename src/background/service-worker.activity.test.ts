@@ -1848,6 +1848,111 @@ describe("wallet-activity-get", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
+  // REORDER (timing fix) — the receipt classification now races the indexer
+  // snapshot (Promise.all) instead of running after it, so the spinner flips at
+  // receipt speed. The OUTPUT must be unchanged: a confirmed row still bridges
+  // on its receipt regardless of the indexer snapshot content, and a bridged row
+  // the indexer surfaces at the same (block,txIndex) anchor is still swapped for
+  // the canonical row (no duplicate) — for ANY kind, not just tx_send.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  it("REORDER: receipt-bridges a confirmed row independent of the indexer snapshot content", async () => {
+    // The indexer fetch SUCCEEDS but returns only an UNRELATED confirmed row
+    // (different counterparty/amount → no heuristic match). The pending row must
+    // still flip confirmed on its own receipt — proving the bridge isn't gated
+    // on the indexer matching it (the receipt pass is indexer-independent).
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 99,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0x" + "9".repeat(40),
+        tokenId: null,
+        amount: "42",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "a1".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number }>;
+      cache: { confirmed: unknown[] };
+    };
+    expect(r.ok).toBe(true);
+    // The pending row bridged (confirmed) on its receipt; the unrelated indexer
+    // row is in the confirmed cache but never matched it.
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200);
+    expect(r.cache.confirmed).toHaveLength(1);
+  });
+
+  it("REORDER: a bridged DELEGATE row is swapped for the indexer's canonical delegation row at the same anchor (no dup)", async () => {
+    // A delegate/undelegate confirms as a delegation row, NEVER a tx_send — the
+    // counterparty/amount heuristic can't retire it, so it relies on the
+    // bridged (block,txIndex) anchor match. Seed the post-first-confirm state: a
+    // pending delegate row already bridged at (100,0); the indexer now surfaces
+    // the canonical delegation row at that exact slot → reconcilePending drops
+    // the bridged copy and the canonical confirmed row renders. No duplicate.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 100,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "delegated",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: "269",
+        cluster: 0,
+        weightBps: 2500,
+      },
+    ];
+    // Receipt re-confirms the same slot (the open poll keeps asking).
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 100 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 100, tx_index: 0 };
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    storageLocal[pendingKey] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash: "0x" + "de".repeat(32),
+          to: "0x000000000000000000000000000000000000100a",
+          amountDecimal: "0",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 100,
+          via: "operator-test",
+          opKind: "delegate",
+          confirmedBlockHeight: 100,
+          confirmedTxIndex: 0,
+        },
+      ],
+    };
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: unknown[];
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
+    // Bridged copy retired by the anchor match; canonical delegation row renders.
+    expect(r.pending).toHaveLength(0);
+    expect(r.cache.confirmed.some((c) => c.kind === "delegate")).toBe(true);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile
   // (dropConfirmedPendingByHash), so a tx that confirms in ~3-5s clears from
