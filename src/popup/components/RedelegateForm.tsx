@@ -19,6 +19,8 @@ import { hoverBg, hoverBright } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import {
   effectiveWeightWholeLythoshi,
+  isInertDelegation,
+  minNonInertBps,
   percentToBps,
 } from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
@@ -135,10 +137,18 @@ export function RedelegateForm({
   // Additive >100% feedback (see StakeForm) — read raw input, parser untouched.
   const exceedsHundred =
     /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
+  // A positive percent that rounds to 0 bps (sub-0.01%) would revert ZeroWeight.
+  const roundsToZeroBps =
+    movePercent !== null && movePercent > 0 && moveBps === 0;
+  // bps >= 1 that floors to 0 whole-LYTH effective weight → accepted but INERT.
+  const inert =
+    balanceLythoshi !== null && isInertDelegation(moveBps, balanceLythoshi);
+  const minBps = balanceLythoshi !== null ? minNonInertBps(balanceLythoshi) : null;
   const canContinue =
     !amountIsZero &&
     !exceedsSource &&
     !exceedsDstCap &&
+    !inert &&
     dstChosen &&
     !sameAsSrc &&
     balanceLythoshi !== null;
@@ -376,6 +386,18 @@ export function RedelegateForm({
         {exceedsHundred && (
           <div className="ext-warn-prominent">
             Enter a percent between 0.01% and 100% of your balance.
+          </div>
+        )}
+        {roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Enter a larger percent — the minimum delegation weight is 0.01%.
+          </div>
+        )}
+        {inert && !roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Too small to redelegate at your balance — minimum ≈ 1 LYTH
+            {minBps !== null ? ` (≈ ${(minBps / 100).toFixed(2)}%)` : ""}. It
+            won&apos;t earn until your balance grows.
           </div>
         )}
       </div>

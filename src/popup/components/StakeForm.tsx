@@ -30,6 +30,8 @@ import { hoverBg } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import {
   effectiveWeightWholeLythoshi,
+  isInertDelegation,
+  minNonInertBps,
   percentToBps,
 } from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
@@ -146,12 +148,22 @@ export function StakeForm({
   // so read the raw input to disambiguate WITHOUT touching the parser.
   const exceedsHundred =
     /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
+  // A positive percent that rounds to 0 bps (sub-0.01%) would revert ZeroWeight
+  // on chain — surface it explicitly instead of a silently-disabled button.
+  const roundsToZeroBps = percent !== null && percent > 0 && additionalBps === 0;
+  // The chain ACCEPTS a bps >= 1 that floors to 0 whole-LYTH effective weight,
+  // but it's INERT (earns nothing / no vote) until the balance grows — warn +
+  // block. The real minimum is balance-dependent (minNonInertBps).
+  const inert =
+    balanceLythoshi !== null && isInertDelegation(additionalBps, balanceLythoshi);
+  const minBps = balanceLythoshi !== null ? minNonInertBps(balanceLythoshi) : null;
 
   const canContinue =
     percent !== null &&
     additionalBps > 0 &&
     !overCap &&
     !overGlobal &&
+    !inert &&
     balanceLythoshi !== null;
 
   const [presetWarning, setPresetWarning] = useState<string | null>(null);
@@ -360,6 +372,18 @@ export function StakeForm({
         )}
         {presetWarning !== null && (
           <div className="ext-warn-prominent">{presetWarning}</div>
+        )}
+        {roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Enter a larger percent — the minimum delegation weight is 0.01%.
+          </div>
+        )}
+        {inert && !roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Too small to delegate at your balance — minimum ≈ 1 LYTH
+            {minBps !== null ? ` (≈ ${(minBps / 100).toFixed(2)}%)` : ""}. It
+            won&apos;t earn until your balance grows.
+          </div>
         )}
         {/* Active / remaining delegation headroom across ALL clusters — escalates
             to the prominent warn treatment only when fully delegated (0% left). */}

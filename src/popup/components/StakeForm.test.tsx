@@ -89,6 +89,33 @@ describe("StakeForm — active/remaining headroom line", () => {
   });
 });
 
+describe("StakeForm — inert (0-effective-weight) warning", () => {
+  it("warns + (the minimum %) when the delegation floors to 0 effective weight", () => {
+    // baseProps balance = 100 LYTH. 0.5% → 50 bps → 0.5 LYTH effective → floors
+    // to 0 → inert. minNonInertBps(100 LYTH) = 100 bps = 1.00%.
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} amountStr="0.5" />,
+    );
+    expect(html).toContain("Too small to delegate at your balance");
+    expect(html).toContain("minimum ≈ 1 LYTH");
+    expect(html).toContain("1.00%");
+  });
+
+  it("does not warn when the delegation earns >= 1 whole LYTH", () => {
+    // 5% of 100 LYTH = 5 LYTH effective → not inert.
+    const html = renderToStaticMarkup(<StakeForm {...baseProps} amountStr="5" />);
+    expect(html).not.toContain("Too small to delegate");
+  });
+
+  it("warns to enter a larger percent when the input rounds to 0 bps", () => {
+    // 0.001% → round(0.1) → 0 bps (would revert ZeroWeight).
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} amountStr="0.001" />,
+    );
+    expect(html).toContain("minimum delegation weight is 0.01%");
+  });
+});
+
 describe("headroomExhausted", () => {
   it("is true only when no headroom remains", () => {
     expect(headroomExhausted(0)).toBe(true);
