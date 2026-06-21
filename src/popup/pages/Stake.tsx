@@ -55,7 +55,7 @@ import { useInFlightClaim, useClaimConfirmed } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
-  effectiveWeightWei,
+  effectiveWeightWholeLythoshi,
   encodeClaimRewards,
   encodeDelegate,
   encodeRedelegate,
@@ -808,7 +808,7 @@ export function Stake({
                 />
                 {delegations !== null && delegations.rows.length > 0 && (
                   <UnstakeAllCard
-                    effectiveWeightLythoshi={effectiveWeightWei(
+                    effectiveWeightLythoshi={effectiveWeightWholeLythoshi(
                       delegations.totalBps,
                       balanceLythoshi ?? 0n,
                     )}
@@ -1115,7 +1115,7 @@ export function Stake({
             walletAddr0x={account.addr}
             amountLythoshi={
               action === "delegate" && balanceLythoshi !== null
-                ? effectiveWeightWei(percentToBps(Number(amountStr)), balanceLythoshi)
+                ? effectiveWeightWholeLythoshi(percentToBps(Number(amountStr)), balanceLythoshi)
                 : null
             }
           />
@@ -1167,7 +1167,7 @@ function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
   // Effective delegated weight = balance × totalBps. NON-CUSTODIAL: this is
   // NOT removed from the spendable balance — the full balance stays liquid,
   // the weight is just the contribution to clusters.
-  const effectiveWeightLythoshi = effectiveWeightWei(
+  const effectiveWeightLythoshi = effectiveWeightWholeLythoshi(
     stakedBps,
     balanceLythoshi ?? 0n,
   );
@@ -1374,14 +1374,14 @@ function PreviewView({
   // the "moved" weight is the entire existing delegation regardless of any
   // input. The LYTH shown is the effective weight that row represents at
   // the live balance (nothing is escrowed).
-  const fullDelegationLythoshi = effectiveWeightWei(
+  const fullDelegationLythoshi = effectiveWeightWholeLythoshi(
     existingWeightBps,
     balanceLythoshi ?? 0n,
   );
   // `amountStr` is a percent of balance (0–100) for delegate/redelegate.
   const moveBps = isUndelegate ? existingWeightBps : percentToBps(Number(amountStr));
   // Effective weight this delegation contributes at the current balance.
-  const moveLythoshi = effectiveWeightWei(moveBps, balanceLythoshi ?? 0n);
+  const moveLythoshi = effectiveWeightWholeLythoshi(moveBps, balanceLythoshi ?? 0n);
   const totalAfterBps =
     action === "delegate"
       ? existingWeightBps + moveBps

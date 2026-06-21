@@ -17,7 +17,10 @@ import { useMemo } from "react";
 import { Icon } from "../Icon";
 import { hoverBg, hoverBright } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { percentToBps } from "../../shared/staking-tx";
+import {
+  effectiveWeightWholeLythoshi,
+  percentToBps,
+} from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface RedelegateFormProps {
@@ -110,15 +113,16 @@ export function RedelegateForm({
   }, [amountStr]);
   const moveBps = movePercent !== null ? percentToBps(movePercent) : 0;
 
-  // Derived for the in-form amount preview (additive). Mirrors the
-  // UnstakeForm derivation: balance × weightBps / 10000, in lythoshi.
+  // Derived for the in-form amount preview — the CHAIN-EXACT effective weight
+  // (whole-LYTH floored, matching mono-core), used for the "Moving X of Y"
+  // display line. The amount INPUT keeps the user's precise value separately.
   const stakedInSrcLythoshi =
-    balanceLythoshi !== null && srcWeightBps > 0
-      ? (balanceLythoshi * BigInt(srcWeightBps)) / 10_000n
+    balanceLythoshi !== null
+      ? effectiveWeightWholeLythoshi(srcWeightBps, balanceLythoshi)
       : 0n;
   const moveLythoshi =
-    balanceLythoshi !== null && moveBps > 0
-      ? (balanceLythoshi * BigInt(moveBps)) / 10_000n
+    balanceLythoshi !== null
+      ? effectiveWeightWholeLythoshi(moveBps, balanceLythoshi)
       : 0n;
 
   const exceedsSource = moveBps > srcWeightBps;

@@ -32,6 +32,7 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
+  LYTHOSHI_PER_LYTH,
 } from "@monolythium/core-sdk";
 
 /** Delegation precompile address — Whitepaper §5.4 / §7.6
@@ -115,4 +116,22 @@ export function effectiveWeightWei(
   if (bps <= 0) return 0n;
   if (bps >= 10_000) return balanceWei;
   return (balanceWei * BigInt(bps)) / 10_000n;
+}
+
+/** Chain-EXACT effective weight: the wallet's effective weight floored to WHOLE
+ *  LYTH, matching mono-core `effective_weight_whole_lyth`
+ *  (`floor(balance · bps / (10000 · 1e18))`). Returned re-expressed in lythoshi
+ *  as a whole multiple of 1 LYTH, so the standard lyth formatters render the
+ *  whole number — e.g. 530.082 LYTH → "530 LYTH", and a sub-1-LYTH delegation →
+ *  "0 LYTH". This is what the chain actually credits for rewards/voting, so use
+ *  it for effective-weight DISPLAYS — NOT for the amount input (which keeps the
+ *  user's precise value) and NOT for the tx (still bps). Equivalent to flooring
+ *  `effectiveWeightWei` to whole LYTH: floor(floor(x/10000)/1e18) ==
+ *  floor(x/(10000·1e18)). */
+export function effectiveWeightWholeLythoshi(
+  bps: number,
+  balanceWei: bigint,
+): bigint {
+  const lythoshi = effectiveWeightWei(bps, balanceWei);
+  return (lythoshi / LYTHOSHI_PER_LYTH) * LYTHOSHI_PER_LYTH;
 }

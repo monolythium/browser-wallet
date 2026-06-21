@@ -21,6 +21,7 @@ import {
   DELEGATION_PRECOMPILE,
   bpsToPercent,
   effectiveWeightWei,
+  effectiveWeightWholeLythoshi,
   encodeClaimRewards,
   encodeDelegate,
   encodeRedelegate,
@@ -149,5 +150,31 @@ describe("effectiveWeightWei", () => {
   it("returns the full balance for >= 10000 bps", () => {
     expect(effectiveWeightWei(10_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
     expect(effectiveWeightWei(15_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
+  });
+});
+
+describe("effectiveWeightWholeLythoshi (chain-exact whole-LYTH floor)", () => {
+  it("floors the effective weight to whole LYTH (matches mono-core)", () => {
+    // 1000 LYTH × 5301 bps = 530.1 LYTH → floors to 530.
+    const balance = 1000n * ONE_LYTH;
+    expect(effectiveWeightWholeLythoshi(5301, balance)).toBe(530n * ONE_LYTH);
+    // 100 LYTH × 3334 bps = 33.34 LYTH → floors to 33.
+    expect(effectiveWeightWholeLythoshi(3334, 100n * ONE_LYTH)).toBe(33n * ONE_LYTH);
+  });
+
+  it("floors a sub-1-LYTH effective weight to 0 (the inert case)", () => {
+    // 100 LYTH × 5 bps = 0.05 LYTH → 0.
+    expect(effectiveWeightWholeLythoshi(5, 100n * ONE_LYTH)).toBe(0n);
+    // 1060 LYTH × 9 bps (0.09%) = 0.954 LYTH → 0; 10 bps (0.10%) = 1.06 → 1.
+    const bal = 1060n * ONE_LYTH;
+    expect(effectiveWeightWholeLythoshi(9, bal)).toBe(0n);
+    expect(effectiveWeightWholeLythoshi(10, bal)).toBe(1n * ONE_LYTH);
+  });
+
+  it("equals the floor of effectiveWeightWei to whole LYTH", () => {
+    const balance = 777n * ONE_LYTH + 123n * 10n ** 16n; // 777.123... LYTH
+    const wei = effectiveWeightWei(4242, balance);
+    const expected = (wei / ONE_LYTH) * ONE_LYTH;
+    expect(effectiveWeightWholeLythoshi(4242, balance)).toBe(expected);
   });
 });

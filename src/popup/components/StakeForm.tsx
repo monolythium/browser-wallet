@@ -28,7 +28,10 @@ import { useMemo, useState } from "react";
 import { Icon } from "../Icon";
 import { hoverBg } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { effectiveWeightWei, percentToBps } from "../../shared/staking-tx";
+import {
+  effectiveWeightWholeLythoshi,
+  percentToBps,
+} from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface StakeFormProps {
@@ -124,7 +127,9 @@ export function StakeForm({
 
   // Live effective weight this percent represents at the current balance.
   const effectiveWeightLythoshi =
-    balanceLythoshi !== null ? effectiveWeightWei(additionalBps, balanceLythoshi) : null;
+    balanceLythoshi !== null
+      ? effectiveWeightWholeLythoshi(additionalBps, balanceLythoshi)
+      : null;
 
   const overCap = capBps !== null && totalAfterBps > capBps;
   // Global ceiling: total delegated weight across ALL clusters ≤ 100%. The
@@ -312,7 +317,7 @@ export function StakeForm({
                   · existing {(existingWeightBps / 100).toFixed(2)}%{" "}
                   <strong style={amountStrongMuted}>
                     ({lythoshiToLyth(
-                      effectiveWeightWei(existingWeightBps, balanceLythoshi),
+                      effectiveWeightWholeLythoshi(existingWeightBps, balanceLythoshi),
                     )}{" "}
                     LYTH)
                   </strong>{" "}

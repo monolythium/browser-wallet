@@ -30,6 +30,7 @@ import { useInFlightClaim, useClaimConfirmed } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
+  effectiveWeightWholeLythoshi,
   encodeClaimRewards,
 } from "../../shared/staking-tx";
 import {
@@ -357,9 +358,11 @@ export function Delegations({
               >
                 {delegations.rows.map((row) => {
                   const c = clusterById.get(row.cluster);
+                  // Chain-exact effective weight (whole-LYTH floored) — what the
+                  // row actually contributes for rewards/voting.
                   const amountLythoshi =
                     balanceLythoshi !== null
-                      ? (balanceLythoshi * BigInt(row.weightBps)) / 10_000n
+                      ? effectiveWeightWholeLythoshi(row.weightBps, balanceLythoshi)
                       : null;
                   return (
                     <div
