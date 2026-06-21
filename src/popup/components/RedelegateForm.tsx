@@ -336,24 +336,6 @@ export function RedelegateForm({
             %
           </div>
         </div>
-        {exceedsSource && (
-          <div className="ext-warn-prominent">
-            Exceeds your current delegation at the source cluster (
-            {(srcWeightBps / 100).toFixed(2)}%).
-          </div>
-        )}
-        {exceedsDstCap && capBps !== null && (
-          <div className="ext-warn-prominent">
-            Would push the destination over the per-cluster cap (
-            {(capBps / 100).toFixed(0)}%) by{" "}
-            {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
-          </div>
-        )}
-        {exceedsHundred && (
-          <div className="ext-warn-prominent">
-            Enter a percent between 0.01% and 100% of your balance.
-          </div>
-        )}
         {moveBps > 0 && balanceLythoshi !== null && (
           <div style={{ ...fromHint, color: "var(--fg-300)" }}>
             Moving{" "}
@@ -372,6 +354,26 @@ export function RedelegateForm({
           Your LYTH stays in your wallet the whole time; only the cluster
           weighting moves.
         </div>
+        {/* Limit/clamp warnings sit LAST in the card, right above the action,
+            so they're seen just before submitting. */}
+        {exceedsSource && (
+          <div className="ext-warn-prominent">
+            Exceeds your current delegation at the source cluster (
+            {(srcWeightBps / 100).toFixed(2)}%).
+          </div>
+        )}
+        {exceedsDstCap && capBps !== null && (
+          <div className="ext-warn-prominent">
+            Would push the destination over the per-cluster cap (
+            {(capBps / 100).toFixed(0)}%) by{" "}
+            {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
+          </div>
+        )}
+        {exceedsHundred && (
+          <div className="ext-warn-prominent">
+            Enter a percent between 0.01% and 100% of your balance.
+          </div>
+        )}
       </div>
 
       <div
