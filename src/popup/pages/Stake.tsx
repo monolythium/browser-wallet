@@ -670,10 +670,12 @@ export function Stake({
     setSubmitError(null);
     setTxHash(null);
     try {
-      // Capture the claimed amount + frozen fiat rate BEFORE broadcast (the
-      // chain/indexer never surface a claim amount). Shared helper — identical
-      // at both claim sites. valueWeiHex stays 0x0; the metadata never signs.
-      const claim = await buildClaimMeta(rewards, rewardsMock);
+      // Capture the frozen fiat rate + currency BEFORE broadcast (shared helper —
+      // identical at both claim sites). The claimed AMOUNT is NOT captured here
+      // (the submit-time pending-rewards value is wrong); it is decoded from the
+      // receipt's Claimed log after confirmation. valueWeiHex stays 0x0; metadata
+      // never signs.
+      const claim = await buildClaimMeta();
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",

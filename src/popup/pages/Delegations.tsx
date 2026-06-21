@@ -177,9 +177,11 @@ export function Delegations({
     setClaimSubmitting(true);
     setClaimResult(null);
     try {
-      // Capture claimed amount + frozen fiat rate before broadcast (shared
-      // helper — identical to the Stake claim site). Metadata-only; value 0x0.
-      const claim = await buildClaimMeta(rewards, rewardsMock);
+      // Capture the frozen fiat rate + currency before broadcast (shared helper —
+      // identical to the Stake claim site). The claimed AMOUNT is decoded from
+      // the receipt's Claimed log after confirmation, not captured here (the
+      // submit-time pending-rewards value is wrong). Metadata-only; value 0x0.
+      const claim = await buildClaimMeta();
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",

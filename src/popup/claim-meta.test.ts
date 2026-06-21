@@ -1,7 +1,9 @@
-// Unit coverage for the shared reward-claim capture helper. Mocks the popup
-// currency pref + the (null) fiat source so the test is pure; the real
-// lythoshi→LYTH converter runs. Pins the no-mock guarantee: a mock/absent
-// rewards snapshot yields a null claimedAmount (never a fabricated figure).
+// Unit coverage for the shared reward-claim capture helper. The claimed AMOUNT
+// is no longer captured at submit (the submit-time pending-rewards value is
+// wrong — settled-only, pre-execution); it is decoded from the receipt's
+// `Claimed` log after confirmation (see shared/claimed-log.ts). buildClaimMeta
+// now only freezes the fiat rate + currency. Mocks the popup currency pref + the
+// (null) fiat source so the test is pure.
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,34 +15,18 @@ vi.mock("../shared/fiat.js", () => ({
 }));
 
 import { buildClaimMeta } from "./claim-meta.js";
-import type { PendingRewardsView } from "../shared/staking.js";
-
-function rewards(settledLythoshiDecimal: string): PendingRewardsView {
-  return {
-    wallet: "0x01029862840d227ee9e76a845c8cbb80ba1d7d23",
-    totalAmountLythoshi: settledLythoshiDecimal,
-    settledPendingLythoshi: settledLythoshiDecimal,
-    unsettledAmountLythoshi: "0",
-    autoCompound: false,
-    totalAmountWei: "0x0",
-    rows: [],
-    blockHeight: "1",
-  };
-}
 
 describe("buildClaimMeta", () => {
-  it("converts live settledPendingLythoshi → decimal LYTH; rate null until oracle", async () => {
-    // 6.51 LYTH = 6_510_000_000_000_000_000 lythoshi (18 decimals).
-    const m = await buildClaimMeta(rewards("6510000000000000000"), false);
-    expect(m.claimedAmount).toBe("6.51");
-    expect(m.rateAtClaim).toBeNull();
+  it("freezes currency + null rate; claimedAmount is null at submit (decoded from the log later)", async () => {
+    const m = await buildClaimMeta();
+    // No wrong pre-confirmation figure — the real amount is decoded from the
+    // Claimed log once the receipt lands (no-mock).
+    expect(m.claimedAmount).toBeNull();
+    expect(m.rateAtClaim).toBeNull(); // no oracle yet
     expect(m.currency).toBe("USD");
   });
 
-  it("no-mock: null claimedAmount when rewards are mock or absent", async () => {
-    const mock = await buildClaimMeta(rewards("6510000000000000000"), true);
-    expect(mock.claimedAmount).toBeNull();
-    const absent = await buildClaimMeta(null, false);
-    expect(absent.claimedAmount).toBeNull();
+  it("takes no arguments (the submit-time pending-rewards capture is gone)", () => {
+    expect(buildClaimMeta.length).toBe(0);
   });
 });
