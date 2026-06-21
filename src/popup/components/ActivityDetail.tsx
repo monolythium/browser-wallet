@@ -34,7 +34,7 @@ import { formatFiat } from "../../shared/fiat";
 import { DISPLAY_CURRENCY_DEFAULT } from "../../shared/constants";
 import { resolveClusterLabel, formatWeightBpsPercent } from "../../shared/staking";
 import { txTypeLabel } from "../../shared/tx-type-label";
-import type { ActivityRow as ActivityRowType } from "../../shared/activity";
+import type { ActivityRow as ActivityRowType, PendingTxRow } from "../../shared/activity";
 import type { NameLabel } from "../../shared/name-resolution";
 import { bgGetBlockTxValue, bgWalletTxFee } from "../bg";
 
@@ -72,6 +72,27 @@ export function isSelfPaid(row: ActivityRowType): boolean {
     default:
       return false;
   }
+}
+
+/** What the Amount row renders for a pending row. A reward claim's tx value is
+ *  0x0, so its `amountDecimal` is "0" — the real figure is decoded from the
+ *  receipt's `Claimed` log after confirmation. A confirmed claim is NEVER 0, so
+ *  a claim with no decoded figure (null/""/"0") must render bare "Rewards
+ *  claimed", NOT "0 LYTH" (no-mock). Any other pending row shows amountDecimal.
+ *  Pure + exported for unit coverage (the modal portals, so it can't be
+ *  render-tested). */
+export type PendingAmountDisplay =
+  | { kind: "claim-figure"; lyth: string }
+  | { kind: "claim-no-figure" }
+  | { kind: "plain"; lyth: string };
+
+export function pendingAmountDisplay(row: PendingTxRow): PendingAmountDisplay {
+  if (row.source === "local-claim") {
+    return row.claimedAmount && row.claimedAmount !== "0"
+      ? { kind: "claim-figure", lyth: row.claimedAmount }
+      : { kind: "claim-no-figure" };
+  }
+  return { kind: "plain", lyth: row.amountDecimal };
 }
 
 // `truncMiddle`, `relativeMs`, `DRow`, `MonoscanTxButton`, and
@@ -170,26 +191,31 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
           <DRow
             label="Amount"
             value={
-              // A reward claim's value is 0x0; show the captured claimedAmount
-              // (C3) + the fiat sibling (frozen rate → dash until the oracle).
-              row.source === "local-claim" &&
-              row.claimedAmount != null &&
-              row.claimedAmount !== "0" ? (
-                <>
-                  {row.claimedAmount} LYTH{" "}
-                  <span style={{ opacity: 0.75 }}>
-                    (
-                    {formatFiat(
-                      row.claimedAmount,
-                      row.currency ?? DISPLAY_CURRENCY_DEFAULT,
-                      row.rateAtClaim ?? null,
-                    )}
-                    )
-                  </span>
-                </>
-              ) : (
-                `${row.amountDecimal} LYTH`
-              )
+              // pendingAmountDisplay: a claim shows its decoded figure + fiat
+              // sibling, or bare "Rewards claimed" until decoded — NEVER "0 LYTH"
+              // (a confirmed claim is never 0; no-mock). Other rows: amountDecimal.
+              (() => {
+                const d = pendingAmountDisplay(row);
+                if (d.kind === "claim-figure") {
+                  return (
+                    <>
+                      {d.lyth} LYTH{" "}
+                      <span style={{ opacity: 0.75 }}>
+                        (
+                        {formatFiat(
+                          d.lyth,
+                          row.currency ?? DISPLAY_CURRENCY_DEFAULT,
+                          row.rateAtClaim ?? null,
+                        )}
+                        )
+                      </span>
+                    </>
+                  );
+                }
+                return d.kind === "claim-no-figure"
+                  ? "Rewards claimed"
+                  : `${d.lyth} LYTH`;
+              })()
             }
           />
           <DRow label="From" value={<CopyableAddress addr0x={walletAddr} />} />

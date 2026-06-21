@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { isSelfPaid } from "./ActivityDetail.js";
+import { isSelfPaid, pendingAmountDisplay } from "./ActivityDetail.js";
 import type { ActivityRow, PendingTxRow } from "../../shared/activity.js";
 
 function pending(over: Partial<PendingTxRow> = {}): PendingTxRow {
@@ -42,5 +42,39 @@ describe("ActivityDetail.isSelfPaid — #7 claim fee eligibility", () => {
     };
     expect(isSelfPaid(send)).toBe(true);
     expect(isSelfPaid(recv)).toBe(false); // inbound — not self-paid
+  });
+});
+
+// The Amount row's decision is extracted (the modal portals, so it can't be
+// render-tested). A confirmed claim must NEVER show "0 LYTH" — the fallback to
+// amountDecimal is gated behind non-claim rows.
+describe("ActivityDetail.pendingAmountDisplay — claim never renders 0 LYTH", () => {
+  const claim = (over: Partial<PendingTxRow> = {}) =>
+    pending({ opKind: "claim", source: "local-claim", amountDecimal: "0", ...over });
+
+  it("a claim with a decoded figure shows it", () => {
+    expect(pendingAmountDisplay(claim({ claimedAmount: "1.5" }))).toEqual({
+      kind: "claim-figure",
+      lyth: "1.5",
+    });
+  });
+
+  it("a claim with claimedAmount '0' → bare 'Rewards claimed', NOT a 0 figure", () => {
+    expect(pendingAmountDisplay(claim({ claimedAmount: "0" }))).toEqual({
+      kind: "claim-no-figure",
+    });
+  });
+
+  it("a claim with null / absent / empty claimedAmount → 'Rewards claimed' (no figure)", () => {
+    expect(pendingAmountDisplay(claim({ claimedAmount: null }))).toEqual({ kind: "claim-no-figure" });
+    expect(pendingAmountDisplay(claim())).toEqual({ kind: "claim-no-figure" });
+    expect(pendingAmountDisplay(claim({ claimedAmount: "" }))).toEqual({ kind: "claim-no-figure" });
+  });
+
+  it("a non-claim pending row keeps its amountDecimal (the fallback stays for non-claims)", () => {
+    expect(pendingAmountDisplay(pending({ opKind: "send", amountDecimal: "2.5" }))).toEqual({
+      kind: "plain",
+      lyth: "2.5",
+    });
   });
 });

@@ -173,4 +173,16 @@ describe("PendingTxRowBody — reward claim claimedAmount + fiat sibling (C3)", 
     expect(html).toContain("Rewards claimed");
     expect(html).not.toContain("LYTH"); // no figure → no fiat, no amount
   });
+
+  it("no-mock: a confirmed claim with claimedAmount '0' shows the bare title, never '0 LYTH'", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={claim({ confirmedBlockHeight: 200, claimedAmount: "0" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Rewards claimed");
+    expect(html).not.toContain("0 LYTH");
+    expect(html).not.toContain("LYTH"); // "0" normalized to no-figure
+  });
 });

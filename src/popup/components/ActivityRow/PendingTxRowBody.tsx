@@ -36,8 +36,10 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
   // field (C3). The fiat sibling uses the FROZEN rate + currency captured at
   // claim time — null rate → the honest dash ("$—"), never a fabricated $0.
   const isClaim = opKind === "claim";
+  // Treat null / undefined / "" / "0" as "no figure yet" (the amount is decoded
+  // from the receipt's Claimed log after confirmation) — never render a "0".
   const claimFig =
-    isClaim && row.claimedAmount != null && row.claimedAmount !== "0"
+    isClaim && row.claimedAmount && row.claimedAmount !== "0"
       ? row.claimedAmount
       : null;
   const claimFiat =
