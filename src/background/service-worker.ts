@@ -250,6 +250,8 @@ import {
   type NameCache,
 } from "../shared/name-resolution.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
+import { lythoshiDecimalToLythDecimal } from "../shared/lyth-units.js";
+import { decodeClaimedAmountLythoshi } from "../shared/claimed-log.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
@@ -5103,6 +5105,13 @@ export interface TerminalPendingTx {
    *  matched to the indexer's canonical row by exact (block, txIndex)
    *  regardless of kind (tx_send, delegate, undelegate, …). Null when absent. */
   txIndex: number | null;
+  /** For a CONFIRMED reward claim (source:"local-claim"): the authoritative
+   *  claimed amount decoded from the receipt's `Claimed` log (data word-0),
+   *  decimal lythoshi — or null/absent when not a claim or no log. The bridge
+   *  converts it to decimal LYTH and writes it onto the row, overriding the
+   *  (dropped) submit-time capture. Additive: callers that ignore it (the
+   *  notification loops, the Gap A alarm re-bridge) are unaffected. */
+  claimedAmountLythoshi?: string | null;
 }
 
 /** Parse a testnet receipt's block + tx index. Numeric (the operators' shape)
@@ -5187,6 +5196,10 @@ async function dropConfirmedPendingByHash(
           blockNumber: number | null;
           txIndex: number | null;
         } | null = null;
+        // Authoritative claimed amount from the receipt's `Claimed` log (decimal
+        // lythoshi) — decoded ONLY for a confirmed reward claim, from the receipt
+        // already in hand (no extra round-trip). null for non-claims / no log.
+        let claimedAmountLythoshi: string | null = null;
         try {
           const receipt = await testnetJsonRpc<{
             status?: number | string;
@@ -5194,12 +5207,16 @@ async function dropConfirmedPendingByHash(
             block_number?: unknown;
             tx_index?: unknown;
             txIndex?: unknown;
+            logs?: unknown;
           } | null>("eth_getTransactionReceipt", [p.txHash], opts);
           if (receipt.result != null) {
             const anchor = parseReceiptBlockTx(receipt.result);
             const rawStatus = receipt.result.status;
             if (rawStatus === 1 || rawStatus === "0x1") {
               resolved = { status: "confirmed", blockNumber: anchor.blockNumber, txIndex: anchor.txIndex };
+              if (p.source === "local-claim") {
+                claimedAmountLythoshi = decodeClaimedAmountLythoshi(receipt.result.logs);
+              }
             } else if (rawStatus === 0 || rawStatus === "0x0") {
               resolved = { status: "failed", blockNumber: anchor.blockNumber, txIndex: anchor.txIndex };
             }
@@ -5214,6 +5231,7 @@ async function dropConfirmedPendingByHash(
             status: resolved.status,
             blockNumber: resolved.blockNumber,
             txIndex: resolved.txIndex,
+            ...(claimedAmountLythoshi !== null ? { claimedAmountLythoshi } : {}),
           });
         } else {
           kept.push(p);
@@ -5226,6 +5244,7 @@ async function dropConfirmedPendingByHash(
         block_number?: unknown;
         tx_index?: unknown;
         txIndex?: unknown;
+        logs?: unknown;
       } | null>("eth_getTransactionReceipt", [p.txHash], opts);
       if (receipt.result == null) {
         kept.push(p);
@@ -5234,7 +5253,17 @@ async function dropConfirmedPendingByHash(
       const rawStatus = receipt.result.status;
       const { blockNumber, txIndex } = parseReceiptBlockTx(receipt.result);
       if (rawStatus === 1 || rawStatus === "0x1") {
-        terminal.push({ row: p, status: "confirmed", blockNumber, txIndex });
+        const claimedAmountLythoshi =
+          p.source === "local-claim"
+            ? decodeClaimedAmountLythoshi(receipt.result.logs)
+            : null;
+        terminal.push({
+          row: p,
+          status: "confirmed",
+          blockNumber,
+          txIndex,
+          ...(claimedAmountLythoshi !== null ? { claimedAmountLythoshi } : {}),
+        });
       } else if (rawStatus === 0 || rawStatus === "0x0") {
         terminal.push({ row: p, status: "failed", blockNumber, txIndex });
       } else {
@@ -5265,13 +5294,23 @@ function bridgeConfirmedTerminals(
     .filter((t) => t.status === "confirmed")
     .map((t) => {
       const block = t.blockNumber ?? t.row.broadcastBlockHeight;
-      return block !== null
-        ? {
-            ...t.row,
-            confirmedBlockHeight: block,
-            ...(t.txIndex !== null ? { confirmedTxIndex: t.txIndex } : {}),
-          }
-        : t.row;
+      if (block === null) return t.row;
+      const bridged: PendingTxRow = {
+        ...t.row,
+        confirmedBlockHeight: block,
+        ...(t.txIndex !== null ? { confirmedTxIndex: t.txIndex } : {}),
+      };
+      // Self-heal the claim amount from the receipt's `Claimed` log (decimal
+      // lythoshi → decimal LYTH), overriding the dropped submit-time capture.
+      // ONLY for a reward claim with a decoded amount; runs each poll so a
+      // confirmed claim row that was missing the amount picks it up. Persisted
+      // via the durable local-claim store (Gap B) → both surfaces self-heal.
+      if (t.row.source === "local-claim" && t.claimedAmountLythoshi != null) {
+        bridged.claimedAmount = lythoshiDecimalToLythDecimal(
+          t.claimedAmountLythoshi,
+        );
+      }
+      return bridged;
     });
 }
 

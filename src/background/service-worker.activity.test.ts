@@ -2036,6 +2036,100 @@ describe("wallet-activity-get", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
+  // CLAIM AMOUNT — decode the real amount from the receipt's Claimed log in the
+  // bridge (overrides the dropped submit-time capture), and write it to the
+  // durable local-claim row. word-0 of the 0x…100A / 0xfa8256f7… log = amount.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  const CLAIMED_TOPIC0 =
+    "0xfa8256f7c08bb01a03ea96f8b3a904a4450311c9725d1c52cdbe21ed3dc42dcc";
+  /** 32 big-endian bytes for a uint256 word (the operator receipt data shape). */
+  function word256(v: bigint): number[] {
+    const b: number[] = new Array(32).fill(0);
+    let n = v;
+    for (let i = 31; i >= 0; i--) {
+      b[i] = Number(n & 0xffn);
+      n >>= 8n;
+    }
+    return b;
+  }
+  function claimedReceipt(amountLythoshi: bigint, block = 200) {
+    return {
+      status: "0x1",
+      blockNumber: block,
+      tx_index: 0,
+      logs: [
+        {
+          address: "0x000000000000000000000000000000000000100a",
+          topics: [CLAIMED_TOPIC0, "0x" + "0".repeat(63) + "1"],
+          data: [...word256(amountLythoshi), ...word256(0n)],
+        },
+      ],
+    };
+  }
+  function seedClaimPending(txHash: string) {
+    storageLocal[
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`
+    ] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash,
+          to: "0x000000000000000000000000000000000000100a",
+          amountDecimal: "0",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 100,
+          via: "operator-test",
+          opKind: "claim",
+          source: "local-claim",
+          // claimedAmount intentionally absent — post-fix it is null at submit
+          // and populated only here by the receipt-log decode.
+        },
+      ],
+    };
+  }
+
+  it("CLAIM AMOUNT: bridge decodes the real amount from the Claimed log onto the local-claim row", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n); // 1.5 LYTH
+    const claimHash = "0x" + "c5".repeat(32);
+    seedClaimPending(claimHash);
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ txHash: string; source?: string; claimedAmount?: string | null; confirmedBlockHeight?: number }>;
+    };
+    expect(r.ok).toBe(true);
+    const claim = r.pending.find((row) => row.txHash === claimHash);
+    expect(claim).toBeDefined();
+    expect(claim!.source).toBe("local-claim");
+    expect(claim!.confirmedBlockHeight).toBe(200);
+    expect(claim!.claimedAmount).toBe("1.5"); // decoded from the log, not "0"
+    // Persisted to the durable local-claim store (Gap B re-injects it).
+    const store = storageLocal[
+      `mono.activity.localclaims.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`
+    ] as { claims: Array<{ txHash: string; claimedAmount?: string }> } | undefined;
+    expect(store?.claims.find((c) => c.txHash === claimHash)?.claimedAmount).toBe("1.5");
+  });
+
+  it("CLAIM AMOUNT: a non-claim confirmed row is unaffected (no claimedAmount written)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    // Even if a Claimed-shaped log were present, a non-local-claim row must not
+    // pick up a claimedAmount (the decode is gated on source:"local-claim").
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n);
+    seedPending("0x" + "c6".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ claimedAmount?: string | null; confirmedBlockHeight?: number }>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200);
+    expect(r.pending[0]?.claimedAmount).toBeUndefined();
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile
   // (dropConfirmedPendingByHash), so a tx that confirms in ~3-5s clears from
