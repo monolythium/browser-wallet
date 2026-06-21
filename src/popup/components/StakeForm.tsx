@@ -83,6 +83,13 @@ export function bindingHeadroomBps(
   return Math.max(0, Math.min(clusterHeadroom, globalHeadroom));
 }
 
+/** The "X% delegated · Y% available" line escalates to the prominent warn
+ *  treatment only when NO global headroom remains (0% available); otherwise it
+ *  stays a quiet hint. Exported for unit coverage. */
+export function headroomExhausted(globalHeadroomBps: number): boolean {
+  return globalHeadroomBps <= 0;
+}
+
 /** Lythoshi → LYTH display string. Used for the
  *  balance + effective-weight hint strings. */
 export function lythoshiToLyth(lythoshi: bigint, decimals = 4): string {
@@ -283,26 +290,32 @@ export function StakeForm({
           </div>
         </div>
         {overCap && capBps !== null && (
-          <div style={inlineErr}>
+          <div className="ext-warn-prominent">
             Delegation would exceed the per-cluster cap (
             {(capBps / 100).toFixed(0)}%) by{" "}
             {((totalAfterBps - capBps) / 100).toFixed(2)}%.
           </div>
         )}
         {exceedsHundred && (
-          <div style={inlineErr}>
+          <div className="ext-warn-prominent">
             Enter a percent between 0.01% and 100% of your balance.
           </div>
         )}
         {overGlobal && !overCap && (
-          <div style={inlineErr}>
+          <div className="ext-warn-prominent">
             You can delegate at most {(globalHeadroomBps / 100).toFixed(2)}% more
             — total delegation across all clusters can&apos;t exceed 100%.
           </div>
         )}
-        {presetWarning !== null && <div style={inlineErr}>{presetWarning}</div>}
-        {/* Active / remaining delegation headroom across ALL clusters. */}
-        <div style={fromHint}>
+        {presetWarning !== null && (
+          <div className="ext-warn-prominent">{presetWarning}</div>
+        )}
+        {/* Active / remaining delegation headroom across ALL clusters — escalates
+            to the prominent warn treatment only when fully delegated (0% left). */}
+        <div
+          className={headroomExhausted(globalHeadroomBps) ? "ext-warn-prominent" : undefined}
+          style={headroomExhausted(globalHeadroomBps) ? undefined : fromHint}
+        >
           {(totalDelegatedBps / 100).toFixed(2)}% delegated ·{" "}
           {(globalHeadroomBps / 100).toFixed(2)}% available
         </div>
@@ -437,13 +450,6 @@ const inlineBtnStyle: CSSProperties = {
   cursor: "pointer",
   whiteSpace: "nowrap",
   transition: "background 120ms",
-};
-
-const inlineErr: CSSProperties = {
-  fontFamily: "var(--f-mono)",
-  fontSize: 10,
-  color: "var(--err)",
-  marginTop: 6,
 };
 
 const fromHint: CSSProperties = {

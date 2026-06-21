@@ -337,20 +337,20 @@ export function RedelegateForm({
           </div>
         </div>
         {exceedsSource && (
-          <div style={inlineErr}>
+          <div className="ext-warn-prominent">
             Exceeds your current delegation at the source cluster (
             {(srcWeightBps / 100).toFixed(2)}%).
           </div>
         )}
         {exceedsDstCap && capBps !== null && (
-          <div style={inlineErr}>
+          <div className="ext-warn-prominent">
             Would push the destination over the per-cluster cap (
             {(capBps / 100).toFixed(0)}%) by{" "}
             {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
           </div>
         )}
         {exceedsHundred && (
-          <div style={inlineErr}>
+          <div className="ext-warn-prominent">
             Enter a percent between 0.01% and 100% of your balance.
           </div>
         )}
