@@ -483,22 +483,20 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 
 /* Prominent limit/clamp warning for the delegate/redelegate forms — the
    bps-headroom clamp messages (and the headroom line when exhausted) used to
-   render as 10px muted/red helper text and were easy to miss. Mirrors the
-   .ext-indexer-stale warn card (tinted bg + warn border + warn text) with a
-   subtle glow, so a clamp reads as a real warning. Shared by StakeForm +
-   RedelegateForm (single source — no per-form drift). */
+   render as 10px muted/red helper text and were easy to miss. Prominence comes
+   from the type alone (12px / 600 / --warn) over a whisper-soft tint — no glow,
+   no hard border, so it reads as a calm callout rather than a neon box. Shared
+   by StakeForm + RedelegateForm (single source — no per-form drift). */
 .ext-warn-prominent {
   font-family: var(--f-mono);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.4;
   color: var(--warn);
-  background: rgba(var(--warn-glow), 0.10);
-  border: 1px solid rgba(var(--warn-glow), 0.25);
-  border-radius: 8px;
-  padding: 7px 10px;
+  background: rgba(var(--warn-glow), 0.05);
+  border-radius: 7px;
+  padding: 6px 9px;
   margin: 6px 0 0;
-  box-shadow: 0 0 12px rgba(var(--warn-glow), 0.25);
 }
 
 /* Bottom hint bar — glass foot */
