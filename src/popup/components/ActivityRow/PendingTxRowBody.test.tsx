@@ -163,6 +163,19 @@ describe("PendingTxRowBody — reward claim claimedAmount + fiat sibling (C3)", 
     expect(html).not.toContain("0 LYTH"); // never the suppressed "0 LYTH to <precompile>"
   });
 
+  it("truncates the claimed amount to 4dp + renders green incoming (+, amt in, dir in)", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={claim({ confirmedBlockHeight: 200, claimedAmount: "0.980035894719687092" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("+0.98 LYTH"); // truncated 4dp + incoming "+" sign
+    expect(html).not.toContain("0.980035894719687092"); // no full-precision leak
+    expect(html).toContain('class="amt in">+0.98'); // green incoming amount cell
+    expect(html).toContain('class="dir in"'); // green receive direction circle
+  });
+
   it("no-mock: a claim with null claimedAmount shows the bare title, no figure", () => {
     const html = renderToStaticMarkup(
       <PendingTxRowBody

@@ -11,6 +11,7 @@ import { useFeature } from "../../hooks/useFeature.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { notificationTitle } from "../../../shared/notifications.js";
 import { formatFiat } from "../../../shared/fiat.js";
+import { formatLythDecimalDisplay } from "../../../shared/lyth-units.js";
 import { DISPLAY_CURRENCY_DEFAULT } from "../../../shared/constants.js";
 import { renderCounterparty } from "../ActivityRow.js";
 import type { PendingTxRow } from "../../../shared/activity.js";
@@ -42,6 +43,10 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
     isClaim && row.claimedAmount && row.claimedAmount !== "0"
       ? row.claimedAmount
       : null;
+  // Display the claimed reward truncated to the wallet's 4-dp standard (the full
+  // value stays canonical in the store); fiat still uses the precise figure.
+  const claimFigDisplay =
+    claimFig !== null ? formatLythDecimalDisplay(claimFig, 4) : null;
   const claimFiat =
     claimFig !== null
       ? formatFiat(
@@ -88,7 +93,11 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       <div className="ext-act-row">
         {/* Sends keep the theme-accent (sent-ok) like TxSendRowBody, for a
             seamless swap when the indexer's tx_send replaces this row. */}
-        <div className={isSend ? "dir out sent-ok" : "dir out"}>
+        <div
+          className={
+            isClaim ? "dir in" : isSend ? "dir out sent-ok" : "dir out"
+          }
+        >
           <Icon name={iconName} size={13} />
         </div>
         <div className="ext-act-row__main">
@@ -101,8 +110,8 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
             ) : (
               <>
                 {notificationTitle(opKind ?? "send", "confirmed")}
-                {claimFig
-                  ? ` ${claimFig} LYTH`
+                {claimFigDisplay
+                  ? ` +${claimFigDisplay} LYTH`
                   : showAmount
                     ? ` ${row.amountDecimal} LYTH`
                     : ""}
@@ -125,9 +134,9 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
               <div className="amt">-{row.amountDecimal}</div>
               <div className="sym">LYTH</div>
             </>
-          ) : claimFig ? (
+          ) : claimFigDisplay ? (
             <>
-              <div className="amt">{claimFig}</div>
+              <div className="amt in">+{claimFigDisplay}</div>
               <div className="sym">LYTH</div>
             </>
           ) : showAmount ? (
@@ -149,7 +158,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       : "Pending";
   return (
     <div className="ext-act-row">
-      <div className="dir out" style={{ position: "relative" }}>
+      <div className={isClaim ? "dir in" : "dir out"} style={{ position: "relative" }}>
         <Icon name={isClaim ? "receive" : "send"} size={13} />
         <span className="ext-pending-dot" aria-label="pending" />
       </div>
@@ -164,7 +173,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
             // not "0 LYTH to <precompile>". Fiat sibling = dash until the oracle.
             <>
               {pendingPrefix} · {notificationTitle("claim", "confirmed")}
-              {claimFig ? ` ${claimFig} LYTH` : ""}
+              {claimFigDisplay ? ` +${claimFigDisplay} LYTH` : ""}
               {claimFiat ? (
                 <span style={{ opacity: 0.75, marginLeft: 4 }}>({claimFiat})</span>
               ) : null}
@@ -190,9 +199,9 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       </div>
       <div className="ext-act-row__right">
         {isClaim ? (
-          claimFig ? (
+          claimFigDisplay ? (
             <>
-              <div className="amt">{claimFig}</div>
+              <div className="amt in">+{claimFigDisplay}</div>
               <div className="sym">LYTH</div>
             </>
           ) : null

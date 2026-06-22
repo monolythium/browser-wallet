@@ -31,6 +31,7 @@ import {
 import { monoscanTxUrl } from "../../shared/build-info";
 import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { formatFiat } from "../../shared/fiat";
+import { formatLythDecimalDisplay } from "../../shared/lyth-units";
 import { DISPLAY_CURRENCY_DEFAULT } from "../../shared/constants";
 import { resolveClusterLabel, formatWeightBpsPercent } from "../../shared/staking";
 import { txTypeLabel } from "../../shared/tx-type-label";
@@ -199,7 +200,7 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
                 if (d.kind === "claim-figure") {
                   return (
                     <>
-                      {d.lyth} LYTH{" "}
+                      {formatLythDecimalDisplay(d.lyth, 4)} LYTH{" "}
                       <span style={{ opacity: 0.75 }}>
                         (
                         {formatFiat(
