@@ -1156,6 +1156,11 @@ let wsNewHeadsListenerInstalled = false;
  *  ChainStatusBanner subscribes to this key via chrome.storage.onChanged
  *  for live-block updates without polling. */
 const STORAGE_KEY_WS_LAST_BLOCK_HEX = "mono.ws.lastBlockHex";
+/** B2: when the head height last ADVANCED, keyed by hex ({ hex, advancedAtMs }).
+ *  Separate from the hex key above (whose string shape the banner depends on).
+ *  Written here only when the hex CHANGES so the popup's stall window survives a
+ *  reopen — the ChainStatusBanner seeds its baseline from this on mount. */
+const STORAGE_KEY_WS_BLOCK_ADVANCE = "mono.ws.lastBlockAdvancedAt";
 
 async function approvalOpened(): Promise<void> {
   openApprovalCount++;
@@ -9416,6 +9421,31 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               .catch(() => {
                 // session write failure is non-load-bearing
               });
+            // B2: track WHEN the head advanced (keyed by hex) so the popup's
+            // stall window survives a reopen. Update the timestamp ONLY when the
+            // hex changes — not on every duplicate push — so it reflects genuine
+            // advancement. Best-effort; a failed read/write just means the next
+            // popup open falls back to its own first-tick baseline.
+            chrome.storage.session
+              .get(STORAGE_KEY_WS_BLOCK_ADVANCE)
+              .then((s) => {
+                const prev = s?.[STORAGE_KEY_WS_BLOCK_ADVANCE];
+                const prevHex =
+                  typeof prev === "object" && prev !== null
+                    ? (prev as { hex?: unknown }).hex
+                    : undefined;
+                if (prevHex !== number) {
+                  chrome.storage.session
+                    .set({
+                      [STORAGE_KEY_WS_BLOCK_ADVANCE]: {
+                        hex: number,
+                        advancedAtMs: Date.now(),
+                      },
+                    })
+                    .catch(() => {});
+                }
+              })
+              .catch(() => {});
           }
         });
       }

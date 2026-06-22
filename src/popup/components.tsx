@@ -169,6 +169,13 @@ const OPERATOR_TICK_MS = 10_000;
 // bare CONNECTING…. Lives in chrome.storage.session (survives SW hibernation;
 // cleared on browser close / extension reload).
 const WS_BLOCK_KEY = "mono.ws.lastBlockHex";
+// B2: when the head height last ADVANCED, keyed by hex. SEPARATE from WS_BLOCK_KEY
+// (whose string shape the warm-start seed + banner WS listener depend on — never
+// change it). Written only on a hex change, by BOTH the poll below and the SW WS
+// handler, so the stall window survives a banner remount / popup reopen: the next
+// mount seeds its baseline from this and can verdict STALLED on the first poll
+// instead of restarting the 15s window from zero. Shape: { hex, advancedAtMs }.
+const BLOCK_ADVANCE_KEY = "mono.ws.lastBlockAdvancedAt";
 
 /**
  * Map a FAILED bgWalletChainBlockNumber poll to a banner health state. The
@@ -203,6 +210,45 @@ export function chainHealthStallVerdict(
   thresholdMs: number,
 ): boolean {
   return nowMs - lastAdvancedAtMs >= thresholdMs;
+}
+
+/**
+ * B2: fold the persisted block-advance store (`BLOCK_ADVANCE_KEY`) into the first
+ * confirmed head of a fresh mount, so the stall window survives a remount / popup
+ * reopen instead of restarting from zero.
+ * - Same head as the persisted session (`stored.hex === currentHex`): carry its
+ *   `advancedAtMs` forward → verdict STALLED if it's been unchanged past the
+ *   threshold (an already-stalled chain flips immediately on reopen).
+ * - Head advanced while closed (different hex), or no/malformed store: a FRESH
+ *   baseline at `nowMs`, never stalled (no false positive — the chain moved, or we
+ *   simply don't know yet; falls back to the current first-tick-LIVE behavior).
+ * Pure + exported.
+ */
+export function seedStallBaseline(
+  stored: unknown,
+  currentHex: string,
+  nowMs: number,
+  thresholdMs: number,
+): { lastBlockHex: string; lastBlockObservedAt: number; stalled: boolean } {
+  if (typeof stored === "object" && stored !== null) {
+    const hex = (stored as { hex?: unknown }).hex;
+    const advancedAtMs = (stored as { advancedAtMs?: unknown }).advancedAtMs;
+    if (
+      typeof hex === "string" &&
+      /^0x[0-9a-fA-F]+$/.test(hex) &&
+      typeof advancedAtMs === "number" &&
+      Number.isFinite(advancedAtMs) &&
+      advancedAtMs <= nowMs && // guard a future/garbage timestamp
+      hex === currentHex
+    ) {
+      return {
+        lastBlockHex: currentHex,
+        lastBlockObservedAt: advancedAtMs,
+        stalled: chainHealthStallVerdict(nowMs, advancedAtMs, thresholdMs),
+      };
+    }
+  }
+  return { lastBlockHex: currentHex, lastBlockObservedAt: nowMs, stalled: false };
 }
 
 /**
@@ -538,6 +584,22 @@ export function ChainStatusBanner({
     // first poll of THIS mount has established a baseline — WS never INITIATES a
     // live transition from a cold/unknown state; only the gated poll does.
     let pollResolvedThisMount = false;
+    // B2: whether the first confirmed head of THIS mount has folded in the
+    // persisted advance store yet (one-shot, on the first ok poll).
+    let stallBaselineSeeded = false;
+    // Read the persisted advance store once at mount; the first ok poll awaits it
+    // (storage reads are sub-ms, so it resolves well before the first tick).
+    const storedAdvancePromise = chrome.storage.session
+      .get(BLOCK_ADVANCE_KEY)
+      .then((s) => s?.[BLOCK_ADVANCE_KEY] as unknown)
+      .catch(() => undefined);
+    // Persist {hex, advancedAtMs} — call ONLY when the hex actually changed, so
+    // the timestamp tracks genuine advancement (not every duplicate tick).
+    const persistBlockAdvance = (hex: string, advancedAtMs: number) => {
+      void chrome.storage.session
+        .set({ [BLOCK_ADVANCE_KEY]: { hex, advancedAtMs } })
+        .catch(() => {});
+    };
 
     const tick = async () => {
       if (cancelled || document.visibilityState === "hidden") return;
@@ -552,6 +614,35 @@ export function ChainStatusBanner({
         }
         pollDegraded = false;
         const now = Date.now();
+        // B2: on the FIRST confirmed head this mount, fold in the persisted
+        // advance store so an already-stalled chain verdicts STALLED immediately
+        // (the window survives mount + popup reopen). Subsequent ticks use the
+        // normal new-block / stall logic below.
+        if (!stallBaselineSeeded) {
+          stallBaselineSeeded = true;
+          const stored = await storedAdvancePromise;
+          if (cancelled) return;
+          const base = seedStallBaseline(
+            stored,
+            r.blockHex,
+            now,
+            STALL_THRESHOLD_MS,
+          );
+          lastBlockHex = base.lastBlockHex;
+          lastBlockObservedAt = base.lastBlockObservedAt;
+          // Keep both persisted keys fresh + hex-synced (advancedAt is the carried
+          // time when the head matched, else `now` for the head seen while closed).
+          void chrome.storage.session
+            .set({ [WS_BLOCK_KEY]: r.blockHex })
+            .catch(() => {});
+          persistBlockAdvance(r.blockHex, lastBlockObservedAt);
+          setHealth(
+            base.stalled
+              ? { kind: "stalled", blockHex: r.blockHex }
+              : { kind: "live", blockHex: r.blockHex },
+          );
+          return;
+        }
         if (lastBlockHex === null || r.blockHex !== lastBlockHex) {
           lastBlockHex = r.blockHex;
           lastBlockObservedAt = now;
@@ -564,6 +655,9 @@ export function ChainStatusBanner({
           void chrome.storage.session
             .set({ [WS_BLOCK_KEY]: r.blockHex })
             .catch(() => {});
+          // B2: the head advanced → record WHEN, so a later reopen can time the
+          // stall from here (written only on this genuine hex change).
+          persistBlockAdvance(r.blockHex, now);
         } else if (
           chainHealthStallVerdict(now, lastBlockObservedAt, STALL_THRESHOLD_MS)
         ) {

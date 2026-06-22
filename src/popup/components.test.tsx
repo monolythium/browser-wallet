@@ -16,6 +16,7 @@ import {
   chainHealthMonoscanLink,
   chainHealthPresentation,
   chainHealthStallVerdict,
+  seedStallBaseline,
   HEALTH_TICK_MS,
   STALL_THRESHOLD_MS,
   chainKindNotLive,
@@ -1418,6 +1419,46 @@ describe("chainHealthStallVerdict (STALLED speedup A — wallet-inferred stall p
     const ticks = Math.ceil(STALL_THRESHOLD_MS / HEALTH_TICK_MS);
     expect(ticks).toBe(2);
     expect(ticks * HEALTH_TICK_MS).toBe(16_000);
+  });
+});
+
+describe("seedStallBaseline (STALLED speedup B2 — window survives mount/popup reopen)", () => {
+  const HEX = "0xabc";
+  it("same head as the persisted session, past threshold → start STALLED (carries the advance time)", () => {
+    const base = seedStallBaseline({ hex: HEX, advancedAtMs: 0 }, HEX, 20_000, 15_000);
+    expect(base).toEqual({
+      lastBlockHex: HEX,
+      lastBlockObservedAt: 0, // carried forward, NOT reset to now
+      stalled: true,
+    });
+  });
+
+  it("same head but still within the window → not stalled, time carried forward", () => {
+    const base = seedStallBaseline({ hex: HEX, advancedAtMs: 10_000 }, HEX, 20_000, 15_000);
+    expect(base).toEqual({
+      lastBlockHex: HEX,
+      lastBlockObservedAt: 10_000,
+      stalled: false,
+    });
+  });
+
+  it("no false positive: the head advanced while closed (different hex) → fresh baseline at now", () => {
+    const base = seedStallBaseline({ hex: HEX, advancedAtMs: 0 }, "0xdef", 20_000, 15_000);
+    expect(base).toEqual({
+      lastBlockHex: "0xdef",
+      lastBlockObservedAt: 20_000,
+      stalled: false,
+    });
+  });
+
+  it("fallback (no regression): missing / malformed / future-timestamp store → fresh first-tick baseline", () => {
+    const fresh = { lastBlockHex: "0xdef", lastBlockObservedAt: 20_000, stalled: false };
+    expect(seedStallBaseline(undefined, "0xdef", 20_000, 15_000)).toEqual(fresh);
+    expect(seedStallBaseline(null, "0xdef", 20_000, 15_000)).toEqual(fresh);
+    expect(seedStallBaseline({ hex: 123 }, "0xdef", 20_000, 15_000)).toEqual(fresh);
+    expect(seedStallBaseline({ hex: "0xdef" }, "0xdef", 20_000, 15_000)).toEqual(fresh); // no advancedAtMs
+    // advancedAtMs in the future (garbage / clock skew) is rejected → no false stall
+    expect(seedStallBaseline({ hex: "0xdef", advancedAtMs: 99_999 }, "0xdef", 20_000, 15_000)).toEqual(fresh);
   });
 });
 
