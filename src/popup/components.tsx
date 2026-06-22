@@ -154,8 +154,14 @@ export function chainKindNotLive(
   );
 }
 
-const HEALTH_TICK_MS = 8_000;
-const STALL_THRESHOLD_MS = 30_000;
+export const HEALTH_TICK_MS = 8_000;
+// How long the head height may stay unchanged before the banner verdicts STALLED.
+// Lowered 30s → 15s: the chain produces ~0.3s blocks, so 15s is ~50× the normal
+// inter-block gap — comfortably clear of a brief pause (no false STALLED) while
+// roughly halving detection. NOTE: detection is also floored by the 8s poll
+// granularity (the predicate is only checked on a tick) → ~16s best case here;
+// lowering further requires lowering HEALTH_TICK_MS too (more RPC traffic).
+export const STALL_THRESHOLD_MS = 15_000;
 const OPERATOR_TICK_MS = 10_000;
 // Session key holding the last block hex we observed (written by the SW on a WS
 // newHeads push AND by the poll tick below). Read on mount to seed the honest
@@ -182,6 +188,21 @@ export function chainHealthForFailedPoll(r: {
   if (r.cause === "untrusted") return { kind: "untrusted" };
   if (r.cause === "quarantined") return { kind: "quarantined" };
   return { kind: "offline", reason: r.reason ?? "unreachable" };
+}
+
+/**
+ * STALLED predicate: the head height has stayed unchanged for at least
+ * `thresholdMs`. Unlike the RPC-reported degraded states, STALLED is wallet-
+ * INFERRED — the chain keeps answering `ok` with the same height, so we time it
+ * out. Pure + exported so the rendered banner and the tested contract can't
+ * drift from `STALL_THRESHOLD_MS`.
+ */
+export function chainHealthStallVerdict(
+  nowMs: number,
+  lastAdvancedAtMs: number,
+  thresholdMs: number,
+): boolean {
+  return nowMs - lastAdvancedAtMs >= thresholdMs;
 }
 
 /**
@@ -543,7 +564,9 @@ export function ChainStatusBanner({
           void chrome.storage.session
             .set({ [WS_BLOCK_KEY]: r.blockHex })
             .catch(() => {});
-        } else if (now - lastBlockObservedAt >= STALL_THRESHOLD_MS) {
+        } else if (
+          chainHealthStallVerdict(now, lastBlockObservedAt, STALL_THRESHOLD_MS)
+        ) {
           setHealth({ kind: "stalled", blockHex: r.blockHex });
         }
         // else: same block but within fresh window — keep current state

@@ -15,6 +15,9 @@ import {
   chainHealthInlineHint,
   chainHealthMonoscanLink,
   chainHealthPresentation,
+  chainHealthStallVerdict,
+  HEALTH_TICK_MS,
+  STALL_THRESHOLD_MS,
   chainKindNotLive,
   reconnectingBannerLabel,
   seedReconnectingHealth,
@@ -1390,6 +1393,31 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.color).toBe("var(--err)");
     expect(pres.tappable).toBe(true);
     expect(pres.tooltip.length).toBeGreaterThan(0);
+  });
+});
+
+describe("chainHealthStallVerdict (STALLED speedup A — wallet-inferred stall predicate)", () => {
+  it("verdicts STALLED once the head has been unchanged for >= threshold", () => {
+    expect(chainHealthStallVerdict(15_000, 0, 15_000)).toBe(true); // exactly at
+    expect(chainHealthStallVerdict(20_000, 0, 15_000)).toBe(true); // past
+  });
+
+  it("stays not-stalled within the fresh window", () => {
+    expect(chainHealthStallVerdict(14_999, 0, 15_000)).toBe(false);
+    expect(chainHealthStallVerdict(8_000, 0, 15_000)).toBe(false);
+  });
+
+  it("pins the lowered threshold (30s → 15s) so an accidental bump is caught", () => {
+    expect(STALL_THRESHOLD_MS).toBe(15_000);
+  });
+
+  it("detection is floored by the poll granularity: ceil(threshold / tick) ticks", () => {
+    expect(HEALTH_TICK_MS).toBe(8_000);
+    // 15_000 / 8_000 → 2 ticks → ~16s best-case detection (not <16s without a
+    // smaller tick). This documents WHY 12s would buy nothing over 15s here.
+    const ticks = Math.ceil(STALL_THRESHOLD_MS / HEALTH_TICK_MS);
+    expect(ticks).toBe(2);
+    expect(ticks * HEALTH_TICK_MS).toBe(16_000);
   });
 });
 
