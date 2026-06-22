@@ -1199,6 +1199,9 @@ export default function App() {
           // wrong-chain / offline counts), not the manage-operators editor, so
           // the user sees WHY the banner is degraded.
           onOpenOperators={() => navigateTo("operator-directory")}
+          // B (R1): the active 0x address so the degraded (tappable) banner
+          // states can offer a "View on Monoscan" link to the user's own page.
+          activeAddr0x={acc.addr}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),

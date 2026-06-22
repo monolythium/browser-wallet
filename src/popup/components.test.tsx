@@ -13,6 +13,7 @@ import {
   AssetList,
   chainHealthForFailedPoll,
   chainHealthInlineHint,
+  chainHealthMonoscanLink,
   chainHealthPresentation,
   chainKindNotLive,
   reconnectingBannerLabel,
@@ -1417,6 +1418,35 @@ describe("chainHealthInlineHint (A/R1 — explanation visible inline, not hover-
     expect(chainHealthInlineHint("stalled")).toBe(
       "The chain hasn't advanced for a while. Tap to review your operators.",
     );
+  });
+});
+
+describe("chainHealthMonoscanLink (B/R1 — View on Monoscan on tappable degraded states)", () => {
+  const URL = "https://monoscan.xyz/#/wallet/mono1abc";
+
+  it("offers the link on every TAPPABLE degraded state when a URL resolved", () => {
+    for (const k of [
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+    ] as const) {
+      expect(chainHealthPresentation(k).tappable).toBe(true); // precondition
+      expect(chainHealthMonoscanLink(k, URL)).toBe(URL);
+    }
+  });
+
+  it("never offers the link on LIVE or the non-tappable transient states", () => {
+    for (const k of ["live", "reconnecting", "loading"] as const) {
+      expect(chainHealthPresentation(k).tappable).toBe(false); // precondition
+      expect(chainHealthMonoscanLink(k, URL)).toBeNull();
+    }
+  });
+
+  it("no-mock: a tappable state with NO resolved URL renders no link", () => {
+    expect(chainHealthMonoscanLink("offline", null)).toBeNull();
+    expect(chainHealthMonoscanLink("stalled", null)).toBeNull();
   });
 });
 

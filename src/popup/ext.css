@@ -455,6 +455,21 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   text-transform: none;
   color: var(--fg-500);
 }
+/* B (R1): "View on Monoscan" link inside the chain-health hint row. Reuses the
+   globe + new-tab affordance + the --fg-200 color of the tx-detail
+   MonoscanTxButton (.ext-act), sized down to a compact inline link. */
+.ext-chain-health-monoscan {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-200);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ext-chain-health-monoscan:hover {
+  text-decoration: underline;
+}
 .ext-pending-dot {
   position: absolute;
   top: -2px;

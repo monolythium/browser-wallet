@@ -293,6 +293,24 @@ export function chainHealthInlineHint(kind: ChainHealth["kind"]): string | null 
 }
 
 /**
+ * B (R1): the "View on Monoscan" target for a chain-health state, or null when
+ * none should render. Offered ONLY on the TAPPABLE degraded states (the same set
+ * that taps through to Operators — stalled / untrusted / regenesis / quarantined
+ * / offline) AND only when a real Monoscan URL resolved (no-mock — never a
+ * fabricated or broken link; the resolved URL is passed in by the caller from the
+ * trusted `pausedBalanceMonoscanUrl`). Pure + exported so the gate is tested
+ * independently of the render.
+ */
+export function chainHealthMonoscanLink(
+  kind: ChainHealth["kind"],
+  monoscanUrl: string | null,
+): string | null {
+  return chainHealthPresentation(kind).tappable && monoscanUrl
+    ? monoscanUrl
+    : null;
+}
+
+/**
  * Visible banner label for the reconnecting warm-start: the last-seen block
  * NUMBER (decimal) with a reconnecting marker. The number is honest — labelled
  * "last seen", never presented as the current head — and this NEVER renders the
@@ -429,6 +447,11 @@ interface ChainStatusBannerProps {
    *  to App so Home can hide the balance + activity for all non-live states
    *  (see `chainKindNotLive`). Optional — secondary banners omit it. */
   onHealthChange?: (kind: ChainHealthKind) => void;
+  /** The active wallet's 0x address — threaded by the main popup so the degraded
+   *  (tappable) states can offer a "View on Monoscan" link to the user's OWN
+   *  address page (B/R1), via the trusted `pausedBalanceMonoscanUrl`. Omitted on
+   *  the secondary approval/unlock banners → no link there (no-mock). */
+  activeAddr0x?: string | null;
 }
 
 // Last chain-health snapshot, cached at MODULE scope so it survives a banner
@@ -452,6 +475,7 @@ export function ChainStatusBanner({
   onMenu,
   onOpenOperators,
   onHealthChange,
+  activeAddr0x,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>(
     () => lastKnownHealth ?? { kind: "loading" },
@@ -757,6 +781,12 @@ export function ChainStatusBanner({
   // A (R1): the explanation that was previously hover-only (title=) now renders
   // as a visible muted line beneath the indicator row for every non-live state.
   const inlineHint = chainHealthInlineHint(health.kind);
+  // B (R1): a "View on Monoscan" link on the tappable degraded states — built
+  // from the user's OWN address over the trusted wallet constant (never
+  // operator-echoed). No-mock: null when the address is absent/invalid (e.g. the
+  // secondary banners that don't thread it) or the state isn't tappable.
+  const monoscanUrl = activeAddr0x ? pausedBalanceMonoscanUrl(activeAddr0x) : null;
+  const monoscanLink = chainHealthMonoscanLink(health.kind, monoscanUrl);
 
   return (
     <div style={{ borderBottom: "1px solid var(--fg-700)" }}>
@@ -818,8 +848,20 @@ export function ChainStatusBanner({
         </>
       )}
     </div>
-    {inlineHint && (
-      <div className="ext-chain-health-hint">{inlineHint}</div>
+    {(inlineHint || monoscanLink) && (
+      <div className="ext-chain-health-hint">
+        {inlineHint && <span>{inlineHint}</span>}
+        {monoscanLink && (
+          <a
+            href={monoscanLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ext-chain-health-monoscan"
+          >
+            <Icon name="globe" size={12} /> View on Monoscan
+          </a>
+        )}
+      </div>
     )}
     </div>
   );
