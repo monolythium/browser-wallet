@@ -279,6 +279,20 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
 }
 
 /**
+ * A (R1): the VISIBLE inline explanation for a chain-health state — the very same
+ * text as the hover `tooltip`, surfaced as a non-loud muted line so a degraded
+ * chain explains itself without a hover. Returns null for the healthy LIVE state
+ * (no hint needed) and a non-empty string for every NON-live state (stalled /
+ * untrusted / regenesis / quarantined / offline / reconnecting / connecting).
+ * Pure + exported so the rendered hint and the tested contract can't drift from
+ * `chainHealthPresentation`.
+ */
+export function chainHealthInlineHint(kind: ChainHealth["kind"]): string | null {
+  if (kind === "live") return null;
+  return chainHealthPresentation(kind).tooltip;
+}
+
+/**
  * Visible banner label for the reconnecting warm-start: the last-seen block
  * NUMBER (decimal) with a reconnecting marker. The number is honest — labelled
  * "last seen", never presented as the current head — and this NEVER renders the
@@ -625,7 +639,9 @@ export function ChainStatusBanner({
     letterSpacing: "0.14em",
     textTransform: "uppercase",
     padding: "8px 12px",
-    borderBottom: "1px solid var(--fg-700)",
+    // The bottom border lives on the OUTER wrapper now (below the inline hint
+    // row, A/R1), so the divider sits under the whole banner — not between the
+    // indicator and its explanation.
     display: "flex",
     alignItems: "center",
     gap: 8,
@@ -738,7 +754,12 @@ export function ChainStatusBanner({
       </>
     );
 
+  // A (R1): the explanation that was previously hover-only (title=) now renders
+  // as a visible muted line beneath the indicator row for every non-live state.
+  const inlineHint = chainHealthInlineHint(health.kind);
+
   return (
+    <div style={{ borderBottom: "1px solid var(--fg-700)" }}>
     <div style={containerStyle}>
       <span
         style={{
@@ -796,6 +817,10 @@ export function ChainStatusBanner({
           </div>
         </>
       )}
+    </div>
+    {inlineHint && (
+      <div className="ext-chain-health-hint">{inlineHint}</div>
+    )}
     </div>
   );
 }

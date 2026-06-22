@@ -439,6 +439,22 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
     animation: none;
   }
 }
+/* A (R1): visible inline explanation under the chain-health indicator. Muted,
+   sentence-case + sans (NOT the uppercase mono banner type) so a degraded chain
+   explains itself without a hover. Theme-aware via the --fg / --f-sans tokens. */
+.ext-chain-health-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 0 12px 8px;
+  font-family: var(--f-sans);
+  font-size: 11px;
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--fg-500);
+}
 .ext-pending-dot {
   position: absolute;
   top: -2px;

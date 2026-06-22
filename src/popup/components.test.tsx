@@ -12,6 +12,7 @@ import {
   applyFeeTier,
   AssetList,
   chainHealthForFailedPoll,
+  chainHealthInlineHint,
   chainHealthPresentation,
   chainKindNotLive,
   reconnectingBannerLabel,
@@ -1388,6 +1389,34 @@ describe("chainHealthPresentation (#42 untrusted = red + tap/tooltips)", () => {
     expect(pres.color).toBe("var(--err)");
     expect(pres.tappable).toBe(true);
     expect(pres.tooltip.length).toBeGreaterThan(0);
+  });
+});
+
+describe("chainHealthInlineHint (A/R1 — explanation visible inline, not hover-only)", () => {
+  it("returns null for the healthy LIVE state (no hint needed)", () => {
+    expect(chainHealthInlineHint("live")).toBeNull();
+  });
+
+  it("surfaces the SAME text as the tooltip for every non-live state", () => {
+    for (const k of [
+      "stalled",
+      "untrusted",
+      "regenesis",
+      "quarantined",
+      "offline",
+      "reconnecting",
+      "loading",
+    ] as const) {
+      const hint = chainHealthInlineHint(k);
+      expect(hint).toBe(chainHealthPresentation(k).tooltip);
+      expect((hint ?? "").length).toBeGreaterThan(0);
+    }
+  });
+
+  it("the inline hint is the rendered explanation, not just an attribute — STALLED case", () => {
+    expect(chainHealthInlineHint("stalled")).toBe(
+      "The chain hasn't advanced for a while. Tap to review your operators.",
+    );
   });
 });
 
