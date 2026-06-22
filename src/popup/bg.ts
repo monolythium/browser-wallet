@@ -977,6 +977,11 @@ export async function bgWalletSendTx(args: {
   claimedAmount?: string | null;
   rateAtClaim?: number | null;
   currency?: CurrencyCode;
+  /** Delegation weight (bps) for delegate/redelegate — PENDING-ROW METADATA
+   *  ONLY (same invariant as opKind/clusterId), forwarded so the notification
+   *  can show the % (bps/100). It's the same uint16 already in the calldata; the
+   *  signed tx is byte-identical. Omit on undelegate/claim/sends. */
+  delegationWeightBps?: number;
   /** T1-04(a) — account password supplied to clear an over-limit passkey
    *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
    *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */

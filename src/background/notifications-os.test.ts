@@ -110,6 +110,9 @@ function baseRecord(overrides: Partial<{
   amountDecimal: string;
   counterparty: string;
   claimedAmount: string;
+  delegationWeightBps: number;
+  clusterName: string;
+  clusterId: number;
 }> = {}) {
   return {
     id: `${CHAIN}:${HASH}`,
@@ -134,6 +137,13 @@ function baseRecord(overrides: Partial<{
     ...(overrides.claimedAmount !== undefined
       ? { claimedAmount: overrides.claimedAmount }
       : {}),
+    ...(overrides.delegationWeightBps !== undefined
+      ? { delegationWeightBps: overrides.delegationWeightBps }
+      : {}),
+    ...(overrides.clusterName !== undefined
+      ? { clusterName: overrides.clusterName }
+      : {}),
+    ...(overrides.clusterId !== undefined ? { clusterId: overrides.clusterId } : {}),
   };
 }
 
@@ -207,6 +217,47 @@ describe("fireOsNotification", () => {
     expect(msg).toBe("+0.98 LYTH"); // truncated, +gain; precompile counterparty dropped
     expect(msg).not.toContain("·"); // no counterparty separator for claims
     expect(captures.notificationsCreate[0]!.options.title).toBe("Rewards claimed");
+  });
+
+  it("shows the cluster + weight % in a delegate body when bps was captured", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "delegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        delegationWeightBps: 2500,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha · 25.00%");
+  });
+
+  it("shows just the % when no cluster name/id is known (redelegate)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        delegationWeightBps: 3334,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("33.34%");
+  });
+
+  it("no-mock: a delegation WITHOUT a captured bps shows no % (legacy / undelegate)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "undelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).not.toContain("%"); // undelegate has no bps → no fabricated %
   });
 
   it("also omits the amount for '0.00' / '0.0000' (the formatter's zero forms)", async () => {

@@ -78,6 +78,20 @@ describe("encodeDelegate", () => {
   });
 });
 
+// The submit-time bps capture (delegationWeightBps) is PENDING-ROW METADATA — it
+// rides into the notification, NOT the calldata. The signed tx is byte-identical:
+// the calldata is built from the SAME bps and the encoder is untouched.
+describe("delegation tx byte-equality (submit-time bps capture is metadata-only)", () => {
+  it("delegate/redelegate calldata depends ONLY on (cluster, bps) — golden, unchanged", () => {
+    expect(encodeDelegate(1, 2500)).toBe(encodeDelegateCalldata(1, 2500));
+    expect(encodeRedelegate(1, 2, 2500)).toBe(encodeRedelegateCalldata(1, 2, 2500));
+    expect(encodeDelegate(1, 2500).startsWith("0x662337de")).toBe(true);
+    expect(encodeRedelegate(1, 2, 2500).startsWith("0xa06ac18f")).toBe(true);
+    // Same bps → same bytes, regardless of any metadata captured alongside.
+    expect(encodeDelegate(1, 2500)).toBe(encodeDelegate(1, 2500));
+  });
+});
+
 describe("encodeUndelegate", () => {
   it("equals the SDK encoder + carries the chain undelegate(uint32) selector (full-row, 1 arg)", () => {
     const data = encodeUndelegate(3);

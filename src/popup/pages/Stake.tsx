@@ -501,6 +501,10 @@ export function Stake({
     try {
       let data: string;
       let executionUnitLimitHex: string;
+      // The delegate/redelegate weight (bps) captured PURELY as notification
+      // metadata — it's the same uint16 already encoded into `data`; the signed
+      // tx is byte-identical. Undelegate/claim leave it undefined (no bps).
+      let delegationWeightBps: number | undefined;
       // NON-CUSTODIAL: delegation never carries native value. The chain
       // reverts (UnexpectedValue / tag 0x020e) if any value is attached —
       // tokens stay liquid in the wallet, weighted by `weightBps`.
@@ -528,6 +532,7 @@ export function Stake({
           setStep("error");
           return;
         }
+        delegationWeightBps = bps; // notification metadata — same bps as the calldata
         if (action === "delegate") {
           // Balance-weighted, non-custodial: weightBps only. No msg.value.
           data = encodeDelegate(selectedCluster!.clusterId, bps);
@@ -561,6 +566,7 @@ export function Stake({
         // directory name when registered; omitted when null.
         clusterId: selectedCluster!.clusterId,
         ...(selectedCluster!.name ? { clusterName: selectedCluster!.name } : {}),
+        ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
       });
       if (r.ok) {
         setTxHash(r.result.txHash);

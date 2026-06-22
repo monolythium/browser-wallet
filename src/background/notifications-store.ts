@@ -84,6 +84,9 @@ export interface RecordNotificationInput {
   /** A reward claim's claimed LYTH (decimal-LYTH string), threaded from the
    *  freshly-decoded `Claimed` log at the confirmed terminal. Claim-only. */
   claimedAmount?: string;
+  /** Delegation weight (bps) from the pending row — delegate/redelegate only;
+   *  the body renders it as a % (bps/100). */
+  delegationWeightBps?: number;
   /** Presence at observe-time. `true` ⇒ a wallet
    *  surface was open when this record was created ⇒ store it already-read
    *  (no badge bump). Omitted/`false` ⇒ unread (the historical default).
@@ -133,6 +136,9 @@ export async function recordNotification(
       ...(input.clusterId !== undefined ? { clusterId: input.clusterId } : {}),
       ...(input.clusterName !== undefined ? { clusterName: input.clusterName } : {}),
       ...(input.claimedAmount !== undefined ? { claimedAmount: input.claimedAmount } : {}),
+      ...(input.delegationWeightBps !== undefined
+        ? { delegationWeightBps: input.delegationWeightBps }
+        : {}),
     };
 
     const historyKey = notificationsHistoryKey(

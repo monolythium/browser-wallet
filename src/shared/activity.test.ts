@@ -1393,6 +1393,27 @@ describe("validateActivityRow — local-claim field survival (C1 edit 1)", () =>
     expect(validateActivityRow(row)).toEqual(row);
   });
 
+  it("round-trips a delegate row's delegationWeightBps (notification % metadata)", () => {
+    const row: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xdel1",
+      to: "0x000000000000000000000000000000000000100a",
+      amountDecimal: "0",
+      broadcastedAtMs: 1_000,
+      broadcastBlockHeight: 100,
+      via: "op-a",
+      opKind: "delegate",
+      clusterId: 2,
+      clusterName: "alpha",
+      delegationWeightBps: 2500,
+    };
+    expect(validateActivityRow(row)).toEqual(row);
+    // A malformed bps is dropped (the row still validates).
+    const bad = validateActivityRow({ ...row, delegationWeightBps: "nope" }) as PendingTxRow;
+    expect(bad).not.toBeNull();
+    expect(bad.delegationWeightBps).toBeUndefined();
+  });
+
   it("keeps a populated rateAtClaim and a null rateAtClaim (no-mock distinction)", () => {
     const withRate = claimRow({ rateAtClaim: 1.23 });
     expect(validateActivityRow(withRate)).toEqual(withRate);

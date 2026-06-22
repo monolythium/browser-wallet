@@ -134,6 +134,9 @@ export interface NotificationRecord {
    *  `amountDecimal` is "0" for a claim, so the body shows this instead).
    *  Only set for claims; optional + legacy-safe. */
   claimedAmount?: string;
+  /** Delegation weight (bps) for a delegate/redelegate, captured at submit. Lets
+   *  the body show the % (bps/100). Absent on undelegate / legacy → no %. */
+  delegationWeightBps?: number;
   /** Epoch ms at the moment the SW observed the terminal transition.
    *  This is the notification's fire-time — distinct from the
    *  pending-row's `broadcastedAtMs` (which is broadcast time). */
@@ -339,6 +342,11 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     typeof r.claimedAmount === "string" && r.claimedAmount.length > 0
       ? r.claimedAmount
       : undefined;
+  const delegationWeightBps =
+    typeof r.delegationWeightBps === "number" &&
+    Number.isFinite(r.delegationWeightBps)
+      ? r.delegationWeightBps
+      : undefined;
   return {
     id: r.id,
     txHash: r.txHash,
@@ -354,6 +362,7 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     ...(clusterId !== undefined ? { clusterId } : {}),
     ...(clusterName !== undefined ? { clusterName } : {}),
     ...(claimedAmount !== undefined ? { claimedAmount } : {}),
+    ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
   };
 }
 

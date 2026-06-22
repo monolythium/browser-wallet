@@ -4995,6 +4995,7 @@ async function persistPendingRowBackground(args: {
   claimedAmount?: string | null;
   rateAtClaim?: number | null;
   currency?: CurrencyCode;
+  delegationWeightBps?: number;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -5040,6 +5041,9 @@ async function persistPendingRowBackground(args: {
       ...(isClaim ? { claimedAmount: args.claimedAmount ?? null } : {}),
       ...(isClaim ? { rateAtClaim: args.rateAtClaim ?? null } : {}),
       ...(isClaim && args.currency !== undefined ? { currency: args.currency } : {}),
+      ...(args.delegationWeightBps !== undefined
+        ? { delegationWeightBps: args.delegationWeightBps }
+        : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -5523,6 +5527,9 @@ export async function pollPendingAndNotify(): Promise<{
             : {}),
           ...(t.claimedAmountLythoshi != null
             ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
+            : {}),
+          ...(t.row.delegationWeightBps !== undefined
+            ? { delegationWeightBps: t.row.delegationWeightBps }
             : {}),
         });
         if (result.added && result.record !== null) {
@@ -8315,6 +8322,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   ...(t.claimedAmountLythoshi != null
                     ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
                     : {}),
+                  ...(t.row.delegationWeightBps !== undefined
+                    ? { delegationWeightBps: t.row.delegationWeightBps }
+                    : {}),
                 });
                 if (result.added && result.record !== null) {
                   anyAdded = true;
@@ -9444,6 +9454,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         claimedAmount?: unknown;
         rateAtClaim?: unknown;
         currency?: unknown;
+        // Delegation weight (bps) for delegate/redelegate — METADATA ONLY (same
+        // as clusterId): the same uint16 already in `data`; rides only into the
+        // pending row so the notification shows the %. Never re-encoded.
+        delegationWeightBps?: unknown;
         // T1-04(a) — elevated re-auth for an over-limit passkey send. When
         // the per-vault passkey cap would reject this value-only transfer,
         // the popup re-submits with the account password here; the SW
@@ -9518,6 +9532,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             ? null
             : undefined;
       const acceptedCurrency = isCurrencyCode(p.currency) ? p.currency : undefined;
+      // Delegation weight (bps) — METADATA ONLY. Accept only an integer in the
+      // chain-valid 1..10000 range; anything else is dropped (no % shown).
+      const acceptedDelegationWeightBps =
+        typeof p.delegationWeightBps === "number" &&
+        Number.isInteger(p.delegationWeightBps) &&
+        p.delegationWeightBps >= 1 &&
+        p.delegationWeightBps <= 10_000
+          ? p.delegationWeightBps
+          : undefined;
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "send is only wired for Monolythium Testnet today" };
       }
@@ -9738,6 +9761,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             ? { rateAtClaim: acceptedRateAtClaim }
             : {}),
           ...(acceptedCurrency !== undefined ? { currency: acceptedCurrency } : {}),
+          // Delegation weight (bps) — metadata only; the % the notification shows.
+          ...(acceptedDelegationWeightBps !== undefined
+            ? { delegationWeightBps: acceptedDelegationWeightBps }
+            : {}),
         });
         return { ok: true, txHash, via };
       } catch (e) {
