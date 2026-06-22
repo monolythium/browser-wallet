@@ -109,6 +109,7 @@ function baseRecord(overrides: Partial<{
   status: "confirmed" | "failed";
   amountDecimal: string;
   counterparty: string;
+  claimedAmount: string;
 }> = {}) {
   return {
     id: `${CHAIN}:${HASH}`,
@@ -130,6 +131,9 @@ function baseRecord(overrides: Partial<{
     createdAtMs: 1_700_000_000_000,
     read: false,
     schemaVersion: 0 as const,
+    ...(overrides.claimedAmount !== undefined
+      ? { claimedAmount: overrides.claimedAmount }
+      : {}),
   };
 }
 
@@ -186,6 +190,22 @@ describe("fireOsNotification", () => {
     expect(msg).not.toContain("LYTH");
     expect(msg).not.toContain("0 ");
     // Title still maps to the friendly label.
+    expect(captures.notificationsCreate[0]!.options.title).toBe("Rewards claimed");
+  });
+
+  it("shows the decoded claimed reward in a claim body (truncated 4dp, +gain, no precompile)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "claim",
+        status: "confirmed",
+        amountDecimal: "0",
+        claimedAmount: "0.980035894719687092",
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("+0.98 LYTH"); // truncated, +gain; precompile counterparty dropped
+    expect(msg).not.toContain("·"); // no counterparty separator for claims
     expect(captures.notificationsCreate[0]!.options.title).toBe("Rewards claimed");
   });
 

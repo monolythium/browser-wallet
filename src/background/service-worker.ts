@@ -5521,6 +5521,9 @@ export async function pollPendingAndNotify(): Promise<{
           ...(t.row.clusterName !== undefined
             ? { clusterName: t.row.clusterName }
             : {}),
+          ...(t.claimedAmountLythoshi != null
+            ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
+            : {}),
         });
         if (result.added && result.record !== null) {
           await fireOsNotification(result.record, { unlocked });
@@ -8308,6 +8311,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                     : {}),
                   ...(t.row.clusterName !== undefined
                     ? { clusterName: t.row.clusterName }
+                    : {}),
+                  ...(t.claimedAmountLythoshi != null
+                    ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
                     : {}),
                 });
                 if (result.added && result.record !== null) {

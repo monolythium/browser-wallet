@@ -129,6 +129,11 @@ export interface NotificationRecord {
    *  kinds + legacy records. */
   clusterId?: number;
   clusterName?: string;
+  /** A reward claim's claimed LYTH (decimal-LYTH string), captured at the
+   *  confirmed terminal from the receipt's `Claimed` log (the row's
+   *  `amountDecimal` is "0" for a claim, so the body shows this instead).
+   *  Only set for claims; optional + legacy-safe. */
+  claimedAmount?: string;
   /** Epoch ms at the moment the SW observed the terminal transition.
    *  This is the notification's fire-time — distinct from the
    *  pending-row's `broadcastedAtMs` (which is broadcast time). */
@@ -330,6 +335,10 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     typeof r.clusterName === "string" && r.clusterName.length > 0
       ? r.clusterName
       : undefined;
+  const claimedAmount =
+    typeof r.claimedAmount === "string" && r.claimedAmount.length > 0
+      ? r.claimedAmount
+      : undefined;
   return {
     id: r.id,
     txHash: r.txHash,
@@ -344,6 +353,7 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
     ...(clusterId !== undefined ? { clusterId } : {}),
     ...(clusterName !== undefined ? { clusterName } : {}),
+    ...(claimedAmount !== undefined ? { claimedAmount } : {}),
   };
 }
 

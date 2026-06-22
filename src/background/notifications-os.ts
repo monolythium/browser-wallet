@@ -37,6 +37,7 @@
 
 import { monoscanTxUrl } from "../shared/build-info.js";
 import { bech32mDisplay } from "../shared/bech32m.js";
+import { formatLythDecimalDisplay } from "../shared/lyth-units.js";
 import {
   notificationTitle,
   type NotificationRecord,
@@ -221,6 +222,16 @@ function isZeroAmount(amountDecimal: string): boolean {
 /** Build the user-facing toast body for one record. Public so tests can
  *  pin the wording without rendering the toast itself. */
 export function notificationBody(record: NotificationRecord): string {
+  // A reward claim's `amountDecimal` is "0" (value 0x0) and its counterparty is
+  // the precompile; show the decoded claimed reward instead (truncated, +gain).
+  // no-mock: only when a real decoded amount is present.
+  if (
+    record.kind === "claim" &&
+    record.claimedAmount &&
+    !isZeroAmount(record.claimedAmount)
+  ) {
+    return `+${formatLythDecimalDisplay(record.claimedAmount, 4)} LYTH`;
+  }
   const short = shortCounterparty(record.counterparty);
   if (isZeroAmount(record.amountDecimal)) {
     return short;
