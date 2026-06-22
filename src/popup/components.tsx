@@ -154,13 +154,16 @@ export function chainKindNotLive(
   );
 }
 
-export const HEALTH_TICK_MS = 8_000;
+// Health-poll cadence. Also the ONLY granularity gate on STALLED detection (the
+// stall predicate is checked once per tick). At 5s, ceil(15_000/5_000)=3 ticks
+// → ~15s worst-case detection (vs ~16s at 8s); single-use (this poll only), so
+// the cost is just slightly more frequent block-number RPCs.
+export const HEALTH_TICK_MS = 5_000;
 // How long the head height may stay unchanged before the banner verdicts STALLED.
 // Lowered 30s → 15s: the chain produces ~0.3s blocks, so 15s is ~50× the normal
 // inter-block gap — comfortably clear of a brief pause (no false STALLED) while
-// roughly halving detection. NOTE: detection is also floored by the 8s poll
-// granularity (the predicate is only checked on a tick) → ~16s best case here;
-// lowering further requires lowering HEALTH_TICK_MS too (more RPC traffic).
+// roughly halving detection. Detection is also floored by the poll granularity
+// (HEALTH_TICK_MS above; the predicate is only checked on a tick).
 export const STALL_THRESHOLD_MS = 15_000;
 const OPERATOR_TICK_MS = 10_000;
 // Session key holding the last block hex we observed (written by the SW on a WS

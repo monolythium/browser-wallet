@@ -1413,12 +1413,12 @@ describe("chainHealthStallVerdict (STALLED speedup A — wallet-inferred stall p
   });
 
   it("detection is floored by the poll granularity: ceil(threshold / tick) ticks", () => {
-    expect(HEALTH_TICK_MS).toBe(8_000);
-    // 15_000 / 8_000 → 2 ticks → ~16s best-case detection (not <16s without a
-    // smaller tick). This documents WHY 12s would buy nothing over 15s here.
+    expect(HEALTH_TICK_MS).toBe(5_000);
+    // 15_000 / 5_000 → 3 ticks → ~15s worst-case first-STALLED tick (tighter than
+    // the ~16s at the prior 8s cadence). Threshold itself is unchanged.
     const ticks = Math.ceil(STALL_THRESHOLD_MS / HEALTH_TICK_MS);
-    expect(ticks).toBe(2);
-    expect(ticks * HEALTH_TICK_MS).toBe(16_000);
+    expect(ticks).toBe(3);
+    expect(ticks * HEALTH_TICK_MS).toBe(15_000);
   });
 });
 
