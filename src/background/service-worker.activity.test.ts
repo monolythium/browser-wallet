@@ -445,6 +445,11 @@ vi.mock("../shared/multisig.js", async (importOriginal) => {
 
 let approvalDecision: { ok: true } | { ok: false; reason?: string } = { ok: true };
 const enqueuedApprovals: Array<{ kind: string; [k: string]: unknown }> = [];
+// P4-001 spies — rejectAllPending (D1a, called by triggerAutoLock on lock) and
+// reapExpired (D1b, called by the ALARM_APPROVAL_REAP onAlarm). mock-prefixed so
+// the vi.mock factory may close over them.
+const mockRejectAllPending = vi.fn();
+const mockReapExpired = vi.fn(() => ({ reaped: 0, remaining: 0 }));
 
 vi.mock("./approvals.js", () => ({
   enqueue: vi.fn(async (req: { kind: string; [k: string]: unknown }) => {
@@ -456,6 +461,8 @@ vi.mock("./approvals.js", () => ({
   getPending: vi.fn(() => null),
   listPending: vi.fn(() => []),
   clearPending: vi.fn(async () => {}),
+  rejectAllPending: mockRejectAllPending,
+  reapExpired: mockReapExpired,
   focusApproval: vi.fn(async () => ({ focused: false })),
 }));
 
@@ -498,6 +505,9 @@ import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_APPROVAL_REAP,
+  APPROVAL_TTL_MS,
+  AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
@@ -709,6 +719,9 @@ beforeEach(() => {
   submitSealedReturn = undefined;
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
+  mockRejectAllPending.mockClear();
+  mockReapExpired.mockClear();
+  mockReapExpired.mockReturnValue({ reaped: 0, remaining: 0 });
   unlocked = true;
   // Reset to the non-null production-invariant default (see the declaration);
   // the cap gate is kept inert by policy.enabled=false below, not a null id.
@@ -3601,6 +3614,91 @@ describe("fired auto-lock clears the session-MEK rehydrate cap (#17)", () => {
     expect(storageSession[SESSION_KEY_MEK_V4]).toBeUndefined();
     expect(storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE]).toBeUndefined();
     expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4-001 — auto-lock vs background polls + pending dApp approvals
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("P4-001 D2 — background-poll ops must not re-arm auto-lock", () => {
+  it("the three fixed-interval poll ops are in AUTO_LOCK_EXEMPT_OPS", () => {
+    expect(AUTO_LOCK_EXEMPT_OPS.has("wallet-activity-get")).toBe(true);
+    expect(AUTO_LOCK_EXEMPT_OPS.has("staking-pending-rewards")).toBe(true);
+    expect(AUTO_LOCK_EXEMPT_OPS.has("wallet-indexer-status")).toBe(true);
+  });
+
+  it("dispatching wallet-activity-get while unlocked does NOT re-arm ALARM_AUTO_LOCK", async () => {
+    unlocked = true;
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      alarmCreateCalls.filter((c) => c.name === ALARM_AUTO_LOCK),
+    ).toHaveLength(0);
+  });
+
+  it("control: a non-exempt op (wallet-resolve-names) DOES re-arm ALARM_AUTO_LOCK via the dispatcher gate", async () => {
+    unlocked = true;
+    rpcResponses["lyth_getAddressLabel"] = null;
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-names",
+      payload: { addresses: ["0xabc"], chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      alarmCreateCalls.filter((c) => c.name === ALARM_AUTO_LOCK).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("P4-001 D1a — auto-lock fires through a pending approval", () => {
+  it("a fired auto-lock locks the wallet, rejects all pending approvals, and drops the reaper alarm", async () => {
+    unlocked = true;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() - 1; // elapsed
+
+    for (const fire of capturedAlarmListeners) fire({ name: ALARM_AUTO_LOCK });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // triggerAutoLock locked the wallet, disposed every pending approval (so the
+    // dApp promise resolves rejected rather than hanging), and cleared the now-
+    // empty reaper alarm.
+    expect(unlocked).toBe(false);
+    expect(mockRejectAllPending).toHaveBeenCalledWith("wallet locked");
+    expect(alarmClearCalls).toContain(ALARM_APPROVAL_REAP);
+  });
+});
+
+describe("P4-001 D1b — pending-approval TTL reaper", () => {
+  it("enqueuing a dApp approval arms the reaper alarm", async () => {
+    unlocked = true;
+    // eth_requestAccounts on a fresh (unconnected) origin falls through to the
+    // approval, which gatedEnqueue wraps — arming ALARM_APPROVAL_REAP.
+    await dispatchRpc("eth_requestAccounts", []);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      alarmCreateCalls.filter((c) => c.name === ALARM_APPROVAL_REAP).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("the reaper tick rejects via reapExpired(APPROVAL_TTL_MS) WITHOUT resetting the auto-lock deadline", async () => {
+    unlocked = true;
+    const deadline = Date.now() + 60_000;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = deadline;
+    // The bus still has work after this tick, so the alarm is NOT cleared.
+    mockReapExpired.mockReturnValue({ reaped: 1, remaining: 1 });
+
+    for (const fire of capturedAlarmListeners) fire({ name: ALARM_APPROVAL_REAP });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockReapExpired).toHaveBeenCalledWith(APPROVAL_TTL_MS, expect.any(Number));
+    // Rejecting an approval is NOT user activity — the deadline is untouched.
+    expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBe(deadline);
+    expect(alarmClearCalls).not.toContain(ALARM_APPROVAL_REAP);
   });
 });
 
