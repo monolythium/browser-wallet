@@ -11,6 +11,17 @@ export const ALARM_AUTO_LOCK = "monolythium.autolock";
  *  pending set becomes non-empty, cleared when it empties. */
 export const ALARM_NOTIF_POLL = "monolythium.notif-poll";
 
+/** Periodic reaper that rejects any dApp approval older than APPROVAL_TTL_MS
+ *  (P4-001 D1b). Self-limiting like ALARM_NOTIF_POLL: armed when an approval is
+ *  enqueued, cleared when the bus drains. */
+export const ALARM_APPROVAL_REAP = "monolythium.approval-reap";
+/** A pending approval older than this is auto-rejected. 3 min: generous for a
+ *  user to act on a VISIBLE prompt (incl. reading a complex EIP-712 payload),
+ *  while bounding a forgotten / flooded approval. Kept <= the 5-min shortest
+ *  AUTO_LOCK_OPTIONS value so the reaper is the tighter independent bound in
+ *  every auto-lock config. */
+export const APPROVAL_TTL_MS = 180_000;
+
 // chrome.storage.local
 export const STORAGE_KEY_AUTO_LOCK_MINUTES = "mono.autoLockMinutes";
 export const STORAGE_KEY_PENDING_APPROVALS = "mono.pending-approvals";

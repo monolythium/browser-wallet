@@ -58,6 +58,7 @@ import {
   listPending,
   clearPending,
   rejectAllPending,
+  reapExpired,
   focusApproval,
   type ApprovalDecision,
   type SendTxView,
@@ -561,6 +562,8 @@ import { addressToBech32m } from "../shared/bech32m.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_APPROVAL_REAP,
+  APPROVAL_TTL_MS,
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
   AUTO_LOCK_OPTIONS,
@@ -1111,6 +1114,8 @@ async function triggerAutoLock(): Promise<void> {
   // P4-001 D1a — a locked wallet can't sign: reject every pending dApp approval
   // so each call resolves rejected rather than hanging, and no window is stranded.
   rejectAllPending("wallet locked");
+  // The bus is now empty — drop the reaper alarm (the next enqueue re-arms it).
+  await chrome.alarms.clear(ALARM_APPROVAL_REAP);
 }
 
 /** Restore the unlocked session on-demand when the SW has just woken from
@@ -1163,6 +1168,9 @@ const STORAGE_KEY_WS_BLOCK_ADVANCE = "mono.ws.lastBlockAdvancedAt";
 async function gatedEnqueue(
   req: Parameters<typeof enqueueApproval>[0],
 ): Promise<ApprovalDecision> {
+  // P4-001 D1b — arm the TTL reaper so a pending approval can't outlive
+  // APPROVAL_TTL_MS even when the user stays active and auto-lock never fires.
+  await ensureApprovalReapAlarm();
   return await enqueueApproval(req);
 }
 
@@ -1187,6 +1195,40 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
     if (typeof deadline === "number" && Date.now() < deadline) return;
     await triggerAutoLock();
+  })();
+});
+
+// ---- pending-approval TTL reaper alarm (P4-001 D1b) ----
+//
+// Self-arming/self-clearing like the notif-poll alarm below: gatedEnqueue arms
+// it when an approval is enqueued; each tick rejects approvals older than
+// APPROVAL_TTL_MS and clears the alarm once the bus drains. Rejecting goes
+// straight through the resolvers (NOT the `resolve` popup op), so a reap is not
+// counted as user activity and never resets the auto-lock deadline.
+
+/** Arm the approval reaper (idempotent — create with the same name replaces). */
+async function ensureApprovalReapAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.create(ALARM_APPROVAL_REAP, {
+      delayInMinutes: 0.5,
+      periodInMinutes: 0.5,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== ALARM_APPROVAL_REAP) return;
+  void (async () => {
+    const { remaining } = reapExpired(APPROVAL_TTL_MS, Date.now());
+    if (remaining === 0) {
+      try {
+        await chrome.alarms.clear(ALARM_APPROVAL_REAP);
+      } catch {
+        // best-effort
+      }
+    }
   })();
 });
 

@@ -340,6 +340,36 @@ export function rejectAllPending(reason: string): void {
   void persistPending();
 }
 
+/**
+ * Reject pending approvals older than `ttlMs` (P4-001 D1b). Rejects DIRECTLY via
+ * the resolvers — NOT through the "resolve" popup op — so a reap is not counted
+ * as user activity and never resets the auto-lock timer. The caller supplies
+ * `now` (keeps this pure + unit-testable). Returns the remaining count so the SW
+ * can clear the reaper alarm once the bus drains.
+ */
+export function reapExpired(
+  ttlMs: number,
+  now: number,
+): { reaped: number; remaining: number } {
+  let reaped = 0;
+  for (const [id, entry] of pending.entries()) {
+    if (now - entry.approval.createdAt > ttlMs) {
+      if (entry.windowId != null && chrome.windows?.remove) {
+        chrome.windows.remove(entry.windowId).catch(() => {
+          /* user might already have closed it */
+        });
+      }
+      for (const r of entry.resolvers) {
+        r({ ok: false, reason: "approval expired — please retry" });
+      }
+      pending.delete(id);
+      reaped++;
+    }
+  }
+  if (reaped > 0) void persistPending();
+  return { reaped, remaining: pending.size };
+}
+
 // Mirror pending list to chrome.storage so the popup can read it before the
 // background sends a message back. Service workers may sleep, but storage
 // survives — popups read from storage, then resolve through the runtime
