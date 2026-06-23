@@ -382,7 +382,7 @@ describe("validatePendingActivityCache", () => {
     expect(r!.pending[0]?.kind).toBe("pending_tx");
   });
 
-  it("round-trips the sealed flag and coerces a non-boolean to absent", () => {
+  it("drops a legacy `sealed` field but keeps the row valid", () => {
     const base = {
       kind: "pending_tx",
       txHash: "0x1",
@@ -392,16 +392,13 @@ describe("validatePendingActivityCache", () => {
       broadcastBlockHeight: 5,
       via: "x",
     } as const;
-    const sealed = validatePendingActivityCache({
+    // The encrypted-mempool lane is gone — any persisted `sealed` from an
+    // older wallet build is ignored on read, and the row stays valid.
+    const legacy = validatePendingActivityCache({
       pending: [{ ...base, sealed: true }],
     });
-    expect(sealed!.pending[0]?.sealed).toBe(true);
-    // A non-boolean `sealed` is dropped, but the row stays valid.
-    const bad = validatePendingActivityCache({
-      pending: [{ ...base, sealed: "yes" }],
-    });
-    expect(bad!.pending[0]).toBeDefined();
-    expect("sealed" in bad!.pending[0]!).toBe(false);
+    expect(legacy!.pending[0]).toBeDefined();
+    expect("sealed" in legacy!.pending[0]!).toBe(false);
   });
 
   it("rejects a non-object input", () => {

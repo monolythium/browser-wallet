@@ -145,11 +145,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
           <DRow
             label="Status"
             value={
-              row.confirmedBlockHeight !== undefined
-                ? "Confirmed"
-                : row.sealed
-                  ? "Pending — awaiting reveal"
-                  : "Pending"
+              row.confirmedBlockHeight !== undefined ? "Confirmed" : "Pending"
             }
           />
           <DRow label="Amount" value={`${row.amountDecimal} LYTH`} />
@@ -158,18 +154,9 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
           <DRow
             label="Tx hash"
             value={
-              // A sealed tx is hidden from the indexer/Monoscan until reveal —
-              // hold the link (it would 404) until it's confirmed; keep the
-              // truncated hash visible meanwhile.
-              !row.sealed || row.confirmedBlockHeight !== undefined ? (
-                <ExternalLink href={monoscanTxUrl(row.txHash)} title={row.txHash} style={{ fontFamily: "var(--f-mono)" }}>
-                  {truncMiddle(row.txHash)}
-                </ExternalLink>
-              ) : (
-                <span style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }} title={row.txHash}>
-                  {truncMiddle(row.txHash)} · available after reveal
-                </span>
-              )
+              <ExternalLink href={monoscanTxUrl(row.txHash)} title={row.txHash} style={{ fontFamily: "var(--f-mono)" }}>
+                {truncMiddle(row.txHash)}
+              </ExternalLink>
             }
           />
           {row.confirmedBlockHeight !== undefined ? (
@@ -180,9 +167,7 @@ export function ActivityDetail({ row, label, walletAddr, onClose }: ActivityDeta
             )
           )}
           <DRow label="Submitted" value={relativeMs(row.broadcastedAtMs)} />
-          {(!row.sealed || row.confirmedBlockHeight !== undefined) && (
-            <MonoscanTxButton hash={row.txHash} />
-          )}
+          <MonoscanTxButton hash={row.txHash} />
         </div>
       </Modal>
     );

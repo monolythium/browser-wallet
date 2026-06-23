@@ -979,13 +979,6 @@ export async function bgWalletSendTx(args: {
     maxPriorityFeePerGasHex: string;
     executionUnitLimitHex: string;
   };
-  /** Opt into the encrypted-mempool (private) lane for this send. Default OFF.
-   *  Encryption is optional and costs more (the seal execution-unit overhead);
-   *  a normal send goes plaintext. When true the SW seals to the cluster roster;
-   *  if that roster is unavailable it does NOT silently downgrade — it returns
-   *  `privateRosterUnavailable` so the popup can offer an explicit plaintext
-   *  fallback confirm. */
-  private?: boolean;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -999,10 +992,6 @@ export async function bgWalletSendTx(args: {
        *  supplied password failed the SW-side re-auth. */
       passkeyElevation?: "required" | "wrong_password" | "rate_limited";
       secondsRemaining?: number;
-      /** Set when an opted-in private send couldn't fetch the seal roster.
-       *  The popup turns this into a "send unencrypted instead?" confirm
-       *  rather than treating it as a hard failure. */
-      privateRosterUnavailable?: boolean;
     }
 > {
   type Reply =
@@ -1015,7 +1004,6 @@ export async function bgWalletSendTx(args: {
         via?: string;
         passkeyElevation?: "required" | "wrong_password" | "rate_limited";
         secondsRemaining?: number;
-        privateRosterUnavailable?: boolean;
       };
   const { executionUnitLimitHex, ...rest } = args;
   const r = await send<Reply>("wallet-send-tx", {
