@@ -57,6 +57,7 @@ import {
   rejectByWindow,
   listPending,
   clearPending,
+  rejectAllPending,
   focusApproval,
   type ApprovalDecision,
   type SendTxView,
@@ -1107,16 +1108,9 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   lockV4();
-}
-
-// Suspend the auto-lock alarm while a separate-window approval is open.
-// Without this, a slow user can find the wallet locked at the moment they
-// click Approve — the approval window doesn't fire any popup IPC ops, so the
-// usual `resetAutoLock()` on activity never runs. Counter so concurrent
-// approvals (different origins) all have to close before the alarm restarts.
-async function pauseAutoLock(): Promise<void> {
-  await chrome.alarms.clear(ALARM_AUTO_LOCK);
-  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+  // P4-001 D1a — a locked wallet can't sign: reject every pending dApp approval
+  // so each call resolves rejected rather than hanging, and no window is stranded.
+  rejectAllPending("wallet locked");
 }
 
 /** Restore the unlocked session on-demand when the SW has just woken from
@@ -1142,8 +1136,6 @@ async function ensureUnlockRestored(): Promise<void> {
   }
 }
 
-let openApprovalCount = 0;
-
 // WS infrastructure module state.
 //
 // `wsNewHeadsListenerInstalled` is set on first `ws-subscribe-new-heads`
@@ -1162,29 +1154,16 @@ const STORAGE_KEY_WS_LAST_BLOCK_HEX = "mono.ws.lastBlockHex";
  *  reopen — the ChainStatusBanner seeds its baseline from this on mount. */
 const STORAGE_KEY_WS_BLOCK_ADVANCE = "mono.ws.lastBlockAdvancedAt";
 
-async function approvalOpened(): Promise<void> {
-  openApprovalCount++;
-  await pauseAutoLock();
-}
-
-async function approvalClosed(): Promise<void> {
-  openApprovalCount = Math.max(0, openApprovalCount - 1);
-  if (openApprovalCount === 0) {
-    await resetAutoLock();
-  }
-}
-
-/** enqueueApproval wrapped in approvalOpened/Closed so the auto-lock alarm
- *  stays paused for the lifetime of the approval window. */
+/** Enqueue a dApp approval. The auto-lock alarm is deliberately NOT paused for
+ *  the approval's lifetime (P4-001 D1a): the alarm armed at the last genuine user
+ *  activity keeps ticking, so an unresolved approval can't hold the wallet
+ *  unlocked past its timeout. If the lock fires first, triggerAutoLock rejects
+ *  the pending approval (rejectAllPending) so the dApp gets a clean rejection
+ *  rather than a hung promise. */
 async function gatedEnqueue(
   req: Parameters<typeof enqueueApproval>[0],
 ): Promise<ApprovalDecision> {
-  await approvalOpened();
-  try {
-    return await enqueueApproval(req);
-  } finally {
-    await approvalClosed();
-  }
+  return await enqueueApproval(req);
 }
 
 // Progressive brute-force lockout — state lives in chrome.storage.session

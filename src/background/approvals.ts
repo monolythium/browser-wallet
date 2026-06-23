@@ -321,6 +321,25 @@ export function rejectByWindow(windowId: number): void {
   }
 }
 
+/**
+ * Reject EVERY pending approval — used on auto-lock (P4-001 D1a). A locked
+ * wallet can't sign, so resolve each waiting dApp call with a clean rejection
+ * rather than stranding it as a hung promise, close its window, and clear the
+ * persisted mirror. Like `rejectByWindow` but for the whole bus at once.
+ */
+export function rejectAllPending(reason: string): void {
+  for (const entry of pending.values()) {
+    if (entry.windowId != null && chrome.windows?.remove) {
+      chrome.windows.remove(entry.windowId).catch(() => {
+        /* user might already have closed it */
+      });
+    }
+    for (const r of entry.resolvers) r({ ok: false, reason });
+  }
+  pending.clear();
+  void persistPending();
+}
+
 // Mirror pending list to chrome.storage so the popup can read it before the
 // background sends a message back. Service workers may sleep, but storage
 // survives — popups read from storage, then resolve through the runtime
