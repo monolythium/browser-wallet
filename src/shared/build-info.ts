@@ -40,7 +40,7 @@ export const SDK_PACKAGE_VERSION: string =
  *  mismatch and the live-registry fetch shows the current GitHub-registry
  *  value alongside it. */
 export const TESTNET_GENESIS_HASH =
-  "0x363fb60abd3f481e16fe74d6a3e5afd35d6d3ba9cc26e186f27d4195cd5a7359";
+  "0xd56f9763ca849c5482cae27c7e2551f891684063b89afd53aadeb55868453959";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
@@ -48,7 +48,7 @@ export const TESTNET_GENESIS_HASH =
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
  *  header hash. They are not the same value on protocore v0.1.49. */
 export const TESTNET_BLOCK0_HASH =
-  "0x374809d6f795397380a7b179143e34243f88abd3f02c434a0b7a1c64f39e6026";
+  "0x072fe84f2411b8a5c08b03210183a224147c0157d7bee7990fa90ca7771d959d";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
@@ -57,7 +57,7 @@ export const TESTNET_BLOCK0_HASH =
  *  behind the installed SDK snapshot (`TESTNET_69420.genesis_hash`), which
  *  is bumped on the next SDK rebuild/publish. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0x363fb60abd3f481e16fe74d6a3e5afd35d6d3ba9cc26e186f27d4195cd5a7359";
+  "0xd56f9763ca849c5482cae27c7e2551f891684063b89afd53aadeb55868453959";
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
