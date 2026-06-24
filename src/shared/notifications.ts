@@ -129,6 +129,11 @@ export interface NotificationRecord {
    *  kinds + legacy records. */
   clusterId?: number;
   clusterName?: string;
+  /** Redelegate DESTINATION cluster (`clusterId`/`clusterName` above are the
+   *  SOURCE). Lets the redelegate toast show `<from> → <to>`. Absent on
+   *  non-redelegate kinds + legacy records. */
+  toClusterId?: number;
+  toClusterName?: string;
   /** A reward claim's claimed LYTH (decimal-LYTH string), captured at the
    *  confirmed terminal from the receipt's `Claimed` log (the row's
    *  `amountDecimal` is "0" for a claim, so the body shows this instead).
@@ -338,6 +343,14 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     typeof r.clusterName === "string" && r.clusterName.length > 0
       ? r.clusterName
       : undefined;
+  const toClusterId =
+    typeof r.toClusterId === "number" && Number.isFinite(r.toClusterId)
+      ? r.toClusterId
+      : undefined;
+  const toClusterName =
+    typeof r.toClusterName === "string" && r.toClusterName.length > 0
+      ? r.toClusterName
+      : undefined;
   const claimedAmount =
     typeof r.claimedAmount === "string" && r.claimedAmount.length > 0
       ? r.claimedAmount
@@ -361,6 +374,8 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
     ...(clusterId !== undefined ? { clusterId } : {}),
     ...(clusterName !== undefined ? { clusterName } : {}),
+    ...(toClusterId !== undefined ? { toClusterId } : {}),
+    ...(toClusterName !== undefined ? { toClusterName } : {}),
     ...(claimedAmount !== undefined ? { claimedAmount } : {}),
     ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
   };

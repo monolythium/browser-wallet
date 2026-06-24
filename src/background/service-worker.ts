@@ -5032,6 +5032,8 @@ async function persistPendingRowBackground(args: {
   /** Cluster metadata for delegation sends — same metadata-only invariant. */
   clusterId?: number;
   clusterName?: string;
+  toClusterId?: number;
+  toClusterName?: string;
   /** Reward-claim metadata (opKind:"claim" only) — captured popup-side at
    *  broadcast. Marks the row source:"local-claim" (TTL-exempt) + mirrors it
    *  into the durable local-claims store. Metadata-only; never reaches the
@@ -5080,6 +5082,8 @@ async function persistPendingRowBackground(args: {
       ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
       ...(args.clusterId !== undefined ? { clusterId: args.clusterId } : {}),
       ...(args.clusterName !== undefined ? { clusterName: args.clusterName } : {}),
+      ...(args.toClusterId !== undefined ? { toClusterId: args.toClusterId } : {}),
+      ...(args.toClusterName !== undefined ? { toClusterName: args.toClusterName } : {}),
       ...(isClaim ? { source: "local-claim" as const } : {}),
       ...(isClaim ? { claimedAmount: args.claimedAmount ?? null } : {}),
       ...(isClaim ? { rateAtClaim: args.rateAtClaim ?? null } : {}),
@@ -5567,6 +5571,10 @@ export async function pollPendingAndNotify(): Promise<{
           ...(t.row.clusterId !== undefined ? { clusterId: t.row.clusterId } : {}),
           ...(t.row.clusterName !== undefined
             ? { clusterName: t.row.clusterName }
+            : {}),
+          ...(t.row.toClusterId !== undefined ? { toClusterId: t.row.toClusterId } : {}),
+          ...(t.row.toClusterName !== undefined
+            ? { toClusterName: t.row.toClusterName }
             : {}),
           ...(t.claimedAmountLythoshi != null
             ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
@@ -8325,6 +8333,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   ...(row.clusterName !== undefined
                     ? { clusterName: row.clusterName }
                     : {}),
+                  ...(row.toClusterId !== undefined ? { toClusterId: row.toClusterId } : {}),
+                  ...(row.toClusterName !== undefined
+                    ? { toClusterName: row.toClusterName }
+                    : {}),
                 });
                 // Fire OS toast ONLY when this snapshot produced
                 // a NEW record (the dedupe set blocks already-notified
@@ -8362,6 +8374,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                     : {}),
                   ...(t.row.clusterName !== undefined
                     ? { clusterName: t.row.clusterName }
+                    : {}),
+                  ...(t.row.toClusterId !== undefined
+                    ? { toClusterId: t.row.toClusterId }
+                    : {}),
+                  ...(t.row.toClusterName !== undefined
+                    ? { toClusterName: t.row.toClusterName }
                     : {}),
                   ...(t.claimedAmountLythoshi != null
                     ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
@@ -9555,6 +9573,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // opKind): rides only into the pending row, never the signer.
         clusterId?: unknown;
         clusterName?: unknown;
+        // Redelegate DESTINATION cluster — METADATA ONLY (for the toast).
+        toClusterId?: unknown;
+        toClusterName?: unknown;
         // Reward-claim metadata (opKind:"claim") — METADATA ONLY (same as
         // clusterId): rides into the pending row + local-claims store, never the
         // signer. claimedAmount = decimal LYTH | null; rateAtClaim = number |
@@ -9620,6 +9641,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const acceptedClusterName =
         typeof p.clusterName === "string" && p.clusterName.length > 0
           ? p.clusterName
+          : undefined;
+      const acceptedToClusterId =
+        typeof p.toClusterId === "number" && Number.isFinite(p.toClusterId)
+          ? p.toClusterId
+          : undefined;
+      const acceptedToClusterName =
+        typeof p.toClusterName === "string" && p.toClusterName.length > 0
+          ? p.toClusterName
           : undefined;
       // Reward-claim metadata — METADATA ONLY (never reaches the signer).
       // Sanitize: a decimal-string|null amount, a finite|null rate, a valid
@@ -9847,6 +9876,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(acceptedClusterId !== undefined ? { clusterId: acceptedClusterId } : {}),
           ...(acceptedClusterName !== undefined
             ? { clusterName: acceptedClusterName }
+            : {}),
+          ...(acceptedToClusterId !== undefined ? { toClusterId: acceptedToClusterId } : {}),
+          ...(acceptedToClusterName !== undefined
+            ? { toClusterName: acceptedToClusterName }
             : {}),
           // Reward-claim metadata — only meaningful when opKind:"claim"; the
           // helper gates the local-claim write on opKind. Metadata-only.

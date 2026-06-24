@@ -984,6 +984,9 @@ export async function bgWalletSendTx(args: {
    *  the signer. Omit for non-delegation sends. */
   clusterId?: number;
   clusterName?: string;
+  /** Redelegate destination cluster — metadata only (for the from→to toast). */
+  toClusterId?: number;
+  toClusterName?: string;
   /** Reward-claim metadata captured at broadcast (opKind:"claim" only) —
    *  PENDING-ROW METADATA ONLY (same invariant as opKind/clusterId): forwarded
    *  to the durable local-claim store + the pending row so the claimed amount +

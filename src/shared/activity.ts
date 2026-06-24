@@ -132,6 +132,13 @@ export interface PendingTxRow {
    *  non-delegation sends and legacy rows. */
   clusterId?: number;
   clusterName?: string;
+  /** Redelegate DESTINATION cluster (`clusterId`/`clusterName` above are the
+   *  SOURCE). Captured at send PURELY as notification metadata so the toast can
+   *  show `<from> → <to>` — there is no cluster directory at notify-time (the
+   *  activity row, by contrast, resolves the destination from the live
+   *  directory). Absent on non-redelegate sends + legacy rows. */
+  toClusterId?: number;
+  toClusterName?: string;
   /** Set once the tx is confirmed via the real-time receipt (the inclusion
    *  block from `eth_getTransactionReceipt`) but BEFORE the indexer has
    *  surfaced the canonical confirmed row. Presence flips the row's render
@@ -364,6 +371,11 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         typeof r.clusterName === "string" && r.clusterName.length > 0
           ? r.clusterName
           : undefined;
+      const toClusterId = isFiniteNumber(r.toClusterId) ? r.toClusterId : undefined;
+      const toClusterName =
+        typeof r.toClusterName === "string" && r.toClusterName.length > 0
+          ? r.toClusterName
+          : undefined;
       // Receipt-confirmed-but-not-yet-indexed marker (the inclusion block + tx
       // index — the precise, kind-agnostic match anchor against the indexer).
       const confirmedBlockHeight = isFiniteNumber(r.confirmedBlockHeight)
@@ -400,6 +412,8 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(opKind !== undefined ? { opKind } : {}),
         ...(clusterId !== undefined ? { clusterId } : {}),
         ...(clusterName !== undefined ? { clusterName } : {}),
+        ...(toClusterId !== undefined ? { toClusterId } : {}),
+        ...(toClusterName !== undefined ? { toClusterName } : {}),
         ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
         ...(confirmedTxIndex !== undefined ? { confirmedTxIndex } : {}),
         ...(source !== undefined ? { source } : {}),

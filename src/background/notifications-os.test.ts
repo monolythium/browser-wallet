@@ -113,6 +113,8 @@ function baseRecord(overrides: Partial<{
   delegationWeightBps: number;
   clusterName: string;
   clusterId: number;
+  toClusterName: string;
+  toClusterId: number;
 }> = {}) {
   return {
     id: `${CHAIN}:${HASH}`,
@@ -144,6 +146,10 @@ function baseRecord(overrides: Partial<{
       ? { clusterName: overrides.clusterName }
       : {}),
     ...(overrides.clusterId !== undefined ? { clusterId: overrides.clusterId } : {}),
+    ...(overrides.toClusterName !== undefined
+      ? { toClusterName: overrides.toClusterName }
+      : {}),
+    ...(overrides.toClusterId !== undefined ? { toClusterId: overrides.toClusterId } : {}),
   };
 }
 
@@ -224,6 +230,54 @@ describe("fireOsNotification", () => {
     await fireOsNotification(
       baseRecord({
         kind: "delegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        delegationWeightBps: 2500,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha · 25.00%");
+  });
+
+  it("redelegate shows <from> → <to> · <%> when both clusters are known", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        toClusterName: "beta",
+        delegationWeightBps: 2500,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha → beta · 25.00%");
+  });
+
+  it("redelegate falls back to <to> · <%> when the combined label exceeds the budget", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    const longFrom = "a".repeat(30);
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: longFrom,
+        toClusterName: "destination-cluster",
+        delegationWeightBps: 2500,
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("destination-cluster · 25.00%");
+    expect(msg).not.toContain("→");
+    expect(msg).not.toContain(longFrom);
+  });
+
+  it("redelegate without a captured destination falls back to <from> · <%>", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
         status: "confirmed",
         amountDecimal: "0",
         clusterName: "alpha",

@@ -558,6 +558,12 @@ export function Stake({
         // budget slightly for that path.
         executionUnitLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
       }
+      // Redelegate destination cluster name (for the from→to toast — the
+      // activity row resolves it from the live directory, but the toast can't).
+      const redelegateDstName =
+        action === "redelegate" && redelegateDstClusterId !== null
+          ? (clusters.find((c) => c.clusterId === redelegateDstClusterId)?.name ?? null)
+          : null;
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex,
@@ -575,6 +581,10 @@ export function Stake({
         // directory name when registered; omitted when null.
         clusterId: selectedCluster!.clusterId,
         ...(selectedCluster!.name ? { clusterName: selectedCluster!.name } : {}),
+        ...(action === "redelegate" && redelegateDstClusterId !== null
+          ? { toClusterId: redelegateDstClusterId }
+          : {}),
+        ...(redelegateDstName ? { toClusterName: redelegateDstName } : {}),
         ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
       });
       if (r.ok) {
