@@ -2209,6 +2209,71 @@ describe("wallet-activity-get", () => {
     expect(r.pending[0]?.claimedAmount).toBeUndefined();
   });
 
+  // ── INTEGRATION (mandatory — the Gap-A/B lesson: units pass, SW path missed) ──
+  it("CLAIM AMOUNT (integration): a null-amount local-claim is FILLED IN-SESSION by the reconcile (no reopen), so the poll can disarm", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n); // 1.5 LYTH
+    const claimHash = "0x" + "c7".repeat(32);
+    seedClaimPending(claimHash); // claimedAmount absent → null at submit
+
+    // BEFORE: the stored local-claim has no amount — exactly the condition that
+    // ARMS the App reconcile poll (localClaimAwaitingAmount → true).
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    const before = (storageLocal[pendingKey] as {
+      pending: Array<{ source?: string; claimedAmount?: string | null }>;
+    }).pending[0]!;
+    expect(before.source).toBe("local-claim");
+    expect(before.claimedAmount == null).toBe(true); // arms the poll
+
+    // The IN-SESSION reconcile (the open-surface poll → wallet-activity-get).
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ txHash: string; claimedAmount?: string | null }>;
+    };
+    const claim = r.pending.find((p) => p.txHash === claimHash)!;
+    // Amount filled IN-SESSION (no reopen) → resolved → the poll can disarm.
+    expect(claim.claimedAmount).toBe("1.5");
+  });
+
+  it("CLAIM AMOUNT (integration): a fresh confirmed claim row with a NULL amount does NOT erase a known amount (sticky)", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    // Prior confirmed cache already carries the decoded amount; STALE so the SW
+    // re-fetches + re-merges (confirmed is rebuilt from the indexer each poll).
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [
+        { kind: "claim", blockHeight: 200, txIndex: 0, logIndex: 0, amountDecimal: "1.5" },
+      ],
+      lastFetchedAtMs: Date.now() - 600_000,
+    };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    // The indexer surfaces the SAME claim a beat before it decodes the amount.
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      cache: { confirmed: Array<{ kind: string; amountDecimal?: string | null }> };
+    };
+    const claim = r.cache.confirmed.find((row) => row.kind === "claim");
+    expect(claim?.amountDecimal).toBe("1.5"); // sticky — not erased to null on the rebuild
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile

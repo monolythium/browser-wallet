@@ -20,6 +20,7 @@ import {
 import { hexLythoshiToLythNumber } from "../shared/native-amount";
 import {
   activityPendingKey,
+  localClaimAwaitingAmount,
   validatePendingActivityCache,
 } from "../shared/activity";
 import {
@@ -864,11 +865,17 @@ export default function App() {
     const apply = (raw: unknown) => {
       if (cancelled) return;
       const v = validatePendingActivityCache(raw);
-      // Durable local-claim rows are persistent records, not in-flight txs —
-      // exclude them so a stored claim doesn't keep the 1.5s reconcile poll
-      // armed forever (the claim never reconciles: the indexer emits no claim).
+      // A local-claim with a RESOLVED amount is a durable record, not an
+      // in-flight tx — exclude it so it doesn't keep the 1.5s reconcile poll
+      // armed forever. But a local-claim whose `claimedAmount` is still null
+      // (decoded from the Claimed log only on a later reconcile) COUNTS as
+      // pending, so the poll stays armed and the reconcile fills the amount
+      // in-session (no reopen). The indexer now also surfaces confirmed claim
+      // rows, which the merge reconciles + keeps sticky (applyStickyClaimAmount).
       setHasPendingTx(
-        (v?.pending.filter((p) => p.source !== "local-claim").length ?? 0) > 0,
+        (v?.pending.filter(
+          (p) => p.source !== "local-claim" || localClaimAwaitingAmount(p),
+        ).length ?? 0) > 0,
       );
     };
     chrome.storage.local.get([key], (res) => apply(res?.[key]));

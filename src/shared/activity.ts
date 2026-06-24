@@ -842,11 +842,25 @@ export function evictExpiredPending(
   );
 }
 
+/** True when a local-claim's reward amount is NOT yet resolved. `claimedAmount`
+ *  is decoded from the Claimed log only on a later reconcile (it is null at
+ *  broadcast), so the App's reconcile poll counts such a claim as "pending" to
+ *  keep the poll armed until the reconcile fills the amount. Once the amount is
+ *  known the claim is a durable record (excluded from the poll), so the poll
+ *  disarms — no forever-poll. */
+export function localClaimAwaitingAmount(row: PendingTxRow): boolean {
+  return (
+    row.source === "local-claim" &&
+    (row.claimedAmount === null || row.claimedAmount === undefined)
+  );
+}
+
 /** Sticky local-claim layer (mirrors applyCapturedClusterNames): a reward-claim
- *  row exists only locally (the indexer emits no claim event), so re-inject the
- *  durable claim rows into the pending list each poll so they survive a lost
- *  pending-cache copy. Returns claims (newest source-of-truth) followed by the
- *  untouched non-claim pending rows.
+ *  row originates locally (its amount is decoded from the receipt's Claimed log)
+ *  and bridges the pre-confirm window, so re-inject the durable claim rows into
+ *  the pending list each poll so they survive a lost pending-cache copy. Returns
+ *  claims (newest source-of-truth) followed by the untouched non-claim pending
+ *  rows.
  *
  *  Two-phase dedup (C2):
  *   - INTRA-STORE identity: union the durable claims with any claim copy already
@@ -856,8 +870,10 @@ export function evictExpiredPending(
  *   - CROSS-STREAM: drop a claim once the indexer surfaces a CONFIRMED row at
  *     its bridged inclusion slot — matched by the `(blockHeight, txIndex)`
  *     ANCHOR, never `txHash` (confirmed rows + the SDK AddressActivityEntry
- *     carry no txHash). Dormant until Nayiem ships an indexer claim event; then
- *     the local copy auto-retires with no double-row. */
+ *     carry no txHash). LIVE since 2026-06-24 (the indexer now ships claim
+ *     events WITH the amount): the local copy auto-retires with no double-row;
+ *     `applyStickyClaimAmount` carries the amount onto a null-amount confirmed
+ *     row so the retire never drops it. */
 export function applyLocalClaims(
   pending: PendingTxRow[],
   localClaims: PendingTxRow[],
@@ -1022,6 +1038,48 @@ export function applyCapturedClusterNames(
   });
 }
 
+/** Thread a known claim amount onto a confirmed `ClaimRow` whose indexer
+ *  `amountDecimal` is null. Mirrors applyCapturedClusterNames: the indexer can
+ *  surface a confirmed claim row (subKind:"claimed") a beat BEFORE it decodes
+ *  the Claimed-log amount, and applyLocalClaims retires the amount-bearing
+ *  local-claim on the (block,txIndex) anchor ALONE — so without this the amount
+ *  blinks out until a reopen re-fetches the decoded value. Two sticky sources,
+ *  prevConfirmed first:
+ *   - `prevConfirmed`: a claim row at the same (blockHeight, txIndex) that
+ *     already carried a non-null amount (survives the per-poll rebuild).
+ *   - `pending`: a local-claim whose receipt slot (confirmedBlockHeight,
+ *     confirmedTxIndex) matches and whose `claimedAmount` is known.
+ *  Only fills a NULL amountDecimal — NEVER overwrites a known amount with null.
+ *  Matched by the (blockHeight, txIndex) inclusion slot — the same key
+ *  applyCapturedClusterNames uses (one tx = one slot). */
+export function applyStickyClaimAmount(
+  confirmed: ConfirmedRow[],
+  prior: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
+): ConfirmedRow[] {
+  const pending = prior.pending ?? [];
+  const prevConfirmed = prior.confirmed ?? [];
+  if (pending.length === 0 && prevConfirmed.length === 0) return confirmed;
+  return confirmed.map((row) => {
+    if (row.kind !== "claim" || row.amountDecimal !== null) return row;
+    const prevAmount = prevConfirmed.find(
+      (p): p is ClaimRow =>
+        p.kind === "claim" &&
+        p.amountDecimal !== null &&
+        p.blockHeight === row.blockHeight &&
+        p.txIndex === row.txIndex,
+    )?.amountDecimal;
+    const pendAmount = pending.find(
+      (p) =>
+        p.source === "local-claim" &&
+        p.claimedAmount != null &&
+        p.confirmedBlockHeight === row.blockHeight &&
+        p.confirmedTxIndex === row.txIndex,
+    )?.claimedAmount;
+    const amount = prevAmount ?? pendAmount ?? null;
+    return amount !== null ? { ...row, amountDecimal: amount } : row;
+  });
+}
+
 /** Merge a fresh indexer snapshot into the previous cache. Pure function:
  *
  *  1. Map delegation-history rows (canonical source — full richness).
@@ -1075,8 +1133,13 @@ export function mergeIndexerSnapshot(
   merged.sort(compareConfirmedNewestFirst);
   const capped = merged.slice(0, ACTIVITY_ROLLING_WINDOW);
   const named = prior ? applyCapturedClusterNames(capped, prior) : capped;
+  // The indexer can surface a confirmed claim row before it decodes the
+  // Claimed-log amount; carry a known amount (a prior confirmed row, or the
+  // receipt-decoded local-claim) onto a null-amount claim row so the amount
+  // doesn't blink out when applyLocalClaims retires the local copy.
+  const withClaimAmounts = prior ? applyStickyClaimAmount(named, prior) : named;
 
-  return { confirmed: named, lastFetchedAtMs: now };
+  return { confirmed: withClaimAmounts, lastFetchedAtMs: now };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

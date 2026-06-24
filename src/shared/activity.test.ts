@@ -18,6 +18,8 @@ import {
   validatePendingActivityCache,
   validateLocalClaimsCache,
   applyLocalClaims,
+  applyStickyClaimAmount,
+  localClaimAwaitingAmount,
   mapDelegationHistoryToRows,
   mapAddressActivityToRows,
   delegationKeySet,
@@ -1592,5 +1594,134 @@ describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
     };
     const out = applyLocalClaims([ordinary], [claimRow({ txHash: "0xc1" })], []);
     expect(out.map((p) => p.txHash).sort()).toEqual(["0xc1", "0xord"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claim amount reconcile — sticky carry + arm-until-resolved (the reopen-bug fix)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function claimConfirmed(
+  blockHeight: number,
+  txIndex: number,
+  amountDecimal: string | null,
+): ClaimRow {
+  return { kind: "claim", blockHeight, txIndex, logIndex: 0, amountDecimal };
+}
+
+function stickyLocalClaim(
+  txHash: string,
+  opts: {
+    claimedAmount?: string | null;
+    confirmedBlockHeight?: number;
+    confirmedTxIndex?: number;
+  } = {},
+): PendingTxRow {
+  return {
+    kind: "pending_tx",
+    txHash,
+    to: "0x000000000000000000000000000000000000100a",
+    amountDecimal: "0",
+    broadcastedAtMs: 1_000,
+    broadcastBlockHeight: 100,
+    via: "op",
+    opKind: "claim",
+    source: "local-claim",
+    ...(opts.claimedAmount !== undefined ? { claimedAmount: opts.claimedAmount } : {}),
+    ...(opts.confirmedBlockHeight !== undefined
+      ? { confirmedBlockHeight: opts.confirmedBlockHeight }
+      : {}),
+    ...(opts.confirmedTxIndex !== undefined
+      ? { confirmedTxIndex: opts.confirmedTxIndex }
+      : {}),
+  };
+}
+
+const claimedActivity = (
+  overrides: Partial<RawAddressActivity> = {},
+): RawAddressActivity => ({
+  blockHeight: 200,
+  txIndex: 0,
+  logIndex: 0,
+  kind: "delegation",
+  subKind: "claimed",
+  direction: null,
+  counterparty: null,
+  tokenId: null,
+  amount: null,
+  cluster: 0,
+  weightBps: 0,
+  ...overrides,
+});
+
+describe("localClaimAwaitingAmount (arm-until-resolved)", () => {
+  it("true while a local-claim's amount is null/undefined; false once resolved", () => {
+    expect(localClaimAwaitingAmount(stickyLocalClaim("0x1", { claimedAmount: null }))).toBe(true);
+    expect(localClaimAwaitingAmount(stickyLocalClaim("0x1"))).toBe(true); // undefined
+    expect(localClaimAwaitingAmount(stickyLocalClaim("0x1", { claimedAmount: "1.5" }))).toBe(false);
+  });
+
+  it("false for a non-claim pending row", () => {
+    const ordinary: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0x9",
+      to: "0xr",
+      amountDecimal: "1",
+      broadcastedAtMs: 1,
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    expect(localClaimAwaitingAmount(ordinary)).toBe(false);
+  });
+});
+
+describe("applyStickyClaimAmount (never lose a known amount)", () => {
+  it("carries a prior confirmed amount onto a fresh null-amount claim row", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, null)], {
+      confirmed: [claimConfirmed(200, 0, "1.5")],
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBe("1.5");
+  });
+
+  it("carries a local-claim's decoded claimedAmount onto a null-amount claim row", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, null)], {
+      pending: [
+        stickyLocalClaim("0xc", {
+          claimedAmount: "2.25",
+          confirmedBlockHeight: 200,
+          confirmedTxIndex: 0,
+        }),
+      ],
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBe("2.25");
+  });
+
+  it("NEVER overwrites a known amount (only fills null)", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, "9.9")], {
+      confirmed: [claimConfirmed(200, 0, "1.5")],
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBe("9.9");
+  });
+
+  it("leaves a null amount null when no source has it (no fabrication)", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, null)], {
+      confirmed: [claimConfirmed(999, 0, "1.5")], // different anchor
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBeNull();
+  });
+});
+
+describe("mergeIndexerSnapshot — claim amount survives the rebuild (the reopen-bug fix)", () => {
+  it("a fresh confirmed claim row with a null amount keeps the prior known amount", () => {
+    // The indexer surfaces the claim row a beat before it decodes the amount.
+    const merged = mergeIndexerSnapshot(
+      { activity: [claimedActivity({ amount: null })], delegation: [] },
+      5_000,
+      { confirmed: [claimConfirmed(200, 0, "1.5")] },
+    );
+    const claim = merged.confirmed.find((r) => r.kind === "claim") as
+      | ClaimRow
+      | undefined;
+    expect(claim?.amountDecimal).toBe("1.5"); // not erased to null on rebuild
   });
 });

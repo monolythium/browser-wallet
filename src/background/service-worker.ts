@@ -8233,11 +8233,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         reconciledHashes.has(r.txHash),
       );
       const evictedPending = evictExpiredPending(survivors, now);
-      // Re-inject the durable local-claim rows (the indexer never emits a claim
-      // event, so they exist only here). applyLocalClaims dedups by txHash
-      // (the receipt-bridged pending copy wins) and CROSS-STREAM suppresses a
-      // claim once a confirmed row appears at its (block,txIndex) anchor (C2 —
-      // confirmed rows carry no txHash). Dormant until the indexer ships claims.
+      // Re-inject the durable local-claim rows (the local-claim bridges the
+      // pre-confirm window + carries the receipt-decoded amount). applyLocalClaims
+      // dedups by txHash (the receipt-bridged pending copy wins) and CROSS-STREAM
+      // suppresses a claim once a confirmed row appears at its (block,txIndex)
+      // anchor (C2 — confirmed rows carry no txHash). LIVE since 2026-06-24: the
+      // indexer now ships claim events WITH the amount, so this retire is active;
+      // mergeIndexerSnapshot keeps the amount sticky (applyStickyClaimAmount) so
+      // a null-amount confirmed row never erases the decoded amount.
       // `prevClaims` was read up-front by readActivityStorage (Gap B) so every
       // return path shares the same durable read.
       const nextPending = applyLocalClaims(
