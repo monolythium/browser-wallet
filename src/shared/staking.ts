@@ -87,6 +87,32 @@ export function destinationAtPerClusterCap(
   return dstExistingWeightBps >= bindingPerClusterCapBps(aggregateCapBps);
 }
 
+/** Global headroom for a delegate: a wallet's total delegated weight across ALL
+ *  clusters may not exceed 100% (10000 bps; chain revert 0x0205
+ *  WalletTotalExceeded). Never negative. */
+export function walletTotalHeadroomBps(totalDelegatedBps: number): number {
+  return Math.max(0, 10000 - totalDelegatedBps);
+}
+
+/** Binding bps headroom for an ADDITIONAL delegation to one cluster: the smaller
+ *  of (a) the per-cluster cap headroom under the fail-closed §16.7 floor and
+ *  (b) the global 100%-of-weight headroom. BOTH caps bind on a delegate. A null
+ *  aggregate cap yields the 5000 per-cluster floor (NOT unlimited) — fail-closed
+ *  on a signing input. (Redelegate moves weight between clusters → the wallet
+ *  total is unchanged, so it uses only the per-cluster term, not this.) */
+export function dualCapHeadroomBps(
+  aggregateCapBps: number | null,
+  existingWeightBps: number,
+  totalDelegatedBps: number,
+): number {
+  const clusterHeadroom =
+    bindingPerClusterCapBps(aggregateCapBps) - existingWeightBps;
+  return Math.max(
+    0,
+    Math.min(clusterHeadroom, walletTotalHeadroomBps(totalDelegatedBps)),
+  );
+}
+
 /** Clear user-facing message for a chain `0x0213 PerWalletCapExceeded` revert. */
 export const PER_WALLET_CAP_REVERT_MESSAGE =
   "This cluster is already at the 50% per-wallet cap — reduce the amount or choose another cluster.";

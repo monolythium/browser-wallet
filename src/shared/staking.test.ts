@@ -3,10 +3,12 @@ import {
   bindingPerClusterCapBps,
   clusterLabel,
   destinationAtPerClusterCap,
+  dualCapHeadroomBps,
   exceedsPerClusterCap,
   formatWeightBpsPercent,
   isPerWalletCapRevert,
   resolveClusterLabel,
+  walletTotalHeadroomBps,
   DELEGATION_PER_WALLET_CAP_BPS,
 } from "./staking.js";
 
@@ -69,6 +71,33 @@ describe("per-wallet delegation cap (WP §16.7, 0x0213 pre-flight)", () => {
     expect(isPerWalletCapRevert("execution reverted", null)).toBe(false);
     expect(isPerWalletCapRevert("WeightOutOfRange 0x0204", 0x0204)).toBe(false);
     expect(isPerWalletCapRevert(null, null)).toBe(false);
+  });
+});
+
+describe("dual-cap headroom (delegate form — per-cluster floor ∩ wallet-total)", () => {
+  it("walletTotalHeadroomBps: 100% ceiling across all clusters, never negative", () => {
+    expect(walletTotalHeadroomBps(0)).toBe(10000);
+    expect(walletTotalHeadroomBps(5100)).toBe(4900);
+    expect(walletTotalHeadroomBps(10000)).toBe(0);
+    expect(walletTotalHeadroomBps(10500)).toBe(0); // clamps, no negative
+  });
+
+  it("dualCapHeadroomBps: a null aggregate cap floors the cluster term to 5000, not 10000", () => {
+    expect(dualCapHeadroomBps(null, 0, 0)).toBe(5000); // floor binds (the fix)
+    expect(dualCapHeadroomBps(null, 4000, 0)).toBe(1000); // 5000 − 4000 cluster floor
+  });
+
+  it("dualCapHeadroomBps: the global ceiling binds when it is tighter than the floor", () => {
+    expect(dualCapHeadroomBps(null, 0, 9000)).toBe(1000); // global 1000 < floor 5000
+    expect(dualCapHeadroomBps(null, 0, 10000)).toBe(0); // fully delegated
+  });
+
+  it("dualCapHeadroomBps: a tighter future-active aggregate cap wins over the floor", () => {
+    expect(dualCapHeadroomBps(2500, 0, 0)).toBe(2500); // aggregate 2500 < floor 5000
+  });
+
+  it("dualCapHeadroomBps: never returns negative headroom (already past the cap)", () => {
+    expect(dualCapHeadroomBps(5000, 6000, 0)).toBe(0);
   });
 });
 

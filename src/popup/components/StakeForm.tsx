@@ -29,6 +29,11 @@ import { Icon } from "../Icon";
 import { hoverBg } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import {
+  bindingPerClusterCapBps,
+  dualCapHeadroomBps,
+  exceedsPerClusterCap,
+} from "../../shared/staking";
+import {
   effectiveWeightWholeLythoshi,
   isInertDelegation,
   minNonInertBps,
@@ -76,16 +81,17 @@ export function parsePercent(amountStr: string): number | null {
 /** Binding bps headroom for an additional delegation to a cluster: the smaller
  *  of the per-cluster cap headroom and the global 100%-of-balance headroom
  *  (total weight across ALL clusters ≤ 10000 bps). Never negative. Pure bps —
- *  delegation is non-custodial (value = 0), so there is no balance subtraction. */
+ *  delegation is non-custodial (value = 0), so there is no balance subtraction.
+ *
+ *  Thin wrapper over the shared `dualCapHeadroomBps` so the per-cluster term is
+ *  the fail-closed §16.7 floor: a null aggregate cap (disabled on v2) yields the
+ *  5000 per-cluster floor, NOT an unlimited cluster headroom. */
 export function bindingHeadroomBps(
   capBps: number | null,
   existingWeightBps: number,
   totalDelegatedBps: number,
 ): number {
-  const clusterHeadroom =
-    capBps === null ? 10000 - existingWeightBps : capBps - existingWeightBps;
-  const globalHeadroom = 10000 - totalDelegatedBps;
-  return Math.max(0, Math.min(clusterHeadroom, globalHeadroom));
+  return dualCapHeadroomBps(capBps, existingWeightBps, totalDelegatedBps);
 }
 
 /** The "X% delegated · Y% available" line escalates to the prominent warn
@@ -133,7 +139,11 @@ export function StakeForm({
       ? effectiveWeightWholeLythoshi(additionalBps, balanceLythoshi)
       : null;
 
-  const overCap = capBps !== null && totalAfterBps > capBps;
+  // The §16.7 per-wallet floor (5000 bps) ALWAYS binds — even when the queryable
+  // AGGREGATE cap (`capBps`, from lyth_getDelegationCap) is disabled/null on v2.
+  // Fail-closed: a null cap does NOT lift the per-cluster cap.
+  const overCap = exceedsPerClusterCap(existingWeightBps, additionalBps, capBps);
+  const bindingCapBps = bindingPerClusterCapBps(capBps);
   // Global ceiling: total delegated weight across ALL clusters ≤ 100%. The
   // binding headroom is the smaller of the per-cluster cap headroom and this.
   const globalHeadroomBps = Math.max(0, 10000 - totalDelegatedBps);
@@ -336,12 +346,8 @@ export function StakeForm({
                   in this cluster
                 </>
               )}
-              {capBps !== null && (
-                <>
-                  {" "}
-                  · cap {(capBps / 100).toFixed(0)}%
-                </>
-              )}
+              {" "}
+              · cap {(bindingCapBps / 100).toFixed(0)}%
             </>
           )}
         </div>
@@ -352,11 +358,11 @@ export function StakeForm({
         </div>
         {/* Limit/clamp warnings + the headroom line sit LAST in the card, right
             above the Continue action, so they're seen just before submitting. */}
-        {overCap && capBps !== null && (
+        {overCap && (
           <div className="ext-warn-prominent">
-            Delegation would exceed the per-cluster cap (
-            {(capBps / 100).toFixed(0)}%) by{" "}
-            {((totalAfterBps - capBps) / 100).toFixed(2)}%.
+            Delegation would exceed the {(bindingCapBps / 100).toFixed(0)}%
+            per-wallet cap for one cluster by{" "}
+            {((totalAfterBps - bindingCapBps) / 100).toFixed(2)}%.
           </div>
         )}
         {exceedsHundred && (

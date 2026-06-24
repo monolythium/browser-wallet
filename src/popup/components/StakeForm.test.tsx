@@ -57,12 +57,14 @@ describe("StakeForm — quick-fill buttons", () => {
 });
 
 describe("bindingHeadroomBps", () => {
-  it("is the full 100% when nothing delegated and the cap is disabled", () => {
-    expect(bindingHeadroomBps(null, 0, 0)).toBe(10000);
+  it("floors to the 50% per-wallet cap when the aggregate cap is disabled", () => {
+    // Fail-closed: a null (disabled/v2) aggregate cap does NOT lift the §16.7
+    // per-wallet floor (5000 bps) — the binding cluster headroom is 50%, not 100%.
+    expect(bindingHeadroomBps(null, 0, 0)).toBe(5000);
   });
 
-  it("uses the global 100% ceiling when the cap is disabled", () => {
-    // 51% already delegated across all clusters → 49% left.
+  it("uses the global ceiling when it is tighter than the per-wallet floor", () => {
+    // 51% already delegated across all clusters → 49% left, below the 50% floor.
     expect(bindingHeadroomBps(null, 0, 5100)).toBe(4900);
   });
 
@@ -76,6 +78,30 @@ describe("bindingHeadroomBps", () => {
   it("never returns negative headroom", () => {
     expect(bindingHeadroomBps(5000, 6000, 0)).toBe(0); // already past the cap
     expect(bindingHeadroomBps(null, 0, 10000)).toBe(0); // fully delegated
+  });
+});
+
+describe("StakeForm — per-cluster cap surfaces under a null (v2) aggregate cap", () => {
+  it("shows the 50% cap hint even when capBps is null (was gated, now fail-closed)", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} capBps={null} amountStr="10" />,
+    );
+    expect(html).toContain("cap 50%");
+  });
+
+  it("warns when the requested percent exceeds the 50% floor with a null cap", () => {
+    // 60% into one cluster, nothing yet delegated → 6000 > 5000 floor → over cap.
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} capBps={null} amountStr="60" />,
+    );
+    expect(html).toContain("per-wallet cap for one cluster");
+  });
+
+  it("does not warn at exactly 50% (at the cap, not over)", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} capBps={null} amountStr="50" />,
+    );
+    expect(html).not.toContain("per-wallet cap for one cluster");
   });
 });
 
