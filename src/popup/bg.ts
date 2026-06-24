@@ -578,6 +578,22 @@ export async function bgWalletResolveNames(
   return send("wallet-resolve-names", { addresses, chainIdHex });
 }
 
+/** §22.8 forward resolution (name → address) against the AUTHORITATIVE on-chain
+ *  hierarchical name registry (0x110E) via lyth_resolveName. SECURITY (P5-002):
+ *  the result feeds the SIGNED recipient — `addr0x` is the registry's owner
+ *  (lowercased 0x) on a hit, or null on a registry miss; `ok:false` on any RPC
+ *  error or quorum failure. The caller MUST treat null/`ok:false` as "no
+ *  resolution" and NEVER sign an unverified address. */
+export async function bgWalletResolveName(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; addr0x: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-resolve-name", { name, chainIdHex });
+}
+
 // Indexer-status polling for the §28.2.1 staleness banner.
 // All success-path fields nullable: when the method is unavailable or
 // the response is malformed, the handler returns the defensive

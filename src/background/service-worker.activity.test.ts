@@ -2621,6 +2621,54 @@ describe("wallet-activity-get", () => {
 // wallet-resolve-names
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe("wallet-resolve-name — authoritative forward resolve (P5-002)", () => {
+  it("a registry hit resolves the name to a 0x address (lyth_resolveName)", async () => {
+    rpcResponses["lyth_resolveName"] = {
+      name: "alice.mono",
+      address: "mono1ewnhc0su4a9lh2y3tstqmwfnd7658h30xc30kd",
+      category: "human",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; addr0x: string | null };
+    expect(r.ok).toBe(true);
+    // The registry's `mono…` bech32m owner → lowercased 0x for the recipient.
+    expect(r.addr0x).toMatch(/^0x[0-9a-f]{40}$/);
+  });
+
+  it("an unregistered name is a clean miss (address:null → addr0x:null), not an error", async () => {
+    rpcResponses["lyth_resolveName"] = { name: "nobody.mono", address: null };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "nobody.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; addr0x: string | null };
+    expect(r).toEqual({ ok: true, addr0x: null });
+  });
+
+  it("FAIL-CLOSED: an RPC error returns ok:false — never a resolved (signable) address", async () => {
+    rpcErrors["lyth_resolveName"] = { code: -32603, message: "operator down" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: boolean; addr0x?: string | null };
+    expect(r.ok).toBe(false);
+    expect(r.addr0x).toBeUndefined(); // nothing to sign
+  });
+
+  it("rejects a non-testnet chain (resolution is testnet-only)", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: "0x1" },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe("wallet-resolve-names", () => {
   it("dedupes + lowercases input addresses", async () => {
     rpcResponses["lyth_getAddressLabel"] = null;
