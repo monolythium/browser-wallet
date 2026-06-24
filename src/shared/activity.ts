@@ -145,12 +145,6 @@ export interface PendingTxRow {
    *  indexer's canonical row by (block, txIndex) for ANY kind (transfer OR
    *  delegate / undelegate / redelegate), not just `tx_send`. */
   confirmedTxIndex?: number;
-  /** Whether the tx went through the sealed (encrypted-mempool) path. While
-   *  sealed-and-unrevealed (no confirmedBlockHeight yet), the UI labels the row
-   *  "Pending · awaiting reveal" and holds the Monoscan link (the inner tx is
-   *  hidden from the indexer until threshold reveal). Absent on plaintext +
-   *  legacy rows. Pending-row metadata only — never part of the signed tx. */
-  sealed?: boolean;
   /** Marks a wallet-local durable reward-claim record (vs an ordinary in-flight
    *  send). Set ONLY on claim rows. Routes render to `claimedAmount` and exempts
    *  the row from the 5-min pending TTL (evictExpiredPending). Metadata-only;
@@ -362,9 +356,6 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       const confirmedTxIndex = isFiniteNumber(r.confirmedTxIndex)
         ? r.confirmedTxIndex
         : undefined;
-      // Sealed-submission marker (encrypted-mempool). Optional; coerce a
-      // non-boolean to undefined rather than rejecting the row.
-      const sealed = typeof r.sealed === "boolean" ? r.sealed : undefined;
       // Local-claim marker + captured claim fields (the reward-claim store).
       // MANDATORY here — without carrying these the fields are silently dropped
       // on every cache (de)serialization rebuild. Coerce/drop malformed values
@@ -395,7 +386,6 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(clusterName !== undefined ? { clusterName } : {}),
         ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
         ...(confirmedTxIndex !== undefined ? { confirmedTxIndex } : {}),
-        ...(sealed !== undefined ? { sealed } : {}),
         ...(source !== undefined ? { source } : {}),
         ...(claimedAmount !== undefined ? { claimedAmount } : {}),
         ...(rateAtClaim !== undefined ? { rateAtClaim } : {}),

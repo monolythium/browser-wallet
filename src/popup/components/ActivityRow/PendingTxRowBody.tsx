@@ -149,13 +149,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       </div>
     );
   }
-  // Sealed (encrypted-mempool) txs are hidden from the indexer/Monoscan until
-  // threshold reveal (~12–25s) — label that window explicitly so the row reads
-  // as "in progress" rather than a bare, seemingly-stuck "Pending".
-  const pendingPrefix =
-    row.sealed && row.confirmedBlockHeight === undefined
-      ? "Pending · awaiting reveal"
-      : "Pending";
+  const pendingPrefix = "Pending";
   return (
     <div className="ext-act-row">
       <div className={isClaim ? "dir in" : "dir out"} style={{ position: "relative" }}>

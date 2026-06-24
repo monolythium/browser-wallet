@@ -386,28 +386,6 @@ describe("validatePendingActivityCache", () => {
     expect(r!.pending[0]?.kind).toBe("pending_tx");
   });
 
-  it("round-trips the sealed flag and coerces a non-boolean to absent", () => {
-    const base = {
-      kind: "pending_tx",
-      txHash: "0x1",
-      to: "0xabc",
-      amountDecimal: "1",
-      broadcastedAtMs: 0,
-      broadcastBlockHeight: 5,
-      via: "x",
-    } as const;
-    const sealed = validatePendingActivityCache({
-      pending: [{ ...base, sealed: true }],
-    });
-    expect(sealed!.pending[0]?.sealed).toBe(true);
-    // A non-boolean `sealed` is dropped, but the row stays valid.
-    const bad = validatePendingActivityCache({
-      pending: [{ ...base, sealed: "yes" }],
-    });
-    expect(bad!.pending[0]).toBeDefined();
-    expect("sealed" in bad!.pending[0]!).toBe(false);
-  });
-
   it("rejects a non-object input", () => {
     expect(validatePendingActivityCache(null)).toBeNull();
     expect(validatePendingActivityCache("string")).toBeNull();

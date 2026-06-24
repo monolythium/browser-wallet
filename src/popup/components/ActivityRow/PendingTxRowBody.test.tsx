@@ -103,29 +103,6 @@ describe("PendingTxRowBody — suppress meaningless 0-value amount", () => {
   });
 });
 
-describe("PendingTxRowBody — sealed 'awaiting reveal' label", () => {
-  it("labels a sealed, unrevealed pending row 'awaiting reveal'", () => {
-    const html = renderToStaticMarkup(
-      <PendingTxRowBody
-        row={pendingRow({ sealed: true, opKind: "send", amountDecimal: "5" })}
-        counterpartyLabel={undefined}
-      />,
-    );
-    expect(html).toContain("awaiting reveal");
-  });
-
-  it("a plaintext pending row stays a plain 'Pending' (no 'awaiting reveal')", () => {
-    const html = renderToStaticMarkup(
-      <PendingTxRowBody
-        row={pendingRow({ sealed: false, opKind: "send", amountDecimal: "5" })}
-        counterpartyLabel={undefined}
-      />,
-    );
-    expect(html).toContain("Pending");
-    expect(html).not.toContain("awaiting reveal");
-  });
-});
-
 // A reward claim's value is 0x0, so its standard amountDecimal is "0" and is
 // suppressed by the regex above; the claimed reward rides on the distinct
 // claimedAmount field (C3). The fiat sibling uses the frozen rate (null today →
