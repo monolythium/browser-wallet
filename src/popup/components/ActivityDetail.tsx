@@ -62,6 +62,9 @@ export function isSelfPaid(row: ActivityRowType): boolean {
     case "undelegate":
     case "redelegate":
     case "crossing_to_private":
+    case "claim":
+      // A reward claim self-pays its fee (wallet-initiated) — resolve it from
+      // the tx hash the block lookup yields for this confirmed row.
       return true;
     case "token_transfer":
       return row.direction === "out";
@@ -284,6 +287,31 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
           <DRow label="Weight" value={formatWeightBpsPercent(row.weightBps)} />
           <DRow label="Cluster" value={resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)} />
           <DRow label="Delegator" value={<CopyableAddress addr0x={walletAddr} />} />
+          {feeText && <DRow label="Fee" value={feeText} />}
+          <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
+          {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}
+        </div>
+      </Modal>
+    );
+  }
+
+  // ── Confirmed reward claim (#3) — the indexer's subKind:"claimed" row ──
+  if (row.kind === "claim") {
+    const figure =
+      row.amountDecimal && row.amountDecimal !== "0" ? row.amountDecimal : null;
+    return (
+      <Modal open onClose={onClose} title={txTypeLabel(row)} showClose>
+        <div>
+          <DRow label="Status" value="Confirmed" />
+          <DRow
+            label="Amount"
+            value={
+              figure !== null
+                ? `${formatLythDecimalDisplay(figure, 4)} LYTH`
+                : "Rewards claimed"
+            }
+          />
+          <DRow label="To" value={<CopyableAddress addr0x={walletAddr} />} />
           {feeText && <DRow label="Fee" value={feeText} />}
           <DRow label="Block" value={row.blockHeight.toLocaleString("en-US")} />
           {resolvedTxHash !== null && <MonoscanTxButton hash={resolvedTxHash} />}

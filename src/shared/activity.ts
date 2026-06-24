@@ -258,6 +258,21 @@ export interface CrossingToPrivateRow extends ConfirmedAnchor {
   amountDecimal: string | null;
 }
 
+/** Reward-claim event, surfaced from the indexer's `subKind:"claimed"` activity
+ *  entry (#3 / upstream #74). `amountDecimal` is the CLAIMED REWARD in decimal
+ *  LYTH (the native LYTH the precompile moved — NOT the staked principal),
+ *  converted from the raw `amount` lythoshi. `cluster` is metadata only (the
+ *  chain reports 0 for claims — they aggregate across the wallet's stake, so it
+ *  is not a render target). The wallet's local receipt-decoded claim is the
+ *  immediate reveal; this confirmed row is the durable one, and the local copy
+ *  auto-retires via applyLocalClaims once it appears at the same (block,
+ *  txIndex). */
+export interface ClaimRow extends ConfirmedAnchor {
+  kind: "claim";
+  amountDecimal: string | null;
+  cluster?: number;
+}
+
 /** Union over every confirmed row kind (no pending). */
 export type ConfirmedRow =
   | TxSendRow
@@ -267,7 +282,8 @@ export type ConfirmedRow =
   | UndelegateRow
   | RedelegateRow
   | RebalanceRow
-  | CrossingToPrivateRow;
+  | CrossingToPrivateRow
+  | ClaimRow;
 
 /** Union over everything an `ActivityList` ever renders. */
 export type ActivityRow = PendingTxRow | ConfirmedRow;
@@ -497,6 +513,20 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       };
     }
 
+    case "claim": {
+      if (!validateConfirmedAnchor(r)) return null;
+      if (!isStringOrNull(r.amountDecimal)) return null;
+      const cluster = isFiniteNumber(r.cluster) ? r.cluster : undefined;
+      return {
+        kind: "claim",
+        blockHeight: r.blockHeight as number,
+        txIndex: r.txIndex as number,
+        logIndex: r.logIndex as number,
+        amountDecimal: r.amountDecimal,
+        ...(cluster !== undefined ? { cluster } : {}),
+      };
+    }
+
     default:
       return null;
   }
@@ -704,6 +734,25 @@ export function mapAddressActivityToRows(
       // fields live on the history-stream row). Otherwise produce a
       // fallback row from subKind.
       if (delegationKeys.has(anchorKey)) continue;
+      // Reward claim (#3 / upstream #74): the indexer surfaces it as
+      // subKind:"claimed" with the claimed reward in `amount` (decimal lythoshi
+      // — the native LYTH moved, NOT the staked principal). Handled BEFORE the
+      // cluster-null guard below: a claim carries cluster:0 (not a real
+      // delegation target), so it must never be dropped for "lacking" a cluster.
+      // delegation-history never surfaces claims, so this anchor is never in
+      // `delegationKeys` — the activity stream is the sole claim source.
+      if (e.subKind === "claimed") {
+        out.push({
+          kind: "claim",
+          blockHeight: e.blockHeight,
+          txIndex: e.txIndex,
+          logIndex: e.logIndex,
+          amountDecimal:
+            e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
+          ...(e.cluster !== null ? { cluster: e.cluster } : {}),
+        });
+        continue;
+      }
       if (e.cluster === null) continue;
       switch (e.subKind) {
         case "delegated":

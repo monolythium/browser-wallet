@@ -77,5 +77,7 @@ export function txTypeLabel(row: ActivityRow): string {
       return "Auto-rebalance";
     case "crossing_to_private":
       return "Private transfer";
+    case "claim":
+      return "Claim rewards";
   }
 }

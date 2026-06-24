@@ -24,6 +24,7 @@ import { UndelegateRowBody } from "./ActivityRow/UndelegateRowBody.js";
 import { RedelegateRowBody } from "./ActivityRow/RedelegateRowBody.js";
 import { RebalanceRowBody } from "./ActivityRow/RebalanceRowBody.js";
 import { CrossingToPrivateRowBody } from "./ActivityRow/CrossingToPrivateRowBody.js";
+import { ClaimRowBody } from "./ActivityRow/ClaimRowBody.js";
 
 export interface ActivityRowProps {
   row: ActivityRowType;
@@ -58,6 +59,8 @@ export function ActivityRow({ row, counterpartyLabel, clusterNameById }: Activit
       return <RebalanceRowBody row={row} />;
     case "crossing_to_private":
       return <CrossingToPrivateRowBody row={row} />;
+    case "claim":
+      return <ClaimRowBody row={row} />;
   }
 }
 

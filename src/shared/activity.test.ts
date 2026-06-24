@@ -33,6 +33,7 @@ import {
   type DelegateRow,
   type RedelegateRow,
   type TxSendRow,
+  type ClaimRow,
   type RawAddressActivity,
   type RawDelegationHistory,
 } from "./activity.js";
@@ -711,6 +712,48 @@ describe("mapAddressActivityToRows", () => {
       new Set(),
     );
     expect(rows).toHaveLength(0);
+  });
+
+  it("maps a delegation/claimed entry → ClaimRow, reward converted lythoshi → LYTH (#3)", () => {
+    // The indexer surfaces a reward claim as kind:"delegation", subKind:"claimed"
+    // with the CLAIMED REWARD in `amount` (decimal lythoshi), cluster:0.
+    const rows = mapAddressActivityToRows(
+      [
+        makeActivity({
+          kind: "delegation",
+          subKind: "claimed",
+          amount: "1500000000000000000", // 1.5 LYTH in lythoshi (18-dec)
+          cluster: 0,
+          direction: null,
+          counterparty: null,
+        }),
+      ],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("claim");
+    // AMOUNT-UNIT GUARD: decimal-lythoshi → decimal LYTH (NOT raw/whole/hex).
+    expect((rows[0] as ClaimRow).amountDecimal).toBe("1.5");
+  });
+
+  it("a claimed entry is NOT suppressed by delegationKeys (claims aren't in the delegation stream) (#3)", () => {
+    // delegationKeySet is built only from delegate/undelegate/redelegate rows, so
+    // a claim's anchor is never in it — the activity stream is the sole source.
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ kind: "delegation", subKind: "claimed", amount: "1000000000000000000", cluster: 0 })],
+      new Set(["999.9.9"]), // a DIFFERENT anchor present — must not affect the claim
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("claim");
+  });
+
+  it("maps a claimed entry even when cluster is null (handled before the cluster-null guard) (#3)", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ kind: "delegation", subKind: "claimed", amount: "1000000000000000000", cluster: null })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("claim");
   });
 });
 
@@ -1513,6 +1556,22 @@ describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
     // carries NO txHash). The local claim must auto-retire — no double-row.
     const out = applyLocalClaims([bridged], [bridged], [confirmed({ blockHeight: 500, txIndex: 0 })]);
     expect(out.some((p) => p.source === "local-claim")).toBe(false);
+  });
+
+  it("CROSS-STREAM: a confirmed ClaimRow at the same (block,txIndex) retires the local claim — exactly one (#3)", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0, claimedAmount: "6.51" });
+    // The #3 indexer reward-claim now surfaces as a confirmed ClaimRow at the
+    // SAME (block, txIndex) anchor (no txHash). The local receipt-copy retires.
+    const indexerClaim: ConfirmedRow = {
+      kind: "claim",
+      blockHeight: 500,
+      txIndex: 0,
+      logIndex: 0,
+      amountDecimal: "6.51",
+    };
+    const out = applyLocalClaims([bridged], [bridged], [indexerClaim]);
+    expect(out.some((p) => p.source === "local-claim")).toBe(false);
+    expect(out.filter((p) => p.txHash === "0xc1").length).toBe(0); // no double-row
   });
 
   it("does NOT suppress when the confirmed anchor differs", () => {
