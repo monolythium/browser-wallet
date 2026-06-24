@@ -18,6 +18,11 @@ import { Icon } from "../Icon";
 import { hoverBg, hoverBright } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
 import {
+  bindingPerClusterCapBps,
+  destinationAtPerClusterCap,
+  exceedsPerClusterCap,
+} from "../../shared/staking";
+import {
   effectiveWeightWholeLythoshi,
   isInertDelegation,
   minNonInertBps,
@@ -129,7 +134,15 @@ export function RedelegateForm({
 
   const exceedsSource = moveBps > srcWeightBps;
   const totalAtDstAfter = dstExistingWeightBps + moveBps;
-  const exceedsDstCap = capBps !== null && totalAtDstAfter > capBps;
+  // Fail-CLOSED: the WP §16.7 per-wallet cap (5000 bps) ALWAYS applies — the
+  // chain enforces it (0x0213 PerWalletCapExceeded) even when the queryable
+  // AGGREGATE cap (`capBps`, from lyth_getDelegationCap) is disabled/null on v2.
+  // The old guard gated solely on `capBps`, so a null aggregate cap stood it
+  // down and let guaranteed-revert tx through. The binding cap is the
+  // per-wallet floor, tightened by a future-active aggregate cap when present.
+  const bindingCapBps = bindingPerClusterCapBps(capBps);
+  const exceedsDstCap = exceedsPerClusterCap(dstExistingWeightBps, moveBps, capBps);
+  const dstAtCap = destinationAtPerClusterCap(dstExistingWeightBps, capBps);
 
   const amountIsZero = movePercent === null || moveBps === 0;
   const dstChosen = dstCluster !== null;
@@ -158,11 +171,10 @@ export function RedelegateForm({
     // Max from source = full source weight, then capped by the
     // destination's headroom if applicable. All in bps fractions now —
     // no balance math, because nothing is escrowed.
-    let limitBps = srcWeightBps;
-    if (capBps !== null) {
-      const headroomBps = Math.max(0, capBps - dstExistingWeightBps);
-      limitBps = Math.min(srcWeightBps, headroomBps);
-    }
+    // Cap Max by the destination's headroom under the BINDING per-wallet cap so
+    // Max never fills into a guaranteed 0x0213 revert.
+    const headroomBps = Math.max(0, bindingCapBps - dstExistingWeightBps);
+    const limitBps = Math.min(srcWeightBps, headroomBps);
     onAmountChange((limitBps / 100).toString());
   };
 
@@ -376,11 +388,17 @@ export function RedelegateForm({
             {(srcWeightBps / 100).toFixed(2)}%).
           </div>
         )}
-        {exceedsDstCap && capBps !== null && (
+        {dstAtCap && (
           <div className="ext-warn-prominent">
-            Would push the destination over the per-cluster cap (
-            {(capBps / 100).toFixed(0)}%) by{" "}
-            {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
+            This cluster is already at the {(bindingCapBps / 100).toFixed(0)}%
+            per-wallet cap — pick another destination.
+          </div>
+        )}
+        {exceedsDstCap && !dstAtCap && (
+          <div className="ext-warn-prominent">
+            Would push the destination over the{" "}
+            {(bindingCapBps / 100).toFixed(0)}% per-wallet cap by{" "}
+            {((totalAtDstAfter - bindingCapBps) / 100).toFixed(2)}%.
           </div>
         )}
         {exceedsHundred && (

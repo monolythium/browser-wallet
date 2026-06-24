@@ -37,6 +37,76 @@ export function formatWeightBpsPercent(bps: number | null): string {
   return `${(bps / 100).toFixed(2)}%`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-wallet delegation cap (WP §16.7 anti-capture)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The active per-wallet, per-cluster delegation cap in basis points: a single
+ *  wallet may direct at most this share of its voting-power weight at ONE
+ *  cluster (WP §16.7 anti-capture; mono-core
+ *  `DELEGATION_CAP_PER_WALLET_BPS_DEFAULT`). 5000 bps = 50%.
+ *
+ *  A FIXED protocol floor the chain ALWAYS enforces (revert tag 0x0213
+ *  PerWalletCapExceeded), DISTINCT from the configurable ADR-0018 cluster-
+ *  AGGREGATE cap exposed by `lyth_getDelegationCap` (disabled — u32::MAX → null
+ *  — at the v2 re-genesis). The wallet hardcodes the §16.7 default because no
+ *  RPC currently exposes the live per-wallet cap; it is the same value
+ *  `staking-client.readDelegationCap` uses as its offline mock. */
+export const DELEGATION_PER_WALLET_CAP_BPS = 5000;
+
+/** The binding per-cluster cap for a delegation move: the §16.7 per-wallet
+ *  floor ALWAYS applies; a (future-active) aggregate cap tightens it further
+ *  when present. A null aggregate cap (disabled / unread) does NOT lift the
+ *  floor — fail-closed on a signing input. */
+export function bindingPerClusterCapBps(aggregateCapBps: number | null): number {
+  return aggregateCapBps !== null
+    ? Math.min(aggregateCapBps, DELEGATION_PER_WALLET_CAP_BPS)
+    : DELEGATION_PER_WALLET_CAP_BPS;
+}
+
+/** True when adding `moveBps` to a wallet's existing weight at a cluster would
+ *  exceed the binding per-cluster cap → the chain reverts 0x0213. The
+ *  redelegate/delegate pre-flight gates on this so the wallet never submits a
+ *  guaranteed-revert tx. */
+export function exceedsPerClusterCap(
+  dstExistingWeightBps: number,
+  moveBps: number,
+  aggregateCapBps: number | null,
+): boolean {
+  return (
+    dstExistingWeightBps + moveBps > bindingPerClusterCapBps(aggregateCapBps)
+  );
+}
+
+/** True when a cluster is ALREADY at the binding cap (0 headroom) — any
+ *  positive move reverts; surface a "pick another destination" message. */
+export function destinationAtPerClusterCap(
+  dstExistingWeightBps: number,
+  aggregateCapBps: number | null,
+): boolean {
+  return dstExistingWeightBps >= bindingPerClusterCapBps(aggregateCapBps);
+}
+
+/** Clear user-facing message for a chain `0x0213 PerWalletCapExceeded` revert. */
+export const PER_WALLET_CAP_REVERT_MESSAGE =
+  "This cluster is already at the 50% per-wallet cap — reduce the amount or choose another cluster.";
+
+/** The mono-core delegation revert tag for PerWalletCapExceeded (0x0213). */
+const PER_WALLET_CAP_REVERT_TAG = 0x0213;
+
+/** Detect a chain PerWalletCapExceeded (0x0213) revert across the shapes it may
+ *  reach the popup as — a numeric code, or the tag/name in the reason string.
+ *  SPECIFIC to 0x0213; other revert codes fall through to the generic path. */
+export function isPerWalletCapRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  if (code === PER_WALLET_CAP_REVERT_TAG) return true;
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r.includes("perwalletcap") || r.includes("0x0213");
+}
+
 /** Display label for a delegation row's cluster. Returns the real
  *  `*.cluster.mono` name when one was captured at send time (threaded onto the
  *  confirmed row via `applyCapturedClusterNames`), otherwise an honest

@@ -76,6 +76,10 @@ import {
   type AutovoteMode,
   type AutovoteResult,
 } from "../../shared/autovote";
+import {
+  isPerWalletCapRevert,
+  PER_WALLET_CAP_REVERT_MESSAGE,
+} from "../../shared/staking";
 
 type Step =
   | "pick"
@@ -577,9 +581,18 @@ export function Stake({
         setTxHash(r.result.txHash);
         setStep("success");
       } else {
+        const code = typeof r.code === "number" ? r.code : null;
+        // Map the chain's PerWalletCapExceeded (0x0213) revert — which the
+        // per-wallet cap pre-flight now prevents, but could still slip through
+        // on a race or a future cap change — to a clear message instead of a
+        // generic "rejected". 0x0213 only; other revert codes keep the raw
+        // reason.
+        const message = isPerWalletCapRevert(r.reason, code)
+          ? PER_WALLET_CAP_REVERT_MESSAGE
+          : (r.reason ?? `${action} rejected`);
         setSubmitError({
-          message: r.reason ?? `${action} rejected`,
-          code: typeof r.code === "number" ? r.code : null,
+          message,
+          code,
           method: typeof r.method === "string" ? r.method : null,
           via: typeof r.via === "string" ? r.via : null,
         });

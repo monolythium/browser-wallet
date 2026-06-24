@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  bindingPerClusterCapBps,
   clusterLabel,
+  destinationAtPerClusterCap,
+  exceedsPerClusterCap,
   formatWeightBpsPercent,
+  isPerWalletCapRevert,
   resolveClusterLabel,
+  DELEGATION_PER_WALLET_CAP_BPS,
 } from "./staking.js";
 
 describe("formatWeightBpsPercent", () => {
@@ -17,6 +22,53 @@ describe("formatWeightBpsPercent", () => {
     expect(formatWeightBpsPercent(107)).not.toContain("bps");
     expect(formatWeightBpsPercent(null)).toBe("—");
     expect(formatWeightBpsPercent(Number.NaN)).toBe("—");
+  });
+});
+
+describe("per-wallet delegation cap (WP §16.7, 0x0213 pre-flight)", () => {
+  it("the per-wallet cap default is 50% (5000 bps)", () => {
+    expect(DELEGATION_PER_WALLET_CAP_BPS).toBe(5000);
+  });
+
+  it("binding cap: the per-wallet floor applies when the aggregate cap is null (fail-closed)", () => {
+    // v2: lyth_getDelegationCap reports the DISABLED aggregate cap → null. The
+    // per-wallet floor must NOT lift.
+    expect(bindingPerClusterCapBps(null)).toBe(5000);
+  });
+
+  it("binding cap: a tighter future-active aggregate cap wins; otherwise the floor binds", () => {
+    expect(bindingPerClusterCapBps(3000)).toBe(3000);
+    expect(bindingPerClusterCapBps(8000)).toBe(5000);
+  });
+
+  it("exceedsPerClusterCap: a destination already at 5000 + any move → over cap (the live failure)", () => {
+    expect(exceedsPerClusterCap(5000, 1, null)).toBe(true);
+    expect(exceedsPerClusterCap(5000, 1250, null)).toBe(true);
+  });
+
+  it("exceedsPerClusterCap: 4000 + 500 ≤ 5000 allowed; 4000 + 1500 > 5000 blocked; exactly 5000 not over", () => {
+    expect(exceedsPerClusterCap(4000, 500, null)).toBe(false);
+    expect(exceedsPerClusterCap(4000, 1500, null)).toBe(true);
+    expect(exceedsPerClusterCap(4000, 1000, null)).toBe(false); // == 5000, at cap not over
+  });
+
+  it("exceedsPerClusterCap: a null aggregate cap no longer disables the guard (the bug fix)", () => {
+    expect(exceedsPerClusterCap(5000, 1250, null)).toBe(true);
+  });
+
+  it("destinationAtPerClusterCap: true at/above 5000, false below", () => {
+    expect(destinationAtPerClusterCap(5000, null)).toBe(true);
+    expect(destinationAtPerClusterCap(4999, null)).toBe(false);
+    expect(destinationAtPerClusterCap(5001, null)).toBe(true);
+  });
+
+  it("isPerWalletCapRevert: matches the 0x0213 code/tag + name, ignores other codes", () => {
+    expect(isPerWalletCapRevert(null, 0x0213)).toBe(true);
+    expect(isPerWalletCapRevert("PerWalletCapExceeded", null)).toBe(true);
+    expect(isPerWalletCapRevert("reverted: 0x0213", null)).toBe(true);
+    expect(isPerWalletCapRevert("execution reverted", null)).toBe(false);
+    expect(isPerWalletCapRevert("WeightOutOfRange 0x0204", 0x0204)).toBe(false);
+    expect(isPerWalletCapRevert(null, null)).toBe(false);
   });
 });
 
