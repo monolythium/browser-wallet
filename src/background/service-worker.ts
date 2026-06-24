@@ -4552,6 +4552,33 @@ async function readNativeAgentStateLookup(
   };
 }
 
+/** Extract the row array from a `lyth_getAddressActivity` response, tolerating
+ *  BOTH shapes during the v2 fleet migration: a legacy operator returns a bare
+ *  array; a v2 operator wraps it in an envelope `{schemaVersion, …, nextCursor,
+ *  activity:[…]}` (commit b676d221). A bare array passes through unchanged; the
+ *  envelope yields `.activity`; anything else → `[]` — the same fail-safe the
+ *  old `Array.isArray(...) ? ... : []` gave (an unrecognised shape was already
+ *  treated as empty). first-page-only by design: `nextCursor`/`schemaVersion`
+ *  are intentionally ignored — the wallet consumes only the newest `limit` rows
+ *  and fills its render window by MERGING streams (delegation + pending +
+ *  local-claims), not by paginating this one.
+ *
+ *  Also applied to `lyth_getDelegationHistory`, which is still a bare array
+ *  today (only `getAddressActivity` was enveloped). On a bare array the helper
+ *  is a pure no-op, so it harmlessly future-proofs that stream against a later
+ *  envelope migration that follows the same `.activity` shape. */
+function extractAddressActivity(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    Array.isArray((value as { activity?: unknown }).activity)
+  ) {
+    return (value as { activity: unknown[] }).activity;
+  }
+  return [];
+}
+
 /** Parallel-fetch the indexer streams used by popup-facing
  *  snapshots. Token balances are validated at the SW boundary because the
  *  popup renders them directly; other streams keep their existing raw shapes
@@ -4587,8 +4614,8 @@ async function fetchIndexerSnapshot(
         }),
     readNativeAgentStateLookup(address),
     settleTestnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
-    settleTestnetRpc<unknown[]>("lyth_getDelegationHistory", [addressForChain, 20]),
-    settleTestnetRpc<unknown[]>("lyth_getAddressActivity", [addressForChain, 30]),
+    settleTestnetRpc<unknown>("lyth_getDelegationHistory", [addressForChain, 20]),
+    settleTestnetRpc<unknown>("lyth_getAddressActivity", [addressForChain, 30]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
@@ -4615,8 +4642,8 @@ async function fetchIndexerSnapshot(
     mrcAccount: mrcAccount.value,
     nativeAgentState: nativeAgentState.value,
     addressLabel: addressLabel.value ?? null,
-    delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
-    addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
+    delegationHistory: extractAddressActivity(delegationHistory.value),
+    addressActivity: extractAddressActivity(addressActivity.value),
     errors,
   };
 }

@@ -1549,6 +1549,68 @@ describe("wallet-activity-get", () => {
     expect(storageLocal[key]).toBeDefined();
   });
 
+  it("#2 — parses BOTH the legacy bare-array and the v2 envelope to identical rows", async () => {
+    const activityRow = {
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      kind: "transfer",
+      direction: "out",
+      counterparty: "0xdead",
+      tokenId: null,
+      amount: "1.5",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+
+    // Legacy operator: a bare array.
+    rpcResponses["lyth_getAddressActivity"] = [activityRow];
+    const legacy = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; cache: { confirmed: Array<{ kind: string }> } };
+
+    // Force a fresh fetch for the next shape (clear the per-(addr,chain) cache).
+    storageLocal = {};
+
+    // v2 operator: the SAME row wrapped in the {schemaVersion, nextCursor,
+    // activity} envelope. Must map to identical rows (first-page-only: the
+    // nextCursor/schemaVersion fields are ignored).
+    rpcResponses["lyth_getAddressActivity"] = {
+      schemaVersion: 1,
+      address: DETERMINISTIC_ADDRESS,
+      limit: 30,
+      nextCursor: "0x000000000000006400000000ffffffff",
+      activity: [activityRow],
+    };
+    const enveloped = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; cache: { confirmed: Array<{ kind: string }> } };
+
+    expect(enveloped.ok).toBe(true);
+    expect(enveloped.cache.confirmed).toEqual(legacy.cache.confirmed);
+    expect(enveloped.cache.confirmed).toHaveLength(1);
+    expect(enveloped.cache.confirmed[0]?.kind).toBe("tx_send");
+
+    // An unrecognised shape (no `activity` array) yields no rows — the same
+    // fail-safe the old `Array.isArray(...) ? ... : []` gave.
+    storageLocal = {};
+    rpcResponses["lyth_getAddressActivity"] = { schemaVersion: 1, unexpected: true };
+    const unknown = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; cache: { confirmed: unknown[] } };
+    expect(unknown.cache.confirmed).toHaveLength(0);
+  });
+
   it("second call within staleness window: serves from cache, no RPC", async () => {
     // Seed: first call populates the cache.
     rpcResponses["lyth_getTokenBalances"] = [];
