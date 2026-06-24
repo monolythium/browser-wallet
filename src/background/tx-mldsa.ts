@@ -6,11 +6,7 @@
 // operator RPCs, and surface wallet-friendly errors.
 
 import {
-  buildEncryptedSubmission as sdkBuildEncryptedSubmission,
   buildPlaintextSubmission as sdkBuildPlaintextSubmission,
-  parseClusterSealKeys,
-  type ClusterSealKeys,
-  type ClusterSealKeysSource,
   type NativeEvmTxFields,
   type NativeTxExtensionLike,
 } from "@monolythium/core-sdk/crypto";
@@ -92,25 +88,6 @@ export class ChainQuarantinedError extends Error {
   constructor(operatorCount: number) {
     super(quarantinedAggregateMessage(operatorCount));
     this.name = "ChainQuarantinedError";
-  }
-}
-
-/** Thrown when a send EXPLICITLY opted into the encrypted-mempool (private)
- *  path but the cluster seal roster could not be fetched (operator withholds
- *  `lyth_getClusterSealKeys`, or transport died). We do NOT silently downgrade
- *  to plaintext: the user asked — and is paying the seal overhead — for privacy,
- *  so a silent plaintext send would quietly defeat the property they chose. The
- *  caller (the `wallet-send-tx` handler) turns this into an explicit "encryption
- *  roster unavailable — send unencrypted instead?" confirm. `kind` lets handlers
- *  recognise it without string-matching. A non-opted-in (default) send never
- *  fetches the roster and so never reaches this. */
-export class PrivateRosterUnavailableError extends Error {
-  readonly kind = "private-roster-unavailable" as const;
-  constructor() {
-    super(
-      "Couldn't reach the encryption roster for this transaction. Nothing was sent.",
-    );
-    this.name = "PrivateRosterUnavailableError";
   }
 }
 
@@ -551,10 +528,8 @@ function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {
 
 /** Build a PLAINTEXT submission for the ML-DSA-65 mesh_submitTx path. Signs
  *  over the canonical chain-side sighash with the unlocked ML-DSA-65 backend
- *  and bincode-serializes the result. (The legacy Ferveo threshold-decrypt
- *  path was removed; the LythiumSeal seal path is live in submitMlDsaTx — it
- *  seals when the operator cluster serves a roster, else this plaintext path
- *  is the fallback.) */
+ *  and bincode-serializes the result. Plaintext `mesh_submitTx` is the wallet's
+ *  only inclusion path — the chain has no encrypted mempool. */
 export async function buildPlaintextSubmission(args: {
   txReq: EthSendTxFields;
   boundVaultId: string;
@@ -613,8 +588,8 @@ export async function broadcastPlaintextTransaction(
   return { txHash: expectedTxHashHex, via };
 }
 
-/** One-shot PLAINTEXT helper used by the service worker — the default tx path
- *  on the live optional-encryption chain. `txHash` is the CANONICAL inner-tx
+/** One-shot PLAINTEXT helper used by the service worker — the tx path on the
+ *  live chain. `txHash` is the CANONICAL inner-tx
  *  hash the chain indexes (`eth_getTransactionByHash` / `lyth_txStatus`
  *  resolve it), validated against the node echo before it is surfaced. */
 export async function submitPlaintextMlDsaTx(
@@ -633,300 +608,17 @@ export async function submitPlaintextMlDsaTx(
   return { txHash, via, innerSighashHex: built.innerSighashHex };
 }
 
-// ----- LythiumSeal encrypted (scheme-3) submission path -----
-//
-// The encrypted mempool is an OPTIONAL, higher-cost private lane — it is never
-// mandatory on a Monolythium network, so `mesh_submitTx` (plaintext) is always
-// admitted. When a user opts into a private send, the wallet seals the
-// *already-signed* inner tx to the operator cluster's ML-KEM-768 roster and
-// submits the envelope via `lyth_submitEncrypted`. The seal is confidentiality
-// only — the inner ML-DSA-65 signature + the canonical inner-tx hash are
-// unchanged, so the receipt is still keyed on the same hash the plaintext path
-// produces. The seal carries a higher intrinsic execution-unit floor (the
-// decrypt + verify overhead), which is the "costs more" the user pays for it.
-//
-// Roster trust — IMPORTANT, read before relying on this for PRIVACY:
-// `fetchClusterSealKeys` reads `lyth_getClusterSealKeys` via `testnetJsonRpc`,
-// which skips any operator whose chain identity != the genesis pin
-// (`verifyOperatorGenesis`), and the SDK's `parseClusterSealKeys` recomputes the
-// roster hash from the served ek set and rejects a mismatched supplied hash.
-// That gives INTEGRITY (the seal binds to exactly the ek set the operator
-// served) — but NOT AUTHENTICITY: the recompute is self-referential, so it
-// cannot distinguish a genuine cluster roster from an all-attacker-ek roster a
-// malicious (or MITM'd) operator substitutes. Adversarial review (2026-06-09)
-// CONFIRMED that a single malicious-but-genesis-trusted operator — or a
-// cleartext-HTTP MITM, since the default operators are http:// — can make the
-// wallet seal to a roster IT ALONE decrypts, defeating the t-of-n privacy. The
-// wallet does NOT yet anchor the roster to an authoritative source. REQUIRED
-// hardening before this is trusted for privacy (the user owns the design call):
-// pin the genesis cluster roster hash + require the recompute to equal it,
-// and/or cross-check each served ek against the on-chain node-registry seal-EK
-// from a QUORUM of independent genesis-trusted operators, plus close the
-// `probeOperatorGenesis` null-probe fail-open and move operators to TLS. Until
-// then this re-enables SENDING on the encrypted-mempool chain but does NOT
-// guarantee privacy against a hostile operator. See
-// `_dev-notes/browser-wallet/2026-06-09_lythiumseal-encrypted-send-impl-FIX.md`.
-
-/** Soft TTL for the cluster seal roster cache. The roster rotates on cluster
- *  membership / epoch changes (infrequent); a short TTL bounds staleness while
- *  avoiding an extra RPC on every send. A stale roster the chain rejects
- *  surfaces honestly and the next attempt re-fetches a fresh, re-validated one.
- *  (Tune once the live rotation cadence is observed — see the FIX report.) */
-const SEAL_ROSTER_TTL_MS = 30_000;
-
-interface CachedClusterSealKeys {
-  clusterId: number;
-  epoch: bigint;
-  keys: ClusterSealKeys;
-  fetchedAtMs: number;
-}
-let cachedClusterSealKeys: CachedClusterSealKeys | null = null;
-
-/** Force-fetch + validate the cluster seal roster for `clusterId` from a
- *  genesis-trusted operator, and refresh the cache. `parseClusterSealKeys`
- *  validates the shape (ek lengths, contiguous `1..=n` indices, `2<=t<=n`) and
- *  the roster hash; a malformed/forged roster throws here rather than being
- *  sealed to. Prefer {@link getClusterSealKeys} in the hot path. */
-export async function fetchClusterSealKeys(
-  clusterId = 0,
-): Promise<ClusterSealKeys> {
-  const { result } = await testnetJsonRpc<
-    ClusterSealKeysSource & { clusterId?: number }
-  >("lyth_getClusterSealKeys", [clusterId]);
-  const keys = parseClusterSealKeys({
-    ...result,
-    clusterId: result.clusterId ?? clusterId,
-  });
-  cachedClusterSealKeys = {
-    clusterId: keys.clusterId,
-    epoch: keys.epoch,
-    keys,
-    fetchedAtMs: Date.now(),
-  };
-  return keys;
-}
-
-/** Cached cluster seal roster accessor (TTL `SEAL_ROSTER_TTL_MS`). Returns the
- *  cached, already-validated roster within the TTL; otherwise force-fetches +
- *  re-validates, which also picks up an epoch rotation. */
-export async function getClusterSealKeys(
-  clusterId = 0,
-): Promise<ClusterSealKeys> {
-  const cached = cachedClusterSealKeys;
-  if (
-    cached !== null &&
-    cached.clusterId === clusterId &&
-    Date.now() - cached.fetchedAtMs < SEAL_ROSTER_TTL_MS
-  ) {
-    return cached.keys;
-  }
-  return fetchClusterSealKeys(clusterId);
-}
-
-/** Drop the cached cluster seal-key roster so the next seal force-fetches a
- *  fresh, re-validated roster from the (possibly changed) operator set. Called
- *  on operator-override — alongside `clearGenesisCache()` — so a roster fetched
- *  from a prior operator set is never sealed to after the active set changes. */
-export function clearClusterSealKeysCache(): void {
-  cachedClusterSealKeys = null;
-}
-
-/** Build a SEALED (LythiumSeal scheme-3) submission for the `lyth_submitEncrypted`
- *  path — the encrypted counterpart of {@link buildPlaintextSubmission}. Signs
- *  the inner ML-DSA-65 tx with the UNCHANGED signing path (the same `signEvmTx`
- *  the plaintext path uses), then seals the signed bytes to the cluster roster
- *  via the SDK. The seal is confidentiality only: `innerTxHashHex` /
- *  `innerSighashHex` are derived from the inner signed tx exactly as the
- *  plaintext path derives them, so the canonical inner-tx hash the chain indexes
- *  is identical — the receipt is keyed on the same hash (invariant 3 + the
- *  canonical-hash invariant; the seal wraps, it does not re-key). */
-export async function buildSealedSubmission(args: {
-  txReq: EthSendTxFields;
-  clusterSealKeys: ClusterSealKeys;
-  boundVaultId: string;
-}): Promise<{
-  envelopeWireHex: string;
-  innerSighashHex: string;
-  innerTxHashHex: string;
-  innerWireBytes: number;
-}> {
-  // NN-01 fail-closed: same consecutive-synchronous assert as the plaintext
-  // builder — getActiveVaultIdV4() and getUnlockedBackendV4() read the same
-  // module-global with no intervening await, and sdkBuildEncryptedSubmission
-  // signs synchronously after `backend` is captured.
-  if (getActiveVaultIdV4() !== args.boundVaultId) {
-    throw new Error(VAULT_BINDING_CHANGED_MESSAGE);
-  }
-  const backend = getUnlockedBackendV4();
-  if (backend === null) {
-    throw new Error("v3 wallet is locked");
-  }
-  return sdkBuildEncryptedSubmission({
-    backend,
-    tx: normalizeFields(args.txReq),
-    clusterSealKeys: args.clusterSealKeys,
-  });
-}
-
-/** Submit a sealed `EncryptedEnvelope` (`0x`-hex) through the LythiumSeal
- *  `lyth_submitEncrypted` path, with the same operator-failover testnetJsonRpc
- *  gives the plaintext path.
- *
- *  Node-echo (deliberately NOT a hash-compare): unlike the plaintext path, the
- *  node CANNOT echo the inner canonical tx hash — the inner tx is encrypted, so
- *  the node never sees it. We therefore do NOT compare the response to
- *  `expectedTxHashHex` (that would always fail); we mirror the SDK's
- *  `submitTransactionWithPrivacy`, which only sanity-checks the response is a
- *  32-byte hash and then returns the LOCAL canonical inner-tx hash for the
- *  receipt lookup. testnetJsonRpc has already rejected any JSON-RPC `error`
- *  response, so reaching here is a genuine node acceptance — we never reject a
- *  successful submit on a response-shape guess (that would risk a double-send).
- *  The exact success-response shape is unverified until a live sealed submit —
- *  see the FIX report's live-verification checklist. */
-export async function broadcastEncryptedTransaction(
-  envelopeWireHex: string,
-  expectedTxHashHex: string,
-): Promise<{ txHash: string; via: string }> {
-  const { result, via } = await testnetJsonRpc<unknown>(
-    "lyth_submitEncrypted",
-    [envelopeWireHex],
-  );
-  const echoed = typeof result === "string" ? result.toLowerCase() : "";
-  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
-    // The node accepted (testnetJsonRpc already confirmed a non-error result);
-    // its response just isn't the 32-byte hash we expected. Trust the local
-    // canonical hash for receipt lookup and note the unexpected shape — do NOT
-    // throw, which would false-fail a landed tx and invite a double-send.
-    console.info(
-      "lyth_submitEncrypted accepted the envelope with a non-32-byte-hash response; trusting the locally computed canonical inner-tx hash for receipt lookup",
-    );
-  }
-  return { txHash: expectedTxHashHex, via };
-}
-
-/** One-shot SEALED helper — the encrypted counterpart of
- *  {@link submitPlaintextMlDsaTx}. `txHash` is the CANONICAL inner-tx hash the
- *  chain indexes (the same value the plaintext path returns), so the caller's
- *  existing receipt poll resolves it unchanged. */
-export async function submitSealedMlDsaTx(
-  req: EthSendTxFields,
-  clusterSealKeys: ClusterSealKeys,
-  boundVaultId: string,
-): Promise<{ txHash: string; via: string; innerSighashHex: string }> {
-  const built = await buildSealedSubmission({
-    txReq: req,
-    clusterSealKeys,
-    boundVaultId,
-  });
-  const { txHash, via } = await broadcastEncryptedTransaction(
-    built.envelopeWireHex,
-    built.innerTxHashHex,
-  );
-  return { txHash, via, innerSighashHex: built.innerSighashHex };
-}
-
-/** Encrypted submissions carry a much higher intrinsic execution-unit floor than
- *  plaintext: the chain must ML-KEM-decrypt + threshold-reconstruct + verify the
- *  sealed envelope before it can execute the inner tx (~227k units of fixed seal
- *  overhead; observed floors ~248–250k). The wallet's per-tx-type limits (e.g.
- *  30k send, 100k delegate) are calibrated for plaintext and fall below that
- *  floor, so the chain rejects a sealed tx with "execution-unit limit X below
- *  intrinsic floor Y" (-32047). Raise the limit by the seal overhead so EVERY tx
- *  type clears the floor. Additive (base + overhead, not a flat floor) so a tx
- *  that already needs a high base — e.g. an MRV deploy with large calldata —
- *  still clears it. The fee is charged on units CONSUMED, so the extra headroom
- *  is a cap, not a charge; the genuine cost rise is the chain's encrypted-
- *  execution overhead, which the fee surfaces should reflect (a follow-up — see
- *  the FIX report). Applied only on the sealed path (in the dispatcher) so
- *  buildSealedSubmission stays a pure "seal this exact tx" and the canonical-hash
- *  invariant is intact. */
-const ENCRYPTED_SEAL_OVERHEAD_UNITS = 250_000n;
-
-export function withEncryptedExecutionUnitFloor(
-  req: EthSendTxFields,
-): EthSendTxFields {
-  let base: bigint;
-  try {
-    base = BigInt(req.gas);
-  } catch {
-    base = 0n;
-  }
-  const raised = base + ENCRYPTED_SEAL_OVERHEAD_UNITS;
-  return { ...req, gas: `0x${raised.toString(16)}` };
-}
-
 /** Submit dispatcher — the SINGLE chokepoint every wallet tx type funnels
  *  through (send / stake / delegate / redelegate / claim / complete-redemption /
- *  spending-policy / multisig / MRV plan+call / emergency). Returns the identical
- *  shape as {@link submitPlaintextMlDsaTx} so all callers are a drop-in swap.
- *
- *  Encryption is OPTIONAL and costs more. The encrypted mempool is never
- *  mandatory on a Monolythium network — plaintext `mesh_submitTx` is always a
- *  legitimate inclusion path. The LythiumSeal (threshold-encrypted) lane is an
- *  opt-in private send that carries a higher execution-unit floor (the
- *  seal-decrypt + verify overhead, ~248–250k), i.e. the user pays extra for it.
- *
- *  SCOPE: today only the `wallet-send-tx` handler passes `opts.private` (from the
- *  Send-screen toggle); every other caller is 2-arg and therefore plaintext. This
- *  intentionally replaces the previous "auto-seal whenever a roster is served"
- *  behaviour (which force-encrypted EVERY tx type) with the optional model. If the
- *  private lane should reach stake/delegate/MRV/etc. too, thread an opts arg
- *  through those handlers + add their own opt-in UI — a deliberate follow-up.
- *
- *  So the dispatcher is choice-driven, NOT roster-presence-driven:
- *   - `opts.private` UNSET / false (the default): plaintext. We do NOT even
- *     fetch the seal roster — a normal send never pays the seal cost and never
- *     touches the encrypted path.
- *   - `opts.private === true`: fetch + validate the cluster roster and seal. If
- *     the roster can't be fetched (operator withholds `lyth_getClusterSealKeys`
- *     or transport dies) we throw {@link PrivateRosterUnavailableError} rather
- *     than silently sending plaintext — the caller surfaces an explicit
- *     "send unencrypted instead?" confirm. A silent downgrade would quietly
- *     defeat the privacy the user opted into (and is paying for).
- *
- *  NOTE on the privacy guarantee: sealing today is integrity-checked but the
- *  roster is not yet anchored to an authoritative quorum, and default operators
- *  are plaintext-HTTP, so a hostile/MITM'd operator can still defeat the t-of-n
- *  property (see the "Roster trust" note above + the TLS hardening it lists).
- *  The opt-in lane is honest about cost; it does not yet promise privacy against
- *  a hostile operator. */
+ *  spending-policy / multisig / MRV plan+call / emergency). Every tx goes
+ *  plaintext through `mesh_submitTx`, the chain's only inclusion path. */
 export async function submitMlDsaTx(
   req: EthSendTxFields,
   boundVaultId: string,
-  opts?: {
-    /** Opt into the encrypted-mempool (private) lane for this tx. Default OFF:
-     *  the send goes plaintext and never fetches the seal roster. */
-    private?: boolean;
-  },
 ): Promise<{
   txHash: string;
   via: string;
   innerSighashHex: string;
-  // Whether this tx went through the sealed (encrypted-mempool) path. Pending-row
-  // metadata only — lets the UI label the sealed "awaiting reveal" window.
-  sealed: boolean;
 }> {
-  if (opts?.private !== true) {
-    // Default path: plaintext. No roster fetch, no seal overhead.
-    return { ...(await submitPlaintextMlDsaTx(req, boundVaultId)), sealed: false };
-  }
-  // Opt-in private path: seal to the cluster roster, or fail loudly (no silent
-  // plaintext downgrade — see PrivateRosterUnavailableError).
-  let roster: ClusterSealKeys;
-  try {
-    roster = await getClusterSealKeys();
-  } catch {
-    throw new PrivateRosterUnavailableError();
-  }
-  // Sealed submissions need a higher execution-unit limit (the seal-decrypt +
-  // verify overhead pushes the chain's intrinsic floor to ~248–250k); raise it
-  // here so the sealed tx clears the floor.
-  return {
-    ...(await submitSealedMlDsaTx(
-      withEncryptedExecutionUnitFloor(req),
-      roster,
-      boundVaultId,
-    )),
-    sealed: true,
-  };
+  return submitPlaintextMlDsaTx(req, boundVaultId);
 }
