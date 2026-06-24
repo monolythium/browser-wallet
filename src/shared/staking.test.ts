@@ -7,6 +7,7 @@ import {
   exceedsPerClusterCap,
   formatWeightBpsPercent,
   isPerWalletCapRevert,
+  isWalletTotalCapRevert,
   resolveClusterLabel,
   walletTotalHeadroomBps,
   DELEGATION_PER_WALLET_CAP_BPS,
@@ -71,6 +72,15 @@ describe("per-wallet delegation cap (WP §16.7, 0x0213 pre-flight)", () => {
     expect(isPerWalletCapRevert("execution reverted", null)).toBe(false);
     expect(isPerWalletCapRevert("WeightOutOfRange 0x0204", 0x0204)).toBe(false);
     expect(isPerWalletCapRevert(null, null)).toBe(false);
+  });
+
+  it("isWalletTotalCapRevert: matches the 0x0205 code/tag + name, ignores other codes", () => {
+    expect(isWalletTotalCapRevert(null, 0x0205)).toBe(true);
+    expect(isWalletTotalCapRevert("WalletTotalExceeded", null)).toBe(true);
+    expect(isWalletTotalCapRevert("reverted: 0x0205", null)).toBe(true);
+    expect(isWalletTotalCapRevert("execution reverted", null)).toBe(false);
+    expect(isWalletTotalCapRevert(null, 0x0213)).toBe(false); // doesn't steal the per-wallet code
+    expect(isWalletTotalCapRevert(null, null)).toBe(false);
   });
 });
 

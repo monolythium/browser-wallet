@@ -133,6 +133,27 @@ export function isPerWalletCapRevert(
   return r.includes("perwalletcap") || r.includes("0x0213");
 }
 
+/** Clear user-facing message for a chain `0x0205 WalletTotalExceeded` revert —
+ *  the wallet's total delegated weight across all clusters would exceed 100%. */
+export const WALLET_TOTAL_CAP_REVERT_MESSAGE =
+  "This would exceed your total delegation limit (100%) — reduce the amount.";
+
+/** The mono-core delegation revert tag for WalletTotalExceeded (0x0205). */
+const WALLET_TOTAL_CAP_REVERT_TAG = 0x0205;
+
+/** Detect a chain WalletTotalExceeded (0x0205) revert across the shapes it may
+ *  reach the popup as — a numeric code, or the tag/name in the reason string.
+ *  SPECIFIC to 0x0205; other revert codes fall through to the generic path. */
+export function isWalletTotalCapRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  if (code === WALLET_TOTAL_CAP_REVERT_TAG) return true;
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r.includes("wallettotal") || r.includes("0x0205");
+}
+
 /** Display label for a delegation row's cluster. Returns the real
  *  `*.cluster.mono` name when one was captured at send time (threaded onto the
  *  confirmed row via `applyCapturedClusterNames`), otherwise an honest

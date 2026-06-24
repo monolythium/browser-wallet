@@ -78,7 +78,9 @@ import {
 } from "../../shared/autovote";
 import {
   isPerWalletCapRevert,
+  isWalletTotalCapRevert,
   PER_WALLET_CAP_REVERT_MESSAGE,
+  WALLET_TOTAL_CAP_REVERT_MESSAGE,
 } from "../../shared/staking";
 
 type Step =
@@ -592,14 +594,16 @@ export function Stake({
         setStep("success");
       } else {
         const code = typeof r.code === "number" ? r.code : null;
-        // Map the chain's PerWalletCapExceeded (0x0213) revert — which the
-        // per-wallet cap pre-flight now prevents, but could still slip through
-        // on a race or a future cap change — to a clear message instead of a
-        // generic "rejected". 0x0213 only; other revert codes keep the raw
-        // reason.
+        // Map the chain's cap reverts — PerWalletCapExceeded (0x0213) and
+        // WalletTotalExceeded (0x0205) — which the pre-flight guards now
+        // prevent, but could still slip through on a race or a future cap
+        // change — to clear messages instead of a generic "rejected". Specific
+        // to those codes; other revert codes keep the raw reason.
         const message = isPerWalletCapRevert(r.reason, code)
           ? PER_WALLET_CAP_REVERT_MESSAGE
-          : (r.reason ?? `${action} rejected`);
+          : isWalletTotalCapRevert(r.reason, code)
+            ? WALLET_TOTAL_CAP_REVERT_MESSAGE
+            : (r.reason ?? `${action} rejected`);
         setSubmitError({
           message,
           code,
