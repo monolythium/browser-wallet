@@ -501,9 +501,11 @@ export function Stake({
     try {
       let data: string;
       let executionUnitLimitHex: string;
-      // The delegate/redelegate weight (bps) captured PURELY as notification
-      // metadata — it's the same uint16 already encoded into `data`; the signed
-      // tx is byte-identical. Undelegate/claim leave it undefined (no bps).
+      // The delegation weight (bps) captured PURELY as notification metadata.
+      // For delegate/redelegate it's the same uint16 already encoded into
+      // `data` (signed tx byte-identical); for undelegate it's the existing
+      // full-row weight being removed (not encoded — undelegate is full-row).
+      // Claim leaves it undefined (no weight).
       let delegationWeightBps: number | undefined;
       // NON-CUSTODIAL: delegation never carries native value. The chain
       // reverts (UnexpectedValue / tag 0x020e) if any value is attached —
@@ -518,6 +520,9 @@ export function Stake({
         // No redemption queue or cooldown — nothing was escrowed.
         data = encodeUndelegate(selectedCluster!.clusterId);
         executionUnitLimitHex = "0x186A0";
+        // Notification metadata: undelegate removes the FULL row, so the % to
+        // show is the cluster's existing weight (no bps is encoded in `data`).
+        delegationWeightBps = existingWeightBps;
       } else {
         // `amountStr` is a PERCENT of balance (0–100) in both the manual
         // and autovote paths. Convert to weightBps for the calldata.
@@ -642,6 +647,9 @@ export function Stake({
     setUnstakeAllError(null);
     try {
       const meta = clusters.find((c) => c.clusterId === cluster);
+      const rowWeightBps = delegations?.rows.find(
+        (row) => row.cluster === cluster,
+      )?.weightBps;
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -651,6 +659,7 @@ export function Stake({
         opKind: "undelegate",
         clusterId: cluster,
         ...(meta?.name ? { clusterName: meta.name } : {}),
+        ...(rowWeightBps !== undefined ? { delegationWeightBps: rowWeightBps } : {}),
       });
       if (r.ok) {
         goToNextUnstake(unstakeAllIndex);

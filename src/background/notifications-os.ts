@@ -232,11 +232,15 @@ export function notificationBody(record: NotificationRecord): string {
   ) {
     return `+${formatLythDecimalDisplay(record.claimedAmount, 4)} LYTH`;
   }
-  // Delegate / redelegate: value is 0x0; show the cluster + the weight %
-  // (bps/100). Only when the bps was captured (no-mock — undelegate has no bps,
-  // legacy rows fall through to the generic body below).
+  // Delegate / redelegate / undelegate: value is 0x0; show the cluster + the
+  // weight % (bps/100). Only when the bps was captured (no-mock — delegate/
+  // redelegate capture the new weight, undelegate captures the removed full-row
+  // weight; legacy rows without a captured bps fall through to the generic body
+  // below).
   if (
-    (record.kind === "delegate" || record.kind === "redelegate") &&
+    (record.kind === "delegate" ||
+      record.kind === "redelegate" ||
+      record.kind === "undelegate") &&
     record.delegationWeightBps !== undefined
   ) {
     const pct = `${(record.delegationWeightBps / 100).toFixed(2)}%`;

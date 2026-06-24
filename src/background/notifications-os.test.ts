@@ -246,7 +246,7 @@ describe("fireOsNotification", () => {
     expect(captures.notificationsCreate[0]!.options.message).toBe("33.34%");
   });
 
-  it("no-mock: a delegation WITHOUT a captured bps shows no % (legacy / undelegate)", async () => {
+  it("no-mock: a LEGACY delegation row WITHOUT a captured bps shows no % (falls through to the generic body)", async () => {
     const { fireOsNotification } = await import("./notifications-os.js");
     await fireOsNotification(
       baseRecord({
@@ -257,7 +257,21 @@ describe("fireOsNotification", () => {
       }),
     );
     const msg = captures.notificationsCreate[0]!.options.message as string;
-    expect(msg).not.toContain("%"); // undelegate has no bps → no fabricated %
+    expect(msg).not.toContain("%"); // no captured bps → no fabricated %
+  });
+
+  it("shows cluster + % on an undelegate that carries the removed full-row weight", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "undelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        delegationWeightBps: 5000, // the full-row weight being removed
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha · 50.00%");
   });
 
   it("also omits the amount for '0.00' / '0.0000' (the formatter's zero forms)", async () => {
