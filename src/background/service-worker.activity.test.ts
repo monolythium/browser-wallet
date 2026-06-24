@@ -141,15 +141,8 @@ vi.mock("./tx-mldsa.js", () => ({
       txHash: SUBMITTED_TX_HASH,
       via: "mock-operator",
       innerSighashHex: "0x" + "b".repeat(64),
-      ...(submitSealedReturn !== undefined ? { sealed: submitSealedReturn } : {}),
     };
   }),
-  // Real class so the SW's `e instanceof PrivateRosterUnavailableError` check in
-  // the wallet-send-tx catch resolves against the mocked module (an undefined
-  // reference would throw a TypeError out of the catch).
-  PrivateRosterUnavailableError: class PrivateRosterUnavailableError extends Error {
-    readonly kind = "private-roster-unavailable" as const;
-  },
 }));
 
 const SUBMITTED_TX_HASH = "0x" + "a".repeat(64);
@@ -325,10 +318,6 @@ function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
   };
 }
 let submitFailure: (Error & { code?: number }) | null = null;
-// Controls the mock submitMlDsaTx return's `sealed` field. undefined → omit it
-// (default; backward-compatible). Set true/false in a test to exercise the
-// sealed-pending-row plumbing.
-let submitSealedReturn: boolean | undefined;
 
 // Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
@@ -519,7 +508,7 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitMlDsaTx, PrivateRosterUnavailableError } from "./tx-mldsa.js";
+import { submitMlDsaTx } from "./tx-mldsa.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -716,7 +705,6 @@ beforeEach(() => {
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
-  submitSealedReturn = undefined;
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   mockRejectAllPending.mockClear();
@@ -2877,40 +2865,6 @@ describe("wallet-send-tx pending-row prepend", () => {
     expect(persisted.pending[0]?.broadcastBlockHeight).toBe(100);
   });
 
-  it("carries the sealed-submission flag onto the pending row (true and false)", async () => {
-    seedTestnetNonceAndFee();
-    rpcResponses["eth_blockNumber"] = "0x64";
-    const pendingKey =
-      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
-    const sendOnce = async () => {
-      await dispatchPopup({
-        kind: "popup",
-        op: "wallet-send-tx",
-        payload: {
-          to: "0xrecipient",
-          valueWeiHex: "0x16345785d8a0000",
-          chainIdHex: TESTNET_CHAIN_ID_HEX,
-        },
-      });
-      await new Promise<void>((resolve) => queueMicrotask(resolve));
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-      return (
-        storageLocal[pendingKey] as { pending: Array<{ sealed?: boolean }> }
-      ).pending[0];
-    };
-
-    // Sealed submit → row tagged sealed:true.
-    submitSealedReturn = true;
-    expect((await sendOnce())?.sealed).toBe(true);
-
-    // Plaintext submit → row tagged sealed:false. Reset rows + the local
-    // nonce so the 2nd send is a clean first-nonce send.
-    storageLocal = {};
-    delete storageSession["mono.nonce.pending"];
-    submitSealedReturn = false;
-    expect((await sendOnce())?.sealed).toBe(false);
-  });
-
   it("FAILED broadcast does NOT write a pending row", async () => {
     seedTestnetNonceAndFee();
     submitFailure = new Error("broadcast rejected") as Error & { code: number };
@@ -2953,33 +2907,6 @@ describe("wallet-send-tx pending-row prepend", () => {
     })) as { ok: false; reason?: string };
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/active account changed/);
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    const pendingKey =
-      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
-    expect(storageLocal[pendingKey]).toBeUndefined();
-  });
-
-  it("an opt-in private send whose roster is unavailable surfaces {ok:false, privateRosterUnavailable:true} and writes NO pending row", async () => {
-    seedTestnetNonceAndFee();
-    // The dispatcher throws this BEFORE any broadcast when private was requested
-    // but the seal roster couldn't be fetched. The handler must map it to the
-    // typed flag (not a generic error) so the popup can offer the plaintext
-    // confirm — and `instanceof` must resolve across the mocked module.
-    submitFailure = new PrivateRosterUnavailableError();
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-send-tx",
-      payload: {
-        to: "0xrecipient",
-        valueWeiHex: "0x989680",
-        chainIdHex: TESTNET_CHAIN_ID_HEX,
-        private: true,
-      },
-    })) as { ok: false; privateRosterUnavailable?: boolean; reason?: string };
-    expect(r.ok).toBe(false);
-    expect(r.privateRosterUnavailable).toBe(true);
-    // Nothing broadcast → no pending row, and the nonce was not advanced (a
-    // plaintext retry will reuse it).
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
     const pendingKey =
       `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;

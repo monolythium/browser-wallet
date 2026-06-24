@@ -258,10 +258,8 @@ import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
   submitMlDsaTx,
-  clearClusterSealKeysCache,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
-  PrivateRosterUnavailableError,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
 import {
@@ -1031,10 +1029,6 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   // probed for genesis; drop the cache so the next dispatch re-probes
   // and the About-page health view reflects fresh trust state.
   clearGenesisCache();
-  // Seal-roster trust: the new operator set may serve a different cluster seal
-  // roster; drop the cached roster so the next seal re-fetches + re-validates
-  // rather than sealing to the prior set's keys.
-  clearClusterSealKeysCache();
 });
 
 // ---- Auto-lock ----
@@ -1426,8 +1420,7 @@ async function testnetTransactionCountHex(address: string): Promise<string> {
 // This chain has NO pending-nonce surface: `lyth_getTransactionCount` returns
 // the COMMITTED nonce and the runtime ignores any block tag, so a 2nd tx sent
 // before the 1st commits would reuse the same nonce → the operator mempool
-// rejects it ("replace underpriced"). The encrypted (sealed) mempool widens the
-// window because sealed txs commit later. We therefore remember the highest
+// rejects it ("replace underpriced"). We therefore remember the highest
 // nonce THIS wallet successfully submitted per (address, chainId) and advance
 // past it. Strictly LOCAL (we never trust an operator's pending count — there
 // is none), and TTL-healed so a dropped/never-committed tx cannot wedge the
@@ -1961,7 +1954,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       }
       // NN-01: bind to the post-approval active vault. The existing plan.from
       // re-check (mrv-native-plan.ts) covers the wide approval window; this
-      // closes the one-await residual (getClusterSealKeys) before the sign.
+      // closes the one-await residual before the sign.
       const boundVaultId = getActiveVaultIdV4();
       if (boundVaultId === null) {
         return err(ERR_UNAUTHORIZED, "wallet is locked");
@@ -5011,9 +5004,6 @@ async function persistPendingRowBackground(args: {
   /** Cluster metadata for delegation sends — same metadata-only invariant. */
   clusterId?: number;
   clusterName?: string;
-  /** Whether the tx went sealed (encrypted-mempool) — drives the UI's
-   *  "awaiting reveal" pending label + the held Monoscan link. */
-  sealed?: boolean;
   /** Reward-claim metadata (opKind:"claim" only) — captured popup-side at
    *  broadcast. Marks the row source:"local-claim" (TTL-exempt) + mirrors it
    *  into the durable local-claims store. Metadata-only; never reaches the
@@ -5062,7 +5052,6 @@ async function persistPendingRowBackground(args: {
       ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
       ...(args.clusterId !== undefined ? { clusterId: args.clusterId } : {}),
       ...(args.clusterName !== undefined ? { clusterName: args.clusterName } : {}),
-      ...(args.sealed !== undefined ? { sealed: args.sealed } : {}),
       ...(isClaim ? { source: "local-claim" as const } : {}),
       ...(isClaim ? { claimedAmount: args.claimedAmount ?? null } : {}),
       ...(isClaim ? { rateAtClaim: args.rateAtClaim ?? null } : {}),
@@ -6089,7 +6078,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         await setOperatorOverride(null);
         cachedOperator = null;
         clearGenesisCache();
-        clearClusterSealKeysCache();
         return { ok: true };
       }
       const validated = validateOperatorList(raw);
@@ -6099,7 +6087,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       await setOperatorOverride(validated);
       cachedOperator = null;
       clearGenesisCache();
-      clearClusterSealKeysCache();
       return { ok: true };
     }
     case "probe-operator": {
@@ -9522,11 +9509,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // clamp) instead of re-reading the operator, closing the display-vs-
         // sign double-read and the Slow/Fast tier-multiplier desync.
         signedFee?: unknown;
-        // Opt into the encrypted-mempool (private) lane for this send. Default
-        // OFF: a normal send goes plaintext and never fetches the seal roster.
-        // Only a strict `true` engages the sealed (higher-cost) path; any other
-        // value is treated as plaintext (default-deny).
-        private?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -9768,13 +9750,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        // Encryption is opt-in + costs more; default-deny — only a strict
-        // boolean `true` engages the sealed lane. Pass the opts object ONLY on
-        // the opt-in path so the default send keeps the unchanged 2-arg call.
-        const { txHash, via, sealed } =
-          p.private === true
-            ? await submitMlDsaTx(txReq, boundVaultId, { private: true })
-            : await submitMlDsaTx(txReq, boundVaultId);
+        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
         // Advance the local pending-nonce now that the submit was accepted, so
         // a 2nd tx sent before this one commits doesn't reuse this nonce.
         // Awaited (small session write) so the next send sees it immediately.
@@ -9794,7 +9770,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
-          sealed,
           // Metadata-only: opKind never reached submitPlaintextMlDsaTx —
           // it travels straight from the popup → here → the pending-row
           // record for the notifications hook to read back.
@@ -9819,18 +9794,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         });
         return { ok: true, txHash, via };
       } catch (e) {
-        // Opted-in private send whose seal roster was unavailable: surface a
-        // distinct flag so the popup offers an explicit "send unencrypted
-        // instead?" confirm rather than treating it as a hard failure. Nothing
-        // was broadcast (we threw before submitting), so a plaintext retry is
-        // safe — the same nonce is reused on the re-submit.
-        if (e instanceof PrivateRosterUnavailableError) {
-          return {
-            ok: false,
-            privateRosterUnavailable: true,
-            reason: e.message,
-          };
-        }
         // Forward method + via when testnetJsonRpc stamped them onto
         // the error (see tx-mldsa.ts body.error branch). Popup's Send
         // ErrorView uses these for method-aware copy that distinguishes
