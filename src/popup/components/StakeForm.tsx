@@ -283,7 +283,7 @@ export function StakeForm({
             inputMode="decimal"
             style={amountInputStyle}
           />
-          {[25, 50, 75].map((p) => (
+          {[25, 50].map((p) => (
             <button
               key={p}
               type="button"

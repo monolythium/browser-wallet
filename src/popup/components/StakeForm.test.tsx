@@ -45,13 +45,13 @@ describe("StakeForm — >100% validation", () => {
 });
 
 describe("StakeForm — quick-fill buttons", () => {
-  it("renders 25/50/75 quick-fills (not 100 — Max covers that)", () => {
+  it("renders 25/50 quick-fills (75 is dead under the 50% cap; Max covers the rest)", () => {
     const html = renderToStaticMarkup(
       <StakeForm {...baseProps} amountStr="" />,
     );
     expect(html).toContain(">25%</button>");
     expect(html).toContain(">50%</button>");
-    expect(html).toContain(">75%</button>");
+    expect(html).not.toContain(">75%</button>");
     expect(html).not.toContain(">100%</button>");
   });
 });
