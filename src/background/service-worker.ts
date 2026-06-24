@@ -260,6 +260,7 @@ import {
   submitMlDsaTx,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
+  testnetResolveNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
 import {
@@ -556,7 +557,7 @@ import {
   removeContact,
   renameContact,
 } from "./contacts.js";
-import { addressToBech32m, bech32mToAddress } from "../shared/bech32m.js";
+import { addressToBech32m } from "../shared/bech32m.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
@@ -8485,13 +8486,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "wallet-resolve-name": {
       // §22.8 FORWARD resolution (name → address) against the AUTHORITATIVE
-      // on-chain hierarchical name registry (0x110E) via lyth_resolveName, on
-      // the genesis-pinned operator rail. SECURITY (P5-002): the result feeds
-      // the SIGNED recipient, so this NEVER falls back to the operator-echoed
-      // label cache — an RPC error or a registry miss returns no address (the
-      // popup tells the user to paste it). Single-operator here; the quorum
-      // cross-check (Commit 2) fans it across genesis-trusted operators so a
-      // single rogue operator can't redirect a name to an attacker address.
+      // on-chain hierarchical name registry (0x110E) via lyth_resolveName.
+      // SECURITY (P5-002): the result feeds the SIGNED recipient, so it is
+      // QUORUM cross-checked across genesis-trusted operators
+      // (testnetResolveNameConsensus) — a single rogue/MITM'd operator that
+      // returns a different address than the quorum is outvoted (disagreement
+      // → never signed). FAIL-CLOSED: a miss, a disagreement, insufficient
+      // responders, or any error returns no address (the popup tells the user
+      // to paste it); we NEVER fall back to the operator-echoed label cache for
+      // a signed send.
       const p = message.payload as { name?: unknown; chainIdHex?: unknown };
       if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
         return { ok: false, reason: "missing name or chainIdHex" };
@@ -8500,34 +8503,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "name resolution is only wired for Monolythium Testnet today" };
       }
       try {
-        const { result } = await testnetJsonRpc<{ address?: unknown } | null>(
-          "lyth_resolveName",
-          [p.name],
-        );
-        const address =
-          result !== null && typeof result === "object"
-            ? (result as { address?: unknown }).address
-            : null;
-        // Unregistered name → address:null → a clean miss (not an error).
-        if (address === null || address === undefined) {
+        const consensus = await testnetResolveNameConsensus(p.name);
+        if (consensus.status === "confirmed-hit") {
+          return { ok: true, addr0x: consensus.addr0x };
+        }
+        if (consensus.status === "confirmed-miss") {
           return { ok: true, addr0x: null };
         }
-        if (typeof address !== "string" || address.length === 0) {
-          return { ok: false, reason: "registry returned a malformed address" };
-        }
-        // The registry returns a `mono…` bech32m address; the recipient pipeline
-        // keys on lowercased 0x. Convert (kind-agnostic — a name may own a
-        // contract/cluster address); a malformed value fails closed.
-        let addr0x: string;
-        try {
-          addr0x = bech32mToAddress(address, null).toLowerCase();
-        } catch {
-          return { ok: false, reason: "registry returned a malformed address" };
-        }
-        return { ok: true, addr0x };
+        // disagreement (a rogue/MITM'd operator differs from the quorum) or
+        // insufficient responders — FAIL-CLOSED, never sign an unverified name.
+        return {
+          ok: false,
+          reason:
+            consensus.status === "disagreement"
+              ? "operators disagreed on this name — paste the address"
+              : "not enough operators agreed to verify this name — paste the address",
+        };
       } catch (e) {
-        // RPC error / all operators untrusted → fail closed. NEVER fall back to
-        // the label cache for a signed address.
         return { ok: false, reason: (e as Error).message ?? "resolve failed" };
       }
     }

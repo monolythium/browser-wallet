@@ -128,6 +128,12 @@ vi.mock("./tx-mldsa.js", () => ({
     contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
     failing: [],
   })),
+  // Quorum name-resolution (wallet-resolve-name). Driven by
+  // `resolveNameConsensusResult` — set a status object, or an Error to throw.
+  testnetResolveNameConsensus: vi.fn(async (_name: string) => {
+    if (resolveNameConsensusResult instanceof Error) throw resolveNameConsensusResult;
+    return resolveNameConsensusResult;
+  }),
   // The DEFAULT (and only) submit path: `wallet-send-tx` plus the dApp
   // eth_sendTransaction / MRV / multisig paths all route here. It feeds
   // `submitMlDsaCalls` so the metadata-only invariant (`opKind` / cluster
@@ -318,6 +324,16 @@ function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
   };
 }
 let submitFailure: (Error & { code?: number }) | null = null;
+// Drives the mocked testnetResolveNameConsensus (wallet-resolve-name): a status
+// object resolves; an Error throws.
+let resolveNameConsensusResult:
+  | {
+      status: "confirmed-hit" | "confirmed-miss" | "disagreement" | "insufficient";
+      addr0x: string | null;
+      agreeing: number;
+      detail: string;
+    }
+  | Error = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
 
 // Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
@@ -705,6 +721,7 @@ beforeEach(() => {
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
+  resolveNameConsensusResult = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   mockRejectAllPending.mockClear();
@@ -2621,25 +2638,21 @@ describe("wallet-activity-get", () => {
 // wallet-resolve-names
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("wallet-resolve-name — authoritative forward resolve (P5-002)", () => {
-  it("a registry hit resolves the name to a 0x address (lyth_resolveName)", async () => {
-    rpcResponses["lyth_resolveName"] = {
-      name: "alice.mono",
-      address: "mono1ewnhc0su4a9lh2y3tstqmwfnd7658h30xc30kd",
-      category: "human",
-    };
+describe("wallet-resolve-name — authoritative quorum forward resolve (P5-002)", () => {
+  const RESOLVED = "0x" + "ab".repeat(20);
+
+  it("a quorum confirmed-hit resolves the name to the 0x owner address", async () => {
+    resolveNameConsensusResult = { status: "confirmed-hit", addr0x: RESOLVED, agreeing: 3, detail: "" };
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-resolve-name",
       payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
     })) as { ok: true; addr0x: string | null };
-    expect(r.ok).toBe(true);
-    // The registry's `mono…` bech32m owner → lowercased 0x for the recipient.
-    expect(r.addr0x).toMatch(/^0x[0-9a-f]{40}$/);
+    expect(r).toEqual({ ok: true, addr0x: RESOLVED });
   });
 
-  it("an unregistered name is a clean miss (address:null → addr0x:null), not an error", async () => {
-    rpcResponses["lyth_resolveName"] = { name: "nobody.mono", address: null };
+  it("a quorum confirmed-miss is a clean miss (addr0x:null), not an error", async () => {
+    resolveNameConsensusResult = { status: "confirmed-miss", addr0x: null, agreeing: 3, detail: "" };
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-resolve-name",
@@ -2648,8 +2661,13 @@ describe("wallet-resolve-name — authoritative forward resolve (P5-002)", () =>
     expect(r).toEqual({ ok: true, addr0x: null });
   });
 
-  it("FAIL-CLOSED: an RPC error returns ok:false — never a resolved (signable) address", async () => {
-    rpcErrors["lyth_resolveName"] = { code: -32603, message: "operator down" };
+  it("FAIL-CLOSED: a quorum DISAGREEMENT (a rogue operator) returns ok:false — never a signable address", async () => {
+    resolveNameConsensusResult = {
+      status: "disagreement",
+      addr0x: null,
+      agreeing: 3,
+      detail: "op-a:0xrogue; op-b:0xreal",
+    };
     const r = (await dispatchPopup({
       kind: "popup",
       op: "wallet-resolve-name",
@@ -2657,6 +2675,27 @@ describe("wallet-resolve-name — authoritative forward resolve (P5-002)", () =>
     })) as { ok: boolean; addr0x?: string | null };
     expect(r.ok).toBe(false);
     expect(r.addr0x).toBeUndefined(); // nothing to sign
+  });
+
+  it("FAIL-CLOSED: insufficient operator responses returns ok:false", async () => {
+    resolveNameConsensusResult = { status: "insufficient", addr0x: null, agreeing: 1, detail: "" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: boolean; addr0x?: string | null };
+    expect(r.ok).toBe(false);
+    expect(r.addr0x).toBeUndefined();
+  });
+
+  it("FAIL-CLOSED: a consensus error returns ok:false", async () => {
+    resolveNameConsensusResult = new Error("all operators untrusted");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
   });
 
   it("rejects a non-testnet chain (resolution is testnet-only)", async () => {
