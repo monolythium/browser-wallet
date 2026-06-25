@@ -209,6 +209,8 @@ import {
   clearGenesisCache,
   rehydrateGenesisCache,
 } from "./networks.js";
+import { isHardenedBuild } from "../shared/build-mode.js";
+import { hardenedChains } from "../shared/hardened-dial.js";
 import { clampToSaneBound } from "../shared/operator-bounds.js";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
@@ -649,7 +651,11 @@ const ACTIVE_CHAIN_STORAGE_KEY = "mono.chain.active";
 let userChains: Record<string, NetInfo> = {};
 
 function chainRegistry(): Record<string, NetInfo> {
-  return { ...BUILTIN_CHAINS, ...userChains };
+  // Hardened builds dial ONLY the allowlisted built-in chain — the strict
+  // connect-src can't cover a user-added chain's RPC. Stored custom chains are
+  // ignored here (not deleted); loadActiveChainId's lookup-miss guard then
+  // reverts the active chain to the built-in default. Dev builds keep them.
+  return hardenedChains(BUILTIN_CHAINS, userChains, isHardenedBuild());
 }
 
 function lookupChain(id: string): NetInfo | null {

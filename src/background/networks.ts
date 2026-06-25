@@ -8,9 +8,10 @@ import { MONOLYTHIUM_TESTNET_CHAIN_ID, getRpcEndpoints } from "@monolythium/core
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
   validateOperatorList,
-  mergeOperatorOverride,
   type OperatorEntry,
 } from "../shared/operators.js";
+import { isHardenedBuild } from "../shared/build-mode.js";
+import { hardenedOperators } from "../shared/hardened-dial.js";
 import {
   TESTNET_BLOCK0_HASH,
   TESTNET_GENESIS_HASH,
@@ -131,7 +132,13 @@ export async function loadOperatorOverride(): Promise<void> {
     chrome.storage.local.get([STORAGE_KEY_OPERATOR_OVERRIDE], (res) => {
       const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
       const validated = validateOperatorList(raw);
-      activeOperators = mergeOperatorOverride(TESTNET_OPERATOR_RPCS_DEFAULTS, validated);
+      // Hardened builds ignore the stored override (it would brick RPC under
+      // the strict connect-src) and always dial the allowlisted defaults.
+      activeOperators = hardenedOperators(
+        TESTNET_OPERATOR_RPCS_DEFAULTS,
+        validated,
+        isHardenedBuild(),
+      );
       resolve();
     });
   });
@@ -145,7 +152,14 @@ export async function loadOperatorOverride(): Promise<void> {
 export async function setOperatorOverride(
   override: OperatorEntry[] | null,
 ): Promise<void> {
-  activeOperators = mergeOperatorOverride(TESTNET_OPERATOR_RPCS_DEFAULTS, override);
+  // Hardened builds never apply an override in memory (it would brick RPC under
+  // the strict connect-src). The override is still persisted so a later dev
+  // build honors it; in a hardened build the in-memory set stays the defaults.
+  activeOperators = hardenedOperators(
+    TESTNET_OPERATOR_RPCS_DEFAULTS,
+    override,
+    isHardenedBuild(),
+  );
   return new Promise((resolve) => {
     if (override === null) {
       chrome.storage.local.remove(STORAGE_KEY_OPERATOR_OVERRIDE, () => resolve());
