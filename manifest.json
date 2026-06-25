@@ -3,7 +3,7 @@
   "name": "Monolythium Browser Wallet",
   "short_name": "Monolythium",
   "version": "0.2.5",
-  "description": "Self-custodial wallet for Monolythium. Post-quantum ML-DSA-65 signing, encrypted mempool, native Rust/RISC-V contract calls.",
+  "description": "Self-custodial wallet for Monolythium. Post-quantum ML-DSA-65 signing, native Rust/RISC-V contract calls.",
   "homepage_url": "https://monolythium.com",
   "action": {
     "default_popup": "src/popup/index.html",
