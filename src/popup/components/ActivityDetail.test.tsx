@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { isSelfPaid, pendingAmountDisplay } from "./ActivityDetail.js";
+import { isSelfPaid, pendingAmountDisplay, rowDescription } from "./ActivityDetail.js";
 import type { ActivityRow, PendingTxRow } from "../../shared/activity.js";
 
 function pending(over: Partial<PendingTxRow> = {}): PendingTxRow {
@@ -76,5 +76,65 @@ describe("ActivityDetail.pendingAmountDisplay — claim never renders 0 LYTH", (
       kind: "plain",
       lyth: "2.5",
     });
+  });
+});
+
+// rowDescription is the secondary line under the detail title (the modal portals,
+// so the string is the testable unit). It echoes the activity row's label.
+describe("ActivityDetail.rowDescription (D)", () => {
+  const dir = new Map<number, string | null>([
+    [1, "halcyon"],
+    [2, "polar"],
+  ]);
+
+  it("confirmed redelegate → 'Redelegated <pct> from <src> to <dst>'", () => {
+    const row: ActivityRow = {
+      kind: "redelegate", blockHeight: 1, txIndex: 0, logIndex: 0,
+      cluster: 1, toCluster: 2, weightBps: 1250, clusterName: "halcyon",
+    };
+    expect(rowDescription(row, undefined, dir)).toBe(
+      "Redelegated 12.50% from halcyon to polar",
+    );
+  });
+
+  it("confirmed delegate / undelegate", () => {
+    const del: ActivityRow = {
+      kind: "delegate", blockHeight: 1, txIndex: 0, logIndex: 0,
+      cluster: 1, weightBps: 5000, clusterName: "halcyon",
+    };
+    const undel: ActivityRow = {
+      kind: "undelegate", blockHeight: 1, txIndex: 0, logIndex: 0,
+      cluster: 1, weightBps: 5000, clusterName: "halcyon",
+    };
+    expect(rowDescription(del, undefined, dir)).toBe("Delegated to halcyon");
+    expect(rowDescription(undel, undefined, dir)).toBe("Undelegated from halcyon");
+  });
+
+  it("confirmed claim with a figure", () => {
+    const row: ActivityRow = {
+      kind: "claim", blockHeight: 1, txIndex: 0, logIndex: 0, amountDecimal: "1.5",
+    };
+    expect(rowDescription(row, undefined, undefined)).toBe("Rewards claimed +1.5 LYTH");
+  });
+
+  it("confirmed tx_send → plain-text 'Sent N LYTH to <cp>'", () => {
+    const row: ActivityRow = {
+      kind: "tx_send", blockHeight: 1, txIndex: 0, logIndex: 0,
+      counterparty: "0x" + "22".repeat(20), amountDecimal: "5",
+    };
+    expect(rowDescription(row, undefined, undefined)).toMatch(/^Sent 5 LYTH to mono1/);
+  });
+
+  it("pending delegate / claim use the present-continuous builder", () => {
+    expect(
+      rowDescription(
+        pending({ opKind: "delegate", delegationWeightBps: 1250, clusterId: 1, clusterName: "halcyon" }),
+        undefined,
+        dir,
+      ),
+    ).toBe("Delegating 12.50% to halcyon");
+    expect(
+      rowDescription(pending({ opKind: "claim", source: "local-claim" }), undefined, undefined),
+    ).toBe("Claiming rewards");
   });
 });

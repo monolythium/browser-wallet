@@ -33,11 +33,82 @@ import { formatNativeLythAmount } from "../../shared/native-fee-display";
 import { formatFiat } from "../../shared/fiat";
 import { formatLythDecimalDisplay } from "../../shared/lyth-units";
 import { DISPLAY_CURRENCY_DEFAULT } from "../../shared/constants";
-import { resolveClusterLabel, formatWeightBpsPercent } from "../../shared/staking";
+import {
+  clusterLabel,
+  resolveClusterLabel,
+  formatWeightBpsPercent,
+} from "../../shared/staking";
+import {
+  CLAIM_PENDING_LABEL,
+  delegationPendingLabel,
+  redelegateConfirmedLabel,
+} from "../../shared/activity-label";
+import { counterpartyText } from "./ActivityRow";
 import { txTypeLabel } from "../../shared/tx-type-label";
 import type { ActivityRow as ActivityRowType, PendingTxRow } from "../../shared/activity";
 import type { NameLabel } from "../../shared/name-resolution";
 import { bgGetBlockTxValue, bgWalletTxFee } from "../bg";
+
+/** One-line description shown beneath the action title in the detail view — the
+ *  SAME label the activity row shows for this row (Section B), so the detail
+ *  echoes the list. Display-only. */
+export function rowDescription(
+  row: ActivityRowType,
+  label: NameLabel | undefined,
+  dir: ReadonlyMap<number, string | null> | undefined,
+): string {
+  switch (row.kind) {
+    case "delegate":
+      return `Delegated to ${resolveClusterLabel(row.cluster, row.clusterName, dir)}`;
+    case "undelegate":
+      return `Undelegated from ${resolveClusterLabel(row.cluster, row.clusterName, dir)}`;
+    case "redelegate":
+      return redelegateConfirmedLabel(
+        row.weightBps,
+        resolveClusterLabel(row.cluster, row.clusterName, dir),
+        row.toCluster !== null
+          ? resolveClusterLabel(row.toCluster, null, dir)
+          : undefined,
+      );
+    case "claim": {
+      const fig =
+        row.amountDecimal && row.amountDecimal !== "0"
+          ? formatLythDecimalDisplay(row.amountDecimal, 4)
+          : null;
+      return `Rewards claimed${fig ? ` +${fig} LYTH` : ""}`;
+    }
+    case "tx_send":
+      return `Sent ${row.amountDecimal ?? "?"} LYTH to ${counterpartyText(row.counterparty, label)}`;
+    case "tx_receive":
+      return `Received ${row.amountDecimal ?? "?"} LYTH from ${counterpartyText(row.counterparty, label)}`;
+    case "token_transfer": {
+      const verb =
+        row.direction === "out" ? "Sent" : row.direction === "in" ? "Received" : "Transferred";
+      const prep =
+        row.direction === "out" ? "to" : row.direction === "in" ? "from" : "with";
+      return `${verb} tokens ${prep} ${counterpartyText(row.counterparty, label)}`;
+    }
+    case "pending_tx": {
+      const ok = row.opKind;
+      if (ok === "claim") return CLAIM_PENDING_LABEL;
+      if (ok === "delegate" || ok === "undelegate" || ok === "redelegate") {
+        const src =
+          row.clusterId !== undefined
+            ? clusterLabel(row.clusterId, row.clusterName)
+            : (row.clusterName ?? "the cluster");
+        const dst =
+          row.toClusterId !== undefined
+            ? clusterLabel(row.toClusterId, row.toClusterName)
+            : undefined;
+        return delegationPendingLabel(ok, row.delegationWeightBps, src, dst);
+      }
+      if (ok === "complete-redemption" || ok === "emergency-key") return txTypeLabel(row);
+      return `Sending ${row.amountDecimal} LYTH to ${counterpartyText(row.to, label)}`;
+    }
+    default:
+      return txTypeLabel(row);
+  }
+}
 
 export interface ActivityDetailProps {
   row: ActivityRowType;
@@ -178,7 +249,7 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
   // ── Pending send ──
   if (row.kind === "pending_tx") {
     return (
-      <Modal open onClose={onClose} title={txTypeLabel(row)} showClose>
+      <Modal open onClose={onClose} title={txTypeLabel(row)} description={rowDescription(row, label, clusterNameById)} showClose>
         <div>
           {/* Confirmed via the receipt but awaiting the indexer's canonical
               row — show it as Confirmed at the receipt's inclusion block. */}
@@ -251,7 +322,7 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
     const title = txTypeLabel(row);
     const cp = row.counterparty;
     return (
-      <Modal open onClose={onClose} title={title} showClose>
+      <Modal open onClose={onClose} title={title} description={rowDescription(row, label, clusterNameById)} showClose>
         <div>
           <DRow label="Status" value="Confirmed" />
           <DRow label="Amount" value={row.amountDecimal !== null ? `${row.amountDecimal} LYTH` : "—"} />
@@ -278,7 +349,7 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
   if (row.kind === "delegate" || row.kind === "undelegate" || row.kind === "redelegate") {
     const title = txTypeLabel(row);
     return (
-      <Modal open onClose={onClose} title={title} showClose>
+      <Modal open onClose={onClose} title={title} description={rowDescription(row, label, clusterNameById)} showClose>
         <div>
           <DRow label="Status" value="Confirmed" />
           {row.kind === "delegate" && delegateLyth !== null && (
@@ -300,7 +371,7 @@ export function ActivityDetail({ row, label, walletAddr, clusterNameById, onClos
     const figure =
       row.amountDecimal && row.amountDecimal !== "0" ? row.amountDecimal : null;
     return (
-      <Modal open onClose={onClose} title={txTypeLabel(row)} showClose>
+      <Modal open onClose={onClose} title={txTypeLabel(row)} description={rowDescription(row, label, clusterNameById)} showClose>
         <div>
           <DRow label="Status" value="Confirmed" />
           <DRow
