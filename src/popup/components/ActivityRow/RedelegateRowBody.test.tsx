@@ -30,6 +30,9 @@ describe("RedelegateRowBody — named confirmed label (B)", () => {
     expect(html).not.toContain('class="ext-act-row__right"');
     // Full label on hover (C): the title carries the untruncated string.
     expect(html).toContain('title="Redelegated 12.50% from halcyon to polar"');
+    // Distinct icon (E): redelegate uses `swap` (↔), not the shared `stake`.
+    expect(html).toContain('d="M7 10h14l-4-4M17 14H3l4 4"');
+    expect(html).not.toContain('cx="5" cy="7"'); // not the stake cluster
   });
 
   it("legacy (no captured bps) → 'Redelegated from halcyon to polar', no %", () => {

@@ -6,7 +6,7 @@
 // The .ext-pending-dot class (ext.css, added in commit 12) gives the
 // rotating amber ring indicator.
 
-import { Icon, type IconName } from "../../Icon.js";
+import { Icon, iconForDelegationKind, type IconName } from "../../Icon.js";
 import { useFeature } from "../../hooks/useFeature.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { notificationTitle } from "../../../shared/notifications.js";
@@ -96,7 +96,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       opKind === "undelegate" ||
       opKind === "redelegate";
     const iconName: IconName = isDelegation
-      ? "stake"
+      ? iconForDelegationKind(opKind as "delegate" | "undelegate" | "redelegate")
       : opKind === "claim" || opKind === "complete-redemption"
         ? "receive"
         : "send";
@@ -194,7 +194,16 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
   return (
     <div className="ext-act-row">
       <div className={isClaim ? "dir in" : "dir out"} style={{ position: "relative" }}>
-        <Icon name={isClaim ? "receive" : "send"} size={13} />
+        <Icon
+          name={
+            isClaim
+              ? "receive"
+              : isDelegationKind
+                ? iconForDelegationKind(opKind as "delegate" | "undelegate" | "redelegate")
+                : "send"
+          }
+          size={13}
+        />
         <span className="ext-pending-dot" aria-label="pending" />
       </div>
       <div className="ext-act-row__main">

@@ -5,7 +5,7 @@
 // optional unread dot. Tapping it opens the shared `NotificationDetail` popup
 // at the call site.
 
-import { Icon, type IconName } from "../Icon";
+import { Icon, iconForDelegationKind, type IconName } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import {
   notificationTitle,
@@ -30,7 +30,7 @@ function iconForKind(kind: TxOpKind): IconName {
     case "delegate":
     case "undelegate":
     case "redelegate":
-      return "stake";
+      return iconForDelegationKind(kind);
     case "claim":
       return "receive";
     case "emergency-key":
