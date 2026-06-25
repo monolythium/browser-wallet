@@ -95,6 +95,11 @@ function ActionSummary({
       <Row label="To">{bech32mDisplay(action.to)}</Row>
       <Row label="Value">{formatLythoshiValue(valueLythoshiHex)}</Row>
       <Row label="Chain">{action.chainIdHex}</Row>
+      {/* P3-009 — gas limit is hashed + signed by every co-signer; show it
+          (when present) so it's WYSIWYS, not a field they sign blind. */}
+      {action.gasLimitHex != null && action.gasLimitHex !== "" && (
+        <Row label="Gas limit">{formatGasLimit(action.gasLimitHex)}</Row>
+      )}
       {hasData && action.kind === "contract" && (
         <CalldataView data={action.data ?? "0x"} to={action.to} />
       )}
@@ -449,6 +454,15 @@ export function formatLythoshiValue(hexLythoshi: string): string {
   const lythoshi = parseHexQuantity(hexLythoshi);
   if (lythoshi == null) return "? LYTH";
   return `${lythoshiToLythDecimal(lythoshi)} LYTH`;
+}
+
+/** Format a gas/execution-unit limit hex for the co-signer summary: a human
+ *  decimal with the raw hex (what is signed) alongside. Falls back to the raw
+ *  hex if unparseable. */
+export function formatGasLimit(hex: string): string {
+  const n = parseHexQuantity(hex);
+  if (n == null) return hex;
+  return `${n.toLocaleString("en-US")} (${hex})`;
 }
 
 /** Truncate a hex blob to "0xabcd…wxyz" for tight UI rows. Pure. */
