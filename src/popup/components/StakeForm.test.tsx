@@ -105,6 +105,31 @@ describe("StakeForm — per-cluster cap surfaces under a null (v2) aggregate cap
   });
 });
 
+describe("StakeForm — at-per-cluster-cap copy (Section A)", () => {
+  it("shows the explicit at-cap message when existing weight is already the 50% cap", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} existingWeightBps={5000} amountStr="" />,
+    );
+    expect(html).toContain("already delegated the 50% per-cluster maximum");
+  });
+
+  it("does NOT show the at-cap message below the cap", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} existingWeightBps={4000} amountStr="" />,
+    );
+    expect(html).not.toContain("already delegated the 50% per-cluster maximum");
+  });
+
+  it("at-cap: the over-cap block is UNCHANGED (a positive % still reads 'Reduce to cap')", () => {
+    // Dual-cap logic untouched: existing 5000 + any positive % → overCap → blocked.
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} existingWeightBps={5000} amountStr="10" />,
+    );
+    expect(html).toContain("Reduce to cap"); // overCap still fires (canContinue blocked)
+    expect(html).toContain("already delegated the 50% per-cluster maximum");
+  });
+});
+
 describe("StakeForm — active/remaining headroom line", () => {
   it("shows delegated vs available across all clusters", () => {
     const html = renderToStaticMarkup(
