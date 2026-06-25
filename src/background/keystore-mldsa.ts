@@ -46,13 +46,13 @@
 // No BIP-32 / BIP-44 derivation paths (whitepaper §21.2.1 forbids HD in
 // v1) — each vault is an independent 24-word BIP-39 recovery phrase.
 //
-// Migration from the legacy single envelope ("mono.vault.v4") to the
-// container ("mono.vaults.v4") is opportunistic, lazy, and runs inside
-// the unlock handler the first time after the v4-multi upgrade. The
-// legacy entry is left in place for one release cycle as rollback
-// safety; a later release drops it. This module lands the schema +
-// helpers + migration function only — wiring into the existing unlock
-// path is wired separately by the unlock handler.
+// Vault creation commits straight into the container ("mono.vaults.v4"):
+// createVaultFromNewMnemonic / commitVaultFromSeed assemble the container
+// shape and write it directly via saveVaultsContainerV4 — the legacy
+// single-envelope key ("mono.vault.v4") is never written. There is no
+// legacy->container migration code at HEAD: an earlier plan for a lazy
+// in-unlock migration became unnecessary once creation wrote the container
+// shape from the start, so no `migrateLegacyToContainerV4` function exists.
 //
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
@@ -1782,10 +1782,9 @@ async function commitVaultFromSeed(
   const address = await backend.getAddress();
 
   // Build a fresh container holding this one vault, master-password-
-  // unlocked. Mirrors migrateLegacyToContainerV4's container assembly,
-  // but seeded from the freshly generated seed/mnemonic instead of a
-  // decrypted legacy envelope. No single-vault `mono.vault.v4` write —
-  // create commits straight into the `mono.vaults.v4` container shape.
+  // unlocked, seeded from the freshly generated seed/mnemonic. No
+  // single-vault `mono.vault.v4` write — create commits straight into
+  // the `mono.vaults.v4` container shape.
   const masterKdf = generateMasterKdfParamsV4();
   const mek = await deriveMekV4(password, masterKdf);
   const vek = generateVekV4();
@@ -1819,7 +1818,7 @@ async function commitVaultFromSeed(
   // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
   // `mek` — ownership transfers to mekCache). This reproduces the exact
   // end state the d67de85 follow-up unlockContainerV4 call established,
-  // inline, so no single-vault write + migration round-trip is needed.
+  // inline, so no single-vault write + re-unlock round-trip is needed.
   if (mekCache) mekCache.fill(0);
   mekCache = mek;
   unlocked = { backend, address };

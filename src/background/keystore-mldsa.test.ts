@@ -3,11 +3,10 @@
 // Covers the additive multi-vault surface:
 //   - VEK wrap/unwrap round-trip under a MEK
 //   - sealVaultEnvelopeV4 / openVaultEnvelopeV4 round-trip
-//   - Legacy mono.vault.v4 → mono.vaults.v4 migration round-trip
-//   - Migration idempotence (second call no-ops)
-//   - Multi-vault unlock under a single MEK
-//   - Container key (mono.vaults.v4) and legacy key (mono.vault.v4)
-//     are independent — populating one does not affect the other
+//   - createVaultFromNewMnemonic commits straight into the container
+//     (mono.vaults.v4); the legacy single-vault key (mono.vault.v4) is
+//     never written, and there is no legacy->container migration at HEAD
+//   - Multi-vault unlock under a single MEK; multisig + passkey state
 //
 // The chrome.storage.local stub mirrors keystore.test.ts. Argon2id
 // dominates the per-test runtime (~1-2 s on a 2020-era laptop), so
