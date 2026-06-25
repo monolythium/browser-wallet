@@ -28,6 +28,8 @@ describe("RedelegateRowBody — named confirmed label (B)", () => {
     expect(html).not.toContain("Moved delegation"); // old label gone
     // The duplicate right-side weight badge is dropped (the % is in the line).
     expect(html).not.toContain('class="ext-act-row__right"');
+    // Full label on hover (C): the title carries the untruncated string.
+    expect(html).toContain('title="Redelegated 12.50% from halcyon to polar"');
   });
 
   it("legacy (no captured bps) → 'Redelegated from halcyon to polar', no %", () => {

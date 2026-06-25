@@ -133,6 +133,7 @@ export function NotificationRow({
       <div className="ext-act-row__main" style={{ minWidth: 0 }}>
         <div
           className="ext-act-row__who"
+          title={title}
           style={{
             fontSize: 13,
             fontWeight: 600,
@@ -146,6 +147,7 @@ export function NotificationRow({
         </div>
         <div
           className="ext-act-row__meta"
+          title={metaText}
           style={{
             fontSize: 10.5,
             color: "var(--fg-400)",

@@ -215,6 +215,8 @@ describe("PendingTxRowBody — present-continuous pending labels (B)", () => {
     );
     expect(html).toContain("Delegating 12.50% to halcyon");
     expect(html).not.toContain("0 LYTH to");
+    // Full label on hover (C).
+    expect(html).toContain('title="Delegating 12.50% to halcyon"');
   });
 
   it("undelegate: 'Undelegating 50.00% from halcyon'", () => {

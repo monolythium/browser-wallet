@@ -13,7 +13,7 @@ import { notificationTitle } from "../../../shared/notifications.js";
 import { formatFiat } from "../../../shared/fiat.js";
 import { formatLythDecimalDisplay } from "../../../shared/lyth-units.js";
 import { DISPLAY_CURRENCY_DEFAULT } from "../../../shared/constants.js";
-import { renderCounterparty } from "../ActivityRow.js";
+import { renderCounterparty, counterpartyText } from "../ActivityRow.js";
 import { clusterLabel } from "../../../shared/staking.js";
 import {
   CLAIM_PENDING_LABEL,
@@ -107,6 +107,16 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
     const clusterTarget = isDelegation
       ? (row.clusterName ?? (row.clusterId !== undefined ? `cluster #${row.clusterId}` : null))
       : null;
+    // Plain-text label for the `title` hover (mirrors the rendered line).
+    const bridgedTitle = isSend
+      ? `Sent ${row.amountDecimal} LYTH to ${counterpartyText(row.to, counterpartyLabel)}`
+      : `${notificationTitle(opKind ?? "send", "confirmed")}${
+          claimFigDisplay
+            ? ` +${claimFigDisplay} LYTH`
+            : showAmount
+              ? ` ${row.amountDecimal} LYTH`
+              : ""
+        }${clusterTarget ? ` · ${clusterTarget}` : ""}`;
     return (
       <div className="ext-act-row">
         {/* Sends keep the theme-accent (sent-ok) like TxSendRowBody, for a
@@ -119,7 +129,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           <Icon name={iconName} size={13} />
         </div>
         <div className="ext-act-row__main">
-          <div className="ext-act-row__who">
+          <div className="ext-act-row__who" title={bridgedTitle}>
             {isSend ? (
               <>
                 Sent {row.amountDecimal} LYTH to{" "}
@@ -168,6 +178,19 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
     );
   }
   const pendingPrefix = "Pending";
+  // Plain-text label for the `title` hover (mirrors the rendered pending line).
+  const pendingWhoTitle = suppressAmount
+    ? `${pendingPrefix} · ${txTypeLabel(row)}`
+    : isClaim
+      ? `${CLAIM_PENDING_LABEL}${claimFigDisplay ? ` +${claimFigDisplay} LYTH` : ""}`
+      : isDelegationKind
+        ? delegationPendingLabel(
+            opKind as "delegate" | "undelegate" | "redelegate",
+            row.delegationWeightBps,
+            pendingSrcLabel,
+            pendingDstLabel,
+          )
+        : `Sending · ${row.amountDecimal} LYTH to ${counterpartyText(row.to, counterpartyLabel)}`;
   return (
     <div className="ext-act-row">
       <div className={isClaim ? "dir in" : "dir out"} style={{ position: "relative" }}>
@@ -175,7 +198,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
         <span className="ext-pending-dot" aria-label="pending" />
       </div>
       <div className="ext-act-row__main">
-        <div className="ext-act-row__who">
+        <div className="ext-act-row__who" title={pendingWhoTitle}>
           {suppressAmount ? (
             // No "0 LYTH to <precompile>" — the send-shaped template doesn't
             // fit a 0-value precompile call. Name it by its operation instead.

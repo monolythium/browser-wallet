@@ -100,3 +100,19 @@ export function renderCounterparty(
     return addr;
   }
 }
+
+// Plain-TEXT counterparty (no CategoryBadge JSX) for a row's `title` hover
+// attribute — the displayName when resolved, else the short bech32m. Mirrors
+// renderCounterparty's fallback so the tooltip text matches the rendered line.
+export function counterpartyText(
+  addr: string | null,
+  label: NameLabel | undefined,
+): string {
+  if (!addr) return "unknown";
+  if (label && label.displayName) return label.displayName;
+  try {
+    return shortBech32m(addr, 6);
+  } catch {
+    return addr;
+  }
+}
