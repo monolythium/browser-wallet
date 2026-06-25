@@ -5,15 +5,15 @@
 // fallback, where the destination is unknown and the " to …" segment is omitted
 // entirely). Never a fabricated name (§C: no cluster-name reader in mono-core).
 //
-// The label is the shared `redelegateConfirmedLabel` ("Redelegated <pct> from
-// <src> to <dst>"), so the % rides IN the line — the old right-side weight badge
-// is dropped to avoid a duplicate figure.
+// The ROW label is "Redelegated from <src> to <dst>" and the weight % sits in
+// the right-side badge (like the delegate row), so a long from→to line truncates
+// without losing the %. (The detail popup + the pending row keep the inline %
+// via the shared builders — those surfaces are intentionally NOT changed here.)
 
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { RedelegateRow } from "../../../shared/activity.js";
-import { resolveClusterLabel } from "../../../shared/staking.js";
-import { redelegateConfirmedLabel } from "../../../shared/activity-label.js";
+import { resolveClusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
 
 export interface RedelegateRowBodyProps {
   row: RedelegateRow;
@@ -29,7 +29,10 @@ export function RedelegateRowBody({ row, clusterNameById }: RedelegateRowBodyPro
     row.toCluster !== null
       ? resolveClusterLabel(row.toCluster, null, clusterNameById)
       : undefined;
-  const label = redelegateConfirmedLabel(row.weightBps, srcLabel, dstLabel);
+  const label =
+    dstLabel !== undefined
+      ? `Redelegated from ${srcLabel} to ${dstLabel}`
+      : `Redelegated from ${srcLabel}`;
   return (
     <div className="ext-act-row">
       <div className="dir out">
@@ -42,6 +45,12 @@ export function RedelegateRowBody({ row, clusterNameById }: RedelegateRowBodyPro
           <span>·</span>
           <span>block {row.blockHeight.toLocaleString("en-US")}</span>
         </div>
+      </div>
+      <div className="ext-act-row__right">
+        <div className="amt">
+          {row.weightBps !== null ? formatWeightBpsPercent(row.weightBps) : "—"}
+        </div>
+        <div className="sym">weight</div>
       </div>
     </div>
   );

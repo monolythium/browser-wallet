@@ -18,42 +18,45 @@ function redelegateRow(p: Partial<RedelegateRow> = {}): RedelegateRow {
   };
 }
 
-describe("RedelegateRowBody — named confirmed label (B)", () => {
-  it("renders 'Redelegated 12.50% from halcyon to polar' (dst from the directory)", () => {
+describe("RedelegateRowBody — from→to label + % weight badge at the line end", () => {
+  it("label is 'Redelegated from src to dst'; the % sits in the right weight badge", () => {
     const dir = new Map<number, string | null>([[2, "polar"]]);
     const html = renderToStaticMarkup(
       <RedelegateRowBody row={redelegateRow()} clusterNameById={dir} />,
     );
-    expect(html).toContain("Redelegated 12.50% from halcyon to polar");
+    expect(html).toContain("Redelegated from halcyon to polar");
     expect(html).not.toContain("Moved delegation"); // old label gone
-    // The duplicate right-side weight badge is dropped (the % is in the line).
-    expect(html).not.toContain('class="ext-act-row__right"');
-    // Full label on hover (C): the title carries the untruncated string.
-    expect(html).toContain('title="Redelegated 12.50% from halcyon to polar"');
-    // Distinct icon (E): redelegate uses `swap` (↔), not the shared `stake`.
+    // % moved OUT of the label into the right-side weight badge (like delegate).
+    expect(html).toContain('class="ext-act-row__right"');
+    expect(html).toContain("12.50%");
+    expect(html).toContain(">weight<");
+    // Hover title = the (no-%) label.
+    expect(html).toContain('title="Redelegated from halcyon to polar"');
+    // Distinct icon (E): `swap` (↔), not the stake cluster.
     expect(html).toContain('d="M7 10h14l-4-4M17 14H3l4 4"');
-    expect(html).not.toContain('cx="5" cy="7"'); // not the stake cluster
+    expect(html).not.toContain('cx="5" cy="7"');
   });
 
-  it("legacy (no captured bps) → 'Redelegated from halcyon to polar', no %", () => {
+  it("legacy (no captured bps) → no %, the badge shows the dash", () => {
     const dir = new Map<number, string | null>([[2, "polar"]]);
     const html = renderToStaticMarkup(
       <RedelegateRowBody row={redelegateRow({ weightBps: null })} clusterNameById={dir} />,
     );
     expect(html).toContain("Redelegated from halcyon to polar");
     expect(html).not.toContain("12.50%");
+    expect(html).toContain('class="ext-act-row__right"'); // badge present (shows "—")
   });
 
-  it("unknown destination (toCluster null) drops the ' to …' segment", () => {
+  it("unknown destination (toCluster null) drops the ' to …' segment; % still in the badge", () => {
     const html = renderToStaticMarkup(
       <RedelegateRowBody row={redelegateRow({ toCluster: null })} clusterNameById={undefined} />,
     );
-    expect(html).toContain("Redelegated 12.50% from halcyon");
+    expect(html).toContain("Redelegated from halcyon");
     expect(html).not.toContain(" to ");
+    expect(html).toContain("12.50%");
   });
 
   it("unnamed source falls back to 'Cluster #<id>'", () => {
-    // No captured `clusterName` → honest #id (omit the optional field entirely).
     const row: RedelegateRow = {
       kind: "redelegate",
       blockHeight: 1000,
@@ -66,6 +69,6 @@ describe("RedelegateRowBody — named confirmed label (B)", () => {
     const html = renderToStaticMarkup(
       <RedelegateRowBody row={row} clusterNameById={undefined} />,
     );
-    expect(html).toContain("Redelegated 12.50% from Cluster #3");
+    expect(html).toContain("Redelegated from Cluster #3");
   });
 });
