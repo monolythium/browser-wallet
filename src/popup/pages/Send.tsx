@@ -37,6 +37,7 @@ import type { Account } from "../demo-data";
 import {
   bech32mDisplay,
   bech32mToAddress,
+  tryDecodeBech32m,
   type AddressKind,
 } from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
@@ -2434,9 +2435,19 @@ interface SuccessViewProps {
 }
 
 /** A bech32m address rendered as a Monoscan address-page link. Addresses are
- *  always bech32m (`mono…`); the raw 0x form is never shown (§22.7). */
-function AddressLink({ addr0x, kind }: { addr0x: string; kind?: AddressKind }) {
+ *  always bech32m (`mono…`); the raw 0x form is never shown (§22.7).
+ *
+ *  Only a value that decodes as a well-formed bech32m becomes a Monoscan link —
+ *  a strict bech32m decode (`tryDecodeBech32m`) gates the value before it reaches
+ *  the `href`, so an unresolved/garbage recipient renders as inert plain text
+ *  (no `<a>`), not a link to a non-existent Monoscan page. Closes the CodeQL
+ *  js/xss-through-dom taint path (recipient input → href) with a real validation;
+ *  see `_dev-notes/.../2026-06-24_codeql-xss-through-dom-inspect.md`. */
+export function AddressLink({ addr0x, kind }: { addr0x: string; kind?: AddressKind }) {
   const bech = bech32mDisplay(addr0x, kind);
+  if (tryDecodeBech32m(bech) === null) {
+    return <span style={{ fontFamily: "var(--f-mono)" }}>{bech}</span>;
+  }
   return (
     <ExternalLink
       href={monoscanAddressUrl(bech)}
