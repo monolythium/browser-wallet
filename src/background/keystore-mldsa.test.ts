@@ -1780,3 +1780,78 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
     60_000,
   );
 });
+
+describe("commitVaultFromSeed error-path zeroization (P2-004)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.doUnmock("@noble/hashes/argon2.js");
+    vi.doUnmock("@monolythium/core-sdk/crypto");
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  // Mock argon2 so deriveMekV4 returns a buffer we hold (to observe the wipe),
+  // and MlDsa65Backend so we can spy on dispose() + skip real keygen. The
+  // mnemonic helpers (generatePqm1Mnemonic / pqm1MnemonicToMlDsa65Seed) stay
+  // real via importOriginal.
+  function installMocks(): {
+    capturedMek: Uint8Array;
+    disposeSpy: ReturnType<typeof vi.fn>;
+  } {
+    const capturedMek = new Uint8Array(32).fill(7);
+    vi.doMock("@noble/hashes/argon2.js", () => ({
+      argon2idAsync: async () => capturedMek,
+    }));
+    const disposeSpy = vi.fn();
+    vi.doMock("@monolythium/core-sdk/crypto", async (importOriginal) => {
+      const actual = (await importOriginal()) as Record<string, unknown>;
+      return {
+        ...actual,
+        MlDsa65Backend: {
+          fromSeed: () => ({
+            getAddress: async () => "0x" + "ab".repeat(20),
+            dispose: disposeSpy,
+          }),
+        },
+      };
+    });
+    return { capturedMek, disposeSpy };
+  }
+
+  it("zeroizes the MEK + disposes the backend when the commit throws after allocation", async () => {
+    const { capturedMek, disposeSpy } = installMocks();
+    // Force saveVaultsContainerV4 to reject: storage.local.set throws. This is
+    // AFTER mek + backend are allocated and BEFORE ownership transfers.
+    const c = (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: unknown } } };
+      }
+    ).chrome;
+    c.storage.local.set = () => {
+      throw new Error("disk full");
+    };
+
+    const ks = await import("./keystore-mldsa.js");
+    await expect(ks.createVaultFromNewMnemonic("pw")).rejects.toThrow();
+
+    // The derived MEK buffer was zeroed, and the backend disposed — on throw.
+    expect(Array.from(capturedMek)).toEqual(new Array(32).fill(0));
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
+    expect(ks.isUnlockedV4()).toBe(false);
+  });
+
+  it("does NOT wipe the MEK / dispose the backend on success (ownership transfers)", async () => {
+    const { capturedMek, disposeSpy } = installMocks();
+    const ks = await import("./keystore-mldsa.js");
+
+    const { address } = await ks.createVaultFromNewMnemonic("pw");
+    expect(address).toBe("0x" + "ab".repeat(20));
+
+    // mek stays live (owned by the session), backend not disposed, unlocked.
+    expect(Array.from(capturedMek)).toEqual(new Array(32).fill(7));
+    expect(disposeSpy).not.toHaveBeenCalled();
+    expect(ks.isUnlockedV4()).toBe(true);
+  });
+});

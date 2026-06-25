@@ -1793,52 +1793,67 @@ async function commitVaultFromSeed(
   // (`unlocked = { backend, address }`, unlock-on-create), so it must NOT be
   // disposed here — lockV4() wipes it (S1-01) when the session ends.
   const backend = MlDsa65Backend.fromSeed(seed);
-  const address = await backend.getAddress();
-
-  // Build a fresh container holding this one vault, master-password-
-  // unlocked, seeded from the freshly generated seed/mnemonic. No
-  // single-vault `mono.vault.v4` write — create commits straight into
-  // the `mono.vaults.v4` container shape.
-  const masterKdf = generateMasterKdfParamsV4();
-  const mek = await deriveMekV4(password, masterKdf);
-  const vek = generateVekV4();
-  let wrappedKey: WrappedVekV4;
-  let envelope: SealedSeedRecordV4;
+  // P2-004 — until ownership of `mek` + `backend` transfers to the session
+  // (mekCache / unlocked) below, any throw must zeroize the derived MEK and
+  // dispose the backend so a mid-commit failure can't leave key material live
+  // in the heap. On success they're owned by the session — do NOT wipe.
+  let mek: Uint8Array | null = null;
+  let committed = false;
   try {
-    wrappedKey = wrapVekV4(mek, vek);
-    envelope = sealVaultEnvelopeV4(vek, seed, mnemonic);
-  } finally {
-    vek.fill(0);
-  }
-  const record: VaultRecordV4 = {
-    id: crypto.randomUUID(),
-    label: "Wallet 1",
-    createdAt: Date.now(),
-    wrappedKey,
-    envelope,
-    addr: address,
-  };
-  const container: VaultsContainerV4 = {
-    version: SCHEMA_VERSION,
-    algo: ALGO_ID,
-    kdf: KDF_ID,
-    aead: AEAD_ID,
-    masterKdf,
-    vaults: [record],
-    activeVaultId: record.id,
-  };
-  await saveVaultsContainerV4(container);
+    const address = await backend.getAddress();
 
-  // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
-  // `mek` — ownership transfers to mekCache). This reproduces the exact
-  // end state the d67de85 follow-up unlockContainerV4 call established,
-  // inline, so no single-vault write + re-unlock round-trip is needed.
-  if (mekCache) mekCache.fill(0);
-  mekCache = mek;
-  unlocked = { backend, address };
-  activeContainerVaultId = record.id;
-  await persistMekToSessionV4(mek);
-  return address;
+    // Build a fresh container holding this one vault, master-password-
+    // unlocked, seeded from the freshly generated seed/mnemonic. No
+    // single-vault `mono.vault.v4` write — create commits straight into
+    // the `mono.vaults.v4` container shape.
+    const masterKdf = generateMasterKdfParamsV4();
+    mek = await deriveMekV4(password, masterKdf);
+    const vek = generateVekV4();
+    let wrappedKey: WrappedVekV4;
+    let envelope: SealedSeedRecordV4;
+    try {
+      wrappedKey = wrapVekV4(mek, vek);
+      envelope = sealVaultEnvelopeV4(vek, seed, mnemonic);
+    } finally {
+      vek.fill(0);
+    }
+    const record: VaultRecordV4 = {
+      id: crypto.randomUUID(),
+      label: "Wallet 1",
+      createdAt: Date.now(),
+      wrappedKey,
+      envelope,
+      addr: address,
+    };
+    const container: VaultsContainerV4 = {
+      version: SCHEMA_VERSION,
+      algo: ALGO_ID,
+      kdf: KDF_ID,
+      aead: AEAD_ID,
+      masterKdf,
+      vaults: [record],
+      activeVaultId: record.id,
+    };
+    await saveVaultsContainerV4(container);
+
+    // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
+    // `mek` — ownership transfers to mekCache). This reproduces the exact
+    // end state the d67de85 follow-up unlockContainerV4 call established,
+    // inline, so no single-vault write + re-unlock round-trip is needed.
+    if (mekCache) mekCache.fill(0);
+    mekCache = mek;
+    unlocked = { backend, address };
+    activeContainerVaultId = record.id;
+    committed = true; // ownership of mek + backend now held by the session
+    await persistMekToSessionV4(mek);
+    return address;
+  } catch (e) {
+    if (!committed) {
+      if (mek) mek.fill(0);
+      backend.dispose();
+    }
+    throw e;
+  }
 }
 
 
