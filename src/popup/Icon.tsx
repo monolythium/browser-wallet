@@ -218,13 +218,17 @@ export function Icon({ name, size = 16 }: IconProps) {
         </svg>
       );
     case "unstake":
-      // A staked node releasing downward — undelegate (weight returns to your
-      // liquid balance). Node up top + a down arrow; distinct from `stake`
-      // (5-circle cluster), `swap` (↔), and `receive` (plain ↓, no node).
+      // The `stake` cluster releasing its center weight downward — undelegate.
+      // Mirrors delegate's `stake` glyph (the same 4 satellites) so the pair
+      // reads as opposites; the center is a down arrow (weight leaving) instead
+      // of the staked node.
       return (
         <svg {...props}>
-          <circle cx="12" cy="5" r="3" />
-          <path d="M12 11v7M8 14l4 4 4-4" />
+          <circle cx="5" cy="7" r="2" />
+          <circle cx="19" cy="7" r="2" />
+          <circle cx="5" cy="17" r="2" />
+          <circle cx="19" cy="17" r="2" />
+          <path d="M12 7v8M9 13l3 3 3-3" />
         </svg>
       );
     case "swap":

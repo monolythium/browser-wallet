@@ -14,7 +14,7 @@ export function UndelegateRowBody({ row, clusterNameById }: UndelegateRowBodyPro
   const label = `Undelegated from ${resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)}`;
   return (
     <div className="ext-act-row">
-      <div className="dir in">
+      <div className="dir out">
         <Icon name="unstake" size={13} />
       </div>
       <div className="ext-act-row__main">

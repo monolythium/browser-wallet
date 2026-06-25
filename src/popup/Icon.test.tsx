@@ -12,11 +12,10 @@ describe("iconForDelegationKind — distinct glyph per delegation action (E)", (
 });
 
 describe("Icon — unstake glyph", () => {
-  it("renders the unstake path (node + down arrow), distinct from stake", () => {
+  it("renders the unstake path (cluster satellites + center down arrow)", () => {
     const html = renderToStaticMarkup(<Icon name="unstake" size={13} />);
-    expect(html).toContain('d="M12 11v7M8 14l4 4 4-4"');
-    expect(html).toContain('<circle cx="12" cy="5" r="3">');
-    // Not the 5-circle stake cluster.
-    expect(html).not.toContain('cx="5" cy="7"');
+    expect(html).toContain('d="M12 7v8M9 13l3 3 3-3"');
+    expect(html).toContain('cx="5" cy="7"'); // shares delegate's cluster satellites
+    expect(html).not.toContain('cx="12" cy="12" r="3"'); // but NOT the stake center node
   });
 });

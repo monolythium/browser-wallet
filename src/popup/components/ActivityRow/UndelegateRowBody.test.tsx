@@ -19,8 +19,9 @@ describe("UndelegateRowBody (B + C + E)", () => {
     const html = renderToStaticMarkup(<UndelegateRowBody row={row} clusterNameById={undefined} />);
     expect(html).toContain("Undelegated from halcyon");
     expect(html).toContain('title="Undelegated from halcyon"');
-    // Distinct icon (E): undelegate uses `unstake` (node + ↓), not `stake`.
-    expect(html).toContain('d="M12 11v7M8 14l4 4 4-4"');
-    expect(html).not.toContain('cx="5" cy="7"'); // not the stake cluster
+    // Distinct icon (E): undelegate uses `unstake` (cluster + center ↓),
+    // harmonious with delegate's `stake` but NOT its center node.
+    expect(html).toContain('d="M12 7v8M9 13l3 3 3-3"');
+    expect(html).not.toContain('cx="12" cy="12" r="3"'); // not the stake center node
   });
 });

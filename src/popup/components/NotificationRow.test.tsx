@@ -37,7 +37,7 @@ describe("NotificationRow — distinct delegation icon + failed-red (E)", () => 
     const html = renderToStaticMarkup(
       <NotificationRow record={record({ kind: "undelegate", status: "confirmed" })} onOpen={() => {}} showUnread={false} />,
     );
-    expect(html).toContain('d="M12 11v7M8 14l4 4 4-4"'); // unstake glyph
+    expect(html).toContain('d="M12 7v8M9 13l3 3 3-3"'); // unstake glyph
     expect(html).toContain("var(--ok"); // confirmed-green ring
   });
 });
