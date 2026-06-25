@@ -1855,3 +1855,69 @@ describe("commitVaultFromSeed error-path zeroization (P2-004)", () => {
     expect(ks.isUnlockedV4()).toBe(true);
   });
 });
+
+describe("sealVaultEnvelopeV4 mnPlain zeroization (P2-005)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.doUnmock("@noble/ciphers/chacha.js");
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  // Mock xchacha so the SECOND encrypt (the mnemonic) captures its arg — which
+  // IS the internal mnPlain buffer — so we can assert the finally zeroed it.
+  // The first encrypt (seed) returns a fake ciphertext.
+  function mockXchachaCapture(throwOnMnemonic: boolean): {
+    mnPlain: Uint8Array | null;
+  } {
+    const cap: { mnPlain: Uint8Array | null } = { mnPlain: null };
+    let n = 0;
+    vi.doMock("@noble/ciphers/chacha.js", async (importOriginal) => {
+      const actual = (await importOriginal()) as Record<string, unknown>;
+      return {
+        ...actual,
+        xchacha20poly1305: () => ({
+          encrypt: (data: Uint8Array) => {
+            n++;
+            if (n === 1) return new Uint8Array(data.length + 16); // seed ct (fake)
+            cap.mnPlain = data; // 2nd call's arg == mnPlain
+            if (throwOnMnemonic) throw new Error("encrypt failed");
+            return new Uint8Array(data.length + 16);
+          },
+        }),
+      };
+    });
+    return cap;
+  }
+
+  it("zeroes mnPlain in the finally even when encrypt() throws", async () => {
+    const cap = mockXchachaCapture(true);
+    const ks = await import("./keystore-mldsa.js");
+    const { generateVekV4, sealVaultEnvelopeV4 } = ks.__internalV4Multi;
+    const vek = generateVekV4();
+    const seed = new Uint8Array(32).fill(9);
+
+    expect(() => sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie")).toThrow();
+    expect(cap.mnPlain).not.toBeNull();
+    expect(Array.from(cap.mnPlain!)).toEqual(
+      new Array(cap.mnPlain!.length).fill(0),
+    );
+  });
+
+  it("zeroes mnPlain on the happy path too", async () => {
+    const cap = mockXchachaCapture(false);
+    const ks = await import("./keystore-mldsa.js");
+    const { generateVekV4, sealVaultEnvelopeV4 } = ks.__internalV4Multi;
+    const vek = generateVekV4();
+    const seed = new Uint8Array(32).fill(9);
+
+    const env = sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie");
+    expect(typeof env.mnemonicCiphertext).toBe("string");
+    expect(cap.mnPlain).not.toBeNull();
+    expect(Array.from(cap.mnPlain!)).toEqual(
+      new Array(cap.mnPlain!.length).fill(0),
+    );
+  });
+});

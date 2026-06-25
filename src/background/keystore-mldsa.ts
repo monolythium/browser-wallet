@@ -513,13 +513,13 @@ function sealVaultEnvelopeV4(
     throw new Error("sealVaultEnvelopeV4: mnemonic must be non-empty");
   }
   const { seedKey, mnemonicKey } = deriveSubKeysFromVekV4(vek);
+  let mnPlain: Uint8Array | null = null;
   try {
     const seedNonce = randomBytes(XCHACHA_NONCE_LEN);
     const seedCt = xchacha20poly1305(seedKey, seedNonce).encrypt(seed);
     const mnNonce = randomBytes(XCHACHA_NONCE_LEN);
-    const mnPlain = new TextEncoder().encode(mnemonic);
+    mnPlain = new TextEncoder().encode(mnemonic);
     const mnCt = xchacha20poly1305(mnemonicKey, mnNonce).encrypt(mnPlain);
-    mnPlain.fill(0);
     return {
       seedNonce: bytesToBase64(seedNonce),
       seedCiphertext: bytesToBase64(seedCt),
@@ -527,6 +527,10 @@ function sealVaultEnvelopeV4(
       mnemonicCiphertext: bytesToBase64(mnCt),
     };
   } finally {
+    // P2-005 — zero the mnemonic plaintext on EVERY exit, including an
+    // encrypt() throw (it was zeroed only on the happy path, leaving the UTF-8
+    // mnemonic bytes live in the heap on failure).
+    if (mnPlain) mnPlain.fill(0);
     seedKey.fill(0);
     mnemonicKey.fill(0);
   }
