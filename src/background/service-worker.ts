@@ -8156,6 +8156,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           evictExpiredPending(prevPending, now),
           prevClaims,
           prevCache.confirmed,
+          // No fresh fetch on the fast path → no newly-surfaced rows; pass the
+          // same confirmed list as prior so the backstop no-ops (anchored retire
+          // still fires). Prevents a stale row matching a re-injected claim.
+          prevCache.confirmed,
         );
         if (
           pending.length !== prevPending.length ||
@@ -8204,6 +8208,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             now,
           ),
           prevClaims,
+          prevCache.confirmed,
+          // Indexer outage → no fresh confirmed rows; same list as prior so the
+          // backstop no-ops (the bridged receipt anchor still retires).
           prevCache.confirmed,
         );
         if (
@@ -8272,6 +8279,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         evictedPending,
         prevClaims,
         nextCache.confirmed,
+        // The PRIOR confirmed cache (before this fetch) scopes the no-receipt
+        // backstop to claim rows that JUST surfaced — a stale row from an
+        // already-retired prior claim can't vanish a brand-new un-anchored claim.
+        prevCache?.confirmed ?? [],
       );
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
       // Keep the durable store in sync with the merged survivors (anchored copies

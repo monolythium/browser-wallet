@@ -2386,6 +2386,66 @@ describe("wallet-activity-get", () => {
     expect(r.cache.confirmed.filter((c) => c.kind === "claim")).toHaveLength(1);
   });
 
+  it("CLAIM PENDING (integration): a STALE prior confirmed claim row does NOT vanish a new un-anchored claim", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    // Prior cache already holds a PRIOR claim's confirmed row @1000 (its own claim
+    // long retired + gone from the store). STALE so the full reconcile runs.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [
+        { kind: "claim", blockHeight: 1000, txIndex: 0, logIndex: 0, amountDecimal: "9.9" },
+      ],
+      lastFetchedAtMs: Date.now() - 600_000,
+    };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    // The indexer still only has the OLD row @1000 — the new claim's row (~1050)
+    // is not indexed yet.
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 1000,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    // New claim @1050, un-anchored (no receipt). |1000-1050| = 50 ≤ window — the
+    // OLD (un-scoped) backstop would have VANISHED it against the stale @1000 row.
+    rpcResponses["lyth_txStatus"] = { status: "pending" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    const claimHash = "0x" + "cc".repeat(32);
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash: claimHash,
+          to: "0x000000000000000000000000000000000000100a",
+          amountDecimal: "0",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 1050,
+          via: "operator-test",
+          opKind: "claim",
+          source: "local-claim",
+        },
+      ],
+    };
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      pending: Array<{ txHash: string }>;
+    };
+    expect(r.ok).toBe(true);
+    // The @1000 row is NOT newly surfaced (it's in the prior cache) → the new
+    // claim survives until its OWN row is indexed. No vanish.
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(true);
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile

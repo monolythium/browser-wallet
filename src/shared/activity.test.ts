@@ -1669,6 +1669,67 @@ describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
       "0xB",
     ]);
   });
+
+  // ── No-vanish: the backstop only fires on NEWLY-surfaced confirmed rows. ──
+
+  it("BACKSTOP no-vanish: a STALE prior confirmed claim row does NOT retire a new un-anchored claim", () => {
+    // New claim @1050, un-anchored (receipt lag). A prior claim's row @1000 is
+    // still in the rolling window (its own claim already retired + left the store)
+    // — |1000-1050| = 50 ≤ window, but it is NOT newly surfaced → must NOT match.
+    const fresh: PendingTxRow = {
+      ...stickyLocalClaim("0xnew", { claimedAmount: null }),
+      broadcastBlockHeight: 1050,
+    };
+    const staleRow = claimConfirmed(1000, 0, "9.9");
+    const out = applyLocalClaims([fresh], [fresh], [staleRow], /* prior */ [staleRow]);
+    expect(out.some((p) => p.txHash === "0xnew")).toBe(true); // survives until its OWN row
+  });
+
+  it("BACKSTOP: a NEWLY-surfaced confirmed claim row (absent from prior) retires the new claim; the stale one is ignored", () => {
+    const fresh: PendingTxRow = {
+      ...stickyLocalClaim("0xnew", { claimedAmount: null }),
+      broadcastBlockHeight: 1050,
+    };
+    const ownRow = claimConfirmed(1052, 0, "9.9"); // just indexed (not in prior)
+    const staleRow = claimConfirmed(1000, 0, "1.0"); // in the window AND in prior
+    const out = applyLocalClaims(
+      [fresh],
+      [fresh],
+      [ownRow, staleRow],
+      /* prior */ [staleRow],
+    );
+    expect(out.some((p) => p.txHash === "0xnew")).toBe(false); // retired by its own new row
+  });
+
+  it("BACKSTOP: a null-broadcastBlockHeight claim is NOT backstop-retired (no window)", () => {
+    const nullBbh: PendingTxRow = {
+      ...stickyLocalClaim("0xnb", { claimedAmount: null }),
+      broadcastBlockHeight: null,
+    };
+    const out = applyLocalClaims([nullBbh], [nullBbh], [claimConfirmed(150, 0, "1")]);
+    expect(out.some((p) => p.txHash === "0xnb")).toBe(true);
+  });
+
+  it("BACKSTOP multi-pair: two confirmed rows retire two un-anchored claims 1:1 (no cross-steal)", () => {
+    const a: PendingTxRow = { ...stickyLocalClaim("0xa", { claimedAmount: null }), broadcastBlockHeight: 100 };
+    const b: PendingTxRow = { ...stickyLocalClaim("0xb", { claimedAmount: null }), broadcastBlockHeight: 200 };
+    const out = applyLocalClaims(
+      [a, b],
+      [a, b],
+      [claimConfirmed(101, 0, "1"), claimConfirmed(201, 1, "2")],
+    );
+    expect(out.some((p) => p.source === "local-claim")).toBe(false); // both retired to their nearest
+  });
+
+  it("BACKSTOP global-nearest: the NEAREST claim wins the row even if a farther claim sorts first", () => {
+    // c1 has the lower broadcast block (sorts first) but is FAR from the row;
+    // c2 is NEAR. Global-nearest must give the row to c2, not c1.
+    const c1: PendingTxRow = { ...stickyLocalClaim("0xc1", { claimedAmount: null }), broadcastBlockHeight: 100 };
+    const c2: PendingTxRow = { ...stickyLocalClaim("0xc2", { claimedAmount: null }), broadcastBlockHeight: 200 };
+    const out = applyLocalClaims([c1, c2], [c1, c2], [claimConfirmed(201, 0, "1")]);
+    const survivors = out.filter((p) => p.source === "local-claim").map((p) => p.txHash);
+    expect(survivors).toEqual(["0xc1"]); // c2 (delta 1) retired; c1 (delta 101) survives its own row
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

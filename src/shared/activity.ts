@@ -891,14 +891,22 @@ export function localClaimAwaitingAmount(row: PendingTxRow): boolean {
  *   - CROSS-STREAM (backstop, no anchor): a precompile claim's receipt can lag
  *     the indexer (or never be retrievable), so the `(block,txIndex)` anchor may
  *     never land — and the indexer's confirmed `kind:"claim"` row has no txHash
- *     to link back. So ALSO retire an UN-anchored claim once a confirmed claim
- *     row matches it by the broadcast-block window (`backstopRetiredClaimTxHashes`,
- *     1:1 nearest-block). Without this the "Pending · Rewards claimed" row strands
- *     beside the confirmed `+amount · block` row until a reopen/alarm. */
+ *     to link back. So ALSO retire an UN-anchored claim once a NEWLY-surfaced
+ *     confirmed claim row matches it by the broadcast-block window
+ *     (`backstopRetiredClaimTxHashes`, 1:1 nearest-block). Without this the
+ *     "Pending · Rewards claimed" row strands beside the confirmed `+amount ·
+ *     block` row until a reopen/alarm.
+ *
+ *  `priorConfirmed` (the confirmed rows from BEFORE this snapshot) scopes the
+ *  backstop to claim rows that just appeared — without it a STALE row from an
+ *  already-retired prior claim could window-match and VANISH a brand-new claim
+ *  (claim rows carry no txHash to disambiguate). Defaults to `[]` (every claim
+ *  row treated as new) for callers that don't track a prior snapshot. */
 export function applyLocalClaims(
   pending: PendingTxRow[],
   localClaims: PendingTxRow[],
   confirmed: ConfirmedRow[],
+  priorConfirmed: ConfirmedRow[] = [],
 ): PendingTxRow[] {
   const nonClaim = pending.filter((p) => p.source !== "local-claim");
   const byHash = new Map<string, PendingTxRow>();
@@ -909,10 +917,10 @@ export function applyLocalClaims(
     if (p.source === "local-claim") byHash.set(p.txHash, p);
   }
   const all = [...byHash.values()];
-  // Un-anchored claims a confirmed claim row matched by the broadcast-block
-  // window. Computed across ALL claims at once so the 1:1 pairing holds (one
-  // confirmed row retires at most one claim).
-  const backstopRetired = backstopRetiredClaimTxHashes(all, confirmed);
+  // Un-anchored claims a NEWLY-surfaced confirmed claim row matched by the
+  // broadcast-block window. Computed across ALL claims at once so the 1:1
+  // pairing holds (one confirmed row retires at most one claim).
+  const backstopRetired = backstopRetiredClaimTxHashes(all, confirmed, priorConfirmed);
   const claims = all.filter((c) => {
     // Anchored retire (existing): the indexer surfaced a confirmed row at the
     // receipt-bridged (block, txIndex) slot.
@@ -934,20 +942,37 @@ export function applyLocalClaims(
  *  retrievable, so the `(block,txIndex)` receipt anchor — the only key the
  *  anchored retire uses — may never land; and the indexer's confirmed
  *  `kind:"claim"` row carries NO txHash to link it back. So pair each confirmed
- *  claim row to AT MOST ONE pending claim: the nearest by broadcast-block within
- *  `PENDING_MATCH_BLOCK_WINDOW` (the same window the tx_send heuristic uses).
- *  The 1:1 pairing stops two concurrent claims from BOTH being retired by a
- *  single confirmed row (which would make the second VANISH until the indexer
- *  surfaces its own row). Confirmed rows already consumed by an ANCHORED claim
+ *  claim row to AT MOST ONE pending claim by broadcast-block within
+ *  `PENDING_MATCH_BLOCK_WINDOW` (the same window the tx_send heuristic uses),
+ *  assigned GLOBALLY nearest-first (not per-claim-in-order, so a farther claim
+ *  can't grab a nearer claim's row). The 1:1 pairing stops two concurrent claims
+ *  from BOTH being retired by a single confirmed row (which would make the second
+ *  VANISH until the indexer surfaces its own row). Confirmed rows already consumed by an ANCHORED claim
  *  are reserved first (that claim retires precisely by its slot, not here). A
  *  claim with a null `broadcastBlockHeight` (eth_blockNumber failed at send) has
  *  no window to match — it falls to the anchored path / TTL only, as tx_send
- *  does. Returns the set of claim txHashes to retire via the backstop. */
+ *  does. Returns the set of claim txHashes to retire via the backstop.
+ *
+ *  `priorConfirmed` scopes the eligible confirmed rows to those NEWLY surfaced
+ *  this snapshot (not already present before the fetch): a claim's own row is
+ *  new on the tick it first appears, while a stale row from an already-retired
+ *  prior claim is excluded — so a wide ±window can't cross-retire (vanish) an
+ *  unrelated new claim against an old row. */
 function backstopRetiredClaimTxHashes(
   claims: PendingTxRow[],
   confirmed: ConfirmedRow[],
+  priorConfirmed: ConfirmedRow[],
 ): Set<string> {
-  const confirmedClaims = confirmed.filter((r) => r.kind === "claim");
+  const priorClaimAnchors = new Set(
+    priorConfirmed
+      .filter((r) => r.kind === "claim")
+      .map((r) => `${r.blockHeight}.${r.txIndex}`),
+  );
+  const confirmedClaims = confirmed.filter(
+    (r) =>
+      r.kind === "claim" &&
+      !priorClaimAnchors.has(`${r.blockHeight}.${r.txIndex}`),
+  );
   if (confirmedClaims.length === 0) return new Set();
   // Reserve the confirmed-claim rows already matched by an anchored claim's
   // exact (block, txIndex) — they retire that claim, not an un-anchored one.
@@ -963,28 +988,32 @@ function backstopRetiredClaimTxHashes(
     );
     if (i >= 0) used.add(i);
   }
-  const retired = new Set<string>();
-  // Greedy nearest-block 1:1 match, un-anchored claims in broadcast order.
-  const unanchored = claims
-    .filter(
-      (c) => c.confirmedBlockHeight === undefined && c.broadcastBlockHeight !== null,
-    )
-    .sort((a, b) => a.broadcastBlockHeight! - b.broadcastBlockHeight!);
+  // Build every in-window (claim, confirmed-row) pair, then assign GLOBALLY
+  // nearest-first (smallest block delta), each claim + each row used at most
+  // once. Global-nearest — not per-claim-in-order — so a farther claim can't
+  // grab a nearer claim's row and leave that claim stranded (or wrongly retired).
+  const unanchored = claims.filter(
+    (c) => c.confirmedBlockHeight === undefined && c.broadcastBlockHeight !== null,
+  );
+  const candidates: Array<{ txHash: string; rowIdx: number; delta: number }> = [];
   for (const c of unanchored) {
-    let best = -1;
-    let bestDelta = Infinity;
     for (let i = 0; i < confirmedClaims.length; i++) {
-      if (used.has(i)) continue;
+      if (used.has(i)) continue; // reserved by an anchored claim
       const delta = Math.abs(confirmedClaims[i]!.blockHeight - c.broadcastBlockHeight!);
-      if (delta <= PENDING_MATCH_BLOCK_WINDOW && delta < bestDelta) {
-        best = i;
-        bestDelta = delta;
+      if (delta <= PENDING_MATCH_BLOCK_WINDOW) {
+        candidates.push({ txHash: c.txHash, rowIdx: i, delta });
       }
     }
-    if (best >= 0) {
-      used.add(best);
-      retired.add(c.txHash);
-    }
+  }
+  // Nearest first; ties broken by row index for determinism.
+  candidates.sort((a, b) => a.delta - b.delta || a.rowIdx - b.rowIdx);
+  const retired = new Set<string>();
+  const claimUsed = new Set<string>();
+  for (const cand of candidates) {
+    if (used.has(cand.rowIdx) || claimUsed.has(cand.txHash)) continue;
+    used.add(cand.rowIdx);
+    claimUsed.add(cand.txHash);
+    retired.add(cand.txHash);
   }
   return retired;
 }
