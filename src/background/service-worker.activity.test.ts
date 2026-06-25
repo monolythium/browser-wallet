@@ -1750,6 +1750,39 @@ describe("wallet-activity-get", () => {
     expect(r.pending[0]!.source).toBe("local-claim");
   });
 
+  it("Commit 1: an UN-RETIRED local-claim IN the pending cache forces the full reconcile (no fast-path skip)", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "e".repeat(64);
+    seedEmptyIndexer(); // indexer reachable but no confirmed claim row → claim can't retire
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    // FRESH confirmed cache (would fast-path) + the claim resident in the PENDING
+    // cache (un-retired). claimedAmount is FILLED ("6.51") — yet it must STILL
+    // force the full reconcile, because retirement (not the amount) is the gate.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [],
+      lastFetchedAtMs: Date.now(),
+    };
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      pending: [durableClaim(claimHash)],
+    };
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    const before = rpcCalls.length;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: Array<Record<string, unknown>> };
+    expect(r.ok).toBe(true);
+    // Fast-path SKIPPED — the full reconcile (indexer fetch + receipt pass) fired RPCs.
+    expect(rpcCalls.length).toBeGreaterThan(before);
+    // No confirmed claim row exists, so the claim still pends (would retire once
+    // the indexer surfaces it — covered by the backstop + integration tests).
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(true);
+  });
+
   it("Gap B: total-outage path re-injects a durable claim absent from the pending cache", async () => {
     const addr = DETERMINISTIC_ADDRESS.toLowerCase();
     const claimHash = "0x" + "d".repeat(64);

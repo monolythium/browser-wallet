@@ -8126,15 +8126,32 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // the NON-claim pending rows only; claim rows still ride through the fresh
       // path (evictExpiredPending exempts them).
       const nonClaimPending = prevPending.filter((p) => p.source !== "local-claim");
+      // A still-pending local-claim must keep the FULL reconcile running (the
+      // receipt pass + the fresh indexer fetch) until it RETIRES — the fast-path
+      // skips both, so the "Pending · Rewards claimed" row strands next to the
+      // confirmed indexer row until a reopen/alarm. A local-claim is present in
+      // prevPending ONLY while un-retired (applyLocalClaims removes it on retire),
+      // so this gates the fast-path solely for the un-retired window, then it
+      // resumes — bounded extra reconciling, not a permanent fast-path removal.
+      // Supersedes the belt-2 "claims don't gate isFresh" rule now that a
+      // confirmed claim reliably retires (the receipt anchor OR the confirmed-row
+      // block-window backstop in applyLocalClaims). A durable claim absent from
+      // the pending cache (Gap B) keeps prevPending empty → still fast-paths +
+      // re-injects below.
+      const hasUnretiredClaim = prevPending.some((p) => p.source === "local-claim");
       const isFresh =
         prevCache !== null &&
         now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS &&
-        nonClaimPending.length === 0;
+        nonClaimPending.length === 0 &&
+        !hasUnretiredClaim;
       if (isFresh) {
         // Re-inject durable claims even on the fast path (Gap B): if the alarm
         // or any writer dropped a claim from the pending cache, the durable
         // store re-surfaces it here. applyLocalClaims dedups by txHash + cross-
-        // stream-suppresses by anchor; belt-2 (claims don't gate isFresh) intact.
+        // stream-suppresses by anchor (and the block-window backstop). This path
+        // is reached only when no UN-RETIRED claim sits in the pending cache (an
+        // un-retired claim now gates isFresh, above) — i.e. a durable claim the
+        // pending cache lost, which we re-surface without an RPC.
         const pending = applyLocalClaims(
           evictExpiredPending(prevPending, now),
           prevClaims,
