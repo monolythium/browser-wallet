@@ -101,6 +101,32 @@ describe("keystore-mldsa v4-multi", () => {
     30_000,
   );
 
+  it("isVaultsContainerV4 refuses out-of-band masterKdf params (P1-002)", async () => {
+    const ks = await import("./keystore-mldsa.js");
+    const { isVaultsContainerV4, generateMasterKdfParamsV4 } = ks.__internalV4Multi;
+    const baseKdf = generateMasterKdfParamsV4(); // valid create-default (64 MiB/t3/p1)
+    const container = (kdf: Record<string, unknown>) => ({
+      version: 4,
+      algo: "ml-dsa-65",
+      kdf: "argon2id",
+      aead: "xchacha20-poly1305",
+      masterKdf: { ...baseKdf, ...kdf },
+      vaults: [],
+      activeVaultId: "v-1",
+    });
+    // The in-band create-default reads fine.
+    expect(isVaultsContainerV4(container({}))).toBe(true);
+    // m out of band — the > cap closes the OOM-on-unlock DoS; the < floor a weak KDF.
+    expect(isVaultsContainerV4(container({ m: 1024 }))).toBe(false);
+    expect(isVaultsContainerV4(container({ m: 2_000_000 }))).toBe(false);
+    // t out of band.
+    expect(isVaultsContainerV4(container({ t: 1 }))).toBe(false);
+    expect(isVaultsContainerV4(container({ t: 11 }))).toBe(false);
+    // p out of band.
+    expect(isVaultsContainerV4(container({ p: 0 }))).toBe(false);
+    expect(isVaultsContainerV4(container({ p: 5 }))).toBe(false);
+  });
+
   it(
     "unwrap with wrong MEK throws (fail-closed)",
     async () => {

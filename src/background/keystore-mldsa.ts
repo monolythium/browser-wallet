@@ -580,9 +580,23 @@ function isVaultsContainerV4(raw: unknown): raw is VaultsContainerV4 {
   const mk = obj["masterKdf"] as Record<string, unknown> | undefined;
   if (!mk || typeof mk !== "object") return false;
   if (mk["kdf"] !== KDF_ID) return false;
-  if (typeof mk["m"] !== "number") return false;
-  if (typeof mk["t"] !== "number") return false;
-  if (typeof mk["p"] !== "number") return false;
+  // P1-002 — refuse out-of-band argon2id params. Integrity/DoS only (the params
+  // are AEAD-bound, NOT a confidentiality path): the m-cap stops a tampered
+  // container from driving argon2id into an OOM at unlock, and the floors stop a
+  // trivially-weak KDF (e.g. m:1) from being read. Bands: m ∈ [64 MiB, 1 GiB]
+  // KiB, t ∈ [2, 10], p ∈ [1, 4]; the create-default (64 MiB / t3 / p1) is in-band.
+  const m = mk["m"];
+  const t = mk["t"];
+  const p = mk["p"];
+  if (typeof m !== "number" || !Number.isInteger(m) || m < 65536 || m > 1048576) {
+    return false;
+  }
+  if (typeof t !== "number" || !Number.isInteger(t) || t < 2 || t > 10) {
+    return false;
+  }
+  if (typeof p !== "number" || !Number.isInteger(p) || p < 1 || p > 4) {
+    return false;
+  }
   if (typeof mk["salt"] !== "string") return false;
   const vaults = obj["vaults"];
   if (!Array.isArray(vaults)) return false;
