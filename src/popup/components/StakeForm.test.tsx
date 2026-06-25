@@ -128,6 +128,16 @@ describe("StakeForm — at-per-cluster-cap copy (Section A)", () => {
     expect(html).toContain("Reduce to cap"); // overCap still fires (canContinue blocked)
     expect(html).toContain("already delegated the 50% per-cluster maximum");
   });
+
+  it("always shows the per-wallet cluster-limit note (at 0% and at 50% existing)", () => {
+    const note = "Per-wallet limit: 50% to any one cluster";
+    expect(
+      renderToStaticMarkup(<StakeForm {...baseProps} existingWeightBps={0} amountStr="" />),
+    ).toContain(note);
+    expect(
+      renderToStaticMarkup(<StakeForm {...baseProps} existingWeightBps={5000} amountStr="" />),
+    ).toContain(note);
+  });
 });
 
 describe("StakeForm — active/remaining headroom line", () => {

@@ -360,6 +360,18 @@ export function StakeForm({
           locked or sent to a delegation contract. The effective weight tracks
           your live balance at the next settlement.
         </div>
+        {/* Always-on informational note (not a warning) — the per-wallet
+            anti-capture limit, so the cap isn't a surprise at submit time. */}
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 9.5,
+            color: "var(--fg-500)",
+            marginTop: 6,
+          }}
+        >
+          Per-wallet limit: {(bindingCapBps / 100).toFixed(0)}% to any one cluster.
+        </div>
         {/* Limit/clamp warnings + the headroom line sit LAST in the card, right
             above the Continue action, so they're seen just before submitting. */}
         {atPerClusterCap && (
