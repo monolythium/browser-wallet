@@ -373,14 +373,18 @@ export async function refreshUnreadBadge(opts?: {
   }
 }
 
+/** Canonical 0x-hex tx-hash shape. Full charset validation (not just the `0x`
+ *  prefix) so a malformed/hostile tail can't reach the Monoscan URL. */
+const TX_HASH_RE = /^0x[0-9a-fA-F]+$/;
+
 /** Pure helper — derive the canonical inner tx hash from a notification
  *  id. The id is `${chainIdHex}:${txHash}` (see `shared/notifications.ts`).
- *  Returns `null` when the id doesn't contain a parseable 0x txHash, so
+ *  Returns `null` when the id doesn't contain a well-formed 0x-hex txHash, so
  *  the caller can short-circuit without opening a bad Monoscan URL. */
 export function parseTxHashFromNotificationId(id: string): string | null {
   const idx = id.indexOf(":");
   const tail = idx >= 0 ? id.slice(idx + 1) : id;
-  return tail.startsWith("0x") ? tail : null;
+  return TX_HASH_RE.test(tail) ? tail : null;
 }
 
 /** Click handler logic, split out from the listener registration so it's

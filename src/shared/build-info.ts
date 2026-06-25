@@ -185,9 +185,13 @@ export const EXTERNAL_LINKS: ReadonlyArray<{
  *  link (honest absence; never synthesize a hash). */
 export const MONOSCAN_TX_BASE = "https://monoscan.xyz/#/tx/";
 
-/** Build the Monoscan URL for a canonical transaction hash. */
+/** Build the Monoscan URL for a canonical transaction hash. The hash is
+ *  `encodeURIComponent`-encoded — a no-op for a valid 0x-hex hash (its charset
+ *  is URL-safe), but it percent-encodes any metacharacter in a malformed value
+ *  so the interpolated component can never carry markup into an `href` (mirrors
+ *  `monoscanAddressUrl`; defense-in-depth across every tx-link call site). */
 export function monoscanTxUrl(txHash: string): string {
-  return `${MONOSCAN_TX_BASE}${txHash}`;
+  return `${MONOSCAN_TX_BASE}${encodeURIComponent(txHash)}`;
 }
 
 /** Monoscan address (wallet) page base. Takes a bech32m address — `mono…`

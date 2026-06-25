@@ -476,6 +476,10 @@ describe("handleNotificationClick / parseTxHashFromNotificationId", () => {
     expect(parseTxHashFromNotificationId(`${CHAIN}:${HASH}`)).toBe(HASH);
     expect(parseTxHashFromNotificationId("no-colon-no-0x")).toBeNull();
     expect(parseTxHashFromNotificationId("0xabc")).toBe("0xabc");
+    // P5-008 — full hex-charset validation: a non-hex / empty 0x tail is rejected.
+    expect(parseTxHashFromNotificationId("0xZZZ")).toBeNull();
+    expect(parseTxHashFromNotificationId(`${CHAIN}:0x12<script>`)).toBeNull();
+    expect(parseTxHashFromNotificationId("0x")).toBeNull();
   });
 });
 

@@ -26,6 +26,16 @@ describe("monoscanTxUrl", () => {
   it("uses the #/tx/ SPA route base", () => {
     expect(MONOSCAN_TX_BASE).toBe("https://monoscan.xyz/#/tx/");
   });
+
+  it("encodeURIComponent is a no-op for valid hex but encodes metacharacters (P5-008)", () => {
+    const hash = CANONICAL_INNER_TX_HASH;
+    // Byte-identical for a real 0x-hex hash (charset is URL-safe).
+    expect(monoscanTxUrl(hash)).toBe(`${MONOSCAN_TX_BASE}${hash}`);
+    expect(monoscanTxUrl(hash)).not.toContain("%");
+    // A malformed/hostile value can't carry markup into the href.
+    expect(monoscanTxUrl("0x<script>")).toContain("%3C");
+    expect(monoscanTxUrl("0x<script>")).not.toContain("<");
+  });
 });
 
 describe("monoscanAddressUrl", () => {
