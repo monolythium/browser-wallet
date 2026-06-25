@@ -28,15 +28,20 @@ function render(canAddCustom: boolean): string {
 }
 
 describe("Networks — add-custom-chain entry gating", () => {
-  it("shows the Add custom chain entry when allowed (dev build + DEVELOPER_MODE)", () => {
+  it("shows the Add custom chain entry + the dev-only advisory when allowed", () => {
     const html = render(true);
     expect(html).toContain("Add custom chain");
+    // Dev-only advisory under the button.
+    expect(html).toContain("Dev mode only");
+    expect(html).toContain("available in production builds");
+    // Not the hidden-case note.
     expect(html).not.toContain("available in this build");
   });
 
-  it("hides the entry + shows the note when not allowed (hardened build)", () => {
+  it("hides the entry + shows the note (no advisory) when not allowed (hardened build)", () => {
     const html = render(false);
     expect(html).not.toContain("Add custom chain");
+    expect(html).not.toContain("Dev mode only");
     expect(html).toContain("available in this build");
   });
 });

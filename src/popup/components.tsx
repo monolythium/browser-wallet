@@ -3396,6 +3396,15 @@ interface NetworksProps {
   canAddCustom: boolean;
 }
 
+/** Muted advisory line under the custom-chain entry — shared by the dev-only
+ *  note (entry shown) and the "not available in this build" note (hidden). */
+const customChainNoteStyle: CSSProperties = {
+  fontSize: 11,
+  color: "var(--fg-400)",
+  textAlign: "center",
+  padding: "8px 4px",
+};
+
 export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCustom, canAddCustom }: NetworksProps) {
   const builtin = chains.filter((c) => c.builtin);
   const custom = chains.filter((c) => !c.builtin);
@@ -3422,22 +3431,22 @@ export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCusto
           emptyHint="No custom chains added yet."
         />
         {canAddCustom ? (
-          <button
-            className="ext-act"
-            onClick={onOpenAddCustom}
-            style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
-          >
-            <Icon name="plus" size={13} /> Add custom chain
-          </button>
+          <>
+            <button
+              className="ext-act"
+              onClick={onOpenAddCustom}
+              style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
+            >
+              <Icon name="plus" size={13} /> Add custom chain
+            </button>
+            {/* Dev mode is a runtime escape hatch; remind that the feature is
+                absent from production (hardened) builds. */}
+            <div style={customChainNoteStyle}>
+              Dev mode only — custom chains aren’t available in production builds.
+            </div>
+          </>
         ) : (
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--fg-400)",
-              textAlign: "center",
-              padding: "8px 4px",
-            }}
-          >
+          <div style={customChainNoteStyle}>
             Custom chains aren’t available in this build.
           </div>
         )}
