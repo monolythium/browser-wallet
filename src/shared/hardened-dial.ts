@@ -2,7 +2,7 @@
 // `connect-src` allowlist (P6-001).
 //
 // COUPLING INVARIANT: in a hardened build the set the service worker DIALS must
-// equal the set the allowlist ENUMERATES. The allowlist (src/build/csp.ts) is
+// equal the set the allowlist ENUMERATES. The allowlist (src/buildtime/csp.ts) is
 // generated from `getRpcEndpoints("testnet-69420")`; the SW dial-set below
 // narrows to the same source (the built-in fleet + the built-in chain). Both
 // derive from one place, so they cannot diverge.

@@ -1,8 +1,11 @@
-import { readFileSync } from "node:fs";
-import { defineConfig } from "vite";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { crx } from "@crxjs/vite-plugin";
+import { getRpcEndpoints } from "@monolythium/core-sdk";
 import manifest from "./manifest.json" with { type: "json" };
+import { applyHardenedCsp } from "./src/buildtime/csp";
 
 // Read the ACTUALLY-INSTALLED @monolythium/core-sdk version at build time and
 // inject it into the bundle (the About page reads it via __SDK_INSTALLED_VERSION__).
@@ -25,8 +28,35 @@ function readInstalledSdkVersion(): string {
   }
 }
 
+/**
+ * P6-001 — inject the strict `connect-src` allowlist (generated from the SDK
+ * fleet) into the emitted dist/manifest.json. PRODUCTION ONLY: dev leaves the
+ * CSP unset so crxjs HMR + custom RPC/chains keep working, and the committed
+ * manifest.json stays CSP-free (the list is build-generated).
+ *
+ * crxjs emits manifest.json from its own (later) generateBundle, so it isn't in
+ * the bundle when an ordinary post-plugin's generateBundle runs — hook
+ * writeBundle and edit the file on disk, after Rollup has written it.
+ */
+function hardenedCspPlugin(mode: string): Plugin {
+  return {
+    name: "mono-hardened-csp",
+    enforce: "post",
+    writeBundle(options) {
+      const file = join(options.dir ?? "dist", "manifest.json");
+      const src = readFileSync(file, "utf8");
+      const out = applyHardenedCsp(
+        src,
+        getRpcEndpoints("testnet-69420"),
+        mode === "production",
+      );
+      if (out !== src) writeFileSync(file, out);
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), crx({ manifest })],
+  plugins: [react(), crx({ manifest }), hardenedCspPlugin(mode)],
   define: {
     __SDK_INSTALLED_VERSION__: JSON.stringify(readInstalledSdkVersion()),
   },

@@ -1,7 +1,7 @@
 // Single source of truth for "is this a hardened (production) build?".
 //
 // In a hardened build the strict `connect-src` allowlist is active (generated
-// by src/build/csp.ts and injected into the manifest by vite.config.ts —
+// by src/buildtime/csp.ts and injected into the manifest by vite.config.ts —
 // production only). Under that allowlist the wallet can dial ONLY the
 // allowlisted built-in fleet, so custom chains and a stored operator override
 // are NOT dialable (their hosts aren't in the allowlist → CSP-blocked → every
