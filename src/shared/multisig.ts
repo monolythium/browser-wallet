@@ -234,6 +234,10 @@ export interface GovernanceProposal {
   createdAt: number;
   expiresAt: number;
   vaultAddress: string;
+  /** Chain this governance decision is bound to (0x-hex). Mixed into the signed
+   *  digest (P1-006) so a proposal signed on one chain can't be replayed on
+   *  another — parity with the tx path's action.chainIdHex. */
+  chainIdHex: string;
   action: GovernanceAction;
   approvals: ProposalSignature[];
   rejections: ProposalSignature[];
@@ -393,6 +397,9 @@ export function hashGovernanceProposal(p: GovernanceProposal): Uint8Array {
     domain: GOV_HASH_DOMAIN,
     proposalId: p.id,
     vaultAddress: p.vaultAddress.toLowerCase(),
+    // P1-006 — bind the chain so a governance proposal signed on one chain can't
+    // be replayed on another (parity with the tx hash's action.chainIdHex).
+    chainIdHex: p.chainIdHex.toLowerCase(),
     action: normalizeGovernanceAction(p.action),
   });
   return keccak_256(new TextEncoder().encode(body));

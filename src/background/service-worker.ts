@@ -6994,6 +6994,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           createdAt: now,
           expiresAt: now + DEFAULT_GOV_PROPOSAL_TTL_MS,
           vaultAddress: target.addr,
+          // P1-006 — bind the active chain into the signed governance digest.
+          chainIdHex: session.chainId,
           action: p.action,
           approvals: [],
           rejections: [],
