@@ -74,6 +74,9 @@ window.addEventListener("message", (ev) => {
   // is rejected here — closes the F-2.1 page-local spoof and the F-2.2
   // cross-frame confused-deputy. Additive: the source-string check below still runs.
   if (ev.source !== window) return;
+  // P4-003 — mirror the provider's origin guard: reject anything not from this
+  // page's own origin (robust if `all_frames` ever flips). Additive DiD.
+  if (ev.origin !== window.location.origin) return;
   const data = ev.data as OutboundEnvelope | undefined;
   if (!data || data.source !== "monolythium-wallet-page") return;
 
