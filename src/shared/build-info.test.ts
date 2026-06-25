@@ -37,6 +37,20 @@ describe("monoscanAddressUrl", () => {
     );
   });
 
+  it("encodeURIComponent is a no-op for a valid bech32m (URL-safe charset)", () => {
+    const addr = "monoc1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46";
+    expect(monoscanAddressUrl(addr)).toBe(`${MONOSCAN_ADDRESS_BASE}${addr}`);
+    expect(monoscanAddressUrl(addr)).not.toContain("%");
+  });
+
+  it("percent-encodes HTML metacharacters in a malformed value (CodeQL sanitizer)", () => {
+    const url = monoscanAddressUrl('"><script>');
+    expect(url).not.toContain("<script>");
+    expect(url).not.toContain('"');
+    expect(url).toContain("%3Cscript%3E");
+    expect(url.startsWith(MONOSCAN_ADDRESS_BASE)).toBe(true);
+  });
+
   it("uses the #/wallet/ SPA route base", () => {
     expect(MONOSCAN_ADDRESS_BASE).toBe("https://monoscan.xyz/#/wallet/");
   });

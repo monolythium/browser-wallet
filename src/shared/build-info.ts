@@ -194,7 +194,12 @@ export function monoscanTxUrl(txHash: string): string {
  *  for accounts, `monoc…` for clusters — never the raw `0x` form. */
 export const MONOSCAN_ADDRESS_BASE = "https://monoscan.xyz/#/wallet/";
 
-/** Build the Monoscan address-page URL for a bech32m address. */
+/** Build the Monoscan address-page URL for a bech32m address. The address
+ *  component is `encodeURIComponent`-encoded: a no-op for a valid bech32m (its
+ *  charset is URL-safe), but it percent-encodes any HTML metacharacters in a
+ *  malformed value so the interpolated component can never carry markup into an
+ *  `href` (CodeQL js/xss-through-dom — a modeled sanitizer, defense-in-depth
+ *  across every address-link call site). */
 export function monoscanAddressUrl(bech32mAddr: string): string {
-  return `${MONOSCAN_ADDRESS_BASE}${bech32mAddr}`;
+  return `${MONOSCAN_ADDRESS_BASE}${encodeURIComponent(bech32mAddr)}`;
 }
