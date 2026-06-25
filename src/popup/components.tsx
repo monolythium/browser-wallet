@@ -3390,9 +3390,13 @@ interface NetworksProps {
   onBack: () => void;
   onOpenDetail: (chainId: string) => void;
   onOpenAddCustom: () => void;
+  /** False in a hardened (production) build (and in dev without DEVELOPER_MODE):
+   *  a custom chain's RPC isn't in the strict connect-src allowlist, so the
+   *  entry is hidden rather than letting a user add an unreachable chain. */
+  canAddCustom: boolean;
 }
 
-export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCustom }: NetworksProps) {
+export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCustom, canAddCustom }: NetworksProps) {
   const builtin = chains.filter((c) => c.builtin);
   const custom = chains.filter((c) => !c.builtin);
   return (
@@ -3417,13 +3421,26 @@ export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCusto
           onOpenDetail={onOpenDetail}
           emptyHint="No custom chains added yet."
         />
-        <button
-          className="ext-act"
-          onClick={onOpenAddCustom}
-          style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
-        >
-          <Icon name="plus" size={13} /> Add custom chain
-        </button>
+        {canAddCustom ? (
+          <button
+            className="ext-act"
+            onClick={onOpenAddCustom}
+            style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
+          >
+            <Icon name="plus" size={13} /> Add custom chain
+          </button>
+        ) : (
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--fg-400)",
+              textAlign: "center",
+              padding: "8px 4px",
+            }}
+          >
+            Custom chains aren’t available in this build.
+          </div>
+        )}
       </div>
     </>
   );

@@ -88,6 +88,7 @@ import { explainImportError } from "./lib/import-error";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { useFeature } from "./hooks/useFeature";
+import { isHardenedBuild } from "../shared/build-mode";
 import { type Account } from "./demo-data";
 import { runMountHydrationLoads } from "./mount-hydration";
 import {
@@ -244,6 +245,12 @@ export default function App() {
   // popup matches the pre-v5 experience exactly. Flip on via Settings →
   // Features.
   const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
+  const developerMode = useFeature("DEVELOPER_MODE");
+  // Custom chains only exist where the strict connect-src allows their RPC:
+  // never in a hardened (production) build, and even in a dev build only under
+  // DEVELOPER_MODE (mirrors the custom-operators gate). The hardened SW also
+  // refuses to dial custom chains (commit 1); this just hides the entry.
+  const canAddCustomChain = !isHardenedBuild() && developerMode;
   // Current UI open mode (popup vs sidepanel). The
   // MainMenu's "Switch to ..." item reads this to label the toggle as
   // the OPPOSITE option. null while the SW IPC is in flight; modes
@@ -1460,6 +1467,7 @@ export default function App() {
             setScreen("network-detail");
           }}
           onOpenAddCustom={() => setScreen("network-add")}
+          canAddCustom={canAddCustomChain}
         />
       )}
 
@@ -1490,7 +1498,7 @@ export default function App() {
         />
       )}
 
-      {screen === "network-add" && (
+      {screen === "network-add" && canAddCustomChain && (
         <AddCustomChain
           existingChainIds={new Set(chainList.map((c) => c.chainId))}
           onBack={() => setScreen("networks")}
