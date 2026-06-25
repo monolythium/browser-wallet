@@ -391,7 +391,7 @@ const operatorWrongChainId = new Set<string>();
 // C6 (R3): bumped to v2 — the persisted blob is now pin-QUALIFIED
 // (`{ pin, entries }`). A pre-C6 v1 blob (un-qualified) lives at the old key and
 // is never read, so it can never be rehydrated as trusted.
-const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v2";
+export const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v2";
 
 /** Identity the persisted genesis blob is qualified by. If EITHER pin changes
  *  (a re-pin build), a blob persisted under the old identity is DROPPED on

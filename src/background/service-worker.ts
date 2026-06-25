@@ -207,6 +207,7 @@ import {
   snapshotGenesisCache,
   classifyNoOperatorReason,
   clearGenesisCache,
+  SESSION_KEY_GENESIS_CACHE,
   rehydrateGenesisCache,
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
@@ -6353,6 +6354,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         await chrome.storage.session.remove([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+          // P2-007 — also clear non-secret device-handoff residue so a prior
+          // owner's operator hint / genesis cache / passkey-usage ledger /
+          // pending-nonce don't survive a full wipe.
+          SESSION_KEY_LAST_OPERATOR,
+          SESSION_KEY_GENESIS_CACHE,
+          SESSION_KEY_PASSKEY_USAGE,
+          PENDING_NONCE_KEY,
         ]);
         await triggerAutoLock();
       } finally {
@@ -6404,6 +6412,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         await chrome.storage.session.remove([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+          // P2-007 — also clear non-secret device-handoff residue so a prior
+          // owner's operator hint / genesis cache / passkey-usage ledger /
+          // pending-nonce don't survive a full wipe.
+          SESSION_KEY_LAST_OPERATOR,
+          SESSION_KEY_GENESIS_CACHE,
+          SESSION_KEY_PASSKEY_USAGE,
+          PENDING_NONCE_KEY,
         ]);
         await triggerAutoLock();
       } finally {

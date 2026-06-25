@@ -372,6 +372,8 @@ vi.mock("./networks.js", () => ({
   // C7: liveness fast-path gate. Default false (operator trusted) so the
   // chain-block fast-path proceeds as before in these tests.
   operatorDefinitivelyUntrusted: vi.fn(() => false),
+  // P2-007 — the wipe handlers remove this session key as device-handoff residue.
+  SESSION_KEY_GENESIS_CACHE: "mono.session.genesis-cache.v2",
 }));
 
 // Keystore (v4) — fixed unlocked address, never actually signs. The
@@ -827,6 +829,29 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     expect(r.ok).toBe(true);
     for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
     expect(storageLocal["nonmono.keep"]).toBe("survives");
+  });
+
+  it("clears non-secret session residue on both wipe paths (P2-007)", async () => {
+    // Device-handoff residue: not secret, but a prior owner's operator hint /
+    // genesis cache / passkey-usage ledger / pending nonce must not survive.
+    const RESIDUE = [
+      "mono.session.operator.v1",
+      "mono.session.genesis-cache.v2",
+      "mono.session.passkey-usage.v1",
+      "mono.nonce.pending",
+    ];
+
+    for (const k of RESIDUE) storageSession[k] = { seeded: true };
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
+
+    for (const k of RESIDUE) storageSession[k] = { seeded: true };
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+    for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
   });
 
   it("closes the connected-sites carryover: a previously-connected origin no longer leaks the address after wipe + re-unlock", async () => {
