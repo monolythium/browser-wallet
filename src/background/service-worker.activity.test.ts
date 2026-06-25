@@ -2307,6 +2307,85 @@ describe("wallet-activity-get", () => {
     expect(claim?.amountDecimal).toBe("1.5"); // sticky — not erased to null on the rebuild
   });
 
+  // ── INTEGRATION (mandatory): the "Pending · Rewards claimed" persists-bug.
+  //    The indexer confirms the claim BEFORE the receipt is available, so the
+  //    receipt anchor never lands — the pending row must still drop IN-SESSION. ──
+  it("CLAIM PENDING (integration): indexer-confirmed claim retires a null-amount, NO-receipt local-claim in-session (no reopen)", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    // The indexer surfaces the confirmed claim (kind:"delegation"/subKind:"claimed",
+    // NO txHash) within ±300 blocks of the broadcast block (100).
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    // Receipt NOT available (the precompile-claim lag) → no (block,txIndex) anchor.
+    rpcResponses["lyth_txStatus"] = { status: "pending" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    const claimHash = "0x" + "ca".repeat(32);
+    seedClaimPending(claimHash); // un-anchored, claimedAmount null
+
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      pending: Array<{ txHash: string }>;
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
+    // Dropped IN-SESSION by the confirmed-row block-window backstop — no reopen,
+    // no receipt. (Commit 1 keeps the full reconcile running; Commit 2 retires.)
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(false);
+    // Exactly one claim row remains: the indexer's confirmed row, no double-row.
+    expect(r.cache.confirmed.filter((c) => c.kind === "claim")).toHaveLength(1);
+  });
+
+  it("CLAIM PENDING (integration): when the receipt DOES land, the anchored retire still fires (no regression)", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    // Receipt lands → stamps the exact (200,0) anchor (+ decodes the amount).
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n, 200);
+    const claimHash = "0x" + "cb".repeat(32);
+    seedClaimPending(claimHash);
+
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      pending: Array<{ txHash: string }>;
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
+    // Retired by the precise (block,txIndex) anchor — the existing path still works.
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(false);
+    expect(r.cache.confirmed.filter((c) => c.kind === "claim")).toHaveLength(1);
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile

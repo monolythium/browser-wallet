@@ -1614,6 +1614,61 @@ describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
     const out = applyLocalClaims([ordinary], [claimRow({ txHash: "0xc1" })], []);
     expect(out.map((p) => p.txHash).sort()).toEqual(["0xc1", "0xord"]);
   });
+
+  // ── Backstop retire (Commit 2): a confirmed claim row with NO receipt anchor
+  //    on the local copy retires it by the broadcast-block window. ──
+
+  it("BACKSTOP: a confirmed claim row retires an UN-anchored local-claim by the broadcast-block window", () => {
+    // No receipt ever landed → the local-claim has no (block,txIndex) anchor.
+    const unanchored = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100
+    // The indexer's confirmed claim row (no txHash) within ±300 blocks retires it.
+    const out = applyLocalClaims([unanchored], [unanchored], [claimConfirmed(150, 0, "6.51")]);
+    expect(out.some((p) => p.source === "local-claim")).toBe(false);
+  });
+
+  it("BACKSTOP: does NOT retire when the confirmed claim is outside the block window", () => {
+    const unanchored = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100
+    // |500 - 100| = 400 > PENDING_MATCH_BLOCK_WINDOW (300).
+    const out = applyLocalClaims([unanchored], [unanchored], [claimConfirmed(500, 0, "6.51")]);
+    expect(out.some((p) => p.txHash === "0xc1")).toBe(true);
+  });
+
+  it("BACKSTOP: does NOT retire on a non-claim confirmed row in the window", () => {
+    const unanchored = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100
+    // A delegate row at block 150 is in-window but the wrong kind — claims only.
+    const out = applyLocalClaims([unanchored], [unanchored], [confirmed({ blockHeight: 150, txIndex: 0 })]);
+    expect(out.some((p) => p.txHash === "0xc1")).toBe(true);
+  });
+
+  it("BACKSTOP 1:1: one confirmed claim row retires only the NEAREST un-anchored claim", () => {
+    const c1 = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100, |101-100|=1
+    const c2: PendingTxRow = {
+      ...stickyLocalClaim("0xc2", { claimedAmount: null }),
+      broadcastBlockHeight: 105, // |101-105|=4
+    };
+    const out = applyLocalClaims([c1, c2], [c1, c2], [claimConfirmed(101, 0, "6.51")]);
+    const survivors = out.filter((p) => p.source === "local-claim").map((p) => p.txHash);
+    expect(survivors).toEqual(["0xc2"]); // nearest (0xc1) retired; 0xc2 survives until its own row
+  });
+
+  it("BACKSTOP: an anchored claim reserves its confirmed row so an un-anchored claim can't steal it", () => {
+    const anchored = stickyLocalClaim("0xA", {
+      claimedAmount: "1",
+      confirmedBlockHeight: 200,
+      confirmedTxIndex: 0,
+    });
+    const unanchored = stickyLocalClaim("0xB", { claimedAmount: null }); // bbh 100, |200-100|=100 ≤ 300
+    const out = applyLocalClaims(
+      [anchored, unanchored],
+      [anchored, unanchored],
+      [claimConfirmed(200, 0, "1")],
+    );
+    // 0xA retires by its exact (200,0) anchor; that confirmed claim row is reserved
+    // by 0xA, so 0xB does NOT steal it → 0xB survives until its own confirmed row.
+    expect(out.filter((p) => p.source === "local-claim").map((p) => p.txHash)).toEqual([
+      "0xB",
+    ]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

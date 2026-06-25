@@ -881,13 +881,20 @@ export function localClaimAwaitingAmount(row: PendingTxRow): boolean {
  *     resident in `pending` (the broadcast-written, receipt-bridged copy),
  *     deduped by `txHash`; the pending-resident copy wins (it carries the
  *     freshest receipt-bridge (block,txIndex) anchor).
- *   - CROSS-STREAM: drop a claim once the indexer surfaces a CONFIRMED row at
- *     its bridged inclusion slot — matched by the `(blockHeight, txIndex)`
+ *   - CROSS-STREAM (anchored): drop a claim once the indexer surfaces a CONFIRMED
+ *     row at its bridged inclusion slot — matched by the `(blockHeight, txIndex)`
  *     ANCHOR, never `txHash` (confirmed rows + the SDK AddressActivityEntry
  *     carry no txHash). LIVE since 2026-06-24 (the indexer now ships claim
  *     events WITH the amount): the local copy auto-retires with no double-row;
  *     `applyStickyClaimAmount` carries the amount onto a null-amount confirmed
- *     row so the retire never drops it. */
+ *     row so the retire never drops it.
+ *   - CROSS-STREAM (backstop, no anchor): a precompile claim's receipt can lag
+ *     the indexer (or never be retrievable), so the `(block,txIndex)` anchor may
+ *     never land — and the indexer's confirmed `kind:"claim"` row has no txHash
+ *     to link back. So ALSO retire an UN-anchored claim once a confirmed claim
+ *     row matches it by the broadcast-block window (`backstopRetiredClaimTxHashes`,
+ *     1:1 nearest-block). Without this the "Pending · Rewards claimed" row strands
+ *     beside the confirmed `+amount · block` row until a reopen/alarm. */
 export function applyLocalClaims(
   pending: PendingTxRow[],
   localClaims: PendingTxRow[],
@@ -901,17 +908,85 @@ export function applyLocalClaims(
   for (const p of pending) {
     if (p.source === "local-claim") byHash.set(p.txHash, p);
   }
-  const claims = [...byHash.values()].filter(
-    (c) =>
-      c.confirmedBlockHeight === undefined ||
-      c.confirmedTxIndex === undefined ||
-      !confirmed.some(
+  const all = [...byHash.values()];
+  // Un-anchored claims a confirmed claim row matched by the broadcast-block
+  // window. Computed across ALL claims at once so the 1:1 pairing holds (one
+  // confirmed row retires at most one claim).
+  const backstopRetired = backstopRetiredClaimTxHashes(all, confirmed);
+  const claims = all.filter((c) => {
+    // Anchored retire (existing): the indexer surfaced a confirmed row at the
+    // receipt-bridged (block, txIndex) slot.
+    const anchoredRetire =
+      c.confirmedBlockHeight !== undefined &&
+      c.confirmedTxIndex !== undefined &&
+      confirmed.some(
         (r) =>
           r.blockHeight === c.confirmedBlockHeight &&
           r.txIndex === c.confirmedTxIndex,
-      ),
-  );
+      );
+    return !(anchoredRetire || backstopRetired.has(c.txHash));
+  });
   return [...claims, ...nonClaim];
+}
+
+/** Backstop retirement for UN-ANCHORED local-claims (no `confirmedBlockHeight`).
+ *  A precompile reward claim's receipt can lag the indexer or never be
+ *  retrievable, so the `(block,txIndex)` receipt anchor — the only key the
+ *  anchored retire uses — may never land; and the indexer's confirmed
+ *  `kind:"claim"` row carries NO txHash to link it back. So pair each confirmed
+ *  claim row to AT MOST ONE pending claim: the nearest by broadcast-block within
+ *  `PENDING_MATCH_BLOCK_WINDOW` (the same window the tx_send heuristic uses).
+ *  The 1:1 pairing stops two concurrent claims from BOTH being retired by a
+ *  single confirmed row (which would make the second VANISH until the indexer
+ *  surfaces its own row). Confirmed rows already consumed by an ANCHORED claim
+ *  are reserved first (that claim retires precisely by its slot, not here). A
+ *  claim with a null `broadcastBlockHeight` (eth_blockNumber failed at send) has
+ *  no window to match — it falls to the anchored path / TTL only, as tx_send
+ *  does. Returns the set of claim txHashes to retire via the backstop. */
+function backstopRetiredClaimTxHashes(
+  claims: PendingTxRow[],
+  confirmed: ConfirmedRow[],
+): Set<string> {
+  const confirmedClaims = confirmed.filter((r) => r.kind === "claim");
+  if (confirmedClaims.length === 0) return new Set();
+  // Reserve the confirmed-claim rows already matched by an anchored claim's
+  // exact (block, txIndex) — they retire that claim, not an un-anchored one.
+  const used = new Set<number>();
+  for (const c of claims) {
+    if (c.confirmedBlockHeight === undefined || c.confirmedTxIndex === undefined) {
+      continue;
+    }
+    const i = confirmedClaims.findIndex(
+      (r) =>
+        r.blockHeight === c.confirmedBlockHeight &&
+        r.txIndex === c.confirmedTxIndex,
+    );
+    if (i >= 0) used.add(i);
+  }
+  const retired = new Set<string>();
+  // Greedy nearest-block 1:1 match, un-anchored claims in broadcast order.
+  const unanchored = claims
+    .filter(
+      (c) => c.confirmedBlockHeight === undefined && c.broadcastBlockHeight !== null,
+    )
+    .sort((a, b) => a.broadcastBlockHeight! - b.broadcastBlockHeight!);
+  for (const c of unanchored) {
+    let best = -1;
+    let bestDelta = Infinity;
+    for (let i = 0; i < confirmedClaims.length; i++) {
+      if (used.has(i)) continue;
+      const delta = Math.abs(confirmedClaims[i]!.blockHeight - c.broadcastBlockHeight!);
+      if (delta <= PENDING_MATCH_BLOCK_WINDOW && delta < bestDelta) {
+        best = i;
+        bestDelta = delta;
+      }
+    }
+    if (best >= 0) {
+      used.add(best);
+      retired.add(c.txHash);
+    }
+  }
+  return retired;
 }
 
 /** Heuristic match: returns true when `confirmed` plausibly represents the
