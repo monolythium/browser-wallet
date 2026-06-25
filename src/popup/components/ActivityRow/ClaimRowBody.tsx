@@ -29,7 +29,7 @@ export function ClaimRowBody({ row }: ClaimRowBodyProps) {
   return (
     <div className="ext-act-row">
       <div className="dir in">
-        <Icon name="receive" size={13} />
+        <Icon name="reward" size={13} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={label}>

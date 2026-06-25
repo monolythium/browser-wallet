@@ -24,6 +24,9 @@ describe("ClaimRowBody (#3)", () => {
     expect(html).toContain("1.5");
     expect(html).toContain("LYTH");
     expect(html).toContain("block 500");
+    // Distinct rewards icon (gift box), not the plain receive arrow.
+    expect(html).toContain('d="M5 12v9h14v-9"');
+    expect(html).not.toContain("M12 5v14M5 12l7 7 7-7");
   });
 
   it("renders bare 'Rewards claimed' (no amount) when the figure is absent — no-mock, never a 0", () => {

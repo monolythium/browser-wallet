@@ -32,7 +32,7 @@ function iconForKind(kind: TxOpKind): IconName {
     case "redelegate":
       return iconForDelegationKind(kind);
     case "claim":
-      return "receive";
+      return "reward";
     case "emergency-key":
       return "shield";
     case "agent-policy":

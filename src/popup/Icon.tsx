@@ -11,7 +11,7 @@ export type IconName =
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
   | "mono-mark" | "github" | "grid"
-  | "language" | "coins" | "palette" | "unstake";
+  | "language" | "coins" | "palette" | "unstake" | "reward";
 
 /** Distinct glyph per delegation action so delegate / undelegate / redelegate
  *  read apart at a glance (they all shared `stake` before). delegate keeps the
@@ -69,6 +69,17 @@ export function Icon({ name, size = 16 }: IconProps) {
           <path d="M18.09 10.37A6 6 0 1 1 10.34 18" />
           <path d="M7 6h1v4" />
           <path d="m16.71 13.88.7.71-2.82 2.82" />
+        </svg>
+      );
+    case "reward":
+      // Gift box (lid + ribbon + bow) — a claimed staking reward. Distinct from
+      // `receive` (plain ↓), `coins` (two coins), and `gem`.
+      return (
+        <svg {...props}>
+          <rect x="3" y="8" width="18" height="4" rx="1" />
+          <path d="M5 12v9h14v-9" />
+          <path d="M12 8v13" />
+          <path d="M12 8a3 3 0 1 1 4 0M12 8a3 3 0 1 0-4 0" />
         </svg>
       );
     case "palette":

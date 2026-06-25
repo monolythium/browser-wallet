@@ -11,6 +11,14 @@ describe("iconForDelegationKind — distinct glyph per delegation action (E)", (
   });
 });
 
+describe("Icon — reward glyph", () => {
+  it("renders the gift-box reward path, distinct from receive", () => {
+    const html = renderToStaticMarkup(<Icon name="reward" size={13} />);
+    expect(html).toContain('d="M5 12v9h14v-9"');
+    expect(html).not.toContain("M12 5v14M5 12l7 7 7-7"); // not the receive ↓ arrow
+  });
+});
+
 describe("Icon — unstake glyph", () => {
   it("renders the unstake path (cluster satellites + center down arrow)", () => {
     const html = renderToStaticMarkup(<Icon name="unstake" size={13} />);

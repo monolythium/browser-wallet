@@ -97,9 +97,11 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
       opKind === "redelegate";
     const iconName: IconName = isDelegation
       ? iconForDelegationKind(opKind as "delegate" | "undelegate" | "redelegate")
-      : opKind === "claim" || opKind === "complete-redemption"
-        ? "receive"
-        : "send";
+      : opKind === "claim"
+        ? "reward"
+        : opKind === "complete-redemption"
+          ? "receive"
+          : "send";
     const showAmount =
       !suppressAmount && !/^0(\.0+)?$/.test(row.amountDecimal);
     // Cluster target for delegations (the tx `to` is the module, not the
@@ -197,7 +199,7 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
         <Icon
           name={
             isClaim
-              ? "receive"
+              ? "reward"
               : isDelegationKind
                 ? iconForDelegationKind(opKind as "delegate" | "undelegate" | "redelegate")
                 : "send"
