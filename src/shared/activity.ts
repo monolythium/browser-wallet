@@ -170,11 +170,12 @@ export interface PendingTxRow {
   /** Display currency the rate was captured in (loadDisplayCurrency) — frozen so
    *  the historic fiat renders in the currency selected at claim time. */
   currency?: CurrencyCode;
-  /** Delegation weight (bps) for a delegate/redelegate, captured at submit PURELY
-   *  as notification metadata (it's the same uint16 ALREADY encoded in the
-   *  calldata — the signed tx is byte-identical, this is NOT re-encoded). Lets the
-   *  notification show the % (bps/100). Absent on undelegate (no bps), claims,
-   *  ordinary sends, and legacy rows → the % is omitted (no-mock). */
+  /** Delegation weight (bps) for a delegate/undelegate/redelegate, captured at
+   *  submit PURELY as display/notification metadata (the signed tx is
+   *  byte-identical — this is NOT re-encoded). Delegate/redelegate carry the
+   *  requested weight; undelegate carries the FULL existing weight being removed
+   *  (`existingWeightBps`). Lets the row/notification show the % (bps/100). Absent
+   *  on claims, ordinary sends, and legacy rows → the % is omitted (no-mock). */
   delegationWeightBps?: number;
 }
 

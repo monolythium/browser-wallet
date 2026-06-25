@@ -14,6 +14,11 @@ import { formatFiat } from "../../../shared/fiat.js";
 import { formatLythDecimalDisplay } from "../../../shared/lyth-units.js";
 import { DISPLAY_CURRENCY_DEFAULT } from "../../../shared/constants.js";
 import { renderCounterparty } from "../ActivityRow.js";
+import { clusterLabel } from "../../../shared/staking.js";
+import {
+  CLAIM_PENDING_LABEL,
+  delegationPendingLabel,
+} from "../../../shared/activity-label.js";
 import type { PendingTxRow } from "../../../shared/activity.js";
 import type { NameLabel } from "../../../shared/name-resolution.js";
 
@@ -32,6 +37,19 @@ function relativeMs(ms: number, now: number): string {
 export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyProps) {
   const devMode = useFeature("DEVELOPER_MODE");
   const opKind = row.opKind;
+  const isDelegationKind =
+    opKind === "delegate" || opKind === "undelegate" || opKind === "redelegate";
+  // Pending delegation labels resolve the cluster via the CAPTURED name (the
+  // pending row carries no live directory) → the real *.cluster.mono name or an
+  // honest `Cluster #<id>`. Redelegate also carries the captured destination.
+  const pendingSrcLabel =
+    row.clusterId !== undefined
+      ? clusterLabel(row.clusterId, row.clusterName)
+      : (row.clusterName ?? "the cluster");
+  const pendingDstLabel =
+    row.toClusterId !== undefined
+      ? clusterLabel(row.toClusterId, row.toClusterName)
+      : undefined;
   // A reward claim's standard `amountDecimal` is "0" (value 0x0) and is
   // suppressed below; the claimed reward rides on the distinct `claimedAmount`
   // field (C3). The fiat sibling uses the FROZEN rate + currency captured at
@@ -166,15 +184,25 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
             // A claim's value is 0x0 — show the claimed reward (claimedAmount)
             // not "0 LYTH to <precompile>". Fiat sibling = dash until the oracle.
             <>
-              {pendingPrefix} · {notificationTitle("claim", "confirmed")}
+              {CLAIM_PENDING_LABEL}
               {claimFigDisplay ? ` +${claimFigDisplay} LYTH` : ""}
               {claimFiat ? (
                 <span style={{ opacity: 0.75, marginLeft: 4 }}>({claimFiat})</span>
               ) : null}
             </>
+          ) : isDelegationKind ? (
+            // Delegation tx: value 0 + the `to` is the module, so the "0 LYTH to
+            // <module>" template is meaningless — name the action + the cluster
+            // (+ the % when captured) via the shared present-continuous builder.
+            delegationPendingLabel(
+              opKind as "delegate" | "undelegate" | "redelegate",
+              row.delegationWeightBps,
+              pendingSrcLabel,
+              pendingDstLabel,
+            )
           ) : (
             <>
-              {pendingPrefix} · {row.amountDecimal} LYTH to{" "}
+              Sending · {row.amountDecimal} LYTH to{" "}
               {renderCounterparty(row.to, counterpartyLabel)}
             </>
           )}
