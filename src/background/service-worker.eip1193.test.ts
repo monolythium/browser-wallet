@@ -577,6 +577,39 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(r.error?.message).toMatch(/wallet_addEthereumChain/);
   });
 
+  describe("P4-002 — addEthereumChain connected-origin gate", () => {
+    const CUSTOM = {
+      chainId: "0xABCD",
+      chainName: "P4-002 chain",
+      rpcUrls: ["https://rpc.p4002.example"],
+    };
+
+    it("rejects a custom-chain add from an UNCONNECTED origin (4100), no approval", async () => {
+      const r = await dispatch("wallet_addEthereumChain", [CUSTOM], "https://unconnected-p4002.example");
+      expect(r.result).toBeUndefined();
+      expect(r.error?.code).toBe(4100);
+      expect(enqueuedApprovals.some((a) => a.kind === "add_chain")).toBe(false);
+    });
+
+    it("allows a custom-chain add from a CONNECTED origin (reaches the approval)", async () => {
+      const origin = "https://connected-p4002.example";
+      await connectOrigin(origin);
+      const r = await dispatch("wallet_addEthereumChain", [CUSTOM], origin);
+      expect(r.error).toBeUndefined();
+      expect(enqueuedApprovals.some((a) => a.kind === "add_chain")).toBe(true);
+    });
+
+    it("a known/built-in chain no-ops (ok null) even for an unconnected origin (EIP-3085)", async () => {
+      const r = await dispatch(
+        "wallet_addEthereumChain",
+        [{ chainId: TESTNET_CHAIN_ID_HEX }],
+        "https://unconnected-known-p4002.example",
+      );
+      expect(r.error).toBeUndefined();
+      expect(r.result).toBeNull();
+    });
+  });
+
   it("wallet_switchEthereumChain without a chainId param returns -32602", async () => {
     const r = await dispatch("wallet_switchEthereumChain", [{}]);
     expect(r.error?.code).toBe(-32602);
@@ -655,6 +688,8 @@ describe("EIP-1193 conformance — service-worker request router", () => {
 
     it("chain-add-manual rejects collision with an existing chain", async () => {
       // Pre-populate via the dApp path (auto-approved by the approvals mock).
+      // P4-002 — the dApp add now requires a connected origin, so connect first.
+      await connectOrigin("https://dapp-add.example");
       await dispatch("wallet_addEthereumChain", [{
         chainId: FOREIGN_CHAIN,
         chainName: "Existing chain",

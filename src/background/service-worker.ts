@@ -2237,6 +2237,11 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!Array.isArray(p?.rpcUrls) || (p?.rpcUrls?.length ?? 0) === 0) {
         return err(-32602, "wallet_addEthereumChain: rpcUrls must be a non-empty array");
       }
+      // P4-002 — only a connected origin may trigger an actual chain-add (mirrors
+      // wallet_switchEthereumChain). The EIP-3085 no-op above still answers anyone.
+      if (!session.connectedOrigins.has(origin)) {
+        return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
+      }
       const spec: AddChainSpec = {
         chainId: requested,
         chainName: typeof p?.chainName === "string" ? p.chainName : "Unnamed chain",
