@@ -40,6 +40,7 @@ import {
   type BgAuthenticatorKind,
   type BgPasskeyState,
 } from "../bg";
+import { PASSKEY_USER_VERIFICATION } from "../../shared/passkey";
 
 export interface PasskeyRegisterModalProps {
   open: boolean;
@@ -174,7 +175,7 @@ export function PasskeyRegisterModal({
           authenticatorSelection: {
             authenticatorAttachment:
               kind === "platform" ? "platform" : "cross-platform",
-            userVerification: "preferred",
+            userVerification: PASSKEY_USER_VERIFICATION,
             // Non-resident keys — the wallet remembers
             // `allowCredentials[].id` itself on future `.get()` calls.
             residentKey: "discouraged",

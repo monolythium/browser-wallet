@@ -24,7 +24,7 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 
 import { Modal } from "./Modal";
-import { buildPasskeyChallenge } from "../../shared/passkey";
+import { buildPasskeyChallenge, PASSKEY_USER_VERIFICATION } from "../../shared/passkey";
 import type { BgPasskeyCredential } from "../bg";
 
 export interface PasskeySignModalProps {
@@ -138,7 +138,7 @@ export function PasskeySignModal({
         publicKey: {
           challenge: toBufferSource(challenge),
           allowCredentials,
-          userVerification: "preferred",
+          userVerification: PASSKEY_USER_VERIFICATION,
           timeout: 60_000,
         },
       };

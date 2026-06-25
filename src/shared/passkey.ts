@@ -63,6 +63,16 @@ import { LYTHOSHI_PER_LYTH } from "@monolythium/core-sdk";
  *  bloating the per-vault record. */
 export const MAX_CREDENTIALS_PER_VAULT = 8;
 
+/** WebAuthn user-verification policy for register (`create()`) AND sign
+ *  (`get()`) — both call sites read this single constant so the policy can't
+ *  drift between them (P6-001/P6-004). "required" forces the authenticator to
+ *  actually perform user verification (biometric / PIN) and to FAIL if it
+ *  can't; "preferred" lets an authenticator silently skip it, so a key that
+ *  auto-asserts (e.g. an evil-maid-spoofed or mis-provisioned authenticator)
+ *  could satisfy the gate with no real user-presence check. The passkey is a
+ *  local unlock gate for the ML-DSA-65 key, so a real UV check is the point. */
+export const PASSKEY_USER_VERIFICATION: UserVerificationRequirement = "required";
+
 /** Native LYTH precision sourced from the SDK (single source of truth). Chain
  *  migrated 8 → 18 decimals (1 lythoshi == 1 wei); SDK 0.3.15 carries
  *  `LYTHOSHI_PER_LYTH = 10^18`. Re-exported so existing importers keep
