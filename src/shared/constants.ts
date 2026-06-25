@@ -3,6 +3,10 @@ import type { CurrencyCode } from "./iso4217";
 export const AUTO_LOCK_MINUTES_DEFAULT = 15;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
 
+/** The exact word the user types to confirm the destructive no-re-auth wipe.
+ *  Single source for the SW verify (P4-004) + both confirm screens. */
+export const WIPE_CONFIRM_WORD = "DELETE";
+
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
 /** Periodic poll that runs `pollPendingAndNotify` while any tx is

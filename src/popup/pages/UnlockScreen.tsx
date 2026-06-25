@@ -9,11 +9,7 @@ import { Modal } from "../components/Modal";
 import { PasswordInput } from "../components/PasswordInput";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bech32mDisplay } from "../../shared/bech32m";
-
-/** The exact word the user must type to confirm the destructive unauthenticated
- *  wipe — same gate as ResetWallet / ForgotPassword, so an irreversible action
- *  always demands a deliberate keystroke, not a single click. */
-const RESET_CONFIRM_WORD = "DELETE";
+import { WIPE_CONFIRM_WORD as RESET_CONFIRM_WORD } from "../../shared/constants";
 
 interface UnlockScreenProps {
   /** Truncated address chip rendered above the password field, in bech32m form (e.g. "mono1abc…wxyz"). */
@@ -146,7 +142,7 @@ export function UnlockScreen({
     setResetting(true);
     setResetError(null);
     try {
-      const r = await bgKeystoreWipeUnauth();
+      const r = await bgKeystoreWipeUnauth(resetConfirmInput.trim().toUpperCase());
       if (!r.ok) {
         setResetError(
           r.reason === "rate_limited"

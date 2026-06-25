@@ -813,7 +813,7 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
 
   it("keystore-wipe-unauth removes every mono.* local key, keeps non-mono", async () => {
     seedFamilies();
-    const r = (await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" })) as { ok: boolean };
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } })) as { ok: boolean };
     expect(r.ok).toBe(true);
     for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
     expect(storageLocal["nonmono.keep"]).toBe("survives");
@@ -842,7 +842,7 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     ];
 
     for (const k of RESIDUE) storageSession[k] = { seeded: true };
-    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
     for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
 
     for (const k of RESIDUE) storageSession[k] = { seeded: true };
@@ -854,13 +854,60 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
   });
 
+  it("keystore-wipe-unauth requires the SW-verified confirm token (P4-004)", async () => {
+    storageLocal["mono.vaults.v4"] = { seeded: true };
+    // No token → rejected, no wipe.
+    const noTok = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+    })) as { ok: boolean; reason?: string };
+    expect(noTok.ok).toBe(false);
+    expect(noTok.reason).toBe("missing_confirm");
+    expect(storageLocal["mono.vaults.v4"]).toBeDefined();
+
+    // Wrong token (case-sensitive) → rejected, no wipe.
+    const badTok = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "delete" },
+    })) as { ok: boolean; reason?: string };
+    expect(badTok.ok).toBe(false);
+    expect(badTok.reason).toBe("missing_confirm");
+    expect(storageLocal["mono.vaults.v4"]).toBeDefined();
+
+    // Correct token → wipes.
+    const ok = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    })) as { ok: boolean };
+    expect(ok.ok).toBe(true);
+    expect(storageLocal["mono.vaults.v4"]).toBeUndefined();
+  });
+
+  it("the 5 s rate-limit still bites a second token-bearing wipe (P4-004)", async () => {
+    const first = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    })) as { ok: boolean };
+    expect(first.ok).toBe(true);
+    const second = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    })) as { ok: boolean; reason?: string };
+    expect(second.ok).toBe(false);
+    expect(second.reason).toBe("rate_limited");
+  });
+
   it("closes the connected-sites carryover: a previously-connected origin no longer leaks the address after wipe + re-unlock", async () => {
     const origin = "https://prior-owner-dapp.example";
     await dispatchRpc("eth_requestAccounts", [], origin); // connects → session.connectedOrigins has origin
     const before = await dispatchRpc("eth_accounts", [], origin);
     expect(before.result).toEqual([DETERMINISTIC_ADDRESS]); // connected → address visible
 
-    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" }); // clears connectedOrigins + locks
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } }); // clears connectedOrigins + locks
     unlocked = true; // simulate the NEW owner importing + unlocking a fresh vault
 
     const after = await dispatchRpc("eth_accounts", [], origin);
@@ -886,13 +933,13 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     );
     // The rejection propagates to the router catch; dispatchPopup resolves with
     // { error }. What matters is that finally { lockV4() } ran first.
-    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
     expect(unlocked).toBe(false); // lockV4 (mock sets unlocked=false) ran via finally
   });
 
   it("C2: clears the toolbar badge on wipe-unauth (no stale unread count for the next owner)", async () => {
     mockRefreshUnreadBadge.mockClear();
-    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
     // The wipe path's only refreshUnreadBadge call is the C2 clear — locked +
     // null scope → after the store is wiped it resolves to an empty badge.
     expect(mockRefreshUnreadBadge).toHaveBeenCalledWith({

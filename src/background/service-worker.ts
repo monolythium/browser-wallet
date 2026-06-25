@@ -581,6 +581,7 @@ import {
   STORAGE_KEY_UI_OPEN_MODE,
   UI_OPEN_MODE_DEFAULT,
   UI_OPEN_MODE_VALUES,
+  WIPE_CONFIRM_WORD,
   type UiOpenMode,
 } from "../shared/constants.js";
 
@@ -6378,6 +6379,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true };
     }
     case "keystore-wipe-unauth": {
+      // P4-004 — require the SW-verified confirm token (the word the user
+      // typed), not just the UI's disabled-button gate, so a tokenless or
+      // scripted message can't trigger the wipe.
+      const wp = message.payload as { confirmToken?: string } | undefined;
+      if (wp?.confirmToken !== WIPE_CONFIRM_WORD) {
+        return { ok: false, reason: "missing_confirm" };
+      }
       // No-re-auth wipe used by the Welcome → Forgot password? path: the
       // user has no password to enter, so the security boundary is the
       // 24-word recovery phrase (which is what restores funds elsewhere).

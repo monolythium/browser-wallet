@@ -371,10 +371,10 @@ export async function bgKeystoreReset(
  * popup-access attacker can wipe but gets no key material; the security
  * boundary is the 24-word recovery phrase, not the popup.
  */
-export async function bgKeystoreWipeUnauth(): Promise<
-  { ok: true } | { ok: false; reason?: string }
-> {
-  return send("keystore-wipe-unauth");
+export async function bgKeystoreWipeUnauth(
+  confirmToken: string,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("keystore-wipe-unauth", { confirmToken });
 }
 
 /**

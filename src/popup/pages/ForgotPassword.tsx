@@ -3,9 +3,7 @@ import { Icon } from "../Icon";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { Modal } from "../components/Modal";
 import { bgKeystoreWipeUnauth } from "../bg";
-
-/** The exact word the user must type to confirm the destructive wipe. */
-const CONFIRM_WORD = "DELETE";
+import { WIPE_CONFIRM_WORD as CONFIRM_WORD } from "../../shared/constants";
 
 interface ForgotPasswordProps {
   /** Returns to Welcome (Cancel button + back arrow). */
@@ -37,7 +35,7 @@ export function ForgotPassword({
     setSubmitting(true);
     setError(null);
     try {
-      const r = await bgKeystoreWipeUnauth();
+      const r = await bgKeystoreWipeUnauth(confirmText.trim().toUpperCase());
       if (r.ok) {
         onWipedThenImport();
         return;
