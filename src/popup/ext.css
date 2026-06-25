@@ -188,10 +188,10 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
    so the algo-placeholder + name-row + address-row stack reads as
    a tighter card. The chip itself (.ext-acc) is unchanged; only
    the container's top/bottom breathing room is reduced. */
-.ext-top { display:flex; align-items:flex-start; gap:8px; padding: 10px 12px; border-bottom:1px solid var(--fg-700); background: rgba(10,10,20,0.35); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); }
+.ext-top { display:flex; align-items:center; gap:8px; padding: 10px 12px; border-bottom:1px solid var(--fg-700); background: rgba(10,10,20,0.35); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); }
 .ext.light .ext-top { background: rgba(255,255,255,0.4); border-bottom:1px solid #e3e3ea; }
 
-.ext-acc { display:flex; align-items:center; gap:8px; padding: 5px 10px 5px 5px; border-radius: 999px; background: rgba(255,255,255,0.05); border:1px solid var(--fg-700); flex:1; cursor:pointer; transition: background 160ms; }
+.ext-acc { display:flex; align-items:center; gap:8px; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,0.05); border:1px solid var(--fg-700); flex:1; cursor:pointer; transition: background 160ms; }
 .ext.light .ext-acc { background:#fff; border:1px solid #e0e0e7; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
 .ext-acc:hover { background: rgba(255,255,255,0.08); }
 .ext-acc__lbl { flex:1; overflow:hidden; }
@@ -201,7 +201,7 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 /* Address block — a separate element below the wallet-selector pill (the
    selector and the address read as two distinct surfaces). Full bech32m
    address + copy button. */
-.ext-acc-addr { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:10px; background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); }
+.ext-acc-addr { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:10px; background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); }
 .ext.light .ext-acc-addr { background:#fff; border:1px solid #e0e0e7; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
 
 .ext-iconbtn { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; color: var(--fg-200); background: rgba(255,255,255,0.04); border:1px solid var(--fg-700); cursor:pointer; transition: all 160ms var(--e-out); }
@@ -240,6 +240,14 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-card { background: rgba(255,255,255,0.85); border:1px solid rgba(0,0,0,0.06); box-shadow: 0 4px 20px -8px rgba(0,0,0,0.12); }
 .ext.light .ext-card::before { background: linear-gradient(180deg, rgba(255,255,255,0.8) 0%, transparent 30%); }
 
+/* --- Footer branding strip --- */
+/* Themed surface mirroring .ext-card so the footer tints with the active
+   theme (the glass veil + blur let the themed body background show through)
+   instead of the old fixed dark bar. Colours live here (not inline) so the
+   .ext.light override can apply — inline styles can't be themed. */
+.ext-footer { background: var(--glass-fill); border-top: 1px solid var(--glass-stroke); backdrop-filter: blur(var(--glass-blur)) saturate(160%); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%); }
+.ext.light .ext-footer { background: rgba(255,255,255,0.85); border-top: 1px solid rgba(0,0,0,0.06); }
+
 .ext-card__head { display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
 .ext-card__head h3 { margin:0; font-size:12.5px; font-weight:500; color: var(--fg-100); letter-spacing:-0.01em; display:inline-flex; align-items:baseline; gap:9px; }
 .ext.light .ext-card__head h3 { color:#1a1a24; }
@@ -260,8 +268,9 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-hero .num { font-family: var(--f-mono); font-weight:300; font-size:36px; line-height:1; letter-spacing:-0.025em; margin-top:6px; font-variant-numeric: tabular-nums; color: var(--fg-100); display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; }
 .ext.light .ext-hero .num { color:#1a1a24; }
 .ext-hero .num .d { font-size:12px; color: var(--fg-400); letter-spacing:0.04em; font-weight:400; }
-.ext-hero .num .frac { color: var(--fg-400); }
-.ext.light .ext-hero .num .frac, .ext.light .ext-hero .num .d { color:#606369; }
+.ext-hero .num .frac { color: var(--fg-100); }
+.ext.light .ext-hero .num .frac { color:#1a1a24; }
+.ext.light .ext-hero .num .d { color:#606369; }
 .ext-hero .num.opaque { color: var(--fg-400); font-size:22px; font-family: var(--f-sans); font-style:italic; font-weight:400; }
 .ext-hero .chg { font-family: var(--f-mono); font-size:11px; margin-top:8px; color: var(--ok); }
 .ext.light .ext-hero .chg { color:#2a7a3f; }
@@ -277,6 +286,25 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext-act.prim:hover { filter: brightness(1.05); }
 .ext-act.prim .ico { opacity:1; }
 .ext[data-denom="private"] .ext-act.prim { background: linear-gradient(180deg, oklch(0.78 0.14 240), oklch(0.62 0.18 250)); color:#061025; border-color: oklch(0.62 0.18 250); box-shadow: 0 4px 14px oklch(0.62 0.18 250 / 0.4), inset 0 1px 0 rgba(255,255,255,0.35); }
+/* Stake-scoped muted action button (className "ext-act prim-soft"): the base
+   .ext-act muted look at rest, full .prim gold gradient on hover. Used ONLY by
+   the Stake-flow CTAs — the shared .ext-act.prim is untouched, so claim-all +
+   Send + chains keep their saturated look. */
+.ext-act.prim-soft { font-weight: 600; color: var(--fg-100); }
+.ext-act.prim-soft:not(:disabled):hover {
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold));
+  color: var(--ink-000);
+  border-color: var(--gold);
+  box-shadow: 0 4px 14px rgba(var(--gold-glow), 0.3), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.ext-act.prim-soft:not(:disabled):hover .ico { opacity: 1; }
+/* private-denom parity (mirror .ext[data-denom="private"] .ext-act.prim): restore the blue gradient on hover */
+.ext[data-denom="private"] .ext-act.prim-soft:not(:disabled):hover {
+  background: linear-gradient(180deg, oklch(0.78 0.14 240), oklch(0.62 0.18 250));
+  color: #061025;
+  border-color: oklch(0.62 0.18 250);
+  box-shadow: 0 4px 14px oklch(0.62 0.18 250 / 0.4), inset 0 1px 0 rgba(255,255,255,0.35);
+}
 
 /* --- Tabs (Assets/Activity) — glassy, gold underline glow --- */
 .ext-tabs { display:flex; gap:0; padding: 0; margin: 6px 0 10px; border-bottom:1px solid var(--glass-stroke); position:relative; }
@@ -411,6 +439,37 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
     animation: none;
   }
 }
+/* A (R1): visible inline explanation under the chain-health indicator. Muted,
+   sentence-case + sans (NOT the uppercase mono banner type) so a degraded chain
+   explains itself without a hover. Theme-aware via the --fg / --f-sans tokens. */
+.ext-chain-health-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 0 12px 8px;
+  font-family: var(--f-sans);
+  font-size: 11px;
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--fg-500);
+}
+/* B (R1): "View on Monoscan" link inside the chain-health hint row. Reuses the
+   globe + new-tab affordance + the --fg-200 color of the tx-detail
+   MonoscanTxButton (.ext-act), sized down to a compact inline link. */
+.ext-chain-health-monoscan {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-200);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ext-chain-health-monoscan:hover {
+  text-decoration: underline;
+}
 .ext-pending-dot {
   position: absolute;
   top: -2px;
@@ -452,6 +511,24 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   opacity: 0.7;
 }
 .ext-indexer-stale .close:hover { opacity: 1; }
+
+/* Prominent limit/clamp warning for the delegate/redelegate forms — the
+   bps-headroom clamp messages (and the headroom line when exhausted) used to
+   render as 10px muted/red helper text and were easy to miss. Prominence comes
+   from the type alone (12px / 600 / --warn) over a whisper-soft tint — no glow,
+   no hard border, so it reads as a calm callout rather than a neon box. Shared
+   by StakeForm + RedelegateForm (single source — no per-form drift). */
+.ext-warn-prominent {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--warn);
+  background: rgba(var(--warn-glow), 0.05);
+  border-radius: 7px;
+  padding: 6px 9px;
+  margin: 6px 0 0;
+}
 
 /* Bottom hint bar — glass foot */
 .ext-hintbar { background: rgba(10,10,20,0.55); backdrop-filter: blur(24px) saturate(160%); -webkit-backdrop-filter: blur(24px) saturate(160%); border-top:1px solid var(--glass-stroke); padding: 6px 14px; font-family: var(--f-mono); font-size:9px; color: var(--fg-500); letter-spacing:0.1em; text-transform:uppercase; display:flex; justify-content:space-between; align-items:center; gap:8px; box-shadow: inset 0 1px 0 var(--glass-inner); }

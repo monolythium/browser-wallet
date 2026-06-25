@@ -11,6 +11,7 @@ import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
 import type { TxOpKind } from "../shared/notifications.js";
+import type { CurrencyCode } from "../shared/iso4217.js";
 export type {
   WalletBridgeDisclosureValue,
   WalletBridgeRouteDisclosure,
@@ -577,6 +578,22 @@ export async function bgWalletResolveNames(
   return send("wallet-resolve-names", { addresses, chainIdHex });
 }
 
+/** §22.8 forward resolution (name → address) against the AUTHORITATIVE on-chain
+ *  hierarchical name registry (0x110E) via lyth_resolveName. SECURITY (P5-002):
+ *  the result feeds the SIGNED recipient — `addr0x` is the registry's owner
+ *  (lowercased 0x) on a hit, or null on a registry miss; `ok:false` on any RPC
+ *  error or quorum failure. The caller MUST treat null/`ok:false` as "no
+ *  resolution" and NEVER sign an unverified address. */
+export async function bgWalletResolveName(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; addr0x: string | null }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-resolve-name", { name, chainIdHex });
+}
+
 // Indexer-status polling for the §28.2.1 staleness banner.
 // All success-path fields nullable: when the method is unavailable or
 // the response is malformed, the handler returns the defensive
@@ -967,6 +984,23 @@ export async function bgWalletSendTx(args: {
    *  the signer. Omit for non-delegation sends. */
   clusterId?: number;
   clusterName?: string;
+  /** Redelegate destination cluster — metadata only (for the from→to toast). */
+  toClusterId?: number;
+  toClusterName?: string;
+  /** Reward-claim metadata captured at broadcast (opKind:"claim" only) —
+   *  PENDING-ROW METADATA ONLY (same invariant as opKind/clusterId): forwarded
+   *  to the durable local-claim store + the pending row so the claimed amount +
+   *  frozen fiat render. Never reaches the signer; `valueWeiHex` stays 0x0.
+   *  `claimedAmount` is decimal LYTH (null = unavailable, no-mock); `rateAtClaim`
+   *  is null until the fiat oracle exists. */
+  claimedAmount?: string | null;
+  rateAtClaim?: number | null;
+  currency?: CurrencyCode;
+  /** Delegation weight (bps) for delegate/redelegate — PENDING-ROW METADATA
+   *  ONLY (same invariant as opKind/clusterId), forwarded so the notification
+   *  can show the % (bps/100). It's the same uint16 already in the calldata; the
+   *  signed tx is byte-identical. Omit on undelegate/claim/sends. */
+  delegationWeightBps?: number;
   /** T1-04(a) — account password supplied to clear an over-limit passkey
    *  cap. The SW verifies it (verifyContainerPasswordV4) before signing;
    *  a wrong/absent value round-trips a typed `passkeyElevation` reject. */

@@ -20,6 +20,22 @@ import {
 } from "../../shared/staking";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
+/** A confirmed-LIVE pending-rewards read with a positive total. Used to decide
+ *  whether to surface the reward card independently of active delegations — a
+ *  user who undelegated everything can still have unclaimed accrued rewards.
+ *  NO-MOCK: a `via:"mock"` (illustrative) read is never treated as positive. */
+export function pendingRewardsArePositive(
+  rewards: PendingRewardsView | null,
+  isMock: boolean,
+): boolean {
+  if (rewards === null || isMock) return false;
+  try {
+    return BigInt(rewards.totalAmountWei) > 0n;
+  } catch {
+    return false;
+  }
+}
+
 interface RewardCardProps {
   /** Compatibility reward fields are still named `*Wei` in
    *  PendingRewardsView; values rendered here are native lythoshi (now
@@ -42,6 +58,11 @@ interface RewardCardProps {
   /** Disable the claim button while a previous claim is in flight or
    *  the wallet has zero accrued rewards. */
   claimDisabled: boolean;
+  /** True ONLY while a claim is in flight (the in-flight guard is active).
+   *  Drives the "Claiming…" label + a pending hover tooltip — NOT the disabled
+   *  state (that's `claimDisabled`, which is also true for zero rewards). When
+   *  false the button keeps its normal label + no tooltip. Default false. */
+  claimPending?: boolean;
   /** When `false`, hide the per-cluster breakdown +
    *  effective-APR annotations ("advanced reward analytics" per
    *  §28.5 Q29's TRADING_INTERFACE flag). The total reward + claim
@@ -62,6 +83,7 @@ export function RewardCard({
   clusters,
   onClaim,
   claimDisabled,
+  claimPending = false,
   showAdvancedAnalytics = true,
   compact = false,
 }: RewardCardProps) {
@@ -110,6 +132,13 @@ export function RewardCard({
     }
   })();
   const totalIsZero = totalLythoshi === 0n;
+  // "Claiming…" + the pending tooltip show ONLY while a claim is in flight
+  // (claimPending) — never for other disabled reasons. zeroState is the muted
+  // "no rewards" chip styling, suppressed during a pending claim so "Claiming…"
+  // renders as a disabled primary button rather than the muted chip.
+  const zeroState = totalIsZero && !claimPending;
+  const CLAIM_PENDING_TOOLTIP =
+    "A reward claim is pending confirmation — you can claim again once it's confirmed.";
 
   // Compact side-by-side variant: vertical mini-card (label / amount /
   // Claim-all). No per-cluster breakdown or mock footer — those stay on the
@@ -149,37 +178,45 @@ export function RewardCard({
           {formatLythoshiAsLyth(totalLythoshi, 4)}{" "}
           <span style={{ fontSize: 9.5, color: "var(--fg-400)" }}>LYTH</span>
         </div>
-        <button
-          onClick={onClaim}
-          disabled={claimDisabled || totalIsZero}
-          className={totalIsZero ? undefined : "ext-act prim"}
-          style={{
-            marginTop: 8,
-            width: "100%",
-            padding: "7px 10px",
-            ...(totalIsZero
-              ? {
-                  borderRadius: 8,
-                  border: "1px solid var(--fg-700)",
-                  background: "rgba(255,255,255,0.04)",
-                  color: "var(--fg-400)",
-                  fontFamily: "var(--f-sans)",
-                  fontSize: 10.5,
-                  cursor: "default",
-                }
-              : {
-                  flexDirection: "row" as const,
-                  justifyContent: "center",
-                  gap: 6,
-                  fontSize: 11,
-                  opacity: claimDisabled ? 0.5 : 1,
-                  cursor: claimDisabled ? "default" : "pointer",
-                }),
-          }}
+        {/* Wrapper carries the pending tooltip: a native `title` on a DISABLED
+            button doesn't fire hover, so attach it to a hover-capable span
+            (title set only while claimPending). */}
+        <span
+          style={{ display: "block" }}
+          {...(claimPending ? { title: CLAIM_PENDING_TOOLTIP } : {})}
         >
-          {!totalIsZero && <Icon name="check" size={11} />}
-          {totalIsZero ? "No rewards" : "Claim all"}
-        </button>
+          <button
+            onClick={onClaim}
+            disabled={claimDisabled || totalIsZero}
+            className={zeroState ? undefined : "ext-act prim"}
+            style={{
+              marginTop: 8,
+              width: "100%",
+              padding: "7px 10px",
+              ...(zeroState
+                ? {
+                    borderRadius: 8,
+                    border: "1px solid var(--fg-700)",
+                    background: "rgba(255,255,255,0.04)",
+                    color: "var(--fg-400)",
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 10.5,
+                    cursor: "default",
+                  }
+                : {
+                    flexDirection: "row" as const,
+                    justifyContent: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    opacity: claimDisabled ? 0.5 : 1,
+                    cursor: claimDisabled ? "default" : "pointer",
+                  }),
+            }}
+          >
+            {!zeroState && <Icon name="check" size={11} />}
+            {claimPending ? "Claiming…" : totalIsZero ? "No rewards" : "Claim all"}
+          </button>
+        </span>
       </div>
     );
   }
@@ -243,35 +280,42 @@ export function RewardCard({
             LYTH
           </span>
         </div>
-        <button
-          onClick={onClaim}
-          disabled={claimDisabled || totalIsZero}
-          className={totalIsZero ? undefined : "ext-act prim"}
-          style={{
-            flexShrink: 0,
-            padding: "7px 12px",
-            ...(totalIsZero
-              ? {
-                  borderRadius: 8,
-                  border: "1px solid var(--fg-700)",
-                  background: "rgba(255,255,255,0.04)",
-                  color: "var(--fg-400)",
-                  fontFamily: "var(--f-sans)",
-                  fontSize: 11,
-                  cursor: "default",
-                }
-              : {
-                  flexDirection: "row" as const,
-                  gap: 6,
-                  fontSize: 11.5,
-                  opacity: claimDisabled ? 0.5 : 1,
-                  cursor: claimDisabled ? "default" : "pointer",
-                }),
-          }}
+        {/* Wrapper carries the pending tooltip (title unreliable on a disabled
+            button); set only while claimPending. */}
+        <span
+          style={{ display: "inline-flex", flexShrink: 0 }}
+          {...(claimPending ? { title: CLAIM_PENDING_TOOLTIP } : {})}
         >
-          {!totalIsZero && <Icon name="check" size={11} />}
-          {totalIsZero ? "No rewards yet" : "Claim all"}
-        </button>
+          <button
+            onClick={onClaim}
+            disabled={claimDisabled || totalIsZero}
+            className={zeroState ? undefined : "ext-act prim"}
+            style={{
+              flexShrink: 0,
+              padding: "7px 12px",
+              ...(zeroState
+                ? {
+                    borderRadius: 8,
+                    border: "1px solid var(--fg-700)",
+                    background: "rgba(255,255,255,0.04)",
+                    color: "var(--fg-400)",
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 11,
+                    cursor: "default",
+                  }
+                : {
+                    flexDirection: "row" as const,
+                    gap: 6,
+                    fontSize: 11.5,
+                    opacity: claimDisabled ? 0.5 : 1,
+                    cursor: claimDisabled ? "default" : "pointer",
+                  }),
+            }}
+          >
+            {!zeroState && <Icon name="check" size={11} />}
+            {claimPending ? "Claiming…" : totalIsZero ? "No rewards yet" : "Claim all"}
+          </button>
+        </span>
       </div>
 
       {/* Per-cluster breakdown — gated behind TRADING_INTERFACE

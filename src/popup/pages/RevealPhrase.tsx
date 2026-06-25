@@ -173,7 +173,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -221,6 +221,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
             </div>
             <input
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => {
@@ -287,7 +288,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -366,7 +367,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Recovery phrase
         </div>

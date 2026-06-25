@@ -30,6 +30,7 @@
 
 import { bech32mToAddress } from "./bech32m.js";
 import { lythoshiDecimalToLythDecimal } from "./lyth-units.js";
+import { isCurrencyCode, type CurrencyCode } from "./iso4217.js";
 import { isTxOpKind, type NotificationRecord, type TxOpKind } from "./notifications.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,6 +45,12 @@ export const ACTIVITY_ROLLING_WINDOW = 100;
  *  Five minutes covers slow blocks + bounded indexer lag; longer pending rows
  *  become user-confusing rather than informative. */
 export const PENDING_TTL_MS = 5 * 60 * 1000;
+
+/** Cap on the durable local-claim store per (address, chainId). Reward claims
+ *  are infrequent manual actions, so a small newest-N window bounds the store
+ *  without ever evicting a recent claim. Distinct from ACTIVITY_ROLLING_WINDOW
+ *  (which caps confirmed rows only). */
+export const LOCAL_CLAIMS_CAP = 50;
 
 /** Heuristic match window for pending-row reconciliation: when a confirmed
  *  entry's blockHeight falls within ±this many blocks of the pending row's
@@ -84,6 +91,13 @@ export function activityPendingKey(addressLower: string, chainIdHex: string): st
   return `mono.activity.pending.${addressLower}.${chainIdHex}`;
 }
 
+/** Per-address, per-chain durable local-claim store key. Reward-claim rows are
+ *  never emitted by the indexer (verification 2026-06-20), so the wallet keeps
+ *  its own record here, scoped exactly like the two caches above. */
+export function activityLocalClaimsKey(addressLower: string, chainIdHex: string): string {
+  return `mono.activity.localclaims.${addressLower}.${chainIdHex}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Row-kind union
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,6 +132,13 @@ export interface PendingTxRow {
    *  non-delegation sends and legacy rows. */
   clusterId?: number;
   clusterName?: string;
+  /** Redelegate DESTINATION cluster (`clusterId`/`clusterName` above are the
+   *  SOURCE). Captured at send PURELY as notification metadata so the toast can
+   *  show `<from> → <to>` — there is no cluster directory at notify-time (the
+   *  activity row, by contrast, resolves the destination from the live
+   *  directory). Absent on non-redelegate sends + legacy rows. */
+  toClusterId?: number;
+  toClusterName?: string;
   /** Set once the tx is confirmed via the real-time receipt (the inclusion
    *  block from `eth_getTransactionReceipt`) but BEFORE the indexer has
    *  surfaced the canonical confirmed row. Presence flips the row's render
@@ -131,6 +152,30 @@ export interface PendingTxRow {
    *  indexer's canonical row by (block, txIndex) for ANY kind (transfer OR
    *  delegate / undelegate / redelegate), not just `tx_send`. */
   confirmedTxIndex?: number;
+  /** Marks a wallet-local durable reward-claim record (vs an ordinary in-flight
+   *  send). Set ONLY on claim rows. Routes render to `claimedAmount` and exempts
+   *  the row from the 5-min pending TTL (evictExpiredPending). Metadata-only;
+   *  the indexer emits no claim event (verification 2026-06-20) so this is the
+   *  sole persistent claim marker. */
+  source?: "local-claim";
+  /** Claimed reward, decimal LYTH, captured popup-side from
+   *  `settledPendingLythoshi` at claim time (the chain/indexer never surface it;
+   *  a claim's `amountDecimal` is "0"). null = unavailable (rewards mock/offline)
+   *  → render shows bare "Rewards claimed", no figure (no-mock). */
+  claimedAmount?: string | null;
+  /** LYTH→fiat rate frozen at claim time (getLythFiatRate; null until the oracle
+   *  ships). Stored so confirmed-history fiat survives every indexer rebuild;
+   *  null → the fiat sibling renders the honest dash, never a fabricated value. */
+  rateAtClaim?: number | null;
+  /** Display currency the rate was captured in (loadDisplayCurrency) — frozen so
+   *  the historic fiat renders in the currency selected at claim time. */
+  currency?: CurrencyCode;
+  /** Delegation weight (bps) for a delegate/redelegate, captured at submit PURELY
+   *  as notification metadata (it's the same uint16 ALREADY encoded in the
+   *  calldata — the signed tx is byte-identical, this is NOT re-encoded). Lets the
+   *  notification show the % (bps/100). Absent on undelegate (no bps), claims,
+   *  ordinary sends, and legacy rows → the % is omitted (no-mock). */
+  delegationWeightBps?: number;
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -220,6 +265,21 @@ export interface CrossingToPrivateRow extends ConfirmedAnchor {
   amountDecimal: string | null;
 }
 
+/** Reward-claim event, surfaced from the indexer's `subKind:"claimed"` activity
+ *  entry (#3 / upstream #74). `amountDecimal` is the CLAIMED REWARD in decimal
+ *  LYTH (the native LYTH the precompile moved — NOT the staked principal),
+ *  converted from the raw `amount` lythoshi. `cluster` is metadata only (the
+ *  chain reports 0 for claims — they aggregate across the wallet's stake, so it
+ *  is not a render target). The wallet's local receipt-decoded claim is the
+ *  immediate reveal; this confirmed row is the durable one, and the local copy
+ *  auto-retires via applyLocalClaims once it appears at the same (block,
+ *  txIndex). */
+export interface ClaimRow extends ConfirmedAnchor {
+  kind: "claim";
+  amountDecimal: string | null;
+  cluster?: number;
+}
+
 /** Union over every confirmed row kind (no pending). */
 export type ConfirmedRow =
   | TxSendRow
@@ -229,7 +289,8 @@ export type ConfirmedRow =
   | UndelegateRow
   | RedelegateRow
   | RebalanceRow
-  | CrossingToPrivateRow;
+  | CrossingToPrivateRow
+  | ClaimRow;
 
 /** Union over everything an `ActivityList` ever renders. */
 export type ActivityRow = PendingTxRow | ConfirmedRow;
@@ -251,6 +312,14 @@ export interface ActivityCache {
  *  short list (one entry per outstanding Send, evicted at PENDING_TTL_MS). */
 export interface PendingActivityCache {
   pending: PendingTxRow[];
+}
+
+/** Persisted shape under `mono.activity.localclaims.<addr>.<chain>`. The wallet's
+ *  durable reward-claim rows (pending_tx-kind, `source:"local-claim"`). The
+ *  indexer emits no claim event, so this is the only persistent claim record;
+ *  capped to LOCAL_CLAIMS_CAP newest by `broadcastedAtMs`. */
+export interface LocalClaimsCache {
+  claims: PendingTxRow[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +371,11 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         typeof r.clusterName === "string" && r.clusterName.length > 0
           ? r.clusterName
           : undefined;
+      const toClusterId = isFiniteNumber(r.toClusterId) ? r.toClusterId : undefined;
+      const toClusterName =
+        typeof r.toClusterName === "string" && r.toClusterName.length > 0
+          ? r.toClusterName
+          : undefined;
       // Receipt-confirmed-but-not-yet-indexed marker (the inclusion block + tx
       // index — the precise, kind-agnostic match anchor against the indexer).
       const confirmedBlockHeight = isFiniteNumber(r.confirmedBlockHeight)
@@ -310,6 +384,23 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       const confirmedTxIndex = isFiniteNumber(r.confirmedTxIndex)
         ? r.confirmedTxIndex
         : undefined;
+      // Local-claim marker + captured claim fields (the reward-claim store).
+      // MANDATORY here — without carrying these the fields are silently dropped
+      // on every cache (de)serialization rebuild. Coerce/drop malformed values
+      // rather than rejecting the row, exactly mirroring the metadata idiom above.
+      const source = r.source === "local-claim" ? "local-claim" : undefined;
+      const claimedAmount =
+        typeof r.claimedAmount === "string" || r.claimedAmount === null
+          ? r.claimedAmount
+          : undefined;
+      const rateAtClaim = isFiniteNumber(r.rateAtClaim)
+        ? r.rateAtClaim
+        : r.rateAtClaim === null
+          ? null
+          : undefined;
+      const currency = isCurrencyCode(r.currency) ? r.currency : undefined;
+      const delegationWeightBps =
+        isFiniteNumber(r.delegationWeightBps) ? r.delegationWeightBps : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -321,8 +412,15 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(opKind !== undefined ? { opKind } : {}),
         ...(clusterId !== undefined ? { clusterId } : {}),
         ...(clusterName !== undefined ? { clusterName } : {}),
+        ...(toClusterId !== undefined ? { toClusterId } : {}),
+        ...(toClusterName !== undefined ? { toClusterName } : {}),
         ...(confirmedBlockHeight !== undefined ? { confirmedBlockHeight } : {}),
         ...(confirmedTxIndex !== undefined ? { confirmedTxIndex } : {}),
+        ...(source !== undefined ? { source } : {}),
+        ...(claimedAmount !== undefined ? { claimedAmount } : {}),
+        ...(rateAtClaim !== undefined ? { rateAtClaim } : {}),
+        ...(currency !== undefined ? { currency } : {}),
+        ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
       };
     }
 
@@ -429,6 +527,20 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       };
     }
 
+    case "claim": {
+      if (!validateConfirmedAnchor(r)) return null;
+      if (!isStringOrNull(r.amountDecimal)) return null;
+      const cluster = isFiniteNumber(r.cluster) ? r.cluster : undefined;
+      return {
+        kind: "claim",
+        blockHeight: r.blockHeight as number,
+        txIndex: r.txIndex as number,
+        logIndex: r.logIndex as number,
+        amountDecimal: r.amountDecimal,
+        ...(cluster !== undefined ? { cluster } : {}),
+      };
+    }
+
     default:
       return null;
   }
@@ -471,6 +583,26 @@ export function validatePendingActivityCache(
     if (row && row.kind === "pending_tx") pending.push(row);
   }
   return { pending };
+}
+
+/** Validate the durable local-claim store. Each entry is a `pending_tx` row
+ *  tagged `source:"local-claim"`; anything else is dropped. Caps to the newest
+ *  LOCAL_CLAIMS_CAP by `broadcastedAtMs` so the store can't grow unboundedly
+ *  (claims are infrequent; the cap never trims a recent one). Returns null on
+ *  any structural failure. */
+export function validateLocalClaimsCache(input: unknown): LocalClaimsCache | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!Array.isArray(r.claims)) return null;
+  const claims: PendingTxRow[] = [];
+  for (const raw of r.claims) {
+    const row = validateActivityRow(raw);
+    if (row && row.kind === "pending_tx" && row.source === "local-claim") {
+      claims.push(row);
+    }
+  }
+  claims.sort((a, b) => b.broadcastedAtMs - a.broadcastedAtMs);
+  return { claims: claims.slice(0, LOCAL_CLAIMS_CAP) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -616,6 +748,25 @@ export function mapAddressActivityToRows(
       // fields live on the history-stream row). Otherwise produce a
       // fallback row from subKind.
       if (delegationKeys.has(anchorKey)) continue;
+      // Reward claim (#3 / upstream #74): the indexer surfaces it as
+      // subKind:"claimed" with the claimed reward in `amount` (decimal lythoshi
+      // — the native LYTH moved, NOT the staked principal). Handled BEFORE the
+      // cluster-null guard below: a claim carries cluster:0 (not a real
+      // delegation target), so it must never be dropped for "lacking" a cluster.
+      // delegation-history never surfaces claims, so this anchor is never in
+      // `delegationKeys` — the activity stream is the sole claim source.
+      if (e.subKind === "claimed") {
+        out.push({
+          kind: "claim",
+          blockHeight: e.blockHeight,
+          txIndex: e.txIndex,
+          logIndex: e.logIndex,
+          amountDecimal:
+            e.amount === null ? null : lythoshiDecimalToLythDecimal(e.amount),
+          ...(e.cluster !== null ? { cluster: e.cluster } : {}),
+        });
+        continue;
+      }
       if (e.cluster === null) continue;
       switch (e.subKind) {
         case "delegated":
@@ -690,12 +841,77 @@ function compareConfirmedNewestFirst(a: ConfirmedRow, b: ConfirmedRow): number {
   return b.logIndex - a.logIndex;
 }
 
-/** Drop pending rows past the TTL backstop. */
+/** Drop pending rows past the TTL backstop. Durable reward-claim rows
+ *  (`source:"local-claim"`) are EXEMPT — they are a persistent record, not an
+ *  in-flight tx, and the indexer never surfaces a claim to reconcile them away
+ *  (verification 2026-06-20). The exemption is claim-rows-ONLY: an ordinary
+ *  pending row still evicts at PENDING_TTL_MS (this is a SEPARATE edit from the
+ *  validator field-survival — C1). */
 export function evictExpiredPending(
   pending: PendingTxRow[],
   now: number,
 ): PendingTxRow[] {
-  return pending.filter((p) => now - p.broadcastedAtMs < PENDING_TTL_MS);
+  return pending.filter(
+    (p) => p.source === "local-claim" || now - p.broadcastedAtMs < PENDING_TTL_MS,
+  );
+}
+
+/** True when a local-claim's reward amount is NOT yet resolved. `claimedAmount`
+ *  is decoded from the Claimed log only on a later reconcile (it is null at
+ *  broadcast), so the App's reconcile poll counts such a claim as "pending" to
+ *  keep the poll armed until the reconcile fills the amount. Once the amount is
+ *  known the claim is a durable record (excluded from the poll), so the poll
+ *  disarms — no forever-poll. */
+export function localClaimAwaitingAmount(row: PendingTxRow): boolean {
+  return (
+    row.source === "local-claim" &&
+    (row.claimedAmount === null || row.claimedAmount === undefined)
+  );
+}
+
+/** Sticky local-claim layer (mirrors applyCapturedClusterNames): a reward-claim
+ *  row originates locally (its amount is decoded from the receipt's Claimed log)
+ *  and bridges the pre-confirm window, so re-inject the durable claim rows into
+ *  the pending list each poll so they survive a lost pending-cache copy. Returns
+ *  claims (newest source-of-truth) followed by the untouched non-claim pending
+ *  rows.
+ *
+ *  Two-phase dedup (C2):
+ *   - INTRA-STORE identity: union the durable claims with any claim copy already
+ *     resident in `pending` (the broadcast-written, receipt-bridged copy),
+ *     deduped by `txHash`; the pending-resident copy wins (it carries the
+ *     freshest receipt-bridge (block,txIndex) anchor).
+ *   - CROSS-STREAM: drop a claim once the indexer surfaces a CONFIRMED row at
+ *     its bridged inclusion slot — matched by the `(blockHeight, txIndex)`
+ *     ANCHOR, never `txHash` (confirmed rows + the SDK AddressActivityEntry
+ *     carry no txHash). LIVE since 2026-06-24 (the indexer now ships claim
+ *     events WITH the amount): the local copy auto-retires with no double-row;
+ *     `applyStickyClaimAmount` carries the amount onto a null-amount confirmed
+ *     row so the retire never drops it. */
+export function applyLocalClaims(
+  pending: PendingTxRow[],
+  localClaims: PendingTxRow[],
+  confirmed: ConfirmedRow[],
+): PendingTxRow[] {
+  const nonClaim = pending.filter((p) => p.source !== "local-claim");
+  const byHash = new Map<string, PendingTxRow>();
+  for (const c of localClaims) {
+    if (c.source === "local-claim") byHash.set(c.txHash, c);
+  }
+  for (const p of pending) {
+    if (p.source === "local-claim") byHash.set(p.txHash, p);
+  }
+  const claims = [...byHash.values()].filter(
+    (c) =>
+      c.confirmedBlockHeight === undefined ||
+      c.confirmedTxIndex === undefined ||
+      !confirmed.some(
+        (r) =>
+          r.blockHeight === c.confirmedBlockHeight &&
+          r.txIndex === c.confirmedTxIndex,
+      ),
+  );
+  return [...claims, ...nonClaim];
 }
 
 /** Heuristic match: returns true when `confirmed` plausibly represents the
@@ -836,6 +1052,48 @@ export function applyCapturedClusterNames(
   });
 }
 
+/** Thread a known claim amount onto a confirmed `ClaimRow` whose indexer
+ *  `amountDecimal` is null. Mirrors applyCapturedClusterNames: the indexer can
+ *  surface a confirmed claim row (subKind:"claimed") a beat BEFORE it decodes
+ *  the Claimed-log amount, and applyLocalClaims retires the amount-bearing
+ *  local-claim on the (block,txIndex) anchor ALONE — so without this the amount
+ *  blinks out until a reopen re-fetches the decoded value. Two sticky sources,
+ *  prevConfirmed first:
+ *   - `prevConfirmed`: a claim row at the same (blockHeight, txIndex) that
+ *     already carried a non-null amount (survives the per-poll rebuild).
+ *   - `pending`: a local-claim whose receipt slot (confirmedBlockHeight,
+ *     confirmedTxIndex) matches and whose `claimedAmount` is known.
+ *  Only fills a NULL amountDecimal — NEVER overwrites a known amount with null.
+ *  Matched by the (blockHeight, txIndex) inclusion slot — the same key
+ *  applyCapturedClusterNames uses (one tx = one slot). */
+export function applyStickyClaimAmount(
+  confirmed: ConfirmedRow[],
+  prior: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
+): ConfirmedRow[] {
+  const pending = prior.pending ?? [];
+  const prevConfirmed = prior.confirmed ?? [];
+  if (pending.length === 0 && prevConfirmed.length === 0) return confirmed;
+  return confirmed.map((row) => {
+    if (row.kind !== "claim" || row.amountDecimal !== null) return row;
+    const prevAmount = prevConfirmed.find(
+      (p): p is ClaimRow =>
+        p.kind === "claim" &&
+        p.amountDecimal !== null &&
+        p.blockHeight === row.blockHeight &&
+        p.txIndex === row.txIndex,
+    )?.amountDecimal;
+    const pendAmount = pending.find(
+      (p) =>
+        p.source === "local-claim" &&
+        p.claimedAmount != null &&
+        p.confirmedBlockHeight === row.blockHeight &&
+        p.confirmedTxIndex === row.txIndex,
+    )?.claimedAmount;
+    const amount = prevAmount ?? pendAmount ?? null;
+    return amount !== null ? { ...row, amountDecimal: amount } : row;
+  });
+}
+
 /** Merge a fresh indexer snapshot into the previous cache. Pure function:
  *
  *  1. Map delegation-history rows (canonical source — full richness).
@@ -889,8 +1147,13 @@ export function mergeIndexerSnapshot(
   merged.sort(compareConfirmedNewestFirst);
   const capped = merged.slice(0, ACTIVITY_ROLLING_WINDOW);
   const named = prior ? applyCapturedClusterNames(capped, prior) : capped;
+  // The indexer can surface a confirmed claim row before it decodes the
+  // Claimed-log amount; carry a known amount (a prior confirmed row, or the
+  // receipt-decoded local-claim) onto a null-amount claim row so the amount
+  // doesn't blink out when applyLocalClaims retires the local copy.
+  const withClaimAmounts = prior ? applyStickyClaimAmount(named, prior) : named;
 
-  return { confirmed: named, lastFetchedAtMs: now };
+  return { confirmed: withClaimAmounts, lastFetchedAtMs: now };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

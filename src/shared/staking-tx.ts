@@ -32,6 +32,7 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
+  LYTHOSHI_PER_LYTH,
 } from "@monolythium/core-sdk";
 
 /** Delegation precompile address — Whitepaper §5.4 / §7.6
@@ -115,4 +116,45 @@ export function effectiveWeightWei(
   if (bps <= 0) return 0n;
   if (bps >= 10_000) return balanceWei;
   return (balanceWei * BigInt(bps)) / 10_000n;
+}
+
+/** Chain-EXACT effective weight: the wallet's effective weight floored to WHOLE
+ *  LYTH, matching mono-core `effective_weight_whole_lyth`
+ *  (`floor(balance · bps / (10000 · 1e18))`). Returned re-expressed in lythoshi
+ *  as a whole multiple of 1 LYTH, so the standard lyth formatters render the
+ *  whole number — e.g. 530.082 LYTH → "530 LYTH", and a sub-1-LYTH delegation →
+ *  "0 LYTH". This is what the chain actually credits for rewards/voting, so use
+ *  it for effective-weight DISPLAYS — NOT for the amount input (which keeps the
+ *  user's precise value) and NOT for the tx (still bps). Equivalent to flooring
+ *  `effectiveWeightWei` to whole LYTH: floor(floor(x/10000)/1e18) ==
+ *  floor(x/(10000·1e18)). */
+export function effectiveWeightWholeLythoshi(
+  bps: number,
+  balanceWei: bigint,
+): bigint {
+  const lythoshi = effectiveWeightWei(bps, balanceWei);
+  return (lythoshi / LYTHOSHI_PER_LYTH) * LYTHOSHI_PER_LYTH;
+}
+
+/** True when a delegation with `bps` (>= 1, otherwise the chain reverts
+ *  ZeroWeight) floors to **0 effective weight** at this balance: the chain
+ *  ACCEPTS it (no revert) but it's inert — earns nothing and casts no vote
+ *  until the balance grows. The real, balance-dependent "minimum" — see
+ *  [`minNonInertBps`]. Shared by the % field and the amount field. */
+export function isInertDelegation(bps: number, balanceWei: bigint): boolean {
+  return (
+    bps >= 1 && balanceWei > 0n && effectiveWeightWholeLythoshi(bps, balanceWei) === 0n
+  );
+}
+
+/** Smallest `bps` that yields >= 1 whole-LYTH effective weight at this balance
+ *  (`ceil(10000·1e18 / balance)`), i.e. the first non-inert weight. Returns null
+ *  when the balance is unknown/zero OR is below 1 LYTH (no bps up to 10000 can
+ *  reach 1 whole-LYTH effective — even 100% floors to 0). Used for the
+ *  "minimum ≈ X%" warning copy. */
+export function minNonInertBps(balanceWei: bigint): number | null {
+  if (balanceWei <= 0n) return null;
+  const num = 10_000n * LYTHOSHI_PER_LYTH;
+  const ceilBps = (num + balanceWei - 1n) / balanceWei; // ceil(num / balance)
+  return ceilBps > 10_000n ? null : Number(ceilBps);
 }

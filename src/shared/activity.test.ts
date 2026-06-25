@@ -9,11 +9,17 @@ import {
   ACTIVITY_ROLLING_WINDOW,
   PENDING_TTL_MS,
   PENDING_MATCH_BLOCK_WINDOW,
+  LOCAL_CLAIMS_CAP,
   activityCacheKey,
   activityPendingKey,
+  activityLocalClaimsKey,
   validateActivityRow,
   validateActivityCache,
   validatePendingActivityCache,
+  validateLocalClaimsCache,
+  applyLocalClaims,
+  applyStickyClaimAmount,
+  localClaimAwaitingAmount,
   mapDelegationHistoryToRows,
   mapAddressActivityToRows,
   delegationKeySet,
@@ -29,6 +35,7 @@ import {
   type DelegateRow,
   type RedelegateRow,
   type TxSendRow,
+  type ClaimRow,
   type RawAddressActivity,
   type RawDelegationHistory,
 } from "./activity.js";
@@ -727,6 +734,48 @@ describe("mapAddressActivityToRows", () => {
     );
     expect(rows).toHaveLength(0);
   });
+
+  it("maps a delegation/claimed entry → ClaimRow, reward converted lythoshi → LYTH (#3)", () => {
+    // The indexer surfaces a reward claim as kind:"delegation", subKind:"claimed"
+    // with the CLAIMED REWARD in `amount` (decimal lythoshi), cluster:0.
+    const rows = mapAddressActivityToRows(
+      [
+        makeActivity({
+          kind: "delegation",
+          subKind: "claimed",
+          amount: "1500000000000000000", // 1.5 LYTH in lythoshi (18-dec)
+          cluster: 0,
+          direction: null,
+          counterparty: null,
+        }),
+      ],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("claim");
+    // AMOUNT-UNIT GUARD: decimal-lythoshi → decimal LYTH (NOT raw/whole/hex).
+    expect((rows[0] as ClaimRow).amountDecimal).toBe("1.5");
+  });
+
+  it("a claimed entry is NOT suppressed by delegationKeys (claims aren't in the delegation stream) (#3)", () => {
+    // delegationKeySet is built only from delegate/undelegate/redelegate rows, so
+    // a claim's anchor is never in it — the activity stream is the sole source.
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ kind: "delegation", subKind: "claimed", amount: "1000000000000000000", cluster: 0 })],
+      new Set(["999.9.9"]), // a DIFFERENT anchor present — must not affect the claim
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("claim");
+  });
+
+  it("maps a claimed entry even when cluster is null (handled before the cluster-null guard) (#3)", () => {
+    const rows = mapAddressActivityToRows(
+      [makeActivity({ kind: "delegation", subKind: "claimed", amount: "1000000000000000000", cluster: null })],
+      new Set(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("claim");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1338,5 +1387,360 @@ describe("mergeActivityNewestFirst", () => {
     // Both block=Infinity → newer ms (failed@20) first.
     expect(out[0]!.tag === "failed").toBe(true);
     expect(out[1]!.tag === "row").toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local-claim store (reward-claim persistence #3) — key, validator survival, cap
+// ─────────────────────────────────────────────────────────────────────────────
+
+function claimRow(over: Partial<PendingTxRow> = {}): PendingTxRow {
+  return {
+    kind: "pending_tx",
+    txHash: "0xclaim1",
+    to: "0x000000000000000000000000000000000000110c",
+    amountDecimal: "0",
+    broadcastedAtMs: 1_000,
+    broadcastBlockHeight: 100,
+    via: "op-a",
+    opKind: "claim",
+    source: "local-claim",
+    claimedAmount: "6.51",
+    rateAtClaim: null,
+    currency: "USD",
+    ...over,
+  };
+}
+
+describe("activityLocalClaimsKey", () => {
+  it("formats a per-address per-chain key in its own namespace", () => {
+    expect(activityLocalClaimsKey("0xabc", "0x10f2c")).toBe(
+      "mono.activity.localclaims.0xabc.0x10f2c",
+    );
+    // Distinct from the confirmed + pending namespaces (no cross-key collision).
+    expect(activityLocalClaimsKey("0xabc", "0x10f2c")).not.toBe(
+      activityPendingKey("0xabc", "0x10f2c"),
+    );
+    expect(
+      activityCacheKey("0xabc", "0x10f2c").startsWith("mono.activity.localclaims."),
+    ).toBe(false);
+  });
+});
+
+describe("validateActivityRow — local-claim field survival (C1 edit 1)", () => {
+  it("round-trips a claim row with source/claimedAmount/rateAtClaim/currency intact", () => {
+    const row = claimRow();
+    // The gotcha: validateActivityRow rebuilds from fresh literals, dropping any
+    // field it does not explicitly carry. These MUST survive every rebuild.
+    expect(validateActivityRow(row)).toEqual(row);
+  });
+
+  it("round-trips a delegate row's delegationWeightBps (notification % metadata)", () => {
+    const row: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xdel1",
+      to: "0x000000000000000000000000000000000000100a",
+      amountDecimal: "0",
+      broadcastedAtMs: 1_000,
+      broadcastBlockHeight: 100,
+      via: "op-a",
+      opKind: "delegate",
+      clusterId: 2,
+      clusterName: "alpha",
+      delegationWeightBps: 2500,
+    };
+    expect(validateActivityRow(row)).toEqual(row);
+    // A malformed bps is dropped (the row still validates).
+    const bad = validateActivityRow({ ...row, delegationWeightBps: "nope" }) as PendingTxRow;
+    expect(bad).not.toBeNull();
+    expect(bad.delegationWeightBps).toBeUndefined();
+  });
+
+  it("keeps a populated rateAtClaim and a null rateAtClaim (no-mock distinction)", () => {
+    const withRate = claimRow({ rateAtClaim: 1.23 });
+    expect(validateActivityRow(withRate)).toEqual(withRate);
+    const nullRate = claimRow({ rateAtClaim: null });
+    expect((validateActivityRow(nullRate) as PendingTxRow).rateAtClaim).toBeNull();
+  });
+
+  it("drops a malformed source/currency rather than rejecting the row", () => {
+    const bad = validateActivityRow({
+      ...claimRow(),
+      source: "bogus",
+      currency: "NOTACODE",
+    }) as PendingTxRow;
+    expect(bad).not.toBeNull();
+    expect(bad.source).toBeUndefined();
+    expect(bad.currency).toBeUndefined();
+  });
+});
+
+describe("validateLocalClaimsCache", () => {
+  it("keeps only pending_tx rows tagged source:local-claim", () => {
+    const out = validateLocalClaimsCache({
+      claims: [
+        claimRow({ txHash: "0x1" }),
+        // ordinary pending row (no source) — dropped
+        { ...claimRow({ txHash: "0x2" }), source: undefined },
+        // wrong kind — dropped
+        { kind: "tx_send", blockHeight: 1, txIndex: 0, logIndex: 0, counterparty: null, amountDecimal: "1" },
+      ],
+    });
+    expect(out?.claims.map((c) => c.txHash)).toEqual(["0x1"]);
+  });
+
+  it("caps to the newest LOCAL_CLAIMS_CAP by broadcastedAtMs", () => {
+    const many = Array.from({ length: LOCAL_CLAIMS_CAP + 10 }, (_, i) =>
+      claimRow({ txHash: `0x${i}`, broadcastedAtMs: i }),
+    );
+    const out = validateLocalClaimsCache({ claims: many });
+    expect(out?.claims.length).toBe(LOCAL_CLAIMS_CAP);
+    // Newest-first, and the 10 oldest were trimmed.
+    expect(out?.claims[0]!.broadcastedAtMs).toBe(LOCAL_CLAIMS_CAP + 9);
+    expect(
+      out?.claims.some((c) => c.broadcastedAtMs < 10),
+    ).toBe(false);
+  });
+
+  it("returns null on a structurally invalid input", () => {
+    expect(validateLocalClaimsCache(null)).toBeNull();
+    expect(validateLocalClaimsCache({})).toBeNull();
+  });
+});
+
+describe("evictExpiredPending — local-claim TTL exemption (C1 edit 2)", () => {
+  it("exempts source:local-claim while an ordinary pending row evicts", () => {
+    const now = 10 * 60 * 1000; // 10 min
+    const ordinary: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xord",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: now - (PENDING_TTL_MS + 1), // past the 5-min TTL
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    const claim = claimRow({ txHash: "0xc", broadcastedAtMs: now - (PENDING_TTL_MS + 1) });
+    const out = evictExpiredPending([ordinary, claim], now);
+    // The two edits are independent: the claim survives PURELY on its source
+    // marker (same age as the evicted ordinary row), proving the exemption is
+    // not the validator change.
+    expect(out.map((p) => p.txHash)).toEqual(["0xc"]);
+  });
+
+  it("still evicts an expired claim-less list normally", () => {
+    const now = 10 * 60 * 1000;
+    const fresh: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xfresh",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: now - 1000,
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    expect(evictExpiredPending([fresh], now).map((p) => p.txHash)).toEqual(["0xfresh"]);
+  });
+});
+
+describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
+  function confirmed(over: Partial<DelegateRow> = {}): ConfirmedRow {
+    return {
+      kind: "delegate",
+      blockHeight: 500,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 0,
+      weightBps: 5000,
+      ...over,
+    };
+  }
+
+  it("re-injects a durable claim the pending cache lost (intra-store by txHash)", () => {
+    const durable = claimRow({ txHash: "0xc1" });
+    const out = applyLocalClaims([], [durable], []);
+    expect(out.map((p) => p.txHash)).toEqual(["0xc1"]);
+  });
+
+  it("dedups a claim resident in BOTH pending and the store (no double-row)", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0 });
+    const durable = claimRow({ txHash: "0xc1" }); // older copy, no anchor
+    const out = applyLocalClaims([bridged], [durable], []);
+    expect(out.filter((p) => p.txHash === "0xc1").length).toBe(1);
+    // The pending-resident (bridged, anchored) copy wins.
+    expect(out[0]!.confirmedBlockHeight).toBe(500);
+  });
+
+  it("CROSS-STREAM: suppresses a claim once a confirmed row shares its (block,txIndex) — NOT txHash", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0 });
+    // A future indexer claim surfaces as a confirmed row at the SAME anchor (it
+    // carries NO txHash). The local claim must auto-retire — no double-row.
+    const out = applyLocalClaims([bridged], [bridged], [confirmed({ blockHeight: 500, txIndex: 0 })]);
+    expect(out.some((p) => p.source === "local-claim")).toBe(false);
+  });
+
+  it("CROSS-STREAM: a confirmed ClaimRow at the same (block,txIndex) retires the local claim — exactly one (#3)", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0, claimedAmount: "6.51" });
+    // The #3 indexer reward-claim now surfaces as a confirmed ClaimRow at the
+    // SAME (block, txIndex) anchor (no txHash). The local receipt-copy retires.
+    const indexerClaim: ConfirmedRow = {
+      kind: "claim",
+      blockHeight: 500,
+      txIndex: 0,
+      logIndex: 0,
+      amountDecimal: "6.51",
+    };
+    const out = applyLocalClaims([bridged], [bridged], [indexerClaim]);
+    expect(out.some((p) => p.source === "local-claim")).toBe(false);
+    expect(out.filter((p) => p.txHash === "0xc1").length).toBe(0); // no double-row
+  });
+
+  it("does NOT suppress when the confirmed anchor differs", () => {
+    const bridged = claimRow({ txHash: "0xc1", confirmedBlockHeight: 500, confirmedTxIndex: 0 });
+    const out = applyLocalClaims([bridged], [bridged], [confirmed({ blockHeight: 999, txIndex: 7 })]);
+    expect(out.some((p) => p.txHash === "0xc1")).toBe(true);
+  });
+
+  it("passes non-claim pending rows through untouched", () => {
+    const ordinary: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xord",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: 1,
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    const out = applyLocalClaims([ordinary], [claimRow({ txHash: "0xc1" })], []);
+    expect(out.map((p) => p.txHash).sort()).toEqual(["0xc1", "0xord"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claim amount reconcile — sticky carry + arm-until-resolved (the reopen-bug fix)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function claimConfirmed(
+  blockHeight: number,
+  txIndex: number,
+  amountDecimal: string | null,
+): ClaimRow {
+  return { kind: "claim", blockHeight, txIndex, logIndex: 0, amountDecimal };
+}
+
+function stickyLocalClaim(
+  txHash: string,
+  opts: {
+    claimedAmount?: string | null;
+    confirmedBlockHeight?: number;
+    confirmedTxIndex?: number;
+  } = {},
+): PendingTxRow {
+  return {
+    kind: "pending_tx",
+    txHash,
+    to: "0x000000000000000000000000000000000000100a",
+    amountDecimal: "0",
+    broadcastedAtMs: 1_000,
+    broadcastBlockHeight: 100,
+    via: "op",
+    opKind: "claim",
+    source: "local-claim",
+    ...(opts.claimedAmount !== undefined ? { claimedAmount: opts.claimedAmount } : {}),
+    ...(opts.confirmedBlockHeight !== undefined
+      ? { confirmedBlockHeight: opts.confirmedBlockHeight }
+      : {}),
+    ...(opts.confirmedTxIndex !== undefined
+      ? { confirmedTxIndex: opts.confirmedTxIndex }
+      : {}),
+  };
+}
+
+const claimedActivity = (
+  overrides: Partial<RawAddressActivity> = {},
+): RawAddressActivity => ({
+  blockHeight: 200,
+  txIndex: 0,
+  logIndex: 0,
+  kind: "delegation",
+  subKind: "claimed",
+  direction: null,
+  counterparty: null,
+  tokenId: null,
+  amount: null,
+  cluster: 0,
+  weightBps: 0,
+  ...overrides,
+});
+
+describe("localClaimAwaitingAmount (arm-until-resolved)", () => {
+  it("true while a local-claim's amount is null/undefined; false once resolved", () => {
+    expect(localClaimAwaitingAmount(stickyLocalClaim("0x1", { claimedAmount: null }))).toBe(true);
+    expect(localClaimAwaitingAmount(stickyLocalClaim("0x1"))).toBe(true); // undefined
+    expect(localClaimAwaitingAmount(stickyLocalClaim("0x1", { claimedAmount: "1.5" }))).toBe(false);
+  });
+
+  it("false for a non-claim pending row", () => {
+    const ordinary: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0x9",
+      to: "0xr",
+      amountDecimal: "1",
+      broadcastedAtMs: 1,
+      broadcastBlockHeight: 1,
+      via: "op",
+    };
+    expect(localClaimAwaitingAmount(ordinary)).toBe(false);
+  });
+});
+
+describe("applyStickyClaimAmount (never lose a known amount)", () => {
+  it("carries a prior confirmed amount onto a fresh null-amount claim row", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, null)], {
+      confirmed: [claimConfirmed(200, 0, "1.5")],
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBe("1.5");
+  });
+
+  it("carries a local-claim's decoded claimedAmount onto a null-amount claim row", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, null)], {
+      pending: [
+        stickyLocalClaim("0xc", {
+          claimedAmount: "2.25",
+          confirmedBlockHeight: 200,
+          confirmedTxIndex: 0,
+        }),
+      ],
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBe("2.25");
+  });
+
+  it("NEVER overwrites a known amount (only fills null)", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, "9.9")], {
+      confirmed: [claimConfirmed(200, 0, "1.5")],
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBe("9.9");
+  });
+
+  it("leaves a null amount null when no source has it (no fabrication)", () => {
+    const out = applyStickyClaimAmount([claimConfirmed(200, 0, null)], {
+      confirmed: [claimConfirmed(999, 0, "1.5")], // different anchor
+    }) as ClaimRow[];
+    expect(out[0]?.amountDecimal).toBeNull();
+  });
+});
+
+describe("mergeIndexerSnapshot — claim amount survives the rebuild (the reopen-bug fix)", () => {
+  it("a fresh confirmed claim row with a null amount keeps the prior known amount", () => {
+    // The indexer surfaces the claim row a beat before it decodes the amount.
+    const merged = mergeIndexerSnapshot(
+      { activity: [claimedActivity({ amount: null })], delegation: [] },
+      5_000,
+      { confirmed: [claimConfirmed(200, 0, "1.5")] },
+    );
+    const claim = merged.confirmed.find((r) => r.kind === "claim") as
+      | ClaimRow
+      | undefined;
+    expect(claim?.amountDecimal).toBe("1.5"); // not erased to null on rebuild
   });
 });

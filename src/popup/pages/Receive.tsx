@@ -5,6 +5,7 @@ import { Icon } from "../Icon";
 import type { Account } from "../demo-data";
 import { bech32mDisplay } from "../../shared/bech32m";
 import { CheckIcon, ClipboardIcon } from "../components/AddressLine";
+import { useFitText } from "../components/useFitText";
 
 interface ReceiveProps {
   account: Account;
@@ -17,6 +18,8 @@ export function Receive({ account, onBack }: ReceiveProps) {
   // same string at 14 px mono so it (not the QR) is the screen's
   // primary visual element.
   const qrPayload = bech32mDisplay(account.addr);
+  // Render the address as large as fits on one line, filling the box width.
+  const addrFitRef = useFitText<HTMLSpanElement>(qrPayload, 16);
   const [copied, setCopied] = useState(false);
   const handleCopy = (e: ReactMouseEvent) => {
     e.stopPropagation();
@@ -38,14 +41,14 @@ export function Receive({ account, onBack }: ReceiveProps) {
         <div
           style={{
             flex: 1,
-            fontSize: 13,
+            fontSize: 15,
             fontWeight: 600,
             textAlign: "center",
           }}
         >
           Receive
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -110,11 +113,11 @@ export function Receive({ account, onBack }: ReceiveProps) {
             }}
           >
             <span
+              ref={addrFitRef}
               style={{
                 flex: 1,
                 minWidth: 0,
                 fontFamily: "var(--f-mono)",
-                fontSize: 12.5,
                 fontWeight: 500,
                 color: copied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
                 letterSpacing: "-0.04em",

@@ -612,6 +612,7 @@ function PasswordStep({ submitLabel, onSuccess, onCancel }: PasswordStepProps) {
       </div>
       <input
         type="password"
+        autoComplete="current-password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         onKeyDown={(e) => {

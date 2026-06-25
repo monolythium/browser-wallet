@@ -128,6 +128,12 @@ vi.mock("./tx-mldsa.js", () => ({
     contributing: [{ name: "mock-operator", balanceHex: "0x0" }],
     failing: [],
   })),
+  // Quorum name-resolution (wallet-resolve-name). Driven by
+  // `resolveNameConsensusResult` — set a status object, or an Error to throw.
+  testnetResolveNameConsensus: vi.fn(async (_name: string) => {
+    if (resolveNameConsensusResult instanceof Error) throw resolveNameConsensusResult;
+    return resolveNameConsensusResult;
+  }),
   // The DEFAULT (and only) submit path: `wallet-send-tx` plus the dApp
   // eth_sendTransaction / MRV / multisig paths all route here. It feeds
   // `submitMlDsaCalls` so the metadata-only invariant (`opKind` / cluster
@@ -318,6 +324,16 @@ function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
   };
 }
 let submitFailure: (Error & { code?: number }) | null = null;
+// Drives the mocked testnetResolveNameConsensus (wallet-resolve-name): a status
+// object resolves; an Error throws.
+let resolveNameConsensusResult:
+  | {
+      status: "confirmed-hit" | "confirmed-miss" | "disagreement" | "insufficient";
+      addr0x: string | null;
+      agreeing: number;
+      detail: string;
+    }
+  | Error = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
 
 // Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
@@ -434,6 +450,11 @@ vi.mock("../shared/multisig.js", async (importOriginal) => {
 
 let approvalDecision: { ok: true } | { ok: false; reason?: string } = { ok: true };
 const enqueuedApprovals: Array<{ kind: string; [k: string]: unknown }> = [];
+// P4-001 spies — rejectAllPending (D1a, called by triggerAutoLock on lock) and
+// reapExpired (D1b, called by the ALARM_APPROVAL_REAP onAlarm). mock-prefixed so
+// the vi.mock factory may close over them.
+const mockRejectAllPending = vi.fn();
+const mockReapExpired = vi.fn(() => ({ reaped: 0, remaining: 0 }));
 
 vi.mock("./approvals.js", () => ({
   enqueue: vi.fn(async (req: { kind: string; [k: string]: unknown }) => {
@@ -445,6 +466,8 @@ vi.mock("./approvals.js", () => ({
   getPending: vi.fn(() => null),
   listPending: vi.fn(() => []),
   clearPending: vi.fn(async () => {}),
+  rejectAllPending: mockRejectAllPending,
+  reapExpired: mockReapExpired,
   focusApproval: vi.fn(async () => ({ focused: false })),
 }));
 
@@ -487,6 +510,9 @@ import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_APPROVAL_REAP,
+  APPROVAL_TTL_MS,
+  AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
   SESSION_KEY_AUTO_LOCK_DEADLINE,
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
@@ -695,8 +721,12 @@ beforeEach(() => {
   rpcResponses = {};
   rpcErrors = {};
   submitFailure = null;
+  resolveNameConsensusResult = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
+  mockRejectAllPending.mockClear();
+  mockReapExpired.mockClear();
+  mockReapExpired.mockReturnValue({ reaped: 0, remaining: 0 });
   unlocked = true;
   // Reset to the non-null production-invariant default (see the declaration);
   // the cap gate is kept inert by policy.enabled=false below, not a null id.
@@ -1536,6 +1566,68 @@ describe("wallet-activity-get", () => {
     expect(storageLocal[key]).toBeDefined();
   });
 
+  it("#2 — parses BOTH the legacy bare-array and the v2 envelope to identical rows", async () => {
+    const activityRow = {
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      kind: "transfer",
+      direction: "out",
+      counterparty: "0xdead",
+      tokenId: null,
+      amount: "1.5",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+
+    // Legacy operator: a bare array.
+    rpcResponses["lyth_getAddressActivity"] = [activityRow];
+    const legacy = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; cache: { confirmed: Array<{ kind: string }> } };
+
+    // Force a fresh fetch for the next shape (clear the per-(addr,chain) cache).
+    storageLocal = {};
+
+    // v2 operator: the SAME row wrapped in the {schemaVersion, nextCursor,
+    // activity} envelope. Must map to identical rows (first-page-only: the
+    // nextCursor/schemaVersion fields are ignored).
+    rpcResponses["lyth_getAddressActivity"] = {
+      schemaVersion: 1,
+      address: DETERMINISTIC_ADDRESS,
+      limit: 30,
+      nextCursor: "0x000000000000006400000000ffffffff",
+      activity: [activityRow],
+    };
+    const enveloped = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; cache: { confirmed: Array<{ kind: string }> } };
+
+    expect(enveloped.ok).toBe(true);
+    expect(enveloped.cache.confirmed).toEqual(legacy.cache.confirmed);
+    expect(enveloped.cache.confirmed).toHaveLength(1);
+    expect(enveloped.cache.confirmed[0]?.kind).toBe("tx_send");
+
+    // An unrecognised shape (no `activity` array) yields no rows — the same
+    // fail-safe the old `Array.isArray(...) ? ... : []` gave.
+    storageLocal = {};
+    rpcResponses["lyth_getAddressActivity"] = { schemaVersion: 1, unexpected: true };
+    const unknown = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; cache: { confirmed: unknown[] } };
+    expect(unknown.cache.confirmed).toHaveLength(0);
+  });
+
   it("second call within staleness window: serves from cache, no RPC", async () => {
     // Seed: first call populates the cache.
     rpcResponses["lyth_getTokenBalances"] = [];
@@ -1609,6 +1701,85 @@ describe("wallet-activity-get", () => {
     expect(r.cache.confirmed).toHaveLength(1);
     expect(r.errors.addressActivity).toBeDefined();
     expect(r.errors.delegationHistory).toBeDefined();
+  });
+
+  // Gap B — a durable claim missing from the pending cache (e.g. dropped by the
+  // 30s alarm) must be re-injected from the localclaims store on EVERY return
+  // path, not just the full path. readActivityStorage now reads the durable
+  // store + applyLocalClaims runs on isFresh + outage + full.
+  function durableClaim(txHash: string) {
+    return {
+      kind: "pending_tx",
+      txHash,
+      to: "0x" + "2".repeat(40),
+      amountDecimal: "0",
+      broadcastedAtMs: Date.now(),
+      broadcastBlockHeight: 100,
+      via: "op",
+      opKind: "claim",
+      source: "local-claim",
+      claimedAmount: "6.51",
+      rateAtClaim: null,
+      currency: "USD",
+    };
+  }
+
+  it("Gap B: isFresh fast path re-injects a durable claim absent from the pending cache (no RPC)", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "c".repeat(64);
+    // Fresh confirmed cache + EMPTY pending (the alarm dropped the claim) + the
+    // claim still in the durable store.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [],
+      lastFetchedAtMs: Date.now(),
+    };
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = { pending: [] };
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    const before = rpcCalls.length;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: Array<Record<string, unknown>> };
+    expect(r.ok).toBe(true);
+    expect(rpcCalls.length).toBe(before); // isFresh fast path — no RPC fired
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]!.txHash).toBe(claimHash);
+    expect(r.pending[0]!.source).toBe("local-claim");
+  });
+
+  it("Gap B: total-outage path re-injects a durable claim absent from the pending cache", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "d".repeat(64);
+    seedEmptyIndexer();
+    // STALE cache (past isFresh) + empty pending + claim in the durable store.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [],
+      lastFetchedAtMs: Date.now() - 600_000,
+    };
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = { pending: [] };
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    // Both indexer streams fail → outage path.
+    rpcErrors["lyth_getDelegationHistory"] = { code: -32603, message: "down" };
+    rpcErrors["lyth_getAddressActivity"] = { code: -32603, message: "down" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      pending: Array<Record<string, unknown>>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined();
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]!.txHash).toBe(claimHash);
+    expect(r.pending[0]!.source).toBe("local-claim");
   });
 
   // C4 — deterministic pending confirmation via the canonical hash.
@@ -1754,6 +1925,353 @@ describe("wallet-activity-get", () => {
     // Failed rows are not bridged into the pending list (surfaced via the
     // failed-row notification path instead).
     expect(r.pending).toHaveLength(0);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // REORDER (timing fix) — the receipt classification now races the indexer
+  // snapshot (Promise.all) instead of running after it, so the spinner flips at
+  // receipt speed. The OUTPUT must be unchanged: a confirmed row still bridges
+  // on its receipt regardless of the indexer snapshot content, and a bridged row
+  // the indexer surfaces at the same (block,txIndex) anchor is still swapped for
+  // the canonical row (no duplicate) — for ANY kind, not just tx_send.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  it("REORDER: receipt-bridges a confirmed row independent of the indexer snapshot content", async () => {
+    // The indexer fetch SUCCEEDS but returns only an UNRELATED confirmed row
+    // (different counterparty/amount → no heuristic match). The pending row must
+    // still flip confirmed on its own receipt — proving the bridge isn't gated
+    // on the indexer matching it (the receipt pass is indexer-independent).
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 99,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0x" + "9".repeat(40),
+        tokenId: null,
+        amount: "42",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "a1".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number }>;
+      cache: { confirmed: unknown[] };
+    };
+    expect(r.ok).toBe(true);
+    // The pending row bridged (confirmed) on its receipt; the unrelated indexer
+    // row is in the confirmed cache but never matched it.
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200);
+    expect(r.cache.confirmed).toHaveLength(1);
+  });
+
+  it("REORDER: a bridged DELEGATE row is swapped for the indexer's canonical delegation row at the same anchor (no dup)", async () => {
+    // A delegate/undelegate confirms as a delegation row, NEVER a tx_send — the
+    // counterparty/amount heuristic can't retire it, so it relies on the
+    // bridged (block,txIndex) anchor match. Seed the post-first-confirm state: a
+    // pending delegate row already bridged at (100,0); the indexer now surfaces
+    // the canonical delegation row at that exact slot → reconcilePending drops
+    // the bridged copy and the canonical confirmed row renders. No duplicate.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 100,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "delegated",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: "269",
+        cluster: 0,
+        weightBps: 2500,
+      },
+    ];
+    // Receipt re-confirms the same slot (the open poll keeps asking).
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 100 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 100, tx_index: 0 };
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    storageLocal[pendingKey] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash: "0x" + "de".repeat(32),
+          to: "0x000000000000000000000000000000000000100a",
+          amountDecimal: "0",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 100,
+          via: "operator-test",
+          opKind: "delegate",
+          confirmedBlockHeight: 100,
+          confirmedTxIndex: 0,
+        },
+      ],
+    };
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: unknown[];
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
+    // Bridged copy retired by the anchor match; canonical delegation row renders.
+    expect(r.pending).toHaveLength(0);
+    expect(r.cache.confirmed.some((c) => c.kind === "delegate")).toBe(true);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // OUTAGE receipt reconcile — when BOTH indexer streams fail, the receipt pass
+  // (indexer-independent: lyth_txStatus + eth_getTransactionReceipt on the chain
+  // RPC, which can be up while the indexer is down) still clears a tx that
+  // confirmed via its receipt instead of stranding it until the 30s alarm. The
+  // Gap B durable-claim re-inject stays intact on this path.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  function seedOutageCache() {
+    storageLocal[
+      `mono.activity.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`
+    ] = { confirmed: [], lastFetchedAtMs: Date.now() - 600_000 };
+  }
+  function failBothIndexerStreams() {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcErrors["lyth_getDelegationHistory"] = { code: -32603, message: "down" };
+    rpcErrors["lyth_getAddressActivity"] = { code: -32603, message: "down" };
+  }
+
+  it("OUTAGE: a sent tx confirmed via receipt is bridged (cleared) without waiting for the 30s alarm", async () => {
+    seedOutageCache();
+    failBothIndexerStreams();
+    // Indexer down, chain RPC up → the receipt resolves.
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    seedPending("0x" + "b2".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number }>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined(); // outage path taken
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200); // bridged on the receipt
+  });
+
+  it("OUTAGE: a still-pending sent tx stays pending (no receipt yet)", async () => {
+    seedOutageCache();
+    failBothIndexerStreams();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    seedPending("0x" + "b3".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number }>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined();
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBeUndefined();
+  });
+
+  it("OUTAGE: re-injects a durable claim (Gap B) while bridging a confirmed sent tx", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "e2".repeat(32);
+    seedOutageCache();
+    failBothIndexerStreams();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    // A sent tx_send in the pending cache + a durable claim that the cache lost.
+    seedPending("0x" + "b4".repeat(32));
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ txHash: string; source?: string; confirmedBlockHeight?: number }>;
+      errors: Record<string, string>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.errors.addressActivity).toBeDefined();
+    // Claim re-injected (Gap B) AND the sent tx bridged (the outage fix).
+    expect(
+      r.pending.some((row) => row.source === "local-claim" && row.txHash === claimHash),
+    ).toBe(true);
+    expect(
+      r.pending.some((row) => row.confirmedBlockHeight === 200 && row.source !== "local-claim"),
+    ).toBe(true);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // CLAIM AMOUNT — decode the real amount from the receipt's Claimed log in the
+  // bridge (overrides the dropped submit-time capture), and write it to the
+  // durable local-claim row. word-0 of the 0x…100A / 0xfa8256f7… log = amount.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  const CLAIMED_TOPIC0 =
+    "0xfa8256f7c08bb01a03ea96f8b3a904a4450311c9725d1c52cdbe21ed3dc42dcc";
+  /** 32 big-endian bytes for a uint256 word (the operator receipt data shape). */
+  function word256(v: bigint): number[] {
+    const b: number[] = new Array(32).fill(0);
+    let n = v;
+    for (let i = 31; i >= 0; i--) {
+      b[i] = Number(n & 0xffn);
+      n >>= 8n;
+    }
+    return b;
+  }
+  function claimedReceipt(amountLythoshi: bigint, block = 200) {
+    return {
+      status: "0x1",
+      blockNumber: block,
+      tx_index: 0,
+      logs: [
+        {
+          address: "0x000000000000000000000000000000000000100a",
+          topics: [CLAIMED_TOPIC0, "0x" + "0".repeat(63) + "1"],
+          data: [...word256(amountLythoshi), ...word256(0n)],
+        },
+      ],
+    };
+  }
+  function seedClaimPending(txHash: string) {
+    storageLocal[
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`
+    ] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash,
+          to: "0x000000000000000000000000000000000000100a",
+          amountDecimal: "0",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 100,
+          via: "operator-test",
+          opKind: "claim",
+          source: "local-claim",
+          // claimedAmount intentionally absent — post-fix it is null at submit
+          // and populated only here by the receipt-log decode.
+        },
+      ],
+    };
+  }
+
+  it("CLAIM AMOUNT: bridge decodes the real amount from the Claimed log onto the local-claim row", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n); // 1.5 LYTH
+    const claimHash = "0x" + "c5".repeat(32);
+    seedClaimPending(claimHash);
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ txHash: string; source?: string; claimedAmount?: string | null; confirmedBlockHeight?: number }>;
+    };
+    expect(r.ok).toBe(true);
+    const claim = r.pending.find((row) => row.txHash === claimHash);
+    expect(claim).toBeDefined();
+    expect(claim!.source).toBe("local-claim");
+    expect(claim!.confirmedBlockHeight).toBe(200);
+    expect(claim!.claimedAmount).toBe("1.5"); // decoded from the log, not "0"
+    // Persisted to the durable local-claim store (Gap B re-injects it).
+    const store = storageLocal[
+      `mono.activity.localclaims.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`
+    ] as { claims: Array<{ txHash: string; claimedAmount?: string }> } | undefined;
+    expect(store?.claims.find((c) => c.txHash === claimHash)?.claimedAmount).toBe("1.5");
+  });
+
+  it("CLAIM AMOUNT: a non-claim confirmed row is unaffected (no claimedAmount written)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    // Even if a Claimed-shaped log were present, a non-local-claim row must not
+    // pick up a claimedAmount (the decode is gated on source:"local-claim").
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n);
+    seedPending("0x" + "c6".repeat(32));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ claimedAmount?: string | null; confirmedBlockHeight?: number }>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200);
+    expect(r.pending[0]?.claimedAmount).toBeUndefined();
+  });
+
+  // ── INTEGRATION (mandatory — the Gap-A/B lesson: units pass, SW path missed) ──
+  it("CLAIM AMOUNT (integration): a null-amount local-claim is FILLED IN-SESSION by the reconcile (no reopen), so the poll can disarm", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n); // 1.5 LYTH
+    const claimHash = "0x" + "c7".repeat(32);
+    seedClaimPending(claimHash); // claimedAmount absent → null at submit
+
+    // BEFORE: the stored local-claim has no amount — exactly the condition that
+    // ARMS the App reconcile poll (localClaimAwaitingAmount → true).
+    const pendingKey =
+      `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    const before = (storageLocal[pendingKey] as {
+      pending: Array<{ source?: string; claimedAmount?: string | null }>;
+    }).pending[0]!;
+    expect(before.source).toBe("local-claim");
+    expect(before.claimedAmount == null).toBe(true); // arms the poll
+
+    // The IN-SESSION reconcile (the open-surface poll → wallet-activity-get).
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ txHash: string; claimedAmount?: string | null }>;
+    };
+    const claim = r.pending.find((p) => p.txHash === claimHash)!;
+    // Amount filled IN-SESSION (no reopen) → resolved → the poll can disarm.
+    expect(claim.claimedAmount).toBe("1.5");
+  });
+
+  it("CLAIM AMOUNT (integration): a fresh confirmed claim row with a NULL amount does NOT erase a known amount (sticky)", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    // Prior confirmed cache already carries the decoded amount; STALE so the SW
+    // re-fetches + re-merges (confirmed is rebuilt from the indexer each poll).
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [
+        { kind: "claim", blockHeight: 200, txIndex: 0, logIndex: 0, amountDecimal: "1.5" },
+      ],
+      lastFetchedAtMs: Date.now() - 600_000,
+    };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    // The indexer surfaces the SAME claim a beat before it decodes the amount.
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      cache: { confirmed: Array<{ kind: string; amountDecimal?: string | null }> };
+    };
+    const claim = r.cache.confirmed.find((row) => row.kind === "claim");
+    expect(claim?.amountDecimal).toBe("1.5"); // sticky — not erased to null on the rebuild
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -2184,6 +2702,76 @@ describe("wallet-activity-get", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // wallet-resolve-names
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-resolve-name — authoritative quorum forward resolve (P5-002)", () => {
+  const RESOLVED = "0x" + "ab".repeat(20);
+
+  it("a quorum confirmed-hit resolves the name to the 0x owner address", async () => {
+    resolveNameConsensusResult = { status: "confirmed-hit", addr0x: RESOLVED, agreeing: 3, detail: "" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; addr0x: string | null };
+    expect(r).toEqual({ ok: true, addr0x: RESOLVED });
+  });
+
+  it("a quorum confirmed-miss is a clean miss (addr0x:null), not an error", async () => {
+    resolveNameConsensusResult = { status: "confirmed-miss", addr0x: null, agreeing: 3, detail: "" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "nobody.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; addr0x: string | null };
+    expect(r).toEqual({ ok: true, addr0x: null });
+  });
+
+  it("FAIL-CLOSED: a quorum DISAGREEMENT (a rogue operator) returns ok:false — never a signable address", async () => {
+    resolveNameConsensusResult = {
+      status: "disagreement",
+      addr0x: null,
+      agreeing: 3,
+      detail: "op-a:0xrogue; op-b:0xreal",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: boolean; addr0x?: string | null };
+    expect(r.ok).toBe(false);
+    expect(r.addr0x).toBeUndefined(); // nothing to sign
+  });
+
+  it("FAIL-CLOSED: insufficient operator responses returns ok:false", async () => {
+    resolveNameConsensusResult = { status: "insufficient", addr0x: null, agreeing: 1, detail: "" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: boolean; addr0x?: string | null };
+    expect(r.ok).toBe(false);
+    expect(r.addr0x).toBeUndefined();
+  });
+
+  it("FAIL-CLOSED: a consensus error returns ok:false", async () => {
+    resolveNameConsensusResult = new Error("all operators untrusted");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects a non-testnet chain (resolution is testnet-only)", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-name",
+      payload: { name: "alice.mono", chainIdHex: "0x1" },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
+  });
+});
 
 describe("wallet-resolve-names", () => {
   it("dedupes + lowercases input addresses", async () => {
@@ -3167,6 +3755,91 @@ describe("fired auto-lock clears the session-MEK rehydrate cap (#17)", () => {
     expect(storageSession[SESSION_KEY_MEK_V4]).toBeUndefined();
     expect(storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE]).toBeUndefined();
     expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4-001 — auto-lock vs background polls + pending dApp approvals
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("P4-001 D2 — background-poll ops must not re-arm auto-lock", () => {
+  it("the three fixed-interval poll ops are in AUTO_LOCK_EXEMPT_OPS", () => {
+    expect(AUTO_LOCK_EXEMPT_OPS.has("wallet-activity-get")).toBe(true);
+    expect(AUTO_LOCK_EXEMPT_OPS.has("staking-pending-rewards")).toBe(true);
+    expect(AUTO_LOCK_EXEMPT_OPS.has("wallet-indexer-status")).toBe(true);
+  });
+
+  it("dispatching wallet-activity-get while unlocked does NOT re-arm ALARM_AUTO_LOCK", async () => {
+    unlocked = true;
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      alarmCreateCalls.filter((c) => c.name === ALARM_AUTO_LOCK),
+    ).toHaveLength(0);
+  });
+
+  it("control: a non-exempt op (wallet-resolve-names) DOES re-arm ALARM_AUTO_LOCK via the dispatcher gate", async () => {
+    unlocked = true;
+    rpcResponses["lyth_getAddressLabel"] = null;
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-resolve-names",
+      payload: { addresses: ["0xabc"], chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      alarmCreateCalls.filter((c) => c.name === ALARM_AUTO_LOCK).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("P4-001 D1a — auto-lock fires through a pending approval", () => {
+  it("a fired auto-lock locks the wallet, rejects all pending approvals, and drops the reaper alarm", async () => {
+    unlocked = true;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() - 1; // elapsed
+
+    for (const fire of capturedAlarmListeners) fire({ name: ALARM_AUTO_LOCK });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // triggerAutoLock locked the wallet, disposed every pending approval (so the
+    // dApp promise resolves rejected rather than hanging), and cleared the now-
+    // empty reaper alarm.
+    expect(unlocked).toBe(false);
+    expect(mockRejectAllPending).toHaveBeenCalledWith("wallet locked");
+    expect(alarmClearCalls).toContain(ALARM_APPROVAL_REAP);
+  });
+});
+
+describe("P4-001 D1b — pending-approval TTL reaper", () => {
+  it("enqueuing a dApp approval arms the reaper alarm", async () => {
+    unlocked = true;
+    // eth_requestAccounts on a fresh (unconnected) origin falls through to the
+    // approval, which gatedEnqueue wraps — arming ALARM_APPROVAL_REAP.
+    await dispatchRpc("eth_requestAccounts", []);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      alarmCreateCalls.filter((c) => c.name === ALARM_APPROVAL_REAP).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("the reaper tick rejects via reapExpired(APPROVAL_TTL_MS) WITHOUT resetting the auto-lock deadline", async () => {
+    unlocked = true;
+    const deadline = Date.now() + 60_000;
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = deadline;
+    // The bus still has work after this tick, so the alarm is NOT cleared.
+    mockReapExpired.mockReturnValue({ reaped: 1, remaining: 1 });
+
+    for (const fire of capturedAlarmListeners) fire({ name: ALARM_APPROVAL_REAP });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockReapExpired).toHaveBeenCalledWith(APPROVAL_TTL_MS, expect.any(Number));
+    // Rejecting an approval is NOT user activity — the deadline is untouched.
+    expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBe(deadline);
+    expect(alarmClearCalls).not.toContain(ALARM_APPROVAL_REAP);
   });
 });
 
@@ -4738,6 +5411,41 @@ describe("pollPendingAndNotify — headless poll-core", () => {
     expect(hist.entries[0]!.blockNumber).toBe(123);
   });
 
+  it("keeps a terminal-confirmed local-claim row (bridged) in the write-back; a non-claim terminal row drops", async () => {
+    const { pollPendingAndNotify } = await import("./service-worker.js");
+    const claimHash = "0x" + "c".repeat(64);
+    const claimRow = pendingRow({
+      txHash: claimHash,
+      opKind: "claim",
+      source: "local-claim",
+      amountDecimal: "0",
+      claimedAmount: "6.51",
+      rateAtClaim: null,
+      currency: "USD",
+    });
+    const ordinaryRow = pendingRow(); // opKind:"send", default hash
+    storageLocal[pendingKey(ADDR, CHAIN)] = {
+      pending: [claimRow, ordinaryRow],
+    };
+    // Both rows confirm (the stub answers per-method, not per-hash).
+    rpcResponses["lyth_txStatus"] = { status: "found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", block_number: 123 };
+
+    const { remaining } = await pollPendingAndNotify();
+
+    const written = (
+      storageLocal[pendingKey(ADDR, CHAIN)] as { pending: Array<Record<string, unknown>> }
+    ).pending;
+    // The claim SURVIVES the alarm (root-cause Gap A fix), bridged with the
+    // receipt block; the ordinary terminal send is dropped (re-surfaces from
+    // the indexer). Confirmed claims aren't counted toward `remaining`.
+    expect(written).toHaveLength(1);
+    expect(written[0]!.txHash).toBe(claimHash);
+    expect(written[0]!.source).toBe("local-claim");
+    expect(written[0]!.confirmedBlockHeight).toBe(123);
+    expect(remaining).toBe(0);
+  });
+
   it("failed pending → recorded as FAILED, never confirmed (#5117)", async () => {
     const { pollPendingAndNotify } = await import("./service-worker.js");
     storageLocal[pendingKey(ADDR, CHAIN)] = { pending: [pendingRow()] };
@@ -4762,7 +5470,7 @@ describe("pollPendingAndNotify — headless poll-core", () => {
     // The chain reports a reverted tx as "found" — it WAS included in a block;
     // inclusion is not success. The receipt status bit (0x0) is authoritative,
     // so the row must be recorded FAILED, not "confirmed" (the bug that toasted
-    // "Staked" for a reverted stake).
+    // "Delegated" for a reverted delegate).
     rpcResponses["lyth_txStatus"] = { status: "found" };
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x0", block_number: 456 };
 
@@ -5431,7 +6139,7 @@ describe("passkey daily-usage ledger persistence (#36)", () => {
 // (defense-in-depth: the popup UI gate is not trusted).
 // ─────────────────────────────────────────────────────────────────────────────
 describe("keystore create/import password floor (#41 SW-side gate)", () => {
-  const VALID = "ValidPassw0rd!"; // >=12, upper, lower, digit, special
+  const VALID = "ValidLongPassphrase"; // 19 chars — passes the ≥15 floor (no composition rules)
   const WEAK = "weak";
 
   it("keystore-create-from-mnemonic rejects a weak password", async () => {

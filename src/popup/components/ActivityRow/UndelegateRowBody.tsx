@@ -1,13 +1,16 @@
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { UndelegateRow } from "../../../shared/activity.js";
-import { clusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
+import { resolveClusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
 
 export interface UndelegateRowBodyProps {
   row: UndelegateRow;
+  /** Cluster directory (id → name); falls back to the captured name then
+   *  `Cluster #<id>`. */
+  clusterNameById?: ReadonlyMap<number, string | null> | undefined;
 }
 
-export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
+export function UndelegateRowBody({ row, clusterNameById }: UndelegateRowBodyProps) {
   return (
     <div className="ext-act-row">
       <div className="dir in">
@@ -15,7 +18,7 @@ export function UndelegateRowBody({ row }: UndelegateRowBodyProps) {
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">
-          Withdrew delegation from {clusterLabel(row.cluster, row.clusterName)}
+          Undelegated from {resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>

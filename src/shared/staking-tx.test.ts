@@ -21,6 +21,9 @@ import {
   DELEGATION_PRECOMPILE,
   bpsToPercent,
   effectiveWeightWei,
+  effectiveWeightWholeLythoshi,
+  isInertDelegation,
+  minNonInertBps,
   encodeClaimRewards,
   encodeDelegate,
   encodeRedelegate,
@@ -72,6 +75,20 @@ describe("encodeDelegate", () => {
     expect(data).toHaveLength(2 + 8 + 64 + 64);
     expect(data.slice(10, 10 + 64)).toBe("0".repeat(63) + "1"); // cluster
     expect(data.slice(10 + 64)).toBe("0".repeat(61) + "9c4"); // 2500 = 0x9c4
+  });
+});
+
+// The submit-time bps capture (delegationWeightBps) is PENDING-ROW METADATA — it
+// rides into the notification, NOT the calldata. The signed tx is byte-identical:
+// the calldata is built from the SAME bps and the encoder is untouched.
+describe("delegation tx byte-equality (submit-time bps capture is metadata-only)", () => {
+  it("delegate/redelegate calldata depends ONLY on (cluster, bps) — golden, unchanged", () => {
+    expect(encodeDelegate(1, 2500)).toBe(encodeDelegateCalldata(1, 2500));
+    expect(encodeRedelegate(1, 2, 2500)).toBe(encodeRedelegateCalldata(1, 2, 2500));
+    expect(encodeDelegate(1, 2500).startsWith("0x662337de")).toBe(true);
+    expect(encodeRedelegate(1, 2, 2500).startsWith("0xa06ac18f")).toBe(true);
+    // Same bps → same bytes, regardless of any metadata captured alongside.
+    expect(encodeDelegate(1, 2500)).toBe(encodeDelegate(1, 2500));
   });
 });
 
@@ -149,5 +166,57 @@ describe("effectiveWeightWei", () => {
   it("returns the full balance for >= 10000 bps", () => {
     expect(effectiveWeightWei(10_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
     expect(effectiveWeightWei(15_000, 100n * ONE_LYTH)).toBe(100n * ONE_LYTH);
+  });
+});
+
+describe("effectiveWeightWholeLythoshi (chain-exact whole-LYTH floor)", () => {
+  it("floors the effective weight to whole LYTH (matches mono-core)", () => {
+    // 1000 LYTH × 5301 bps = 530.1 LYTH → floors to 530.
+    const balance = 1000n * ONE_LYTH;
+    expect(effectiveWeightWholeLythoshi(5301, balance)).toBe(530n * ONE_LYTH);
+    // 100 LYTH × 3334 bps = 33.34 LYTH → floors to 33.
+    expect(effectiveWeightWholeLythoshi(3334, 100n * ONE_LYTH)).toBe(33n * ONE_LYTH);
+  });
+
+  it("floors a sub-1-LYTH effective weight to 0 (the inert case)", () => {
+    // 100 LYTH × 5 bps = 0.05 LYTH → 0.
+    expect(effectiveWeightWholeLythoshi(5, 100n * ONE_LYTH)).toBe(0n);
+    // 1060 LYTH × 9 bps (0.09%) = 0.954 LYTH → 0; 10 bps (0.10%) = 1.06 → 1.
+    const bal = 1060n * ONE_LYTH;
+    expect(effectiveWeightWholeLythoshi(9, bal)).toBe(0n);
+    expect(effectiveWeightWholeLythoshi(10, bal)).toBe(1n * ONE_LYTH);
+  });
+
+  it("equals the floor of effectiveWeightWei to whole LYTH", () => {
+    const balance = 777n * ONE_LYTH + 123n * 10n ** 16n; // 777.123... LYTH
+    const wei = effectiveWeightWei(4242, balance);
+    const expected = (wei / ONE_LYTH) * ONE_LYTH;
+    expect(effectiveWeightWholeLythoshi(4242, balance)).toBe(expected);
+  });
+});
+
+describe("isInertDelegation (0-effective-weight floor)", () => {
+  it("true when bps>=1 floors to 0 effective weight at the balance", () => {
+    // 100 LYTH × 50 bps (0.5%) = 0.5 LYTH → floors to 0 → inert.
+    expect(isInertDelegation(50, 100n * ONE_LYTH)).toBe(true);
+    // 100 LYTH × 200 bps (2%) = 2 LYTH → not inert.
+    expect(isInertDelegation(200, 100n * ONE_LYTH)).toBe(false);
+  });
+  it("false for bps 0 (chain reverts ZeroWeight) and unknown balance", () => {
+    expect(isInertDelegation(0, 100n * ONE_LYTH)).toBe(false);
+    expect(isInertDelegation(50, 0n)).toBe(false);
+  });
+});
+
+describe("minNonInertBps (balance-dependent minimum)", () => {
+  it("is ceil(10000·1e18 / balance) — the first non-inert weight", () => {
+    expect(minNonInertBps(1060n * ONE_LYTH)).toBe(10); // 0.10%
+    expect(minNonInertBps(100n * ONE_LYTH)).toBe(100); // 1.00%
+    expect(minNonInertBps(2n * ONE_LYTH)).toBe(5000); // 50%
+    expect(minNonInertBps(1n * ONE_LYTH)).toBe(10_000); // 100%
+  });
+  it("is null when no weight up to 100% reaches 1 whole-LYTH effective", () => {
+    expect(minNonInertBps(ONE_LYTH / 2n)).toBeNull(); // 0.5 LYTH balance
+    expect(minNonInertBps(0n)).toBeNull();
   });
 });

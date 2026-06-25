@@ -8,8 +8,8 @@
 //
 // Vocabulary (present-tense nouns), aligned with `notificationTitle` in
 // shared/notifications.ts:
-//   Outgoing transfer · Incoming transfer · Token transfer · Stake · Unstake ·
-//   Restake · Claim rewards · Redemption · Backup key · Agent policy ·
+//   Outgoing transfer · Incoming transfer · Token transfer · Delegate ·
+//   Undelegate · Redelegate · Claim rewards · Redemption · Backup key · Agent policy ·
 //   Contract call · Auto-rebalance · Private transfer · Transaction (fallback).
 //
 // "Transaction" is reserved for the genuinely-unclassifiable — a pending row
@@ -28,11 +28,11 @@ export function txTypeLabelForOpKind(opKind: TxOpKind | undefined): string {
     case "receive":
       return "Incoming transfer";
     case "delegate":
-      return "Stake";
+      return "Delegate";
     case "undelegate":
-      return "Unstake";
+      return "Undelegate";
     case "redelegate":
-      return "Restake";
+      return "Redelegate";
     case "claim":
       return "Claim rewards";
     case "complete-redemption":
@@ -68,14 +68,16 @@ export function txTypeLabel(row: ActivityRow): string {
           ? "Outgoing transfer"
           : "Token transfer";
     case "delegate":
-      return "Stake";
+      return "Delegate";
     case "undelegate":
-      return "Unstake";
+      return "Undelegate";
     case "redelegate":
-      return "Restake";
+      return "Redelegate";
     case "rebalance":
       return "Auto-rebalance";
     case "crossing_to_private":
       return "Private transfer";
+    case "claim":
+      return "Claim rewards";
   }
 }

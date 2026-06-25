@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { clusterLabel, formatWeightBpsPercent } from "./staking.js";
+import {
+  bindingPerClusterCapBps,
+  clusterLabel,
+  destinationAtPerClusterCap,
+  dualCapHeadroomBps,
+  exceedsPerClusterCap,
+  formatWeightBpsPercent,
+  isPerWalletCapRevert,
+  isWalletTotalCapRevert,
+  resolveClusterLabel,
+  walletTotalHeadroomBps,
+  DELEGATION_PER_WALLET_CAP_BPS,
+} from "./staking.js";
 
 describe("formatWeightBpsPercent", () => {
   it("renders basis points as a 2-dp percent (the delegation-weight display)", () => {
@@ -13,6 +25,89 @@ describe("formatWeightBpsPercent", () => {
     expect(formatWeightBpsPercent(107)).not.toContain("bps");
     expect(formatWeightBpsPercent(null)).toBe("—");
     expect(formatWeightBpsPercent(Number.NaN)).toBe("—");
+  });
+});
+
+describe("per-wallet delegation cap (WP §16.7, 0x0213 pre-flight)", () => {
+  it("the per-wallet cap default is 50% (5000 bps)", () => {
+    expect(DELEGATION_PER_WALLET_CAP_BPS).toBe(5000);
+  });
+
+  it("binding cap: the per-wallet floor applies when the aggregate cap is null (fail-closed)", () => {
+    // v2: lyth_getDelegationCap reports the DISABLED aggregate cap → null. The
+    // per-wallet floor must NOT lift.
+    expect(bindingPerClusterCapBps(null)).toBe(5000);
+  });
+
+  it("binding cap: a tighter future-active aggregate cap wins; otherwise the floor binds", () => {
+    expect(bindingPerClusterCapBps(3000)).toBe(3000);
+    expect(bindingPerClusterCapBps(8000)).toBe(5000);
+  });
+
+  it("exceedsPerClusterCap: a destination already at 5000 + any move → over cap (the live failure)", () => {
+    expect(exceedsPerClusterCap(5000, 1, null)).toBe(true);
+    expect(exceedsPerClusterCap(5000, 1250, null)).toBe(true);
+  });
+
+  it("exceedsPerClusterCap: 4000 + 500 ≤ 5000 allowed; 4000 + 1500 > 5000 blocked; exactly 5000 not over", () => {
+    expect(exceedsPerClusterCap(4000, 500, null)).toBe(false);
+    expect(exceedsPerClusterCap(4000, 1500, null)).toBe(true);
+    expect(exceedsPerClusterCap(4000, 1000, null)).toBe(false); // == 5000, at cap not over
+  });
+
+  it("exceedsPerClusterCap: a null aggregate cap no longer disables the guard (the bug fix)", () => {
+    expect(exceedsPerClusterCap(5000, 1250, null)).toBe(true);
+  });
+
+  it("destinationAtPerClusterCap: true at/above 5000, false below", () => {
+    expect(destinationAtPerClusterCap(5000, null)).toBe(true);
+    expect(destinationAtPerClusterCap(4999, null)).toBe(false);
+    expect(destinationAtPerClusterCap(5001, null)).toBe(true);
+  });
+
+  it("isPerWalletCapRevert: matches the 0x0213 code/tag + name, ignores other codes", () => {
+    expect(isPerWalletCapRevert(null, 0x0213)).toBe(true);
+    expect(isPerWalletCapRevert("PerWalletCapExceeded", null)).toBe(true);
+    expect(isPerWalletCapRevert("reverted: 0x0213", null)).toBe(true);
+    expect(isPerWalletCapRevert("execution reverted", null)).toBe(false);
+    expect(isPerWalletCapRevert("WeightOutOfRange 0x0204", 0x0204)).toBe(false);
+    expect(isPerWalletCapRevert(null, null)).toBe(false);
+  });
+
+  it("isWalletTotalCapRevert: matches the 0x0205 code/tag + name, ignores other codes", () => {
+    expect(isWalletTotalCapRevert(null, 0x0205)).toBe(true);
+    expect(isWalletTotalCapRevert("WalletTotalExceeded", null)).toBe(true);
+    expect(isWalletTotalCapRevert("reverted: 0x0205", null)).toBe(true);
+    expect(isWalletTotalCapRevert("execution reverted", null)).toBe(false);
+    expect(isWalletTotalCapRevert(null, 0x0213)).toBe(false); // doesn't steal the per-wallet code
+    expect(isWalletTotalCapRevert(null, null)).toBe(false);
+  });
+});
+
+describe("dual-cap headroom (delegate form — per-cluster floor ∩ wallet-total)", () => {
+  it("walletTotalHeadroomBps: 100% ceiling across all clusters, never negative", () => {
+    expect(walletTotalHeadroomBps(0)).toBe(10000);
+    expect(walletTotalHeadroomBps(5100)).toBe(4900);
+    expect(walletTotalHeadroomBps(10000)).toBe(0);
+    expect(walletTotalHeadroomBps(10500)).toBe(0); // clamps, no negative
+  });
+
+  it("dualCapHeadroomBps: a null aggregate cap floors the cluster term to 5000, not 10000", () => {
+    expect(dualCapHeadroomBps(null, 0, 0)).toBe(5000); // floor binds (the fix)
+    expect(dualCapHeadroomBps(null, 4000, 0)).toBe(1000); // 5000 − 4000 cluster floor
+  });
+
+  it("dualCapHeadroomBps: the global ceiling binds when it is tighter than the floor", () => {
+    expect(dualCapHeadroomBps(null, 0, 9000)).toBe(1000); // global 1000 < floor 5000
+    expect(dualCapHeadroomBps(null, 0, 10000)).toBe(0); // fully delegated
+  });
+
+  it("dualCapHeadroomBps: a tighter future-active aggregate cap wins over the floor", () => {
+    expect(dualCapHeadroomBps(2500, 0, 0)).toBe(2500); // aggregate 2500 < floor 5000
+  });
+
+  it("dualCapHeadroomBps: never returns negative headroom (already past the cap)", () => {
+    expect(dualCapHeadroomBps(5000, 6000, 0)).toBe(0);
   });
 });
 
@@ -36,5 +131,30 @@ describe("clusterLabel", () => {
     expect(clusterLabel(0)).not.toContain(".cluster.mono");
     // The raw id is preserved exactly (no +1).
     expect(clusterLabel(0)).toBe("Cluster #0");
+  });
+});
+
+describe("resolveClusterLabel", () => {
+  const dir = new Map<number, string | null>([
+    [0, "halcyon.cluster.mono"],
+    [3, null], // present but unnamed
+  ]);
+
+  it("prefers the captured name over the directory name", () => {
+    expect(resolveClusterLabel(0, "captured.cluster.mono", dir)).toBe(
+      "captured.cluster.mono",
+    );
+  });
+
+  it("falls back to the directory name when no captured name", () => {
+    expect(resolveClusterLabel(0, null, dir)).toBe("halcyon.cluster.mono");
+    expect(resolveClusterLabel(0, undefined, dir)).toBe("halcyon.cluster.mono");
+  });
+
+  it("falls back to 'Cluster #<id>' when neither source names it (no-mock)", () => {
+    expect(resolveClusterLabel(3, null, dir)).toBe("Cluster #3"); // present-but-null
+    expect(resolveClusterLabel(9, null, dir)).toBe("Cluster #9"); // absent from dir
+    expect(resolveClusterLabel(9, null, undefined)).toBe("Cluster #9"); // no dir at all
+    expect(resolveClusterLabel(9, "", dir)).toBe("Cluster #9"); // empty captured name
   });
 });

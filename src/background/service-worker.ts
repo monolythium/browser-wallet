@@ -20,10 +20,13 @@
 // Chain reads use `RpcClient` from `@monolythium/core-sdk` (root export).
 // The testnet flows route through `testnetJsonRpc()` against the native
 // `lyth_*` namespace directly. User-added chains use the same `RpcClient`
-// transport keyed on their declared RPC URL. Per mono-core `b2f0c498`,
-// the chain no longer serves `eth_call`, `eth_estimateGas`,
-// `eth_sendRawTransaction`, or the six polling-filter methods; the wallet
-// dispatcher rejects those at the boundary with EIP-1193 code 4200.
+// transport keyed on their declared RPC URL. The wallet does NOT proxy
+// arbitrary EVM reads through its dApp surface by design (native / non-EVM
+// chain → dApps use their own RPC); the dispatcher rejects `eth_call`,
+// `eth_estimateGas`, `eth_sendRawTransaction`, and the six polling-filter
+// methods at the boundary with EIP-1193 code 4200. `eth_call` /
+// `eth_estimateGas` ARE served by the chain as read-only native-executor
+// views (not retired — just not proxied here); the six filters ARE retired.
 
 import { RpcClient } from "@monolythium/core-sdk";
 import {
@@ -54,6 +57,8 @@ import {
   rejectByWindow,
   listPending,
   clearPending,
+  rejectAllPending,
+  reapExpired,
   focusApproval,
   type ApprovalDecision,
   type SendTxView,
@@ -212,17 +217,22 @@ import {
 import {
   activityCacheKey,
   activityPendingKey,
+  activityLocalClaimsKey,
   mergeIndexerSnapshot,
   evictExpiredPending,
+  applyLocalClaims,
   reconcilePending,
   validateActivityCache,
   validatePendingActivityCache,
+  validateLocalClaimsCache,
+  LOCAL_CLAIMS_CAP,
   type ActivityCache,
   type ConfirmedRow,
   type PendingTxRow,
   type RawAddressActivity,
   type RawDelegationHistory,
 } from "../shared/activity.js";
+import { isCurrencyCode, type CurrencyCode } from "../shared/iso4217.js";
 import {
   sentAddressesKey,
   parseSentAddresses,
@@ -242,12 +252,15 @@ import {
   type NameCache,
 } from "../shared/name-resolution.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
+import { lythoshiDecimalToLythDecimal } from "../shared/lyth-units.js";
+import { decodeClaimedAmountLythoshi } from "../shared/claimed-log.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
   submitMlDsaTx,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
+  testnetResolveNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
 import {
@@ -548,6 +561,8 @@ import { addressToBech32m } from "../shared/bech32m.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_APPROVAL_REAP,
+  APPROVAL_TTL_MS,
   AUTO_LOCK_EXEMPT_OPS,
   AUTO_LOCK_MINUTES_DEFAULT,
   AUTO_LOCK_OPTIONS,
@@ -1091,16 +1106,11 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   lockV4();
-}
-
-// Suspend the auto-lock alarm while a separate-window approval is open.
-// Without this, a slow user can find the wallet locked at the moment they
-// click Approve — the approval window doesn't fire any popup IPC ops, so the
-// usual `resetAutoLock()` on activity never runs. Counter so concurrent
-// approvals (different origins) all have to close before the alarm restarts.
-async function pauseAutoLock(): Promise<void> {
-  await chrome.alarms.clear(ALARM_AUTO_LOCK);
-  await chrome.storage.session.remove(SESSION_KEY_AUTO_LOCK_DEADLINE);
+  // P4-001 D1a — a locked wallet can't sign: reject every pending dApp approval
+  // so each call resolves rejected rather than hanging, and no window is stranded.
+  rejectAllPending("wallet locked");
+  // The bus is now empty — drop the reaper alarm (the next enqueue re-arms it).
+  await chrome.alarms.clear(ALARM_APPROVAL_REAP);
 }
 
 /** Restore the unlocked session on-demand when the SW has just woken from
@@ -1126,8 +1136,6 @@ async function ensureUnlockRestored(): Promise<void> {
   }
 }
 
-let openApprovalCount = 0;
-
 // WS infrastructure module state.
 //
 // `wsNewHeadsListenerInstalled` is set on first `ws-subscribe-new-heads`
@@ -1140,30 +1148,25 @@ let wsNewHeadsListenerInstalled = false;
  *  ChainStatusBanner subscribes to this key via chrome.storage.onChanged
  *  for live-block updates without polling. */
 const STORAGE_KEY_WS_LAST_BLOCK_HEX = "mono.ws.lastBlockHex";
+/** B2: when the head height last ADVANCED, keyed by hex ({ hex, advancedAtMs }).
+ *  Separate from the hex key above (whose string shape the banner depends on).
+ *  Written here only when the hex CHANGES so the popup's stall window survives a
+ *  reopen — the ChainStatusBanner seeds its baseline from this on mount. */
+const STORAGE_KEY_WS_BLOCK_ADVANCE = "mono.ws.lastBlockAdvancedAt";
 
-async function approvalOpened(): Promise<void> {
-  openApprovalCount++;
-  await pauseAutoLock();
-}
-
-async function approvalClosed(): Promise<void> {
-  openApprovalCount = Math.max(0, openApprovalCount - 1);
-  if (openApprovalCount === 0) {
-    await resetAutoLock();
-  }
-}
-
-/** enqueueApproval wrapped in approvalOpened/Closed so the auto-lock alarm
- *  stays paused for the lifetime of the approval window. */
+/** Enqueue a dApp approval. The auto-lock alarm is deliberately NOT paused for
+ *  the approval's lifetime (P4-001 D1a): the alarm armed at the last genuine user
+ *  activity keeps ticking, so an unresolved approval can't hold the wallet
+ *  unlocked past its timeout. If the lock fires first, triggerAutoLock rejects
+ *  the pending approval (rejectAllPending) so the dApp gets a clean rejection
+ *  rather than a hung promise. */
 async function gatedEnqueue(
   req: Parameters<typeof enqueueApproval>[0],
 ): Promise<ApprovalDecision> {
-  await approvalOpened();
-  try {
-    return await enqueueApproval(req);
-  } finally {
-    await approvalClosed();
-  }
+  // P4-001 D1b — arm the TTL reaper so a pending approval can't outlive
+  // APPROVAL_TTL_MS even when the user stays active and auto-lock never fires.
+  await ensureApprovalReapAlarm();
+  return await enqueueApproval(req);
 }
 
 // Progressive brute-force lockout — state lives in chrome.storage.session
@@ -1187,6 +1190,40 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
     if (typeof deadline === "number" && Date.now() < deadline) return;
     await triggerAutoLock();
+  })();
+});
+
+// ---- pending-approval TTL reaper alarm (P4-001 D1b) ----
+//
+// Self-arming/self-clearing like the notif-poll alarm below: gatedEnqueue arms
+// it when an approval is enqueued; each tick rejects approvals older than
+// APPROVAL_TTL_MS and clears the alarm once the bus drains. Rejecting goes
+// straight through the resolvers (NOT the `resolve` popup op), so a reap is not
+// counted as user activity and never resets the auto-lock deadline.
+
+/** Arm the approval reaper (idempotent — create with the same name replaces). */
+async function ensureApprovalReapAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.create(ALARM_APPROVAL_REAP, {
+      delayInMinutes: 0.5,
+      periodInMinutes: 0.5,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== ALARM_APPROVAL_REAP) return;
+  void (async () => {
+    const { remaining } = reapExpired(APPROVAL_TTL_MS, Date.now());
+    if (remaining === 0) {
+      try {
+        await chrome.alarms.clear(ALARM_APPROVAL_REAP);
+      } catch {
+        // best-effort
+      }
+    }
   })();
 });
 
@@ -2133,10 +2170,12 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       return err(4200, "eth_sendRawTransaction is not supported by this wallet");
     }
 
-    // Chain retired EVM simulation + polling filters per mono-core
-    // b2f0c498 (v4.1 §22.9). Reject at the wallet boundary with 4200
-    // instead of letting the call hit the chain just to get
-    // MethodNotFound — friendlier error message, faster round-trip.
+    // Reject these at the wallet boundary with 4200. Two distinct reasons:
+    // eth_call / eth_estimateGas ARE served by the chain (read-only
+    // native-executor views) but the wallet does not proxy arbitrary EVM reads
+    // by design (native / non-EVM chain → dApps use their own RPC); the six
+    // eth_*Filter methods are genuinely retired by the chain. A clear boundary
+    // answer beats a chain round-trip either way.
     case "eth_call":
     case "eth_estimateGas":
     case "eth_newFilter":
@@ -2147,7 +2186,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
     case "eth_getFilterLogs": {
       return err(
         4200,
-        `${method} is unavailable on Monolythium — the chain retired EVM simulation and polling-filter methods. Use native reads or submit via the wallet UI.`,
+        `${method} is not proxied by this wallet. Monolythium is a native (non-EVM) chain — use your own RPC for chain reads, or submit via the wallet UI.`,
       );
     }
 
@@ -2276,13 +2315,14 @@ function parseTypedData(raw: string): TypedDataEnvelope | null {
 }
 
 /**
- * Pre-populate the `SendTxView` shown on the approval popup. Per mono-core
- * `b2f0c498` + v4.1 §22.9, no on-chain simulation is available — the chain
- * retired `eth_call` and `eth_estimateGas`. The approval view shows declared
- * intent (recipient, value, calldata, fee) without a simulated outcome.
- * Fee and nonce reads still go through the chain's curated passive surface
- * (`eth_gasPrice` / `eth_getTransactionCount`) or the testnet native
- * helpers when running against a testnet operator.
+ * Pre-populate the `SendTxView` shown on the approval popup. The wallet does
+ * not run an on-chain simulation for the approval view — it shows declared
+ * intent (recipient, value, calldata, fee) without a simulated outcome. (The
+ * chain DOES serve `eth_call` / `eth_estimateGas` as read-only native-executor
+ * views, but the wallet does not use them for the approval preview.) Fee and
+ * nonce reads still go through the chain's curated passive surface
+ * (`eth_gasPrice` / `eth_getTransactionCount`) or the testnet native helpers
+ * when running against a testnet operator.
  */
 async function buildSendTxView(
   txReq: EthSendTransactionRequest,
@@ -4513,6 +4553,33 @@ async function readNativeAgentStateLookup(
   };
 }
 
+/** Extract the row array from a `lyth_getAddressActivity` response, tolerating
+ *  BOTH shapes during the v2 fleet migration: a legacy operator returns a bare
+ *  array; a v2 operator wraps it in an envelope `{schemaVersion, …, nextCursor,
+ *  activity:[…]}` (commit b676d221). A bare array passes through unchanged; the
+ *  envelope yields `.activity`; anything else → `[]` — the same fail-safe the
+ *  old `Array.isArray(...) ? ... : []` gave (an unrecognised shape was already
+ *  treated as empty). first-page-only by design: `nextCursor`/`schemaVersion`
+ *  are intentionally ignored — the wallet consumes only the newest `limit` rows
+ *  and fills its render window by MERGING streams (delegation + pending +
+ *  local-claims), not by paginating this one.
+ *
+ *  Also applied to `lyth_getDelegationHistory`, which is still a bare array
+ *  today (only `getAddressActivity` was enveloped). On a bare array the helper
+ *  is a pure no-op, so it harmlessly future-proofs that stream against a later
+ *  envelope migration that follows the same `.activity` shape. */
+function extractAddressActivity(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    Array.isArray((value as { activity?: unknown }).activity)
+  ) {
+    return (value as { activity: unknown[] }).activity;
+  }
+  return [];
+}
+
 /** Parallel-fetch the indexer streams used by popup-facing
  *  snapshots. Token balances are validated at the SW boundary because the
  *  popup renders them directly; other streams keep their existing raw shapes
@@ -4548,8 +4615,8 @@ async function fetchIndexerSnapshot(
         }),
     readNativeAgentStateLookup(address),
     settleTestnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
-    settleTestnetRpc<unknown[]>("lyth_getDelegationHistory", [addressForChain, 20]),
-    settleTestnetRpc<unknown[]>("lyth_getAddressActivity", [addressForChain, 30]),
+    settleTestnetRpc<unknown>("lyth_getDelegationHistory", [addressForChain, 20]),
+    settleTestnetRpc<unknown>("lyth_getAddressActivity", [addressForChain, 30]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
@@ -4576,8 +4643,8 @@ async function fetchIndexerSnapshot(
     mrcAccount: mrcAccount.value,
     nativeAgentState: nativeAgentState.value,
     addressLabel: addressLabel.value ?? null,
-    delegationHistory: Array.isArray(delegationHistory.value) ? delegationHistory.value : [],
-    addressActivity: Array.isArray(addressActivity.value) ? addressActivity.value : [],
+    delegationHistory: extractAddressActivity(delegationHistory.value),
+    addressActivity: extractAddressActivity(addressActivity.value),
     errors,
   };
 }
@@ -4765,13 +4832,25 @@ function parseIndexerStatus(value: unknown): {
 async function readActivityStorage(
   cacheKey: string,
   pendingKey: string,
-): Promise<{ cache: ActivityCache | null; pending: PendingTxRow[] }> {
+  localClaimsKey: string,
+): Promise<{
+  cache: ActivityCache | null;
+  pending: PendingTxRow[];
+  claims: PendingTxRow[];
+}> {
   const stored = await new Promise<Record<string, unknown>>((resolve) => {
-    chrome.storage.local.get([cacheKey, pendingKey], (res) => resolve(res ?? {}));
+    chrome.storage.local.get(
+      [cacheKey, pendingKey, localClaimsKey],
+      (res) => resolve(res ?? {}),
+    );
   });
   return {
     cache: validateActivityCache(stored[cacheKey]),
     pending: validatePendingActivityCache(stored[pendingKey])?.pending ?? [],
+    // Durable reward-claim store — read on EVERY activity-get path so a claim
+    // missing from the pending cache is always re-injected from the source of
+    // truth (Gap B fix; applyLocalClaims runs on all return paths below).
+    claims: validateLocalClaimsCache(stored[localClaimsKey])?.claims ?? [],
   };
 }
 
@@ -4953,6 +5032,16 @@ async function persistPendingRowBackground(args: {
   /** Cluster metadata for delegation sends — same metadata-only invariant. */
   clusterId?: number;
   clusterName?: string;
+  toClusterId?: number;
+  toClusterName?: string;
+  /** Reward-claim metadata (opKind:"claim" only) — captured popup-side at
+   *  broadcast. Marks the row source:"local-claim" (TTL-exempt) + mirrors it
+   *  into the durable local-claims store. Metadata-only; never reaches the
+   *  signer. */
+  claimedAmount?: string | null;
+  rateAtClaim?: number | null;
+  currency?: CurrencyCode;
+  delegationWeightBps?: number;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -4978,6 +5067,10 @@ async function persistPendingRowBackground(args: {
       );
     });
     const prev = validatePendingActivityCache(stored)?.pending ?? [];
+    // A reward claim is a durable local record (the indexer never emits a claim
+    // event): mark it source:"local-claim" so it is TTL-exempt + routes render
+    // to claimedAmount, and mirror it into the localclaims store below.
+    const isClaim = args.opKind === "claim";
     const row: PendingTxRow = {
       kind: "pending_tx",
       txHash: args.txHash,
@@ -4989,6 +5082,15 @@ async function persistPendingRowBackground(args: {
       ...(args.opKind !== undefined ? { opKind: args.opKind } : {}),
       ...(args.clusterId !== undefined ? { clusterId: args.clusterId } : {}),
       ...(args.clusterName !== undefined ? { clusterName: args.clusterName } : {}),
+      ...(args.toClusterId !== undefined ? { toClusterId: args.toClusterId } : {}),
+      ...(args.toClusterName !== undefined ? { toClusterName: args.toClusterName } : {}),
+      ...(isClaim ? { source: "local-claim" as const } : {}),
+      ...(isClaim ? { claimedAmount: args.claimedAmount ?? null } : {}),
+      ...(isClaim ? { rateAtClaim: args.rateAtClaim ?? null } : {}),
+      ...(isClaim && args.currency !== undefined ? { currency: args.currency } : {}),
+      ...(args.delegationWeightBps !== undefined
+        ? { delegationWeightBps: args.delegationWeightBps }
+        : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -4998,6 +5100,24 @@ async function persistPendingRowBackground(args: {
         () => resolve(),
       );
     });
+    // Mirror the claim into the durable local-claims store (the source of truth
+    // that survives a lost pending cache; re-injected each poll by
+    // applyLocalClaims). Dedup by txHash (intra-store identity); cap to newest.
+    if (isClaim) {
+      const claimsKey = activityLocalClaimsKey(addrLower, args.chainIdHex);
+      const storedClaims = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([claimsKey], (res) => resolve(res?.[claimsKey]));
+      });
+      const prevClaims = validateLocalClaimsCache(storedClaims)?.claims ?? [];
+      const deduped = prevClaims.filter((c) => c.txHash !== row.txHash);
+      const nextClaims = [row, ...deduped].slice(0, LOCAL_CLAIMS_CAP);
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [claimsKey]: { claims: nextClaims } },
+          () => resolve(),
+        );
+      });
+    }
     // A pending row now exists → arm the headless poll so this tx's
     // terminal transition is observed (toast + badge) even if every wallet
     // surface is closed before it confirms. Idempotent; lock-independent.
@@ -5036,6 +5156,13 @@ export interface TerminalPendingTx {
    *  matched to the indexer's canonical row by exact (block, txIndex)
    *  regardless of kind (tx_send, delegate, undelegate, …). Null when absent. */
   txIndex: number | null;
+  /** For a CONFIRMED reward claim (source:"local-claim"): the authoritative
+   *  claimed amount decoded from the receipt's `Claimed` log (data word-0),
+   *  decimal lythoshi — or null/absent when not a claim or no log. The bridge
+   *  converts it to decimal LYTH and writes it onto the row, overriding the
+   *  (dropped) submit-time capture. Additive: callers that ignore it (the
+   *  notification loops, the Gap A alarm re-bridge) are unaffected. */
+  claimedAmountLythoshi?: string | null;
 }
 
 /** Parse a testnet receipt's block + tx index. Numeric (the operators' shape)
@@ -5120,6 +5247,10 @@ async function dropConfirmedPendingByHash(
           blockNumber: number | null;
           txIndex: number | null;
         } | null = null;
+        // Authoritative claimed amount from the receipt's `Claimed` log (decimal
+        // lythoshi) — decoded ONLY for a confirmed reward claim, from the receipt
+        // already in hand (no extra round-trip). null for non-claims / no log.
+        let claimedAmountLythoshi: string | null = null;
         try {
           const receipt = await testnetJsonRpc<{
             status?: number | string;
@@ -5127,12 +5258,16 @@ async function dropConfirmedPendingByHash(
             block_number?: unknown;
             tx_index?: unknown;
             txIndex?: unknown;
+            logs?: unknown;
           } | null>("eth_getTransactionReceipt", [p.txHash], opts);
           if (receipt.result != null) {
             const anchor = parseReceiptBlockTx(receipt.result);
             const rawStatus = receipt.result.status;
             if (rawStatus === 1 || rawStatus === "0x1") {
               resolved = { status: "confirmed", blockNumber: anchor.blockNumber, txIndex: anchor.txIndex };
+              if (p.source === "local-claim") {
+                claimedAmountLythoshi = decodeClaimedAmountLythoshi(receipt.result.logs);
+              }
             } else if (rawStatus === 0 || rawStatus === "0x0") {
               resolved = { status: "failed", blockNumber: anchor.blockNumber, txIndex: anchor.txIndex };
             }
@@ -5147,6 +5282,7 @@ async function dropConfirmedPendingByHash(
             status: resolved.status,
             blockNumber: resolved.blockNumber,
             txIndex: resolved.txIndex,
+            ...(claimedAmountLythoshi !== null ? { claimedAmountLythoshi } : {}),
           });
         } else {
           kept.push(p);
@@ -5159,6 +5295,7 @@ async function dropConfirmedPendingByHash(
         block_number?: unknown;
         tx_index?: unknown;
         txIndex?: unknown;
+        logs?: unknown;
       } | null>("eth_getTransactionReceipt", [p.txHash], opts);
       if (receipt.result == null) {
         kept.push(p);
@@ -5167,7 +5304,17 @@ async function dropConfirmedPendingByHash(
       const rawStatus = receipt.result.status;
       const { blockNumber, txIndex } = parseReceiptBlockTx(receipt.result);
       if (rawStatus === 1 || rawStatus === "0x1") {
-        terminal.push({ row: p, status: "confirmed", blockNumber, txIndex });
+        const claimedAmountLythoshi =
+          p.source === "local-claim"
+            ? decodeClaimedAmountLythoshi(receipt.result.logs)
+            : null;
+        terminal.push({
+          row: p,
+          status: "confirmed",
+          blockNumber,
+          txIndex,
+          ...(claimedAmountLythoshi !== null ? { claimedAmountLythoshi } : {}),
+        });
       } else if (rawStatus === 0 || rawStatus === "0x0") {
         terminal.push({ row: p, status: "failed", blockNumber, txIndex });
       } else {
@@ -5180,6 +5327,42 @@ async function dropConfirmedPendingByHash(
     }
   }
   return { kept, terminal, rpcFailures };
+}
+
+/** Stamp the receipt's inclusion slot (block, txIndex) onto each receipt-
+ *  CONFIRMED pending row so it renders confirmed immediately (not "Pending")
+ *  and reconcilePending can later retire it by that exact (block, txIndex) slot
+ *  — for ANY kind (transfer OR delegate/undelegate/redelegate), not just
+ *  tx_send. Falls back to the broadcast anchor for the block; a row with no
+ *  known block stays a plain pending row until the indexer surfaces it. FAILED
+ *  terminals are NOT bridged (they surface via the failed-row notification
+ *  path). Shared by the full path and the indexer-outage path so both bridge
+ *  identically. */
+function bridgeConfirmedTerminals(
+  terminals: TerminalPendingTx[],
+): PendingTxRow[] {
+  return terminals
+    .filter((t) => t.status === "confirmed")
+    .map((t) => {
+      const block = t.blockNumber ?? t.row.broadcastBlockHeight;
+      if (block === null) return t.row;
+      const bridged: PendingTxRow = {
+        ...t.row,
+        confirmedBlockHeight: block,
+        ...(t.txIndex !== null ? { confirmedTxIndex: t.txIndex } : {}),
+      };
+      // Self-heal the claim amount from the receipt's `Claimed` log (decimal
+      // lythoshi → decimal LYTH), overriding the dropped submit-time capture.
+      // ONLY for a reward claim with a decoded amount; runs each poll so a
+      // confirmed claim row that was missing the amount picks it up. Persisted
+      // via the durable local-claim store (Gap B) → both surfaces self-heal.
+      if (t.row.source === "local-claim" && t.claimedAmountLythoshi != null) {
+        bridged.claimedAmount = lythoshiDecimalToLythDecimal(
+          t.claimedAmountLythoshi,
+        );
+      }
+      return bridged;
+    });
 }
 
 /** Best-effort total tx fee (lythoshi decimal string) for a CONFIRMED tx, read
@@ -5389,19 +5572,67 @@ export async function pollPendingAndNotify(): Promise<{
           ...(t.row.clusterName !== undefined
             ? { clusterName: t.row.clusterName }
             : {}),
+          ...(t.row.toClusterId !== undefined ? { toClusterId: t.row.toClusterId } : {}),
+          ...(t.row.toClusterName !== undefined
+            ? { toClusterName: t.row.toClusterName }
+            : {}),
+          ...(t.claimedAmountLythoshi != null
+            ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
+            : {}),
+          ...(t.row.delegationWeightBps !== undefined
+            ? { delegationWeightBps: t.row.delegationWeightBps }
+            : {}),
         });
         if (result.added && result.record !== null) {
           await fireOsNotification(result.record, { unlocked });
         }
       }
-      // Write back ONLY the still-pending rows (terminal + TTL-expired
-      // dropped) so they aren't re-polled. Change-guard mirrors
-      // writeActivityStorage so we don't fire a spurious onChanged.
-      if (kept.length !== pending.length) {
+      // Write back the still-pending rows. A reward CLAIM (source:"local-claim")
+      // is a DURABLE local record — the indexer emits no claim event, so the
+      // alarm must NOT delete a confirmed claim from the pending cache (that
+      // would vanish it from an open popup via onChanged). Re-bridge a
+      // terminal-confirmed claim back into the written list (stamp the receipt
+      // inclusion slot, mirroring the activity-get bridge); ordinary terminal
+      // rows still drop (they re-surface from the indexer). Order + object refs
+      // are preserved so a settled claim never fires a spurious onChanged.
+      const confirmedClaims = new Map(
+        terminal
+          .filter((t) => t.status === "confirmed" && t.row.source === "local-claim")
+          .map((t) => [t.row.txHash, t] as const),
+      );
+      let writtenPending: PendingTxRow[];
+      if (confirmedClaims.size === 0) {
+        writtenPending = kept;
+      } else {
+        const keptHashes = new Set(kept.map((r) => r.txHash));
+        writtenPending = live
+          .filter((r) => keptHashes.has(r.txHash) || confirmedClaims.has(r.txHash))
+          .map((r) => {
+            const tc = confirmedClaims.get(r.txHash);
+            if (tc === undefined || r.confirmedBlockHeight !== undefined) return r;
+            const block = tc.blockNumber ?? r.broadcastBlockHeight;
+            return block !== null
+              ? {
+                  ...r,
+                  confirmedBlockHeight: block,
+                  ...(tc.txIndex !== null ? { confirmedTxIndex: tc.txIndex } : {}),
+                }
+              : r;
+          });
+      }
+      const writtenChanged =
+        writtenPending.length !== pending.length ||
+        writtenPending.some((row, i) => row !== pending[i]);
+      if (writtenChanged) {
         await new Promise<void>((resolve) => {
-          chrome.storage.local.set({ [key]: { pending: kept } }, () => resolve());
+          chrome.storage.local.set(
+            { [key]: { pending: writtenPending } },
+            () => resolve(),
+          );
         });
       }
+      // A confirmed claim is a settled record, NOT in-flight — exclude it from
+      // `remaining` so it never keeps the alarm armed (kept rows still do).
       remaining += kept.length;
     }
     await refreshUnreadBadge({
@@ -7874,11 +8105,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const addressLower = p.address.toLowerCase();
       const cacheKey = activityCacheKey(addressLower, p.chainIdHex);
       const pendingKey = activityPendingKey(addressLower, p.chainIdHex);
+      const localClaimsKey = activityLocalClaimsKey(addressLower, p.chainIdHex);
       const now = Date.now();
-      const { cache: prevCache, pending: prevPending } = await readActivityStorage(
-        cacheKey,
-        pendingKey,
-      );
+      const {
+        cache: prevCache,
+        pending: prevPending,
+        claims: prevClaims,
+      } = await readActivityStorage(cacheKey, pendingKey, localClaimsKey);
       // Bug A F1 — bypass the staleness short-circuit when pending rows exist
       // so a refocus/nav refresh (and the F2 ~4s re-poll in useActivity) falls
       // through to the authoritative reconcile (dropConfirmedPendingByHash
@@ -7888,13 +8121,29 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // non-pending refresh keeps the 30s cache benefit for the common case.
       // Reconcile only flips a confirmed/failed verdict off the receipt
       // (#5117 preserved); it never invents a confirmation.
+      // Durable local-claim rows are TTL-exempt + persistent, so they would keep
+      // prevPending non-empty forever and defeat the 30s cache. Gate freshness on
+      // the NON-claim pending rows only; claim rows still ride through the fresh
+      // path (evictExpiredPending exempts them).
+      const nonClaimPending = prevPending.filter((p) => p.source !== "local-claim");
       const isFresh =
         prevCache !== null &&
         now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS &&
-        prevPending.length === 0;
+        nonClaimPending.length === 0;
       if (isFresh) {
-        const pending = evictExpiredPending(prevPending, now);
-        if (pending.length !== prevPending.length) {
+        // Re-inject durable claims even on the fast path (Gap B): if the alarm
+        // or any writer dropped a claim from the pending cache, the durable
+        // store re-surfaces it here. applyLocalClaims dedups by txHash + cross-
+        // stream-suppresses by anchor; belt-2 (claims don't gate isFresh) intact.
+        const pending = applyLocalClaims(
+          evictExpiredPending(prevPending, now),
+          prevClaims,
+          prevCache.confirmed,
+        );
+        if (
+          pending.length !== prevPending.length ||
+          pending.some((row, i) => row !== prevPending[i])
+        ) {
           await new Promise<void>((resolve) => {
             chrome.storage.local.set(
               { [pendingKey]: { pending } },
@@ -7904,16 +8153,46 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
         return { ok: true, cache: prevCache, pending, errors: {} };
       }
-      const fresh = await fetchIndexerSnapshot(p.address, p.chainIdHex, {
-        includeMrcAccount: false,
-      });
+      // Receipt classification is indexer-independent — it asks the chain
+      // directly (lyth_txStatus + eth_getTransactionReceipt on the pending
+      // txHashes), so run it CONCURRENTLY with the ~6-7 RPC indexer snapshot
+      // instead of after it. Sequencing the receipt pass after the snapshot
+      // delayed the spinner flip by a full receipt round-trip (~1-3s) behind
+      // the single-RPC balance pill — the visible "balance updated but still
+      // pending" beat. The indexer anchor match (reconcilePending) still runs
+      // AFTER the fetch (it needs the freshly indexed confirmed rows); the
+      // early receipt pass only feeds the indexer-lag bridge below.
+      const [fresh, receiptPass] = await Promise.all([
+        fetchIndexerSnapshot(p.address, p.chainIdHex, {
+          includeMrcAccount: false,
+        }),
+        dropConfirmedPendingByHash(prevPending),
+      ]);
+      const { kept: receiptKept, terminal: terminalByHash } = receiptPass;
       const activityOk = fresh.errors.addressActivity === undefined;
       const delegationOk = fresh.errors.delegationHistory === undefined;
       if (!activityOk && !delegationOk && prevCache !== null) {
-        // Total indexer outage with a usable prev cache — preserve and
-        // surface. TTL backstop still runs on the pending list.
-        const pending = evictExpiredPending(prevPending, now);
-        if (pending.length !== prevPending.length) {
+        // Total indexer outage with a usable prev cache — preserve and surface.
+        // The receipt pass (above) is indexer-INDEPENDENT, so even with BOTH
+        // indexer streams down we still clear a tx that confirmed via its
+        // receipt instead of stranding it until the 30s alarm: bridge the
+        // receipt-confirmed rows (stamp confirmedBlockHeight) and keep the
+        // still-pending ones. There's no indexer snapshot to anchor-swap against
+        // here, so bridged rows render confirmed until a later (recovered) poll's
+        // reconcilePending retires them. TTL backstop still runs; re-inject
+        // durable claims too (Gap B) so an outage never drops a claim.
+        const pending = applyLocalClaims(
+          evictExpiredPending(
+            [...receiptKept, ...bridgeConfirmedTerminals(terminalByHash)],
+            now,
+          ),
+          prevClaims,
+          prevCache.confirmed,
+        );
+        if (
+          pending.length !== prevPending.length ||
+          pending.some((row, i) => row !== prevPending[i])
+        ) {
           await new Promise<void>((resolve) => {
             chrome.storage.local.set(
               { [pendingKey]: { pending } },
@@ -7934,13 +8213,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         confirmed: prevCache?.confirmed ?? [],
       });
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
-      const { kept, terminal: terminalByHash } = await dropConfirmedPendingByHash(reconciled);
+      const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
       // Indexer-lag bridge (open-surface display path). A tx confirmed via the
-      // real-time receipt is dropped from `kept`, but the indexer's success
-      // stream usually hasn't surfaced its canonical row in THIS snapshot yet —
-      // the chain includes the tx a beat before the indexer writes the activity
-      // row, and since reconcilePending ran first without matching it, the
-      // confirmed row is NOT in nextCache. Dropping it now would make the tx
+      // real-time receipt is dropped from `receiptKept`, but the indexer's
+      // success stream usually hasn't surfaced its canonical row in THIS snapshot
+      // yet — the chain includes the tx a beat before the indexer writes the
+      // activity row, and reconcilePending (run over the raw prevPending, which
+      // carries no confirmedBlockHeight on a first-confirm tick) can't match it,
+      // so the confirmed row is NOT in nextCache. Dropping it now would make the tx
       // VANISH (pending gone, confirmed not yet indexed) until a much later
       // refresh — exactly the "sent but not shown in Activity" report. Keep
       // confirmed rows in the pending list so the tx stays visible AND the
@@ -7949,27 +8229,48 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // then renders — no duplicate, no gap). Failed rows are never in the
       // success-only indexer stream, so they are NOT bridged: they drop here and
       // surface via the notification-history failed-row path.
-      const bridgedConfirmed = terminalByHash
-        .filter((t) => t.status === "confirmed")
-        .map((t) => {
-          // Stamp the receipt's inclusion (block, txIndex) so the row renders as
-          // confirmed immediately (not "Pending") and reconcilePending can match
-          // the indexer's canonical row by that exact slot — for ANY kind
-          // (transfer OR delegate/undelegate/redelegate), not just tx_send.
-          // Fall back to the broadcast anchor for the block; if no block is
-          // known leave it unflagged (a plain pending row until the indexer
-          // surfaces it).
-          const block = t.blockNumber ?? t.row.broadcastBlockHeight;
-          return block !== null
-            ? {
-                ...t.row,
-                confirmedBlockHeight: block,
-                ...(t.txIndex !== null ? { confirmedTxIndex: t.txIndex } : {}),
-              }
-            : t.row;
-        });
-      const nextPending = evictExpiredPending([...kept, ...bridgedConfirmed], now);
+      const bridgedConfirmed = bridgeConfirmedTerminals(terminalByHash);
+      // Final pending = the receipt survivors (still-pending + bridged-confirmed)
+      // that the indexer ALSO hasn't surfaced yet. The receipt pass ran over ALL
+      // prevPending (it raced the fetch), so restrict it to reconciledHashes —
+      // this keeps the result identical to the previous "receipt over indexer-
+      // survivors" ordering: a row the indexer matched THIS tick is dropped (its
+      // canonical confirmed row renders); an unmatched bridged row stays visible
+      // until a later tick's reconcilePending retires it by (block,txIndex).
+      const survivors = [...receiptKept, ...bridgedConfirmed].filter((r) =>
+        reconciledHashes.has(r.txHash),
+      );
+      const evictedPending = evictExpiredPending(survivors, now);
+      // Re-inject the durable local-claim rows (the local-claim bridges the
+      // pre-confirm window + carries the receipt-decoded amount). applyLocalClaims
+      // dedups by txHash (the receipt-bridged pending copy wins) and CROSS-STREAM
+      // suppresses a claim once a confirmed row appears at its (block,txIndex)
+      // anchor (C2 — confirmed rows carry no txHash). LIVE since 2026-06-24: the
+      // indexer now ships claim events WITH the amount, so this retire is active;
+      // mergeIndexerSnapshot keeps the amount sticky (applyStickyClaimAmount) so
+      // a null-amount confirmed row never erases the decoded amount.
+      // `prevClaims` was read up-front by readActivityStorage (Gap B) so every
+      // return path shares the same durable read.
+      const nextPending = applyLocalClaims(
+        evictedPending,
+        prevClaims,
+        nextCache.confirmed,
+      );
       await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
+      // Keep the durable store in sync with the merged survivors (anchored copies
+      // + cross-stream-retired claims dropped). Only write when it changed.
+      const liveClaims = nextPending.filter((p) => p.source === "local-claim");
+      const claimsChanged =
+        liveClaims.length !== prevClaims.length ||
+        liveClaims.some((c, i) => c !== prevClaims[i]);
+      if (claimsChanged) {
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set(
+            { [localClaimsKey]: { claims: liveClaims } },
+            () => resolve(),
+          );
+        });
+      }
       // Notifications hook — post-write microtask. The hook records
       // one notification per row that just reached a TERMINAL state (the
       // confirmed/failed bit from the indexer reconcile or the receipt-RPC
@@ -7978,7 +8279,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // notification I/O — a slow/failed notification write must never delay
       // or break activity persistence. See plan §P6.
       {
-        const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
+        // reconciledHashes is computed once in the main body above (the indexer
+        // anchor survivors); reuse it so the heuristic notification set stays
+        // exactly "rows the indexer matched" — unchanged by the receipt reorder.
         const heuristicallyMatched = prevPending.filter(
           (r) => !reconciledHashes.has(r.txHash),
         );
@@ -8030,6 +8333,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   ...(row.clusterName !== undefined
                     ? { clusterName: row.clusterName }
                     : {}),
+                  ...(row.toClusterId !== undefined ? { toClusterId: row.toClusterId } : {}),
+                  ...(row.toClusterName !== undefined
+                    ? { toClusterName: row.toClusterName }
+                    : {}),
                 });
                 // Fire OS toast ONLY when this snapshot produced
                 // a NEW record (the dedupe set blocks already-notified
@@ -8067,6 +8374,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                     : {}),
                   ...(t.row.clusterName !== undefined
                     ? { clusterName: t.row.clusterName }
+                    : {}),
+                  ...(t.row.toClusterId !== undefined
+                    ? { toClusterId: t.row.toClusterId }
+                    : {}),
+                  ...(t.row.toClusterName !== undefined
+                    ? { toClusterName: t.row.toClusterName }
+                    : {}),
+                  ...(t.claimedAmountLythoshi != null
+                    ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
+                    : {}),
+                  ...(t.row.delegationWeightBps !== undefined
+                    ? { delegationWeightBps: t.row.delegationWeightBps }
                     : {}),
                 });
                 if (result.added && result.record !== null) {
@@ -8184,6 +8503,45 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             address: p.address.toLowerCase(),
           },
         };
+      }
+    }
+    case "wallet-resolve-name": {
+      // §22.8 FORWARD resolution (name → address) against the AUTHORITATIVE
+      // on-chain hierarchical name registry (0x110E) via lyth_resolveName.
+      // SECURITY (P5-002): the result feeds the SIGNED recipient, so it is
+      // QUORUM cross-checked across genesis-trusted operators
+      // (testnetResolveNameConsensus) — a single rogue/MITM'd operator that
+      // returns a different address than the quorum is outvoted (disagreement
+      // → never signed). FAIL-CLOSED: a miss, a disagreement, insufficient
+      // responders, or any error returns no address (the popup tells the user
+      // to paste it); we NEVER fall back to the operator-echoed label cache for
+      // a signed send.
+      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name resolution is only wired for Monolythium Testnet today" };
+      }
+      try {
+        const consensus = await testnetResolveNameConsensus(p.name);
+        if (consensus.status === "confirmed-hit") {
+          return { ok: true, addr0x: consensus.addr0x };
+        }
+        if (consensus.status === "confirmed-miss") {
+          return { ok: true, addr0x: null };
+        }
+        // disagreement (a rogue/MITM'd operator differs from the quorum) or
+        // insufficient responders — FAIL-CLOSED, never sign an unverified name.
+        return {
+          ok: false,
+          reason:
+            consensus.status === "disagreement"
+              ? "operators disagreed on this name — paste the address"
+              : "not enough operators agreed to verify this name — paste the address",
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message ?? "resolve failed" };
       }
     }
     case "wallet-resolve-names": {
@@ -9159,6 +9517,31 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               .catch(() => {
                 // session write failure is non-load-bearing
               });
+            // B2: track WHEN the head advanced (keyed by hex) so the popup's
+            // stall window survives a reopen. Update the timestamp ONLY when the
+            // hex changes — not on every duplicate push — so it reflects genuine
+            // advancement. Best-effort; a failed read/write just means the next
+            // popup open falls back to its own first-tick baseline.
+            chrome.storage.session
+              .get(STORAGE_KEY_WS_BLOCK_ADVANCE)
+              .then((s) => {
+                const prev = s?.[STORAGE_KEY_WS_BLOCK_ADVANCE];
+                const prevHex =
+                  typeof prev === "object" && prev !== null
+                    ? (prev as { hex?: unknown }).hex
+                    : undefined;
+                if (prevHex !== number) {
+                  chrome.storage.session
+                    .set({
+                      [STORAGE_KEY_WS_BLOCK_ADVANCE]: {
+                        hex: number,
+                        advancedAtMs: Date.now(),
+                      },
+                    })
+                    .catch(() => {});
+                }
+              })
+              .catch(() => {});
           }
         });
       }
@@ -9190,6 +9573,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // opKind): rides only into the pending row, never the signer.
         clusterId?: unknown;
         clusterName?: unknown;
+        // Redelegate DESTINATION cluster — METADATA ONLY (for the toast).
+        toClusterId?: unknown;
+        toClusterName?: unknown;
+        // Reward-claim metadata (opKind:"claim") — METADATA ONLY (same as
+        // clusterId): rides into the pending row + local-claims store, never the
+        // signer. claimedAmount = decimal LYTH | null; rateAtClaim = number |
+        // null; currency = ISO-4217 code.
+        claimedAmount?: unknown;
+        rateAtClaim?: unknown;
+        currency?: unknown;
+        // Delegation weight (bps) for delegate/redelegate — METADATA ONLY (same
+        // as clusterId): the same uint16 already in `data`; rides only into the
+        // pending row so the notification shows the %. Never re-encoded.
+        delegationWeightBps?: unknown;
         // T1-04(a) — elevated re-auth for an over-limit passkey send. When
         // the per-vault passkey cap would reject this value-only transfer,
         // the popup re-submits with the account password here; the SW
@@ -9244,6 +9641,37 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const acceptedClusterName =
         typeof p.clusterName === "string" && p.clusterName.length > 0
           ? p.clusterName
+          : undefined;
+      const acceptedToClusterId =
+        typeof p.toClusterId === "number" && Number.isFinite(p.toClusterId)
+          ? p.toClusterId
+          : undefined;
+      const acceptedToClusterName =
+        typeof p.toClusterName === "string" && p.toClusterName.length > 0
+          ? p.toClusterName
+          : undefined;
+      // Reward-claim metadata — METADATA ONLY (never reaches the signer).
+      // Sanitize: a decimal-string|null amount, a finite|null rate, a valid
+      // ISO-4217 currency; anything else is dropped.
+      const acceptedClaimedAmount =
+        typeof p.claimedAmount === "string" || p.claimedAmount === null
+          ? p.claimedAmount
+          : undefined;
+      const acceptedRateAtClaim =
+        typeof p.rateAtClaim === "number" && Number.isFinite(p.rateAtClaim)
+          ? p.rateAtClaim
+          : p.rateAtClaim === null
+            ? null
+            : undefined;
+      const acceptedCurrency = isCurrencyCode(p.currency) ? p.currency : undefined;
+      // Delegation weight (bps) — METADATA ONLY. Accept only an integer in the
+      // chain-valid 1..10000 range; anything else is dropped (no % shown).
+      const acceptedDelegationWeightBps =
+        typeof p.delegationWeightBps === "number" &&
+        Number.isInteger(p.delegationWeightBps) &&
+        p.delegationWeightBps >= 1 &&
+        p.delegationWeightBps <= 10_000
+          ? p.delegationWeightBps
           : undefined;
       if (!chainRequiresMlDsa(p.chainIdHex)) {
         return { ok: false, reason: "send is only wired for Monolythium Testnet today" };
@@ -9448,6 +9876,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ...(acceptedClusterId !== undefined ? { clusterId: acceptedClusterId } : {}),
           ...(acceptedClusterName !== undefined
             ? { clusterName: acceptedClusterName }
+            : {}),
+          ...(acceptedToClusterId !== undefined ? { toClusterId: acceptedToClusterId } : {}),
+          ...(acceptedToClusterName !== undefined
+            ? { toClusterName: acceptedToClusterName }
+            : {}),
+          // Reward-claim metadata — only meaningful when opKind:"claim"; the
+          // helper gates the local-claim write on opKind. Metadata-only.
+          ...(acceptedClaimedAmount !== undefined
+            ? { claimedAmount: acceptedClaimedAmount }
+            : {}),
+          ...(acceptedRateAtClaim !== undefined
+            ? { rateAtClaim: acceptedRateAtClaim }
+            : {}),
+          ...(acceptedCurrency !== undefined ? { currency: acceptedCurrency } : {}),
+          // Delegation weight (bps) — metadata only; the % the notification shows.
+          ...(acceptedDelegationWeightBps !== undefined
+            ? { delegationWeightBps: acceptedDelegationWeightBps }
             : {}),
         });
         return { ok: true, txHash, via };

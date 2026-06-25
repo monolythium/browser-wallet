@@ -65,7 +65,7 @@ export function ForgotPassword({
         <div
           style={{
             flex: 1,
-            fontSize: 13,
+            fontSize: 15,
             fontWeight: 600,
             textAlign: "center",
           }}

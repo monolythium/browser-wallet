@@ -21,6 +21,7 @@ import {
   verifyOperatorGenesis,
 } from "./networks.js";
 import { isWithinSaneBound } from "../shared/operator-bounds.js";
+import { bech32mToAddress } from "../shared/bech32m.js";
 
 /** Sentinel thrown by the fail-closed vault-binding assert when the active
  *  vault changed between approval and the synchronous pre-sign read (NN-01
@@ -492,6 +493,136 @@ export async function testnetMaxBalanceConsensus(
     contributing: contributing.map((c) => ({ name: c.name, balanceHex: c.balanceHex })),
     failing,
   };
+}
+
+/**
+ * Cross-operator QUORUM for §22.8 forward name resolution (P5-002 close).
+ * Mirrors the `testnetMaxBalanceConsensus` fan-out — the SAME operator set
+ * (`getActiveOperators`), the same genesis-pin gate, the same parallel-probe-
+ * with-timeout — but with an EXACT-MATCH agreement reduce instead of MAX (an
+ * address is not orderable, so MAX is meaningless; the balance helper itself
+ * warns against generalizing its reduce to non-monotonic reads).
+ *
+ * Because the resolved address feeds a SIGNED recipient, this is FAIL-CLOSED:
+ *  - `confirmed-hit`  — ≥ NAME_RESOLVE_QUORUM_MIN genesis-trusted operators
+ *    answered AND all agree on the SAME owner address.
+ *  - `confirmed-miss` — ≥ the quorum answered AND all agree the name is
+ *    unregistered (null) — a legitimate "not registered".
+ *  - `disagreement`   — any two answers differ (a rogue returning a different
+ *    address, or a hit-vs-miss split). NEVER signed.
+ *  - `insufficient`   — fewer than the quorum answered, so no single operator
+ *    is the sole authority for a signed address.
+ * Only `confirmed-hit` yields an address; everything else → the user pastes it.
+ * This closes the SINGLE-ROGUE model; a full on-path RPC-MITM (one forged
+ * response on every connection) still needs operator TLS (O1 / P6-002).
+ */
+export interface NameResolveConsensusResult {
+  status: "confirmed-hit" | "confirmed-miss" | "disagreement" | "insufficient";
+  /** The agreed lowercased 0x owner address — `confirmed-hit` only, else null. */
+  addr0x: string | null;
+  /** Operators that returned a definitive answer (a hit OR a miss). */
+  agreeing: number;
+  /** Per-operator outcome, for the SW console (diagnostics only). */
+  detail: string;
+}
+
+/** Minimum genesis-trusted operators that must agree before a name resolution
+ *  is trusted for a SIGNED recipient. ≥2 so no single operator is the sole
+ *  authority: a lone roge is outvoted (→ disagreement → fail-closed), and a
+ *  rogue that is the ONLY responder fails the quorum (→ insufficient). */
+const NAME_RESOLVE_QUORUM_MIN = 2;
+
+export async function testnetResolveNameConsensus(
+  name: string,
+): Promise<NameResolveConsensusResult> {
+  const operators = getActiveOperators();
+  if (operators.length === 0) {
+    throw new Error("no Monolythium Testnet operators configured");
+  }
+
+  const probes = operators.map(async (op) => {
+    // GAP #11: skip operators whose chain identity doesn't match our pin.
+    if (!(await verifyOperatorGenesis(op.rpc, BALANCE_GENESIS_PROBE_TIMEOUT_MS))) {
+      return { name: op.name, addr0x: null, answered: false, reason: "untrusted genesis" };
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), BALANCE_CONSENSUS_TIMEOUT_MS);
+    try {
+      const res = await fetch(op.rpc, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "lyth_resolveName", params: [name] }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        return { name: op.name, addr0x: null, answered: false, reason: `HTTP ${res.status}` };
+      }
+      const body = (await res.json()) as {
+        result?: { address?: unknown } | null;
+        error?: { message?: string };
+      };
+      if (body.error) {
+        return { name: op.name, addr0x: null, answered: false, reason: body.error.message ?? "rpc error" };
+      }
+      const address =
+        body.result !== null && typeof body.result === "object"
+          ? (body.result as { address?: unknown }).address
+          : null;
+      // Unregistered → a DEFINITIVE miss answer (null), still a quorum vote.
+      if (address === null || address === undefined) {
+        return { name: op.name, addr0x: null, answered: true, reason: null };
+      }
+      if (typeof address !== "string" || address.length === 0) {
+        return { name: op.name, addr0x: null, answered: false, reason: "malformed shape" };
+      }
+      try {
+        const addr0x = bech32mToAddress(address, null).toLowerCase();
+        return { name: op.name, addr0x, answered: true, reason: null };
+      } catch {
+        return { name: op.name, addr0x: null, answered: false, reason: "malformed address" };
+      }
+    } catch (e) {
+      const err = e as Error;
+      return {
+        name: op.name,
+        addr0x: null,
+        answered: false,
+        reason: err.name === "AbortError" ? "timeout" : err.message,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  const responses = await Promise.all(probes);
+  const answered = responses.filter((r) => r.answered);
+
+  if (answered.length < NAME_RESOLVE_QUORUM_MIN) {
+    return {
+      status: "insufficient",
+      addr0x: null,
+      agreeing: answered.length,
+      detail: responses.map((r) => `${r.name}:${r.reason ?? "ok"}`).join("; "),
+    };
+  }
+
+  // EXACT-MATCH agreement: every definitive answer must be identical — all the
+  // SAME owner address, or all miss. A single divergent answer (a rogue's
+  // different address, or a hit-vs-miss split) → disagreement → fail-closed.
+  const distinct = new Set(answered.map((r) => (r.addr0x === null ? "MISS" : r.addr0x)));
+  if (distinct.size !== 1) {
+    return {
+      status: "disagreement",
+      addr0x: null,
+      agreeing: answered.length,
+      detail: answered.map((r) => `${r.name}:${r.addr0x ?? "MISS"}`).join("; "),
+    };
+  }
+
+  const agreed = answered[0]!.addr0x;
+  return agreed === null
+    ? { status: "confirmed-miss", addr0x: null, agreeing: answered.length, detail: "" }
+    : { status: "confirmed-hit", addr0x: agreed, agreeing: answered.length, detail: "" };
 }
 
 function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {

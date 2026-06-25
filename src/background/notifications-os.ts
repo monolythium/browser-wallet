@@ -37,6 +37,7 @@
 
 import { monoscanTxUrl } from "../shared/build-info.js";
 import { bech32mDisplay } from "../shared/bech32m.js";
+import { formatLythDecimalDisplay } from "../shared/lyth-units.js";
 import {
   notificationTitle,
   type NotificationRecord,
@@ -218,9 +219,57 @@ function isZeroAmount(amountDecimal: string): boolean {
   return /^0(\.0+)?$/.test(amountDecimal);
 }
 
+/** Char budget for the redelegate toast's `<from> → <to>` cluster label. Chrome
+ *  notifications truncate around the body width; past this, show the
+ *  destination alone. */
+const REDELEGATE_CLUSTER_BUDGET = 40;
+
 /** Build the user-facing toast body for one record. Public so tests can
  *  pin the wording without rendering the toast itself. */
 export function notificationBody(record: NotificationRecord): string {
+  // A reward claim's `amountDecimal` is "0" (value 0x0) and its counterparty is
+  // the precompile; show the decoded claimed reward instead (truncated, +gain).
+  // no-mock: only when a real decoded amount is present.
+  if (
+    record.kind === "claim" &&
+    record.claimedAmount &&
+    !isZeroAmount(record.claimedAmount)
+  ) {
+    return `+${formatLythDecimalDisplay(record.claimedAmount, 4)} LYTH`;
+  }
+  // Delegate / redelegate / undelegate: value is 0x0; show the cluster + the
+  // weight % (bps/100). Only when the bps was captured (no-mock — delegate/
+  // redelegate capture the new weight, undelegate captures the removed full-row
+  // weight; legacy rows without a captured bps fall through to the generic body
+  // below).
+  if (
+    (record.kind === "delegate" ||
+      record.kind === "redelegate" ||
+      record.kind === "undelegate") &&
+    record.delegationWeightBps !== undefined
+  ) {
+    const pct = `${(record.delegationWeightBps / 100).toFixed(2)}%`;
+    const from =
+      record.clusterName ??
+      (record.clusterId !== undefined ? `cluster #${record.clusterId}` : null);
+    // Redelegate: show SOURCE → DESTINATION when both are known. There is no
+    // cluster directory at notify-time, so the destination uses the captured
+    // `toClusterName`/`toClusterId`. Chrome notifications expose no width API —
+    // fall back to the destination ALONE when `<from> → <to>` overruns a sane
+    // char budget (the destination is the outcome the user cares about).
+    if (record.kind === "redelegate") {
+      const to =
+        record.toClusterName ??
+        (record.toClusterId !== undefined ? `cluster #${record.toClusterId}` : null);
+      if (to !== null) {
+        const both = from !== null ? `${from} → ${to}` : to;
+        const cluster = both.length <= REDELEGATE_CLUSTER_BUDGET ? both : to;
+        return `${cluster} · ${pct}`;
+      }
+      // No captured destination (legacy) — fall through to the source-only form.
+    }
+    return from ? `${from} · ${pct}` : pct;
+  }
   const short = shortCounterparty(record.counterparty);
   if (isZeroAmount(record.amountDecimal)) {
     return short;

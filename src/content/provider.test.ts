@@ -199,3 +199,23 @@ describe("initial-state sync (BROKEN-1/2 fix)", () => {
     }
   });
 });
+
+// CodeQL js/cross-window-information-leak — the provider's request envelope to the
+// bridge must target the page origin, never "*".
+describe("outbound request post targets the page origin (not '*')", () => {
+  it("posts the page->bridge request envelope with the page origin as targetOrigin", async () => {
+    const provider = await loadProvider();
+    const spy = stubWindow.postMessage as ReturnType<typeof vi.fn>;
+    const before = spy.mock.calls.length;
+    // A method not answered locally routes through send() -> window.postMessage.
+    // The promise stays pending (no bridge reply in the stub); we only inspect
+    // the synchronous outbound post.
+    void provider.request({ method: "eth_blockNumber" }).catch(() => {});
+    const reqCall = spy.mock.calls
+      .slice(before)
+      .find((c: unknown[]) => (c[0] as { source?: string })?.source === "monolythium-wallet-page");
+    expect(reqCall).toBeTruthy();
+    expect(reqCall![1]).toBe("https://dapp.example");
+    expect(reqCall![1]).not.toBe("*");
+  });
+});

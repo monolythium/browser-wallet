@@ -129,6 +129,19 @@ export interface NotificationRecord {
    *  kinds + legacy records. */
   clusterId?: number;
   clusterName?: string;
+  /** Redelegate DESTINATION cluster (`clusterId`/`clusterName` above are the
+   *  SOURCE). Lets the redelegate toast show `<from> → <to>`. Absent on
+   *  non-redelegate kinds + legacy records. */
+  toClusterId?: number;
+  toClusterName?: string;
+  /** A reward claim's claimed LYTH (decimal-LYTH string), captured at the
+   *  confirmed terminal from the receipt's `Claimed` log (the row's
+   *  `amountDecimal` is "0" for a claim, so the body shows this instead).
+   *  Only set for claims; optional + legacy-safe. */
+  claimedAmount?: string;
+  /** Delegation weight (bps) for a delegate/redelegate, captured at submit. Lets
+   *  the body show the % (bps/100). Absent on undelegate / legacy → no %. */
+  delegationWeightBps?: number;
   /** Epoch ms at the moment the SW observed the terminal transition.
    *  This is the notification's fire-time — distinct from the
    *  pending-row's `broadcastedAtMs` (which is broadcast time). */
@@ -263,9 +276,9 @@ export const NOTIFICATION_LABELS: Record<
   // Incoming transfers only fire on confirmation; the "failed" string is unused
   // (an inbound transfer the wallet didn't send has no failed state for us).
   receive: { confirmed: "Received", failed: "Received" },
-  delegate: { confirmed: "Staked", failed: "Stake failed" },
-  undelegate: { confirmed: "Unstaked", failed: "Unstake failed" },
-  redelegate: { confirmed: "Restaked", failed: "Restake failed" },
+  delegate: { confirmed: "Delegated", failed: "Delegate failed" },
+  undelegate: { confirmed: "Undelegated", failed: "Undelegate failed" },
+  redelegate: { confirmed: "Redelegated", failed: "Redelegate failed" },
   claim: { confirmed: "Rewards claimed", failed: "Claim failed" },
   "complete-redemption": {
     confirmed: "Redemption completed",
@@ -330,6 +343,23 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     typeof r.clusterName === "string" && r.clusterName.length > 0
       ? r.clusterName
       : undefined;
+  const toClusterId =
+    typeof r.toClusterId === "number" && Number.isFinite(r.toClusterId)
+      ? r.toClusterId
+      : undefined;
+  const toClusterName =
+    typeof r.toClusterName === "string" && r.toClusterName.length > 0
+      ? r.toClusterName
+      : undefined;
+  const claimedAmount =
+    typeof r.claimedAmount === "string" && r.claimedAmount.length > 0
+      ? r.claimedAmount
+      : undefined;
+  const delegationWeightBps =
+    typeof r.delegationWeightBps === "number" &&
+    Number.isFinite(r.delegationWeightBps)
+      ? r.delegationWeightBps
+      : undefined;
   return {
     id: r.id,
     txHash: r.txHash,
@@ -344,6 +374,10 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
     ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
     ...(clusterId !== undefined ? { clusterId } : {}),
     ...(clusterName !== undefined ? { clusterName } : {}),
+    ...(toClusterId !== undefined ? { toClusterId } : {}),
+    ...(toClusterName !== undefined ? { toClusterName } : {}),
+    ...(claimedAmount !== undefined ? { claimedAmount } : {}),
+    ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
   };
 }
 

@@ -40,7 +40,7 @@ describe("RedelegateForm — in-form amount preview", () => {
     // Amounts are wrapped in emphasized <strong> spans.
     expect(html).toContain(">5 LYTH</strong>");
     expect(html).toContain(">10 LYTH</strong>");
-    expect(html).toContain("staked in alpha");
+    expect(html).toContain("delegated to alpha");
   });
 
   it("omits the preview when the amount is empty/zero", () => {
@@ -87,5 +87,55 @@ describe("RedelegateForm — quick-fill buttons", () => {
     expect(redelegateQuickFillPercent(1050, 75)).toBe("7.88");
     expect(redelegateQuickFillPercent(1050, 100)).toBe("10.5"); // == Max
     expect(redelegateQuickFillPercent(0, 25)).toBe("0");
+  });
+});
+
+describe("RedelegateForm — per-wallet cap guard (0x0213 pre-flight)", () => {
+  const dstCluster: ClusterDirectoryEntry = {
+    clusterId: 1,
+    name: "beta",
+    size: 10,
+    threshold: 7,
+    health: "healthy",
+    regions: [],
+    active: true,
+    entity: null,
+  };
+  // capBps:null = the v2 case (lyth_getDelegationCap reports the DISABLED
+  // aggregate cap → null). srcWeightBps high so `exceedsSource` doesn't mask.
+  const capProps = {
+    ...baseProps,
+    srcWeightBps: 5000,
+    dstCluster,
+    capBps: null,
+  } as const;
+
+  it("flags a destination already at the 50% cap (dst holds 5000 bps)", () => {
+    const html = renderToStaticMarkup(
+      <RedelegateForm {...capProps} dstExistingWeightBps={5000} amountStr="5" />,
+    );
+    expect(html).toContain("already at the");
+    expect(html).toContain("pick another destination");
+  });
+
+  it("allows a move that stays within the cap (4000 + 500 = 4500 ≤ 5000)", () => {
+    const html = renderToStaticMarkup(
+      <RedelegateForm {...capProps} dstExistingWeightBps={4000} amountStr="5" />,
+    );
+    expect(html).not.toContain("per-wallet cap");
+  });
+
+  it("warns 'over the cap' when the move exceeds it (4000 + 1500 = 5500 > 5000)", () => {
+    const html = renderToStaticMarkup(
+      <RedelegateForm {...capProps} dstExistingWeightBps={4000} amountStr="15" />,
+    );
+    expect(html).toContain("per-wallet cap by");
+  });
+
+  it("fires even when the aggregate cap is null — the null cap no longer disables the guard", () => {
+    const html = renderToStaticMarkup(
+      <RedelegateForm {...capProps} dstExistingWeightBps={5000} amountStr="10" />,
+    );
+    expect(html).toContain("per-wallet cap");
   });
 });

@@ -39,9 +39,9 @@ interface SettingsProps {
   /** Routes to the Features page (two-tier UX
    *  toggles per §28.5 Q29). Optional for the same reasons. */
   onOpenFeatures?: () => void;
-  /** Routes to the Theme page (appearance / theme picker, promoted to
-   *  its own top-level category). Always wired — theme is not vault-gated. */
-  onOpenTheme: () => void;
+  /** Routes to the Display & Preferences hub (theme / language / display
+   *  currency, each on its own page). Always wired — not vault-gated. */
+  onOpenDisplayPreferences: () => void;
   /** Passed only when the active vault is a multisig vault.
    *  When set, Settings renders the Multisig card with M-of-N pill +
    *  pending count + entry points to the Pending dashboard and
@@ -90,7 +90,7 @@ export function Settings({
   onOpenDelegations,
   onOpenSecurity,
   onOpenFeatures,
-  onOpenTheme,
+  onOpenDisplayPreferences,
   multisig,
 }: SettingsProps) {
   const devMode = useFeature("DEVELOPER_MODE");
@@ -117,7 +117,7 @@ export function Settings({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Settings
         </div>
@@ -449,12 +449,11 @@ export function Settings({
           </button>
         </div>
 
-        {/* Theme — promoted out of the Security card into its own
-           top-level category. The picker lives on the Theme sub-page so
-           it stays a single source shared with the hamburger entry. */}
+        {/* Display & Preferences — theme, language, and display currency,
+           each on its own page. Single hub shared with the hamburger menu. */}
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Theme</h3>
+            <h3>Display &amp; Preferences</h3>
           </div>
           <div
             style={{
@@ -464,11 +463,10 @@ export function Settings({
               marginBottom: 10,
             }}
           >
-            Choose the wallet&apos;s colour theme — light, dark, and accent
-            palettes.
+            Theme, language, and display currency.
           </div>
           <button
-            onClick={onOpenTheme}
+            onClick={onOpenDisplayPreferences}
             style={{
               width: "100%",
               padding: "10px 12px",
@@ -487,8 +485,8 @@ export function Settings({
             }}
           >
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Icon name="contrast" size={13} />
-              Appearance
+              <Icon name="palette" size={13} />
+              Theme, language &amp; currency
             </span>
             <Icon name="chev" size={12} />
           </button>
@@ -496,7 +494,7 @@ export function Settings({
 
         <div className="ext-card">
           <div className="ext-card__head">
-            <h3>Staking</h3>
+            <h3>Delegation</h3>
           </div>
           <div
             style={{

@@ -401,14 +401,14 @@ export function AgentPolicy({
           <div
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: 600,
               textAlign: "center",
             }}
           >
             Automation
           </div>
-          <div style={{ width: 28 }} />
+          <div style={{ width: 36 }} />
         </div>
         <div className="ext-body">
           <div
@@ -469,7 +469,7 @@ export function AgentPolicy({
         >
           <Icon name="back" size={15} />
         </button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+        <div style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}>
           {step === "overview"
             ? "Agent spending policy"
             : step === "form"
@@ -482,7 +482,7 @@ export function AgentPolicy({
                     ? "Done"
                     : "Error"}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">

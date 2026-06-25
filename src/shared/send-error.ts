@@ -16,11 +16,6 @@
 // transacting, not debugging.
 //
 // Whitepaper alignment:
-//   §21.5  — LythiumSeal encrypted mempool: the wallet seals (scheme-3 ML-KEM)
-//            when the operator cluster serves a seal roster, else falls back to
-//            plaintext (which an encryption-required chain rejects — see the
-//            plaintext-not-allowed branch). The earlier Ferveo threshold-decrypt
-//            path was removed.
 //   §22    — EIP-1559-style fee model (execution-unit estimation failures)
 //   §23.2  — liquid bonding (no nonce/cooldown blockers for delegators
 //            specifically — but nonce-too-low still happens on multi-

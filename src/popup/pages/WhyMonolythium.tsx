@@ -17,11 +17,11 @@ export function WhyMonolythium({ onBack }: WhyMonolythiumProps) {
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           About Monolythium
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         <div className="ext-card">

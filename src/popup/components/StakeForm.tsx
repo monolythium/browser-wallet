@@ -24,10 +24,21 @@
 // Real fee suggestion arrives from `wallet-fee-suggestion` IPC at the parent.
 
 import type { CSSProperties } from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Icon } from "../Icon";
+import { hoverBg } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { effectiveWeightWei, percentToBps } from "../../shared/staking-tx";
+import {
+  bindingPerClusterCapBps,
+  dualCapHeadroomBps,
+  exceedsPerClusterCap,
+} from "../../shared/staking";
+import {
+  effectiveWeightWholeLythoshi,
+  isInertDelegation,
+  minNonInertBps,
+  percentToBps,
+} from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface StakeFormProps {
@@ -43,6 +54,9 @@ export interface StakeFormProps {
   /** Already-delegated weight to THIS cluster (bps). Used for the
    *  cap-headroom check — additions stack on top of existing weight. */
   existingWeightBps: number;
+  /** Total weight already delegated across ALL clusters (bps). The global
+   *  100%-of-balance ceiling: requested + total must stay ≤ 10000 bps. */
+  totalDelegatedBps: number;
   /** Per-cluster cap in bps from `lyth_getDelegationCap`. `null` when
    *  the chain has disabled the cap (`u32::MAX`). */
   capBps: number | null;
@@ -62,6 +76,29 @@ export function parsePercent(amountStr: string): number | null {
   const n = Number(amountStr);
   if (!Number.isFinite(n) || n < 0 || n > 100) return null;
   return n;
+}
+
+/** Binding bps headroom for an additional delegation to a cluster: the smaller
+ *  of the per-cluster cap headroom and the global 100%-of-balance headroom
+ *  (total weight across ALL clusters ≤ 10000 bps). Never negative. Pure bps —
+ *  delegation is non-custodial (value = 0), so there is no balance subtraction.
+ *
+ *  Thin wrapper over the shared `dualCapHeadroomBps` so the per-cluster term is
+ *  the fail-closed §16.7 floor: a null aggregate cap (disabled on v2) yields the
+ *  5000 per-cluster floor, NOT an unlimited cluster headroom. */
+export function bindingHeadroomBps(
+  capBps: number | null,
+  existingWeightBps: number,
+  totalDelegatedBps: number,
+): number {
+  return dualCapHeadroomBps(capBps, existingWeightBps, totalDelegatedBps);
+}
+
+/** The "X% delegated · Y% available" line escalates to the prominent warn
+ *  treatment only when NO global headroom remains (0% available); otherwise it
+ *  stays a quiet hint. Exported for unit coverage. */
+export function headroomExhausted(globalHeadroomBps: number): boolean {
+  return globalHeadroomBps <= 0;
 }
 
 /** Lythoshi → LYTH display string. Used for the
@@ -85,6 +122,7 @@ export function StakeForm({
   onAmountChange,
   balanceLythoshi,
   existingWeightBps,
+  totalDelegatedBps,
   capBps,
   onContinue,
   onBack,
@@ -97,31 +135,70 @@ export function StakeForm({
 
   // Live effective weight this percent represents at the current balance.
   const effectiveWeightLythoshi =
-    balanceLythoshi !== null ? effectiveWeightWei(additionalBps, balanceLythoshi) : null;
+    balanceLythoshi !== null
+      ? effectiveWeightWholeLythoshi(additionalBps, balanceLythoshi)
+      : null;
 
-  const overCap = capBps !== null && totalAfterBps > capBps;
+  // The §16.7 per-wallet floor (5000 bps) ALWAYS binds — even when the queryable
+  // AGGREGATE cap (`capBps`, from lyth_getDelegationCap) is disabled/null on v2.
+  // Fail-closed: a null cap does NOT lift the per-cluster cap.
+  const overCap = exceedsPerClusterCap(existingWeightBps, additionalBps, capBps);
+  const bindingCapBps = bindingPerClusterCapBps(capBps);
+  // Global ceiling: total delegated weight across ALL clusters ≤ 100%. The
+  // binding headroom is the smaller of the per-cluster cap headroom and this.
+  const globalHeadroomBps = Math.max(0, 10000 - totalDelegatedBps);
+  const headroomBps = bindingHeadroomBps(
+    capBps,
+    existingWeightBps,
+    totalDelegatedBps,
+  );
+  const overGlobal = additionalBps > globalHeadroomBps;
   const percentIsZero = percent === null || additionalBps === 0;
   // Additive >100% feedback: parsePercent collapses >100 to null (= empty),
   // so read the raw input to disambiguate WITHOUT touching the parser.
   const exceedsHundred =
     /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
+  // A positive percent that rounds to 0 bps (sub-0.01%) would revert ZeroWeight
+  // on chain — surface it explicitly instead of a silently-disabled button.
+  const roundsToZeroBps = percent !== null && percent > 0 && additionalBps === 0;
+  // The chain ACCEPTS a bps >= 1 that floors to 0 whole-LYTH effective weight,
+  // but it's INERT (earns nothing / no vote) until the balance grows — warn +
+  // block. The real minimum is balance-dependent (minNonInertBps).
+  const inert =
+    balanceLythoshi !== null && isInertDelegation(additionalBps, balanceLythoshi);
+  const minBps = balanceLythoshi !== null ? minNonInertBps(balanceLythoshi) : null;
 
   const canContinue =
     percent !== null &&
     additionalBps > 0 &&
     !overCap &&
+    !overGlobal &&
+    !inert &&
     balanceLythoshi !== null;
 
+  const [presetWarning, setPresetWarning] = useState<string | null>(null);
+
   const handleMax = () => {
-    // Cap-aware max: fill up to the per-cluster cap headroom (or 100% when
-    // the cap is disabled). Headroom is purely a bps fraction now — no
-    // balance math, because nothing is escrowed.
-    if (capBps === null) {
-      onAmountChange("100");
-      return;
-    }
-    const headroomBps = Math.max(0, capBps - existingWeightBps);
+    // Fill up to the BINDING headroom — the smaller of the per-cluster cap
+    // headroom and the global 100%-of-balance headroom. Purely a bps fraction;
+    // no balance math, because nothing is escrowed.
+    setPresetWarning(null);
     onAmountChange((headroomBps / 100).toString());
+  };
+
+  // A quick-fill preset: enter it as-is when it fits the headroom; otherwise
+  // clamp the INPUT to the headroom and surface a small warning (never
+  // silently rewrite the intent).
+  const handlePreset = (p: number) => {
+    if (percentToBps(p) <= headroomBps) {
+      setPresetWarning(null);
+      onAmountChange(String(p));
+    } else {
+      setPresetWarning(
+        `Only ${(headroomBps / 100).toFixed(2)}% left to delegate — set to max.`,
+      );
+      onAmountChange((headroomBps / 100).toString());
+    }
   };
 
   const aprBps = cluster.aprBps ?? null;
@@ -161,7 +238,11 @@ export function StakeForm({
               {cluster.name ?? `cluster-${cluster.clusterId}`}
             </div>
           </div>
-          <button onClick={onBack} style={changeBtnStyle}>
+          <button
+            onClick={onBack}
+            style={changeBtnStyle}
+            {...hoverBg("rgba(255,255,255,0.04)")}
+          >
             Change
           </button>
         </div>
@@ -194,17 +275,21 @@ export function StakeForm({
           <input
             type="text"
             value={amountStr}
-            onChange={(e) => onAmountChange(e.target.value.trim())}
+            onChange={(e) => {
+              setPresetWarning(null);
+              onAmountChange(e.target.value.trim());
+            }}
             placeholder="0"
             inputMode="decimal"
             style={amountInputStyle}
           />
-          {[25, 50, 75].map((p) => (
+          {[25, 50].map((p) => (
             <button
               key={p}
               type="button"
-              onClick={() => onAmountChange(String(p))}
+              onClick={() => handlePreset(p)}
               style={{ ...inlineBtnStyle, padding: "8px 10px" }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               {p}%
             </button>
@@ -216,6 +301,7 @@ export function StakeForm({
               ...inlineBtnStyle,
               opacity: balanceLythoshi === null ? 0.5 : 1,
             }}
+            {...hoverBg("rgba(255,255,255,0.04)")}
             type="button"
           >
             Max
@@ -230,18 +316,6 @@ export function StakeForm({
             %
           </div>
         </div>
-        {overCap && capBps !== null && (
-          <div style={inlineErr}>
-            Delegation would exceed the per-cluster cap (
-            {(capBps / 100).toFixed(0)}%) by{" "}
-            {((totalAfterBps - capBps) / 100).toFixed(2)}%.
-          </div>
-        )}
-        {exceedsHundred && (
-          <div style={inlineErr}>
-            Enter a percent between 0.01% and 100% of your balance.
-          </div>
-        )}
         <div style={fromHint}>
           {balanceLythoshi === null ? (
             "Balance loading…"
@@ -265,32 +339,72 @@ export function StakeForm({
                   · existing {(existingWeightBps / 100).toFixed(2)}%{" "}
                   <strong style={amountStrongMuted}>
                     ({lythoshiToLyth(
-                      effectiveWeightWei(existingWeightBps, balanceLythoshi),
+                      effectiveWeightWholeLythoshi(existingWeightBps, balanceLythoshi),
                     )}{" "}
                     LYTH)
                   </strong>{" "}
                   in this cluster
                 </>
               )}
-              {capBps !== null && (
-                <>
-                  {" "}
-                  · cap {(capBps / 100).toFixed(0)}%
-                </>
-              )}
+              {" "}
+              · cap {(bindingCapBps / 100).toFixed(0)}%
             </>
           )}
         </div>
         <div style={liquidNote}>
           Your LYTH stays in your wallet and remains spendable — nothing is
-          locked or sent to a staking contract. The effective weight tracks
+          locked or sent to a delegation contract. The effective weight tracks
           your live balance at the next settlement.
+        </div>
+        {/* Limit/clamp warnings + the headroom line sit LAST in the card, right
+            above the Continue action, so they're seen just before submitting. */}
+        {overCap && (
+          <div className="ext-warn-prominent">
+            Delegation would exceed the {(bindingCapBps / 100).toFixed(0)}%
+            per-wallet cap for one cluster by{" "}
+            {((totalAfterBps - bindingCapBps) / 100).toFixed(2)}%.
+          </div>
+        )}
+        {exceedsHundred && (
+          <div className="ext-warn-prominent">
+            Enter a percent between 0.01% and 100% of your balance.
+          </div>
+        )}
+        {overGlobal && !overCap && (
+          <div className="ext-warn-prominent">
+            You can delegate at most {(globalHeadroomBps / 100).toFixed(2)}% more
+            — total delegation across all clusters can&apos;t exceed 100%.
+          </div>
+        )}
+        {presetWarning !== null && (
+          <div className="ext-warn-prominent">{presetWarning}</div>
+        )}
+        {roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Enter a larger percent — the minimum delegation weight is 0.01%.
+          </div>
+        )}
+        {inert && !roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Too small to delegate at your balance — minimum ≈ 1 LYTH
+            {minBps !== null ? ` (≈ ${(minBps / 100).toFixed(2)}%)` : ""}. It
+            won&apos;t earn until your balance grows.
+          </div>
+        )}
+        {/* Active / remaining delegation headroom across ALL clusters — escalates
+            to the prominent warn treatment only when fully delegated (0% left). */}
+        <div
+          className={headroomExhausted(globalHeadroomBps) ? "ext-warn-prominent" : undefined}
+          style={headroomExhausted(globalHeadroomBps) ? undefined : fromHint}
+        >
+          {(totalDelegatedBps / 100).toFixed(2)}% delegated ·{" "}
+          {(globalHeadroomBps / 100).toFixed(2)}% available
         </div>
       </div>
 
       {/* Continue */}
       <button
-        className="ext-act prim"
+        className="ext-act prim-soft"
         onClick={onContinue}
         disabled={!canContinue}
         style={{
@@ -307,7 +421,9 @@ export function StakeForm({
           ? "Enter a percent"
           : overCap
             ? "Reduce to cap"
-            : "Review delegation"}
+            : overGlobal
+              ? "Reduce to available"
+              : "Review delegation"}
       </button>
     </div>
   );
@@ -335,6 +451,7 @@ const changeBtnStyle: CSSProperties = {
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   cursor: "pointer",
+  transition: "background 120ms",
 };
 
 const cardLabel: CSSProperties = {
@@ -369,18 +486,12 @@ const inlineBtnStyle: CSSProperties = {
   fontSize: 11,
   cursor: "pointer",
   whiteSpace: "nowrap",
-};
-
-const inlineErr: CSSProperties = {
-  fontFamily: "var(--f-mono)",
-  fontSize: 10,
-  color: "var(--err)",
-  marginTop: 6,
+  transition: "background 120ms",
 };
 
 const fromHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 10,
+  fontSize: 12,
   color: "var(--fg-500)",
   marginTop: 8,
   lineHeight: 1.5,
@@ -390,13 +501,13 @@ const fromHint: CSSProperties = {
 // wallet's mono numeric font so the figures stand out from the prose.
 const amountStrong: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 13,
+  fontSize: 14,
   color: "var(--gold)",
 };
 
 const amountStrongMuted: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 11,
+  fontSize: 13,
   color: "var(--fg-200)",
 };
 

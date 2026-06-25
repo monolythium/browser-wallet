@@ -40,6 +40,10 @@ export interface ActivityListProps {
    *  at the moment it matters most would be worse than the stale-history problem
    *  this whole change addresses. A short note explains the suppression. */
   hideConfirmed?: boolean;
+  /** Cluster directory (id → name) for delegation rows — threaded to the row
+   *  bodies + detail so an indexer-fed numeric cluster id resolves to its real
+   *  name, falling back to `Cluster #<id>` when unknown (no-mock). */
+  clusterNameById?: ReadonlyMap<number, string | null> | undefined;
 }
 
 function counterpartyOf(row: ActivityRowType): string | null {
@@ -238,7 +242,7 @@ function SuppressedHistoryNote({ hasOwnRows }: { hasOwnRows: boolean }) {
   );
 }
 
-export function ActivityList({ addr, chainIdHex, hideConfirmed }: ActivityListProps) {
+export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById }: ActivityListProps) {
   const { cache, pending, failed, loading, errors, refresh } = useActivity(
     addr,
     chainIdHex,
@@ -384,7 +388,11 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed }: ActivityListPr
                   }}
                   style={{ cursor: "pointer" }}
                 >
-                  <ActivityRow row={row} counterpartyLabel={label} />
+                  <ActivityRow
+                    row={row}
+                    counterpartyLabel={label}
+                    clusterNameById={clusterNameById}
+                  />
                 </div>
               );
             })}
@@ -396,6 +404,7 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed }: ActivityListPr
           row={selected.row}
           label={selected.label}
           walletAddr={addr}
+          clusterNameById={clusterNameById}
           onClose={() => setSelected(null)}
         />
       )}

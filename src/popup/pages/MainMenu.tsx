@@ -4,7 +4,7 @@
 //   1. Quick action — Notifications, full screen, popup/sidebar toggle.
 //   2. Manage — Contacts, Connected sites, Networks, Multisig, RISC-V.
 //   3. Security — Security, Features, Emergency recovery.
-//   4. Settings — Settings, Theme, Operators.
+//   4. Settings — Settings, Display & Preferences, Operators.
 //   5. Info — About, Resources, Why Monolythium.
 //   6. Danger — Lock wallet, Reset wallet (red).
 //
@@ -42,9 +42,9 @@ interface MainMenuProps {
    *  omitted (or developer mode is off) the menu item is hidden. */
   onAgentPolicy?: () => void;
   onSettings: () => void;
-  /** Opens the Theme page (appearance / theme picker) — the same page
-   *  the Settings "Theme" category routes to. */
-  onTheme: () => void;
+  /** Opens the Display & Preferences hub (theme / language / display
+   *  currency) — the same hub the Settings page routes to. */
+  onDisplayPreferences: () => void;
   onAbout: () => void;
   /** Optional — passkey / security policy page (§28.5). Vault-gated, so the
    *  row hides when no active vault is selected. */
@@ -82,7 +82,7 @@ export function MainMenu({
   onMultisig,
   onAgentPolicy,
   onSettings,
-  onTheme,
+  onDisplayPreferences,
   onAbout,
   onOpenSecurity,
   onOpenFeatures,
@@ -128,14 +128,14 @@ export function MainMenu({
         <div
           style={{
             flex: 1,
-            fontSize: 13,
+            fontSize: 15,
             fontWeight: 600,
             textAlign: "center",
           }}
         >
           Menu
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body" style={{ paddingTop: 4 }}>
@@ -241,9 +241,9 @@ export function MainMenu({
             hasChevron
           />
           <MenuItem
-            icon="contrast"
-            label="Theme"
-            onClick={onTheme}
+            icon="palette"
+            label="Display & Preferences"
+            onClick={onDisplayPreferences}
             hasChevron
           />
           <MenuItem

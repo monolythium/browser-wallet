@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { ClusterDirectoryEntry } from "../../shared/staking.js";
-import { StakeForm } from "./StakeForm.js";
+import { StakeForm, bindingHeadroomBps, headroomExhausted } from "./StakeForm.js";
 
 const cluster: ClusterDirectoryEntry = {
   clusterId: 0,
@@ -20,6 +20,7 @@ const baseProps = {
   onAmountChange: () => {},
   balanceLythoshi: 100n * 10n ** 18n, // 100 LYTH
   existingWeightBps: 0,
+  totalDelegatedBps: 0,
   capBps: null,
   onContinue: () => {},
   onBack: () => {},
@@ -44,13 +45,134 @@ describe("StakeForm — >100% validation", () => {
 });
 
 describe("StakeForm — quick-fill buttons", () => {
-  it("renders 25/50/75 quick-fills (not 100 — Max covers that)", () => {
+  it("renders 25/50 quick-fills (75 is dead under the 50% cap; Max covers the rest)", () => {
     const html = renderToStaticMarkup(
       <StakeForm {...baseProps} amountStr="" />,
     );
     expect(html).toContain(">25%</button>");
     expect(html).toContain(">50%</button>");
-    expect(html).toContain(">75%</button>");
+    expect(html).not.toContain(">75%</button>");
     expect(html).not.toContain(">100%</button>");
+  });
+});
+
+describe("bindingHeadroomBps", () => {
+  it("floors to the 50% per-wallet cap when the aggregate cap is disabled", () => {
+    // Fail-closed: a null (disabled/v2) aggregate cap does NOT lift the §16.7
+    // per-wallet floor (5000 bps) — the binding cluster headroom is 50%, not 100%.
+    expect(bindingHeadroomBps(null, 0, 0)).toBe(5000);
+  });
+
+  it("uses the global ceiling when it is tighter than the per-wallet floor", () => {
+    // 51% already delegated across all clusters → 49% left, below the 50% floor.
+    expect(bindingHeadroomBps(null, 0, 5100)).toBe(4900);
+  });
+
+  it("takes the smaller of per-cluster cap headroom and global headroom", () => {
+    // cap 50%, 10% in this cluster → cluster headroom 40%; global total 51% → 49%.
+    expect(bindingHeadroomBps(5000, 1000, 5100)).toBe(4000);
+    // cap 50%, 40% in this cluster → cluster 10%; global 90% delegated → 10%.
+    expect(bindingHeadroomBps(5000, 4000, 9000)).toBe(1000);
+  });
+
+  it("never returns negative headroom", () => {
+    expect(bindingHeadroomBps(5000, 6000, 0)).toBe(0); // already past the cap
+    expect(bindingHeadroomBps(null, 0, 10000)).toBe(0); // fully delegated
+  });
+});
+
+describe("StakeForm — per-cluster cap surfaces under a null (v2) aggregate cap", () => {
+  it("shows the 50% cap hint even when capBps is null (was gated, now fail-closed)", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} capBps={null} amountStr="10" />,
+    );
+    expect(html).toContain("cap 50%");
+  });
+
+  it("warns when the requested percent exceeds the 50% floor with a null cap", () => {
+    // 60% into one cluster, nothing yet delegated → 6000 > 5000 floor → over cap.
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} capBps={null} amountStr="60" />,
+    );
+    expect(html).toContain("per-wallet cap for one cluster");
+  });
+
+  it("does not warn at exactly 50% (at the cap, not over)", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} capBps={null} amountStr="50" />,
+    );
+    expect(html).not.toContain("per-wallet cap for one cluster");
+  });
+});
+
+describe("StakeForm — active/remaining headroom line", () => {
+  it("shows delegated vs available across all clusters", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} totalDelegatedBps={5100} amountStr="" />,
+    );
+    expect(html).toContain("51.00% delegated");
+    expect(html).toContain("49.00% available");
+  });
+});
+
+describe("StakeForm — inert (0-effective-weight) warning", () => {
+  it("warns + (the minimum %) when the delegation floors to 0 effective weight", () => {
+    // baseProps balance = 100 LYTH. 0.5% → 50 bps → 0.5 LYTH effective → floors
+    // to 0 → inert. minNonInertBps(100 LYTH) = 100 bps = 1.00%.
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} amountStr="0.5" />,
+    );
+    expect(html).toContain("Too small to delegate at your balance");
+    expect(html).toContain("minimum ≈ 1 LYTH");
+    expect(html).toContain("1.00%");
+  });
+
+  it("does not warn when the delegation earns >= 1 whole LYTH", () => {
+    // 5% of 100 LYTH = 5 LYTH effective → not inert.
+    const html = renderToStaticMarkup(<StakeForm {...baseProps} amountStr="5" />);
+    expect(html).not.toContain("Too small to delegate");
+  });
+
+  it("warns to enter a larger percent when the input rounds to 0 bps", () => {
+    // 0.001% → round(0.1) → 0 bps (would revert ZeroWeight).
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} amountStr="0.001" />,
+    );
+    expect(html).toContain("minimum delegation weight is 0.01%");
+  });
+});
+
+describe("headroomExhausted", () => {
+  it("is true only when no headroom remains", () => {
+    expect(headroomExhausted(0)).toBe(true);
+    expect(headroomExhausted(-1)).toBe(true);
+    expect(headroomExhausted(1)).toBe(false);
+    expect(headroomExhausted(10000)).toBe(false);
+  });
+});
+
+describe("StakeForm — limit-warning prominence (Request 2)", () => {
+  it("escalates the headroom line to the prominent warn treatment when fully delegated", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} totalDelegatedBps={10000} amountStr="" />,
+    );
+    expect(html).toContain("0.00% available");
+    expect(html).toContain("ext-warn-prominent"); // headroom line is now prominent
+  });
+
+  it("keeps the headroom line quiet (no prominent class) when headroom remains", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} totalDelegatedBps={0} amountStr="" />,
+    );
+    expect(html).toContain("100.00% available");
+    expect(html).not.toContain("ext-warn-prominent"); // no warning showing → quiet
+  });
+
+  it("renders limit/clamp warnings with the prominent class", () => {
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} amountStr="150" />, // >100% → exceedsHundred warning
+    );
+    expect(html).toContain("Enter a percent between 0.01% and 100%");
+    expect(html).toContain("ext-warn-prominent");
   });
 });

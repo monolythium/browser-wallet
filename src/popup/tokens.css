@@ -59,6 +59,7 @@
   /* ---------- Status ---------- */
   --ok:     #7ee3c1;
   --warn:   #f4c97a;
+  --warn-glow: 244, 201, 122;
   --alert:  #ff8a9a;
   --err:    #ff8a9a;
   --info:   #7c7fff;

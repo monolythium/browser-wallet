@@ -37,6 +37,123 @@ export function formatWeightBpsPercent(bps: number | null): string {
   return `${(bps / 100).toFixed(2)}%`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-wallet delegation cap (WP §16.7 anti-capture)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The active per-wallet, per-cluster delegation cap in basis points: a single
+ *  wallet may direct at most this share of its voting-power weight at ONE
+ *  cluster (WP §16.7 anti-capture; mono-core
+ *  `DELEGATION_CAP_PER_WALLET_BPS_DEFAULT`). 5000 bps = 50%.
+ *
+ *  A FIXED protocol floor the chain ALWAYS enforces (revert tag 0x0213
+ *  PerWalletCapExceeded), DISTINCT from the configurable ADR-0018 cluster-
+ *  AGGREGATE cap exposed by `lyth_getDelegationCap` (disabled — u32::MAX → null
+ *  — at the v2 re-genesis). The wallet hardcodes the §16.7 default because no
+ *  RPC currently exposes the live per-wallet cap; it is the same value
+ *  `staking-client.readDelegationCap` uses as its offline mock. */
+export const DELEGATION_PER_WALLET_CAP_BPS = 5000;
+
+/** The binding per-cluster cap for a delegation move: the §16.7 per-wallet
+ *  floor ALWAYS applies; a (future-active) aggregate cap tightens it further
+ *  when present. A null aggregate cap (disabled / unread) does NOT lift the
+ *  floor — fail-closed on a signing input. */
+export function bindingPerClusterCapBps(aggregateCapBps: number | null): number {
+  return aggregateCapBps !== null
+    ? Math.min(aggregateCapBps, DELEGATION_PER_WALLET_CAP_BPS)
+    : DELEGATION_PER_WALLET_CAP_BPS;
+}
+
+/** True when adding `moveBps` to a wallet's existing weight at a cluster would
+ *  exceed the binding per-cluster cap → the chain reverts 0x0213. The
+ *  redelegate/delegate pre-flight gates on this so the wallet never submits a
+ *  guaranteed-revert tx. */
+export function exceedsPerClusterCap(
+  dstExistingWeightBps: number,
+  moveBps: number,
+  aggregateCapBps: number | null,
+): boolean {
+  return (
+    dstExistingWeightBps + moveBps > bindingPerClusterCapBps(aggregateCapBps)
+  );
+}
+
+/** True when a cluster is ALREADY at the binding cap (0 headroom) — any
+ *  positive move reverts; surface a "pick another destination" message. */
+export function destinationAtPerClusterCap(
+  dstExistingWeightBps: number,
+  aggregateCapBps: number | null,
+): boolean {
+  return dstExistingWeightBps >= bindingPerClusterCapBps(aggregateCapBps);
+}
+
+/** Global headroom for a delegate: a wallet's total delegated weight across ALL
+ *  clusters may not exceed 100% (10000 bps; chain revert 0x0205
+ *  WalletTotalExceeded). Never negative. */
+export function walletTotalHeadroomBps(totalDelegatedBps: number): number {
+  return Math.max(0, 10000 - totalDelegatedBps);
+}
+
+/** Binding bps headroom for an ADDITIONAL delegation to one cluster: the smaller
+ *  of (a) the per-cluster cap headroom under the fail-closed §16.7 floor and
+ *  (b) the global 100%-of-weight headroom. BOTH caps bind on a delegate. A null
+ *  aggregate cap yields the 5000 per-cluster floor (NOT unlimited) — fail-closed
+ *  on a signing input. (Redelegate moves weight between clusters → the wallet
+ *  total is unchanged, so it uses only the per-cluster term, not this.) */
+export function dualCapHeadroomBps(
+  aggregateCapBps: number | null,
+  existingWeightBps: number,
+  totalDelegatedBps: number,
+): number {
+  const clusterHeadroom =
+    bindingPerClusterCapBps(aggregateCapBps) - existingWeightBps;
+  return Math.max(
+    0,
+    Math.min(clusterHeadroom, walletTotalHeadroomBps(totalDelegatedBps)),
+  );
+}
+
+/** Clear user-facing message for a chain `0x0213 PerWalletCapExceeded` revert. */
+export const PER_WALLET_CAP_REVERT_MESSAGE =
+  "This cluster is already at the 50% per-wallet cap — reduce the amount or choose another cluster.";
+
+/** The mono-core delegation revert tag for PerWalletCapExceeded (0x0213). */
+const PER_WALLET_CAP_REVERT_TAG = 0x0213;
+
+/** Detect a chain PerWalletCapExceeded (0x0213) revert across the shapes it may
+ *  reach the popup as — a numeric code, or the tag/name in the reason string.
+ *  SPECIFIC to 0x0213; other revert codes fall through to the generic path. */
+export function isPerWalletCapRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  if (code === PER_WALLET_CAP_REVERT_TAG) return true;
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r.includes("perwalletcap") || r.includes("0x0213");
+}
+
+/** Clear user-facing message for a chain `0x0205 WalletTotalExceeded` revert —
+ *  the wallet's total delegated weight across all clusters would exceed 100%. */
+export const WALLET_TOTAL_CAP_REVERT_MESSAGE =
+  "This would exceed your total delegation limit (100%) — reduce the amount.";
+
+/** The mono-core delegation revert tag for WalletTotalExceeded (0x0205). */
+const WALLET_TOTAL_CAP_REVERT_TAG = 0x0205;
+
+/** Detect a chain WalletTotalExceeded (0x0205) revert across the shapes it may
+ *  reach the popup as — a numeric code, or the tag/name in the reason string.
+ *  SPECIFIC to 0x0205; other revert codes fall through to the generic path. */
+export function isWalletTotalCapRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  if (code === WALLET_TOTAL_CAP_REVERT_TAG) return true;
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r.includes("wallettotal") || r.includes("0x0205");
+}
+
 /** Display label for a delegation row's cluster. Returns the real
  *  `*.cluster.mono` name when one was captured at send time (threaded onto the
  *  confirmed row via `applyCapturedClusterNames`), otherwise an honest
@@ -51,6 +168,20 @@ export function clusterLabel(cluster: number, clusterName?: string | null): stri
   return `Cluster #${cluster}`;
 }
 
+/** Resolve a delegation row's cluster display label with the no-mock fallback
+ *  chain: the name the wallet CAPTURED at send time wins, else the live cluster
+ *  directory name (the id→name map threaded from the App-level
+ *  `bgStakingClusterDirectory` fetch), else the honest `Cluster #<id>` via
+ *  `clusterLabel`. Never fabricates a name — a cluster absent from both sources
+ *  shows its raw id. */
+export function resolveClusterLabel(
+  cluster: number,
+  capturedName: string | null | undefined,
+  directory?: ReadonlyMap<number, string | null>,
+): string {
+  return clusterLabel(cluster, capturedName ?? directory?.get(cluster) ?? null);
+}
+
 /** Cluster directory row. Mirrors SDK `ClusterDirectoryEntryResponse` + the
  *  entity flag pulled in via `lyth_getClusterEntity` (so a single popup-
  *  visible cluster card carries the Foundation / community badge per §30.5
@@ -59,11 +190,12 @@ export interface ClusterDirectoryEntry {
   /** Numeric cluster id used by every chain-side delegation precompile. */
   clusterId: number;
   /** §22.4 cluster-name-registry display name (e.g. `halcyon.cluster.mono`).
-   *  The chain DOES ship a cluster-name reader — `lyth_getClusterName`
-   *  (cluster-name registry 0x1104), with `lyth_resolveName` for the
-   *  hierarchical 0x110E registry — both wrapped by the SDK. Not wired here
-   *  yet: the wallet still displays mock names from `MOCK_CLUSTERS[*].name`
-   *  below; replace with the real lookup when this surface adopts it. */
+   *  Populated from the chain via `lyth_getClusterName` (cluster-name registry
+   *  0x1104, SDK 0.4.18 `lythGetClusterName`) in the directory fanout
+   *  (`readClusterName`). `null` when the cluster is unnamed or the per-cluster
+   *  lookup failed — the UI falls back to the `cluster-<id>` id-label, never a
+   *  fabricated name. (`lyth_resolveName`, the forward 0x110E hierarchical
+   *  resolver, is a separate reader and is not used here.) */
   name: string | null;
   /** Member count (`ClusterDirectoryEntryResponse.size`). Whitepaper §14
    *  fixes this at 10 for v1; surfaced from the chain so future
@@ -605,8 +737,10 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //
 //   ✅ naming registry — readers exist: `lyth_resolveName` (hierarchical
 //      0x110E, §22.8) and `lyth_getClusterName` (cluster-name 0x1104), both
-//      SDK-wrapped. Not wired here yet, so cluster names still display
-//      `cluster-<id>` until this surface adopts the reader.
+//      SDK-wrapped. `lyth_getClusterName` is consumed in the directory fanout
+//      (readClusterName → per-cluster name), so cluster names display their
+//      canonical on-chain value and fall back to `cluster-<id>` only when
+//      unnamed. `lyth_resolveName` (forward name→address) is not wired yet.
 //
 // The above is the binding wallet-side view; the testnet deploy status
 // of each method is checked at runtime via `withChainFallback` rather

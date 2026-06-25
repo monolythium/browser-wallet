@@ -119,10 +119,10 @@ export function MultisigGovernance({ vaultId, onBack }: MultisigGovernanceProps)
         <button className="ext-iconbtn" onClick={onBack} aria-label="Back">
           <Icon name="back" size={15} />
         </button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+        <div style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}>
           Multisig governance
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         {!loaded && <Hint>Loading…</Hint>}

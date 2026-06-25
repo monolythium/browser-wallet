@@ -63,14 +63,14 @@ export function MultisigList({ onBack, onOpenPending }: MultisigListProps) {
         <div
           style={{
             flex: 1,
-            fontSize: 13,
+            fontSize: 15,
             fontWeight: 600,
             textAlign: "center",
           }}
         >
           Multisig wallets
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">

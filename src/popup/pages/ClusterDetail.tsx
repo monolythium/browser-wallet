@@ -12,16 +12,16 @@
 //   - `lyth_getDelegationHistory` cluster-relevant rows from the
 //      user's perspective (filtered by cluster id)
 //
-// Cluster-name registry (§22.8) and per-cluster APR DO have SDK readers
-// (`lythGetClusterName` at 0x1104, `lythClusterApr`); APR is already wired
-// elsewhere. This page renders `cluster-<id>` as the honest id-derived
-// fallback for name until the name reader is wired here; absent values stay
+// Cluster-name registry (§22.8) and per-cluster APR both have SDK readers
+// (`lythGetClusterName` at 0x1104, `lythClusterApr`), both wired in the
+// directory fanout. This page renders the entry's canonical name and falls
+// back to `cluster-<id>` only when the cluster is unnamed; absent values stay
 // absent per `_dev-notes/_principles/no-mock-fallbacks.md` (chain silence ↦
 // field absent — no placeholder).
 //
 // Whitepaper alignment:
 //   §14    — cluster marketplace (this page IS the marketplace surface)
-//   §22.4  — cluster-name registry (reader exists: lythGetClusterName; wire here)
+//   §22.4  — cluster-name registry (lythGetClusterName, wired via the directory)
 //   §22.8  — hierarchical naming registry 0x110E (reader: lythResolveName)
 //   §23.5  — service-proved reward share (renders cluster's effective
 //            reward rate: rewards come from services the cluster proves,
@@ -144,11 +144,11 @@ export function ClusterDetail({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           {cluster.name ?? `cluster-${cluster.clusterId}`}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div

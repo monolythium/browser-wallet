@@ -24,6 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "../Icon";
+import { hoverBg, hoverBright } from "../hover";
 import { monoscanTxUrl, monoscanAddressUrl } from "../../shared/build-info";
 import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import { bech32mDisplay } from "../../shared/bech32m";
@@ -33,7 +34,7 @@ import { ExternalLink } from "../components/ExternalLink";
 import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
-import { RewardCard } from "../components/RewardCard";
+import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
 import { useFeature } from "../hooks/useFeature";
@@ -49,10 +50,12 @@ import {
   type DelegationsView,
   type PendingRewardsView,
 } from "../bg";
+import { buildClaimMeta } from "../claim-meta";
+import { useInFlightClaim, useClaimConfirmed } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
-  effectiveWeightWei,
+  effectiveWeightWholeLythoshi,
   encodeClaimRewards,
   encodeDelegate,
   encodeRedelegate,
@@ -73,6 +76,12 @@ import {
   type AutovoteMode,
   type AutovoteResult,
 } from "../../shared/autovote";
+import {
+  isPerWalletCapRevert,
+  isWalletTotalCapRevert,
+  PER_WALLET_CAP_REVERT_MESSAGE,
+  WALLET_TOTAL_CAP_REVERT_MESSAGE,
+} from "../../shared/staking";
 
 type Step =
   | "pick"
@@ -100,6 +109,10 @@ type EntryMode = "manual" | AutovoteMode;
 // ClusterDetail as sibling screens, so Stake unmounts on navigation).
 // Cleared by App.tsx when the user explicitly leaves Stake via onBack.
 const STAKE_STATE_KEY = "monowallet_stake_state";
+
+// Pending-rewards poll cadence. Matches App.tsx BALANCE_POLL_MS (3 s ≈
+// block-time) so the wallet keeps one refresh rhythm.
+const REWARDS_POLL_MS = 3_000;
 
 interface PersistedStakeState {
   step: Step;
@@ -240,6 +253,11 @@ export function Stake({
         : (savedState?.step ?? "pick");
   const [step, setStep] = useState<Step>(initialStep);
 
+  // #2 — guard against a double claim-broadcast. Reads the durable in-flight
+  // signal (persisted), so it holds even if the popup was closed + reopened
+  // mid-claim (local `step` state would be lost).
+  const claimInFlight = useInFlightClaim(account.addr, chainId);
+
   // Cluster directory state.
   const [clusters, setClusters] = useState<ClusterDirectoryEntry[]>([]);
   const [clustersError, setClustersError] = useState<string | null>(null);
@@ -282,6 +300,19 @@ export function Stake({
 
   // Submission state.
   const [txHash, setTxHash] = useState<string | null>(null);
+  // #2 — auto-dismiss the claim SuccessView once the claim confirms on-chain
+  // (its pending row is receipt-bridged), so the user no longer has to tap Done.
+  const claimSuccessConfirmed = useClaimConfirmed(
+    account.addr,
+    chainId,
+    action === "claim" && step === "success" ? txHash : null,
+  );
+  useEffect(() => {
+    if (!claimSuccessConfirmed) return;
+    // Brief grace so the success is visibly seen, then close (== onDone).
+    const t = setTimeout(() => onBack(), 1500);
+    return () => clearTimeout(t);
+  }, [claimSuccessConfirmed, onBack]);
   const [hashCopied, setHashCopied] = useState(false);
   const [submitError, setSubmitError] = useState<{
     message: string;
@@ -397,6 +428,25 @@ export function Stake({
     };
   }, [account.addr, chainId]);
 
+  // Poll pending rewards on the shared cadence (REWARDS_POLL_MS ==
+  // App.BALANCE_POLL_MS) so the Claim amount stays live without a manual
+  // refresh. The live lyth_pendingRewards RPC is keyed on the wallet only; the
+  // rows arg just feeds the never-displayed mock fallback, so [] is fine. A
+  // transient poll failure keeps the last good value (no error/clear on !ok).
+  useEffect(() => {
+    if (!account.addr.startsWith("0x")) return;
+    const id = setInterval(() => {
+      void (async () => {
+        const rewR = await bgStakingPendingRewards(account.addr, []);
+        if (rewR.ok) {
+          setRewards(rewR.data);
+          setRewardsMock(rewR.via === "mock");
+        }
+      })();
+    }, REWARDS_POLL_MS);
+    return () => clearInterval(id);
+  }, [account.addr, chainId]);
+
   // Recompute the autovote plan whenever inputs change. The plan
   // doesn't submit on its own — the user reviews it on the preview
   // screen before the chain call.
@@ -457,6 +507,12 @@ export function Stake({
     try {
       let data: string;
       let executionUnitLimitHex: string;
+      // The delegation weight (bps) captured PURELY as notification metadata.
+      // For delegate/redelegate it's the same uint16 already encoded into
+      // `data` (signed tx byte-identical); for undelegate it's the existing
+      // full-row weight being removed (not encoded — undelegate is full-row).
+      // Claim leaves it undefined (no weight).
+      let delegationWeightBps: number | undefined;
       // NON-CUSTODIAL: delegation never carries native value. The chain
       // reverts (UnexpectedValue / tag 0x020e) if any value is attached —
       // tokens stay liquid in the wallet, weighted by `weightBps`.
@@ -470,6 +526,9 @@ export function Stake({
         // No redemption queue or cooldown — nothing was escrowed.
         data = encodeUndelegate(selectedCluster!.clusterId);
         executionUnitLimitHex = "0x186A0";
+        // Notification metadata: undelegate removes the FULL row, so the % to
+        // show is the cluster's existing weight (no bps is encoded in `data`).
+        delegationWeightBps = existingWeightBps;
       } else {
         // `amountStr` is a PERCENT of balance (0–100) in both the manual
         // and autovote paths. Convert to weightBps for the calldata.
@@ -484,6 +543,7 @@ export function Stake({
           setStep("error");
           return;
         }
+        delegationWeightBps = bps; // notification metadata — same bps as the calldata
         if (action === "delegate") {
           // Balance-weighted, non-custodial: weightBps only. No msg.value.
           data = encodeDelegate(selectedCluster!.clusterId, bps);
@@ -500,6 +560,12 @@ export function Stake({
         // budget slightly for that path.
         executionUnitLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
       }
+      // Redelegate destination cluster name (for the from→to toast — the
+      // activity row resolves it from the live directory, but the toast can't).
+      const redelegateDstName =
+        action === "redelegate" && redelegateDstClusterId !== null
+          ? (clusters.find((c) => c.clusterId === redelegateDstClusterId)?.name ?? null)
+          : null;
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex,
@@ -517,14 +583,30 @@ export function Stake({
         // directory name when registered; omitted when null.
         clusterId: selectedCluster!.clusterId,
         ...(selectedCluster!.name ? { clusterName: selectedCluster!.name } : {}),
+        ...(action === "redelegate" && redelegateDstClusterId !== null
+          ? { toClusterId: redelegateDstClusterId }
+          : {}),
+        ...(redelegateDstName ? { toClusterName: redelegateDstName } : {}),
+        ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
         setStep("success");
       } else {
+        const code = typeof r.code === "number" ? r.code : null;
+        // Map the chain's cap reverts — PerWalletCapExceeded (0x0213) and
+        // WalletTotalExceeded (0x0205) — which the pre-flight guards now
+        // prevent, but could still slip through on a race or a future cap
+        // change — to clear messages instead of a generic "rejected". Specific
+        // to those codes; other revert codes keep the raw reason.
+        const message = isPerWalletCapRevert(r.reason, code)
+          ? PER_WALLET_CAP_REVERT_MESSAGE
+          : isWalletTotalCapRevert(r.reason, code)
+            ? WALLET_TOTAL_CAP_REVERT_MESSAGE
+            : (r.reason ?? `${action} rejected`);
         setSubmitError({
-          message: r.reason ?? `${action} rejected`,
-          code: typeof r.code === "number" ? r.code : null,
+          message,
+          code,
           method: typeof r.method === "string" ? r.method : null,
           via: typeof r.via === "string" ? r.via : null,
         });
@@ -592,6 +674,9 @@ export function Stake({
     setUnstakeAllError(null);
     try {
       const meta = clusters.find((c) => c.clusterId === cluster);
+      const rowWeightBps = delegations?.rows.find(
+        (row) => row.cluster === cluster,
+      )?.weightBps;
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -601,6 +686,7 @@ export function Stake({
         opKind: "undelegate",
         clusterId: cluster,
         ...(meta?.name ? { clusterName: meta.name } : {}),
+        ...(rowWeightBps !== undefined ? { delegationWeightBps: rowWeightBps } : {}),
       });
       if (r.ok) {
         goToNextUnstake(unstakeAllIndex);
@@ -626,6 +712,12 @@ export function Stake({
     setSubmitError(null);
     setTxHash(null);
     try {
+      // Capture the frozen fiat rate + currency BEFORE broadcast (shared helper —
+      // identical at both claim sites). The claimed AMOUNT is NOT captured here
+      // (the submit-time pending-rewards value is wrong); it is decoded from the
+      // receipt's Claimed log after confirmation. valueWeiHex stays 0x0; metadata
+      // never signs.
+      const claim = await buildClaimMeta();
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -633,6 +725,9 @@ export function Stake({
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
         opKind: "claim",
+        claimedAmount: claim.claimedAmount,
+        rateAtClaim: claim.rateAtClaim,
+        currency: claim.currency,
       });
       if (r.ok) {
         setTxHash(r.result.txHash);
@@ -679,14 +774,14 @@ export function Stake({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           {step === "pick"
-            ? "Stake"
+            ? "Delegate"
             : step === "form"
-              ? "Stake — amount"
+              ? "Delegate — amount"
               : step === "unstake-form"
-                ? "Unstake — amount"
+                ? "Undelegate — amount"
                 : step === "redelegate-form"
                   ? "Redelegate"
                   : step === "redelegate-dst-pick"
@@ -695,8 +790,8 @@ export function Stake({
                       ? action === "delegate"
                         ? "Review delegation"
                         : action === "undelegate"
-                          ? "Review unstake"
-                          : "Review swap"
+                          ? "Review undelegation"
+                          : "Review redelegation"
                       : step === "submitting"
                         ? action === "claim"
                           ? "Claiming…"
@@ -705,13 +800,15 @@ export function Stake({
                           ? action === "claim"
                             ? "Claimed"
                             : action === "undelegate"
-                              ? "Unstaked"
+                              ? "Undelegated"
                               : action === "redelegate"
-                                ? "Swapped"
+                                ? "Redelegated"
                                 : "Delegated"
-                          : "Error"}
+                          : step === "unstake-all"
+                            ? "Undelegate all"
+                            : "Error"}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -722,14 +819,20 @@ export function Stake({
               balanceLythoshi={balanceLythoshi}
             />
 
-            {/* Pending rewards (left) + effective weight / Unstake-all
-                (right), side by side. Surfaces only with an active
-                delegation that could accrue. */}
-            {delegations !== null && delegations.rows.length > 0 && (
+            {/* Pending rewards + (for active delegators) the Unstake-all card.
+                The reward card shows whenever there is a LIVE positive pending
+                balance — even with no active delegation, so rewards still
+                accrued after undelegating everything stay claimable. Unstake-all
+                stays gated on having active delegations. */}
+            {(pendingRewardsArePositive(rewards, rewardsMock) ||
+              (delegations !== null && delegations.rows.length > 0)) && (
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns:
+                    delegations !== null && delegations.rows.length > 0
+                      ? "1fr 1fr"
+                      : "1fr",
                   gap: 8,
                   marginBottom: 4,
                 }}
@@ -741,18 +844,21 @@ export function Stake({
                   isMock={rewardsMock}
                   clusters={clusters}
                   onClaim={() => void handleClaim()}
-                  claimDisabled={false}
+                  claimDisabled={claimInFlight}
+                  claimPending={claimInFlight}
                   showAdvancedAnalytics={tradingInterfaceOn}
                 />
-                <UnstakeAllCard
-                  effectiveWeightLythoshi={effectiveWeightWei(
-                    delegations.totalBps,
-                    balanceLythoshi ?? 0n,
-                  )}
-                  totalBps={delegations.totalBps}
-                  balanceLythoshi={balanceLythoshi}
-                  onUnstakeAll={handleUnstakeAll}
-                />
+                {delegations !== null && delegations.rows.length > 0 && (
+                  <UnstakeAllCard
+                    effectiveWeightLythoshi={effectiveWeightWholeLythoshi(
+                      delegations.totalBps,
+                      balanceLythoshi ?? 0n,
+                    )}
+                    totalBps={delegations.totalBps}
+                    balanceLythoshi={balanceLythoshi}
+                    onUnstakeAll={handleUnstakeAll}
+                  />
+                )}
               </div>
             )}
 
@@ -981,6 +1087,7 @@ export function Stake({
             onAmountChange={setAmountStr}
             balanceLythoshi={balanceLythoshi}
             existingWeightBps={existingWeightBps}
+            totalDelegatedBps={delegations?.totalBps ?? 0}
             capBps={capBps}
             onContinue={() => setStep("preview")}
             onBack={() => setStep("pick")}
@@ -1050,7 +1157,7 @@ export function Stake({
             walletAddr0x={account.addr}
             amountLythoshi={
               action === "delegate" && balanceLythoshi !== null
-                ? effectiveWeightWei(percentToBps(Number(amountStr)), balanceLythoshi)
+                ? effectiveWeightWholeLythoshi(percentToBps(Number(amountStr)), balanceLythoshi)
                 : null
             }
           />
@@ -1102,7 +1209,7 @@ function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
   // Effective delegated weight = balance × totalBps. NON-CUSTODIAL: this is
   // NOT removed from the spendable balance — the full balance stays liquid,
   // the weight is just the contribution to clusters.
-  const effectiveWeightLythoshi = effectiveWeightWei(
+  const effectiveWeightLythoshi = effectiveWeightWholeLythoshi(
     stakedBps,
     balanceLythoshi ?? 0n,
   );
@@ -1141,7 +1248,7 @@ function SummaryBanner({ delegations, balanceLythoshi }: SummaryBannerProps) {
         style={{
           marginTop: 10,
           fontFamily: "var(--f-mono)",
-          fontSize: 11,
+          fontSize: 10,
           color: "var(--fg-300)",
           lineHeight: 1.6,
         }}
@@ -1218,9 +1325,11 @@ function UnstakeAllCard({
           fontSize: 11,
           fontWeight: 600,
           cursor: "pointer",
+          transition: "filter 120ms",
         }}
+        {...hoverBright}
       >
-        Unstake all
+        Undelegate all
       </button>
     </div>
   );
@@ -1307,14 +1416,14 @@ function PreviewView({
   // the "moved" weight is the entire existing delegation regardless of any
   // input. The LYTH shown is the effective weight that row represents at
   // the live balance (nothing is escrowed).
-  const fullDelegationLythoshi = effectiveWeightWei(
+  const fullDelegationLythoshi = effectiveWeightWholeLythoshi(
     existingWeightBps,
     balanceLythoshi ?? 0n,
   );
   // `amountStr` is a percent of balance (0–100) for delegate/redelegate.
   const moveBps = isUndelegate ? existingWeightBps : percentToBps(Number(amountStr));
   // Effective weight this delegation contributes at the current balance.
-  const moveLythoshi = effectiveWeightWei(moveBps, balanceLythoshi ?? 0n);
+  const moveLythoshi = effectiveWeightWholeLythoshi(moveBps, balanceLythoshi ?? 0n);
   const totalAfterBps =
     action === "delegate"
       ? existingWeightBps + moveBps
@@ -1331,7 +1440,7 @@ function PreviewView({
             textTransform: "uppercase",
           }}
         >
-          Unstake all · cluster {sequence.index + 1} of {sequence.total}
+          Undelegate all · cluster {sequence.index + 1} of {sequence.total}
         </div>
       )}
       <div className="ext-card" style={{ padding: 14 }}>
@@ -1386,7 +1495,7 @@ function PreviewView({
           v={aprBps === null ? "—" : `${(aprBps / 100).toFixed(2)}%`}
         />
         <Row
-          k={action === "redelegate" ? "Cluster swap" : action === "undelegate" ? "Unstake" : "Custody"}
+          k={action === "redelegate" ? "Cluster redelegation" : action === "undelegate" ? "Undelegate" : "Custody"}
           v={
             action === "redelegate"
               ? "Instant"
@@ -1426,7 +1535,7 @@ function PreviewView({
               {action === "undelegate" &&
                 "Submits `undelegate(uint32 cluster)` — instantly removes your entire delegation row. No redemption queue or cooldown."}
               {action === "redelegate" &&
-                "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster swap, no cooldown."}{" "}
+                "Submits `redelegate(srcCluster, dstCluster, weightBps)` — instant cluster redelegation, no cooldown."}{" "}
               Monolythium Testnet may reject the call until the gate is activated.
             </>
           ) : (
@@ -1437,7 +1546,7 @@ function PreviewView({
                 "Removes your delegation instantly. Your tokens were never locked, so there is nothing to wait for. "}
               {action === "redelegate" &&
                 "Moves your delegation to another cluster instantly. "}
-              Monolythium Testnet may reject this until staking is enabled.
+              Monolythium Testnet may reject this until delegation is enabled.
             </>
           )}
         </div>
@@ -1469,6 +1578,7 @@ function PreviewView({
               onClick={sequence.onCancel}
               disabled={sequence.busy}
               style={{ ...secondaryBtn, opacity: sequence.busy ? 0.6 : 1 }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               Cancel
             </button>
@@ -1476,11 +1586,12 @@ function PreviewView({
               onClick={sequence.onSkip}
               disabled={sequence.busy}
               style={{ ...secondaryBtn, opacity: sequence.busy ? 0.6 : 1 }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               Skip
             </button>
             <button
-              className="ext-act prim"
+              className="ext-act prim-soft"
               onClick={onConfirm}
               disabled={sequence.busy}
               style={{
@@ -1496,7 +1607,7 @@ function PreviewView({
                 "Submitting…"
               ) : (
                 <>
-                  <Icon name="check" size={12} /> Unstake
+                  <Icon name="check" size={12} /> Undelegate
                 </>
               )}
             </button>
@@ -1504,17 +1615,26 @@ function PreviewView({
           <div
             style={{
               fontFamily: "var(--f-mono)",
-              fontSize: 9,
-              color: "var(--fg-500)",
-              lineHeight: 1.6,
+              fontSize: 11,
+              color: "var(--fg-400)",
+              lineHeight: 1.7,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
             }}
           >
-            <strong style={{ color: "var(--err)" }}>Unstake</strong> removes
-            this cluster, then continues ·{" "}
-            <strong style={{ color: "var(--fg-300)" }}>Skip</strong> keeps it
-            staked and moves on ·{" "}
-            <strong style={{ color: "var(--fg-300)" }}>Cancel</strong> stops
-            here.
+            <div>
+              <strong style={{ color: "var(--err)" }}>Undelegate</strong> removes
+              this cluster, then continues.
+            </div>
+            <div>
+              <strong style={{ color: "var(--fg-300)" }}>Skip</strong> keeps it
+              delegated and moves on.
+            </div>
+            <div>
+              <strong style={{ color: "var(--fg-300)" }}>Cancel</strong> stops
+              here.
+            </div>
           </div>
         </>
       ) : (
@@ -1525,11 +1645,15 @@ function PreviewView({
             gap: 8,
           }}
         >
-          <button onClick={onBack} style={secondaryBtn}>
+          <button
+            onClick={onBack}
+            style={secondaryBtn}
+            {...hoverBg("rgba(255,255,255,0.04)")}
+          >
             Back
           </button>
           <button
-            className="ext-act prim"
+            className="ext-act prim-soft"
             onClick={onConfirm}
             style={{
               padding: 12,
@@ -1639,9 +1763,9 @@ function SuccessView({
     action === "claim"
       ? "Claim submitted"
       : action === "undelegate"
-        ? "Unstake submitted"
+        ? "Undelegate submitted"
         : action === "redelegate"
-          ? "Cluster swap submitted"
+          ? "Cluster redelegation submitted"
           : "Delegation submitted";
   const walletBech = bech32mDisplay(walletAddr0x);
   return (
@@ -1715,6 +1839,7 @@ function SuccessView({
           <button
             onClick={onCopy}
             aria-label="Copy transaction hash"
+            {...hoverBg("transparent")}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -1727,6 +1852,8 @@ function SuccessView({
               color: copied ? "var(--ok, #5fc97a)" : "var(--fg-400)",
               cursor: "pointer",
               flexShrink: 0,
+              borderRadius: 6,
+              transition: "background 120ms",
             }}
           >
             {copied ? <CheckIcon /> : <ClipboardIcon />}
@@ -1776,6 +1903,12 @@ function SuccessView({
         href={monoscanTxUrl(txHash)}
         target="_blank"
         rel="noopener noreferrer"
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "rgba(255,255,255,0.09)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+        }}
         style={{
           ...secondaryBtn,
           width: "100%",
@@ -1789,7 +1922,7 @@ function SuccessView({
       >
         <Icon name="globe" size={13} /> View on Monoscan
       </a>
-      <button onClick={onDone} className="ext-act prim" style={{ padding: 12 }}>
+      <button onClick={onDone} className="ext-act prim-soft" style={{ padding: 12 }}>
         Done
       </button>
     </div>
@@ -1810,6 +1943,7 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
       <button
         type="button"
         onClick={onOpenOperators}
+        {...hoverBright}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -1821,6 +1955,7 @@ function genesisErrorBody(body: string, onOpenOperators: () => void) {
           color: "var(--gold)",
           textDecoration: "underline",
           cursor: "pointer",
+          transition: "filter 120ms",
         }}
       >
         {marker}
@@ -1927,10 +2062,14 @@ function ErrorView({
           gap: 8,
         }}
       >
-        <button onClick={onCancel} style={secondaryBtn}>
+        <button
+          onClick={onCancel}
+          style={secondaryBtn}
+          {...hoverBg("rgba(255,255,255,0.04)")}
+        >
           Cancel
         </button>
-        <button onClick={onRetry} className="ext-act prim" style={{ padding: 12 }}>
+        <button onClick={onRetry} className="ext-act prim-soft" style={{ padding: 12 }}>
           Retry
         </button>
       </div>
@@ -2124,20 +2263,23 @@ function ExistingDelegations({
                 <button
                   onClick={() => onStake(row.cluster)}
                   style={stakeMoreBtnStyle}
+                  {...hoverBright}
                 >
-                  Stake
+                  Delegate
                 </button>
                 <button
                   onClick={() => onRedelegate(row.cluster)}
                   style={redelegateBtnStyle}
+                  {...hoverBright}
                 >
                   Redelegate
                 </button>
                 <button
                   onClick={() => onUnstake(row.cluster)}
                   style={unstakeBtnStyle}
+                  {...hoverBright}
                 >
-                  Unstake
+                  Undelegate
                 </button>
               </div>
             </div>
@@ -2160,6 +2302,7 @@ const delegationActionBtnBase: CSSProperties = {
   cursor: "pointer",
   letterSpacing: "0.06em",
   textTransform: "uppercase",
+  transition: "filter 120ms",
 };
 
 const stakeMoreBtnStyle: CSSProperties = {
@@ -2205,6 +2348,7 @@ function EntryModeToggle({ entryMode, onChange }: EntryModeToggleProps) {
       >
         <button
           onClick={() => onChange("manual")}
+          {...hoverBright}
           style={{
             ...modeToggleBtn,
             background: isManual ? "var(--gold-bg)" : "rgba(255,255,255,0.03)",
@@ -2218,6 +2362,7 @@ function EntryModeToggle({ entryMode, onChange }: EntryModeToggleProps) {
         </button>
         <button
           onClick={() => onChange("max-decentralization")}
+          {...hoverBright}
           style={{
             ...modeToggleBtn,
             background: !isManual ? "var(--gold-bg)" : "rgba(255,255,255,0.03)",
@@ -2322,8 +2467,8 @@ function AutovotePlanCard({
             color: "var(--warn)",
             padding: "6px 8px",
             borderRadius: 6,
-            background: "rgba(244,201,122,0.08)",
-            border: "1px solid rgba(244,201,122,0.4)",
+            background: "rgba(var(--warn-glow), 0.08)",
+            border: "1px solid rgba(var(--warn-glow), 0.4)",
             marginBottom: 8,
             lineHeight: 1.5,
           }}
@@ -2494,7 +2639,7 @@ function AutovotePlanCard({
           </div>
           <button
             onClick={onProceed}
-            className="ext-act prim"
+            className="ext-act prim-soft"
             disabled={plan.allocations.length === 0}
             style={{
               marginTop: 10,
@@ -2570,6 +2715,7 @@ const secondaryBtn: CSSProperties = {
   fontFamily: "var(--f-sans)",
   fontSize: 12,
   cursor: "pointer",
+  transition: "background 120ms",
 };
 
 const errBanner: CSSProperties = {

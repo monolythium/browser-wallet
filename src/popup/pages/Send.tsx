@@ -17,6 +17,7 @@ import {
   bgPasskeyRecordUsage,
   bgPreviewTransactionHooks,
   bgWalletBalance,
+  bgWalletResolveName,
   bgWalletFeeSuggestion,
   bgWalletSendTx,
   type BgPasskeyDecision,
@@ -42,7 +43,6 @@ import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
 import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import {
   STORAGE_KEY_NAME_CACHE,
-  lookupNameInCache,
   parseMonoName,
   validateNameCache,
   type MonoNameParse,
@@ -80,6 +80,8 @@ import {
   scaleByBps,
 } from "../../shared/native-fee-display";
 import { lythoshiToLythDecimal } from "../../shared/native-amount";
+import { getLythFiatRate, formatFiat } from "../../shared/fiat";
+import { useDisplayCurrencyPref } from "../hooks/useDisplayPrefs";
 
 interface SendProps {
   account: Account;
@@ -163,6 +165,9 @@ export function Send({
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
+  // Display-currency pref (popup-side) for the fiat-equivalent hint below the
+  // amount field. No oracle yet → the rate is null → renders "—".
+  const [displayCurrency] = useDisplayCurrencyPref();
   // Contacts picker. pickerOpen drives the modal;
   // selectedContact holds the chosen contact so the preview screen can
   // render its name above the address. selectedContact clears when
@@ -266,7 +271,7 @@ export function Send({
   const estimatedFeeLythoshi = estimatedFeeDisplay?.totalLythoshi ?? null;
 
   const parsedRecipient = useMemo(() => validateToAddress(to), [to]);
-  const nameResolution = useNameForwardResolve(parsedRecipient.monoName);
+  const nameResolution = useNameForwardResolve(parsedRecipient.monoName, chainId);
   const effectiveAddr0x =
     parsedRecipient.addr0x ?? nameResolution.addr0x ?? null;
 
@@ -633,6 +638,7 @@ export function Send({
           </div>
           <input
             type="password"
+            autoComplete="current-password"
             autoFocus
             value={elevatedPw}
             onChange={(e) => {
@@ -778,11 +784,11 @@ export function Send({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Send
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -962,6 +968,24 @@ export function Send({
               LYTH
             </div>
           </div>
+          {/* Fiat equivalent of the entered amount (live). No oracle yet →
+             rate null → "—"; never a fabricated value. */}
+          {amountLythoshi !== null && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                color: "var(--fg-400)",
+                marginTop: 4,
+              }}
+            >
+              {formatFiat(
+                lythoshiToLythDecimal(amountLythoshi, 6),
+                displayCurrency,
+                getLythFiatRate(displayCurrency),
+              )}
+            </div>
+          )}
           {amountError && <div style={inlineError}>{amountError}</div>}
           {!amountError && insufficientFunds && (
             <div style={inlineError}>
@@ -971,12 +995,16 @@ export function Send({
           <div style={fromHint}>
             from: {bech32mDisplay(account.addr)}
             {balanceLythoshi !== null && (
-              <>
-                {" · balance: "}
-                <span style={{ fontFamily: "var(--f-mono)" }}>
-                  {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH
+              <div style={fromBalanceLine}>
+                balance: {lythoshiToLythDecimal(balanceLythoshi, 4)} LYTH{" "}
+                <span style={{ color: "var(--fg-400)" }}>
+                  ({formatFiat(
+                    lythoshiToLythDecimal(balanceLythoshi, 6),
+                    displayCurrency,
+                    getLythFiatRate(displayCurrency),
+                  )})
                 </span>
-              </>
+              </div>
             )}
           </div>
         </FormCard>
@@ -1071,6 +1099,21 @@ export function Send({
                 <span style={{ fontFamily: "var(--f-mono)" }}>
                   {estimatedFeeDisplay?.defaultText ?? "—"}
                 </span>
+                {/* Fiat equivalent as a SEPARATE sibling — the canonical LYTH
+                   fee string (defaultText) is never touched, so it stays clear
+                   of the fee-display conformance path. "—" until a rate lands. */}
+                {estimatedFeeLythoshi !== null && (
+                  <span
+                    style={{ fontFamily: "var(--f-mono)", color: "var(--fg-400)" }}
+                  >
+                    {" "}
+                    ({formatFiat(
+                      lythoshiToLythDecimal(estimatedFeeLythoshi, 6),
+                      displayCurrency,
+                      getLythFiatRate(displayCurrency),
+                    )})
+                  </span>
+                )}
               </div>
               {/* DEV-ONLY: low-level lythoshi/execution-unit fee breakdown.
                   The default surface shows a single LYTH-denominated fee
@@ -1223,22 +1266,31 @@ const inlineError: CSSProperties = {
 
 const dualFormatHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 10,
-  color: "var(--fg-400)",
+  fontSize: 11,
+  color: "var(--fg-100)",
   marginTop: 6,
   wordBreak: "break-all",
 };
 
 const fromHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 10,
-  color: "var(--fg-500)",
+  fontSize: 11,
+  color: "var(--fg-100)",
   marginTop: 8,
   // bech32m address is rendered full (no
   // shortAddr truncation). Allow wrap if it doesn't fit on one
   // line at the current popup width; truncation would violate the
   // "no ellipsis" rule.
   wordBreak: "break-all",
+};
+
+// The from-balance sits on its own line under the from-address (same
+// monospace family + bumped size as the address), not inline.
+const fromBalanceLine: CSSProperties = {
+  fontFamily: "var(--f-mono)",
+  fontSize: 11,
+  color: "var(--fg-100)",
+  marginTop: 3,
 };
 
 // ---- validation ----
@@ -1386,7 +1438,7 @@ function looksLikePartialMonoName(s: string): boolean {
   return /^[a-z0-9][a-z0-9.-]*$/.test(s);
 }
 
-// ---- §22.8 forward-resolve (name → address) via local name cache ----
+// ---- §22.8 forward-resolve (name → address) via the on-chain registry ----
 
 interface NameResolutionState {
   status: "idle" | "loading" | "hit" | "miss";
@@ -1396,23 +1448,20 @@ interface NameResolutionState {
 const IDLE_RESOLUTION: NameResolutionState = { status: "idle", addr0x: null };
 
 /**
- * Reverse-scans the local name cache to find an address whose stored
- * displayName matches the requested §22.8 name. Returns idle when there
- * is no name to resolve, loading while the storage read is in flight,
- * hit when the cache had a match, miss when it didn't.
+ * Forward-resolve a §22.8 `*.mono` name to its owner address against the
+ * AUTHORITATIVE on-chain hierarchical name registry (0x110E) via the SW's
+ * `wallet-resolve-name` (lyth_resolveName on the genesis-pinned rail, quorum
+ * cross-checked). idle = no name to resolve; loading = RPC in flight; hit =
+ * the registry returned an owner; miss = unregistered OR the resolve failed.
  *
- * The cache is the only forward-resolve source today — the SDK already
- * exposes `lyth_resolveName` (hierarchical registry 0x110E), but this hook
- * hasn't wired the network fallback yet. This hook is the place to add it;
- * the surface (idle / loading / hit / miss + addr0x) stays stable so callers
- * don't change.
- *
- * Subscribes to chrome.storage.onChanged so a fresh reverse-resolve
- * elsewhere in the popup (e.g. activity feed pulling a new label) makes
- * the Send form light up without a re-type.
+ * FAIL-CLOSED (P5-002): the resolved address feeds the SIGNED recipient
+ * (`effectiveAddr0x`), so a miss/error yields NO address — we NEVER fall back
+ * to the operator-echoed label cache for a signed send; the user pastes the
+ * address instead. The {status, addr0x} surface is unchanged for callers.
  */
 function useNameForwardResolve(
   parsed: MonoNameParse | null,
+  chainIdHex: string,
 ): NameResolutionState {
   const [state, setState] = useState<NameResolutionState>(IDLE_RESOLUTION);
   const canonical = parsed?.canonical ?? null;
@@ -1424,41 +1473,19 @@ function useNameForwardResolve(
     }
     let cancelled = false;
     setState({ status: "loading", addr0x: null });
-
-    const resolve = (cache: NameCache) => {
-      const addr = lookupNameInCache(canonical, cache);
+    void (async () => {
+      const r = await bgWalletResolveName(canonical, chainIdHex);
       if (cancelled) return;
       setState(
-        addr !== null
-          ? { status: "hit", addr0x: addr }
+        r.ok && r.addr0x !== null
+          ? { status: "hit", addr0x: r.addr0x }
           : { status: "miss", addr0x: null },
       );
-    };
-
-    chrome.storage.local.get([STORAGE_KEY_NAME_CACHE], (res) => {
-      if (cancelled) return;
-      const validated = validateNameCache(res?.[STORAGE_KEY_NAME_CACHE]);
-      resolve(validated ?? {});
-    });
-
-    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
-      changes,
-      area,
-    ) => {
-      if (area !== "local") return;
-      const change = changes[STORAGE_KEY_NAME_CACHE];
-      if (!change) return;
-      const validated = validateNameCache(change.newValue);
-      if (validated === null) return;
-      resolve(validated);
-    };
-    chrome.storage.onChanged.addListener(listener);
-
+    })();
     return () => {
       cancelled = true;
-      chrome.storage.onChanged.removeListener(listener);
     };
-  }, [canonical]);
+  }, [canonical, chainIdHex]);
 
   return state;
 }
@@ -1529,7 +1556,7 @@ function MonoNameResolveHint({ parsed, resolution }: MonoNameResolveHintProps) {
   if (resolution.status === "loading") {
     return (
       <div style={dualFormatHint}>
-        Looks like a {tldLabel} name — checking your address book…
+        Looks like a {tldLabel} name — resolving on-chain…
       </div>
     );
   }
@@ -1543,8 +1570,8 @@ function MonoNameResolveHint({ parsed, resolution }: MonoNameResolveHintProps) {
   if (resolution.status === "miss") {
     return (
       <div style={inlineError}>
-        Name not in your address book yet. On-chain name lookup ships with the
-        naming registry — paste the typed mono1 address for now.
+        This name doesn't resolve on-chain right now — paste the typed mono1
+        address to send.
       </div>
     );
   }
@@ -2065,6 +2092,22 @@ function PreviewView({
   recipientRegisteredName,
   finalityPosture,
 }: PreviewViewProps) {
+  // Display-currency pref for the fiat-equivalent siblings beside the LYTH
+  // amount / fee / total. No oracle yet → rate null → "—". The canonical LYTH
+  // strings (formatNativeLythAmount) stay untouched; fiat is a SEPARATE element
+  // only — it never feeds the fee-display conformance path.
+  const [displayCurrency] = useDisplayCurrencyPref();
+  // Renders the fiat equivalent of a lythoshi amount as a sibling span beside
+  // (never concatenated into) the canonical LYTH text. "—" when the rate is null.
+  const fiatSuffix = (lythoshi: bigint) => (
+    <span style={{ opacity: 0.75, fontWeight: 400, marginLeft: 4 }}>
+      ({formatFiat(
+        lythoshiToLythDecimal(lythoshi, 6),
+        displayCurrency,
+        getLythFiatRate(displayCurrency),
+      )})
+    </span>
+  );
   const total =
     amountLythoshi !== null && estimatedFeeLythoshi !== null
       ? amountLythoshi + estimatedFeeLythoshi
@@ -2087,11 +2130,11 @@ function PreviewView({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           {isMultisig ? "Review proposal" : "Review send"}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -2157,18 +2200,28 @@ function PreviewView({
           <SummaryRow
             label="Amount"
             value={
-              amountLythoshi !== null
-                ? formatNativeLythAmount(amountLythoshi)
-                : "—"
+              amountLythoshi !== null ? (
+                <>
+                  {formatNativeLythAmount(amountLythoshi)}
+                  {fiatSuffix(amountLythoshi)}
+                </>
+              ) : (
+                "—"
+              )
             }
             mono
           />
           <SummaryRow
             label={`Fee (${TIER_LABELS[tier]})`}
             value={
-              estimatedFeeLythoshi !== null
-                ? formatNativeLythAmount(estimatedFeeLythoshi)
-                : "—"
+              estimatedFeeLythoshi !== null ? (
+                <>
+                  {formatNativeLythAmount(estimatedFeeLythoshi)}
+                  {fiatSuffix(estimatedFeeLythoshi)}
+                </>
+              ) : (
+                "—"
+              )
             }
             mono
           />
@@ -2181,7 +2234,16 @@ function PreviewView({
           >
             <SummaryRow
               label="Total"
-              value={total !== null ? formatNativeLythAmount(total) : "—"}
+              value={
+                total !== null ? (
+                  <>
+                    {formatNativeLythAmount(total)}
+                    {fiatSuffix(total)}
+                  </>
+                ) : (
+                  "—"
+                )
+              }
               mono
               emphasis
             />
@@ -2403,11 +2465,11 @@ function SuccessView({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           {isProposal ? "Proposal created" : "Transaction sent"}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -2744,11 +2806,11 @@ function ErrorView({ message, code, method, via, onRetry, onCancel, onOpenOperat
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           {classified.headline}
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">

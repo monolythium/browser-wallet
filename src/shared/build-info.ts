@@ -33,12 +33,15 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value tracks protocore v0.1.72-testnet (2026-06-21), where
- *  `lyth_chainStats.genesisHash`
- *  reports the registry identity hash below. Bumping this security pin is
- *  a human-reviewer decision; the About-page drift banner surfaces the
- *  mismatch and the live-registry fetch shows the current GitHub-registry
- *  value alongside it. */
+ *  Current value = the 2026-06-24 v2 re-genesis (protocore v0.2.0-testnet,
+ *  mono-core nextgen-v2 @ 42cc2120), where `lyth_chainStats.genesisHash`
+ *  reports the registry identity hash below. CONFIRMED 2026-06-24 against
+ *  monolythium/chain-registry (master) + all 12 live fleet operators (height
+ *  ~25.5k). Pulled forward of the Wave-2 SDK bump: the installed SDK 0.4.22
+ *  registry snapshot still reads the prior 0x363fb60a value (see
+ *  SDK_REGISTRY_GENESIS_HASH; the About drift banner surfaces that lag until
+ *  the SDK is bumped). Bumping this security pin is a human-reviewer decision;
+ *  the live-registry fetch shows the current GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
   "0xd56f9763ca849c5482cae27c7e2551f891684063b89afd53aadeb55868453959";
 

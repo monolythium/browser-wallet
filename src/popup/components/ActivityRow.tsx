@@ -24,6 +24,7 @@ import { UndelegateRowBody } from "./ActivityRow/UndelegateRowBody.js";
 import { RedelegateRowBody } from "./ActivityRow/RedelegateRowBody.js";
 import { RebalanceRowBody } from "./ActivityRow/RebalanceRowBody.js";
 import { CrossingToPrivateRowBody } from "./ActivityRow/CrossingToPrivateRowBody.js";
+import { ClaimRowBody } from "./ActivityRow/ClaimRowBody.js";
 
 export interface ActivityRowProps {
   row: ActivityRowType;
@@ -32,9 +33,13 @@ export interface ActivityRowProps {
    *  Bodies that don't show a counterparty (delegate / rebalance /
    *  crossing) ignore this prop. */
   counterpartyLabel: NameLabel | undefined;
+  /** Cluster directory (id → name) for the delegate/undelegate/redelegate
+   *  bodies — resolves the numeric cluster id to its real name, else
+   *  `Cluster #<id>` (no-mock). Other kinds ignore it. */
+  clusterNameById?: ReadonlyMap<number, string | null> | undefined;
 }
 
-export function ActivityRow({ row, counterpartyLabel }: ActivityRowProps) {
+export function ActivityRow({ row, counterpartyLabel, clusterNameById }: ActivityRowProps) {
   switch (row.kind) {
     case "pending_tx":
       return <PendingTxRowBody row={row} counterpartyLabel={counterpartyLabel} />;
@@ -45,15 +50,17 @@ export function ActivityRow({ row, counterpartyLabel }: ActivityRowProps) {
     case "token_transfer":
       return <TokenTransferRowBody row={row} counterpartyLabel={counterpartyLabel} />;
     case "delegate":
-      return <DelegateRowBody row={row} />;
+      return <DelegateRowBody row={row} clusterNameById={clusterNameById} />;
     case "undelegate":
-      return <UndelegateRowBody row={row} />;
+      return <UndelegateRowBody row={row} clusterNameById={clusterNameById} />;
     case "redelegate":
-      return <RedelegateRowBody row={row} />;
+      return <RedelegateRowBody row={row} clusterNameById={clusterNameById} />;
     case "rebalance":
       return <RebalanceRowBody row={row} />;
     case "crossing_to_private":
       return <CrossingToPrivateRowBody row={row} />;
+    case "claim":
+      return <ClaimRowBody row={row} />;
   }
 }
 

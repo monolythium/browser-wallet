@@ -62,7 +62,7 @@ chrome.runtime.sendMessage(
       source: "monolythium-wallet-bridge",
       state: { accounts: response.accounts, chainId: response.chainId },
     };
-    window.postMessage(state, "*");
+    window.postMessage(state, window.location.origin);
   },
 );
 
@@ -87,7 +87,7 @@ window.addEventListener("message", (ev) => {
         id: data.id,
         ...(response?.error ? { error: response.error } : { result: response?.result }),
       };
-      window.postMessage(reply, "*");
+      window.postMessage(reply, window.location.origin);
     },
   );
 });
@@ -102,7 +102,7 @@ chrome.runtime.onMessage.addListener((message: { kind: string; event?: string; p
     event: message.event as InboundEvent["event"],
     payload: message.payload,
   };
-  window.postMessage(ev, "*");
+  window.postMessage(ev, window.location.origin);
 });
 
 // This content script is bundled as an ES module by @crxjs; the explicit export

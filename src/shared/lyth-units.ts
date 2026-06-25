@@ -41,3 +41,17 @@ export function lythoshiDecimalToLythDecimal(lythoshiDec: string): string {
   if (!/^[0-9]+$/.test(lythoshiDec)) return "0";
   return formatLythoshiToLythDecimal(BigInt(lythoshiDec));
 }
+
+/** Truncate a decimal-LYTH string (e.g. "0.980035894719687092") to at most
+ *  `decimals` fractional digits for DISPLAY — TRUNCATION (not rounding) +
+ *  trailing-zero trim, matching `lythoshiToLyth(x, decimals)`. The canonical
+ *  full-precision value stays in the store; this is display-only. A string with
+ *  no fraction (or a malformed one) passes through unchanged. */
+export function formatLythDecimalDisplay(s: string, decimals = 4): string {
+  if (!/^[0-9]+(\.[0-9]+)?$/.test(s)) return s;
+  const dot = s.indexOf(".");
+  if (dot < 0) return s;
+  const intPart = s.slice(0, dot);
+  const frac = s.slice(dot + 1, dot + 1 + decimals).replace(/0+$/, "");
+  return frac.length === 0 ? intPart : `${intPart}.${frac}`;
+}

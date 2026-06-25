@@ -13,7 +13,8 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
-import { RewardCard } from "../components/RewardCard";
+import { hoverBg } from "../hover";
+import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
 import {
   bgStakingClusterDirectory,
   bgStakingDelegations,
@@ -24,9 +25,12 @@ import {
   type DelegationsView,
   type PendingRewardsView,
 } from "../bg";
+import { buildClaimMeta } from "../claim-meta";
+import { useInFlightClaim, useClaimConfirmed } from "../hooks/useInFlightClaim";
 import type { Account } from "../demo-data";
 import {
   DELEGATION_PRECOMPILE,
+  effectiveWeightWholeLythoshi,
   encodeClaimRewards,
 } from "../../shared/staking-tx";
 import {
@@ -51,6 +55,10 @@ interface DelegationsProps {
   onShowClusterDetail?: (cluster: ClusterDirectoryEntry) => void;
 }
 
+// Pending-rewards poll cadence — matches App.tsx BALANCE_POLL_MS (3 s) so the
+// wallet keeps one refresh rhythm.
+const REWARDS_POLL_MS = 3_000;
+
 export function Delegations({
   account,
   chainId,
@@ -69,11 +77,26 @@ export function Delegations({
   // RewardCard's honest-absence state instead of perpetual "Loading…".
   const [rewardsError, setRewardsError] = useState<string | null>(null);
   const [claimSubmitting, setClaimSubmitting] = useState(false);
+  // #2 — durable in-flight claim signal (survives popup close→reopen, unlike the
+  // ephemeral claimSubmitting). OR'd into claimDisabled to block a double-submit.
+  const claimInFlight = useInFlightClaim(account.addr, chainId);
   const [claimResult, setClaimResult] = useState<
     | { ok: true; txHash: string }
     | { ok: false; reason: string }
     | null
   >(null);
+  // #2 — auto-dismiss the claim-submitted toast once the claim confirms on-chain
+  // (its pending row is receipt-bridged), so the user doesn't dismiss manually.
+  const claimConfirmed = useClaimConfirmed(
+    account.addr,
+    chainId,
+    claimResult?.ok ? claimResult.txHash : null,
+  );
+  useEffect(() => {
+    if (!claimConfirmed) return;
+    const t = setTimeout(() => setClaimResult(null), 1500);
+    return () => clearTimeout(t);
+  }, [claimConfirmed]);
 
   // Load active delegations + cluster directory + balance + rewards on
   // mount. The fan-out is identical to the Stake page's pick-step
@@ -119,6 +142,24 @@ export function Delegations({
     };
   }, [account.addr, chainId]);
 
+  // Poll pending rewards on the shared cadence so the Claim amount stays live.
+  // The live lyth_pendingRewards RPC is keyed on the wallet only; the rows arg
+  // just feeds the never-displayed mock fallback. A transient poll failure
+  // keeps the last good value (no error/clear on !ok).
+  useEffect(() => {
+    if (!account.addr.startsWith("0x")) return;
+    const id = setInterval(() => {
+      void (async () => {
+        const rewR = await bgStakingPendingRewards(account.addr, []);
+        if (rewR.ok) {
+          setRewards(rewR.data);
+          setRewardsMock(rewR.via === "mock");
+        }
+      })();
+    }, REWARDS_POLL_MS);
+    return () => clearInterval(id);
+  }, [account.addr, chainId]);
+
   const clusterById = useMemo(() => {
     const m = new Map<number, ClusterDirectoryEntry>();
     for (const c of clusters) m.set(c.clusterId, c);
@@ -137,6 +178,11 @@ export function Delegations({
     setClaimSubmitting(true);
     setClaimResult(null);
     try {
+      // Capture the frozen fiat rate + currency before broadcast (shared helper —
+      // identical to the Stake claim site). The claimed AMOUNT is decoded from
+      // the receipt's Claimed log after confirmation, not captured here (the
+      // submit-time pending-rewards value is wrong). Metadata-only; value 0x0.
+      const claim = await buildClaimMeta();
       const r = await bgWalletSendTx({
         to: DELEGATION_PRECOMPILE,
         valueWeiHex: "0x0",
@@ -144,6 +190,9 @@ export function Delegations({
         data: encodeClaimRewards(),
         executionUnitLimitHex: "0x14820", // 84000 — selector-only allowance
         opKind: "claim",
+        claimedAmount: claim.claimedAmount,
+        rateAtClaim: claim.rateAtClaim,
+        currency: claim.currency,
       });
       if (r.ok) setClaimResult({ ok: true, txHash: r.result.txHash });
       else setClaimResult({ ok: false, reason: r.reason ?? "claim rejected" });
@@ -161,11 +210,11 @@ export function Delegations({
           <Icon name="back" size={15} />
         </button>
         <div
-          style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}
+          style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}
         >
           Delegations
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
 
       <div className="ext-body">
@@ -201,15 +250,19 @@ export function Delegations({
           </div>
         </div>
 
-        {/* Pending rewards card */}
-        {delegations !== null && delegations.rows.length > 0 && (
+        {/* Pending rewards card — shows on a LIVE positive pending balance even
+            with no active delegation (unclaimed rewards stay claimable), or
+            whenever there are active delegations. */}
+        {(pendingRewardsArePositive(rewards, rewardsMock) ||
+          (delegations !== null && delegations.rows.length > 0)) && (
           <RewardCard
             rewards={rewards}
             error={rewardsError}
             isMock={rewardsMock}
             clusters={clusters}
             onClaim={() => void handleClaim()}
-            claimDisabled={claimSubmitting}
+            claimDisabled={claimSubmitting || claimInFlight}
+            claimPending={claimSubmitting || claimInFlight}
           />
         )}
 
@@ -288,7 +341,7 @@ export function Delegations({
                 gap: 8,
               }}
             >
-              <Icon name="stake" size={12} /> Stake LYTH
+              <Icon name="stake" size={12} /> Delegate LYTH
             </button>
           </div>
         ) : (
@@ -305,9 +358,11 @@ export function Delegations({
               >
                 {delegations.rows.map((row) => {
                   const c = clusterById.get(row.cluster);
+                  // Chain-exact effective weight (whole-LYTH floored) — what the
+                  // row actually contributes for rewards/voting.
                   const amountLythoshi =
                     balanceLythoshi !== null
-                      ? (balanceLythoshi * BigInt(row.weightBps)) / 10_000n
+                      ? effectiveWeightWholeLythoshi(row.weightBps, balanceLythoshi)
                       : null;
                   return (
                     <div
@@ -368,12 +423,14 @@ export function Delegations({
                         <button
                           onClick={() => onUnstake(row.cluster)}
                           style={rowActionBtnStyle}
+                          {...hoverBg("rgba(255,255,255,0.04)")}
                         >
-                          Unstake
+                          Undelegate
                         </button>
                         <button
                           onClick={() => onRedelegate(row.cluster)}
                           style={rowActionBtnStyle}
+                          {...hoverBg("rgba(255,255,255,0.04)")}
                         >
                           Redelegate
                         </button>
@@ -386,6 +443,7 @@ export function Delegations({
                               if (c) onShowClusterDetail(c);
                             }}
                             style={rowActionBtnStyle}
+                            {...hoverBg("rgba(255,255,255,0.04)")}
                             aria-label={`View details for cluster ${row.cluster}`}
                           >
                             Details
@@ -409,7 +467,7 @@ export function Delegations({
                 width: "100%",
               }}
             >
-              <Icon name="plus" size={12} /> Stake more
+              <Icon name="plus" size={12} /> Delegate more
             </button>
           </>
         )}
@@ -482,4 +540,5 @@ const rowActionBtnStyle: CSSProperties = {
   cursor: "pointer",
   letterSpacing: "0.06em",
   textTransform: "uppercase",
+  transition: "background 120ms",
 };

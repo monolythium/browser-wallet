@@ -20,6 +20,7 @@
 
 import { useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { hoverBg } from "../hover";
 import { type ClusterDirectoryEntry } from "../../shared/staking";
 
 type SortMode = "apr" | "decentralization";
@@ -206,6 +207,12 @@ function ClusterRow({
         transition: "all 100ms var(--e-out)",
       }}
       onClick={onSelect}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.filter = "brightness(1.15)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.filter = "none";
+      }}
     >
       {/* Top row: name + health dot + APR */}
       <div
@@ -290,6 +297,7 @@ function ClusterRow({
             onToggleExpand();
           }}
           style={detailsBtnStyle}
+          {...hoverBg("transparent")}
         >
           {expanded ? "Hide" : "Details"}{" "}
           <Icon name={expanded ? "chev-d" : "chev"} size={10} />
@@ -368,7 +376,9 @@ function ClusterRow({
                 padding: "4px 10px",
                 borderRadius: 6,
                 cursor: "pointer",
+                transition: "background 120ms",
               }}
+              {...hoverBg("rgba(255,255,255,0.05)")}
               aria-label={`View details for ${cluster.name ?? `cluster-${cluster.clusterId}`}`}
             >
               View details →
@@ -417,9 +427,9 @@ function FoundationBadge() {
         fontWeight: 600,
         padding: "1px 5px",
         borderRadius: 3,
-        background: "rgba(244,201,122,0.12)",
+        background: "rgba(var(--gold-glow), 0.12)",
         color: "var(--gold)",
-        border: "1px solid rgba(244,201,122,0.4)",
+        border: "1px solid rgba(var(--gold-glow), 0.4)",
         letterSpacing: "0.08em",
         textTransform: "uppercase",
       }}
@@ -555,4 +565,5 @@ const detailsBtnStyle: CSSProperties = {
   letterSpacing: "0.06em",
   textTransform: "uppercase",
   flexShrink: 0,
+  transition: "background 120ms",
 };

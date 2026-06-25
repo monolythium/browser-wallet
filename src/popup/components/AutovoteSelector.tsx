@@ -8,6 +8,7 @@
 
 import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { hoverBright } from "../hover";
 import type { AutovoteMode } from "../../shared/autovote";
 
 interface AutovoteSelectorProps {
@@ -36,7 +37,7 @@ const MODES: ReadonlyArray<ModeMeta> = [
     mode: "max-decentralization",
     label: "Max Decentralization",
     description:
-      "Actively route stake away from clusters with high correlated-preference scores, geographic concentration, or shared operator membership. Recommended default.",
+      "Actively route delegation away from clusters with high correlated-preference scores, geographic concentration, or shared operator membership. Recommended default.",
     iconHint: "shield",
   },
   {
@@ -124,6 +125,7 @@ function ModePill({ meta, selected, onClick, compact }: ModePillProps) {
     <button
       onClick={onClick}
       title={meta.description}
+      {...hoverBright}
       style={{
         padding: compact ? "6px 10px" : "10px 12px",
         borderRadius: 10,

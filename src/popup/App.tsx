@@ -20,6 +20,7 @@ import {
 import { hexLythoshiToLythNumber } from "../shared/native-amount";
 import {
   activityPendingKey,
+  localClaimAwaitingAmount,
   validatePendingActivityCache,
 } from "../shared/activity";
 import {
@@ -47,6 +48,9 @@ import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
 import { Theme } from "./pages/Theme";
+import { DisplayPreferences } from "./pages/DisplayPreferences";
+import { LanguageSettings } from "./pages/LanguageSettings";
+import { DisplayCurrencySettings } from "./pages/DisplayCurrencySettings";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -99,6 +103,8 @@ import {
   bgWalletBalance,
   bgWalletActivityGet,
   bgWalletIndexerSnapshot,
+  bgStakingDelegations,
+  bgStakingClusterDirectory,
   bgWalletActiveChain,
   bgWalletSetActiveChain,
   bgChainList,
@@ -117,6 +123,7 @@ import {
   type ChainEntry,
   type WalletIndexerSnapshot,
 } from "./bg";
+import type { DelegationsView } from "../shared/staking";
 
 type Screen =
   | "loading"
@@ -159,6 +166,9 @@ type Screen =
   | "security"
   | "features"
   | "theme"
+  | "display-preferences"
+  | "language-settings"
+  | "display-currency-settings"
   | "main-menu"
   | "contacts"
   | "new-wallet-flow"
@@ -219,6 +229,13 @@ const TESTNET_FALLBACK: ChainEntry = {
  *  waiting for a tab change or the 30s background alarm. The SW only does the
  *  heavy reconcile when a pending row exists, so each tick is cheap otherwise. */
 const PENDING_REPOLL_MS = 1_500;
+
+// Keep the balance AND activity live on a fixed cadence while the popup is open
+// (~block-time), independent of any pending tx — a SEPARATE effect from the
+// hasPendingTx reconcile poll above. The unconditional activity refresh here is
+// what surfaces an INCOMING transfer promptly: no pending row exists to arm the
+// reconcile poll, so without this an incoming tx waited for a mount/nav/focus.
+const BALANCE_POLL_MS = 3_000;
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
@@ -392,6 +409,17 @@ export default function App() {
   );
   const chainNotLive = chainKindNotLive(chainHealthKind);
   const [indexerSnapshot, setIndexerSnapshot] = useState<WalletIndexerSnapshot | null>(null);
+  // Active delegations (totalBps) for the Home "Delegated" chip. Best-effort:
+  // null while loading / on fetch failure → Home shows "0.00" (no fabrication).
+  const [delegationsView, setDelegationsView] = useState<DelegationsView | null>(null);
+  const refreshDelegations = useCallback(async () => {
+    if (!acc.addr.startsWith("0x")) {
+      setDelegationsView(null);
+      return;
+    }
+    const r = await bgStakingDelegations(acc.addr);
+    setDelegationsView(r.ok ? r.data : null);
+  }, [acc.addr]);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
   // the balance/fee hooks can dep on it. `activeChain` falls back to
@@ -402,6 +430,34 @@ export default function App() {
   const [chainList, setChainList] = useState<ChainEntry[]>([]);
   const activeChain: ChainEntry =
     chainList.find((c) => c.chainId === activeChainId) ?? TESTNET_FALLBACK;
+  // Cluster name directory (id → name) for the Home Activity rows. Indexer-fed
+  // delegation rows carry only a numeric cluster id; this map lets them show the
+  // real cluster name with a graceful fallback to `Cluster #<id>` (no-mock).
+  // Fetched once per account/chain via the SAME staking-cluster-directory call
+  // the Stake/Delegations pages use, lifted here so the directory resolves in
+  // ONE place and is threaded down (Home → ActivityList → row bodies) rather
+  // than a third per-surface fetch. A transient failure keeps the last good map
+  // (rows fall back to the raw id meanwhile) — never cleared to a mock.
+  const [clusterNameById, setClusterNameById] = useState<Map<number, string | null>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) {
+      setClusterNameById(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const r = await bgStakingClusterDirectory();
+      if (cancelled || !r.ok) return;
+      const m = new Map<number, string | null>();
+      for (const c of r.data.clusters) m.set(c.clusterId, c.name);
+      setClusterNameById(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [acc.addr, activeChain.chainId]);
   // Currently-viewed chain on NetworkDetail / EditChain. Set when the user
   // taps a row on the Networks list; cleared when they back out.
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
@@ -809,7 +865,18 @@ export default function App() {
     const apply = (raw: unknown) => {
       if (cancelled) return;
       const v = validatePendingActivityCache(raw);
-      setHasPendingTx((v?.pending.length ?? 0) > 0);
+      // A local-claim with a RESOLVED amount is a durable record, not an
+      // in-flight tx — exclude it so it doesn't keep the 1.5s reconcile poll
+      // armed forever. But a local-claim whose `claimedAmount` is still null
+      // (decoded from the Claimed log only on a later reconcile) COUNTS as
+      // pending, so the poll stays armed and the reconcile fills the amount
+      // in-session (no reopen). The indexer now also surfaces confirmed claim
+      // rows, which the merge reconciles + keeps sticky (applyStickyClaimAmount).
+      setHasPendingTx(
+        (v?.pending.filter(
+          (p) => p.source !== "local-claim" || localClaimAwaitingAmount(p),
+        ).length ?? 0) > 0,
+      );
     };
     chrome.storage.local.get([key], (res) => apply(res?.[key]));
     const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
@@ -840,6 +907,40 @@ export default function App() {
     return () => clearInterval(id);
   }, [hasPendingTx, refreshActivity]);
 
+  // Standalone balance poll — keep the balance live on a fixed cadence while the
+  // popup is open, independent of any pending tx (so a confirmation refreshes the
+  // home balance without a popup reopen / home-nav). The ref holds the latest
+  // refreshBalance so the interval is armed once per account (stable address dep)
+  // and is NOT recreated when refreshBalance's identity changes — no interval
+  // churn. Crucially, this does NOT touch the activity pending-poll above, which
+  // stays activity-only.
+  const refreshBalanceRef = useRef(refreshBalance);
+  useEffect(() => {
+    refreshBalanceRef.current = refreshBalance;
+  }, [refreshBalance]);
+  // The same standalone poll also refreshes ACTIVITY unconditionally (NOT gated
+  // on hasPendingTx like the reconcile poll above), so an INCOMING tx surfaces
+  // on the next tick instead of waiting for a mount / home-nav / focus-regain —
+  // the wallet holds no inbound hash to reconcile, so its only signal is the
+  // indexer history snapshot. refreshActivity is race-guarded and never clears
+  // the list on a transient indexer failure (it writes no local state on error),
+  // so riding this existing timer adds no failure mode. Ref-armed like the
+  // balance ref so the interval stays stable per account (no churn). The chain's
+  // commit-then-reveal lag is the remaining (chain-side) floor.
+  const refreshActivityRef = useRef(refreshActivity);
+  useEffect(() => {
+    refreshActivityRef.current = refreshActivity;
+  }, [refreshActivity]);
+  const balancePollAddress = acc.addr;
+  useEffect(() => {
+    if (!balancePollAddress.startsWith("0x")) return; // active unlocked account only
+    const id = setInterval(() => {
+      void refreshBalanceRef.current();
+      void refreshActivityRef.current();
+    }, BALANCE_POLL_MS);
+    return () => clearInterval(id);
+  }, [balancePollAddress]);
+
   // Refetch balance when the user lands on Home so in-popup navigations
   // (Send → Home, Networks → Home, etc.) reflect a balance that may have
   // changed while the user was on another screen. Also covers the post-send
@@ -848,8 +949,9 @@ export default function App() {
     if (screen === "home") {
       void refreshBalance();
       void refreshActivity();
+      void refreshDelegations();
     }
-  }, [screen, refreshBalance, refreshActivity]);
+  }, [screen, refreshBalance, refreshActivity, refreshDelegations]);
 
   // Re-fetch the active vault summary whenever the user
   // navigates. Cheap (one IPC) and covers the cases where the user
@@ -881,6 +983,13 @@ export default function App() {
       cancelled = true;
     };
   }, [acc.addr, activeChain.chainId]);
+
+  // Active-delegations fetch — mirrors the indexer fetch; refires on
+  // account/chain change (the home-nav effect below also refreshes it so the
+  // Delegated chip is fresh after an in-session delegate/undelegate).
+  useEffect(() => {
+    void refreshDelegations();
+  }, [refreshDelegations, activeChain.chainId]);
 
   // Re-skin popup background per active denom (matches designs/src/ext-app.jsx).
   useEffect(() => {
@@ -1097,6 +1206,9 @@ export default function App() {
           // wrong-chain / offline counts), not the manage-operators editor, so
           // the user sees WHY the banner is degraded.
           onOpenOperators={() => navigateTo("operator-directory")}
+          // B (R1): the active 0x address so the degraded (tappable) banner
+          // states can offer a "View on Monoscan" link to the user's own page.
+          activeAddr0x={acc.addr}
           {...(screen === "home"
             ? {
                 onSettings: () => navigateTo("settings"),
@@ -1286,6 +1398,8 @@ export default function App() {
           account={acc}
           network={activeChain}
           indexer={indexerSnapshot}
+          delegations={delegationsView}
+          clusterNameById={clusterNameById}
           balanceStale={balanceStale}
           balanceCause={balanceCause}
           chainNotLive={chainNotLive}
@@ -1427,10 +1541,10 @@ export default function App() {
           // navigateBack would fall back to home, skipping Settings.
           onOpenAbout={() => navigateTo("about")}
           onOpenDelegations={() => setScreen("delegations")}
-          // Settings → Theme pushes onto the screen stack via navigateTo
-          // so Theme's onBack (navigateBack) returns to Settings — and the
-          // same Theme page is reachable from the hamburger menu.
-          onOpenTheme={() => navigateTo("theme")}
+          // Settings → Display & Preferences hub (theme / language / display
+          // currency). navigateTo so the hub's back returns to Settings; the
+          // same hub is reachable from the hamburger menu.
+          onOpenDisplayPreferences={() => navigateTo("display-preferences")}
           {...(activeVaultSummary
             ? {
                 onOpenSecurity: () => navigateTo("security"),
@@ -1465,10 +1579,28 @@ export default function App() {
         <Features onBack={navigateBack} />
       )}
 
-      {/* Theme page. Reached from the Settings "Theme" category card AND
-         the hamburger menu, both via navigateTo, so onBack (navigateBack)
-         returns to whichever pushed it. */}
+      {/* Theme page. Reached from the Display & Preferences hub via navigateTo,
+         so onBack (navigateBack) returns to the hub. */}
       {screen === "theme" && <Theme onBack={navigateBack} />}
+
+      {/* Display & Preferences hub + its three dedicated pages. Each pushes
+         onto the screen stack via navigateTo, so back from a leaf returns to
+         the hub, and back from the hub returns to its opener (Settings or the
+         hamburger menu). */}
+      {screen === "display-preferences" && (
+        <DisplayPreferences
+          onBack={navigateBack}
+          onOpenTheme={() => navigateTo("theme")}
+          onOpenLanguage={() => navigateTo("language-settings")}
+          onOpenCurrency={() => navigateTo("display-currency-settings")}
+        />
+      )}
+      {screen === "language-settings" && (
+        <LanguageSettings onBack={navigateBack} />
+      )}
+      {screen === "display-currency-settings" && (
+        <DisplayCurrencySettings onBack={navigateBack} />
+      )}
 
       {screen === "operators" && (
         <Operators
@@ -1631,9 +1763,9 @@ export default function App() {
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
           onSettings={() => navigateTo("settings")}
-          // Theme — opens the same Theme page the Settings "Theme" category
-          // routes to. navigateTo pushes "main-menu" so back returns here.
-          onTheme={() => navigateTo("theme")}
+          // Display & Preferences — the same hub the Settings page routes to.
+          // navigateTo pushes "main-menu" so back returns here.
+          onDisplayPreferences={() => navigateTo("display-preferences")}
           onAbout={() => navigateTo("about")}
           onResources={() => navigateTo("resources")}
           onWhyMonolythium={() => navigateTo("why-monolythium")}

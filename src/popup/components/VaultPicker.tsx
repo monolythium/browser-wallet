@@ -42,8 +42,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 
-import { Icon, shortAddr } from "../Icon";
+import { Icon } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
+import { useFitText } from "./useFitText";
 import { Modal } from "./Modal";
 import { CheckIcon, ClipboardIcon } from "./AddressLine";
 import { VaultAddModal, type VaultAddMode } from "./VaultAddModal";
@@ -299,6 +300,9 @@ export function VaultPicker({
   const activeVault = ready ? vaults!.find((v) => v.isActive) ?? null : null;
   const displayLabel = resolveVaultChipLabel(activeVault?.label, activeVaultLabel);
   const fullAddr = bech32mDisplay(activeAccount.addr);
+  // Render the full bech32m address as large as fits on one line, filling the
+  // box edge-to-edge (the fixed font kept leaving a slack gap / risking wrap).
+  const addrFitRef = useFitText<HTMLSpanElement>(fullAddr, 18);
   const [addrCopied, setAddrCopied] = useState(false);
   const handleAddrCopy = (e: ReactMouseEvent) => {
     e.stopPropagation();
@@ -367,8 +371,26 @@ export function VaultPicker({
               gap: 6,
             }}
           >
-            {/* Col 1 — empty spacer for centering. */}
-            <span />
+            {/* Col 1 — ML-DSA-65 algo label, moved up here from the .ext-top
+               row above so the name sits in the top row and the left isn't
+               wasted empty space. */}
+            <span
+              style={{
+                justifySelf: "start",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontFamily: "var(--f-mono)",
+                fontSize: 8.5,
+                fontWeight: 600,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: "var(--fg-400)",
+              }}
+            >
+              ML-DSA-65
+            </span>
             {/* Col 2 — name + pencil cluster (centered). */}
             <span
               style={{
@@ -434,8 +456,8 @@ export function VaultPicker({
                     fontSize: 9,
                     padding: "1px 4px",
                     borderRadius: 3,
-                    border: "1px solid rgba(124,127,255,0.4)",
-                    background: "rgba(124,127,255,0.08)",
+                    border: "1px solid rgba(var(--gold-glow), 0.4)",
+                    background: "rgba(var(--gold-glow), 0.08)",
                     color: "var(--fg-200)",
                     letterSpacing: "0.05em",
                     flexShrink: 0,
@@ -467,19 +489,19 @@ export function VaultPicker({
           picker hit-area, so it never opens the dropdown. */}
       <div className="ext-acc-addr">
         <span
+          ref={addrFitRef}
           onClick={handleAddrCopy}
           title={addrCopied ? "Copied" : fullAddr}
           style={{
             flex: "1 1 auto",
             minWidth: 0,
-            whiteSpace: "normal",
-            wordBreak: "break-all",
-            lineHeight: 1.4,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
             fontFamily: "var(--f-mono)",
-            fontSize: 13.5,
             fontWeight: 500,
             color: addrCopied ? "var(--ok, #5fc97a)" : "var(--fg-100)",
-            letterSpacing: "-0.01em",
+            letterSpacing: "-0.02em",
             cursor: "copy",
           }}
         >
@@ -596,7 +618,9 @@ interface VaultRowProps {
 }
 
 function VaultRow({ vault, onSelect, onRename }: VaultRowProps) {
-  const displayAddr = shortAddr(bech32mDisplay(vault.addr), 12);
+  // Show the full bech32m address (not a 12+12 truncation), fit to the row.
+  const displayAddr = bech32mDisplay(vault.addr);
+  const addrFitRef = useFitText<HTMLDivElement>(displayAddr, 12);
   return (
     <div
       role="option"
@@ -661,9 +685,9 @@ function VaultRow({ vault, onSelect, onRename }: VaultRowProps) {
           )}
         </div>
         <div
+          ref={addrFitRef}
           style={{
             fontFamily: "var(--f-mono)",
-            fontSize: 10,
             color: "var(--fg-400)",
             overflow: "hidden",
             textOverflow: "ellipsis",

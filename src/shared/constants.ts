@@ -1,3 +1,5 @@
+import type { CurrencyCode } from "./iso4217";
+
 export const AUTO_LOCK_MINUTES_DEFAULT = 15;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
 
@@ -8,6 +10,17 @@ export const ALARM_AUTO_LOCK = "monolythium.autolock";
  *  still toasts + badges at confirm time. Self-limiting: created when the
  *  pending set becomes non-empty, cleared when it empties. */
 export const ALARM_NOTIF_POLL = "monolythium.notif-poll";
+
+/** Periodic reaper that rejects any dApp approval older than APPROVAL_TTL_MS
+ *  (P4-001 D1b). Self-limiting like ALARM_NOTIF_POLL: armed when an approval is
+ *  enqueued, cleared when the bus drains. */
+export const ALARM_APPROVAL_REAP = "monolythium.approval-reap";
+/** A pending approval older than this is auto-rejected. 3 min: generous for a
+ *  user to act on a VISIBLE prompt (incl. reading a complex EIP-712 payload),
+ *  while bounding a forgotten / flooded approval. Kept <= the 5-min shortest
+ *  AUTO_LOCK_OPTIONS value so the reaper is the tighter independent bound in
+ *  every auto-lock config. */
+export const APPROVAL_TTL_MS = 180_000;
 
 // chrome.storage.local
 export const STORAGE_KEY_AUTO_LOCK_MINUTES = "mono.autoLockMinutes";
@@ -30,6 +43,22 @@ export const STORAGE_KEY_UI_OPEN_MODE = "mono.ui.open-mode";
 export const UI_OPEN_MODE_VALUES = ["sidepanel", "popup"] as const;
 export type UiOpenMode = (typeof UI_OPEN_MODE_VALUES)[number];
 export const UI_OPEN_MODE_DEFAULT: UiOpenMode = "sidepanel";
+
+// UI language. Display-only and popup-consumed; no service-worker behavior
+// depends on it (unlike open-mode, which the SW reads on boot to bind the
+// action-icon click). A placeholder for future locales — only English (US)
+// ships today, so there is nothing to switch between yet. Read/validated via
+// src/popup/display-prefs.ts.
+export const STORAGE_KEY_LANGUAGE = "mono.ui.language";
+export const LANGUAGE_VALUES = ["en-US"] as const;
+export type LanguageCode = (typeof LANGUAGE_VALUES)[number];
+export const LANGUAGE_DEFAULT: LanguageCode = "en-US";
+
+// Display currency (ISO-4217). STORED PREFERENCE ONLY — no value renders today
+// (no LYTH->fiat oracle exists). The curated code set + per-currency minor-unit
+// precision live in ./iso4217; this is just the storage key + default.
+export const STORAGE_KEY_DISPLAY_CURRENCY = "mono.ui.display-currency";
+export const DISPLAY_CURRENCY_DEFAULT: CurrencyCode = "USD";
 
 // chrome.storage.session
 export const SESSION_KEY_AUTO_LOCK_DEADLINE = "autoLockDeadline";
@@ -110,6 +139,14 @@ export const AUTO_LOCK_EXEMPT_OPS: ReadonlySet<string> = new Set([
   // AddressActivityKind probe is passive metadata
   // (used by the activity feed to render empty-state context).
   "wallet-activity-kind",
+  // Background refreshers fired on a fixed setInterval WITHOUT user input (the App
+  // balance/activity poll, the Delegations/Stake rewards poll, the 30s indexer-status
+  // tick). Like wallet-balance / wallet-indexer-snapshot above, these are passive —
+  // they must NOT re-arm auto-lock, or an open surface keeps the wallet unlocked
+  // past its timeout indefinitely (P4-001 D2). See the wrongly-non-exempt rule above.
+  "wallet-activity-get",
+  "staking-pending-rewards",
+  "wallet-indexer-status",
   "list-pending",
   "focus-approval",
   "keystore-unlock",

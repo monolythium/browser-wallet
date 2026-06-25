@@ -5,8 +5,8 @@
 //
 // Per whitepaper §23.2, redelegation is instant for delegators — no
 // unbonding period, no cluster-side cooldown. The form's UX language
-// reflects this explicitly: "Instant cluster swap" rather than the
-// Cosmos-style 21-day-redelegation-window framing.
+// reflects this explicitly: "Instant cluster redelegation" rather than
+// the Cosmos-style 21-day-redelegation-window framing.
 //
 // NON-CUSTODIAL: the move is expressed as a PERCENT of balance (weightBps);
 // no tokens are escrowed at either cluster — the redelegate tx is sent with
@@ -15,8 +15,19 @@
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import { Icon } from "../Icon";
+import { hoverBg, hoverBright } from "../hover";
 import type { ClusterDirectoryEntry } from "../../shared/staking";
-import { percentToBps } from "../../shared/staking-tx";
+import {
+  bindingPerClusterCapBps,
+  destinationAtPerClusterCap,
+  exceedsPerClusterCap,
+} from "../../shared/staking";
+import {
+  effectiveWeightWholeLythoshi,
+  isInertDelegation,
+  minNonInertBps,
+  percentToBps,
+} from "../../shared/staking-tx";
 import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface RedelegateFormProps {
@@ -109,20 +120,29 @@ export function RedelegateForm({
   }, [amountStr]);
   const moveBps = movePercent !== null ? percentToBps(movePercent) : 0;
 
-  // Derived for the in-form amount preview (additive). Mirrors the
-  // UnstakeForm derivation: balance × weightBps / 10000, in lythoshi.
+  // Derived for the in-form amount preview — the CHAIN-EXACT effective weight
+  // (whole-LYTH floored, matching mono-core), used for the "Moving X of Y"
+  // display line. The amount INPUT keeps the user's precise value separately.
   const stakedInSrcLythoshi =
-    balanceLythoshi !== null && srcWeightBps > 0
-      ? (balanceLythoshi * BigInt(srcWeightBps)) / 10_000n
+    balanceLythoshi !== null
+      ? effectiveWeightWholeLythoshi(srcWeightBps, balanceLythoshi)
       : 0n;
   const moveLythoshi =
-    balanceLythoshi !== null && moveBps > 0
-      ? (balanceLythoshi * BigInt(moveBps)) / 10_000n
+    balanceLythoshi !== null
+      ? effectiveWeightWholeLythoshi(moveBps, balanceLythoshi)
       : 0n;
 
   const exceedsSource = moveBps > srcWeightBps;
   const totalAtDstAfter = dstExistingWeightBps + moveBps;
-  const exceedsDstCap = capBps !== null && totalAtDstAfter > capBps;
+  // Fail-CLOSED: the WP §16.7 per-wallet cap (5000 bps) ALWAYS applies — the
+  // chain enforces it (0x0213 PerWalletCapExceeded) even when the queryable
+  // AGGREGATE cap (`capBps`, from lyth_getDelegationCap) is disabled/null on v2.
+  // The old guard gated solely on `capBps`, so a null aggregate cap stood it
+  // down and let guaranteed-revert tx through. The binding cap is the
+  // per-wallet floor, tightened by a future-active aggregate cap when present.
+  const bindingCapBps = bindingPerClusterCapBps(capBps);
+  const exceedsDstCap = exceedsPerClusterCap(dstExistingWeightBps, moveBps, capBps);
+  const dstAtCap = destinationAtPerClusterCap(dstExistingWeightBps, capBps);
 
   const amountIsZero = movePercent === null || moveBps === 0;
   const dstChosen = dstCluster !== null;
@@ -130,10 +150,18 @@ export function RedelegateForm({
   // Additive >100% feedback (see StakeForm) — read raw input, parser untouched.
   const exceedsHundred =
     /^\d+(\.\d+)?$/.test(amountStr) && Number(amountStr) > 100;
+  // A positive percent that rounds to 0 bps (sub-0.01%) would revert ZeroWeight.
+  const roundsToZeroBps =
+    movePercent !== null && movePercent > 0 && moveBps === 0;
+  // bps >= 1 that floors to 0 whole-LYTH effective weight → accepted but INERT.
+  const inert =
+    balanceLythoshi !== null && isInertDelegation(moveBps, balanceLythoshi);
+  const minBps = balanceLythoshi !== null ? minNonInertBps(balanceLythoshi) : null;
   const canContinue =
     !amountIsZero &&
     !exceedsSource &&
     !exceedsDstCap &&
+    !inert &&
     dstChosen &&
     !sameAsSrc &&
     balanceLythoshi !== null;
@@ -143,11 +171,10 @@ export function RedelegateForm({
     // Max from source = full source weight, then capped by the
     // destination's headroom if applicable. All in bps fractions now —
     // no balance math, because nothing is escrowed.
-    let limitBps = srcWeightBps;
-    if (capBps !== null) {
-      const headroomBps = Math.max(0, capBps - dstExistingWeightBps);
-      limitBps = Math.min(srcWeightBps, headroomBps);
-    }
+    // Cap Max by the destination's headroom under the BINDING per-wallet cap so
+    // Max never fills into a guaranteed 0x0213 revert.
+    const headroomBps = Math.max(0, bindingCapBps - dstExistingWeightBps);
+    const limitBps = Math.min(srcWeightBps, headroomBps);
     onAmountChange((limitBps / 100).toString());
   };
 
@@ -155,7 +182,7 @@ export function RedelegateForm({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {/* Source + destination row */}
       <div className="ext-card" style={{ padding: 12 }}>
-        <div style={cardLabel}>Cluster swap</div>
+        <div style={cardLabel}>Cluster redelegation</div>
         <div
           style={{
             marginTop: 8,
@@ -210,7 +237,11 @@ export function RedelegateForm({
 
           {/* Destination */}
           {dstCluster === null ? (
-            <button onClick={onPickDestination} style={pickDstBtnStyle}>
+            <button
+              onClick={onPickDestination}
+              style={pickDstBtnStyle}
+              {...hoverBright}
+            >
               Pick cluster
             </button>
           ) : (
@@ -218,6 +249,7 @@ export function RedelegateForm({
               onClick={onPickDestination}
               style={dstChosenBtnStyle}
               title="Tap to change destination"
+              {...hoverBright}
             >
               <div
                 style={{
@@ -303,6 +335,7 @@ export function RedelegateForm({
                 padding: "8px 10px",
                 opacity: srcWeightBps <= 0 ? 0.5 : 1,
               }}
+              {...hoverBg("rgba(255,255,255,0.04)")}
             >
               {p}%
             </button>
@@ -315,6 +348,7 @@ export function RedelegateForm({
               opacity: srcWeightBps <= 0 || dstCluster === null ? 0.5 : 1,
             }}
             type="button"
+            {...hoverBg("rgba(255,255,255,0.04)")}
           >
             Max
           </button>
@@ -328,24 +362,6 @@ export function RedelegateForm({
             %
           </div>
         </div>
-        {exceedsSource && (
-          <div style={inlineErr}>
-            Exceeds your current delegation at the source cluster (
-            {(srcWeightBps / 100).toFixed(2)}%).
-          </div>
-        )}
-        {exceedsDstCap && capBps !== null && (
-          <div style={inlineErr}>
-            Would push the destination over the per-cluster cap (
-            {(capBps / 100).toFixed(0)}%) by{" "}
-            {((totalAtDstAfter - capBps) / 100).toFixed(2)}%.
-          </div>
-        )}
-        {exceedsHundred && (
-          <div style={inlineErr}>
-            Enter a percent between 0.01% and 100% of your balance.
-          </div>
-        )}
         {moveBps > 0 && balanceLythoshi !== null && (
           <div style={{ ...fromHint, color: "var(--fg-300)" }}>
             Moving{" "}
@@ -356,14 +372,52 @@ export function RedelegateForm({
             <strong style={amountStrongMuted}>
               {lythoshiToLyth(stakedInSrcLythoshi)} LYTH
             </strong>{" "}
-            staked in {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
+            delegated to {srcCluster.name ?? `cluster-${srcCluster.clusterId}`}.
           </div>
         )}
         <div style={fromHint}>
-          Instant cluster swap — no cooldown between source and destination.
+          Instant cluster redelegation — no cooldown between source and destination.
           Your LYTH stays in your wallet the whole time; only the cluster
           weighting moves.
         </div>
+        {/* Limit/clamp warnings sit LAST in the card, right above the action,
+            so they're seen just before submitting. */}
+        {exceedsSource && (
+          <div className="ext-warn-prominent">
+            Exceeds your current delegation at the source cluster (
+            {(srcWeightBps / 100).toFixed(2)}%).
+          </div>
+        )}
+        {dstAtCap && (
+          <div className="ext-warn-prominent">
+            This cluster is already at the {(bindingCapBps / 100).toFixed(0)}%
+            per-wallet cap — pick another destination.
+          </div>
+        )}
+        {exceedsDstCap && !dstAtCap && (
+          <div className="ext-warn-prominent">
+            Would push the destination over the{" "}
+            {(bindingCapBps / 100).toFixed(0)}% per-wallet cap by{" "}
+            {((totalAtDstAfter - bindingCapBps) / 100).toFixed(2)}%.
+          </div>
+        )}
+        {exceedsHundred && (
+          <div className="ext-warn-prominent">
+            Enter a percent between 0.01% and 100% of your balance.
+          </div>
+        )}
+        {roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Enter a larger percent — the minimum delegation weight is 0.01%.
+          </div>
+        )}
+        {inert && !roundsToZeroBps && (
+          <div className="ext-warn-prominent">
+            Too small to redelegate at your balance — minimum ≈ 1 LYTH
+            {minBps !== null ? ` (≈ ${(minBps / 100).toFixed(2)}%)` : ""}. It
+            won&apos;t earn until your balance grows.
+          </div>
+        )}
       </div>
 
       <div
@@ -373,11 +427,15 @@ export function RedelegateForm({
           gap: 8,
         }}
       >
-        <button onClick={onBack} style={secondaryBtnStyle}>
+        <button
+          onClick={onBack}
+          style={secondaryBtnStyle}
+          {...hoverBg("rgba(255,255,255,0.04)")}
+        >
           Back
         </button>
         <button
-          className="ext-act prim"
+          className="ext-act prim-soft"
           onClick={onContinue}
           disabled={!canContinue}
           style={{
@@ -399,7 +457,7 @@ export function RedelegateForm({
                   ? "Reduce amount"
                   : exceedsDstCap
                     ? "Reduce to cap"
-                    : "Review swap"}
+                    : "Review redelegation"}
         </button>
       </div>
     </div>
@@ -442,6 +500,7 @@ const inlineBtnStyle: CSSProperties = {
   fontSize: 11,
   cursor: "pointer",
   whiteSpace: "nowrap",
+  transition: "background 120ms",
 };
 
 const inlineErr: CSSProperties = {
@@ -453,7 +512,7 @@ const inlineErr: CSSProperties = {
 
 const fromHint: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 10,
+  fontSize: 12,
   color: "var(--fg-500)",
   marginTop: 8,
   lineHeight: 1.5,
@@ -463,13 +522,13 @@ const fromHint: CSSProperties = {
 // mono numeric font so the figures stand out from the prose.
 const amountStrong: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 13,
+  fontSize: 14,
   color: "var(--gold)",
 };
 
 const amountStrongMuted: CSSProperties = {
   fontFamily: "var(--f-mono)",
-  fontSize: 11,
+  fontSize: 13,
   color: "var(--fg-200)",
 };
 
@@ -485,6 +544,7 @@ const pickDstBtnStyle: CSSProperties = {
   cursor: "pointer",
   textAlign: "center",
   width: "100%",
+  transition: "filter 120ms",
 };
 
 const dstChosenBtnStyle: CSSProperties = {
@@ -495,6 +555,7 @@ const dstChosenBtnStyle: CSSProperties = {
   cursor: "pointer",
   width: "100%",
   minWidth: 0,
+  transition: "filter 120ms",
 };
 
 const secondaryBtnStyle: CSSProperties = {
@@ -506,4 +567,5 @@ const secondaryBtnStyle: CSSProperties = {
   fontFamily: "var(--f-sans)",
   fontSize: 12,
   cursor: "pointer",
+  transition: "background 120ms",
 };

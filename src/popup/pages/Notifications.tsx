@@ -83,7 +83,7 @@ export function Notifications({ onBack }: NotificationsProps) {
         <div
           style={{
             flex: 1,
-            fontSize: 13,
+            fontSize: 15,
             fontWeight: 600,
             textAlign: "center",
           }}
@@ -101,7 +101,7 @@ export function Notifications({ onBack }: NotificationsProps) {
             Mark all as read
           </button>
         ) : (
-          <div style={{ width: 28 }} />
+          <div style={{ width: 36 }} />
         )}
       </div>
 

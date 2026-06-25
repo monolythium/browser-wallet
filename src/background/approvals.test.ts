@@ -149,3 +149,45 @@ describe("approvals — window-bomb guards (T4-06)", () => {
     await Promise.all(spam);
   });
 });
+
+describe("approvals — rejectAllPending + reapExpired (P4-001)", () => {
+  it("rejectAllPending: every pending approval resolves rejected and the bus is cleared (D1a)", async () => {
+    const a = await import("./approvals.js");
+    const p1 = a.enqueue(sendTx("https://a.example", "0xAAA", "0x1"));
+    const p2 = a.enqueue(sendTx("https://b.example", "0xBBB", "0x2"));
+    await tick();
+    expect(a.listPending().length).toBe(2);
+    // A locked wallet can't sign — every waiting dApp call must resolve rejected,
+    // not hang, and the bus must drain.
+    a.rejectAllPending("wallet locked");
+    expect(await p1).toEqual({ ok: false, reason: "wallet locked" });
+    expect(await p2).toEqual({ ok: false, reason: "wallet locked" });
+    expect(a.listPending().length).toBe(0);
+  });
+
+  it("reapExpired: rejects approvals older than ttl, keeps fresh ones, reports counts (D1b)", async () => {
+    const a = await import("./approvals.js");
+    const pOld = a.enqueue(sendTx("https://old.example", "0xAAA", "0x1"));
+    await tick();
+    const createdAt = a.listPending()[0]!.createdAt;
+    // now is 1s past createdAt with a 1ms ttl → the entry is expired and reaped.
+    const r1 = a.reapExpired(1, createdAt + 1000);
+    expect(r1).toEqual({ reaped: 1, remaining: 0 });
+    expect(await pOld).toEqual({
+      ok: false,
+      reason: "approval expired — please retry",
+    });
+    expect(a.listPending().length).toBe(0);
+
+    // A fresh entry within the ttl is NOT reaped.
+    const pFresh = a.enqueue(sendTx("https://fresh.example", "0xBBB", "0x2"));
+    await tick();
+    const freshCreatedAt = a.listPending()[0]!.createdAt;
+    const r2 = a.reapExpired(180_000, freshCreatedAt + 1000); // 1s elapsed < 3min
+    expect(r2).toEqual({ reaped: 0, remaining: 1 });
+    expect(a.listPending().length).toBe(1);
+    // settle the survivor so the test leaves no dangling promise
+    a.resolve(a.listPending()[0]!.id, { ok: false });
+    await pFresh;
+  });
+});

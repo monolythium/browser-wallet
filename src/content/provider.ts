@@ -50,11 +50,16 @@ interface InboundState {
  *  both while guaranteeing a dead/absent SW can never hang a page's RPC. */
 const INITIAL_STATE_TIMEOUT_MS = 250;
 
-// Methods the chain retired in mono-core b2f0c498 (EVM mutation,
-// simulation, and the six polling-filter methods). Note that
-// eth_sendRawTransaction is also retired by the chain but kept in
-// the service-worker dispatcher as a wallet-policy rejection — the
-// provider lets it through and the SW returns the historical 4200.
+// Methods this wallet does NOT answer through its dApp surface. The wallet
+// treats them the same (a clean 4200), but the rationale differs by group:
+//  (1) eth_call / eth_estimateGas ARE served by the chain at HEAD as read-only
+//      native-executor views — the wallet just does not proxy arbitrary EVM
+//      reads BY DESIGN (Monolythium is a native / non-EVM chain, so dApps use
+//      their own RPC endpoint for chain reads);
+//  (2) the six eth_*Filter methods are GENUINELY retired by the chain (no
+//      polling-filter surface).
+// (eth_sendRawTransaction is kept as a separate wallet-policy rejection in the
+// SW dispatcher — the provider lets it through and the SW returns 4200.)
 const RETIRED_METHODS: ReadonlySet<string> = new Set([
   "eth_call",
   "eth_estimateGas",
@@ -129,16 +134,17 @@ class MonolythiumProvider {
       return String(parseInt(this.cachedChainId, 16));
     }
 
-    // Methods retired by mono-core b2f0c498 (v4.1 §22.9 — no EVM
-    // simulation / polling-filters on Monolythium). Reject at the
-    // provider boundary with EIP-1193 code 4200 so dapps get a clear,
-    // synchronous answer without a chain round-trip. The service
-    // worker carries the same rejection arms as a defense-in-depth
-    // backstop for callers that bypass this provider.
+    // Reject at the provider boundary with EIP-1193 code 4200 so dapps get a
+    // clear, synchronous answer without a chain round-trip. eth_call /
+    // eth_estimateGas are served by the chain (read-only native-executor views)
+    // but are not proxied here by design (native / non-EVM chain → dApps use
+    // their own RPC); the six eth_*Filter methods are genuinely retired by the
+    // chain. The service worker carries the same rejection arms as a
+    // defense-in-depth backstop for callers that bypass this provider.
     if (RETIRED_METHODS.has(args.method)) {
       throw this.rpcError(
         4200,
-        `${args.method} is unavailable on Monolythium — the chain retired EVM simulation and polling-filter methods. Use native reads or submit via the wallet UI.`,
+        `${args.method} is not proxied by this wallet. Monolythium is a native (non-EVM) chain — use your own RPC for chain reads, or submit via the wallet UI.`,
       );
     }
 
@@ -171,7 +177,7 @@ class MonolythiumProvider {
         id,
         args,
       };
-      window.postMessage(msg, "*");
+      window.postMessage(msg, window.location.origin);
     });
   }
 

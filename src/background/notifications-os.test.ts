@@ -109,6 +109,12 @@ function baseRecord(overrides: Partial<{
   status: "confirmed" | "failed";
   amountDecimal: string;
   counterparty: string;
+  claimedAmount: string;
+  delegationWeightBps: number;
+  clusterName: string;
+  clusterId: number;
+  toClusterName: string;
+  toClusterId: number;
 }> = {}) {
   return {
     id: `${CHAIN}:${HASH}`,
@@ -130,6 +136,20 @@ function baseRecord(overrides: Partial<{
     createdAtMs: 1_700_000_000_000,
     read: false,
     schemaVersion: 0 as const,
+    ...(overrides.claimedAmount !== undefined
+      ? { claimedAmount: overrides.claimedAmount }
+      : {}),
+    ...(overrides.delegationWeightBps !== undefined
+      ? { delegationWeightBps: overrides.delegationWeightBps }
+      : {}),
+    ...(overrides.clusterName !== undefined
+      ? { clusterName: overrides.clusterName }
+      : {}),
+    ...(overrides.clusterId !== undefined ? { clusterId: overrides.clusterId } : {}),
+    ...(overrides.toClusterName !== undefined
+      ? { toClusterName: overrides.toClusterName }
+      : {}),
+    ...(overrides.toClusterId !== undefined ? { toClusterId: overrides.toClusterId } : {}),
   };
 }
 
@@ -155,7 +175,7 @@ describe("fireOsNotification", () => {
     expect(call.id).toBe(`${CHAIN}:${HASH}`);
     expect(call.options.type).toBe("basic");
     expect(call.options.iconUrl).toBe("icon-48.png");
-    expect(call.options.title).toBe("Staked");
+    expect(call.options.title).toBe("Delegated");
     // body = amount + " LYTH · " + short bech32m counterparty
     expect(typeof call.options.message).toBe("string");
     expect(call.options.message as string).toContain("0.10 LYTH");
@@ -187,6 +207,125 @@ describe("fireOsNotification", () => {
     expect(msg).not.toContain("0 ");
     // Title still maps to the friendly label.
     expect(captures.notificationsCreate[0]!.options.title).toBe("Rewards claimed");
+  });
+
+  it("shows the decoded claimed reward in a claim body (truncated 4dp, +gain, no precompile)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "claim",
+        status: "confirmed",
+        amountDecimal: "0",
+        claimedAmount: "0.980035894719687092",
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("+0.98 LYTH"); // truncated, +gain; precompile counterparty dropped
+    expect(msg).not.toContain("·"); // no counterparty separator for claims
+    expect(captures.notificationsCreate[0]!.options.title).toBe("Rewards claimed");
+  });
+
+  it("shows the cluster + weight % in a delegate body when bps was captured", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "delegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        delegationWeightBps: 2500,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha · 25.00%");
+  });
+
+  it("redelegate shows <from> → <to> · <%> when both clusters are known", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        toClusterName: "beta",
+        delegationWeightBps: 2500,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha → beta · 25.00%");
+  });
+
+  it("redelegate falls back to <to> · <%> when the combined label exceeds the budget", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    const longFrom = "a".repeat(30);
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: longFrom,
+        toClusterName: "destination-cluster",
+        delegationWeightBps: 2500,
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("destination-cluster · 25.00%");
+    expect(msg).not.toContain("→");
+    expect(msg).not.toContain(longFrom);
+  });
+
+  it("redelegate without a captured destination falls back to <from> · <%>", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        delegationWeightBps: 2500,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha · 25.00%");
+  });
+
+  it("shows just the % when no cluster name/id is known (redelegate)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "redelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        delegationWeightBps: 3334,
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("33.34%");
+  });
+
+  it("no-mock: a LEGACY delegation row WITHOUT a captured bps shows no % (falls through to the generic body)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "undelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).not.toContain("%"); // no captured bps → no fabricated %
+  });
+
+  it("shows cluster + % on an undelegate that carries the removed full-row weight", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "undelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        clusterName: "alpha",
+        delegationWeightBps: 5000, // the full-row weight being removed
+      }),
+    );
+    expect(captures.notificationsCreate[0]!.options.message).toBe("alpha · 50.00%");
   });
 
   it("also omits the amount for '0.00' / '0.0000' (the formatter's zero forms)", async () => {

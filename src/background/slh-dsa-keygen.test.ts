@@ -225,6 +225,38 @@ describe("prepareSlhDsaBackup", () => {
     expect(backup.publicKey).toBe(expectedHex);
   });
 
+  // ── Known-answer test (KAT) — cross-version backup-compat tripwire ──
+  // The determinism test above recomputes `expectedHex` from the SAME installed
+  // noble, so it only proves self-consistency and would NOT catch a future
+  // @noble/post-quantum bump that silently changed slh_dsa_sha2_128s keygen
+  // output (both sides shift together). This freezes the backup pubkey for a
+  // fixed entropy as a LITERAL, so any cross-version output drift fails here
+  // immediately. `backup.publicKey` is registered on-chain at the emergency-key
+  // registry (precompile 0x1100), so a silent drift would break recovery + the
+  // on-chain registration — hence the frozen vector. Captured under
+  // @noble/post-quantum 0.6.1 (P7-002 align). To re-derive: run
+  // deriveSlhDsaSeed(fixtureEntropy(0x55)) -> slh_dsa_sha2_128s.keygen(seed),
+  // hex-encode publicKey.
+  it("KAT: a fixed entropy derives a frozen backup pubkey (guards noble output drift)", () => {
+    const seed = deriveSlhDsaSeed(fixtureEntropy(0x55));
+    const kp = slh_dsa_sha2_128s.keygen(seed);
+    let pubHex = "";
+    for (const b of kp.publicKey) pubHex += b.toString(16).padStart(2, "0");
+    expect(pubHex).toBe(
+      "ab8579a8e1f65d12dcc8fb49e13aed4e55a41726e83742973398a1b702333442",
+    );
+    expect(kp.publicKey.length).toBe(SLH_DSA_SHA2_128S_LENGTHS.publicKey);
+    expect(kp.secretKey.length).toBe(SLH_DSA_SHA2_128S_LENGTHS.secretKey);
+    // SLH-DSA layout SK.seed|SK.prf|PK.seed|PK.root: the 32-byte pubkey is the
+    // last 32 bytes of the 64-byte secret key. Pinning this embeds half the
+    // secret in the KAT without a fragile 128-char secret-key literal.
+    let secTailHex = "";
+    for (const b of kp.secretKey.slice(32)) {
+      secTailHex += b.toString(16).padStart(2, "0");
+    }
+    expect(secTailHex).toBe(pubHex);
+  });
+
   it("the same entropy + VEK + timestamp produces an identical backup record (deterministic)", () => {
     // The encryptedPrivateKey field DIFFERS run-to-run because the
     // AEAD nonce is random — `prepareSlhDsaBackup` calls

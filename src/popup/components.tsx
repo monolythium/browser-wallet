@@ -26,7 +26,8 @@ import type { IconName } from "./Icon";
 import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
-import { clusterLabel, formatWeightBpsPercent } from "../shared/staking";
+import { clusterLabel, type DelegationsView } from "../shared/staking";
+import { getLythFiatRate, formatFiat } from "../shared/fiat";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
 import type {
@@ -68,6 +69,7 @@ import type {
 } from "./bg";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useFeature } from "./hooks/useFeature";
+import { useDisplayCurrencyPref } from "./hooks/useDisplayPrefs";
 import { ActivityList } from "./components/ActivityList";
 import { VaultPicker } from "./components/VaultPicker";
 import {
@@ -152,8 +154,17 @@ export function chainKindNotLive(
   );
 }
 
-const HEALTH_TICK_MS = 8_000;
-const STALL_THRESHOLD_MS = 30_000;
+// Health-poll cadence. Also the ONLY granularity gate on STALLED detection (the
+// stall predicate is checked once per tick). At 5s, ceil(15_000/5_000)=3 ticks
+// → ~15s worst-case detection (vs ~16s at 8s); single-use (this poll only), so
+// the cost is just slightly more frequent block-number RPCs.
+export const HEALTH_TICK_MS = 5_000;
+// How long the head height may stay unchanged before the banner verdicts STALLED.
+// Lowered 30s → 15s: the chain produces ~0.3s blocks, so 15s is ~50× the normal
+// inter-block gap — comfortably clear of a brief pause (no false STALLED) while
+// roughly halving detection. Detection is also floored by the poll granularity
+// (HEALTH_TICK_MS above; the predicate is only checked on a tick).
+export const STALL_THRESHOLD_MS = 15_000;
 const OPERATOR_TICK_MS = 10_000;
 // Session key holding the last block hex we observed (written by the SW on a WS
 // newHeads push AND by the poll tick below). Read on mount to seed the honest
@@ -161,6 +172,13 @@ const OPERATOR_TICK_MS = 10_000;
 // bare CONNECTING…. Lives in chrome.storage.session (survives SW hibernation;
 // cleared on browser close / extension reload).
 const WS_BLOCK_KEY = "mono.ws.lastBlockHex";
+// B2: when the head height last ADVANCED, keyed by hex. SEPARATE from WS_BLOCK_KEY
+// (whose string shape the warm-start seed + banner WS listener depend on — never
+// change it). Written only on a hex change, by BOTH the poll below and the SW WS
+// handler, so the stall window survives a banner remount / popup reopen: the next
+// mount seeds its baseline from this and can verdict STALLED on the first poll
+// instead of restarting the 15s window from zero. Shape: { hex, advancedAtMs }.
+const BLOCK_ADVANCE_KEY = "mono.ws.lastBlockAdvancedAt";
 
 /**
  * Map a FAILED bgWalletChainBlockNumber poll to a banner health state. The
@@ -180,6 +198,60 @@ export function chainHealthForFailedPoll(r: {
   if (r.cause === "untrusted") return { kind: "untrusted" };
   if (r.cause === "quarantined") return { kind: "quarantined" };
   return { kind: "offline", reason: r.reason ?? "unreachable" };
+}
+
+/**
+ * STALLED predicate: the head height has stayed unchanged for at least
+ * `thresholdMs`. Unlike the RPC-reported degraded states, STALLED is wallet-
+ * INFERRED — the chain keeps answering `ok` with the same height, so we time it
+ * out. Pure + exported so the rendered banner and the tested contract can't
+ * drift from `STALL_THRESHOLD_MS`.
+ */
+export function chainHealthStallVerdict(
+  nowMs: number,
+  lastAdvancedAtMs: number,
+  thresholdMs: number,
+): boolean {
+  return nowMs - lastAdvancedAtMs >= thresholdMs;
+}
+
+/**
+ * B2: fold the persisted block-advance store (`BLOCK_ADVANCE_KEY`) into the first
+ * confirmed head of a fresh mount, so the stall window survives a remount / popup
+ * reopen instead of restarting from zero.
+ * - Same head as the persisted session (`stored.hex === currentHex`): carry its
+ *   `advancedAtMs` forward → verdict STALLED if it's been unchanged past the
+ *   threshold (an already-stalled chain flips immediately on reopen).
+ * - Head advanced while closed (different hex), or no/malformed store: a FRESH
+ *   baseline at `nowMs`, never stalled (no false positive — the chain moved, or we
+ *   simply don't know yet; falls back to the current first-tick-LIVE behavior).
+ * Pure + exported.
+ */
+export function seedStallBaseline(
+  stored: unknown,
+  currentHex: string,
+  nowMs: number,
+  thresholdMs: number,
+): { lastBlockHex: string; lastBlockObservedAt: number; stalled: boolean } {
+  if (typeof stored === "object" && stored !== null) {
+    const hex = (stored as { hex?: unknown }).hex;
+    const advancedAtMs = (stored as { advancedAtMs?: unknown }).advancedAtMs;
+    if (
+      typeof hex === "string" &&
+      /^0x[0-9a-fA-F]+$/.test(hex) &&
+      typeof advancedAtMs === "number" &&
+      Number.isFinite(advancedAtMs) &&
+      advancedAtMs <= nowMs && // guard a future/garbage timestamp
+      hex === currentHex
+    ) {
+      return {
+        lastBlockHex: currentHex,
+        lastBlockObservedAt: advancedAtMs,
+        stalled: chainHealthStallVerdict(nowMs, advancedAtMs, thresholdMs),
+      };
+    }
+  }
+  return { lastBlockHex: currentHex, lastBlockObservedAt: nowMs, stalled: false };
 }
 
 /**
@@ -274,6 +346,38 @@ export function chainHealthPresentation(kind: ChainHealth["kind"]): {
         tappable: false,
       };
   }
+}
+
+/**
+ * A (R1): the VISIBLE inline explanation for a chain-health state — the very same
+ * text as the hover `tooltip`, surfaced as a non-loud muted line so a degraded
+ * chain explains itself without a hover. Returns null for the healthy LIVE state
+ * (no hint needed) and a non-empty string for every NON-live state (stalled /
+ * untrusted / regenesis / quarantined / offline / reconnecting / connecting).
+ * Pure + exported so the rendered hint and the tested contract can't drift from
+ * `chainHealthPresentation`.
+ */
+export function chainHealthInlineHint(kind: ChainHealth["kind"]): string | null {
+  if (kind === "live") return null;
+  return chainHealthPresentation(kind).tooltip;
+}
+
+/**
+ * B (R1): the "View on Monoscan" target for a chain-health state, or null when
+ * none should render. Offered ONLY on the TAPPABLE degraded states (the same set
+ * that taps through to Operators — stalled / untrusted / regenesis / quarantined
+ * / offline) AND only when a real Monoscan URL resolved (no-mock — never a
+ * fabricated or broken link; the resolved URL is passed in by the caller from the
+ * trusted `pausedBalanceMonoscanUrl`). Pure + exported so the gate is tested
+ * independently of the render.
+ */
+export function chainHealthMonoscanLink(
+  kind: ChainHealth["kind"],
+  monoscanUrl: string | null,
+): string | null {
+  return chainHealthPresentation(kind).tappable && monoscanUrl
+    ? monoscanUrl
+    : null;
 }
 
 /**
@@ -413,6 +517,11 @@ interface ChainStatusBannerProps {
    *  to App so Home can hide the balance + activity for all non-live states
    *  (see `chainKindNotLive`). Optional — secondary banners omit it. */
   onHealthChange?: (kind: ChainHealthKind) => void;
+  /** The active wallet's 0x address — threaded by the main popup so the degraded
+   *  (tappable) states can offer a "View on Monoscan" link to the user's OWN
+   *  address page (B/R1), via the trusted `pausedBalanceMonoscanUrl`. Omitted on
+   *  the secondary approval/unlock banners → no link there (no-mock). */
+  activeAddr0x?: string | null;
 }
 
 // Last chain-health snapshot, cached at MODULE scope so it survives a banner
@@ -436,6 +545,7 @@ export function ChainStatusBanner({
   onMenu,
   onOpenOperators,
   onHealthChange,
+  activeAddr0x,
 }: ChainStatusBannerProps) {
   const [health, setHealth] = useState<ChainHealth>(
     () => lastKnownHealth ?? { kind: "loading" },
@@ -477,6 +587,22 @@ export function ChainStatusBanner({
     // first poll of THIS mount has established a baseline — WS never INITIATES a
     // live transition from a cold/unknown state; only the gated poll does.
     let pollResolvedThisMount = false;
+    // B2: whether the first confirmed head of THIS mount has folded in the
+    // persisted advance store yet (one-shot, on the first ok poll).
+    let stallBaselineSeeded = false;
+    // Read the persisted advance store once at mount; the first ok poll awaits it
+    // (storage reads are sub-ms, so it resolves well before the first tick).
+    const storedAdvancePromise = chrome.storage.session
+      .get(BLOCK_ADVANCE_KEY)
+      .then((s) => s?.[BLOCK_ADVANCE_KEY] as unknown)
+      .catch(() => undefined);
+    // Persist {hex, advancedAtMs} — call ONLY when the hex actually changed, so
+    // the timestamp tracks genuine advancement (not every duplicate tick).
+    const persistBlockAdvance = (hex: string, advancedAtMs: number) => {
+      void chrome.storage.session
+        .set({ [BLOCK_ADVANCE_KEY]: { hex, advancedAtMs } })
+        .catch(() => {});
+    };
 
     const tick = async () => {
       if (cancelled || document.visibilityState === "hidden") return;
@@ -491,6 +617,35 @@ export function ChainStatusBanner({
         }
         pollDegraded = false;
         const now = Date.now();
+        // B2: on the FIRST confirmed head this mount, fold in the persisted
+        // advance store so an already-stalled chain verdicts STALLED immediately
+        // (the window survives mount + popup reopen). Subsequent ticks use the
+        // normal new-block / stall logic below.
+        if (!stallBaselineSeeded) {
+          stallBaselineSeeded = true;
+          const stored = await storedAdvancePromise;
+          if (cancelled) return;
+          const base = seedStallBaseline(
+            stored,
+            r.blockHex,
+            now,
+            STALL_THRESHOLD_MS,
+          );
+          lastBlockHex = base.lastBlockHex;
+          lastBlockObservedAt = base.lastBlockObservedAt;
+          // Keep both persisted keys fresh + hex-synced (advancedAt is the carried
+          // time when the head matched, else `now` for the head seen while closed).
+          void chrome.storage.session
+            .set({ [WS_BLOCK_KEY]: r.blockHex })
+            .catch(() => {});
+          persistBlockAdvance(r.blockHex, lastBlockObservedAt);
+          setHealth(
+            base.stalled
+              ? { kind: "stalled", blockHex: r.blockHex }
+              : { kind: "live", blockHex: r.blockHex },
+          );
+          return;
+        }
         if (lastBlockHex === null || r.blockHex !== lastBlockHex) {
           lastBlockHex = r.blockHex;
           lastBlockObservedAt = now;
@@ -503,7 +658,12 @@ export function ChainStatusBanner({
           void chrome.storage.session
             .set({ [WS_BLOCK_KEY]: r.blockHex })
             .catch(() => {});
-        } else if (now - lastBlockObservedAt >= STALL_THRESHOLD_MS) {
+          // B2: the head advanced → record WHEN, so a later reopen can time the
+          // stall from here (written only on this genuine hex change).
+          persistBlockAdvance(r.blockHex, now);
+        } else if (
+          chainHealthStallVerdict(now, lastBlockObservedAt, STALL_THRESHOLD_MS)
+        ) {
           setHealth({ kind: "stalled", blockHex: r.blockHex });
         }
         // else: same block but within fresh window — keep current state
@@ -623,7 +783,9 @@ export function ChainStatusBanner({
     letterSpacing: "0.14em",
     textTransform: "uppercase",
     padding: "8px 12px",
-    borderBottom: "1px solid var(--fg-700)",
+    // The bottom border lives on the OUTER wrapper now (below the inline hint
+    // row, A/R1), so the divider sits under the whole banner — not between the
+    // indicator and its explanation.
     display: "flex",
     alignItems: "center",
     gap: 8,
@@ -736,7 +898,18 @@ export function ChainStatusBanner({
       </>
     );
 
+  // A (R1): the explanation that was previously hover-only (title=) now renders
+  // as a visible muted line beneath the indicator row for every non-live state.
+  const inlineHint = chainHealthInlineHint(health.kind);
+  // B (R1): a "View on Monoscan" link on the tappable degraded states — built
+  // from the user's OWN address over the trusted wallet constant (never
+  // operator-echoed). No-mock: null when the address is absent/invalid (e.g. the
+  // secondary banners that don't thread it) or the state isn't tappable.
+  const monoscanUrl = activeAddr0x ? pausedBalanceMonoscanUrl(activeAddr0x) : null;
+  const monoscanLink = chainHealthMonoscanLink(health.kind, monoscanUrl);
+
   return (
+    <div style={{ borderBottom: "1px solid var(--fg-700)" }}>
     <div style={containerStyle}>
       <span
         style={{
@@ -794,6 +967,22 @@ export function ChainStatusBanner({
           </div>
         </>
       )}
+    </div>
+    {(inlineHint || monoscanLink) && (
+      <div className="ext-chain-health-hint">
+        {inlineHint && <span>{inlineHint}</span>}
+        {monoscanLink && (
+          <a
+            href={monoscanLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ext-chain-health-monoscan"
+          >
+            <Icon name="globe" size={12} /> View on Monoscan
+          </a>
+        )}
+      </div>
+    )}
     </div>
   );
 }
@@ -910,23 +1099,9 @@ interface TopProps {
 export function Top({ account, activeVaultLabel, onNewWalletFlow, onVaultComplete }: TopProps) {
   return (
     <div className="ext-top" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
-      <div
-        style={{
-          fontFamily: "var(--f-mono)",
-          fontSize: 9,
-          fontWeight: 600,
-          letterSpacing: "0.12em",
-          textTransform: "uppercase",
-          // Reads from the --fg-400 token directly (≈7.0:1 on the body
-          // surface). A prior `opacity: 0.75` dragged it to ~4.4:1 (sub-AA);
-          // removed so the label sits at its token tier. If a quieter step is
-          // ever wanted, drop to --fg-500 via token, not opacity.
-          color: "var(--fg-400)",
-          paddingLeft: 4,
-        }}
-      >
-        ML-DSA-65
-      </div>
+      {/* The ML-DSA-65 algo label moved INTO the picker pill (its left column)
+         so the wallet name sits up in the top row and the empty space above is
+         gone. */}
       <VaultPicker
         activeAccount={account}
         {...(activeVaultLabel ? { activeVaultLabel } : {})}
@@ -958,6 +1133,7 @@ interface AssetListProps {
 
 export function AssetList({ account, network, indexer, hideBalance }: AssetListProps) {
   const lythAmount = account.balance;
+  const [displayCurrency] = useDisplayCurrencyPref();
   const liveRows = indexer?.tokenBalances ?? [];
   return (
     <div>
@@ -1002,7 +1178,18 @@ export function AssetList({ account, network, indexer, hideBalance }: AssetListP
           <div className="amt">
             {hideBalance ? "—" : lythAmount != null ? fmt(lythAmount, 2) : "0.00"}
           </div>
-          <div className="chg">—</div>
+          {/* Fiat equivalent of the LYTH balance — sized to match the amount
+             above, neutral (not the green change colour). No oracle → the rate
+             is null → "<symbol>—" (e.g. "$—"), never a fabricated "$0". */}
+          <div className="chg" style={{ fontSize: 13, color: "var(--fg-400)" }}>
+            {hideBalance
+              ? "—"
+              : formatFiat(
+                  lythAmount ?? 0,
+                  displayCurrency,
+                  getLythFiatRate(displayCurrency),
+                )}
+          </div>
         </div>
       </div>
     </div>
@@ -1978,6 +2165,13 @@ interface HomeProps {
   account: Account;
   network: ChainEntry;
   indexer: WalletIndexerSnapshot | null;
+  /** Active delegations (totalBps) for the Home "Delegated" chip. null while
+   *  loading / on fetch failure → the chip shows "0.00" (no fabrication). */
+  delegations?: DelegationsView | null;
+  /** Cluster directory (id → name) for the Activity rows. Threaded to
+   *  ActivityList so an indexer-fed delegation row (numeric id only) resolves
+   *  the real cluster name, falling back to `Cluster #<id>` (no-mock). */
+  clusterNameById?: ReadonlyMap<number, string | null> | undefined;
   /** #42: the displayed balance is a RETAINED last-known value (the chain was
    *  unreachable/untrusted on the latest refresh). When true and a balance is
    *  present, the hero labels it as stale — it never fabricates/zeros it. */
@@ -2019,10 +2213,11 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, clusterNameById, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
+  const [displayCurrency] = useDisplayCurrencyPref();
   const isPriv = account.denom === "private";
   // C5 (R2 no-mock): pause the display when operators serve a different chain
   // (re-genesis / wrong chain) and the value is genuinely unknown — never a
@@ -2085,12 +2280,21 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
   // still used for the Hero card's account-name display.
   const liveLabel = indexer?.addressLabel;
   const latestDelegation = indexer?.delegationHistory[0] ?? null;
-  // Staked is hardcoded zero until the delegation precompile (0x100A)
-  // activates on the testnet — see ADR-0015. The Staked chip is rendered
-  // disabled-style in the meantime; the hero number falls back to
-  // "0.00" when staked is the active view, which is accurate, not a
-  // placeholder.
-  const stakedStr = "0.00";
+  // Delegated effective weight = balance × totalBps/10000 — the live,
+  // non-custodial contribution (the LYTH stays in account.balance and remains
+  // spendable; nothing is escrowed). null delegations / totalBps 0 → "0.00"; the
+  // existing degraded/paused gate still forces "—". Never a fabricated figure.
+  const delegatedBps = delegations?.totalBps ?? 0;
+  const delegatedLyth =
+    account.balance != null && delegatedBps > 0
+      ? (account.balance * delegatedBps) / 10_000
+      : 0;
+  const stakedStr =
+    hideBalanceValue || balancePaused
+      ? "—"
+      : delegatedBps > 0
+        ? fmt(delegatedLyth, 2)
+        : "0.00";
   const heroStr = activeChip === "total" ? totalStr : stakedStr;
   const [intPart, fracPart] = heroStr.split(".");
 
@@ -2124,6 +2328,29 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
                 <span className="frac">.{fracPart}</span>
               )}
               <span className="d">LYTH</span>
+            </div>
+          )}
+          {/* Fiat equivalent of the hero balance. Shows beside (under) the
+             LYTH amount whenever a real balance is displayed; hidden when the
+             value is degraded/paused (no fiat under a hidden balance). Sized to
+             match the "LYTH" unit label (.d) beside the amount. With no oracle
+             the rate is null, so this renders the selected currency's symbol +
+             em-dash (e.g. "$—") — never a fabricated "$0". */}
+          {!isPriv && !hideBalanceValue && !balancePaused && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 12,
+                color: "var(--fg-400)",
+                letterSpacing: "0.04em",
+                marginTop: 2,
+              }}
+            >
+              {formatFiat(
+                activeChip === "total" ? account.balance ?? 0 : delegatedLyth,
+                displayCurrency,
+                getLythFiatRate(displayCurrency),
+              )}
             </div>
           )}
           {balanceDegraded && (
@@ -2187,11 +2414,9 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
             <div className="chg">
               {activeChip === "total"
                 ? "—% · 24h · attested"
-                : latestDelegation
-                  ? devMode
-                    ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
-                    : `${clusterLabel(latestDelegation.cluster)} · ${formatWeightBpsPercent(latestDelegation.weightBps)}`
-                  : "delegated · 0 / 10 clusters"}
+                : devMode && latestDelegation
+                  ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
+                  : `${(delegatedBps / 100).toFixed(2)}% delegated · full balance spendable`}
             </div>
           )}
           {isPriv && (
@@ -2216,10 +2441,10 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
                 onClick={() => setActiveChip("total")}
               />
               <HeroChip
-                label="Staked"
+                label="Delegated"
                 value={stakedStr}
                 active={activeChip === "staked"}
-                disabled
+                onClick={() => setActiveChip("staked")}
               />
             </div>
           )}
@@ -2235,7 +2460,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
             </button>
             <button className="ext-act" onClick={onOpenStake ?? (() => {})}>
               <span className="ico"><Icon name="stake" size={16} /></span>
-              <span>Stake</span>
+              <span>Delegate</span>
             </button>
             <button className="ext-act" onClick={onOpenBridge ?? (() => {})}>
               <span className="ico"><Icon name="bridge" size={16} /></span>
@@ -2304,6 +2529,7 @@ export function Home({ account, network, indexer, balanceStale, balanceCause, ch
                 addr={account.addr.startsWith("0x") ? account.addr : null}
                 chainIdHex={network.chainId}
                 hideConfirmed={hideBalanceValue}
+                clusterNameById={clusterNameById}
               />
             </div>
           )}
@@ -2363,10 +2589,10 @@ export function Bridge({ onBack, indexer }: BridgeProps) {
         <button className="ext-iconbtn" onClick={onBack}>
           <Icon name="back" size={15} />
         </button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+        <div style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}>
           Cross-chain bridge
         </div>
-        <div style={{ width: 28 }} />
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         <div className="ext-card" style={{ padding: 14 }}>
@@ -3173,8 +3399,8 @@ export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCusto
     <>
       <div className="ext-top">
         <button className="ext-iconbtn" onClick={onBack}><Icon name="back" size={15} /></button>
-        <div style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "center" }}>Networks</div>
-        <div style={{ width: 28 }} />
+        <div style={{ flex: 1, fontSize: 15, fontWeight: 600, textAlign: "center" }}>Networks</div>
+        <div style={{ width: 36 }} />
       </div>
       <div className="ext-body">
         <NetworksSection
