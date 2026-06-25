@@ -11,7 +11,25 @@ export type IconName =
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
   | "mono-mark" | "github" | "grid"
-  | "language" | "coins" | "palette";
+  | "language" | "coins" | "palette" | "unstake";
+
+/** Distinct glyph per delegation action so delegate / undelegate / redelegate
+ *  read apart at a glance (they all shared `stake` before). delegate keeps the
+ *  cluster `stake` glyph; undelegate gets the `unstake` (node releasing down);
+ *  redelegate gets `swap` (move between clusters). A failed record inherits the
+ *  glyph in the error tone via NotificationRow's status ring. */
+export function iconForDelegationKind(
+  kind: "delegate" | "undelegate" | "redelegate",
+): IconName {
+  switch (kind) {
+    case "delegate":
+      return "stake";
+    case "undelegate":
+      return "unstake";
+    case "redelegate":
+      return "swap";
+  }
+}
 
 interface IconProps {
   name: IconName;
@@ -197,6 +215,16 @@ export function Icon({ name, size = 16 }: IconProps) {
           <circle cx="19" cy="7" r="2" />
           <circle cx="5" cy="17" r="2" />
           <circle cx="19" cy="17" r="2" />
+        </svg>
+      );
+    case "unstake":
+      // A staked node releasing downward — undelegate (weight returns to your
+      // liquid balance). Node up top + a down arrow; distinct from `stake`
+      // (5-circle cluster), `swap` (↔), and `receive` (plain ↓, no node).
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="5" r="3" />
+          <path d="M12 11v7M8 14l4 4 4-4" />
         </svg>
       );
     case "swap":
