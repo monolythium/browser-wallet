@@ -274,9 +274,26 @@ export function getPending(id: string): PendingApproval | null {
   return pending.get(id)?.approval ?? null;
 }
 
-export function resolve(id: string, decision: ApprovalDecision): boolean {
+export function resolve(
+  id: string,
+  decision: ApprovalDecision,
+  callerWindowId?: number,
+): boolean {
   const entry = pending.get(id);
   if (!entry) return false;
+  // P4-005 — when BOTH the approval's window and the resolving popup's window
+  // are known, the resolver must own the approval's window. Fail-open when
+  // either is absent (the async windowId-capture race, or a caller that can't
+  // report its window) so a legit resolve never breaks. Approvals are only
+  // resolved from their own dedicated `?approval=<id>` window (App.tsx mount
+  // bootstrap), so this rejects a cross-window/forged resolve with no UI impact.
+  if (
+    entry.windowId != null &&
+    callerWindowId != null &&
+    entry.windowId !== callerWindowId
+  ) {
+    return false;
+  }
   pending.delete(id);
   void persistPending();
   if (entry.windowId != null && chrome.windows?.remove) {

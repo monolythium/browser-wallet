@@ -5687,8 +5687,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "list-pending":
       return listPending();
     case "resolve": {
-      const p = message.payload as { id: string; decision: ApprovalDecision };
-      const found = resolveApproval(p.id, p.decision);
+      const p = message.payload as {
+        id: string;
+        decision: ApprovalDecision;
+        windowId?: number;
+      };
+      const found = resolveApproval(p.id, p.decision, p.windowId);
       return { found };
     }
     case "focus-approval": {

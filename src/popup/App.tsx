@@ -1139,7 +1139,16 @@ export default function App() {
 
   const finalizeApproval = async (ok: boolean) => {
     if (!activeApproval) return;
-    await bgResolveApproval(activeApproval.approval.id, { ok });
+    // P4-005 — report THIS window's id so the SW can verify the resolver owns
+    // the approval's window. Fail-open: if we can't read it, the SW falls back
+    // to the UUID-only resolve (this dedicated window is the only resolver).
+    let windowId: number | undefined;
+    try {
+      windowId = (await chrome.windows.getCurrent()).id;
+    } catch {
+      /* fail-open */
+    }
+    await bgResolveApproval(activeApproval.approval.id, { ok }, windowId);
     window.close();
   };
 

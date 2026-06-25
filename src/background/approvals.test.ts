@@ -191,3 +191,47 @@ describe("approvals — rejectAllPending + reapExpired (P4-001)", () => {
     await pFresh;
   });
 });
+
+describe("approvals — resolve window-binding (P4-005)", () => {
+  it("rejects a resolve from a window that does not own the approval", async () => {
+    const a = await import("./approvals.js");
+    void a.enqueue(sendTx("https://a.example", "0x1", "0x1"));
+    await tick(); // openApprovalWindow sets entry.windowId = 1
+    const id = a.listPending()[0]!.id;
+    expect(a.resolve(id, { ok: true }, 999)).toBe(false); // wrong window
+    expect(a.listPending().some((p) => p.id === id)).toBe(true); // still pending
+    a.resolve(id, { ok: false }, 1); // settle the dangling promise
+  });
+
+  it("resolves from the owning window", async () => {
+    const a = await import("./approvals.js");
+    void a.enqueue(sendTx("https://b.example", "0x2", "0x2"));
+    await tick();
+    const id = a.listPending()[0]!.id;
+    expect(a.resolve(id, { ok: true }, 1)).toBe(true); // entry.windowId === 1
+    expect(a.listPending().some((p) => p.id === id)).toBe(false); // removed
+  });
+
+  it("fail-open: a resolve with no caller windowId still resolves", async () => {
+    const a = await import("./approvals.js");
+    void a.enqueue(sendTx("https://c.example", "0x3", "0x3"));
+    await tick();
+    const id = a.listPending()[0]!.id;
+    expect(a.resolve(id, { ok: false })).toBe(true); // no callerWindowId
+    expect(a.listPending().some((p) => p.id === id)).toBe(false);
+  });
+
+  it("fail-open: a resolve when entry.windowId was never captured still resolves", async () => {
+    const chromeStub = (globalThis as unknown as {
+      chrome: { windows: { create: (...a: unknown[]) => Promise<{ id?: number }> } };
+    }).chrome;
+    chromeStub.windows.create = vi.fn(async () => ({})); // no id captured
+    const a = await import("./approvals.js");
+    void a.enqueue(sendTx("https://d.example", "0x4", "0x4"));
+    await tick();
+    const id = a.listPending()[0]!.id;
+    // entry.windowId is undefined → cross-check skipped even with a caller id.
+    expect(a.resolve(id, { ok: true }, 42)).toBe(true);
+    expect(a.listPending().some((p) => p.id === id)).toBe(false);
+  });
+});

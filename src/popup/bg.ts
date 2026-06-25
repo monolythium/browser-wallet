@@ -1340,8 +1340,9 @@ export async function bgListPending(): Promise<PendingApproval[]> {
 export async function bgResolveApproval(
   id: string,
   decision: { ok: boolean; reason?: string },
+  windowId?: number,
 ): Promise<{ found: boolean }> {
-  return send<{ found: boolean }>("resolve", { id, decision });
+  return send<{ found: boolean }>("resolve", { id, decision, windowId });
 }
 
 export async function bgFocusApproval(id: string): Promise<{ focused: boolean }> {
