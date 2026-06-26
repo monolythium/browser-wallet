@@ -1588,6 +1588,78 @@ describe("wallet-indexer-snapshot", () => {
       params: [],
     });
   });
+
+  it("caps operator-returned activity + delegation arrays at the requested limit (P5-005)", async () => {
+    // A rogue/buggy operator echoes far more rows than the wallet asked for.
+    const overActivity = Array.from({ length: 45 }, (_, i) => ({
+      blockHeight: 1000 + i,
+      txIndex: 0,
+      logIndex: 0,
+      kind: "transfer",
+      direction: "out",
+      counterparty: "0xdead",
+      tokenId: null,
+      amount: "1.0",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    }));
+    const overDelegation = Array.from({ length: 35 }, (_, i) => ({
+      blockHeight: 2000 + i,
+      kind: "delegate",
+    }));
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = overDelegation;
+    rpcResponses["lyth_getAddressActivity"] = overActivity;
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: { addressActivity: unknown[]; delegationHistory: unknown[] };
+    };
+
+    expect(r.ok).toBe(true);
+    // Re-sliced wallet-side to the limit the wallet requested, regardless of
+    // how many the operator echoed (30 for activity, 20 for delegation).
+    expect(r.snapshot.addressActivity).toHaveLength(30);
+    expect(r.snapshot.delegationHistory).toHaveLength(20);
+    // The first-N rows are kept, in operator order (no fabrication, no reorder).
+    expect((r.snapshot.addressActivity[0] as { blockHeight: number }).blockHeight).toBe(1000);
+    expect((r.snapshot.addressActivity[29] as { blockHeight: number }).blockHeight).toBe(1029);
+  });
+
+  it("leaves an at/under-limit activity array unchanged (P5-005)", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      blockHeight: 1000 + i,
+      txIndex: 0,
+      logIndex: 0,
+      kind: "transfer",
+      direction: "out",
+      counterparty: "0xdead",
+      tokenId: null,
+      amount: "1.0",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    }));
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = rows;
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; snapshot: { addressActivity: unknown[] } };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.addressActivity).toHaveLength(5);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

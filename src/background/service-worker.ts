@@ -4577,6 +4577,14 @@ async function readNativeAgentStateLookup(
   };
 }
 
+/** Row caps the wallet ASKS each activity stream for. The SAME constant bounds
+ *  both the RPC `limit` request param AND the wallet-side defensive slice in
+ *  `extractAddressActivity`, so a rogue/buggy operator that echoes more rows
+ *  than requested can't drive a render/processing DoS — the wallet processes at
+ *  most what it asked for (P5-005). */
+const ADDRESS_ACTIVITY_RPC_LIMIT = 30;
+const DELEGATION_HISTORY_RPC_LIMIT = 20;
+
 /** Extract the row array from a `lyth_getAddressActivity` response, tolerating
  *  BOTH shapes during the v2 fleet migration: a legacy operator returns a bare
  *  array; a v2 operator wraps it in an envelope `{schemaVersion, …, nextCursor,
@@ -4591,17 +4599,26 @@ async function readNativeAgentStateLookup(
  *  Also applied to `lyth_getDelegationHistory`, which is still a bare array
  *  today (only `getAddressActivity` was enveloped). On a bare array the helper
  *  is a pure no-op, so it harmlessly future-proofs that stream against a later
- *  envelope migration that follows the same `.activity` shape. */
-function extractAddressActivity(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (
+ *  envelope migration that follows the same `.activity` shape.
+ *
+ *  P5-005: the resolved rows are re-sliced to `limit` — the same value sent as
+ *  the RPC `limit` param — so an operator echoing MORE rows than requested
+ *  (semi-trusted input) can't drive a render/processing DoS. The wallet renders
+ *  at most the window it asked for, regardless of what the operator returns. */
+function extractAddressActivity(value: unknown, limit: number): unknown[] {
+  let rows: unknown[];
+  if (Array.isArray(value)) {
+    rows = value;
+  } else if (
     value !== null &&
     typeof value === "object" &&
     Array.isArray((value as { activity?: unknown }).activity)
   ) {
-    return (value as { activity: unknown[] }).activity;
+    rows = (value as { activity: unknown[] }).activity;
+  } else {
+    return [];
   }
-  return [];
+  return rows.length > limit ? rows.slice(0, limit) : rows;
 }
 
 /** Parallel-fetch the indexer streams used by popup-facing
@@ -4639,8 +4656,14 @@ async function fetchIndexerSnapshot(
         }),
     readNativeAgentStateLookup(address),
     settleTestnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
-    settleTestnetRpc<unknown>("lyth_getDelegationHistory", [addressForChain, 20]),
-    settleTestnetRpc<unknown>("lyth_getAddressActivity", [addressForChain, 30]),
+    settleTestnetRpc<unknown>("lyth_getDelegationHistory", [
+      addressForChain,
+      DELEGATION_HISTORY_RPC_LIMIT,
+    ]),
+    settleTestnetRpc<unknown>("lyth_getAddressActivity", [
+      addressForChain,
+      ADDRESS_ACTIVITY_RPC_LIMIT,
+    ]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
@@ -4667,8 +4690,14 @@ async function fetchIndexerSnapshot(
     mrcAccount: mrcAccount.value,
     nativeAgentState: nativeAgentState.value,
     addressLabel: addressLabel.value ?? null,
-    delegationHistory: extractAddressActivity(delegationHistory.value),
-    addressActivity: extractAddressActivity(addressActivity.value),
+    delegationHistory: extractAddressActivity(
+      delegationHistory.value,
+      DELEGATION_HISTORY_RPC_LIMIT,
+    ),
+    addressActivity: extractAddressActivity(
+      addressActivity.value,
+      ADDRESS_ACTIVITY_RPC_LIMIT,
+    ),
     errors,
   };
 }
