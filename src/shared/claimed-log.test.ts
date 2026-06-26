@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { decodeClaimedAmountLythoshi, CLAIMED_EVENT_TOPIC0 } from "./claimed-log.js";
+import {
+  decodeClaimedAmountLythoshi,
+  CLAIMED_EVENT_TOPIC0,
+  MAX_PLAUSIBLE_CLAIM_LYTHOSHI,
+} from "./claimed-log.js";
+import { LYTHOSHI_PER_LYTH } from "@monolythium/core-sdk";
 
 const PRECOMPILE = "0x000000000000000000000000000000000000100a";
 const WALLET_TOPIC =
@@ -86,5 +91,28 @@ describe("decodeClaimedAmountLythoshi", () => {
     const noise = { address: "0x" + "1".repeat(40), topics: ["0x" + "2".repeat(64)], data: [] };
     const amount = 42n;
     expect(decodeClaimedAmountLythoshi([noise, claimedLogBytes(amount)])).toBe("42");
+  });
+
+  describe("MAX_PLAUSIBLE_CLAIM_LYTHOSHI bound (P5-004)", () => {
+    it("pins the cap at 200M LYTH (2x genesis supply)", () => {
+      expect(MAX_PLAUSIBLE_CLAIM_LYTHOSHI).toBe(200_000_000n * LYTHOSHI_PER_LYTH);
+    });
+
+    it("decodes an at-the-cap amount normally", () => {
+      const atCap = MAX_PLAUSIBLE_CLAIM_LYTHOSHI;
+      expect(decodeClaimedAmountLythoshi([claimedLogBytes(atCap)])).toBe(
+        atCap.toString(10),
+      );
+    });
+
+    it("returns null (undecodable → bare render) for an over-bound amount, never a huge number", () => {
+      const overBound = MAX_PLAUSIBLE_CLAIM_LYTHOSHI + 1n;
+      expect(decodeClaimedAmountLythoshi([claimedLogBytes(overBound)])).toBeNull();
+    });
+
+    it("rejects an absurd near-uint256-max echo as undecodable", () => {
+      const absurd = (1n << 255n); // ~5.8e76 lythoshi
+      expect(decodeClaimedAmountLythoshi([claimedLogBytes(absurd)])).toBeNull();
+    });
   });
 });
