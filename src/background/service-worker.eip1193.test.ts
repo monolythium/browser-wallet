@@ -437,6 +437,43 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     }
   });
 
+  describe("P3-002 — from is bound to the active address", () => {
+    async function connectedNativeOrigin(origin: string): Promise<void> {
+      await connectOrigin(origin);
+      await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }], origin);
+    }
+
+    it("with NO from → proceeds to the approval (nonce read for the active address)", async () => {
+      const origin = "https://p3002-no-from.example";
+      await connectedNativeOrigin(origin);
+      approvalDecision = { ok: false, reason: "rejected" }; // stop at the approval, don't sign
+      const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
+      expect(r.error?.code).toBe(4001); // reached the approval
+      expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
+    });
+
+    it("with from == the active address → proceeds to the approval", async () => {
+      const origin = "https://p3002-from-match.example";
+      await connectedNativeOrigin(origin);
+      approvalDecision = { ok: false, reason: "rejected" };
+      const r = await dispatch("eth_sendTransaction", [{ from: DETERMINISTIC_ADDRESS, to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
+      expect(r.error?.code).toBe(4001);
+      expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
+    });
+
+    it("with from != the active address → rejected (4100), no approval, nonce never read for the foreign address", async () => {
+      const origin = "https://p3002-from-mismatch.example";
+      await connectedNativeOrigin(origin);
+      const r = await dispatch("eth_sendTransaction", [{ from: "0x00000000000000000000000000000000000000ff", to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
+      expect(r.result).toBeUndefined();
+      expect(r.error?.code).toBe(4100);
+      expect(r.error?.message).toMatch(/from does not match/i);
+      // Rejected BEFORE buildSendTxView → no approval, and no nonce RPC at all.
+      expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
+      expect(rpcCalls.map((c) => c.method)).not.toContain("lyth_getTransactionCount");
+    });
+  });
+
   // ---- 6. personal_sign ----
   it("personal_sign returns 0x-prefixed hex signature after approval", async () => {
     const origin = "https://sign-test.example";

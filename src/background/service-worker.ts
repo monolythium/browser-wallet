@@ -1793,12 +1793,24 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, MULTISIG_SEND_REFUSAL);
       }
 
+      // P3-002 — the wallet signs only with the active vault's key (one account
+      // per connection), so a dApp-supplied `from` naming a different address can
+      // never be honored: reject it (and never let it poison the nonce read).
+      const activeFrom = getUnlockedAddressV4();
+      if (
+        typeof txReq.from === "string" &&
+        activeFrom != null &&
+        txReq.from.toLowerCase() !== activeFrom.toLowerCase()
+      ) {
+        return err(ERR_UNAUTHORIZED, "from does not match the connected account");
+      }
+
       // NN-01: snapshot the active vault id at view-build time (synchronously,
       // before any await / the separate-window approval) so a vault-select
       // landing DURING the approval await is caught at sign time. The popup
-      // displays `txReq.from ?? getUnlockedAddressV4()` off the same global, so
-      // this binds the signer to the displayed vault. Coalesced post-unlock
-      // below for the locked-at-view-build case (no false abort).
+      // shows the ACTIVE vault address as the signer, so this binds the signer
+      // to the displayed (active) vault. Coalesced post-unlock below for the
+      // locked-at-view-build case (no false abort).
       const boundVaultIdAtView = getActiveVaultIdV4();
       // Build the approval view BEFORE opening the popup so the user sees
       // real numbers (execution-unit estimate, simulation outcome, nonce)
@@ -2355,14 +2367,13 @@ async function buildSendTxView(
   if (!net) return view;
 
   const client = rpcClientFor(chainId);
-  // SEPARATE FINDING (NOT NN-01; tracked for its own triage): the approval view
-  // displays `txReq.from ?? getUnlockedAddressV4()`, but the wallet always SIGNS
-  // with the active vault's backend. A dApp-supplied `from` that differs from
-  // the active vault is a pre-existing display-vs-sign WYSIWYS gap, independent
-  // of the NN-01 active-vault TOCTOU (which binds the signer to the active vault
-  // via boundVaultId). Do not conflate the two.
+  // P3-002 — the approval UI always shows the ACTIVE vault address as the signer
+  // (never `txReq.from`); a dApp `from` that differs is rejected at the
+  // eth_sendTransaction entry, and the nonce below is read for the active
+  // address. So there is no display-vs-sign gap here. NN-01 separately binds the
+  // signer to the active vault via boundVaultId; do not conflate the two.
   const fromAddr =
-    txReq.from ?? getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
+    getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
 
   const [pricePerExecutionUnitLythoshiHex, nonce] = await Promise.all([
     view.pricePerExecutionUnitLythoshiHex != null
