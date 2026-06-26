@@ -111,6 +111,7 @@ let activeVaultMultisig = false;
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => vaultExists),
   hasContainerV4: vi.fn(async () => vaultExists),
+  storedContainerNeedsRestoreV4: vi.fn(async () => false),
   unlockContainerV4: vi.fn(async () => ({
     address: DETERMINISTIC_ADDRESS,
     vaultId: "v1",

@@ -79,6 +79,7 @@ import {
   getUnlockedPublicKeyV4,
   // Multi-vault surface.
   hasContainerV4,
+  storedContainerNeedsRestoreV4,
   unlockContainerV4,
   selectActiveVaultV4,
   listVaultsV4,
@@ -5763,6 +5764,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // racing SW boot doesn't report a false "locked" the popup can't
       // recover from. See ensureUnlockRestored.
       await ensureUnlockRestored();
+      // P1-003: a stored pre-V5 (no-AAD) container is surfaced as "present but
+      // needs restore" — hasVault:true so the popup routes to the locked screen,
+      // which shows the restore-from-phrase message (legacyRestoreRequired).
+      // Read-only detection; never decrypts.
+      if (await storedContainerNeedsRestoreV4()) {
+        return {
+          hasVault: true,
+          legacyVault: false,
+          unlocked: false,
+          address: null,
+          custody: "sw" as const,
+          algo: "mldsa" as const,
+          legacyRestoreRequired: true as const,
+        };
+      }
       // v4 (ML-DSA-65) is the only vault format. A populated multi-vault
       // container (mono.vaults.v4) means "wallet present"; its absence means
       // "no wallet" → the popup routes to Welcome. The v2/v1 "vault format
@@ -6199,6 +6215,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
+      // P1-003: a stored pre-V5 (no-AAD) container can't be opened by the V5
+      // AAD-bound seal. Detect it (read-only — never decrypts) and tell the
+      // user to restore from their recovery phrase, instead of a misleading
+      // wrong-password from the AEAD failure.
+      if (await storedContainerNeedsRestoreV4()) {
+        return { ok: false, reason: "legacy_restore_required" };
+      }
       // v4 multi-vault container unlock. Rate limiting counts every
       // wrong-password attempt against the shared SESSION_KEY_UNLOCK_FAIL_COUNT.
       if (await hasContainerV4()) {

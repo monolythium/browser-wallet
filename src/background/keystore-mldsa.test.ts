@@ -91,10 +91,10 @@ describe("keystore-mldsa v4-multi", () => {
       const vek = generateVekV4();
       expect(vek.length).toBe(32);
 
-      const wrapped = wrapVekV4(mek, vek);
+      const wrapped = wrapVekV4(mek, vek, "v-rt");
       expect(wrapped.aead).toBe("xchacha20-poly1305");
 
-      const unwrapped = unwrapVekV4(mek, wrapped);
+      const unwrapped = unwrapVekV4(mek, wrapped, "v-rt");
       expect(unwrapped.length).toBe(32);
       expect(Array.from(unwrapped)).toEqual(Array.from(vek));
     },
@@ -106,7 +106,7 @@ describe("keystore-mldsa v4-multi", () => {
     const { isVaultsContainerV4, generateMasterKdfParamsV4 } = ks.__internalV4Multi;
     const baseKdf = generateMasterKdfParamsV4(); // valid create-default (64 MiB/t3/p1)
     const container = (kdf: Record<string, unknown>) => ({
-      version: 4,
+      version: 5,
       algo: "ml-dsa-65",
       kdf: "argon2id",
       aead: "xchacha20-poly1305",
@@ -143,9 +143,9 @@ describe("keystore-mldsa v4-multi", () => {
       const goodMek = await deriveMekV4("right-password", params);
       const badMek = await deriveMekV4("wrong-password", params);
       const vek = generateVekV4();
-      const wrapped = wrapVekV4(goodMek, vek);
+      const wrapped = wrapVekV4(goodMek, vek, "v-wm");
 
-      expect(() => unwrapVekV4(badMek, wrapped)).toThrow();
+      expect(() => unwrapVekV4(badMek, wrapped, "v-wm")).toThrow();
     },
     30_000,
   );
@@ -163,13 +163,13 @@ describe("keystore-mldsa v4-multi", () => {
       const mnemonic =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
-      const env = sealVaultEnvelopeV4(vek, seed, mnemonic);
+      const env = sealVaultEnvelopeV4(vek, seed, mnemonic, "v-env");
       expect(typeof env.seedNonce).toBe("string");
       expect(typeof env.seedCiphertext).toBe("string");
       expect(typeof env.mnemonicNonce).toBe("string");
       expect(typeof env.mnemonicCiphertext).toBe("string");
 
-      const opened = openVaultEnvelopeV4(vek, env);
+      const opened = openVaultEnvelopeV4(vek, env, "v-env");
       expect(opened.seed.length).toBe(32);
       expect(Array.from(opened.seed)).toEqual(Array.from(seed));
       expect(opened.mnemonic).toBe(mnemonic);
@@ -203,8 +203,12 @@ describe("keystore-mldsa v4-multi", () => {
 
       // Re-derive MEK, unwrap VEK, open envelope → mnemonic matches.
       const mek = await deriveMekV4(password, c.masterKdf);
-      const vek = unwrapVekV4(mek, c.vaults[0]!.wrappedKey);
-      const opened = openVaultEnvelopeV4(vek, c.vaults[0]!.envelope);
+      const vek = unwrapVekV4(mek, c.vaults[0]!.wrappedKey, c.vaults[0]!.id);
+      const opened = openVaultEnvelopeV4(
+        vek,
+        c.vaults[0]!.envelope,
+        c.vaults[0]!.id,
+      );
       expect(opened.mnemonic).toBe(mnemonic);
       expect(opened.seed.length).toBe(32);
     },
@@ -258,24 +262,26 @@ describe("keystore-mldsa v4-multi", () => {
       const mnemonicA = "vault a " + "abandon ".repeat(22).trim();
       const mnemonicB = "vault b " + "abandon ".repeat(22).trim();
 
+      const idA = crypto.randomUUID();
+      const idB = crypto.randomUUID();
       const recordA = {
-        id: crypto.randomUUID(),
+        id: idA,
         label: "Vault A",
         createdAt: Date.now(),
-        wrappedKey: wrapVekV4(mek, vekA),
-        envelope: sealVaultEnvelopeV4(vekA, seedA, mnemonicA),
+        wrappedKey: wrapVekV4(mek, vekA, idA),
+        envelope: sealVaultEnvelopeV4(vekA, seedA, mnemonicA, idA),
         addr: "0x" + "a".repeat(40),
       };
       const recordB = {
-        id: crypto.randomUUID(),
+        id: idB,
         label: "Vault B",
         createdAt: Date.now() + 1,
-        wrappedKey: wrapVekV4(mek, vekB),
-        envelope: sealVaultEnvelopeV4(vekB, seedB, mnemonicB),
+        wrappedKey: wrapVekV4(mek, vekB, idB),
+        envelope: sealVaultEnvelopeV4(vekB, seedB, mnemonicB, idB),
         addr: "0x" + "b".repeat(40),
       };
       const container = {
-        version: 4 as const,
+        version: 5 as const,
         algo: "ml-dsa-65" as const,
         kdf: "argon2id" as const,
         aead: "xchacha20-poly1305" as const,
@@ -289,18 +295,28 @@ describe("keystore-mldsa v4-multi", () => {
       const reloaded = await loadVaultsContainerV4();
       expect(reloaded).not.toBeNull();
       const mek2 = await deriveMekV4(password, reloaded!.masterKdf);
-      const unwrappedA = unwrapVekV4(mek2, reloaded!.vaults[0]!.wrappedKey);
-      const unwrappedB = unwrapVekV4(mek2, reloaded!.vaults[1]!.wrappedKey);
+      const unwrappedA = unwrapVekV4(
+        mek2,
+        reloaded!.vaults[0]!.wrappedKey,
+        reloaded!.vaults[0]!.id,
+      );
+      const unwrappedB = unwrapVekV4(
+        mek2,
+        reloaded!.vaults[1]!.wrappedKey,
+        reloaded!.vaults[1]!.id,
+      );
       expect(Array.from(unwrappedA)).toEqual(Array.from(vekA));
       expect(Array.from(unwrappedB)).toEqual(Array.from(vekB));
 
       const openedA = openVaultEnvelopeV4(
         unwrappedA,
         reloaded!.vaults[0]!.envelope,
+        reloaded!.vaults[0]!.id,
       );
       const openedB = openVaultEnvelopeV4(
         unwrappedB,
         reloaded!.vaults[1]!.envelope,
+        reloaded!.vaults[1]!.id,
       );
       expect(openedA.mnemonic).toBe(mnemonicA);
       expect(openedB.mnemonic).toBe(mnemonicB);
@@ -321,6 +337,81 @@ describe("keystore-mldsa v4-multi", () => {
     },
     10_000,
   );
+
+  // ── P1-003: canonical vaultId AAD binding (V5 always-AAD) ──────────────────
+
+  it("buildVaultAadV4 is byte-deterministic and changes with the vaultId", async () => {
+    const ks = await import("./keystore-mldsa.js");
+    const { buildVaultAadV4 } = ks.__internalV4Multi;
+    const a1 = buildVaultAadV4("vault-A");
+    const a2 = buildVaultAadV4("vault-A");
+    const b = buildVaultAadV4("vault-B");
+    // same vaultId → identical bytes (seal + open build the same AAD)
+    expect(Array.from(a1)).toEqual(Array.from(a2));
+    // different vaultId → different bytes (the binding term)
+    expect(Array.from(a1)).not.toEqual(Array.from(b));
+    // carries the format tag + the version byte (V5)
+    const tag = "mono.vault.aad.v1";
+    expect(new TextDecoder().decode(a1.slice(0, tag.length))).toBe(tag);
+    expect(a1[tag.length]).toBe(5);
+  });
+
+  it(
+    "a cross-vault ciphertext move FAILS the AAD check (wrap + envelope)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const {
+        generateMasterKdfParamsV4,
+        deriveMekV4,
+        generateVekV4,
+        wrapVekV4,
+        unwrapVekV4,
+        sealVaultEnvelopeV4,
+        openVaultEnvelopeV4,
+      } = ks.__internalV4Multi;
+
+      const mek = await deriveMekV4("pw", generateMasterKdfParamsV4());
+      const vek = generateVekV4();
+      const seed = new Uint8Array(32).fill(7);
+      const mnemonic = "alpha " + "abandon ".repeat(23).trim();
+
+      // Sealed under vault A's id.
+      const wrapped = wrapVekV4(mek, vek, "vault-A");
+      const env = sealVaultEnvelopeV4(vek, seed, mnemonic, "vault-A");
+
+      // Same id → opens fine.
+      expect(() => unwrapVekV4(mek, wrapped, "vault-A")).not.toThrow();
+      expect(openVaultEnvelopeV4(vek, env, "vault-A").mnemonic).toBe(mnemonic);
+
+      // Lifted into vault B's record → the AEAD tag check rejects both layers.
+      expect(() => unwrapVekV4(mek, wrapped, "vault-B")).toThrow();
+      expect(() => openVaultEnvelopeV4(vek, env, "vault-B")).toThrow();
+    },
+    30_000,
+  );
+
+  it("a stored V4 container is DETECTED (restore-from-phrase) without decrypting", async () => {
+    const ks = await import("./keystore-mldsa.js");
+    const { loadVaultsContainerV4 } = ks.__internalV4Multi;
+    // A legacy V4 (no-AAD) container on disk — minimal shape, real ciphertext
+    // fields are irrelevant because nothing decrypts it.
+    storage["mono.vaults.v4"] = {
+      version: 4,
+      algo: "ml-dsa-65",
+      kdf: "argon2id",
+      aead: "xchacha20-poly1305",
+      masterKdf: { kdf: "argon2id", m: 65536, t: 3, p: 1, salt: "AAAA" },
+      vaults: [{ id: "v1", wrappedKey: {}, envelope: {} }],
+      activeVaultId: "v1",
+    };
+    // Detected as needs-restore (read-only version check)…
+    expect(await ks.storedContainerNeedsRestoreV4()).toBe(true);
+    // …and the load path returns null (graceful — never decrypts the V4 blob).
+    expect(await loadVaultsContainerV4()).toBeNull();
+    // No stored container → not a restore case.
+    delete storage["mono.vaults.v4"];
+    expect(await ks.storedContainerNeedsRestoreV4()).toBe(false);
+  });
 });
 
 describe("keystore-mldsa v4-multi state machine", () => {
@@ -1899,7 +1990,9 @@ describe("sealVaultEnvelopeV4 mnPlain zeroization (P2-005)", () => {
     const vek = generateVekV4();
     const seed = new Uint8Array(32).fill(9);
 
-    expect(() => sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie")).toThrow();
+    expect(() =>
+      sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie", "v-zero"),
+    ).toThrow();
     expect(cap.mnPlain).not.toBeNull();
     expect(Array.from(cap.mnPlain!)).toEqual(
       new Array(cap.mnPlain!.length).fill(0),
@@ -1913,7 +2006,7 @@ describe("sealVaultEnvelopeV4 mnPlain zeroization (P2-005)", () => {
     const vek = generateVekV4();
     const seed = new Uint8Array(32).fill(9);
 
-    const env = sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie");
+    const env = sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie", "v-zero");
     expect(typeof env.mnemonicCiphertext).toBe("string");
     expect(cap.mnPlain).not.toBeNull();
     expect(Array.from(cap.mnPlain!)).toEqual(

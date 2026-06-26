@@ -65,6 +65,10 @@ export interface KeystoreStatus {
    * was retired in favour of ML-DSA-65 — kept in the union so the
    * Settings panel's pre-PQ fallback render path still typechecks. */
   algo: SignAlgo;
+  /** P1-003: set when a stored container predates the V5 always-AAD seal and
+   *  cannot be opened — the locked screen shows "restore from your recovery
+   *  phrase" instead of a password prompt. Absent/false in the normal case. */
+  legacyRestoreRequired?: boolean;
 }
 
 export interface SendTxView {

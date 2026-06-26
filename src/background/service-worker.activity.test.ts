@@ -405,6 +405,7 @@ vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
   clearSlhDsaBackupV4: mockClearSlhDsaBackupV4,
   hasContainerV4: vi.fn(async () => true),
+  storedContainerNeedsRestoreV4: vi.fn(async () => false),
   unlockContainerV4: vi.fn(async () => ({
     address: DETERMINISTIC_ADDRESS,
     vaultId: "v1",
