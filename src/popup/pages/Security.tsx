@@ -416,7 +416,6 @@ export function Security({
         {/* SLH-DSA emergency backup card */}
         <SlhDsaBackupCard
           vaultId={vaultId}
-          vaultAddressLabel={vaultAddress}
           chainIdHex={chainIdHex}
         />
       </div>

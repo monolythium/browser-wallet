@@ -64,9 +64,6 @@ export interface SlhDsaBackupRevealModalProps {
   mode: RevealMode;
   /** Active vault id — the IPC takes vaultId as its only payload. */
   vaultId: string;
-  /** Short-form address (e.g. `mono1abc…xyz` or `0x12…34`) to
-   *  include in the downloaded text file's header. */
-  vaultAddressLabel: string;
   /** Dismiss without persisting any state change. The SW-side
    *  `chainRegistrationStatus` + `coldStorageConfirmed` flags are
    *  untouched until the user explicitly attests + closes. */
@@ -88,7 +85,6 @@ export function SlhDsaBackupRevealModal({
   open,
   mode,
   vaultId,
-  vaultAddressLabel,
   onClose,
   onConfirmed,
 }: SlhDsaBackupRevealModalProps) {
@@ -188,22 +184,6 @@ export function SlhDsaBackupRevealModal({
     const ok = await clearClipboardNow();
     setClearState(ok ? "cleared" : "failed");
     if (ok) setCopied(false);
-  };
-
-  const handleDownload = () => {
-    if (screen.kind !== "reveal" || !screen.held) return;
-    const shortLabel = vaultAddressLabel.replace(/[^a-z0-9]/gi, "");
-    const filename = `monolythium-emergency-backup-${shortLabel.slice(0, 12)}.txt`;
-    const body = buildDownloadText(screen.mnemonic, vaultAddressLabel);
-    const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   const handleConfirm = async () => {
@@ -334,9 +314,6 @@ export function SlhDsaBackupRevealModal({
                 <button onClick={() => void handleCopy()} style={btnGhost}>
                   <Icon name="eye" size={11} />{" "}
                   {copied ? "Copied — auto-clears in ~30 s" : "Copy"}
-                </button>
-                <button onClick={handleDownload} style={btnGhost}>
-                  Download .txt
                 </button>
                 <button onClick={() => void handleClear()} style={btnGhost}>
                   <Icon
@@ -514,35 +491,6 @@ function ExplainerScreen({
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers + styles
 // ────────────────────────────────────────────────────────────────────────────
-
-/** Build the downloaded .txt body. Plaintext with a security
- *  warning header so the file is obviously sensitive at a glance. */
-export function buildDownloadText(
-  mnemonic: string,
-  vaultAddressLabel: string,
-): string {
-  const created = new Date().toISOString();
-  return [
-    "# Monolythium Wallet — Emergency Recovery Backup",
-    "",
-    "DO NOT share this file with anyone.",
-    "DO NOT upload it to cloud storage, email, or chat.",
-    "Anyone with this 24-word phrase can rotate to your emergency",
-    "key and take over your account during a cryptographic emergency.",
-    "",
-    `Vault address: ${vaultAddressLabel}`,
-    `Created at:    ${created}`,
-    "Algorithm:     SLH-DSA-SHA2-128s (NIST FIPS 205)",
-    "",
-    "----- BEGIN BIP-39 (24 words) -----",
-    mnemonic,
-    "----- END BIP-39 -----",
-    "",
-    "Store this on paper in a fire-safe / safe-deposit box.",
-    "Verify a copy before destroying the original.",
-    "",
-  ].join("\n");
-}
 
 const errBox: CSSProperties = {
   fontSize: 11.5,

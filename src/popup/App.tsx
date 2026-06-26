@@ -1635,7 +1635,6 @@ export default function App() {
         <EmergencyRecovery
           onBack={navigateBack}
           vaultId={activeVaultSummary.id}
-          vaultAddress={activeVaultSummary.addr}
           chainIdHex={activeChain.chainId}
         />
       )}

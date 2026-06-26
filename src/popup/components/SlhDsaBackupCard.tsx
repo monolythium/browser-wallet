@@ -44,8 +44,6 @@ const RECEIPT_POLL_MAX_MS = 5 * 60_000; // 5 minutes
 
 export interface SlhDsaBackupCardProps {
   vaultId: string;
-  /** Address label for the reveal modal's downloaded text header. */
-  vaultAddressLabel: string;
   /** Active chain id (hex). Required for the registration tx
    *  submit path. */
   chainIdHex: string;
@@ -55,7 +53,6 @@ type ConfirmingClear = "idle" | "asking" | "clearing";
 
 export function SlhDsaBackupCard({
   vaultId,
-  vaultAddressLabel,
   chainIdHex,
 }: SlhDsaBackupCardProps) {
   const [backup, setBackup] = useState<SlhDsaBackup | null>(null);
@@ -447,7 +444,6 @@ export function SlhDsaBackupCard({
           open={revealOpen !== null}
           mode={revealOpen}
           vaultId={vaultId}
-          vaultAddressLabel={vaultAddressLabel}
           onClose={() => setRevealOpen(null)}
           onConfirmed={() => {
             setRevealOpen(null);
