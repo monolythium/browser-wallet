@@ -64,6 +64,8 @@ export function SlhDsaBackupCard({
   >(null);
   const [confirmingClear, setConfirmingClear] =
     useState<ConfirmingClear>("idle");
+  const [clearPassword, setClearPassword] = useState("");
+  const [clearError, setClearError] = useState<string | null>(null);
   const pollStartRef = useRef<number | null>(null);
 
   const refresh = async () => {
@@ -154,9 +156,38 @@ export function SlhDsaBackupCard({
     await refresh();
   };
 
+  const resetClearFlow = () => {
+    setConfirmingClear("idle");
+    setClearPassword("");
+    setClearError(null);
+  };
+
   const handleClearConfirmed = async () => {
+    if (clearPassword.length === 0) {
+      setClearError("Enter your password to confirm.");
+      return;
+    }
     setConfirmingClear("clearing");
-    await bgSlhDsaBackupClear(vaultId);
+    setClearError(null);
+    const r = await bgSlhDsaBackupClear(vaultId, clearPassword);
+    if (!r.ok) {
+      // Stay on the confirm step so the user can retry; surface the reason.
+      setConfirmingClear("asking");
+      const secs = r.secondsRemaining ?? 0;
+      setClearError(
+        r.reason === "wrong_password"
+          ? secs > 0
+            ? `Incorrect password. Try again in ${secs}s.`
+            : "Incorrect password."
+          : r.reason === "locked_out"
+            ? `Too many attempts. Try again in ${secs}s.`
+            : r.reason === "missing password"
+              ? "Enter your password to confirm."
+              : r.reason,
+      );
+      return;
+    }
+    setClearPassword("");
     setConfirmingClear("idle");
     await refresh();
   };
@@ -403,16 +434,28 @@ export function SlhDsaBackupCard({
                       new backup leaves the prior registration permanently in
                       place. Continue only if you've lost the cold-storage copy.
                     </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button
-                        onClick={() => setConfirmingClear("idle")}
-                        style={btnGhostFlex}
-                      >
+                    <input
+                      type="password"
+                      value={clearPassword}
+                      onChange={(e) => setClearPassword(e.target.value)}
+                      placeholder="Enter your password to confirm"
+                      autoComplete="current-password"
+                      style={clearPasswordInput}
+                    />
+                    {clearError && (
+                      <div style={{ ...errBox, marginTop: 8 }}>{clearError}</div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button onClick={resetClearFlow} style={btnGhostFlex}>
                         Cancel
                       </button>
                       <button
                         onClick={() => void handleClearConfirmed()}
-                        style={btnDangerFlex}
+                        disabled={clearPassword.length === 0}
+                        style={{
+                          ...btnDangerFlex,
+                          opacity: clearPassword.length === 0 ? 0.5 : 1,
+                        }}
                       >
                         Clear local backup
                       </button>
@@ -526,6 +569,18 @@ const errBox: CSSProperties = {
   borderRadius: 8,
   background: "rgba(220,80,80,0.08)",
   lineHeight: 1.5,
+};
+
+const clearPasswordInput: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.04)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 12,
 };
 
 const infoBox: CSSProperties = {

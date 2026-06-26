@@ -2469,14 +2469,19 @@ export async function bgSlhDsaBackupConfirmColdStorage(
 /** Drop the backup record. Settings → Security exposes this as an
  *  explicit "Generate new key" action — chain registration becomes
  *  irrecoverable for the vault address after a clear+regenerate
- *  cycle. */
+ *  cycle. Password-gated: the SW verifies the master password
+ *  (verify-only, no unlock) before deleting, sharing the unlock
+ *  brute-force lockout. `reason` is `"wrong_password"` / `"locked_out"`
+ *  / `"missing password"` on failure (`secondsRemaining` for the rate-
+ *  limited cases). */
 export async function bgSlhDsaBackupClear(
   vaultId: string,
+  password: string,
 ): Promise<
   | { ok: true; cleared: boolean }
-  | { ok: false; reason: string }
+  | { ok: false; reason: string; secondsRemaining?: number }
 > {
-  return send("slh-dsa-backup-clear", { vaultId });
+  return send("slh-dsa-backup-clear", { vaultId, password });
 }
 
 /** Light wrapper around `eth_getTransactionReceipt` used to poll a

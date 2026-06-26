@@ -7742,15 +7742,66 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "slh-dsa-backup-clear": {
-      // Escape hatch for users who want to abandon the local
-      // record and regenerate. Surfaces an explicit warning UX in
-      // because a prior on-chain registration becomes
-      // irrecoverable for this vault address (the precompile is
-      // one-time-per-address).
-      const p = (message.payload ?? {}) as { vaultId?: string };
+      // Escape hatch for users who want to abandon the local record and
+      // regenerate. PASSWORD-GATED (verify-only, no unlock side-effect): the
+      // record carries the only recoverable emergency-key secret, and a prior
+      // on-chain registration becomes irrecoverable after a clear+regenerate
+      // (the 0x1100 precompile is one-time-per-address). Gating it also closes
+      // the prior gap where any local IPC actor could delete the record on a
+      // bare {vaultId}. Mirrors the passkey over-limit re-auth gate: shared
+      // brute-force lockout, verify-only, never `unlockContainerV4`.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        password?: unknown;
+      };
       if (typeof p.vaultId !== "string") {
         return { ok: false, reason: "missing vaultId" };
       }
+      if (typeof p.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const nowMs = Date.now();
+      // Honour an active lockout BEFORE spending an Argon2id verify.
+      if (lockoutUntil > nowMs) {
+        return {
+          ok: false,
+          reason: "locked_out",
+          secondsRemaining: Math.ceil((lockoutUntil - nowMs) / 1000),
+        };
+      }
+      const verified = await verifyContainerPasswordV4(p.password);
+      if (!verified) {
+        failCount += 1;
+        const ms = lockoutMsFor(failCount);
+        if (ms > 0) lockoutUntil = Date.now() + ms;
+        await chrome.storage.session.set({
+          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+        });
+        return {
+          ok: false,
+          reason: "wrong_password",
+          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+        };
+      }
+      // Correct password — clear the shared fail/lockout counters as the
+      // unlock path does, then delete the record.
+      await chrome.storage.session.remove([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
       try {
         const cleared = await clearSlhDsaBackupV4(p.vaultId);
         return { ok: true, cleared };

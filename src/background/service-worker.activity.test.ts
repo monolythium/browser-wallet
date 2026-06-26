@@ -396,8 +396,14 @@ let correctElevatedPassword = "correct-horse-battery-staple";
 // null (no multisig vault) so it is inert for every non-multisig test.
 let multisigMetaForTest: unknown = null;
 
+// Spy for the SLH-DSA backup clear seam — `vi.hoisted` so it is initialized
+// before the (hoisted) keystore mock factory closes over it; lets the
+// clear-gate tests assert delete-or-not.
+const mockClearSlhDsaBackupV4 = vi.hoisted(() => vi.fn(async () => true));
+
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
+  clearSlhDsaBackupV4: mockClearSlhDsaBackupV4,
   hasContainerV4: vi.fn(async () => true),
   unlockContainerV4: vi.fn(async () => ({
     address: DETERMINISTIC_ADDRESS,
@@ -519,6 +525,8 @@ import {
   SESSION_KEY_AUTO_LOCK_DEADLINE,
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
   SESSION_KEY_MEK_V4,
+  SESSION_KEY_UNLOCK_FAIL_COUNT,
+  SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
   STORAGE_KEY_AUTO_LOCK_MINUTES,
 } from "../shared/constants.js";
 import {
@@ -952,6 +960,62 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // wallet-indexer-snapshot
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe("slh-dsa-backup-clear — password gate", () => {
+  const VAULT = "v1";
+  const GOOD = "correct-horse-battery-staple";
+
+  it("rejects with NO password and does not delete", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password");
+    expect(mockClearSlhDsaBackupV4).not.toHaveBeenCalled();
+  });
+
+  it("rejects a WRONG password, increments the shared fail count, no delete", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT, password: "nope" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(mockClearSlhDsaBackupV4).not.toHaveBeenCalled();
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("honours an active lockout WITHOUT verifying or deleting", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    const keystore = await import("./keystore-mldsa.js");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT, password: GOOD },
+    })) as { ok: boolean; reason?: string; secondsRemaining?: number };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("locked_out");
+    expect(r.secondsRemaining).toBeGreaterThan(0);
+    expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+    expect(mockClearSlhDsaBackupV4).not.toHaveBeenCalled();
+  });
+
+  it("CORRECT password clears the record and resets the fail count", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 2;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT, password: GOOD },
+    })) as { ok: boolean; cleared?: boolean };
+    expect(r.ok).toBe(true);
+    expect(r.cleared).toBe(true);
+    expect(mockClearSlhDsaBackupV4).toHaveBeenCalledWith(VAULT);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+});
 
 describe("wallet-indexer-snapshot", () => {
   it("validates token balances while preserving optional MRC identity", async () => {
