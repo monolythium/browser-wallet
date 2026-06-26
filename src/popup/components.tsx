@@ -4762,7 +4762,11 @@ export function ReqSendTx({
   chain,
 }: ReqSendTxProps) {
   const { tx, view, origin } = request;
-  const [tier, setTier] = useState<FeeTier>("medium");
+  // P3-001 — the dApp fee is shown READ-ONLY: the selector never bound the
+  // signed fee (the SW signs the raw dApp price), so a picker was a false
+  // affordance. Pin the display at medium (1x = the raw signed price) → the fee
+  // shown is exactly the fee signed.
+  const tier: FeeTier = "medium";
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
   const [showFeeDetails, setShowFeeDetails] = useState(false);
@@ -4892,31 +4896,6 @@ export function ReqSendTx({
             </button>
           )}
         </div>
-        {!hasStructuredFee && (
-          <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-            {(["low", "medium", "high"] as FeeTier[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTier(t)}
-                style={{
-                  flex: 1,
-                  padding: "7px 6px",
-                  borderRadius: 8,
-                  fontSize: 10,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                  fontFamily: "var(--f-mono)",
-                  background: tier === t ? "var(--gold-bg)" : "transparent",
-                  color: tier === t ? "var(--gold)" : "var(--fg-300)",
-                  border: tier === t ? "1px solid rgba(124,127,255,0.4)" : "1px solid var(--fg-700)",
-                  cursor: "pointer",
-                }}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        )}
         {feeDisplay?.source === "structured" ? (
           <>
             <div className="req-kv">

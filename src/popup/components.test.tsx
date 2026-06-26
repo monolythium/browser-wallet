@@ -163,6 +163,45 @@ describe("ReqSendTx native fee helpers", () => {
     expect(html).not.toContain("Price / execution unit");
     expect(html).not.toContain("lythoshi");
   });
+
+  it("drops the non-binding dApp fee-tier selector (P3-001)", () => {
+    const chain = {
+      chainId: "0x10f2c",
+      name: "Monolythium Testnet",
+      rpc: "http://localhost:8545",
+      chainIdNum: 69420,
+      builtin: true,
+      active: true,
+    } satisfies ChainEntry;
+    const html = renderToStaticMarkup(
+      <ReqSendTx
+        request={{
+          kind: "send_tx",
+          origin: "https://dapp.example",
+          tx: { to: "0x2222222222222222222222222222222222222222", value: "0x0" },
+          view: {
+            executionUnitLimitHex: "0x5208",
+            pricePerExecutionUnitLythoshiHex: "0x64",
+            nonce: "0x1",
+            simulation: null,
+            chainId: "0x10f2c",
+            chainLabel: "Monolythium Testnet",
+          },
+        }}
+        custody="sw"
+        signerAddress="0x1111111111111111111111111111111111111111"
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        chain={chain}
+      />,
+    );
+    // The fee is still shown — at medium (1x) = the raw signed price.
+    expect(html).toContain("Network fee");
+    expect(html).toContain("0.0000000000021 LYTH");
+    // The non-binding low/medium/high tier picker is gone (no false affordance).
+    expect(html).not.toContain(">low</button>");
+    expect(html).not.toContain(">high</button>");
+  });
 });
 
 describe("ReqSendTx native market calldata decode", () => {
