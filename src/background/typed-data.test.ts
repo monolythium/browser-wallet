@@ -10,7 +10,35 @@
 // digest independently proves the encoder is spec-correct for valid inputs.
 
 import { describe, it, expect } from "vitest";
-import { computeTypedDataDigest, TypedDataError } from "./typed-data.js";
+import {
+  computeTypedDataDigest,
+  hexOrUtf8ToBytes,
+  TypedDataError,
+} from "./typed-data.js";
+
+// P3-003 — the popup's personal_sign approval view decodes the message with
+// THIS exact function (components.tsx imports it), so what the user sees is
+// byte-for-byte what gets signed. These pin the decoder's behavior — especially
+// the odd-length-hex case that previously diverged from the popup's own padder.
+describe("hexOrUtf8ToBytes — display==signed decoder (P3-003)", () => {
+  it("odd-length 0x-hex falls back to UTF-8 of the whole string (not a left-pad)", () => {
+    // "0x1" is NOT valid even hex → the whole string is UTF-8 encoded:
+    // [0x30,0x78,0x31] ('0','x','1'). The old popup padder gave [0x01] — wrong.
+    expect(Array.from(hexOrUtf8ToBytes("0x1"))).toEqual([0x30, 0x78, 0x31]);
+  });
+
+  it("valid even-length 0x-hex decodes to raw bytes", () => {
+    expect(Array.from(hexOrUtf8ToBytes("0xdeadbeef"))).toEqual([
+      0xde, 0xad, 0xbe, 0xef,
+    ]);
+  });
+
+  it("a plain (non-hex) string is UTF-8 encoded", () => {
+    expect(Array.from(hexOrUtf8ToBytes("hello"))).toEqual([
+      ...new TextEncoder().encode("hello"),
+    ]);
+  });
+});
 
 function hex(b: Uint8Array): string {
   let s = "0x";

@@ -24,6 +24,7 @@ import {
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
+import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
 import { clusterLabel, type DelegationsView } from "../shared/staking";
@@ -3713,17 +3714,6 @@ export { ReqSheet };
 
 // Hex / bytes helpers that don't drag a Buffer dep in.
 
-function hexToBytes(hex: string): Uint8Array {
-  const r = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (r.length === 0) return new Uint8Array(0);
-  const padded = r.length % 2 === 1 ? "0" + r : r;
-  const out = new Uint8Array(padded.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(padded.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-
 function bytesToUtf8IfPrintable(b: Uint8Array): string | null {
   try {
     const s = new TextDecoder("utf-8", { fatal: true }).decode(b);
@@ -5077,7 +5067,10 @@ export function ReqPersonalSignReal({
 }: ReqPersonalSignRealProps) {
   const { message, address, origin } = request;
   const isHex = message.startsWith("0x") || message.startsWith("0X");
-  const bytes = isHex ? hexToBytes(message) : new TextEncoder().encode(message);
+  // P3-003 — decode via the SAME helper the signer uses (hexOrUtf8ToBytes) so the
+  // displayed bytes are EXACTLY the signed bytes (odd-length 0x-hex previously
+  // diverged: popup padded to [0x01] while the signer UTF-8'd to [0x30,0x78,0x31]).
+  const bytes = hexOrUtf8ToBytes(message);
   const utf8 = isHex ? bytesToUtf8IfPrintable(bytes) : message;
   const [showRaw, setShowRaw] = useState(false);
 
