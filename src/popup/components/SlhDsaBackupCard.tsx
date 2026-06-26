@@ -31,6 +31,7 @@ import { SlhDsaRotationRehearsal } from "./SlhDsaRotationRehearsal";
 import {
   type SlhDsaBackup,
   backupStatusLabel,
+  clearAbandonsOnChainKey,
   isBackupComplete,
 } from "../../shared/slh-dsa-backup.js";
 import { monoscanTxUrl } from "../../shared/build-info";
@@ -66,6 +67,13 @@ export function SlhDsaBackupCard({
     useState<ConfirmingClear>("idle");
   const [clearPassword, setClearPassword] = useState("");
   const [clearError, setClearError] = useState<string | null>(null);
+  const [clearAck, setClearAck] = useState(false);
+
+  // Clearing a `registered` (or in-flight `pending`) backup abandons the
+  // one-time-per-account on-chain key — high-friction path (hard warning +
+  // explicit ack gating the password + a Re-export steer).
+  const clearRequiresAck =
+    backup !== null && clearAbandonsOnChainKey(backup.chainRegistrationStatus);
   const pollStartRef = useRef<number | null>(null);
 
   const refresh = async () => {
@@ -160,9 +168,16 @@ export function SlhDsaBackupCard({
     setConfirmingClear("idle");
     setClearPassword("");
     setClearError(null);
+    setClearAck(false);
   };
 
   const handleClearConfirmed = async () => {
+    if (clearRequiresAck && !clearAck) {
+      setClearError(
+        "Acknowledge that this abandons emergency recovery to continue.",
+      );
+      return;
+    }
     if (clearPassword.length === 0) {
       setClearError("Enter your password to confirm.");
       return;
@@ -421,26 +436,88 @@ export function SlhDsaBackupCard({
                 )}
                 {confirmingClear === "asking" && (
                   <>
-                    <div
-                      style={{
-                        ...errBox,
-                        marginBottom: 8,
-                        color: "var(--fg-100)",
-                      }}
-                    >
-                      You can register an emergency-recovery slot only once
-                      per address — choose your backup key carefully. Once
-                      registered (or even attempted) on chain, generating a
-                      new backup leaves the prior registration permanently in
-                      place. Continue only if you've lost the cold-storage copy.
-                    </div>
+                    {clearRequiresAck ? (
+                      <>
+                        <div
+                          style={{
+                            ...errBox,
+                            marginBottom: 8,
+                            color: "var(--fg-100)",
+                          }}
+                        >
+                          <strong>
+                            Clearing does not remove the on-chain registration.
+                          </strong>{" "}
+                          Registration is permanent and one-time per account —
+                          if you clear this backup,{" "}
+                          <strong>
+                            this account can never register a new emergency
+                            recovery key
+                          </strong>
+                          , and the key already on chain becomes permanently
+                          unusable (its secret is discarded). If you only need
+                          to write your recovery phrase down again, use
+                          Re-export instead. Continue only if you have
+                          deliberately decided to abandon emergency recovery for
+                          this account.
+                        </div>
+                        <button
+                          onClick={() => {
+                            resetClearFlow();
+                            setRevealOpen("re-export");
+                          }}
+                          style={btnPrimaryFull}
+                        >
+                          <Icon name="eye" size={12} /> Re-export instead
+                          (recommended)
+                        </button>
+                        <label
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: 8,
+                            margin: "10px 0 2px",
+                            fontSize: 11,
+                            color: "var(--fg-100)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={clearAck}
+                            onChange={(e) => setClearAck(e.target.checked)}
+                            style={{ marginTop: 2 }}
+                          />
+                          <span>
+                            I understand this permanently abandons emergency
+                            recovery for this account and cannot be undone.
+                          </span>
+                        </label>
+                      </>
+                    ) : (
+                      <div
+                        style={{
+                          ...errBox,
+                          marginBottom: 8,
+                          color: "var(--fg-100)",
+                        }}
+                      >
+                        This discards your local emergency backup. You'll
+                        generate a new 24-word phrase and write it down again.
+                      </div>
+                    )}
                     <input
                       type="password"
                       value={clearPassword}
                       onChange={(e) => setClearPassword(e.target.value)}
                       placeholder="Enter your password to confirm"
                       autoComplete="current-password"
-                      style={clearPasswordInput}
+                      disabled={clearRequiresAck && !clearAck}
+                      style={{
+                        ...clearPasswordInput,
+                        marginTop: 8,
+                        opacity: clearRequiresAck && !clearAck ? 0.5 : 1,
+                      }}
                     />
                     {clearError && (
                       <div style={{ ...errBox, marginTop: 8 }}>{clearError}</div>
@@ -451,10 +528,17 @@ export function SlhDsaBackupCard({
                       </button>
                       <button
                         onClick={() => void handleClearConfirmed()}
-                        disabled={clearPassword.length === 0}
+                        disabled={
+                          clearPassword.length === 0 ||
+                          (clearRequiresAck && !clearAck)
+                        }
                         style={{
                           ...btnDangerFlex,
-                          opacity: clearPassword.length === 0 ? 0.5 : 1,
+                          opacity:
+                            clearPassword.length === 0 ||
+                            (clearRequiresAck && !clearAck)
+                              ? 0.5
+                              : 1,
                         }}
                       >
                         Clear local backup

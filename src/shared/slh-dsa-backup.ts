@@ -406,6 +406,21 @@ export function hasBackupStarted(
   return b !== null && b !== undefined && b.createdAt > 0;
 }
 
+/** True when clearing the local backup would ABANDON an on-chain (or
+ *  in-flight) emergency-key registration. The 0x1100 precompile is one-time
+ *  per account: once `registered` — or a `pending` tx that may already be
+ *  mined — the on-chain key is permanent, and the local record holds the
+ *  only recoverable secret for it. Clearing then strands that key forever
+ *  (a replacement can never be registered: `register` reverts
+ *  `AlreadyRegistered`). The clear UI uses this to switch to a hard warning +
+ *  a required acknowledgment + a Re-export steer; the `not-registered` /
+ *  `registration-failed` (never-landed) states clear cleanly and regenerate. */
+export function clearAbandonsOnChainKey(
+  status: BackupRegistrationStatus,
+): boolean {
+  return status === "registered" || status === "pending";
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Hex helpers — also useful in the popup tx-building path
 // ────────────────────────────────────────────────────────────────────────────
