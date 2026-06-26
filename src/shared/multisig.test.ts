@@ -15,6 +15,7 @@ import {
   assertSignerSetUnique,
   defaultThreshold,
   deserializeSharedProposal,
+  MAX_SHARED_PROPOSAL_BYTES,
   hashGovernanceProposal,
   hashTxProposal,
   isExecutable,
@@ -699,6 +700,29 @@ describe("serializeProposalForShare + deserializeSharedProposal", () => {
       JSON.stringify({ v: 1, kind: "alien", proposal: { id: "x" } }),
     );
     expect(() => deserializeSharedProposal(badEnv)).toThrow(/kind/);
+  });
+
+  describe("size cap (P5-006)", () => {
+    it("pins the cap at 512 KB", () => {
+      expect(MAX_SHARED_PROPOSAL_BYTES).toBe(512 * 1024);
+    });
+
+    it("early-throws on an over-cap blob BEFORE base64/JSON parse", () => {
+      // All-'A' is valid base64, so without the size guard this would decode
+      // and only fail at JSON.parse (/JSON/). Throwing the cap message proves
+      // the early-throw fired before base64ToBytes + JSON.parse.
+      const oversized = "A".repeat(MAX_SHARED_PROPOSAL_BYTES + 1);
+      expect(() => deserializeSharedProposal(oversized)).toThrow(/cap/);
+      expect(() => deserializeSharedProposal(oversized)).not.toThrow(/JSON/);
+    });
+
+    it("accepts a real proposal blob at/under the cap (multi-signature)", () => {
+      const p = makeProposal({ id: "p-capped" });
+      const blob = serializeProposalForShare(p, "tx");
+      expect(blob.length).toBeLessThanOrEqual(MAX_SHARED_PROPOSAL_BYTES);
+      const env = deserializeSharedProposal(blob);
+      expect(env.proposal.id).toBe(p.id);
+    });
   });
 });
 
