@@ -961,6 +961,16 @@ export function classifyStalePending(
     }
     return { status: "slow", noncePassedAtMs: since };
   }
+  // A failed committed-nonce read (null) is NO evidence the tx came back: never
+  // ADVANCE to dropped, but also never REGRESS a verdict already reached (a null
+  // pass would otherwise un-drop a dropped row and persist it on writeback). A
+  // REAL read that is <= the row nonce (a genuine re-org regression) DOES un-drop
+  // — it falls through to the time-only states below and clears the stamp.
+  if (committedNonce === null && row.lifecycle === "dropped") {
+    return row.noncePassedAtMs !== undefined
+      ? { status: "dropped", noncePassedAtMs: row.noncePassedAtMs }
+      : { status: "dropped" };
+  }
   const age = now - row.broadcastedAtMs;
   if (age >= PENDING_ABSOLUTE_CAP_MS) return { status: "expired" };
   if (age >= PENDING_SLOW_MS) return { status: "slow" };

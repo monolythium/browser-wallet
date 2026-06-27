@@ -9,7 +9,8 @@
 //
 // Empty/error/stale state copy is locked verbatim per the plan.
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { bgDismissPendingTx } from "../bg.js";
 import { useActivity } from "../hooks/useActivity.js";
 import { useActivityKind } from "../hooks/useActivityKind.js";
 import { useNameResolution } from "../hooks/useNameResolution.js";
@@ -248,6 +249,18 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
     chainIdHex,
   );
   const indexerStatus = useIndexerStatus(chainIdHex);
+  // Dismiss a TERMINAL (dropped/expired) pending row, then refresh. The SW
+  // refuses to remove a durable claim or a still-live row, so this is safe.
+  const handleDismissPending = useCallback(
+    (txHash: string) => {
+      if (!addr || !chainIdHex) return;
+      void (async () => {
+        await bgDismissPendingTx({ address: addr, chainIdHex, txHash });
+        void refresh();
+      })();
+    },
+    [addr, chainIdHex, refresh],
+  );
   // Kind probe runs in parallel with the activity
   // fetch. Used only by the empty-state branch — when rows arrive,
   // the envelope is irrelevant.
@@ -392,6 +405,7 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
                     row={row}
                     counterpartyLabel={label}
                     clusterNameById={clusterNameById}
+                    onDismissPending={handleDismissPending}
                   />
                 </div>
               );

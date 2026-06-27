@@ -37,12 +37,28 @@ export interface ActivityRowProps {
    *  bodies — resolves the numeric cluster id to its real name, else
    *  `Cluster #<id>` (no-mock). Other kinds ignore it. */
   clusterNameById?: ReadonlyMap<number, string | null> | undefined;
+  /** Dismiss a TERMINAL (dropped/expired) pending row — threaded to
+   *  PendingTxRowBody, which shows the affordance only for those states. */
+  onDismissPending?: (txHash: string) => void;
 }
 
-export function ActivityRow({ row, counterpartyLabel, clusterNameById }: ActivityRowProps) {
+export function ActivityRow({
+  row,
+  counterpartyLabel,
+  clusterNameById,
+  onDismissPending,
+}: ActivityRowProps) {
   switch (row.kind) {
     case "pending_tx":
-      return <PendingTxRowBody row={row} counterpartyLabel={counterpartyLabel} />;
+      return (
+        <PendingTxRowBody
+          row={row}
+          counterpartyLabel={counterpartyLabel}
+          {...(onDismissPending
+            ? { onDismiss: () => onDismissPending(row.txHash) }
+            : {})}
+        />
+      );
     case "tx_send":
       return <TxSendRowBody row={row} counterpartyLabel={counterpartyLabel} />;
     case "tx_receive":

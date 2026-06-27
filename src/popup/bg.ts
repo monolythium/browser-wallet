@@ -553,6 +553,17 @@ export async function bgWalletActivityGet(
   return send("wallet-activity-get", { address, chainIdHex });
 }
 
+/** Dismiss a TERMINAL (dropped/expired) pending row from the activity list.
+ *  Display/state only — the SW removes the local pending-row record by txHash;
+ *  it refuses to remove a durable claim or a still-live (pending/slow) row. */
+export async function bgDismissPendingTx(args: {
+  address: string;
+  chainIdHex: string;
+  txHash: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return send("wallet-dismiss-pending", args);
+}
+
 /** Failed txs for (address, chain), sourced from the notification history
  *  (the indexer activity stream is success-only). Newest-first. Drives the
  *  red "<Type> failed" rows in the Activity list. */

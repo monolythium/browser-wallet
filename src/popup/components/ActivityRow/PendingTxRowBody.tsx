@@ -25,6 +25,10 @@ import type { NameLabel } from "../../../shared/name-resolution.js";
 export interface PendingTxRowBodyProps {
   row: PendingTxRow;
   counterpartyLabel: NameLabel | undefined;
+  /** Dismiss a TERMINAL (`dropped`/`expired`) row from the list. Shown ONLY for
+   *  those states — a `pending`/`slow` row is still possibly live and is never
+   *  dismissible. */
+  onDismiss?: () => void;
 }
 
 function relativeMs(ms: number, now: number): string {
@@ -34,9 +38,23 @@ function relativeMs(ms: number, now: number): string {
   return `${Math.floor(delta / 3_600_000)}h ago`;
 }
 
-export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyProps) {
+export function PendingTxRowBody({ row, counterpartyLabel, onDismiss }: PendingTxRowBodyProps) {
   const devMode = useFeature("DEVELOPER_MODE");
   const opKind = row.opKind;
+  // Drop-detection lifecycle (display/state): the row stays VISIBLE through
+  // these states instead of silently vanishing at the old 5-min TTL. A terminal
+  // state drops the in-flight spinner + offers a dismiss; a `pending`/`slow` row
+  // is still live (spinner stays, no dismiss).
+  const lifecycle = row.lifecycle ?? "pending";
+  const isTerminalLifecycle = lifecycle === "dropped" || lifecycle === "expired";
+  const lifecycleNote =
+    lifecycle === "slow"
+      ? "taking longer than usual"
+      : lifecycle === "dropped"
+        ? "Didn't confirm (replaced or dropped)"
+        : lifecycle === "expired"
+          ? "Status unknown — taking unusually long"
+          : null;
   const isDelegationKind =
     opKind === "delegate" || opKind === "undelegate" || opKind === "redelegate";
   // Pending delegation labels resolve the cluster via the CAPTURED name (the
@@ -206,7 +224,11 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           }
           size={13}
         />
-        <span className="ext-pending-dot" aria-label="pending" />
+        {/* In-flight spinner only while still possibly live; a terminal
+            (dropped/expired) row is settled, so the spinner is dropped. */}
+        {!isTerminalLifecycle && (
+          <span className="ext-pending-dot" aria-label="pending" />
+        )}
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={pendingWhoTitle}>
@@ -245,6 +267,18 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
           <span>{txTypeLabel(row)}</span>
           <span>·</span>
           <span>{relativeMs(row.broadcastedAtMs, Date.now())}</span>
+          {lifecycleNote && (
+            <>
+              <span>·</span>
+              <span
+                style={
+                  isTerminalLifecycle ? { color: "var(--err)" } : undefined
+                }
+              >
+                {lifecycleNote}
+              </span>
+            </>
+          )}
           {devMode && (
             <>
               <span>·</span>
@@ -252,6 +286,30 @@ export function PendingTxRowBody({ row, counterpartyLabel }: PendingTxRowBodyPro
             </>
           )}
         </div>
+        {/* Terminal rows are kept VISIBLE (never a silent vanish) and offer a
+            dismiss; they also auto-clear after the bounded retain window. */}
+        {isTerminalLifecycle && onDismiss && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDismiss();
+            }}
+            style={{
+              marginTop: 4,
+              alignSelf: "flex-start",
+              padding: "2px 8px",
+              fontSize: 10.5,
+              borderRadius: 6,
+              border: "1px solid var(--fg-700)",
+              background: "transparent",
+              color: "var(--fg-300)",
+              cursor: "pointer",
+            }}
+          >
+            Dismiss
+          </button>
+        )}
       </div>
       <div className="ext-act-row__right">
         {isClaim ? (

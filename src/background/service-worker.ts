@@ -232,7 +232,7 @@ import {
   activityPendingKey,
   activityLocalClaimsKey,
   mergeIndexerSnapshot,
-  evictExpiredPending,
+  transitionPending,
   applyLocalClaims,
   reconcilePending,
   validateActivityCache,
@@ -5420,7 +5420,9 @@ async function persistPendingRowBackground(args: {
         : {}),
       ...(args.nonce !== undefined ? { nonce: args.nonce } : {}),
     };
-    const evicted = evictExpiredPending(prev, now);
+    // Transition the prior rows (no fresh nonce read at broadcast → null →
+    // time-only states + preserve any prior `dropped`, never a 5-min vanish).
+    const evicted = transitionPending(prev, null, now);
     const next = [row, ...evicted];
     await new Promise<void>((resolve) => {
       chrome.storage.local.set(
@@ -5886,8 +5888,11 @@ export async function pollPendingAndNotify(): Promise<{
         remaining += pending.length;
         continue;
       }
-      // TTL-evict FIRST so an expired row is neither notified nor re-polled.
-      const live = evictExpiredPending(pending, now);
+      // Transition FIRST (the lifecycle replaces the blind 5-min TTL): a row
+      // slower than 5 min stays live for the receipt check + remaining count
+      // instead of vanishing on writeback. No fresh nonce read in the alarm →
+      // null → time-only states + preserve a prior `dropped` (never un-drop).
+      const live = transitionPending(pending, null, now);
       const { kept, terminal, rpcFailures } = await dropConfirmedPendingByHash(
         live,
         { timeoutMs: NOTIF_POLL_RPC_TIMEOUT_MS },
@@ -8587,6 +8592,49 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         },
       };
     }
+    case "wallet-dismiss-pending": {
+      // User-dismiss of a TERMINAL pending row (lifecycle dropped/expired) from
+      // the activity list. Display/state only — removes the local pending-row
+      // record by txHash; never touches a durable claim or a still-live
+      // (pending/slow) row, so a possibly-live tx can't be dismissed away.
+      const dp = message.payload as {
+        address?: unknown;
+        chainIdHex?: unknown;
+        txHash?: unknown;
+      };
+      if (
+        typeof dp?.address !== "string" ||
+        typeof dp?.chainIdHex !== "string" ||
+        typeof dp?.txHash !== "string"
+      ) {
+        return { ok: false, reason: "missing address, chainIdHex, or txHash" };
+      }
+      const dismissKey = activityPendingKey(dp.address.toLowerCase(), dp.chainIdHex);
+      const dismissStored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([dismissKey], (res) =>
+          resolve(res?.[dismissKey]),
+        );
+      });
+      const dismissPrev =
+        validatePendingActivityCache(dismissStored)?.pending ?? [];
+      const dismissNext = dismissPrev.filter(
+        (r) =>
+          !(
+            r.txHash === dp.txHash &&
+            r.source !== "local-claim" &&
+            (r.lifecycle === "dropped" || r.lifecycle === "expired")
+          ),
+      );
+      if (dismissNext.length !== dismissPrev.length) {
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set(
+            { [dismissKey]: { pending: dismissNext } },
+            () => resolve(),
+          );
+        });
+      }
+      return { ok: true };
+    }
     case "wallet-activity-get": {
       // Read-through cache. Hits chrome.storage.local first;
       // if the cache is fresher than CACHE_STALENESS_MS, returns it
@@ -8669,7 +8717,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // un-retired claim now gates isFresh, above) — i.e. a durable claim the
         // pending cache lost, which we re-surface without an RPC.
         const pending = applyLocalClaims(
-          evictExpiredPending(prevPending, now),
+          // Fast path runs only when there are no non-claim pending rows
+          // (isFresh gate); no fresh nonce read → null → time-only + preserve
+          // dropped.
+          transitionPending(prevPending, null, now),
           prevClaims,
           prevCache.confirmed,
           // No fresh fetch on the fast path → no newly-surfaced rows; pass the
@@ -8699,12 +8750,29 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // pending" beat. The indexer anchor match (reconcilePending) still runs
       // AFTER the fetch (it needs the freshly indexed confirmed rows); the
       // early receipt pass only feeds the indexer-lag bridge below.
-      const [fresh, receiptPass] = await Promise.all([
+      const [fresh, receiptPass, committedNonceHex] = await Promise.all([
         fetchIndexerSnapshot(p.address, p.chainIdHex, {
           includeMrcAccount: false,
         }),
         dropConfirmedPendingByHash(prevPending),
+        // Committed nonce for the drop-detection lifecycle — READ only (the
+        // signed nonce is unchanged). Indexer-independent (eth_getTransactionCount),
+        // so it works even on the indexer-outage path below. Only read when there
+        // are pending rows to classify (no extra RPC on the common no-pending
+        // fetch). `null` (no rows / failure) → transitionPending never declares
+        // `dropped`.
+        prevPending.length > 0
+          ? testnetTransactionCountHex(p.address).catch(() => null)
+          : Promise.resolve(null),
       ]);
+      let committedNonce: number | null = null;
+      if (committedNonceHex !== null) {
+        try {
+          committedNonce = Number(BigInt(committedNonceHex));
+        } catch {
+          committedNonce = null;
+        }
+      }
       const { kept: receiptKept, terminal: terminalByHash } = receiptPass;
       const activityOk = fresh.errors.addressActivity === undefined;
       const delegationOk = fresh.errors.delegationHistory === undefined;
@@ -8719,8 +8787,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // reconcilePending retires them. TTL backstop still runs; re-inject
         // durable claims too (Gap B) so an outage never drops a claim.
         const pending = applyLocalClaims(
-          evictExpiredPending(
+          transitionPending(
             [...receiptKept, ...bridgeConfirmedTerminals(terminalByHash)],
+            committedNonce,
             now,
           ),
           prevClaims,
@@ -8780,7 +8849,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const survivors = [...receiptKept, ...bridgedConfirmed].filter((r) =>
         reconciledHashes.has(r.txHash),
       );
-      const evictedPending = evictExpiredPending(survivors, now);
+      const evictedPending = transitionPending(survivors, committedNonce, now);
       // Re-inject the durable local-claim rows (the local-claim bridges the
       // pre-confirm window + carries the receipt-decoded amount). applyLocalClaims
       // dedups by txHash (the receipt-bridged pending copy wins) and CROSS-STREAM
