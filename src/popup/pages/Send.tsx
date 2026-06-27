@@ -142,6 +142,12 @@ const ADMISSION_REJECT_CODE_HI = -32020;
 // doesn't supply one.
 const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
+// Mempool per-execution-unit priority-tip floor (crates/boundary/mempool):
+// a tip below this is rejected at admission with -32047. `suggestFee` returns
+// the floor as the priority tip, so the "Slow" 0.5x tier would scale it to
+// ~5e8 — below the floor. Clamp the tier-scaled tip up to the floor.
+const MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI = 1_000_000_000n; // 1 gwei
+
 export function Send({
   account,
   chainId,
@@ -460,7 +466,13 @@ export function Send({
           feeSuggestion.priorityPricePerExecutionUnitLythoshiHex,
         );
         if (base !== null && tip !== null) {
-          const scaledTip = scaleByBps(tip, tierMultiplierBps);
+          const tieredTip = scaleByBps(tip, tierMultiplierBps);
+          // A tier multiplier (e.g. "Slow" 0.5x) must never push the tip below
+          // the mempool floor, or the chain rejects the tx with -32047.
+          const scaledTip =
+            tieredTip < MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI
+              ? MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI
+              : tieredTip;
           signedFee = {
             maxFeePerGasHex: "0x" + (base + scaledTip).toString(16),
             maxPriorityFeePerGasHex: "0x" + scaledTip.toString(16),
@@ -1712,7 +1724,13 @@ function scaleLythoshiPerExecutionUnit(
   if (lythoshi === null) {
     return "?";
   }
-  return scaleByBps(lythoshi, multiplierBps).toString();
+  // Match the submit path: clamp the tier-scaled tip to the mempool floor so
+  // the displayed estimate equals what is actually broadcast.
+  const tiered = scaleByBps(lythoshi, multiplierBps);
+  return (tiered < MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI
+    ? MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI
+    : tiered
+  ).toString();
 }
 
 // ---- fee math ----
