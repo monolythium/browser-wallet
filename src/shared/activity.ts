@@ -177,6 +177,34 @@ export interface PendingTxRow {
    *  (`existingWeightBps`). Lets the row/notification show the % (bps/100). Absent
    *  on claims, ordinary sends, and legacy rows → the % is omitted (no-mock). */
   delegationWeightBps?: number;
+  /** The nonce this tx was broadcast with — the nonce was ALREADY chosen +
+   *  signed at send (`nextNonceHex` is untouched), and is persisted here PURELY
+   *  for the pending-row drop-detection lifecycle (a committed-nonce read past
+   *  this value, with no receipt, means the tx was replaced/dropped). NEVER
+   *  re-signed, never part of the signed bytes. Absent on legacy rows + any
+   *  non-`wallet-send-tx` broadcast path → that row falls back to the time-only
+   *  lifecycle states. */
+  nonce?: number;
+  /** Drop-detection debounce stamp: the epoch-ms the poll FIRST observed the
+   *  committed nonce had passed this row's `nonce` with no receipt. The `dropped`
+   *  verdict only fires once `now - noncePassedAtMs >= PENDING_DROP_GRACE_MS`, so
+   *  this MUST survive the storage round-trip (else it re-stamps to `now` every
+   *  poll and the grace never elapses). Display/state only. */
+  noncePassedAtMs?: number;
+  /** Recomputed each poll by `transitionPending` from the row's nonce + the
+   *  committed-nonce read + age — drives the render label. `dropped`/`expired`
+   *  are VISIBLE terminal states (never a silent vanish). Display/state only;
+   *  persisting it is harmless (it is recomputed regardless). */
+  lifecycle?: PendingLifecycle;
+}
+
+/** Pending-row lifecycle (display/state). Primary terminal verdict is a receipt
+ *  or an indexer match (handled in the SW poll); these are the *time/nonce*
+ *  states for a row that has neither yet. */
+export type PendingLifecycle = "pending" | "slow" | "dropped" | "expired";
+
+function isPendingLifecycle(v: unknown): v is PendingLifecycle {
+  return v === "pending" || v === "slow" || v === "dropped" || v === "expired";
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -402,6 +430,15 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       const currency = isCurrencyCode(r.currency) ? r.currency : undefined;
       const delegationWeightBps =
         isFiniteNumber(r.delegationWeightBps) ? r.delegationWeightBps : undefined;
+      // Drop-detection lifecycle fields (display/state). `nonce` is captured at
+      // broadcast; `noncePassedAtMs` MUST survive so the debounce grace can
+      // elapse across polls (else it re-stamps to `now` and `dropped` never
+      // fires). `lifecycle` is recomputed each poll but survives harmlessly.
+      const nonce = isFiniteNumber(r.nonce) ? r.nonce : undefined;
+      const noncePassedAtMs = isFiniteNumber(r.noncePassedAtMs)
+        ? r.noncePassedAtMs
+        : undefined;
+      const lifecycle = isPendingLifecycle(r.lifecycle) ? r.lifecycle : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -422,6 +459,9 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(rateAtClaim !== undefined ? { rateAtClaim } : {}),
         ...(currency !== undefined ? { currency } : {}),
         ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
+        ...(nonce !== undefined ? { nonce } : {}),
+        ...(noncePassedAtMs !== undefined ? { noncePassedAtMs } : {}),
+        ...(lifecycle !== undefined ? { lifecycle } : {}),
       };
     }
 

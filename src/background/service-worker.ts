@@ -5365,6 +5365,10 @@ async function persistPendingRowBackground(args: {
   rateAtClaim?: number | null;
   currency?: CurrencyCode;
   delegationWeightBps?: number;
+  /** The nonce this tx was broadcast with — ALREADY chosen + signed (nextNonceHex
+   *  is untouched); persisted into the pending row PURELY for the drop-detection
+   *  lifecycle. Never re-signed. */
+  nonce?: number;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -5414,6 +5418,7 @@ async function persistPendingRowBackground(args: {
       ...(args.delegationWeightBps !== undefined
         ? { delegationWeightBps: args.delegationWeightBps }
         : {}),
+      ...(args.nonce !== undefined ? { nonce: args.nonce } : {}),
     };
     const evicted = evictExpiredPending(prev, now);
     const next = [row, ...evicted];
@@ -10484,6 +10489,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
+          // The nonce was already chosen + signed above (nextNonceHex untouched);
+          // persist it for the pending-row drop-detection lifecycle. Display/state
+          // only — never re-signed.
+          nonce: Number(BigInt(nonceHex)),
           // Metadata-only: opKind never reached submitPlaintextMlDsaTx —
           // it travels straight from the popup → here → the pending-row
           // record for the notifications hook to read back.
