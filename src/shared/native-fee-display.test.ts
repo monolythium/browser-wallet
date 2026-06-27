@@ -5,6 +5,7 @@ import {
   nativeFeeDisplayFromPrice,
   nativeFeeDisplayFromStructuredFee,
 } from "./native-fee-display.js";
+import { MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI } from "./operator-bounds.js";
 
 describe("native fee display conformance", () => {
   it("formats execution-unit estimates through the shared LYTH display path", () => {
@@ -99,39 +100,41 @@ describe("native fee display conformance", () => {
   });
 });
 
-describe("base+priority total clamps the tier-scaled tip to the mempool floor", () => {
-  // suggestFee returns the 1-gwei mempool floor (1e9) as the priority tip, on the
-  // legacy base+priority shape that the Send headline total + Max reservation are
-  // computed from. The submit path (Send.tsx, fee-fix 6345e5c) clamps the SIGNED
-  // tip up to the floor, so this display total must clamp identically or it would
-  // under-report vs the broadcast.
-  const FLOOR = 1_000_000_000n; // 1 gwei
+describe("base+priority total clamps a below-floor priority tip to the mempool floor", () => {
+  // Defensive clamp in nativeFeeDisplayFromBaseAndPriority: a priority price below
+  // the mempool floor is raised to MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI so the
+  // displayed total (and the Max reservation derived from it) matches the submit
+  // path, which signs the clamped tip. No wallet tier produces a below-floor tip
+  // today (the Slow 0.5x tier was removed), but the clamp guards a future
+  // tier/Custom and a chain that ever returns a sub-floor suggestion. Exercised
+  // here DIRECTLY via a below-floor priority input at 1x — not via a tier.
+  const FLOOR = MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI; // 1e9 (1 gwei)
   const base = 2_000_000_000n; // 2 gwei base price
   const units = 30_000n; // realistic native-transfer execution-unit limit
-  const total = (bps: bigint): bigint => {
+  const totalForTip = (priorityLythoshi: bigint): bigint => {
     const r = computeNativeFeeFromBaseAndPriority({
       executionUnitLimitHex: "0x" + units.toString(16),
       basePricePerExecutionUnitLythoshiHex: "0x" + base.toString(16),
-      priorityPricePerExecutionUnitLythoshiHex: "0x" + FLOOR.toString(16), // tip == floor
-      priorityMultiplierBps: bps,
+      priorityPricePerExecutionUnitLythoshiHex: "0x" + priorityLythoshi.toString(16),
+      priorityMultiplierBps: 10_000n, // 1x — isolate the floor clamp, not a tier
     });
     if (r === null) throw new Error("unexpected null fee total");
     return r;
   };
 
-  it("Slow (0.5x) clamps the tip up to the floor → total equals the broadcast", () => {
-    // Broadcast tip (submit path) = max(0.5 × floor, floor) = floor.
-    const broadcastTotal = (base + FLOOR) * units; // 9e13
-    expect(total(5_000n)).toBe(broadcastTotal);
-    // Pre-fix, the headline used the unclamped 0.5 × floor tip and under-reported.
-    const underReported = (base + FLOOR / 2n) * units; // 7.5e13
-    expect(underReported).toBeLessThan(broadcastTotal);
+  it("raises a below-floor priority tip up to the floor", () => {
+    const belowFloor = FLOOR / 2n; // 5e8 < floor
+    // Clamped to the floor: total = (base + floor) × units, NOT (base + 5e8) × units.
+    expect(totalForTip(belowFloor)).toBe((base + FLOOR) * units);
+    expect(totalForTip(belowFloor)).toBe(totalForTip(FLOOR)); // == an at-floor tip
+    // Without the clamp it would have been strictly lower.
+    expect((base + belowFloor) * units).toBeLessThan((base + FLOOR) * units);
   });
 
-  it("normal (1x) and fast (2x) are unchanged (tip already at/above the floor)", () => {
-    expect(total(10_000n)).toBe((base + FLOOR) * units); // 1× → tip == floor
-    expect(total(5_000n)).toBe(total(10_000n)); // slow now matches normal
-    expect(total(20_000n)).toBe((base + 2n * FLOOR) * units); // 2× → above floor, untouched
-    expect(total(20_000n)).toBeGreaterThan(total(10_000n));
+  it("leaves an at/above-floor priority tip untouched", () => {
+    expect(totalForTip(FLOOR)).toBe((base + FLOOR) * units); // at the floor
+    const aboveFloor = 2n * FLOOR; // 2e9 (e.g. the Fast tier's effective tip)
+    expect(totalForTip(aboveFloor)).toBe((base + aboveFloor) * units); // untouched
+    expect(totalForTip(aboveFloor)).toBeGreaterThan(totalForTip(FLOOR));
   });
 });

@@ -111,22 +111,23 @@ interface SendProps {
 
 type Step = "form" | "preview" | "sending" | "success" | "error";
 
-type FeeTier = "slow" | "normal" | "fast";
+type FeeTier = "normal" | "fast";
 
+// Slow (0.5x) was removed: the suggestFee priority tip is always the 1e9
+// mempool floor by construction, so 0.5x always clamped back up to the floor
+// — i.e. permanently identical to Normal. Normal (1x) is the default + the
+// going rate; Fast (2x) is the only above-floor option.
 const TIER_MULTIPLIERS_BPS: Record<FeeTier, bigint> = {
-  slow: 5_000n,
   normal: FEE_MULTIPLIER_BPS_BASE,
   fast: 20_000n,
 };
 
 const TIER_MULTIPLIER_TEXT: Record<FeeTier, string> = {
-  slow: "0.5",
   normal: "1",
   fast: "2",
 };
 
 const TIER_LABELS: Record<FeeTier, string> = {
-  slow: "Slow",
   normal: "Normal",
   fast: "Fast",
 };
