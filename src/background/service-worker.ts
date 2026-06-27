@@ -4,7 +4,7 @@
 //   - eth_accounts
 //   - eth_requestAccounts        (real popup approval)
 //   - eth_chainId / net_version
-//   - eth_sendTransaction        (native ML-DSA encrypted submission)
+//   - eth_sendTransaction        (native ML-DSA submission)
 //   - eth_sign / personal_sign   (native wallet signing)
 //   - eth_signTypedData_v4       (EIP-712 typed-data signing)
 //   - wallet_switchEthereumChain
@@ -1795,7 +1795,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       const arr = Array.isArray(params) ? params : [];
       const txReq = (arr[0] as EthSendTransactionRequest | undefined) ?? {};
       if (!chainRequiresMlDsa(session.chainId)) {
-        return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
+        return err(4200, "eth_sendTransaction only supports native Monolythium Testnet sends");
       }
       // S6 #45 B1: refuse single-signer sends from a multisig active vault —
       // they must go through the propose/approve ceremony (not this lone-
@@ -1920,7 +1920,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
+      return err(4200, "eth_sendTransaction only supports native Monolythium Testnet sends");
     }
 
     case "monolythium_submitMrvNativePlan": {

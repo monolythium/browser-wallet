@@ -396,7 +396,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
 
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4200);
-    expect(r.error?.message).toMatch(/native encrypted Monolythium Testnet sends/);
+    expect(r.error?.message).toMatch(/native Monolythium Testnet sends/);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
     const methods = rpcCalls.map((c) => c.method);
     expect(methods).not.toContain("eth_getTransactionCount");
