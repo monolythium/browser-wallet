@@ -2176,6 +2176,120 @@ describe("wallet-activity-get", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Drop-detection lifecycle (C4) — the poll reads the committed nonce and
+  // classifies a still-pending row (no receipt, not indexed) into the
+  // pending/slow/dropped/expired lifecycle instead of the blind 5-min vanish.
+  // ───────────────────────────────────────────────────────────────────────────
+  function seedPendingRow(row: Record<string, unknown>) {
+    const pendingKey = `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    storageLocal[pendingKey] = { pending: [row] };
+  }
+  function basePending(over: Record<string, unknown> = {}) {
+    return {
+      kind: "pending_tx",
+      txHash: "0x" + "a1".repeat(32),
+      to: "0xrecipient",
+      amountDecimal: "0.01",
+      broadcastedAtMs: Date.now(),
+      broadcastBlockHeight: 1000,
+      via: "op",
+      nonce: 5,
+      ...over,
+    };
+  }
+
+  it("a >5-min un-confirmed send is NOT dropped — stays visible as `slow` (no 5-min vanish)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 5; // committed == row nonce → not passed
+    seedPendingRow(basePending({ broadcastedAtMs: Date.now() - 6 * 60 * 1000, nonce: 5 }));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ lifecycle?: string }>;
+    };
+    expect(r.pending).toHaveLength(1); // still visible, NOT dropped
+    expect(r.pending[0]?.lifecycle).toBe("slow");
+  });
+
+  it("a nonce-passed, no-receipt row → `dropped` (the stamp survived a prior poll, past the grace)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 6; // committed > row nonce 5 → passed
+    // noncePassedAtMs stamped by a prior poll, well past the 30s drop grace.
+    seedPendingRow(
+      basePending({
+        nonce: 5,
+        noncePassedAtMs: Date.now() - 60_000,
+        broadcastedAtMs: Date.now() - 2 * 60 * 1000,
+      }),
+    );
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ lifecycle?: string }>;
+    };
+    expect(r.pending).toHaveLength(1); // visible terminal, not vanished
+    expect(r.pending[0]?.lifecycle).toBe("dropped");
+  });
+
+  it("a receipt-confirmed row still bridges even with the nonce passed (receipt wins over drop-detection)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    rpcResponses["lyth_getTransactionCount"] = 6; // passed — would be dropped if it reached the classifier
+    seedPendingRow(basePending({ nonce: 5 }));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number; lifecycle?: string }>;
+    };
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200); // bridged-confirmed
+    expect(r.pending[0]?.lifecycle).toBeUndefined(); // bridged rows aren't lifecycle-tagged
+  });
+
+  it("the delegation heuristic retires a receipt-missed confirmed undelegate (NOT mis-flagged dropped)", async () => {
+    // No receipt, but the indexer surfaces the confirmed undelegate AND the nonce
+    // has passed (would be dropped) — the C3 heuristic retires it first.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getAddressActivity"] = [];
+    rpcResponses["lyth_getDelegationHistory"] = [
+      {
+        blockHeight: 1005,
+        txIndex: 0,
+        logIndex: 0,
+        wallet: DETERMINISTIC_ADDRESS.toLowerCase(),
+        cluster: 7,
+        toCluster: null,
+        kind: "undelegated",
+        weightBps: 2500,
+        walletTotalBps: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 6; // passed → would be dropped without the heuristic
+    seedPendingRow(
+      basePending({
+        opKind: "undelegate",
+        clusterId: 7,
+        to: "0x" + "11".repeat(20),
+        broadcastBlockHeight: 1000,
+        nonce: 5,
+        amountDecimal: "0",
+      }),
+    );
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: unknown[];
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.pending).toHaveLength(0); // retired by the heuristic, NOT lingering/dropped
+    expect(r.cache.confirmed.some((c) => c.kind === "undelegate")).toBe(true);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
   // REORDER (timing fix) — the receipt classification now races the indexer
   // snapshot (Promise.all) instead of running after it, so the spinner flips at
   // receipt speed. The OUTPUT must be unchanged: a confirmed row still bridges

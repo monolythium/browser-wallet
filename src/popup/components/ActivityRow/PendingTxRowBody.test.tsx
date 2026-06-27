@@ -103,6 +103,73 @@ describe("PendingTxRowBody — suppress meaningless 0-value amount", () => {
   });
 });
 
+// Drop-detection lifecycle (C4): a pending row never silently vanishes — it
+// shows slow → dropped/expired, drops the spinner on a terminal state, and
+// offers a Dismiss affordance only when terminal AND onDismiss is provided.
+describe("PendingTxRowBody — drop-detection lifecycle (C4)", () => {
+  it("slow: shows 'taking longer than usual' and keeps the spinner", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "slow" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("taking longer than usual");
+    expect(html).toContain("ext-pending-dot"); // still in-flight
+  });
+
+  it("dropped: shows the terminal note, drops the spinner, offers Dismiss", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "dropped" })}
+        counterpartyLabel={undefined}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(html).toContain("replaced or dropped"); // "Didn't confirm (replaced or dropped)"
+    expect(html).not.toContain("ext-pending-dot"); // settled — no spinner
+    expect(html).toContain("Dismiss");
+  });
+
+  it("expired: shows 'Status unknown', drops the spinner, offers Dismiss", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "expired" })}
+        counterpartyLabel={undefined}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(html).toContain("Status unknown");
+    expect(html).not.toContain("ext-pending-dot");
+    expect(html).toContain("Dismiss");
+  });
+
+  it("a terminal row WITHOUT onDismiss renders no Dismiss button", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "dropped" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("replaced or dropped");
+    expect(html).not.toContain("Dismiss");
+  });
+
+  it("default (pending): no note, keeps the spinner, never dismissible", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1" })}
+        counterpartyLabel={undefined}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(html).not.toContain("taking longer");
+    expect(html).not.toContain("replaced or dropped");
+    expect(html).toContain("ext-pending-dot");
+    expect(html).not.toContain("Dismiss");
+  });
+});
+
 describe("PendingTxRowBody — pending label", () => {
   it("labels an unconfirmed send 'Sending · …'", () => {
     const html = renderToStaticMarkup(

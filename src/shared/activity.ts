@@ -992,7 +992,11 @@ export function transitionPending(
 ): PendingTxRow[] {
   const out: PendingTxRow[] = [];
   for (const row of pending) {
-    if (row.source === "local-claim") {
+    // Durable claims (exempt) and receipt-bridged rows (already terminal-
+    // confirmed; the render shows them as confirmed regardless of lifecycle) are
+    // passed through untouched — drop-detection applies only to rows with no
+    // terminal verdict yet.
+    if (row.source === "local-claim" || row.confirmedBlockHeight !== undefined) {
       out.push(row);
       continue;
     }

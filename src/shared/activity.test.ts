@@ -27,12 +27,19 @@ import {
   applyCapturedClusterNames,
   mergeActivityNewestFirst,
   evictExpiredPending,
+  classifyStalePending,
+  transitionPending,
+  PENDING_SLOW_MS,
+  PENDING_DROP_GRACE_MS,
+  PENDING_ABSOLUTE_CAP_MS,
+  PENDING_TERMINAL_RETAIN_MS,
   reconcilePending,
   NATIVE_LYTH_TOKEN_ID,
   isNativeLythTokenId,
   type PendingTxRow,
   type ConfirmedRow,
   type DelegateRow,
+  type UndelegateRow,
   type RedelegateRow,
   type TxSendRow,
   type ClaimRow,
@@ -846,6 +853,291 @@ describe("evictExpiredPending", () => {
     const expired = makePending(now - PENDING_TTL_MS - 1000);
     const result = evictExpiredPending([fresh, expired], now);
     expect(result).toEqual([fresh]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// classifyStalePending — drop-detection lifecycle (C2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("classifyStalePending", () => {
+  const NOW = 1_000_000_000;
+  const mk = (overrides: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xtx",
+    to: "0xabc",
+    amountDecimal: "1",
+    broadcastedAtMs: NOW - 1000, // young by default
+    broadcastBlockHeight: 100,
+    via: "op",
+    nonce: 5,
+    ...overrides,
+  });
+
+  it("nonce passed + no receipt + past grace → dropped", () => {
+    const row = mk({ noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1 });
+    expect(classifyStalePending(row, 6, NOW)).toEqual({
+      status: "dropped",
+      noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1,
+    });
+  });
+
+  it("nonce passed, FIRST observation (within grace) → slow + stamps the clock", () => {
+    const row = mk(); // no noncePassedAtMs yet
+    expect(classifyStalePending(row, 6, NOW)).toEqual({
+      status: "slow",
+      noncePassedAtMs: NOW,
+    });
+  });
+
+  it("committedNonce === null → NEVER dropped (no fresh signal)", () => {
+    const row = mk({ noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1 });
+    const r = classifyStalePending(row, null, NOW);
+    expect(r.status).not.toBe("dropped");
+  });
+
+  it("committedNonce === null PRESERVES a prior dropped verdict (no un-drop on a failed read)", () => {
+    const row = mk({ lifecycle: "dropped", noncePassedAtMs: NOW - 999_999 });
+    expect(classifyStalePending(row, null, NOW)).toEqual({
+      status: "dropped",
+      noncePassedAtMs: NOW - 999_999,
+    });
+  });
+
+  it("a REAL read ≤ row.nonce un-drops (re-org regression) → time-only", () => {
+    const row = mk({ nonce: 5, lifecycle: "dropped", broadcastedAtMs: NOW - 1000 });
+    // committed regressed back to 5 (== row.nonce) → not passed → re-evaluate.
+    expect(classifyStalePending(row, 5, NOW).status).toBe("pending");
+  });
+
+  it("nonce ≤ committed-not-greater → time-only by age (pending / slow / expired)", () => {
+    expect(classifyStalePending(mk({ broadcastedAtMs: NOW - 1000 }), 5, NOW).status).toBe(
+      "pending",
+    );
+    expect(
+      classifyStalePending(mk({ broadcastedAtMs: NOW - PENDING_SLOW_MS }), 5, NOW).status,
+    ).toBe("slow");
+    expect(
+      classifyStalePending(mk({ broadcastedAtMs: NOW - PENDING_ABSOLUTE_CAP_MS }), 5, NOW)
+        .status,
+    ).toBe("expired");
+  });
+
+  it("nonce gap (row.nonce > committed) → pending, never dropped", () => {
+    const row = mk({ nonce: 7, broadcastedAtMs: NOW - 1000 });
+    expect(classifyStalePending(row, 5, NOW).status).toBe("pending");
+  });
+
+  it("claim rows are exempt (always pending)", () => {
+    const row = mk({ source: "local-claim", nonce: 5 });
+    expect(classifyStalePending(row, 9999, NOW).status).toBe("pending");
+  });
+
+  it("nonce-less rows fall to time-only (never dropped)", () => {
+    const row = mk({ broadcastedAtMs: NOW - PENDING_SLOW_MS });
+    delete (row as { nonce?: number }).nonce; // legacy / non-send-tx broadcaster
+    expect(classifyStalePending(row, 9999, NOW).status).toBe("slow");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// transitionPending — never silently vanish (C2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("transitionPending", () => {
+  const NOW = 1_000_000_000;
+  const mk = (overrides: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xtx",
+    to: "0xabc",
+    amountDecimal: "1",
+    broadcastedAtMs: NOW - 1000,
+    broadcastBlockHeight: 100,
+    via: "op",
+    nonce: 5,
+    ...overrides,
+  });
+
+  it("never removes a pending/slow row (the core guarantee)", () => {
+    const young = mk({ txHash: "0xa", broadcastedAtMs: NOW - 1000 });
+    const slow = mk({ txHash: "0xb", broadcastedAtMs: NOW - PENDING_SLOW_MS });
+    const out = transitionPending([young, slow], 5, NOW);
+    expect(out).toHaveLength(2);
+    expect(out.map((r) => r.lifecycle)).toEqual(["pending", "slow"]);
+  });
+
+  it("tags a dropped row but keeps it visible within the retain window", () => {
+    const dropped = mk({
+      broadcastedAtMs: NOW - 10 * 60 * 1000, // 10m — well under retain
+      noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1,
+    });
+    const out = transitionPending([dropped], 6, NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.lifecycle).toBe("dropped");
+  });
+
+  it("removes a TERMINAL row only past PENDING_TERMINAL_RETAIN_MS", () => {
+    const old = mk({
+      broadcastedAtMs: NOW - PENDING_TERMINAL_RETAIN_MS, // at the bound
+      noncePassedAtMs: NOW - PENDING_TERMINAL_RETAIN_MS,
+    });
+    expect(transitionPending([old], 6, NOW)).toHaveLength(0);
+  });
+
+  it("passes claim rows through untouched (durable)", () => {
+    const claim = mk({ source: "local-claim", broadcastedAtMs: NOW - 2 * 60 * 60 * 1000 });
+    const out = transitionPending([claim], 9999, NOW);
+    expect(out).toEqual([claim]); // same object ref, no lifecycle added
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// validatePendingActivityCache — nonce + noncePassedAtMs survive (C1 / added-req-1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("pending-row lifecycle field survival", () => {
+  it("nonce + noncePassedAtMs + lifecycle survive a cache round-trip", () => {
+    const row: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xtx",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: 123,
+      broadcastBlockHeight: 100,
+      via: "op",
+      nonce: 5,
+      noncePassedAtMs: 999,
+      lifecycle: "dropped",
+    };
+    const out = validatePendingActivityCache({ pending: [JSON.parse(JSON.stringify(row))] });
+    expect(out?.pending[0]?.nonce).toBe(5);
+    expect(out?.pending[0]?.noncePassedAtMs).toBe(999);
+    expect(out?.pending[0]?.lifecycle).toBe("dropped");
+  });
+
+  it("a row whose nonce passed > grace ago across TWO persisted polls → dropped", () => {
+    const T0 = 5_000_000;
+    const base: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xtx",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: T0 - 1000,
+      broadcastBlockHeight: 100,
+      via: "op",
+      nonce: 5,
+    };
+    // Poll 1 at T0: nonce just passed → slow, stamps noncePassedAtMs = T0.
+    const poll1 = transitionPending([base], 6, T0);
+    expect(poll1[0]!.lifecycle).toBe("slow");
+    expect(poll1[0]!.noncePassedAtMs).toBe(T0);
+    // Persist + round-trip (the stamp MUST survive, else the grace re-stamps).
+    const persisted =
+      validatePendingActivityCache({ pending: JSON.parse(JSON.stringify(poll1)) })?.pending ??
+      [];
+    expect(persisted[0]?.noncePassedAtMs).toBe(T0);
+    // Poll 2 past the grace → dropped (only works because the stamp survived).
+    const poll2 = transitionPending(persisted, 6, T0 + PENDING_DROP_GRACE_MS + 1);
+    expect(poll2[0]!.lifecycle).toBe("dropped");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// pendingMatchesConfirmed — delegation heuristic (C3), exercised via reconcilePending
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("reconcilePending — delegation heuristic (C3)", () => {
+  const mkPending = (overrides: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xtx",
+    to: "0x" + "11".repeat(20), // the delegation module, never a tx_send counterparty
+    amountDecimal: "0",
+    broadcastedAtMs: 1,
+    broadcastBlockHeight: 1000,
+    via: "op",
+    opKind: "undelegate",
+    clusterId: 7,
+    delegationWeightBps: 2500,
+    ...overrides,
+  });
+  const mkUndelegate = (overrides: Partial<UndelegateRow> = {}): UndelegateRow => ({
+    kind: "undelegate",
+    blockHeight: 1005,
+    txIndex: 0,
+    logIndex: 0,
+    cluster: 7,
+    weightBps: 2500,
+    ...overrides,
+  });
+
+  it("retires a pending undelegate against a confirmed undelegate (cluster + window)", () => {
+    expect(reconcilePending([mkPending()], [mkUndelegate()])).toEqual([]);
+  });
+
+  it("does NOT retire on a cluster mismatch", () => {
+    expect(
+      reconcilePending([mkPending({ clusterId: 7 })], [mkUndelegate({ cluster: 9 })]),
+    ).toHaveLength(1);
+  });
+
+  it("does NOT retire on a weight MISMATCH (both known, different)", () => {
+    expect(
+      reconcilePending(
+        [mkPending({ delegationWeightBps: 2500 })],
+        [mkUndelegate({ weightBps: 3000 })],
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("DOES retire despite a null confirmed weight (conservative skip, not reject)", () => {
+    expect(
+      reconcilePending([mkPending()], [mkUndelegate({ weightBps: null })]),
+    ).toEqual([]);
+  });
+
+  it("does NOT retire outside the block window", () => {
+    expect(
+      reconcilePending(
+        [mkPending({ broadcastBlockHeight: 1000 })],
+        [mkUndelegate({ blockHeight: 1000 + PENDING_MATCH_BLOCK_WINDOW + 1 })],
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does NOT retire against a DIFFERENT delegation kind", () => {
+    const delegate: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 1005,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 2500,
+    };
+    expect(reconcilePending([mkPending({ opKind: "undelegate" })], [delegate])).toHaveLength(
+      1,
+    );
+  });
+
+  it("redelegate matches on source + destination when both known", () => {
+    const pending = mkPending({
+      opKind: "redelegate",
+      clusterId: 7,
+      toClusterId: 9,
+    });
+    const redelegate: RedelegateRow = {
+      kind: "redelegate",
+      blockHeight: 1005,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      toCluster: 9,
+      weightBps: 2500,
+    };
+    expect(reconcilePending([pending], [redelegate])).toEqual([]);
+    // destination mismatch → not retired
+    expect(
+      reconcilePending([pending], [{ ...redelegate, toCluster: 3 }]),
+    ).toHaveLength(1);
   });
 });
 
