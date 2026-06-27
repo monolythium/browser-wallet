@@ -17,7 +17,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TESTNET_OPERATOR_RPCS_DEFAULTS,
-  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   allActiveOperatorsDefinitivelyUntrusted,
   operatorDefinitivelyUntrusted,
   clearGenesisCache,
@@ -28,7 +27,10 @@ import {
   snapshotWrongChainOperators,
   verifyOperatorGenesis,
 } from "./networks.js";
-import { clampToSaneBound } from "../shared/operator-bounds.js";
+import {
+  clampToSaneBound,
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+} from "../shared/operator-bounds.js";
 import {
   TESTNET_BLOCK0_HASH,
   TESTNET_GENESIS_HASH,

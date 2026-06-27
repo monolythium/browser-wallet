@@ -22,7 +22,7 @@
 import { describe, expect, it } from "vitest";
 import { LYTHOSHI_PER_LYTH } from "@monolythium/core-sdk";
 import { MAX_PLAUSIBLE_BALANCE_LYTHOSHI } from "./tx-mldsa.js";
-import { MAX_EXECUTION_UNIT_PRICE_LYTHOSHI } from "./networks.js";
+import { MAX_EXECUTION_UNIT_PRICE_LYTHOSHI } from "../shared/operator-bounds.js";
 import { MOCK_REWARD_PRINCIPAL_LYTHOSHI } from "./staking-client.js";
 import {
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,

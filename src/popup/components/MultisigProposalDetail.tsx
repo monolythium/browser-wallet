@@ -26,6 +26,7 @@ import {
   lythoshiToLythDecimal,
   parseHexQuantity,
 } from "../../shared/native-amount";
+import { MAX_EXECUTION_UNIT_PRICE_LYTHOSHI } from "../../shared/operator-bounds";
 
 export interface MultisigProposalDetailProps {
   proposal: PendingProposal;
@@ -100,6 +101,26 @@ function ActionSummary({
       {action.gasLimitHex != null && action.gasLimitHex !== "" && (
         <Row label="Gas limit">{formatGasLimit(action.gasLimitHex)}</Row>
       )}
+      {/* P3-004 — the executor sets the fee at EXECUTION (the live network
+          price); the wallet clamps the per-execution-unit price to
+          MAX_EXECUTION_UNIT_PRICE_LYTHOSHI so a malicious/MITM operator can't
+          inflate it. Show that cap so co-signers see the worst-case rate they
+          implicitly approve. Display-only — the fee is NOT part of the signed
+          proposal digest. */}
+      <Row label="Max fee rate">
+        {`≤ ${lythoshiToLythDecimal(MAX_EXECUTION_UNIT_PRICE_LYTHOSHI)} LYTH / unit`}
+      </Row>
+      <div
+        style={{
+          fontSize: 10,
+          lineHeight: 1.5,
+          color: "var(--fg-500, #8a8f98)",
+          padding: "2px 0 0",
+        }}
+      >
+        Live network price at execution, capped — the executor&apos;s wallet
+        refuses a higher fee.
+      </div>
       {hasData && action.kind === "contract" && (
         <CalldataView data={action.data ?? "0x"} to={action.to} />
       )}

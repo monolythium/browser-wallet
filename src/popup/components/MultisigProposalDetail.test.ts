@@ -10,10 +10,13 @@ import {
   MultisigProposalDetail,
   shortenHex,
 } from "./MultisigProposalDetail.js";
-import type {
-  MultisigSigner,
-  PendingProposal,
+import {
+  hashTxProposal,
+  type MultisigSigner,
+  type PendingProposal,
 } from "../../shared/multisig.js";
+import { lythoshiToLythDecimal } from "../../shared/native-amount.js";
+import { MAX_EXECUTION_UNIT_PRICE_LYTHOSHI } from "../../shared/operator-bounds.js";
 
 describe("formatRemaining", () => {
   const MIN = 60 * 1000;
@@ -157,6 +160,61 @@ describe("MultisigProposalDetail value display", () => {
     expect(html).not.toContain("Value (wei)");
     expect(html).not.toContain("valueWeiHex");
     expect(html).not.toContain(">1000000000000000000</div>");
+  });
+
+  // ── P3-004 — execution fee ceiling (display-only) ──────────────────────────
+
+  it("renders the max-fee-rate cap row formatted from the ceiling constant", () => {
+    const html = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(html).toContain(">Max fee rate</div>");
+    expect(html).toContain("≤ 0.001 LYTH / unit");
+    expect(html).toContain("refuses a higher fee");
+    // The displayed value tracks the constant (= 0.001 LYTH/unit @ 18 dec).
+    expect(lythoshiToLythDecimal(MAX_EXECUTION_UNIT_PRICE_LYTHOSHI)).toBe("0.001");
+  });
+
+  it("shows the cap row regardless of gas-limit presence (Design A)", () => {
+    const withLimit = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX, "0x5208"),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    const noLimit = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(withLimit).toContain(">Max fee rate</div>");
+    expect(noLimit).toContain(">Max fee rate</div>");
+  });
+
+  it("does NOT change the signed proposal digest (display-only)", () => {
+    const proposal = makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX, "0x5208");
+    // The fee ceiling is a rendered constant, never part of the proposal — the
+    // signed digest must be identical before/after the component renders it.
+    const before = Array.from(hashTxProposal(proposal));
+    renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal,
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(Array.from(hashTxProposal(proposal))).toEqual(before);
   });
 });
 

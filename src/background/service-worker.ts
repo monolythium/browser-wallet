@@ -195,7 +195,6 @@ import { keccak_256, shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
   TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
-  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   MAX_EXECUTION_UNIT_LIMIT,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
@@ -213,7 +212,10 @@ import {
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
 import { hardenedChains } from "../shared/hardened-dial.js";
-import { clampToSaneBound } from "../shared/operator-bounds.js";
+import {
+  clampToSaneBound,
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+} from "../shared/operator-bounds.js";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
   validateOperatorList,
