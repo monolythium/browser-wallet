@@ -10,7 +10,7 @@
 //      fallback). The popup renders the SpendingPolicyView summary card.
 //
 //   2. buildSpendingPolicyClaim(form) — the agent sub-account lifecycle:
-//        - CREATE: generate a fresh PQM-1 mnemonic + ML-DSA-65 keypair
+//        - CREATE: generate a fresh recovery phrase + ML-DSA-65 keypair
 //          the principal controls (its OWN keypair, NOT a vault — the
 //          24-word mnemonic is returned once so the principal can fund
 //          / re-manage it). This is the sub-account.
@@ -39,8 +39,8 @@
 
 import { testnetJsonRpc } from "./tx-mldsa.js";
 import {
-  generatePqm1Mnemonic,
-  pqm1MnemonicToMlDsa65Seed,
+  generateMnemonic,
+  mnemonicToMlDsa65Seed,
 } from "@monolythium/core-sdk/crypto";
 import { MlDsa65Backend } from "@monolythium/core-sdk/crypto";
 import { randomBytes } from "@noble/hashes/utils.js";
@@ -141,7 +141,7 @@ export interface BuildClaimResult {
   subAccountAddress: string;
   /** The fresh sub-account address (typed `mono` bech32m). */
   subAccountBech32m: string;
-  /** The sub-account's 24-word PQM-1 recovery phrase — ONE-TIME. The
+  /** The sub-account's 24-word recovery phrase — ONE-TIME. The
    *  principal must save this to fund / re-manage the sub-account
    *  later; it is the sub-account's only key. */
   subAccountMnemonic: string;
@@ -153,7 +153,7 @@ export type BuildClaimOutcome = BuildClaimResult | { ok: false; reason: string }
  * Generate a fresh agent sub-account keypair, sign the §18.8
  * claim-bound message with it, and build the `setPolicyClaim` calldata.
  *
- * The sub-account is a brand-new ML-DSA-65 keypair (fresh PQM-1
+ * The sub-account is a brand-new ML-DSA-65 keypair (fresh recovery
  * mnemonic) the principal controls — it is NOT one of the principal's
  * wallet vaults. The returned mnemonic is the only copy of the
  * sub-account's key; the popup surfaces it once for the user to save.
@@ -166,10 +166,10 @@ export async function buildSpendingPolicyClaim(
   req: BuildClaimRequest,
 ): Promise<BuildClaimOutcome> {
   // 1. Fresh sub-account keypair.
-  const mnemonic = generatePqm1Mnemonic((out) => {
+  const mnemonic = generateMnemonic((out) => {
     out.set(randomBytes(out.length));
   });
-  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const seed = mnemonicToMlDsa65Seed(mnemonic);
   let backend: MlDsa65Backend;
   try {
     backend = MlDsa65Backend.fromSeed(seed);

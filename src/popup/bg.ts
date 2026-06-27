@@ -323,7 +323,7 @@ export async function bgKeystoreCreateFromMnemonic(
 }
 
 /**
- * Re-auth and return the 24-word PQM-1 mnemonic for the Settings →
+ * Re-auth and return the 24-word recovery phrase for the Settings →
  * Show recovery phrase flow. Wrong-password attempts share the
  * SESSION_KEY_UNLOCK_FAIL_COUNT/_UNTIL counters with `bgKeystoreUnlock`,
  * so brute-force lockout thresholds apply identically. v4 strict
@@ -1679,7 +1679,7 @@ export async function bgVaultRename(
 }
 
 /**
- * Generate a fresh PQM-1 mnemonic and append a new vault. Caller
+ * Generate a fresh recovery phrase and append a new vault. Caller
  * receives the mnemonic for one-time display (Settings → Show
  * recovery phrase later requires re-auth). Does NOT switch the active
  * vault — the popup decides whether to follow up with `bgVaultSelect`.
@@ -1699,7 +1699,7 @@ export async function bgVaultAddFresh(
 }
 
 /**
- * Generate a fresh PQM-1 mnemonic for the in-app
+ * Generate a fresh recovery phrase for the in-app
  * multi-step new-wallet flow. The SW returns the mnemonic without
  * persisting any vault; the popup holds it in React state through
  * the show-phrase + verify-phrase steps and commits via
@@ -1715,7 +1715,7 @@ export async function bgVaultGenerateFreshMnemonic(): Promise<
 }
 
 /**
- * Import a user-supplied PQM-1 mnemonic. Rejects duplicate-address
+ * Import a user-supplied recovery phrase. Rejects duplicate-address
  * imports (the importing mnemonic would derive the same address as
  * an existing vault) with `reason: "vault with this address already
  * exists in the container"`. Same no-auto-switch + requires-unlock

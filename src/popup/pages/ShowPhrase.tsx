@@ -60,7 +60,7 @@ export function ShowPhrase({ mnemonic, onConfirmed, onBack }: ShowPhraseProps) {
             textTransform: "uppercase",
           }}
         >
-          PQM-1 · {wordCount} words
+          ML-DSA-65 · {wordCount} words
         </div>
 
         <MnemonicGrid mnemonic={mnemonic} />

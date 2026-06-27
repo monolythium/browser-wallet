@@ -408,7 +408,7 @@ export function RevealPhrase({ onBack }: RevealPhraseProps) {
               textTransform: "uppercase",
             }}
           >
-            PQM-1 · 24 words
+            ML-DSA-65 · 24 words
           </div>
           <div
             style={{

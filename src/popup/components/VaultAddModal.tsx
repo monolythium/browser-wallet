@@ -3,12 +3,12 @@
 // mode to enter from the dropdown footer CTAs and the modal skips the
 // mode-picker screen entirely.
 //
-// Whitepaper §21.2.1 (PQM-1 v1) is the authority for the 24-word
+// Whitepaper §21.2.1 (BIP-39 + ML-DSA-65) is the authority for the 24-word
 // mnemonic format used in both flows. The popup never re-implements
 // crypto — fresh generation routes through bgVaultAddFresh (which
-// invokes the SDK's generatePqm1Mnemonic + ML-DSA-65 keygen in the
+// invokes the SDK's generateMnemonic + ML-DSA-65 keygen in the
 // service worker), and the import flow defers wordlist + checksum
-// validation to pqm1MnemonicToMlDsa65Seed inside the SW. The popup
+// validation to mnemonicToMlDsa65Seed inside the SW. The popup
 // only checks word count locally — same posture as the onboarding
 // ImportWallet page.
 //
@@ -25,7 +25,7 @@
 // Fresh flow steps:
 //   1. password (only if locked)
 //   2. label  — auto-default "Vault N+1", user-editable
-//   3. reveal — 24-word PQM-1 + bech32m address + backup checkbox
+//   3. reveal — 24-word recovery phrase + bech32m address + backup checkbox
 //
 // Import flow steps:
 //   1. password (only if locked)
@@ -270,8 +270,8 @@ function FreshFlow({
     return (
       <div style={colStyle}>
         <div style={hintStyle}>
-          A new ML-DSA-65 keypair will be derived from a fresh PQM-1
-          (24-word) mnemonic. You&apos;ll see the words on the next
+          A new ML-DSA-65 keypair will be derived from a fresh 24-word
+          recovery phrase. You&apos;ll see the words on the next
           screen — write them down before continuing.
         </div>
         <LabelInput
@@ -323,7 +323,7 @@ function FreshFlow({
           textTransform: "uppercase",
         }}
       >
-        PQM-1 · {MNEMONIC_WORDS} words
+        ML-DSA-65 · {MNEMONIC_WORDS} words
       </div>
       <MnemonicGrid mnemonic={mnemonic} />
       <div
@@ -451,7 +451,7 @@ function ImportFlow({
   return (
     <div style={colStyle}>
       <div style={hintStyle}>
-        Paste your 24-word PQM-1 recovery phrase. Words are space-
+        Paste your 24-word recovery phrase. Words are space-
         separated; case is normalised on import.
       </div>
       <textarea

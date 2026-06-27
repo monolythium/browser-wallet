@@ -73,10 +73,10 @@ describe("deriveSlhDsaSeed", () => {
     expect(() => deriveSlhDsaSeed(new Uint8Array(33))).toThrow();
   });
 
-  it("domain-separates from the primary PQM-1 ML-DSA derivation", () => {
+  it("domain-separates from the primary ML-DSA-65 derivation", () => {
     // The domain tag in our SHAKE256 expansion is
     // `monolythium.slh-dsa-backup.v1` — distinct from
-    // `monolythium.pqm1.v1.mldsa65` (PQM-1 ML-DSA). Two SHAKE256
+    // `monolythium.mldsa65.v1` (the primary ML-DSA-65 seed domain). Two SHAKE256
     // expansions over the same entropy under different domain tags
     // must produce different output. We don't have direct access to
     // the ML-DSA derivation here, but we can pin that swapping the

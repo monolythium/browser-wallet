@@ -46,7 +46,7 @@ export function ImportWallet({ onSubmit, onBack, error }: ImportWalletProps) {
             lineHeight: 1.5,
           }}
         >
-          Paste your 24-word PQM-1 recovery phrase. Words are separated by
+          Paste your 24-word recovery phrase. Words are separated by
           spaces. Case is normalised on import.
         </div>
 

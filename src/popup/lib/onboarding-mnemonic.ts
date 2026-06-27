@@ -1,4 +1,4 @@
-// SECURITY ADDENDUM — popup-side PQM-1 mnemonic generator
+// SECURITY ADDENDUM — popup-side recovery-phrase generator
 // for the FIRST-SETUP onboarding flow.
 //
 // Why generate on the popup side? The first-setup security model
@@ -23,21 +23,21 @@
 // path the Import flow uses, which already takes user-supplied
 // mnemonic as input). That requires the popup to generate the
 // mnemonic itself — hence this helper. The SDK's
-// `generatePqm1Mnemonic` is the same primitive the SW uses; the
+// `generateMnemonic` is the same primitive the SW uses; the
 // entropy source is `crypto.getRandomValues` which the browser
 // guarantees is CSPRNG-quality. Output bytes are identical to what
 // the SW would have produced.
 
-import { generatePqm1Mnemonic } from "@monolythium/core-sdk/crypto";
+import { generateMnemonic } from "@monolythium/core-sdk/crypto";
 
-/** Generate a fresh 24-word PQM-1 recovery phrase using the
+/** Generate a fresh 24-word recovery phrase using the
  *  browser's CSPRNG. Never persisted by this function — the caller
  *  holds the returned string in component state and commits via
  *  `bgKeystoreCreateFromMnemonic` only on verify-phrase success.
  *  Throws if the SDK rejects the entropy callback (shouldn't happen
  *  with the default 32-byte buffer). */
 export function generateOnboardingMnemonic(): string {
-  return generatePqm1Mnemonic((out) => {
+  return generateMnemonic((out) => {
     crypto.getRandomValues(out);
   });
 }
