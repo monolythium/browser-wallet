@@ -33,17 +33,17 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value = the 2026-06-24 v2 re-genesis (protocore v0.2.0-testnet,
- *  mono-core nextgen-v2 @ 42cc2120), where `lyth_chainStats.genesisHash`
- *  reports the registry identity hash below. CONFIRMED 2026-06-24 against
- *  monolythium/chain-registry (master) + all 12 live fleet operators (height
- *  ~25.5k). Pulled forward of the Wave-2 SDK bump: the installed SDK 0.4.22
+ *  Current value = the 2026-06-25 v2 re-genesis (protocore v0.2.2-testnet,
+ *  mono-core @ 6f33aa30), where `lyth_chainStats.genesisHash`
+ *  reports the registry identity hash below. CONFIRMED 2026-06-25 against
+ *  monolythium/chain-registry (master) + the live 2×10 operator fleet.
+ *  Pulled forward of the Wave-2 SDK bump: the installed SDK 0.4.22
  *  registry snapshot still reads the prior 0x363fb60a value (see
  *  SDK_REGISTRY_GENESIS_HASH; the About drift banner surfaces that lag until
  *  the SDK is bumped). Bumping this security pin is a human-reviewer decision;
  *  the live-registry fetch shows the current GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
-  "0xd56f9763ca849c5482cae27c7e2551f891684063b89afd53aadeb55868453959";
+  "0xb52b59d667a0ad97c531607b840b7082547ba3151aa11a819eb6916b080b1ca9";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
@@ -56,11 +56,11 @@ export const TESTNET_BLOCK0_HASH =
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
- *  the v0.1.72-testnet re-genesis value (2026-06-21) so it does not lag
+ *  the v0.2.2-testnet re-genesis value (2026-06-25) so it does not lag
  *  behind the installed SDK snapshot (`TESTNET_69420.genesis_hash`), which
  *  is bumped on the next SDK rebuild/publish. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0xd56f9763ca849c5482cae27c7e2551f891684063b89afd53aadeb55868453959";
+  "0xb52b59d667a0ad97c531607b840b7082547ba3151aa11a819eb6916b080b1ca9";
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
