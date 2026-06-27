@@ -63,6 +63,15 @@ type ScreenState =
   | { kind: "error"; message: string }
   | { kind: "done" };
 
+/** Signature counter from a WebAuthn registration's authenticator data.
+ *  Layout: `rpIdHash[32] || flags[1] || signCount[4]` — read the big-endian
+ *  u32 at byte offset 33. Returns 0 when the buffer is unavailable or too
+ *  short (many platform authenticators report 0 anyway). */
+function readSignCount(authData: ArrayBuffer | null): number {
+  if (!authData || authData.byteLength < 37) return 0;
+  return new DataView(authData).getUint32(33, false);
+}
+
 function bytesToBase64Url(b: ArrayBuffer | Uint8Array): string {
   const u8 = b instanceof Uint8Array ? b : new Uint8Array(b);
   let s = "";
@@ -139,6 +148,9 @@ export function PasskeyRegisterModal({
     setScreen({ kind: "registering" });
 
     let credentialId: string;
+    let publicKeySpki: string;
+    let alg: number;
+    let signCount: number;
     try {
       // Use a freshly-allocated ArrayBuffer-backed Uint8Array so the
       // DOM `BufferSource` constraint accepts the value — `Uint8Array
@@ -195,6 +207,26 @@ export function PasskeyRegisterModal({
         return;
       }
       credentialId = bytesToBase64Url(cred.rawId);
+      // Part 1a — capture the credential PUBLIC KEY so the SW can verify the
+      // assertion later (Option A). `getPublicKey()` returns SPKI DER (or null
+      // if the browser can't export the alg — fail closed, never store a
+      // pubkey-less credential). `getPublicKeyAlgorithm()` is the COSE alg id
+      // (-7 ES256 / -257 RS256, the registered set). `signCount` is the
+      // big-endian u32 in the registration authData.
+      const att = cred.response as AuthenticatorAttestationResponse;
+      const spki = att.getPublicKey?.() ?? null;
+      if (!spki) {
+        setScreen({
+          kind: "error",
+          message:
+            "Your authenticator returned a key format the wallet can't use " +
+            "for transaction signing — try another authenticator",
+        });
+        return;
+      }
+      publicKeySpki = bytesToBase64Url(spki);
+      alg = att.getPublicKeyAlgorithm();
+      signCount = readSignCount(att.getAuthenticatorData?.() ?? null);
     } catch (e) {
       const err = e as DOMException | Error;
       const msg = describeWebAuthnError(err);
@@ -210,6 +242,9 @@ export function PasskeyRegisterModal({
         name: trimmed,
         kind,
         createdAt: Date.now(),
+        publicKeySpki,
+        alg,
+        signCount,
       },
     });
     if (!res.ok) {

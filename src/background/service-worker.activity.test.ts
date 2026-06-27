@@ -6437,6 +6437,43 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Part 1a — the add-credential IPC requires the credential public key so a
+// pubkey-less credential can never be stored (Option A's SW-verify needs it).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("passkey-add-credential requires the public key (Part 1a)", () => {
+  function add(credential: Record<string, unknown>) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "passkey-add-credential",
+      payload: { vaultId: "v1", credential },
+    }) as Promise<{ ok: boolean; reason?: string }>;
+  }
+
+  it("rejects a new registration with NO publicKeySpki — never stores a pubkey-less credential", async () => {
+    const r = await add({
+      credentialId: "c1",
+      name: "Key",
+      kind: "platform",
+      createdAt: 1,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("invalid credential shape");
+  });
+
+  it("rejects a registration missing the alg", async () => {
+    const r = await add({
+      credentialId: "c1",
+      name: "Key",
+      kind: "platform",
+      createdAt: 1,
+      publicKeySpki: "c3BraQ",
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("invalid credential shape");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Part 3 — the SW is the authoritative passkey daily-cap counter. The ledger
 // APPEND lives in wallet-send-tx (not a popup IPC), persisted to
 // chrome.storage.session so it survives MV3 SW hibernation AND a compromised

@@ -1233,6 +1233,55 @@ describe("keystore-mldsa passkey state", () => {
   );
 
   it(
+    "round-trips the credential public-key fields (Part 1a)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-pubkey-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const id = (await ks.listVaultsV4())![0]!.id;
+      await ks.addPasskeyCredentialV4(id, {
+        credentialId: "cred-pk",
+        name: "Key",
+        kind: "platform",
+        createdAt: 1_000_000,
+        publicKeySpki: "c3BraS1kZXItYmFzZTY0dXJs",
+        alg: -7,
+        signCount: 5,
+      });
+      // Survives the storage round-trip (passkeyStateForStorage →
+      // clonePasskeyState) intact.
+      const state = await ks.readPasskeyStateV4(id);
+      const c = state.credentials[0]!;
+      expect(c.publicKeySpki).toBe("c3BraS1kZXItYmFzZTY0dXJs");
+      expect(c.alg).toBe(-7);
+      expect(c.signCount).toBe(5);
+    },
+    120_000,
+  );
+
+  it(
+    "reads back a legacy credential with NO pubkey fields (undefined, no throw)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-legacy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const id = (await ks.listVaultsV4())![0]!.id;
+      // `fakeCred` is the pre-Part-1a shape (no publicKeySpki/alg/signCount) —
+      // a vault that predates this change. It must read back cleanly.
+      await ks.addPasskeyCredentialV4(id, fakeCred(9));
+      const state = await ks.readPasskeyStateV4(id);
+      const c = state.credentials[0]!;
+      expect(c.credentialId).toBe("cred-9");
+      expect(c.publicKeySpki).toBeUndefined();
+      expect(c.alg).toBeUndefined();
+      expect(c.signCount).toBeUndefined();
+    },
+    120_000,
+  );
+
+  it(
     "removePasskeyCredentialV4 disables the policy when the last cred goes",
     async () => {
       const ks = await import("./keystore-mldsa.js");

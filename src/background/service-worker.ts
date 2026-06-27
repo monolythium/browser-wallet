@@ -2836,11 +2836,22 @@ function parsePasskeyCredential(raw: unknown): PasskeyCredential | null {
   if (typeof r.name !== "string") return null;
   if (r.kind !== "platform" && r.kind !== "cross-platform") return null;
   if (typeof r.createdAt !== "number") return null;
+  // Part 1a — a NEW registration must carry the credential public key so the
+  // SW can verify the assertion later (Option A). Reject a pubkey-less
+  // registration here; never store one. `signCount` defaults to 0.
+  if (typeof r.publicKeySpki !== "string" || r.publicKeySpki.length === 0) {
+    return null;
+  }
+  if (typeof r.alg !== "number") return null;
+  const signCount = typeof r.signCount === "number" ? r.signCount : 0;
   return {
     credentialId: r.credentialId,
     name: r.name,
     kind: r.kind,
     createdAt: r.createdAt,
+    publicKeySpki: r.publicKeySpki,
+    alg: r.alg,
+    signCount,
   };
 }
 

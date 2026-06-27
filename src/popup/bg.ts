@@ -2308,6 +2308,14 @@ export interface BgPasskeyCredential {
   name: string;
   kind: BgAuthenticatorKind;
   createdAt: number;
+  /** base64url(SPKI DER) of the credential public key — sent on a new
+   *  registration (the SW requires it). Optional on the type so reads of
+   *  legacy credentials (registered before this field) don't break. */
+  publicKeySpki?: string;
+  /** COSE alg id: -7 (ES256) / -257 (RS256). */
+  alg?: number;
+  /** Authenticator signature counter from the registration authData. */
+  signCount?: number;
 }
 
 export async function bgPasskeyGetState(

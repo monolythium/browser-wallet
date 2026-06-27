@@ -154,6 +154,19 @@ export interface PasskeyCredential {
   kind: AuthenticatorKind;
   /** Date.now() at registration. */
   createdAt: number;
+  /** base64url(SPKI DER) of the credential public key, captured at
+   *  registration via `getPublicKey()`. REQUIRED for new credentials (the
+   *  add-credential IPC rejects a new registration without it). Optional on
+   *  the type because credentials persisted before this field existed read
+   *  back without it; Option A's SW-verify (a later commit) detects that
+   *  absence and routes the user to re-register. */
+  publicKeySpki?: string;
+  /** COSE algorithm id from `getPublicKeyAlgorithm()` — `-7` (ES256) or
+   *  `-257` (RS256), the only registered algs. Absent on legacy creds. */
+  alg?: number;
+  /** Authenticator signature counter from the registration `authData`
+   *  (big-endian u32). Absent on legacy creds; `0` when unavailable. */
+  signCount?: number;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
