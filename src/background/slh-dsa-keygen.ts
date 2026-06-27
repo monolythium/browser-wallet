@@ -24,16 +24,16 @@
 //
 // Mnemonic encoding → BIP-39 24-word English wordlist via
 // `@scure/bip39`. Same wordlist + same `entropyToMnemonic` path the
-// primary PQM-1 mnemonic uses (whitepaper §21.2.1) so users see a
+// primary recovery phrase uses (whitepaper §21.2.1) so users see a
 // familiar shape. 32-byte entropy = 256 bits = 24 words.
 //
 // Seed expansion → `SHAKE256(domain || entropy, 48)` where
 // `domain = "monolythium.slh-dsa-backup.v1"`. The 48-byte output is
 // fed directly to `slh_dsa_sha2_128s.keygen(seed)`. The domain
 // separation:
-//   - prevents collision with `PQM1_V1_MLDSA65_DOMAIN_TAG` (different
+//   - prevents collision with the primary ML-DSA-65 seed domain `MLDSA65_SEED_DOMAIN` (different
 //     literal string → different SHAKE state)
-//   - lets a future chain-canonicalized PQM-1 SLH-DSA branch land
+//   - lets a future chain-canonicalized SLH-DSA branch land
 //     under a different tag without invalidating existing on-chain
 //     registrations
 //   - is wallet-side ONLY; the chain has not pinned this derivation

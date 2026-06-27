@@ -45,7 +45,7 @@ shared wallet store. Reasons:
 
 ### Path A — Generate / import inside the extension (status quo)
 
-Standard wallet flows: create a new 24-word PQM-1 mnemonic, or import an
+Standard wallet flows: create a new 24-word recovery phrase, or import an
 existing one via paste. Encrypted under user passphrase + stored in
 `chrome.storage.local`.
 

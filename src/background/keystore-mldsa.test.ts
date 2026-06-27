@@ -877,7 +877,7 @@ describe("keystore-mldsa multisig vault", () => {
       const ks = await import("./keystore-mldsa.js");
       const {
         MlDsa65Backend,
-        pqm1MnemonicToMlDsa65Seed,
+        mnemonicToMlDsa65Seed,
       } = await import("@monolythium/core-sdk/crypto");
 
       const password = "ms-sign-password";
@@ -900,7 +900,7 @@ describe("keystore-mldsa multisig vault", () => {
       // signature against its own pubkey. The SDK's MlDsa65Backend
       // wraps @noble/post-quantum's ml_dsa65.verify — this is the
       // same verifier path a future on-chain precompile would use.
-      const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+      const seed = mnemonicToMlDsa65Seed(mnemonic);
       const backend = MlDsa65Backend.fromSeed(seed);
       // Pubkey from the re-derivation must match what the keystore
       // returns; pins that signWithVaultV4 doesn't accidentally

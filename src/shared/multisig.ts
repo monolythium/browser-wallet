@@ -53,7 +53,7 @@
 // §28.5 Q70 — configurable 1-of-1 through N-of-M, signers nameable.
 // §28.5 Q75 — signers changeable post-creation via existing-signer
 //             approval (an M-of-current-signers governance vote).
-// §21.2.1   — each signer's keypair is the same PQM-1 ML-DSA-65 seed
+// §21.2.1   — each signer's keypair is the same ML-DSA-65 seed
 //             a regular vault uses; "self" signers reference a vault
 //             inside the same VaultsContainerV4. "external" signers
 //             are pubkeys without a local secret — they can vote via

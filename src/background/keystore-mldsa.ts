@@ -44,7 +44,7 @@
 // vault's seed: unwrap VEK with MEK, then HKDF-split VEK into
 // seedKey + mnemonicKey, then XChaCha20-Poly1305 the existing envelope.
 // No BIP-32 / BIP-44 derivation paths (whitepaper §21.2.1 forbids HD in
-// v1) — each vault is an independent 24-word PQM-1 mnemonic.
+// v1) — each vault is an independent 24-word BIP-39 recovery phrase.
 //
 // Migration from the legacy single envelope ("mono.vault.v4") to the
 // container ("mono.vaults.v4") is opportunistic, lazy, and runs inside
@@ -62,8 +62,8 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
   MlDsa65Backend,
-  generatePqm1Mnemonic,
-  pqm1MnemonicToMlDsa65Seed,
+  generateMnemonic,
+  mnemonicToMlDsa65Seed,
 } from "@monolythium/core-sdk/crypto";
 import {
   computeTypedDataDigest,
@@ -868,7 +868,7 @@ export async function renameVaultV4(
   await saveVaultsContainerV4(container);
 }
 
-/** Generate a fresh PQM-1 mnemonic and add a new vault to the
+/** Generate a fresh recovery phrase and add a new vault to the
  *  container. Requires the container to be unlocked. Returns the new
  *  vault id, the mnemonic (one-time — treat like a private key), and
  *  the derived address. Does NOT change `activeVaultId`.
@@ -882,10 +882,10 @@ export async function addVaultFreshV4(label?: string): Promise<{
   address: string;
 }> {
   if (!mekCache) throw new Error("container is locked");
-  const mnemonic = generatePqm1Mnemonic((out) => {
+  const mnemonic = generateMnemonic((out) => {
     out.set(randomBytes(out.length));
   });
-  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const seed = mnemonicToMlDsa65Seed(mnemonic);
   try {
     return await appendVaultRecord(mekCache, seed, mnemonic, label);
   } finally {
@@ -893,7 +893,7 @@ export async function addVaultFreshV4(label?: string): Promise<{
   }
 }
 
-/** Generate a fresh PQM-1 mnemonic WITHOUT
+/** Generate a fresh recovery phrase WITHOUT
  *  persisting any vault. The popup uses this for the in-app multi-
  *  step new-wallet flow (show phrase → verify phrase → commit). The
  *  returned mnemonic lives in popup-side React state until the user
@@ -905,12 +905,12 @@ export async function addVaultFreshV4(label?: string): Promise<{
  *  the wrong container after an unlock. */
 export function generateFreshMnemonicV4(): string {
   if (!mekCache) throw new Error("container is locked");
-  return generatePqm1Mnemonic((out) => {
+  return generateMnemonic((out) => {
     out.set(randomBytes(out.length));
   });
 }
 
-/** Import a user-supplied PQM-1 mnemonic and add it to the container.
+/** Import a user-supplied recovery phrase and add it to the container.
  *  Requires the container to be unlocked. Rejects if the derived
  *  address already matches a vault in the container (duplicate seed).
  *  See {@link addVaultFreshV4} for label semantics. */
@@ -919,7 +919,7 @@ export async function addVaultImportV4(
   label?: string,
 ): Promise<{ vaultId: string; address: string }> {
   if (!mekCache) throw new Error("container is locked");
-  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const seed = mnemonicToMlDsa65Seed(mnemonic);
   try {
     const r = await appendVaultRecord(mekCache, seed, mnemonic, label);
     return { vaultId: r.vaultId, address: r.address };
@@ -956,10 +956,10 @@ export async function addVaultMultisigV4(args: {
   assertSignerSetUnique(args.signers);
   validateThreshold(args.threshold, args.signers.length);
 
-  const mnemonic = generatePqm1Mnemonic((out) => {
+  const mnemonic = generateMnemonic((out) => {
     out.set(randomBytes(out.length));
   });
-  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const seed = mnemonicToMlDsa65Seed(mnemonic);
   try {
     return await appendVaultRecord(mekCache, seed, mnemonic, args.label, {
       kind: "multisig",
@@ -1721,7 +1721,7 @@ export function lockV4(): void {
 }
 
 /**
- * Generate a fresh PQM-1 v1 24-word mnemonic and commit a v4 vault.
+ * Generate a fresh 24-word BIP-39 recovery phrase and commit a v4 vault.
  *
  * The returned mnemonic is the recovery secret. Treat it like a private key.
  * The mnemonic is also persisted in the vault (encrypted under the same DEK)
@@ -1735,16 +1735,16 @@ export async function createVaultFromNewMnemonic(password: string): Promise<{
   if (await hasContainerV4()) {
     throw new Error("v4 vault already exists; cannot overwrite");
   }
-  const mnemonic = generatePqm1Mnemonic((out) => {
+  const mnemonic = generateMnemonic((out) => {
     out.set(randomBytes(out.length));
   });
-  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const seed = mnemonicToMlDsa65Seed(mnemonic);
   const address = await commitVaultFromSeed(password, seed, mnemonic);
   seed.fill(0);
   return { mnemonic, address };
 }
 
-/** Import from a user-supplied PQM-1 v1 24-word mnemonic.
+/** Import from a user-supplied 24-word BIP-39 recovery phrase.
  *
  * The supplied mnemonic is persisted alongside the seed (encrypted) so the
  * imported wallet can re-display the phrase from Settings without forcing
@@ -1756,7 +1756,7 @@ export async function createVaultFromMnemonic(
   if (await hasContainerV4()) {
     throw new Error("v4 vault already exists; cannot overwrite");
   }
-  const seed = pqm1MnemonicToMlDsa65Seed(mnemonic);
+  const seed = mnemonicToMlDsa65Seed(mnemonic);
   const address = await commitVaultFromSeed(password, seed, mnemonic);
   seed.fill(0);
   return { address };

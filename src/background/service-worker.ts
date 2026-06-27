@@ -6227,7 +6227,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "keystore-export-seed": {
-      // Re-auth path that returns the 24-word PQM-1 mnemonic for the
+      // Re-auth path that returns the 24-word recovery phrase for the
       // Settings → Show recovery phrase flow. Shares the unlock-attempt
       // session counters with keystore-unlock so wrong-password attempts
       // here count against the same brute-force lockout thresholds. v4
@@ -6454,7 +6454,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "vault-add-fresh": {
       // Requires an unlocked container (MEK cached). Generates a fresh
-      // PQM-1 mnemonic and appends a new VaultRecordV4. Auto-switches
+      // recovery phrase and appends a new VaultRecordV4. Auto-switches
       // the active vault to the newly-created one (the
       // previous design left active unchanged and required a separate
       // `vault-select`; the popup didn't, so users saw the old vault's

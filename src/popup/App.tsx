@@ -1039,7 +1039,7 @@ export default function App() {
   //
   // New flow (no chrome.storage write until verify success):
   //   1. Generate the mnemonic on the popup side using the SDK's
-  //      generatePqm1Mnemonic + crypto.getRandomValues (same
+  //      generateMnemonic + crypto.getRandomValues (same
   //      primitive + same CSPRNG-quality entropy the SW would use).
   //   2. Hold password + mnemonic in popup React state through the
   //      Show Phrase + Verify Phrase steps.

@@ -291,7 +291,7 @@ export function UnlockScreen({
           }}
         >
           Add your wallet back to Monolythium by entering the
-          24-word PQM-1 recovery phrase associated with it.
+          24-word recovery phrase associated with it.
         </div>
         <div
           style={{
@@ -393,9 +393,9 @@ export function UnlockScreen({
             lineHeight: 1.55,
           }}
         >
-          We can&apos;t recover your 24-word PQM-1 recovery phrase. You
+          We can&apos;t recover your 24-word recovery phrase. You
           can reset the wallet to create a new one and import your
-          accounts using a new PQM-1 phrase.
+          accounts using a new recovery phrase.
         </div>
         <div
           style={{

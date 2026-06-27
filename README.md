@@ -27,7 +27,7 @@ Watch this repo for the first non-preview tag before treating any build as produ
 
 A Manifest V3 browser extension that:
 
-- Holds **PQM-1 / ML-DSA-65** Monolythium keys (post-quantum signature scheme) and BIP-39-derived EVM keys for the EVM-supported chain track.
+- Holds **ML-DSA-65** Monolythium keys (post-quantum signature scheme) and BIP-39-derived EVM keys for the EVM-supported chain track.
 - Signs transactions for dapps via a standard **EIP-1193 provider** injected into every page.
 - Talks to Monolythium nodes through the typed **`@monolythium/core-sdk`** client.
 - Routes every destructive operation through a **popup approval flow** with password gate + hold-to-reveal recovery-phrase UX.
@@ -106,7 +106,7 @@ browser-wallet/
 │   ├── background/              # Service worker
 │   │   ├── service-worker.ts    # Entry point + EIP-1193 dispatcher
 │   │   ├── keystore.ts          # BIP-39 / EVM-track keystore
-│   │   ├── keystore-mldsa.ts    # PQM-1 / ML-DSA-65 keystore
+│   │   ├── keystore-mldsa.ts    # ML-DSA-65 keystore
 │   │   ├── approvals.ts         # Request → popup approval flow
 │   │   ├── networks.ts          # Chain config + FALLBACK_OPERATORS_*
 │   │   ├── connected-sites.ts   # Per-origin dapp permissions
@@ -135,10 +135,10 @@ browser-wallet/
 
 ## Crypto stack
 
-- **`@monolythium/core-sdk`** — the ML-DSA-65 (FIPS-204) backend, PQM-1 seed derivation, address derivation, and tx signing
+- **`@monolythium/core-sdk`** — the ML-DSA-65 (FIPS-204) backend, BIP-39 -> ML-DSA-65 seed derivation, address derivation, and tx signing
 - **`@noble/post-quantum`** for the ML-DSA-65 (FIPS-204) signature primitives
 - **`@noble/ciphers`** + **`@noble/hashes`** for the password-derived KEK + AES-GCM vault encryption (and SHAKE256 / keccak)
-- **`@scure/bip39`** for the 24-word recovery mnemonic (PQM-1 derivation — no BIP-32 HD / secp256k1 path)
+- **`@scure/bip39`** for the 24-word recovery mnemonic (BIP-39 -> ML-DSA-65 derivation — no BIP-32 HD / secp256k1 path)
 
 No custom crypto. All sensitive operations go through the noble/scure stack — audited, well-known, RustCrypto-aligned.
 

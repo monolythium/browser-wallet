@@ -12,13 +12,13 @@
 //
 // CHAIN GAP TRACKER
 // =================
-// 1. PQM-1 SLH-DSA derivation branch — NOT canonicalized in
+// 1. SLH-DSA derivation branch — NOT canonicalized in
 //    mono-core or mono-core-sdk @0fd8a79. Only
-//    `PQM1_V1_MLDSA65_DOMAIN_TAG = "monolythium.pqm1.v1.mldsa65"`
+//    `MLDSA65_SEED_DOMAIN = "monolythium.mldsa65.v1"`
 //    exists. The wallet adopts a wallet-side domain tag
 //    `"monolythium.slh-dsa-backup.v1"` for SHAKE256 expansion from
 //    32-byte BIP-39 entropy → 48-byte SLH-DSA seed. If a chain-side
-//    canonicalizes a chain-side PQM-1 SLH-DSA branch later, this
+//    canonicalizes a chain-side SLH-DSA branch later, this
 //    derivation can flip to that path without breaking existing
 //    on-chain registrations (the registered public key remains
 //    valid regardless of how the wallet recovered it).
@@ -104,9 +104,9 @@ export const SLH_DSA_SHA2_128S_LENGTHS = {
 /** SHAKE256 domain tag used by the wallet to expand 32-byte BIP-39
  *  entropy into the 48-byte SLH-DSA-SHA2-128s keygen seed.
  *
- *  Wallet-side ONLY — the chain has not canonicalized a PQM-1 branch
+ *  Wallet-side ONLY — the chain has not canonicalized an SLH-DSA branch
  *  for SLH-DSA derivation (see CHAIN GAP TRACKER above). Domain-
- *  separated from PQM-1 ML-DSA (`monolythium.pqm1.v1.mldsa65`) so a
+ *  separated from the primary ML-DSA-65 seed domain (`monolythium.mldsa65.v1`) so a
  *  future chain-canonicalized branch cannot collide. */
 export const SLH_DSA_BACKUP_DOMAIN_TAG = "monolythium.slh-dsa-backup.v1";
 

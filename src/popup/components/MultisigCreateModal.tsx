@@ -9,7 +9,7 @@
 //   3. threshold — stepper, [1, N]; default = floor(N/2)+1
 //   4. review    — confirm signer roster + threshold + executor mnemonic
 //                  reveal warning
-//   5. reveal    — show the multisig vault's own 24-word PQM-1 mnemonic +
+//   5. reveal    — show the multisig vault's own 24-word recovery phrase +
 //                  its bech32m address + backup checkbox
 //
 // The "executor mnemonic" is the recovery secret for the multisig
@@ -1046,7 +1046,7 @@ function RevealStep({
           textTransform: "uppercase",
         }}
       >
-        Executor mnemonic · PQM-1 · 24 words
+        Executor mnemonic · ML-DSA-65 · 24 words
       </div>
       <MnemonicGrid mnemonic={mnemonic} />
       <div
