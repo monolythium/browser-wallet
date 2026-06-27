@@ -43,8 +43,37 @@ export const ACTIVITY_ROLLING_WINDOW = 100;
 /** Pending-row TTL backstop: a synthetic pending row is dropped this long
  *  after broadcast regardless of whether a confirmed match was found.
  *  Five minutes covers slow blocks + bounded indexer lag; longer pending rows
- *  become user-confusing rather than informative. */
+ *  become user-confusing rather than informative.
+ *  DEPRECATED for non-claim rows: the blind TTL silently dropped txs slower
+ *  than 5 min (the ~7-8 min undelegate). Superseded by the nonce+receipt
+ *  lifecycle (`transitionPending`/`classifyStalePending`); retained only for the
+ *  legacy `evictExpiredPending` shim + its tests. */
 export const PENDING_TTL_MS = 5 * 60 * 1000;
+
+/** A pending row past this age (with no terminal receipt/indexer verdict) is
+ *  flagged "taking longer than usual" — a hint, not a removal. */
+export const PENDING_SLOW_MS = 3 * 60 * 1000;
+
+/** Debounce before declaring a nonce-passed row `dropped`: the committed nonce
+ *  advancing past the row's nonce can momentarily race a confirming receipt
+ *  (nonce advanced, receipt lagging). Require the nonce-passed-without-receipt
+ *  condition to persist this long (≈2 polls) before the `dropped` verdict, so a
+ *  just-confirmed tx surfaces its receipt within the grace instead of a wrong
+ *  terminal. MUST be paired with a persisted `noncePassedAtMs` (else the grace
+ *  re-stamps every poll and never elapses). */
+export const PENDING_DROP_GRACE_MS = 30 * 1000;
+
+/** Absolute last-resort cap: a row that never reaches a receipt/indexer/nonce
+ *  verdict transitions to a VISIBLE `expired` ("status unknown") state — far
+ *  longer than the old 5 min, and a state, not a silent vanish. */
+export const PENDING_ABSOLUTE_CAP_MS = 45 * 60 * 1000;
+
+/** Bounded display window for a TERMINAL (`dropped`/`expired`) row: it stays
+ *  VISIBLE as its terminal state until this age, then is removed (the user can
+ *  also dismiss it sooner). A `pending`/`slow` row is NEVER removed by this —
+ *  removal only ever follows an explicit terminal verdict + this generous
+ *  window, so a possibly-live tx never vanishes. */
+export const PENDING_TERMINAL_RETAIN_MS = 60 * 60 * 1000;
 
 /** Cap on the durable local-claim store per (address, chainId). Reward claims
  *  are infrequent manual actions, so a small newest-N window bounds the store
@@ -895,6 +924,84 @@ export function evictExpiredPending(
   return pending.filter(
     (p) => p.source === "local-claim" || now - p.broadcastedAtMs < PENDING_TTL_MS,
   );
+}
+
+/** Classify a still-pending row (one that has NO terminal receipt and NO indexer
+ *  match yet — the caller applies those first) into its time/nonce lifecycle.
+ *  PURE: the committed nonce + receipt verdicts are read by the SW poll and
+ *  passed in. Never removes a row; only labels it.
+ *
+ *  - claim rows are EXEMPT (durable) — the caller skips them; this returns
+ *    `pending` defensively.
+ *  - `committedNonce > row.nonce` (both known) → the nonce was consumed by a
+ *    DIFFERENT tx and this row has no receipt → it was replaced/dropped. Gated by
+ *    `PENDING_DROP_GRACE_MS` via `noncePassedAtMs` (the returned value the caller
+ *    persists) so a confirming-receipt race resolves first: within the grace →
+ *    `slow`; past it → `dropped`.
+ *  - `committedNonce === null` (count RPC failed) or `nonce` unknown or
+ *    `committedNonce <= row.nonce` (incl. a nonce gap) → NEVER `dropped`; falls
+ *    to the time-only states (`expired` past the absolute cap, else `slow` past
+ *    the slow threshold, else `pending`), and any stale `noncePassedAtMs` is
+ *    cleared (a regressed/un-passed nonce is no longer "passed"). */
+export function classifyStalePending(
+  row: PendingTxRow,
+  committedNonce: number | null,
+  now: number,
+): { status: PendingLifecycle; noncePassedAtMs?: number } {
+  if (row.source === "local-claim") return { status: "pending" };
+  const noncePassed =
+    committedNonce !== null &&
+    row.nonce !== undefined &&
+    committedNonce > row.nonce;
+  if (noncePassed) {
+    // Stamp the clock the first poll observed; a later poll past the grace → dropped.
+    const since = row.noncePassedAtMs ?? now;
+    if (now - since >= PENDING_DROP_GRACE_MS) {
+      return { status: "dropped", noncePassedAtMs: since };
+    }
+    return { status: "slow", noncePassedAtMs: since };
+  }
+  const age = now - row.broadcastedAtMs;
+  if (age >= PENDING_ABSOLUTE_CAP_MS) return { status: "expired" };
+  if (age >= PENDING_SLOW_MS) return { status: "slow" };
+  return { status: "pending" };
+}
+
+/** Transition every pending row to its lifecycle state (replaces the blind
+ *  `evictExpiredPending` TTL). NEVER removes a `pending`/`slow` row — the core
+ *  "never silently vanish" guarantee. A TERMINAL (`dropped`/`expired`) row is
+ *  retained as a VISIBLE terminal until `PENDING_TERMINAL_RETAIN_MS` (then
+ *  removed; the user can dismiss sooner), so removal only ever follows an
+ *  explicit terminal verdict + a generous window. Claim rows are passed through
+ *  untouched (durable). `committedNonce` is the SW's committed-nonce read this
+ *  poll (`null` when the RPC failed → time-only states, never `dropped`). */
+export function transitionPending(
+  pending: PendingTxRow[],
+  committedNonce: number | null,
+  now: number,
+): PendingTxRow[] {
+  const out: PendingTxRow[] = [];
+  for (const row of pending) {
+    if (row.source === "local-claim") {
+      out.push(row);
+      continue;
+    }
+    const { status, noncePassedAtMs } = classifyStalePending(row, committedNonce, now);
+    const isTerminal = status === "dropped" || status === "expired";
+    if (isTerminal && now - row.broadcastedAtMs >= PENDING_TERMINAL_RETAIN_MS) {
+      continue; // bounded removal of a long-visible terminal row
+    }
+    const next: PendingTxRow = { ...row, lifecycle: status };
+    // Set the fresh debounce stamp, or clear a stale one (a regressed/un-passed
+    // nonce is no longer "passed").
+    if (noncePassedAtMs !== undefined) {
+      next.noncePassedAtMs = noncePassedAtMs;
+    } else {
+      delete next.noncePassedAtMs;
+    }
+    out.push(next);
+  }
+  return out;
 }
 
 /** True when a local-claim's reward amount is NOT yet resolved. `claimedAmount`
