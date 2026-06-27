@@ -79,6 +79,7 @@ import {
   parseNativeHexQuantity,
   scaleByBps,
 } from "../../shared/native-fee-display";
+import { MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI } from "../../shared/operator-bounds";
 import { lythoshiToLythDecimal } from "../../shared/native-amount";
 import { getLythFiatRate, formatFiat } from "../../shared/fiat";
 import { useDisplayCurrencyPref } from "../hooks/useDisplayPrefs";
@@ -142,11 +143,9 @@ const ADMISSION_REJECT_CODE_HI = -32020;
 // doesn't supply one.
 const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
-// Mempool per-execution-unit priority-tip floor (crates/boundary/mempool):
-// a tip below this is rejected at admission with -32047. `suggestFee` returns
-// the floor as the priority tip, so the "Slow" 0.5x tier would scale it to
-// ~5e8 — below the floor. Clamp the tier-scaled tip up to the floor.
-const MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI = 1_000_000_000n; // 1 gwei
+// MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI is the single source of truth in
+// shared/operator-bounds (imported above) — both the submit clamp here and the
+// display clamp in native-fee-display reference the one constant.
 
 export function Send({
   account,

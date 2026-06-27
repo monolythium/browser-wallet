@@ -182,31 +182,58 @@ describe("native LYTH amount conversion — lythoshi precision", () => {
 });
 
 describe("native LYTH fee display math", () => {
+  // Realistic shape: suggestFee returns the 1-gwei mempool floor (1e9) as the
+  // priority tip; base = 2 gwei; units = the 30000 native-transfer limit. The
+  // headline total (computeEstimatedFeeLythoshi) and the Max reservation derived
+  // from it must clamp the tier-scaled tip to the floor exactly as the submit
+  // path signs it (fee-fix 6345e5c), or "Slow" under-reports vs the broadcast.
+  const FLOOR_LYTHOSHI = 1_000_000_000n; // 1 gwei mempool priority-tip floor
+  const base = 2_000_000_000n;
+  const units = 30_000n;
   const fee = {
-    priorityPricePerExecutionUnitLythoshiHex: "0x5",
-    maxPricePerExecutionUnitLythoshiHex: "0x8",
-    basePricePerExecutionUnitLythoshiHex: "0x3",
-    executionUnitLimitHex: "0xa",
+    priorityPricePerExecutionUnitLythoshiHex: "0x3b9aca00", // 1e9 = floor (suggestFee tip)
+    maxPricePerExecutionUnitLythoshiHex: "0xb2d05e00", // 3e9 (inert for the total)
+    basePricePerExecutionUnitLythoshiHex: "0x77359400", // 2e9
+    executionUnitLimitHex: "0x7530", // 30000
   };
 
-  it("computes estimated fees in lythoshi from price-per-execution-unit fields", () => {
-    expect(computeEstimatedFeeLythoshi(fee, 5_000n)).toBe(50n);
-    expect(computeEstimatedFeeLythoshi(fee, 10_000n)).toBe(80n);
-    expect(computeEstimatedFeeLythoshi(fee, 20_000n)).toBe(130n);
+  it("clamps the Slow-tier headline up to the mempool floor so it matches the broadcast", () => {
+    // Slow 0.5x scales the floor tip to 5e8 < floor → clamped back up to the
+    // floor, so the headline (and the Max reservation = maxBasis − this) equals
+    // the broadcast total (base + floor) × units, not the pre-fix under-report.
+    const broadcastTotal = (base + FLOOR_LYTHOSHI) * units; // 9e13
+    expect(computeEstimatedFeeLythoshi(fee, 5_000n)).toBe(broadcastTotal);
+    const underReportedPreFix = (base + FLOOR_LYTHOSHI / 2n) * units; // 7.5e13
+    expect(underReportedPreFix).toBeLessThan(broadcastTotal);
+  });
+
+  it("leaves normal (1x) and fast (2x) headline totals unchanged", () => {
+    const estimate = (multBps: bigint): bigint => {
+      const r = computeEstimatedFeeLythoshi(fee, multBps);
+      if (r === null) throw new Error("unexpected null estimate");
+      return r;
+    };
+    expect(estimate(10_000n)).toBe((base + FLOOR_LYTHOSHI) * units);
+    // Slow now equals normal (both at the floor); fast stays strictly above.
+    expect(estimate(5_000n)).toBe(estimate(10_000n));
+    expect(estimate(20_000n)).toBe((base + 2n * FLOOR_LYTHOSHI) * units);
+    expect(estimate(20_000n)).toBeGreaterThan(estimate(10_000n));
   });
 
   it("uses the native-transfer fallback execution-unit limit when omitted", () => {
+    // executionUnitLimitHex null → 21000 fallback; priority at the floor so the
+    // clamp is a no-op and only the fallback-units path is under test.
     expect(
       computeEstimatedFeeLythoshi(
         {
-          priorityPricePerExecutionUnitLythoshiHex: "0x1",
-          maxPricePerExecutionUnitLythoshiHex: "0x3",
-          basePricePerExecutionUnitLythoshiHex: "0x2",
+          priorityPricePerExecutionUnitLythoshiHex: "0x3b9aca00", // 1e9 = floor
+          maxPricePerExecutionUnitLythoshiHex: "0xb2d05e00", // 3e9
+          basePricePerExecutionUnitLythoshiHex: "0x77359400", // 2e9
           executionUnitLimitHex: null,
         },
         10_000n,
       ),
-    ).toBe(63_000n);
+    ).toBe(63_000_000_000_000n); // (2e9 + 1e9) × 21000
   });
 
   it("does not fall back to compatibility fee fields when structured fee is malformed", () => {

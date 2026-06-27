@@ -62,3 +62,27 @@ export function clampToSaneBound(value: bigint, maxInclusive: bigint): bigint {
  * the real ~1e9–1e10 price.
  */
 export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15 lythoshi/unit (18-dec; loose-but-safe — see VALUE-DECISION)
+
+/**
+ * Mempool per-execution-unit PRIORITY-TIP floor (crates/boundary/mempool): a
+ * priority tip below this is rejected at admission with -32047. `suggestFee`
+ * returns this floor as the priority tip, so the "Slow" 0.5x fee tier would
+ * scale it to ~5e8 — below the floor. Every site that tier-scales the tip must
+ * clamp the result UP to this floor.
+ *
+ * Single source of truth, imported by BOTH:
+ *   - the submit path (`Send.tsx`) — so the broadcast `maxPriorityFeePerGas` is
+ *     admissible (landed by fee-fix 6345e5c), and
+ *   - the display path (`native-fee-display.ts` `nativeFeeDisplayFromBaseAndPriority`)
+ *     — so the user-visible headline total and the Max reservation derived from
+ *     it match the clamped tip the submit path actually broadcasts.
+ *
+ * Lives here next to `MAX_EXECUTION_UNIT_PRICE_LYTHOSHI` (this module is a pure
+ * constants/clamp leaf with no imports, so the popup display and the shared
+ * fee-display module can both depend on it without an import cycle).
+ *
+ * UNIT NOTE: lythoshi-per-execution-unit, 18-decimal domain. 1e9 == 1 gwei ==
+ * `LYTHOSHI_PER_LYTH / 1_000_000_000` (10^18 / 10^9). This is the chain's
+ * configured floor; it must track the chain, not the decimal domain.
+ */
+export const MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI = 1_000_000_000n; // 1 gwei (1e9 lythoshi/unit @ 18 dec)

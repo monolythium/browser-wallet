@@ -22,7 +22,10 @@
 import { describe, expect, it } from "vitest";
 import { LYTHOSHI_PER_LYTH } from "@monolythium/core-sdk";
 import { MAX_PLAUSIBLE_BALANCE_LYTHOSHI } from "./tx-mldsa.js";
-import { MAX_EXECUTION_UNIT_PRICE_LYTHOSHI } from "../shared/operator-bounds.js";
+import {
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+  MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI,
+} from "../shared/operator-bounds.js";
 import { MOCK_REWARD_PRINCIPAL_LYTHOSHI } from "./staking-client.js";
 import {
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
@@ -63,5 +66,17 @@ describe("unit-domain constants pinned to LYTHOSHI_PER_LYTH (18-decimal drift gu
     // Never-too-low invariant: a wide margin above the realistic ~1e10 price so
     // it can never clamp a legitimate fee.
     expect(MAX_EXECUTION_UNIT_PRICE_LYTHOSHI).toBeGreaterThan(10_000n * 10_000_000_000n); // > 1e4 × 1e10
+  });
+
+  it("mempool priority-tip floor is 1 gwei pinned to the 18-decimal domain", () => {
+    // The chain's per-execution-unit priority-tip admission floor (-32047 below
+    // it). A per-unit lythoshi price, so pinned both as its literal and relative
+    // to LYTHOSHI_PER_LYTH. 1e9 == 1 gwei == 10^18 / 10^9. The single source of
+    // truth shared by the Send submit clamp and the native-fee-display headline
+    // clamp; if the chain's floor moves, this assertion forces a reviewed update.
+    expect(MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI).toBe(1_000_000_000n); // 1e9
+    expect(MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI).toBe(LYTHOSHI_PER_LYTH / 1_000_000_000n); // 1 gwei @ 18 dec
+    // The floor sits far below the price ceiling — they bound opposite ends.
+    expect(MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI).toBeLessThan(MAX_EXECUTION_UNIT_PRICE_LYTHOSHI);
   });
 });
