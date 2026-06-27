@@ -2063,3 +2063,110 @@ describe("sealVaultEnvelopeV4 mnPlain zeroization (P2-005)", () => {
     );
   });
 });
+
+describe("sent-address integrity HMAC (P5-007)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  const CHAIN = "0x10f2c"; // 69420
+  const RECIP = "0xrecipient000000000000000000000000000001";
+
+  it(
+    "computes a deterministic, cross-bound tag and verifies it; fails safe when tampered or locked",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const sa = await import("../shared/sent-addresses.js");
+      await ks.createVaultFromNewMnemonic("vault-unlock-password");
+      const vault = ks.getUnlockedAddressV4()!.toLowerCase();
+
+      const msg = sa.canonicalSentAddrMessage(vault, CHAIN, RECIP);
+      const tag = ks.computeSentAddrTagV4(msg);
+      expect(tag).toMatch(/^[0-9a-f]{64}$/); // 32-byte HMAC-SHA256, hex
+
+      // Deterministic + verifies.
+      expect(ks.computeSentAddrTagV4(msg)).toBe(tag);
+      expect(ks.verifySentAddrTagV4(msg, tag!)).toBe(true);
+
+      // Cross-binding: a tag is not valid for a different recipient / chain / vault.
+      expect(
+        ks.computeSentAddrTagV4(sa.canonicalSentAddrMessage(vault, CHAIN, "0xother")),
+      ).not.toBe(tag);
+      expect(
+        ks.verifySentAddrTagV4(sa.canonicalSentAddrMessage(vault, "0x1", RECIP), tag!),
+      ).toBe(false);
+      expect(
+        ks.verifySentAddrTagV4(
+          sa.canonicalSentAddrMessage("0xothervault", CHAIN, RECIP),
+          tag!,
+        ),
+      ).toBe(false);
+
+      // Tampered / wrong-length / non-hex tag → false, never throws.
+      expect(ks.verifySentAddrTagV4(msg, "00".repeat(32))).toBe(false);
+      expect(ks.verifySentAddrTagV4(msg, "abcd")).toBe(false); // wrong length
+      expect(ks.verifySentAddrTagV4(msg, "nothex!!")).toBe(false); // invalid hex
+
+      // Locked → compute null, verify false (fail-safe: the warning fires).
+      ks.lockV4();
+      expect(ks.computeSentAddrTagV4(msg)).toBeNull();
+      expect(ks.verifySentAddrTagV4(msg, tag!)).toBe(false);
+    },
+    60_000,
+  );
+
+  it(
+    "write→verify (handler logic): wallet entry verifies; planted/legacy/missing do not; self-heals on re-send",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const sa = await import("../shared/sent-addresses.js");
+      await ks.createVaultFromNewMnemonic("vault-unlock-password");
+      const vault = ks.getUnlockedAddressV4()!.toLowerCase();
+
+      // Exactly what the `wallet-recipient-sent-verified` handler does:
+      // read store → parseSentEntries → find addr → verify its tag.
+      const verifyFromStore = (raw: unknown, recipient: string): boolean => {
+        const e = sa
+          .parseSentEntries(raw)
+          .find((x) => x.a === recipient.toLowerCase());
+        return (
+          !!e &&
+          ks.verifySentAddrTagV4(
+            sa.canonicalSentAddrMessage(vault, CHAIN, recipient.toLowerCase()),
+            e.t,
+          )
+        );
+      };
+
+      // Wallet-written entry (the SW write path) verifies.
+      const tag = ks.computeSentAddrTagV4(
+        sa.canonicalSentAddrMessage(vault, CHAIN, RECIP),
+      )!;
+      const written = { v: 1, entries: sa.addSentEntry([], RECIP, tag) };
+      expect(verifyFromStore(written, RECIP)).toBe(true);
+
+      // Planted well-formed entry with a FORGED tag → false (warning fires).
+      const planted = { v: 1, entries: [{ a: RECIP, t: "ab".repeat(32) }] };
+      expect(verifyFromStore(planted, RECIP)).toBe(false);
+
+      // Legacy {addrs} entry → parseSentEntries drops it → false (warning fires).
+      expect(verifyFromStore({ addrs: [RECIP] }, RECIP)).toBe(false);
+
+      // Missing entry → false.
+      expect(verifyFromStore(written, "0xnotsent")).toBe(false);
+
+      // Self-heal: a legitimate re-send writes a fresh tag over the legacy list.
+      const reSent = {
+        v: 1,
+        entries: sa.addSentEntry(sa.parseSentEntries({ addrs: [RECIP] }), RECIP, tag),
+      };
+      expect(verifyFromStore(reSent, RECIP)).toBe(true);
+    },
+    60_000,
+  );
+});

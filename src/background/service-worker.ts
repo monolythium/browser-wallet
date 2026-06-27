@@ -112,6 +112,9 @@ import {
   setSlhDsaRegistrationStatusV4,
   // Session-rehydrate across MV3 SW hibernation.
   tryRestoreFromSessionV4,
+  // P5-007 — sent-address integrity HMAC (keyed by a MEK-derived sub-key).
+  computeSentAddrTagV4,
+  verifySentAddrTagV4,
 } from "./keystore-mldsa.js";
 // Notifications — the chokepoint hook in wallet-indexer-snapshot
 // calls this to record one notification per tracked-tx terminal transition.
@@ -245,8 +248,9 @@ import {
 import { isCurrencyCode, type CurrencyCode } from "../shared/iso4217.js";
 import {
   sentAddressesKey,
-  parseSentAddresses,
-  addToSentList,
+  parseSentEntries,
+  addSentEntry,
+  canonicalSentAddrMessage,
 } from "../shared/sent-addresses.js";
 import {
   DEMO_ADDR_SENTINELS_LOWER,
@@ -5444,14 +5448,35 @@ async function persistPendingRowBackground(args: {
     // CX3 — record the recipient in the durable sent-address log so repeat
     // sends to it aren't re-warned as "first-time" once the pending row's TTL
     // lapses (independent of any indexer refresh). Best-effort.
-    const sentKey = sentAddressesKey(addrLower, args.chainIdHex);
-    const sentStored = await new Promise<unknown>((resolve) => {
-      chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
-    });
-    const nextSent = addToSentList(parseSentAddresses(sentStored), args.to);
-    await new Promise<void>((resolve) => {
-      chrome.storage.local.set({ [sentKey]: { addrs: nextSent } }, () => resolve());
-    });
+    // P5-007 — bind the entry to a wallet HMAC tag so a disk-planted entry can't
+    // suppress the warning. The tag is keyed by a MEK-derived sub-key (the
+    // vault is unlocked here — the send just signed). If the keystore raced into
+    // a lock (no MEK → tag null), write NOTHING rather than an untagged entry:
+    // the recipient re-warns next time and self-heals on the next real send.
+    const recipientLower = args.to.toLowerCase();
+    const tag =
+      getUnlockedAddressV4()?.toLowerCase() === addrLower
+        ? computeSentAddrTagV4(
+            canonicalSentAddrMessage(addrLower, args.chainIdHex, recipientLower),
+          )
+        : null;
+    if (tag) {
+      const sentKey = sentAddressesKey(addrLower, args.chainIdHex);
+      const sentStored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
+      });
+      const nextEntries = addSentEntry(
+        parseSentEntries(sentStored),
+        recipientLower,
+        tag,
+      );
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [sentKey]: { v: 1, entries: nextEntries } },
+          () => resolve(),
+        );
+      });
+    }
   } catch {
     // Swallow. The broadcast handler has already returned. A
     // pending-write failure is silent UX degradation only — the user
@@ -8295,6 +8320,46 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const feeLythoshi = await fetchConfirmedFeeLythoshi(p.txHash);
       return { ok: true, feeLythoshi: feeLythoshi ?? null };
+    }
+    case "wallet-recipient-sent-verified": {
+      // P5-007 — answer "is <recipient> a wallet-VERIFIED sent-address for
+      // (vault, chain)?" for the popup's first-time-send warning. Reads the
+      // durable sent-address log and verifies the entry's wallet HMAC (the MEK
+      // is SW-only, so the popup can't verify itself). Advisory-only: the bit
+      // gates a phishing-friction warning, never a send. Fail-safe: a missing
+      // entry, a forged/legacy/untagged entry, a locked container, or any read
+      // error all return verified:false → the popup shows the warning.
+      const p = message.payload as {
+        vaultAddrLower?: unknown;
+        chainIdHex?: unknown;
+        recipient?: unknown;
+      };
+      if (
+        typeof p?.vaultAddrLower !== "string" ||
+        typeof p?.chainIdHex !== "string" ||
+        typeof p?.recipient !== "string" ||
+        p.recipient.length === 0
+      ) {
+        return { ok: true, verified: false };
+      }
+      const vaultAddrLower = p.vaultAddrLower.toLowerCase();
+      const recipientLower = p.recipient.toLowerCase();
+      try {
+        const sentKey = sentAddressesKey(vaultAddrLower, p.chainIdHex);
+        const stored = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
+        });
+        const entry = parseSentEntries(stored).find((e) => e.a === recipientLower);
+        const verified =
+          !!entry &&
+          verifySentAddrTagV4(
+            canonicalSentAddrMessage(vaultAddrLower, p.chainIdHex, recipientLower),
+            entry.t,
+          );
+        return { ok: true, verified };
+      } catch {
+        return { ok: true, verified: false };
+      }
     }
     case "wallet-chain-block-number": {
       // Real chain-liveness probe for the popup's status-bar health

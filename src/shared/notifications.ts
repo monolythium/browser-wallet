@@ -383,7 +383,7 @@ function asNotificationRecord(raw: unknown): NotificationRecord | null {
 
 /** Tolerant parse of the per-scope history envelope. Malformed → null
  *  (caller treats as empty + heals on next write). Mirrors the posture of
- *  `parseSentAddresses` + `parseWalletUpdateCache`: garbage in, defensive
+ *  `parseSentEntries` + `parseWalletUpdateCache`: garbage in, defensive
  *  default out. */
 export function parseHistoryEnvelope(
   raw: unknown,

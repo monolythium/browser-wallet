@@ -57,9 +57,10 @@
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
+import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
-import { randomBytes } from "@noble/hashes/utils.js";
+import { hexToBytes, randomBytes } from "@noble/hashes/utils.js";
 import {
   MlDsa65Backend,
   generateMnemonic,
@@ -143,6 +144,12 @@ const HKDF_INFO_VAULT_SEED = new TextEncoder().encode(
 );
 const HKDF_INFO_VAULT_MNEMONIC = new TextEncoder().encode(
   "mono-vault-mnemonic-vmulti-v4",
+);
+// P5-007 — info label for the sent-address integrity HMAC sub-key. DISTINCT
+// from the seed/mnemonic labels above so the integrity sub-key can never share
+// derived material with the envelope keys (domain separation by construction).
+const HKDF_INFO_SENT_ADDR_INTEGRITY = new TextEncoder().encode(
+  "mono-sent-addr-integrity-v1",
 );
 
 interface UnlockedState {
@@ -540,6 +547,55 @@ function deriveSubKeysFromVekV4(vek: Uint8Array): {
     SUBKEY_LEN,
   );
   return { seedKey, mnemonicKey };
+}
+
+/** P5-007 — derive the sent-address-integrity sub-key from the in-session MEK.
+ *  Domain-separated from the seed/mnemonic sub-keys so it can never collide.
+ *  Returns null when the container is locked (no MEK) → callers fail safe. The
+ *  caller MUST zero the returned key after use. */
+function deriveSentAddrIntegrityKeyV4(): Uint8Array | null {
+  if (!mekCache) return null;
+  return hkdf(sha256, mekCache, undefined, HKDF_INFO_SENT_ADDR_INTEGRITY, SUBKEY_LEN);
+}
+
+/** P5-007 — compute the wallet HMAC integrity tag (hex) for a canonical
+ *  sent-address message (see `canonicalSentAddrMessage`). Returns null when the
+ *  container is locked. The MEK-derived sub-key never leaves this module and is
+ *  zeroed after use. Advisory-only: the tag gates a phishing-friction warning,
+ *  never a send. */
+export function computeSentAddrTagV4(message: string): string | null {
+  const subKey = deriveSentAddrIntegrityKeyV4();
+  if (!subKey) return null;
+  try {
+    return bytesToHex(hmac(sha256, subKey, new TextEncoder().encode(message)));
+  } finally {
+    subKey.fill(0);
+  }
+}
+
+/** P5-007 — verify a stored tag against a freshly recomputed one in CONSTANT
+ *  TIME. Returns false when the container is locked, when the stored tag isn't a
+ *  well-formed hex MAC of the right length, or on any mismatch. Never throws. */
+export function verifySentAddrTagV4(message: string, tagHex: string): boolean {
+  const subKey = deriveSentAddrIntegrityKeyV4();
+  if (!subKey) return false;
+  try {
+    const expected = hmac(sha256, subKey, new TextEncoder().encode(message));
+    let provided: Uint8Array;
+    try {
+      provided = hexToBytes(tagHex);
+    } catch {
+      return false;
+    }
+    if (provided.length !== expected.length) return false;
+    let diff = 0;
+    for (let i = 0; i < expected.length; i++) {
+      diff |= (expected[i] ?? 0) ^ (provided[i] ?? 0);
+    }
+    return diff === 0;
+  } finally {
+    subKey.fill(0);
+  }
 }
 
 /** Encrypt seed + mnemonic under a VEK. Each side gets a fresh nonce

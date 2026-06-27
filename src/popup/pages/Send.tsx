@@ -15,6 +15,7 @@ import {
   bgMultisigPropose,
   bgPasskeyEvaluate,
   bgPreviewTransactionHooks,
+  bgRecipientSentVerified,
   bgWalletBalance,
   bgWalletResolveName,
   bgWalletFeeSuggestion,
@@ -61,11 +62,6 @@ import {
   type ActivityCache,
   type PendingActivityCache,
 } from "../../shared/activity";
-import {
-  sentAddressesKey,
-  parseSentAddresses,
-  isSentAddress,
-} from "../../shared/sent-addresses";
 import {
   FEE_MULTIPLIER_BPS_BASE,
   LYTHOSHI_PER_LYTH,
@@ -1654,20 +1650,27 @@ function useRecipientFamiliarity(
     const accLower = accountAddr.toLowerCase();
     const confirmedKey = activityCacheKey(accLower, chainIdHex);
     const pendingKey = activityPendingKey(accLower, chainIdHex);
-    // CX3 — durable per-(vault,chain) sent-address log. Written on every
-    // successful send and never TTL-evicted, so a known recipient stays
-    // "seen" even after the pending row's 5-min TTL lapses and before an
-    // indexer refresh re-caches the confirmed send (the old re-warn bug).
-    const sentKey = sentAddressesKey(accLower, chainIdHex);
     let cancelled = false;
     setState("unknown");
 
-    chrome.storage.local.get([confirmedKey, pendingKey, sentKey], (res) => {
+    void (async () => {
+      // CX3 — durable per-(vault,chain) sent-address log keeps a recipient
+      // "seen" after the pending row's 5-min TTL lapses and before an indexer
+      // refresh re-caches the confirmed send (the old re-warn bug). P5-007 —
+      // each entry is HMAC-tagged and the MEK is SW-only, so the "verified
+      // sent" bit is resolved by the SW (fails safe to false on lock/error →
+      // the warning fires). confirmed/pending remain local reads.
+      const [local, inSent] = await Promise.all([
+        new Promise<Record<string, unknown>>((resolve) => {
+          chrome.storage.local.get([confirmedKey, pendingKey], (res) =>
+            resolve(res ?? {}),
+          );
+        }),
+        bgRecipientSentVerified(accLower, chainIdHex, target),
+      ]);
       if (cancelled) return;
-      const confirmed = res?.[confirmedKey] as ActivityCache | undefined;
-      const pending = res?.[pendingKey] as PendingActivityCache | undefined;
-
-      const inSent = isSentAddress(parseSentAddresses(res?.[sentKey]), target);
+      const confirmed = local[confirmedKey] as ActivityCache | undefined;
+      const pending = local[pendingKey] as PendingActivityCache | undefined;
       const inConfirmed = (confirmed?.confirmed ?? []).some((r) => {
         if (r.kind === "tx_send") return r.counterparty === target;
         if (r.kind === "token_transfer")
@@ -1678,7 +1681,7 @@ function useRecipientFamiliarity(
         (r) => r.to.toLowerCase() === target,
       );
       setState(inSent || inConfirmed || inPending ? "seen" : "new");
-    });
+    })();
 
     return () => {
       cancelled = true;

@@ -455,6 +455,26 @@ export async function bgWalletTxFee(
   return send("wallet-tx-fee", { txHash });
 }
 
+/** P5-007 — ask the SW whether `recipient` is a wallet-VERIFIED sent-address for
+ *  (vault, chain). The MEK is SW-only, so HMAC verification lives there. Returns
+ *  a plain boolean; ANY error (transport, locked, malformed) → false, so the
+ *  first-time-send warning fails safe to firing. Advisory-only — never a gate. */
+export async function bgRecipientSentVerified(
+  vaultAddrLower: string,
+  chainIdHex: string,
+  recipient: string,
+): Promise<boolean> {
+  try {
+    const r = await send<{ ok?: boolean; verified?: boolean }>(
+      "wallet-recipient-sent-verified",
+      { vaultAddrLower, chainIdHex, recipient },
+    );
+    return r?.verified === true;
+  } catch {
+    return false;
+  }
+}
+
 export interface WalletAddressLabel {
   address: string;
   category: string;
