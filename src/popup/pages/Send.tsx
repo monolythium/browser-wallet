@@ -14,7 +14,6 @@ import { Icon } from "../Icon";
 import {
   bgMultisigPropose,
   bgPasskeyEvaluate,
-  bgPasskeyRecordUsage,
   bgPreviewTransactionHooks,
   bgWalletBalance,
   bgWalletResolveName,
@@ -498,20 +497,9 @@ export function Send({
       if (r.ok) {
         if (opts?.viaElevated) setElevatedOpen(false);
         setTxHash(r.result.txHash);
-        // Record passkey-unlocked txs against the daily-cap ledger.
-        // The SW prunes on read; this fire-and-forget call appends.
-        // Only fires when the policy decision was passkey-ok and a
-        // passkey assertion succeeded — over-limit / password-required
-        // txs do not contribute to the cap.
-        if (
-          singleVaultId !== undefined &&
-          passkeyDecision?.kind === "passkey-ok"
-        ) {
-          void bgPasskeyRecordUsage({
-            vaultId: singleVaultId,
-            valueWeiHex: valueLythoshiHex,
-          });
-        }
+        // The daily-cap usage ledger is appended by the service worker itself
+        // on a successful daily-mode passkey send (the SW is the authoritative
+        // counter) — no popup-side record-usage call.
         setStep("success");
         // CX4 — the "Add to contacts" affordance now lives inline on the
         // receipt's To row (shown when the recipient is neither a saved

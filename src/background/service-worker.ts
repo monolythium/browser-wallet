@@ -7539,27 +7539,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: (e as Error).message };
       }
     }
-    case "passkey-record-usage": {
-      // Append a compatibility-shaped `{at, valueWei}` entry containing
-      // lythoshi to the in-memory daily-cap ledger. Popup calls this after
-      // a successful passkey-unlocked tx submit. Prune-on-read keeps the
-      // list bounded — no explicit GC required.
-      const p = (message.payload ?? {}) as {
-        vaultId?: string;
-        valueWeiHex?: string;
-      };
-      if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
-        return { ok: false, reason: "missing vaultId or valueWeiHex" };
-      }
-      let valueLythoshi: bigint;
-      try {
-        valueLythoshi = BigInt(p.valueWeiHex);
-      } catch {
-        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
-      }
-      await recordPasskeyUsageEntry(p.vaultId, valueLythoshi);
-      return { ok: true };
-    }
     case "passkey-set-policy": {
       // Replace the policy atomically. The wallet now enforces the
       // resulting per-tx/daily cap LOCALLY at the SW signing boundary
@@ -9895,6 +9874,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // otherwise an over-limit native-equivalent transfer could slip past the
       // cap by sending data:"0x". (data === "" is already rejected by the
       // 0x-prefix validation above; only "0x" reaches here.)
+      // Part 3 (passkey daily cap): a daily-mode passkey-unlocked send to
+      // count, captured in the gate below and appended AFTER the submit
+      // succeeds so the SW — not the popup — is the authoritative counter.
+      let passkeyDailyAppend: { vaultId: string; value: bigint } | null = null;
       const isBareValueTransfer = p.data === undefined || p.data === "0x";
       if (isBareValueTransfer) {
         const activeVaultId = getActiveVaultIdV4();
@@ -9976,6 +9959,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 SESSION_KEY_UNLOCK_FAIL_COUNT,
                 SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
               ]);
+            } else if (pkState.policy.mode === "daily") {
+              // Part 3: a daily-mode passkey-unlocked (under-cap) send. The SW
+              // is the authoritative daily-cap counter — append to the usage
+              // ledger ourselves AFTER the submit succeeds (below) so a
+              // compromised popup that skips the (removed) record-usage IPC
+              // can't keep used = 0.
+              passkeyDailyAppend = { vaultId: activeVaultId, value: pkValue };
             }
           }
         }
@@ -10039,6 +10029,20 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // Awaited (small session write) so the next send sees it immediately.
         // Only the success path reaches here — a reject throws to the catch.
         await recordSubmittedNonce(fromAddr, p.chainIdHex, nonceHex);
+        // Part 3: SW-authoritative daily-cap count. A daily-mode passkey-
+        // unlocked send was just submitted — append to the usage ledger here
+        // (success path only) so the SW, not the popup, is the counter.
+        // Best-effort: the tx already broadcast.
+        if (passkeyDailyAppend) {
+          try {
+            await recordPasskeyUsageEntry(
+              passkeyDailyAppend.vaultId,
+              passkeyDailyAppend.value,
+            );
+          } catch {
+            // ledger append best-effort; the submit already succeeded.
+          }
+        }
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are

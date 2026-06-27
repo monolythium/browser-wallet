@@ -2364,16 +2364,9 @@ export async function bgPasskeyEvaluate(args: {
   return send("passkey-evaluate", args);
 }
 
-/** Append to the in-memory daily-cap ledger after a successful
- *  passkey-unlocked tx submit. Caller is the popup Send flow on the
- *  Confirm → submit → success transition. */
-export async function bgPasskeyRecordUsage(args: {
-  vaultId: string;
-  /** Compatibility field name; hex lythoshi. */
-  valueWeiHex: string;
-}): Promise<{ ok: boolean; reason?: string }> {
-  return send("passkey-record-usage", args);
-}
+// The passkey daily-cap usage ledger is appended by the service worker itself
+// (in wallet-send-tx, on a successful daily-mode passkey send) — the SW is the
+// authoritative counter, so there is no popup-side record-usage IPC.
 
 // Two-tier UX feature toggles
 import {

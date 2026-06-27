@@ -6437,10 +6437,12 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// #36 — passkey daily-usage ledger persisted to chrome.storage.session so it
-// survives MV3 SW hibernation instead of resetting the rolling window.
+// Part 3 — the SW is the authoritative passkey daily-cap counter. The ledger
+// APPEND lives in wallet-send-tx (not a popup IPC), persisted to
+// chrome.storage.session so it survives MV3 SW hibernation AND a compromised
+// popup that skips reporting.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("passkey daily-usage ledger persistence (#36)", () => {
+describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () => {
   const LYTH = 1_000_000_000_000_000_000n; // 1e18 lythoshi
   const DAILY_CAP = 100n * LYTH;
   const SESSION_KEY = "mono.session.passkey-usage.v1";
@@ -6453,13 +6455,18 @@ describe("passkey daily-usage ledger persistence (#36)", () => {
       credentials: [{ credentialId: "c1" }],
     };
   }
-
-  function record(vaultId: string, valueWei: bigint) {
-    return dispatchPopup({
-      kind: "popup",
-      op: "passkey-record-usage",
-      payload: { vaultId, valueWeiHex: hex(valueWei) },
-    });
+  function seedNonceAndFee() {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
   }
   function evaluate(vaultId: string, valueWei: bigint) {
     return dispatchPopup({
@@ -6468,31 +6475,83 @@ describe("passkey daily-usage ledger persistence (#36)", () => {
       payload: { vaultId, valueWeiHex: hex(valueWei) },
     }) as Promise<{ ok: boolean; decision?: { kind: string; mode?: string } }>;
   }
+  function ledger() {
+    return (
+      storageSession[SESSION_KEY] as
+        | Record<string, { at: number; valueWei: string }[]>
+        | undefined
+    )?.v1;
+  }
 
-  it("passkey-record-usage persists to chrome.storage.session as a decimal string", async () => {
+  it("the SW appends the ledger entry ITSELF on a daily-mode send — no popup IPC", async () => {
     enableDailyCap();
-    await record("v1", 60n * LYTH);
-    const stored = storageSession[SESSION_KEY] as
-      | Record<string, { at: number; valueWei: string }[]>
-      | undefined;
-    const entries = stored?.v1;
-    expect(entries).toBeDefined();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: hex(60n * LYTH),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    // The SW wrote the ledger; there is no popup record-usage IPC anymore.
+    const entries = ledger();
     expect(entries).toHaveLength(1);
-    // bigint is serialized as a decimal string (survives structured-clone).
     expect(entries?.[0]?.valueWei).toBe((60n * LYTH).toString());
     expect(typeof entries?.[0]?.at).toBe("number");
   });
 
-  it("recorded usage persists in session and counts toward the daily cap (survives SW restart)", async () => {
+  it("a second send over the daily cap is blocked by the SW's OWN count", async () => {
     enableDailyCap();
-    await record("v1", 60n * LYTH);
-    // The ledger now lives ONLY in chrome.storage.session, so a fresh read
-    // (as a restarted SW would do) still sees the prior usage.
+    seedNonceAndFee();
+    // First passkey send (60 <= 100): submits + the SW appends 60.
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: hex(60n * LYTH),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    });
+    expect(ledger()).toHaveLength(1);
+    // Second send (60 + 50 = 110 > 100) is blocked using the SW-counted 60 —
+    // the popup never reported anything.
+    const r2 = (await send({
+      to: "0xrecipient",
+      valueWeiHex: hex(50n * LYTH),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r2.ok).toBe(false);
+    expect(r2.passkeyElevation).toBe("required");
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1); // only the first submitted
+    expect(ledger()).toHaveLength(1); // the blocked send did not append
+  });
+
+  it("an over-limit, password-elevated send does NOT append a passkey-usage entry", async () => {
+    enableDailyCap();
+    seedNonceAndFee();
+    // 150 > the 100 cap → over-limit → password elevation (correct pw) → submits,
+    // but it is a PASSWORD-authorised send, not a passkey one — must not count.
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: hex(150n * LYTH),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "correct-horse-battery-staple",
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(ledger()).toBeUndefined(); // no passkey-usage appended
+  });
+
+  it("the SW-recorded usage counts toward the cap on a fresh read (survives SW restart)", async () => {
+    enableDailyCap();
+    seedNonceAndFee();
+    await send({
+      to: "0xrecipient",
+      valueWeiHex: hex(60n * LYTH),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    });
+    // The ledger lives only in chrome.storage.session — a fresh evaluate (as a
+    // restarted SW would do) still sees the SW-recorded 60.
     const over = await evaluate("v1", 50n * LYTH); // 60 + 50 = 110 > 100
-    expect(over.ok).toBe(true);
     expect(over.decision?.kind).toBe("over-limit");
     expect(over.decision?.mode).toBe("daily");
-
     const ok = await evaluate("v1", 30n * LYTH); // 60 + 30 = 90 <= 100
     expect(ok.decision?.kind).toBe("passkey-ok");
   });
