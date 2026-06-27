@@ -166,9 +166,10 @@ export function PasskeySignModal({
           <div
             style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}
           >
-            Approve the prompt from your authenticator to send this small-value
-            transaction. The wallet uses your passkey as a fast-unlock shortcut
-            in place of typing your password.
+            Approve the prompt from your authenticator to authorize this
+            transaction. The wallet verifies your passkey against this exact
+            transaction before signing — so a page can't fake the approval.
+            Sends above your limit still need your password.
           </div>
           <div
             style={{

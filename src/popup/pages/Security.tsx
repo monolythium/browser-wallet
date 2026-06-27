@@ -198,9 +198,10 @@ export function Security({
               marginBottom: 10,
             }}
           >
-            Use Windows Hello, Touch ID, or a security key for fast unlock on
-            small-value transfers. Password unlock is still required above
-            the configured limit and for vault management.
+            Use Windows Hello, Touch ID, or a security key to approve transfers
+            up to your limit — the wallet cryptographically verifies the passkey
+            before signing. Sends above the limit, and vault management, still
+            require your password.
           </div>
 
           {loadErr && (
@@ -230,8 +231,8 @@ export function Security({
                     {state.credentials.length === 0
                       ? "Register a passkey to enable the policy"
                       : state.policy.enabled
-                      ? "Small txs unlock with your passkey"
-                      : "All txs require password unlock"}
+                      ? "Transfers up to your limit are approved by passkey"
+                      : "All transactions require your password"}
                   </div>
                 </div>
                 <button
@@ -329,9 +330,9 @@ export function Security({
                     </span>
                   </div>
                   <div style={{ fontSize: 10.5, color: "var(--fg-400)", lineHeight: 1.5 }}>
-                    Daily cap is the rolling 24-hour total of passkey-unlocked
+                    Daily cap is the rolling 24-hour total of passkey-approved
                     transfers. Tracks against transactions signed via passkey
-                    only — password-unlocked txs do not count against it.
+                    only — password-authorized txs do not count against it.
                   </div>
                 </div>
               )}
@@ -348,8 +349,8 @@ export function Security({
 
           {state && state.credentials.length === 0 && (
             <div style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}>
-              No passkeys registered for this vault yet. Register one to enable
-              fast-unlock on small transfers.
+              No passkeys registered for this vault yet. Register one to approve
+              transfers up to your limit with a passkey.
             </div>
           )}
 

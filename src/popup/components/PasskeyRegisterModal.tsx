@@ -124,8 +124,8 @@ export function PasskeyRegisterModal({
     return (
       <Modal open={open} onClose={onClose} title="Register a passkey">
         <div style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}>
-          Your browser does not support WebAuthn / passkeys. Phase 9's
-          fast-unlock surface requires a browser with{" "}
+          Your browser does not support WebAuthn / passkeys. Passkey approvals
+          require a browser with{" "}
           <code>navigator.credentials</code> support — Chrome 67+, Firefox 60+,
           Edge 18+, or Safari 13+.
         </div>
@@ -260,10 +260,11 @@ export function PasskeyRegisterModal({
       {screen.kind === "form" && (
         <>
           <div style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}>
-            Register a Windows Hello, Touch ID, or security-key passkey so the
-            wallet can ask for it instead of your password on small-value
-            transfers. The private key never leaves the authenticator. The
-            wallet only stores the public credential ID.
+            Register a Windows Hello, Touch ID, or security-key passkey to
+            approve transfers up to your limit — the wallet verifies it before
+            signing, instead of asking for your password. Larger sends still
+            need your password. The private key never leaves the authenticator;
+            the wallet stores only the public credential.
           </div>
 
           <label style={{ display: "block", marginTop: 8 }}>
@@ -409,8 +410,8 @@ export function PasskeyRegisterModal({
               background: "rgba(126,227,193,0.08)",
             }}
           >
-            Passkey registered. Enable the policy on the Security page to
-            start using it on small-value transfers.
+            Passkey registered. Enable the policy on the Security page to approve
+            transfers up to your limit with it.
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
             <button onClick={onClose} style={btnPrimary}>
