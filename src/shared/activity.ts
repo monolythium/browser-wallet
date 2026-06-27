@@ -1105,9 +1105,21 @@ function pendingMatchesConfirmed(
       confirmed.txIndex === pending.confirmedTxIndex
     );
   }
-  // Heuristic match for not-yet-confirmed rows (the indexer-first path):
-  // tx_send + counterparty + amount + block window.
-  if (confirmed.kind !== "tx_send") return false;
+  // Heuristic match for not-yet-confirmed rows (the indexer-first path).
+  // tx_send rows use counterparty + amount + window (below). Delegation rows
+  // (delegate/undelegate/redelegate) surface as delegation rows, never tx_send,
+  // so without a backstop they retire ONLY via the receipt-bridge (above) — a
+  // confirmed-but-receipt-missed delegation would then be mis-flagged `dropped`
+  // by the drop-detection lifecycle. The CONSERVATIVE delegation heuristic
+  // (C3 — the interlock) lets the indexer retire it: kind-family + cluster
+  // (+ destination/weight when both known) + block window. Never matches on an
+  // ambiguous null → no false retirement.
+  if (confirmed.kind !== "tx_send") {
+    if (isDelegationRow(confirmed) && pendingIsSameDelegation(pending, confirmed)) {
+      return true;
+    }
+    return false;
+  }
   if (pending.broadcastBlockHeight === null) return false;
   if (confirmed.counterparty === null) return false;
   if (
@@ -1119,6 +1131,49 @@ function pendingMatchesConfirmed(
   if (confirmed.amountDecimal !== pending.amountDecimal) return false;
   const delta = Math.abs(confirmed.blockHeight - pending.broadcastBlockHeight);
   return delta <= PENDING_MATCH_BLOCK_WINDOW;
+}
+
+/** Conservative match between a pending delegation send and a confirmed
+ *  delegation row — the C3 backstop in `pendingMatchesConfirmed` that closes the
+ *  tx_send-only heuristic gap. Requires the kind FAMILY to agree
+ *  (`opKind` === confirmed `kind`), the SOURCE cluster id to match (both known),
+ *  and the confirmed block to fall within `PENDING_MATCH_BLOCK_WINDOW` of the
+ *  broadcast anchor. The redelegate destination and the weight are matched ONLY
+ *  when BOTH sides know them (the activity-stream fallback leaves
+ *  `confirmed.toCluster` / `confirmed.weightBps` null → skip, never reject) — so
+ *  a null never causes a false retirement. */
+function pendingIsSameDelegation(
+  pending: PendingTxRow,
+  confirmed: DelegateRow | UndelegateRow | RedelegateRow,
+): boolean {
+  if (pending.opKind !== confirmed.kind) return false;
+  if (pending.clusterId === undefined) return false;
+  if (pending.clusterId !== confirmed.cluster) return false;
+  if (pending.broadcastBlockHeight === null) return false;
+  if (
+    Math.abs(confirmed.blockHeight - pending.broadcastBlockHeight) >
+    PENDING_MATCH_BLOCK_WINDOW
+  ) {
+    return false;
+  }
+  // Destination cluster (redelegate) — match only when BOTH are known.
+  if (
+    confirmed.kind === "redelegate" &&
+    pending.toClusterId !== undefined &&
+    confirmed.toCluster !== null &&
+    pending.toClusterId !== confirmed.toCluster
+  ) {
+    return false;
+  }
+  // Weight — match only when BOTH are known.
+  if (
+    pending.delegationWeightBps !== undefined &&
+    confirmed.weightBps !== null &&
+    pending.delegationWeightBps !== confirmed.weightBps
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /** Drop pending rows that have a matching confirmed entry in the freshly
