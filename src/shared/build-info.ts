@@ -49,9 +49,10 @@ export const TESTNET_GENESIS_HASH =
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
  *  exposes the chain identity hash used by the registry / p2p binding,
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
- *  header hash. They are not the same value on protocore v0.1.49. */
+ *  header hash. They are not the same value (verified against the live v0.2.2
+ *  chain, genesis 0xb52b59d6…). */
 export const TESTNET_BLOCK0_HASH =
-  "0x072fe84f2411b8a5c08b03210183a224147c0157d7bee7990fa90ca7771d959d";
+  "0x857200a9d97eb0cea4345950db929811f24f3aa6a9e58e0aed7af0c9b10f610c";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
