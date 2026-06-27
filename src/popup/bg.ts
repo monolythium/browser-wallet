@@ -1017,6 +1017,12 @@ export async function bgWalletSendTx(args: {
     maxPriorityFeePerGasHex: string;
     executionUnitLimitHex: string;
   };
+  /** boundary 3b — the SW-minted single-use challenge id + the forwarded
+   *  WebAuthn assertion for an under-limit passkey send. The SW consumes the
+   *  challenge, re-binds it to this tx's intent, and cryptographically verifies
+   *  the assertion before signing. Omit on non-passkey sends. */
+  passkeyChallengeId?: string;
+  passkeyAssertion?: BgForwardedAssertion;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -1029,6 +1035,9 @@ export async function bgWalletSendTx(args: {
        *  no/empty password supplied; "wrong_password"/"rate_limited" = a
        *  supplied password failed the SW-side re-auth. */
       passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+      /** boundary 3b Part 2: the credential that signed predates the public-key
+       *  capture — the user must re-register it before it can authorize. */
+      passkeyReregister?: "required";
       secondsRemaining?: number;
     }
 > {
@@ -1041,6 +1050,7 @@ export async function bgWalletSendTx(args: {
         method?: string;
         via?: string;
         passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+        passkeyReregister?: "required";
         secondsRemaining?: number;
       };
   const { executionUnitLimitHex, ...rest } = args;
@@ -2345,11 +2355,31 @@ export async function bgPasskeySetPolicy(args: {
   return send("passkey-set-policy", args);
 }
 
+/** A WebAuthn assertion (base64url) forwarded from the popup's
+ *  `navigator.credentials.get()` to the SW verify gate (boundary 3b). */
+export interface BgForwardedAssertion {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+}
+
 /** Wire-format passkey decision — mirrors `PolicyDecision` in
  *  `shared/passkey.ts` with lythoshi bigint values encoded as hex strings. */
 export type BgPasskeyDecision =
-  | { kind: "passkey-ok"; credentials: BgPasskeyCredential[] }
+  | {
+      kind: "passkey-ok";
+      credentials: BgPasskeyCredential[];
+      /** boundary 3b: the SW-minted single-use challenge id + bytes (base64url)
+       *  the popup must pass to `.get()`. The popup never builds its own
+       *  challenge anymore. */
+      challengeId?: string;
+      challengeB64?: string;
+    }
   | { kind: "password-required"; reason: "disabled" | "no-credential" }
+  /** boundary 3b Part 2: every registered credential predates the public-key
+   *  capture and cannot authorize a signature — the user must re-register. */
+  | { kind: "reregister-required" }
   | {
       kind: "over-limit";
       mode: BgPolicyMode;
@@ -2360,11 +2390,17 @@ export type BgPasskeyDecision =
     };
 
 /** Consult the policy for a tx value. The wallet UI runs this before
- *  the preview screen so the user sees which unlock path applies. */
+ *  the preview screen so the user sees which unlock path applies. On a
+ *  `passkey-ok` decision the SW also mints the tx-bound challenge, so `to` +
+ *  `chainIdHex` (the intent it binds to) are required for a single-vault send. */
 export async function bgPasskeyEvaluate(args: {
   vaultId: string;
   /** Compatibility field name; hex lythoshi. */
   valueWeiHex: string;
+  /** Recipient + chain — bound into the minted challenge's intent digest. */
+  to?: string;
+  chainIdHex?: string;
+  data?: string;
 }): Promise<
   | { ok: true; decision: BgPasskeyDecision }
   | { ok: false; reason: string }

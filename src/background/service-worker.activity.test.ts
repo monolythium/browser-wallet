@@ -401,6 +401,11 @@ let multisigMetaForTest: unknown = null;
 // clear-gate tests assert delete-or-not.
 const mockClearSlhDsaBackupV4 = vi.hoisted(() => vi.fn(async () => true));
 
+// Spy for the boundary-3b signCount persistence seam (best-effort, post-submit).
+const mockUpdateSignCount = vi.hoisted(() =>
+  vi.fn(async (_v: string, _c: string, _n: number) => {}),
+);
+
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
   clearSlhDsaBackupV4: mockClearSlhDsaBackupV4,
@@ -414,6 +419,7 @@ vi.mock("./keystore-mldsa.js", () => ({
   // T1-04(a) passkey-cap gate seams. Default-inert (null active vault).
   getActiveVaultIdV4: vi.fn(() => activePasskeyVaultId),
   readPasskeyStateV4: vi.fn(async () => passkeyStateForTest),
+  updatePasskeyCredentialSignCountV4: mockUpdateSignCount,
   verifyContainerPasswordV4: vi.fn(
     async (pw: string) => pw === correctElevatedPassword,
   ),
@@ -6304,6 +6310,169 @@ describe("notification settings IPC — boolean validation at the boundary", () 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// boundary 3b helpers — construct a REAL WebAuthn assertion over the SW-minted
+// challenge (chrome.runtime.id is "test" → rpId "test", origin
+// "chrome-extension://test"), exactly as the verify gate expects. Mirrors the
+// passkey-verify unit-test approach: generate a P-256 key, build authData +
+// clientDataJSON, sign, DER-encode the signature.
+const _pkEnc = new TextEncoder();
+function _pkB64Url(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function _pkConcat(...arrs: Uint8Array[]): Uint8Array {
+  const total = arrs.reduce((n, a) => n + a.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const a of arrs) {
+    out.set(a, o);
+    o += a.length;
+  }
+  return out;
+}
+function _pkToBuf(b: Uint8Array): ArrayBuffer {
+  const a = new ArrayBuffer(b.length);
+  new Uint8Array(a).set(b);
+  return a;
+}
+async function _pkSha256(b: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", _pkToBuf(b)));
+}
+async function _pkAuthData(
+  rpId: string,
+  flags: number,
+  signCount: number,
+): Promise<Uint8Array> {
+  const rpIdHash = await _pkSha256(_pkEnc.encode(rpId));
+  const sc = new Uint8Array(4);
+  new DataView(sc.buffer).setUint32(0, signCount, false);
+  return _pkConcat(rpIdHash, new Uint8Array([flags]), sc);
+}
+function _pkRawToDer(raw: Uint8Array): Uint8Array {
+  const derInt = (b: Uint8Array): Uint8Array => {
+    let i = 0;
+    while (i < b.length - 1 && b[i] === 0x00) i++;
+    let v = b.subarray(i);
+    if (v[0]! & 0x80) v = _pkConcat(new Uint8Array([0x00]), v);
+    return v;
+  };
+  const r = derInt(raw.subarray(0, 32));
+  const s = derInt(raw.subarray(32, 64));
+  const body = _pkConcat(
+    new Uint8Array([0x02, r.length]),
+    r,
+    new Uint8Array([0x02, s.length]),
+    s,
+  );
+  return _pkConcat(new Uint8Array([0x30, body.length]), body);
+}
+
+interface TestCred {
+  cred: Record<string, unknown>;
+  priv: CryptoKey;
+}
+/** A pubkey-bearing ES256 credential (the shape readPasskeyStateV4 returns). */
+async function makeEs256Cred(
+  credentialId: string,
+  signCount = 0,
+): Promise<TestCred> {
+  const kp = (await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const spki = _pkB64Url(
+    new Uint8Array(await crypto.subtle.exportKey("spki", kp.publicKey)),
+  );
+  return {
+    cred: {
+      credentialId,
+      name: "Key",
+      kind: "platform",
+      createdAt: 1,
+      publicKeySpki: spki,
+      alg: -7,
+      signCount,
+    },
+    priv: kp.privateKey,
+  };
+}
+
+interface ForwardedAssertion {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+}
+async function buildAssertion(opts: {
+  challengeB64: string;
+  priv: CryptoKey;
+  credentialId: string;
+  rpId?: string;
+  origin?: string;
+  flags?: number;
+  signCount?: number;
+}): Promise<ForwardedAssertion> {
+  const rpId = opts.rpId ?? "test";
+  const origin = opts.origin ?? "chrome-extension://test";
+  const flags = opts.flags ?? 0x05; // UP + UV
+  const signCount = opts.signCount ?? 9;
+  const authData = await _pkAuthData(rpId, flags, signCount);
+  const clientDataJSON = _pkEnc.encode(
+    JSON.stringify({ type: "webauthn.get", challenge: opts.challengeB64, origin }),
+  );
+  const signedData = _pkConcat(authData, await _pkSha256(clientDataJSON));
+  const rawSig = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      opts.priv,
+      _pkToBuf(signedData),
+    ),
+  );
+  return {
+    credentialId: opts.credentialId,
+    authenticatorData: _pkB64Url(authData),
+    clientDataJSON: _pkB64Url(clientDataJSON),
+    signature: _pkB64Url(_pkRawToDer(rawSig)),
+  };
+}
+/** Mint a challenge via `passkey-evaluate` and build a valid assertion over it. */
+async function mintAndAssert(opts: {
+  vaultId: string;
+  to: string;
+  valueWei: bigint;
+  chainIdHex: string;
+  priv: CryptoKey;
+  credentialId: string;
+  signCount?: number;
+}): Promise<{ challengeId: string; challengeB64: string; assertion: ForwardedAssertion }> {
+  const ev = (await dispatchPopup({
+    kind: "popup",
+    op: "passkey-evaluate",
+    payload: {
+      vaultId: opts.vaultId,
+      valueWeiHex: "0x" + opts.valueWei.toString(16),
+      to: opts.to,
+      chainIdHex: opts.chainIdHex,
+    },
+  })) as {
+    ok: boolean;
+    decision?: { kind: string; challengeId?: string; challengeB64?: string };
+  };
+  if (!ev.ok || ev.decision?.kind !== "passkey-ok" || !ev.decision.challengeId) {
+    throw new Error(`mint failed: ${JSON.stringify(ev)}`);
+  }
+  const challengeB64 = ev.decision.challengeB64!;
+  const assertion = await buildAssertion({
+    challengeB64,
+    priv: opts.priv,
+    credentialId: opts.credentialId,
+    ...(opts.signCount !== undefined ? { signCount: opts.signCount } : {}),
+  });
+  return { challengeId: ev.decision.challengeId, challengeB64, assertion };
+}
+
 // T1-04(a) — passkey spending cap enforced at the SW signing boundary.
 // The gate is INERT unless a test opts in via activePasskeyVaultId +
 // passkeyStateForTest (default null/disabled — see the keystore mock).
@@ -6313,11 +6482,14 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   const OVER = "0x" + (LIMIT_LYTHOSHI * 2n).toString(16); // 200 LYTH
   const UNDER = "0x" + (LIMIT_LYTHOSHI / 2n).toString(16); // 50 LYTH
 
-  function enablePerTxCap() {
+  let perTxPriv: CryptoKey;
+  async function enablePerTxCap() {
+    const { cred, priv } = await makeEs256Cred("c1");
+    perTxPriv = priv;
     activePasskeyVaultId = "v1";
     passkeyStateForTest = {
       policy: { enabled: true, mode: "per-tx", limitWei: LIMIT_LYTHOSHI },
-      credentials: [{ credentialId: "c1" }],
+      credentials: [cred],
     };
   }
 
@@ -6337,7 +6509,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   }
 
   it("over-limit value send with NO password → passkeyElevation:required, no broadcast", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -6350,7 +6522,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   });
 
   it("over-limit value send with the CORRECT password is SW-verified and broadcasts", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -6363,7 +6535,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   });
 
   it("over-limit value send with a WRONG password → passkeyElevation:wrong_password, no broadcast", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -6376,17 +6548,40 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
-  it("under-limit value send broadcasts with no elevation required", async () => {
-    enablePerTxCap();
+  it("under-limit value send with a VERIFIED passkey assertion broadcasts", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: LIMIT_LYTHOSHI / 2n,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv: perTxPriv,
+      credentialId: "c1",
+    });
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; passkeyElevation?: string };
+    expect(r.ok).toBe(true);
+    expect(r.passkeyElevation).toBeUndefined();
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("under-limit value send with NO assertion is REJECTED (boundary 3b)", async () => {
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
       valueWeiHex: UNDER,
       chainIdHex: TESTNET_CHAIN_ID_HEX,
-    })) as { ok: boolean; passkeyElevation?: string };
-    expect(r.ok).toBe(true);
-    expect(r.passkeyElevation).toBeUndefined();
-    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("passkey assertion required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("policy disabled → gate inert, over-limit value send broadcasts", async () => {
@@ -6406,7 +6601,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   });
 
   it("data (contract-call) send bypasses the value-only cap even when over-limit", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0x0000000000000000000000000000000000001001",
@@ -6420,7 +6615,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   });
 
   it("empty-data (0x) over-limit send is treated as a bare value transfer and is capped (#36)", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -6485,11 +6680,14 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
   const SESSION_KEY = "mono.session.passkey-usage.v1";
   const hex = (v: bigint) => "0x" + v.toString(16);
 
-  function enableDailyCap() {
+  let dailyPriv: CryptoKey;
+  async function enableDailyCap() {
+    const { cred, priv } = await makeEs256Cred("c1");
+    dailyPriv = priv;
     activePasskeyVaultId = "v1";
     passkeyStateForTest = {
       policy: { enabled: true, mode: "daily", dailyCapWei: DAILY_CAP },
-      credentials: [{ credentialId: "c1" }],
+      credentials: [cred],
     };
   }
   function seedNonceAndFee() {
@@ -6504,6 +6702,25 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
   }
   function send(payload: Record<string, unknown>) {
     return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+  // A full under-cap passkey send: mint the challenge, build a valid assertion,
+  // forward it (boundary 3b requires a verified assertion to sign).
+  async function sendPasskey(valueWei: bigint) {
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv: dailyPriv,
+      credentialId: "c1",
+    });
+    return send({
+      to: "0xrecipient",
+      valueWeiHex: hex(valueWei),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    });
   }
   function evaluate(vaultId: string, valueWei: bigint) {
     return dispatchPopup({
@@ -6521,13 +6738,9 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
   }
 
   it("the SW appends the ledger entry ITSELF on a daily-mode send — no popup IPC", async () => {
-    enableDailyCap();
+    await enableDailyCap();
     seedNonceAndFee();
-    const r = (await send({
-      to: "0xrecipient",
-      valueWeiHex: hex(60n * LYTH),
-      chainIdHex: TESTNET_CHAIN_ID_HEX,
-    })) as { ok: boolean };
+    const r = (await sendPasskey(60n * LYTH)) as { ok: boolean };
     expect(r.ok).toBe(true);
     expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
     // The SW wrote the ledger; there is no popup record-usage IPC anymore.
@@ -6538,14 +6751,10 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
   });
 
   it("a second send over the daily cap is blocked by the SW's OWN count", async () => {
-    enableDailyCap();
+    await enableDailyCap();
     seedNonceAndFee();
     // First passkey send (60 <= 100): submits + the SW appends 60.
-    await send({
-      to: "0xrecipient",
-      valueWeiHex: hex(60n * LYTH),
-      chainIdHex: TESTNET_CHAIN_ID_HEX,
-    });
+    await sendPasskey(60n * LYTH);
     expect(ledger()).toHaveLength(1);
     // Second send (60 + 50 = 110 > 100) is blocked using the SW-counted 60 —
     // the popup never reported anything.
@@ -6561,7 +6770,7 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
   });
 
   it("an over-limit, password-elevated send does NOT append a passkey-usage entry", async () => {
-    enableDailyCap();
+    await enableDailyCap();
     seedNonceAndFee();
     // 150 > the 100 cap → over-limit → password elevation (correct pw) → submits,
     // but it is a PASSWORD-authorised send, not a passkey one — must not count.
@@ -6577,13 +6786,9 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
   });
 
   it("the SW-recorded usage counts toward the cap on a fresh read (survives SW restart)", async () => {
-    enableDailyCap();
+    await enableDailyCap();
     seedNonceAndFee();
-    await send({
-      to: "0xrecipient",
-      valueWeiHex: hex(60n * LYTH),
-      chainIdHex: TESTNET_CHAIN_ID_HEX,
-    });
+    await sendPasskey(60n * LYTH);
     // The ledger lives only in chrome.storage.session — a fresh evaluate (as a
     // restarted SW would do) still sees the SW-recorded 60.
     const over = await evaluate("v1", 50n * LYTH); // 60 + 50 = 110 > 100
@@ -6594,7 +6799,7 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
   });
 
   it("prunes >24h usage entries on read", async () => {
-    enableDailyCap();
+    await enableDailyCap();
     const DAY_MS = 24 * 60 * 60 * 1000;
     storageSession[SESSION_KEY] = {
       v1: [
@@ -6608,6 +6813,271 @@ describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () =>
     // With pruning: 30 + 50 = 80 <= 100 → passkey-ok.
     const r = await evaluate("v1", 50n * LYTH);
     expect(r.decision?.kind).toBe("passkey-ok");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// boundary 3b — the per-tx passkey is now a REAL SW-verified boundary. The SW
+// consumes a single-use, tx-intent-bound challenge and cryptographically
+// verifies the forwarded WebAuthn assertion before signing.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-send-tx passkey verify gate (boundary 3b)", () => {
+  const LIMIT = 100_000_000_000_000_000_000n; // 100 LYTH
+  const UNDER = LIMIT / 2n; // 50 LYTH
+  const UNDER_HEX = "0x" + UNDER.toString(16);
+
+  let priv: CryptoKey;
+  async function enable(mode: "per-tx" | "daily" = "per-tx") {
+    const { cred, priv: p } = await makeEs256Cred("c1");
+    priv = p;
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy:
+        mode === "per-tx"
+          ? { enabled: true, mode: "per-tx", limitWei: LIMIT }
+          : { enabled: true, mode: "daily", dailyCapWei: LIMIT },
+      credentials: [cred],
+    };
+  }
+  function seedNonceAndFee() {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+
+  it("a VALID assertion verifies, signs, and persists the new signCount", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+      signCount: 12,
+    });
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    // The verified signCount advance is persisted (vault, credential, count).
+    expect(mockUpdateSignCount).toHaveBeenCalledWith("v1", "c1", 12);
+  });
+
+  it("a GARBAGE assertion is rejected with no sign", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: {
+        credentialId: "c1",
+        authenticatorData: "not-base64url-and-wrong",
+        clientDataJSON: "garbage",
+        signature: "garbage",
+      },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a REPLAYED assertion (reused challengeId) is rejected — challenge consumed", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    const first = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean };
+    expect(first.ok).toBe(true);
+    // Replay the SAME assertion + challengeId — the challenge was consumed.
+    const replay = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(replay.ok).toBe(false);
+    expect(replay.reason).toContain("already used");
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1); // only the first
+  });
+
+  it("a TX-SWAP (assertion minted for A, submitted as B) is rejected by the intent digest", async () => {
+    await enable();
+    seedNonceAndFee();
+    // Mint + sign for recipient A.
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xAAAA000000000000000000000000000000000000",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    // Submit the same assertion against a DIFFERENT recipient B.
+    const r = (await send({
+      to: "0xBBBB000000000000000000000000000000000000",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("does not match this transaction");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("an EXPIRED challenge is rejected", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    // Force the stored challenge to be in the past.
+    const wire = storageSession["mono.session.passkey-challenges.v1"] as Record<
+      string,
+      { expiresAt: number }
+    >;
+    wire[challengeId]!.expiresAt = Date.now() - 1;
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("expired");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a WRONG-VAULT challenge (minted for another vault) is rejected", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    // Rebind the stored challenge to a different vault than the active one.
+    const wire = storageSession["mono.session.passkey-challenges.v1"] as Record<
+      string,
+      { vaultId: string }
+    >;
+    wire[challengeId]!.vaultId = "other-vault";
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("vault mismatch");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a pubkey-less credential → reregister-required at evaluate, never signs", async () => {
+    // A credential WITHOUT a public key (pre-upgrade).
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "per-tx", limitWei: LIMIT },
+      credentials: [{ credentialId: "c1" }],
+    };
+    seedNonceAndFee();
+    // Evaluate returns reregister-required (no challenge can be minted).
+    const ev = (await dispatchPopup({
+      kind: "popup",
+      op: "passkey-evaluate",
+      payload: {
+        vaultId: "v1",
+        valueWeiHex: UNDER_HEX,
+        to: "0xrecipient",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: boolean; decision?: { kind: string } };
+    expect(ev.ok).toBe(true);
+    expect(ev.decision?.kind).toBe("reregister-required");
+    // And a direct send (no assertion) never signs.
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a verified credential whose stored record loses its pubkey → passkeyReregister at send", async () => {
+    // Mint + build a valid assertion, THEN strip the pubkey from the stored
+    // credential so the SW-side verify hits the no-pubkey route.
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "per-tx", limitWei: LIMIT },
+      credentials: [{ credentialId: "c1" }], // pubkey stripped
+    };
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; passkeyReregister?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyReregister).toBe("required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
 

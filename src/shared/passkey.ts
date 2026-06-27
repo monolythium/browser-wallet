@@ -385,6 +385,53 @@ export function buildPasskeyChallenge(
   return keccak_256(buf);
 }
 
+/** Domain tag for the tx-intent digest (distinct from the challenge domain so
+ *  an intent digest can never be confused with a challenge). */
+const INTENT_DOMAIN = "mono-wallet-passkey-intent-v1";
+
+/** Canonicalise a hex quantity (value / chainId) so the digest is invariant to
+ *  case + leading zeros. Falls back to a lowercased raw string on un-parseable
+ *  input (both call sites validate hex first, so this is belt-and-braces). */
+function canonHexQuantity(h: string): string {
+  try {
+    return "0x" + BigInt(h).toString(16);
+  } catch {
+    return h.toLowerCase();
+  }
+}
+
+/** Deterministic 32-byte digest over a transaction's INTENT — `to`, `value`,
+ *  `data`, `chainId` ONLY. Deliberately excludes the nonce + fee, which the
+ *  service worker resolves later at submit (they are not known when the
+ *  challenge is minted and would never match).
+ *
+ *  The per-tx passkey challenge is `buildPasskeyChallenge(intentDigest, nonce)`,
+ *  so a successful assertion is bound to this exact recipient/value/data/chain.
+ *  The SW recomputes this digest from the real send fields at the verify gate
+ *  and requires it to equal the digest captured at mint — a compromised popup
+ *  therefore cannot swap the transaction after collecting the assertion.
+ *
+ *  MUST be computed identically at mint (passkey-evaluate) and verify
+ *  (wallet-send-tx). `data` is normalised so an absent / `"0x"` field (a bare
+ *  value transfer, the only shape the passkey cap governs) hashes the same on
+ *  both sides. */
+export function buildTxIntentDigest(intent: {
+  to: string;
+  valueWeiHex: string;
+  data?: string;
+  chainIdHex: string;
+}): Uint8Array {
+  const to = intent.to.toLowerCase();
+  const value = canonHexQuantity(intent.valueWeiHex);
+  const data =
+    intent.data === undefined || intent.data === "" || intent.data === "0x"
+      ? "0x"
+      : intent.data.toLowerCase();
+  const chainId = canonHexQuantity(intent.chainIdHex);
+  const canon = `${INTENT_DOMAIN}|${to}|${value}|${data}|${chainId}`;
+  return keccak_256(new TextEncoder().encode(canon));
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Vault-state mutations (pure)
 // ────────────────────────────────────────────────────────────────────────────

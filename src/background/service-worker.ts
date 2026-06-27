@@ -98,6 +98,7 @@ import {
   addPasskeyCredentialV4,
   removePasskeyCredentialV4,
   setPasskeyPolicyV4,
+  updatePasskeyCredentialSignCountV4,
   // SLH-DSA emergency-backup surface.
   // `writeSlhDsaBackupV4` is not used directly by any IPC — the
   // SW writes through the higher-level helpers (`generateSlhDsaBackupV4`,
@@ -161,10 +162,13 @@ import {
   DAILY_CAP_WINDOW_MS,
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+  buildPasskeyChallenge,
+  buildTxIntentDigest,
   evaluatePolicy as evaluatePasskeyPolicy,
   validateCredentialName,
   validatePasskeyPolicy,
 } from "../shared/passkey.js";
+import { verifyPasskeyAssertion } from "./passkey-verify.js";
 import { loadTwoTierState } from "./two-tier-features-store.js";
 import { isPasswordValid } from "../lib/password-validation.js";
 import {
@@ -2295,6 +2299,23 @@ function bytesToHex(b: Uint8Array): string {
   return s;
 }
 
+function bytesToBase64Url(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Decode a base64url string to bytes. Throws on malformed input (callers in
+ *  the passkey verify gate treat a throw as a rejected assertion). */
+function base64UrlToBytes(s: string): Uint8Array {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const norm = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  const bin = atob(norm);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 function parseHexQuantity(hex: string): number {
   const r = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
   if (r.length === 0) return 0;
@@ -2653,6 +2674,237 @@ async function recordPasskeyUsageEntry(
   } catch {
     // session set best-effort.
   }
+}
+
+// ── Pending per-tx passkey challenges (boundary 3b) ──────────────────────────
+//
+// The SW mints a single-use, tx-intent-bound challenge at `passkey-evaluate`
+// and persists it here; the verify gate in `wallet-send-tx` CONSUMES it
+// (delete-on-read) before checking the forwarded assertion. Kept in
+// `chrome.storage.session` (NOT module memory) so it survives an MV3 SW
+// hibernation during the up-to-60s authenticator prompt. Entries are bounded
+// by a short TTL + prune-on-write.
+const SESSION_KEY_PASSKEY_CHALLENGES = "mono.session.passkey-challenges.v1";
+const PASSKEY_CHALLENGE_TTL_MS = 2 * 60_000; // ~2 min — covers the WebAuthn prompt
+interface PasskeyChallengeRecord {
+  /** base64url of the challenge bytes the popup must pass to `.get()`. */
+  challengeB64: string;
+  /** hex of the tx-intent digest the assertion is bound to. */
+  intentDigestHex: string;
+  /** the vault the challenge was minted for. */
+  vaultId: string;
+  /** epoch ms after which the challenge is rejected. */
+  expiresAt: number;
+}
+type PasskeyChallengeWire = Record<string, PasskeyChallengeRecord>;
+
+async function readPasskeyChallengeWire(): Promise<PasskeyChallengeWire> {
+  try {
+    const raw = await chrome.storage.session.get(SESSION_KEY_PASSKEY_CHALLENGES);
+    const stored = raw[SESSION_KEY_PASSKEY_CHALLENGES];
+    if (!stored || typeof stored !== "object") return {};
+    return stored as PasskeyChallengeWire;
+  } catch {
+    return {};
+  }
+}
+
+/** Persist a pending challenge (pruning expired entries) and return its id. */
+async function putPendingPasskeyChallenge(
+  rec: PasskeyChallengeRecord,
+): Promise<string> {
+  const wire = await readPasskeyChallengeWire();
+  const now = Date.now();
+  for (const [id, r] of Object.entries(wire)) {
+    if (!r || typeof r.expiresAt !== "number" || r.expiresAt < now) {
+      delete wire[id];
+    }
+  }
+  const challengeId = crypto.randomUUID();
+  wire[challengeId] = rec;
+  try {
+    await chrome.storage.session.set({ [SESSION_KEY_PASSKEY_CHALLENGES]: wire });
+  } catch {
+    // best-effort; a failed persist surfaces as "challenge not found" at verify.
+  }
+  return challengeId;
+}
+
+/** Read AND DELETE a pending challenge — single-use, one-shot. Deletes
+ *  regardless of the record's validity so a failed attempt can never be
+ *  replayed. Returns null when absent or structurally invalid. */
+async function consumePendingPasskeyChallenge(
+  challengeId: string,
+): Promise<PasskeyChallengeRecord | null> {
+  const wire = await readPasskeyChallengeWire();
+  const rec = wire[challengeId];
+  if (rec) {
+    delete wire[challengeId];
+    try {
+      await chrome.storage.session.set({
+        [SESSION_KEY_PASSKEY_CHALLENGES]: wire,
+      });
+    } catch {
+      // best-effort delete; the TTL is the backstop.
+    }
+  }
+  if (
+    !rec ||
+    typeof rec.challengeB64 !== "string" ||
+    typeof rec.intentDigestHex !== "string" ||
+    typeof rec.vaultId !== "string" ||
+    typeof rec.expiresAt !== "number"
+  ) {
+    return null;
+  }
+  return rec;
+}
+
+/** The (base64url-encoded) assertion the popup forwards from
+ *  `navigator.credentials.get()`. */
+interface ForwardedAssertion {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+}
+
+function isForwardedAssertion(x: unknown): x is ForwardedAssertion {
+  if (!x || typeof x !== "object") return false;
+  const a = x as Record<string, unknown>;
+  return (
+    typeof a.credentialId === "string" &&
+    typeof a.authenticatorData === "string" &&
+    typeof a.clientDataJSON === "string" &&
+    typeof a.signature === "string"
+  );
+}
+
+type PasskeySendGateResult =
+  | {
+      ok: true;
+      signCountUpdate: { credentialId: string; newSignCount: number };
+    }
+  | {
+      ok: false;
+      reject: { ok: false; reason: string; passkeyReregister?: "required" };
+    };
+
+/** The boundary-3b verify gate for an under-limit passkey send. Consumes the
+ *  single-use challenge, checks expiry + vault binding, recomputes the tx
+ *  intent digest and requires it to match the minted one (binds the assertion
+ *  to THIS exact tx), then cryptographically verifies the assertion via
+ *  `verifyPasskeyAssertion`. Returns a typed reject on any failure — the caller
+ *  signs ONLY on `{ ok: true }`. */
+async function verifyPasskeyAssertionForSend(args: {
+  to: string;
+  valueWeiHex: string;
+  data?: string;
+  chainIdHex: string;
+  challengeId: unknown;
+  assertion: unknown;
+  activeVaultId: string;
+  credentials: PasskeyCredential[];
+}): Promise<PasskeySendGateResult> {
+  const { challengeId, assertion } = args;
+  if (typeof challengeId !== "string" || !isForwardedAssertion(assertion)) {
+    return { ok: false, reject: { ok: false, reason: "passkey assertion required" } };
+  }
+  // CONSUME the challenge FIRST — single-use, deleted before verify so a
+  // failed attempt cannot be replayed.
+  const pending = await consumePendingPasskeyChallenge(challengeId);
+  if (!pending) {
+    return {
+      ok: false,
+      reject: { ok: false, reason: "passkey challenge not found or already used" },
+    };
+  }
+  if (Date.now() > pending.expiresAt) {
+    return { ok: false, reject: { ok: false, reason: "passkey challenge expired" } };
+  }
+  if (pending.vaultId !== args.activeVaultId) {
+    return {
+      ok: false,
+      reject: { ok: false, reason: "passkey challenge vault mismatch" },
+    };
+  }
+  // RECOMPUTE the intent digest from the ACTUAL send fields and require a
+  // match — a compromised popup cannot swap the recipient/value/data/chain
+  // after collecting the assertion.
+  const intentDigest = buildTxIntentDigest({
+    to: args.to,
+    valueWeiHex: args.valueWeiHex,
+    ...(args.data !== undefined ? { data: args.data } : {}),
+    chainIdHex: args.chainIdHex,
+  });
+  if (bytesToHex(intentDigest) !== pending.intentDigestHex) {
+    return {
+      ok: false,
+      reject: {
+        ok: false,
+        reason: "passkey assertion does not match this transaction",
+      },
+    };
+  }
+  const cred = args.credentials.find(
+    (c) => c.credentialId === assertion.credentialId,
+  );
+  if (!cred) {
+    return {
+      ok: false,
+      reject: { ok: false, reason: "passkey credential not recognized" },
+    };
+  }
+  let decoded: {
+    authenticatorData: Uint8Array;
+    clientDataJSON: Uint8Array;
+    signature: Uint8Array;
+    credentialId: string;
+  };
+  try {
+    decoded = {
+      authenticatorData: base64UrlToBytes(assertion.authenticatorData),
+      clientDataJSON: base64UrlToBytes(assertion.clientDataJSON),
+      signature: base64UrlToBytes(assertion.signature),
+      credentialId: assertion.credentialId,
+    };
+  } catch {
+    return { ok: false, reject: { ok: false, reason: "passkey assertion is malformed" } };
+  }
+  const verify = await verifyPasskeyAssertion({
+    assertion: decoded,
+    expectedChallenge: base64UrlToBytes(pending.challengeB64),
+    expectedOrigin: `chrome-extension://${chrome.runtime.id}`,
+    expectedRpId: chrome.runtime.id,
+    credential: {
+      ...(cred.publicKeySpki !== undefined ? { publicKeySpki: cred.publicKeySpki } : {}),
+      ...(cred.alg !== undefined ? { alg: cred.alg } : {}),
+      ...(cred.signCount !== undefined ? { signCount: cred.signCount } : {}),
+    },
+  });
+  if (!verify.ok) {
+    if (verify.reason === "no-pubkey") {
+      // Part 2: a pubkey-less (pre-upgrade) credential cannot sign — route the
+      // user to re-register rather than degrading to popup-only trust.
+      return {
+        ok: false,
+        reject: {
+          ok: false,
+          passkeyReregister: "required",
+          reason:
+            "this passkey predates an encryption upgrade — re-register it in Security to sign",
+        },
+      };
+    }
+    return { ok: false, reject: { ok: false, reason: "passkey verification failed" } };
+  }
+  return {
+    ok: true,
+    signCountUpdate: {
+      credentialId: assertion.credentialId,
+      newSignCount: verify.newSignCount ?? 0,
+    },
+  };
 }
 
 /**
@@ -7490,10 +7742,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "passkey-evaluate": {
       // Send-flow consults this before showing the preview screen.
       // Returns a decision the popup uses to pick the unlock-mode
-      // badge + whether to run a passkey ceremony before submit.
+      // badge + whether to run a passkey ceremony before submit. On a
+      // `passkey-ok` decision the SW also MINTS the single-use, tx-intent-bound
+      // challenge (boundary 3b) — `to` + `chainIdHex` bind it to this exact tx.
       const p = (message.payload ?? {}) as {
         vaultId?: string;
         valueWeiHex?: string;
+        to?: string;
+        chainIdHex?: string;
+        data?: string;
       };
       if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
         return { ok: false, reason: "missing vaultId or valueWeiHex" };
@@ -7528,14 +7785,57 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           };
         }
         if (decision.kind === "passkey-ok") {
-          // Surface the active credentials so the popup can build the
-          // `allowCredentials[]` list for `navigator.credentials.get()`
-          // without a second round-trip.
+          // boundary 3b: only credentials with a captured public key can be
+          // SW-verified. Build `allowCredentials[]` from those so the
+          // authenticator can't return an unverifiable (pre-upgrade)
+          // assertion.
+          const verifiable = state.credentials.filter(
+            (c) => typeof c.publicKeySpki === "string" && c.publicKeySpki.length > 0,
+          );
+          if (verifiable.length === 0) {
+            // Part 2: every credential predates the public-key capture — the
+            // user must re-register before a passkey can authorize a signature.
+            return {
+              ok: true,
+              decision: { kind: "reregister-required" as const },
+            };
+          }
+          // Mint the single-use, tx-intent-bound challenge ONLY when the caller
+          // supplies the recipient + chain (the Send flow). A badge-only query
+          // (no to/chainId) returns passkey-ok WITHOUT a challenge — a send
+          // still has to mint via a to/chainId evaluate, so it can't sign off a
+          // challenge-less decision.
+          if (typeof p.to === "string" && typeof p.chainIdHex === "string") {
+            const intentDigest = buildTxIntentDigest({
+              to: p.to,
+              valueWeiHex: p.valueWeiHex,
+              ...(typeof p.data === "string" ? { data: p.data } : {}),
+              chainIdHex: p.chainIdHex,
+            });
+            const challengeNonce = crypto.getRandomValues(new Uint8Array(16));
+            const challengeBytes = buildPasskeyChallenge(intentDigest, challengeNonce);
+            const challengeB64 = bytesToBase64Url(challengeBytes);
+            const challengeId = await putPendingPasskeyChallenge({
+              challengeB64,
+              intentDigestHex: bytesToHex(intentDigest),
+              vaultId: p.vaultId,
+              expiresAt: Date.now() + PASSKEY_CHALLENGE_TTL_MS,
+            });
+            return {
+              ok: true,
+              decision: {
+                kind: "passkey-ok" as const,
+                credentials: verifiable.map((c) => ({ ...c })),
+                challengeId,
+                challengeB64,
+              },
+            };
+          }
           return {
             ok: true,
             decision: {
               kind: "passkey-ok" as const,
-              credentials: state.credentials.map((c) => ({ ...c })),
+              credentials: verifiable.map((c) => ({ ...c })),
             },
           };
         }
@@ -9774,6 +10074,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // clamp) instead of re-reading the operator, closing the display-vs-
         // sign double-read and the Slow/Fast tier-multiplier desync.
         signedFee?: unknown;
+        // boundary 3b — the single-use challenge id + the forwarded WebAuthn
+        // assertion for an under-limit passkey send. The SW CONSUMES the
+        // challenge, re-binds it to this tx's intent, and cryptographically
+        // verifies the assertion before signing (verifyPasskeyAssertionForSend).
+        passkeyChallengeId?: unknown;
+        passkeyAssertion?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -9889,6 +10195,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // count, captured in the gate below and appended AFTER the submit
       // succeeds so the SW — not the popup — is the authoritative counter.
       let passkeyDailyAppend: { vaultId: string; value: bigint } | null = null;
+      // boundary 3b: an under-limit passkey send's verified signCount advance,
+      // persisted AFTER a successful submit (alongside the daily append).
+      let passkeySignCountUpdate: {
+        vaultId: string;
+        credentialId: string;
+        newSignCount: number;
+      } | null = null;
       const isBareValueTransfer = p.data === undefined || p.data === "0x";
       if (isBareValueTransfer) {
         const activeVaultId = getActiveVaultIdV4();
@@ -9970,13 +10283,36 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 SESSION_KEY_UNLOCK_FAIL_COUNT,
                 SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
               ]);
-            } else if (pkState.policy.mode === "daily") {
-              // Part 3: a daily-mode passkey-unlocked (under-cap) send. The SW
-              // is the authoritative daily-cap counter — append to the usage
-              // ledger ourselves AFTER the submit succeeds (below) so a
-              // compromised popup that skips the (removed) record-usage IPC
-              // can't keep used = 0.
-              passkeyDailyAppend = { vaultId: activeVaultId, value: pkValue };
+            } else {
+              // boundary 3b: an UNDER-LIMIT passkey send. Previously this path
+              // signed on the popup's say-so alone (P3-005 popup-only). The SW
+              // now REQUIRES a cryptographically-verified WebAuthn assertion
+              // over a fresh, single-use, intent-bound challenge — signs only
+              // on { ok: true }.
+              const gate = await verifyPasskeyAssertionForSend({
+                to: p.to,
+                valueWeiHex: p.valueWeiHex,
+                ...(p.data !== undefined ? { data: p.data } : {}),
+                chainIdHex: p.chainIdHex,
+                challengeId: p.passkeyChallengeId,
+                assertion: p.passkeyAssertion,
+                activeVaultId,
+                credentials: pkState.credentials,
+              });
+              if (!gate.ok) return gate.reject;
+              passkeySignCountUpdate = {
+                vaultId: activeVaultId,
+                credentialId: gate.signCountUpdate.credentialId,
+                newSignCount: gate.signCountUpdate.newSignCount,
+              };
+              if (pkState.policy.mode === "daily") {
+                // Part 3: a daily-mode passkey-unlocked (under-cap) send. The SW
+                // is the authoritative daily-cap counter — append to the usage
+                // ledger ourselves AFTER the submit succeeds (below) so a
+                // compromised popup that skips the (removed) record-usage IPC
+                // can't keep used = 0.
+                passkeyDailyAppend = { vaultId: activeVaultId, value: pkValue };
+              }
             }
           }
         }
@@ -10052,6 +10388,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             );
           } catch {
             // ledger append best-effort; the submit already succeeded.
+          }
+        }
+        // boundary 3b: persist the verified signCount advance (success path
+        // only). Best-effort — the single-use challenge already prevents replay
+        // of this assertion; the counter is cross-session cloned-authenticator
+        // defense.
+        if (passkeySignCountUpdate) {
+          try {
+            await updatePasskeyCredentialSignCountV4(
+              passkeySignCountUpdate.vaultId,
+              passkeySignCountUpdate.credentialId,
+              passkeySignCountUpdate.newSignCount,
+            );
+          } catch {
+            // best-effort.
           }
         }
         // Fire-and-forget pending-row write. Unawaited so

@@ -19,6 +19,7 @@ import {
   bgWalletResolveName,
   bgWalletFeeSuggestion,
   bgWalletSendTx,
+  type BgForwardedAssertion,
   type BgPasskeyDecision,
   type FeeSuggestion,
   type PreviewTransactionHooksOutcome,
@@ -31,7 +32,6 @@ import { useFeature } from "../hooks/useFeature";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { Modal } from "../components/Modal";
-import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
 import {
   bech32mDisplay,
@@ -386,11 +386,16 @@ export function Send({
     if (
       singleVaultId !== undefined &&
       multisigVaultId === undefined &&
-      amountLythoshi !== null
+      amountLythoshi !== null &&
+      effectiveAddr0x !== null
     ) {
+      // Pass the recipient + chain so the SW can bind the minted passkey
+      // challenge to this exact tx intent (boundary 3b). Native send → no data.
       const r = await bgPasskeyEvaluate({
         vaultId: singleVaultId,
         valueWeiHex: "0x" + amountLythoshi.toString(16),
+        to: effectiveAddr0x,
+        chainIdHex: chainId,
       });
       setPasskeyDecision(r.ok ? r.decision : null);
     } else {
@@ -402,6 +407,10 @@ export function Send({
   const handleConfirm = async (opts?: {
     elevatedPassword?: string;
     viaElevated?: boolean;
+    /** boundary 3b — the collected passkey assertion + its challenge id,
+     *  forwarded to the SW verify gate for an under-limit passkey send. */
+    passkeyAssertion?: BgForwardedAssertion;
+    passkeyChallengeId?: string;
   }) => {
     if (amountLythoshi === null) return;
     if (effectiveAddr0x === null) return; // form button is gated; defensive
@@ -492,6 +501,14 @@ export function Send({
         ...(opts?.elevatedPassword
           ? { elevatedPassword: opts.elevatedPassword }
           : {}),
+        // boundary 3b — present only on the under-limit passkey path; the SW
+        // consumes the challenge + verifies the assertion before signing.
+        ...(opts?.passkeyAssertion && opts?.passkeyChallengeId
+          ? {
+              passkeyAssertion: opts.passkeyAssertion,
+              passkeyChallengeId: opts.passkeyChallengeId,
+            }
+          : {}),
         ...(signedFee ? { signedFee } : {}),
       });
       if (r.ok) {
@@ -519,6 +536,18 @@ export function Send({
               : null,
         );
         if (!opts?.viaElevated) setStep("preview");
+      } else if (r.passkeyReregister) {
+        // boundary 3b Part 2 — the credential predates the public-key capture
+        // and can't authorize; send the user to Security to re-register.
+        if (opts?.viaElevated) setElevatedOpen(false);
+        setSubmitError({
+          message:
+            "This passkey was set up before a security upgrade and can no longer approve transactions. Re-register it in Settings → Security, or turn off the passkey spending limit.",
+          code: null,
+          method: null,
+          via: null,
+        });
+        setStep("error");
       } else {
         if (opts?.viaElevated) setElevatedOpen(false);
         setSubmitError({
@@ -563,9 +592,24 @@ export function Send({
 
   if (step === "preview") {
     const needsPasskey = passkeyDecision?.kind === "passkey-ok";
+    const passkeyChallengeB64 =
+      passkeyDecision?.kind === "passkey-ok" ? passkeyDecision.challengeB64 : undefined;
+    const passkeyChallengeId =
+      passkeyDecision?.kind === "passkey-ok" ? passkeyDecision.challengeId : undefined;
     const onPreviewConfirm = () => {
-      if (needsPasskey) {
+      if (needsPasskey && passkeyChallengeB64) {
         setPasskeyModalOpen(true);
+      } else if (passkeyDecision?.kind === "reregister-required") {
+        // boundary 3b Part 2 — no usable (pubkey-bearing) credential. Don't
+        // degrade to popup-only trust; route the user to re-register.
+        setSubmitError({
+          message:
+            "This passkey was set up before a security upgrade and can no longer approve transactions. Re-register it in Settings → Security, or turn off the passkey spending limit.",
+          code: null,
+          method: null,
+          via: null,
+        });
+        setStep("error");
       } else if (passkeyDecision?.kind === "over-limit") {
         // T1-04(a) — above the passkey cap: require an account-password
         // re-auth (the SW enforces this regardless; the modal collects it).
@@ -576,22 +620,6 @@ export function Send({
         void handleConfirm();
       }
     };
-
-    // Build a stable tx digest for the WebAuthn challenge. Binds the
-    // assertion to the specific (to, value, chainId) so a captured
-    // assertion cannot be replayed for a different tx via the same
-    // wallet. We hash the wire-format strings — close enough for the
-    // local-presence-check the wallet uses today; the future
-    // chain-side passkey precompile will use the chain's
-    // canonical txHash for the same binding.
-    const txDigest =
-      needsPasskey && effectiveAddr0x !== null && amountLythoshi !== null
-        ? keccak_256(
-            new TextEncoder().encode(
-              `${effectiveAddr0x}|${amountLythoshi.toString(16)}|${chainId}`,
-            ),
-          )
-        : new Uint8Array(32);
 
     return (
       <>
@@ -609,19 +637,25 @@ export function Send({
           recipientRegisteredName={recipientRegisteredName}
           finalityPosture={finalityPostureFor(chainId)}
         />
-        {needsPasskey && passkeyDecision?.kind === "passkey-ok" && (
-          <PasskeySignModal
-            open={passkeyModalOpen}
-            vaultAddress={account.addr}
-            credentials={passkeyDecision.credentials}
-            txDigest={txDigest}
-            onCancel={() => setPasskeyModalOpen(false)}
-            onSuccess={() => {
-              setPasskeyModalOpen(false);
-              void handleConfirm();
-            }}
-          />
-        )}
+        {needsPasskey &&
+          passkeyDecision?.kind === "passkey-ok" &&
+          passkeyChallengeB64 &&
+          passkeyChallengeId && (
+            <PasskeySignModal
+              open={passkeyModalOpen}
+              vaultAddress={account.addr}
+              credentials={passkeyDecision.credentials}
+              challengeB64={passkeyChallengeB64}
+              onCancel={() => setPasskeyModalOpen(false)}
+              onSuccess={(assertion) => {
+                setPasskeyModalOpen(false);
+                void handleConfirm({
+                  passkeyAssertion: assertion,
+                  passkeyChallengeId,
+                });
+              }}
+            />
+          )}
         <Modal
           open={elevatedOpen}
           onClose={() => {
@@ -1813,6 +1847,28 @@ function PasskeyDecisionBadge({
             Below the configured limit — Confirm will use your passkey instead
             of asking for your password.
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (decision.kind === "reregister-required") {
+    return (
+      <div
+        style={{
+          padding: "8px 10px",
+          borderRadius: 8,
+          background: "rgba(242,180,65,0.08)",
+          border: "1px solid rgba(242,180,65,0.4)",
+          color: "var(--fg-100)",
+          fontSize: 11.5,
+          lineHeight: 1.5,
+        }}
+      >
+        <div style={{ fontWeight: 600 }}>Passkey needs re-registering</div>
+        <div style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
+          This passkey predates a security upgrade and can't approve transactions.
+          Re-register it in Settings → Security, or turn off the passkey limit.
         </div>
       </div>
     );

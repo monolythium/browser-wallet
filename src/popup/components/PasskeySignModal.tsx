@@ -1,31 +1,20 @@
 // PasskeySignModal.
 //
-// Runs `navigator.credentials.get()` with a tx-hash-bound challenge
-// when the Send flow's policy evaluation says `passkey-ok`. The modal
-// is a UX-layer presence gate: a successful WebAuthn assertion is
-// proof that the user has access to the registered passkey, and the
-// wallet treats that as authorisation for the small-value tx without
-// re-prompting for password.
-//
-// The wallet does NOT cryptographically verify the WebAuthn signature
-// here — the browser's WebAuthn implementation is the verifier. We
-// trust the runtime to refuse to return an assertion unless the
-// authenticator actually approved it. (When the chain ships a
-// passkey precompile, this will evolve: the wallet will collect the
-// assertion bytes and ship them on chain alongside the ML-DSA
-// signature.)
-//
-// Challenge construction: deterministic hash of (domain, tx fields,
-// nonce). Domain separation prevents an assertion captured here from
-// being replayed against an unrelated wallet using the same
-// authenticator.
+// Runs `navigator.credentials.get()` with the SERVICE-WORKER-ISSUED,
+// tx-intent-bound challenge when the Send flow's policy evaluation says
+// `passkey-ok` (boundary 3b). The popup no longer builds its own challenge:
+// the SW mints a single-use challenge at `passkey-evaluate`, the popup runs the
+// ceremony over it, and forwards the resulting assertion bytes back to the SW,
+// which CRYPTOGRAPHICALLY VERIFIES the assertion (origin, rpId, challenge,
+// signature, signCount) before signing. A successful `.get()` here is no longer
+// trusted on its own — it is only the collection step.
 
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 
 import { Modal } from "./Modal";
-import { buildPasskeyChallenge, PASSKEY_USER_VERIFICATION } from "../../shared/passkey";
-import type { BgPasskeyCredential } from "../bg";
+import { PASSKEY_USER_VERIFICATION } from "../../shared/passkey";
+import type { BgForwardedAssertion, BgPasskeyCredential } from "../bg";
 
 export interface PasskeySignModalProps {
   open: boolean;
@@ -35,15 +24,14 @@ export interface PasskeySignModalProps {
    *  `allowCredentials[]` from these so the authenticator knows which
    *  registered key to use. */
   credentials: BgPasskeyCredential[];
-  /** Deterministic tx digest (32 bytes) for the challenge. Caller is
-   *  the Send flow; it should pass the same digest the chain will
-   *  see (txHash) so a future on-chain passkey precompile can
-   *  cross-check. */
-  txDigest: Uint8Array;
+  /** The SW-issued challenge (base64url) the ceremony must sign over. The
+   *  popup uses this verbatim — it never mints its own challenge (3b). */
+  challengeB64: string;
   /** Dismiss without proceeding. */
   onCancel: () => void;
-  /** Assertion succeeded — caller proceeds with the tx submit. */
-  onSuccess: () => void;
+  /** Assertion collected — caller forwards it to the SW verify gate, which
+   *  decides whether to sign. */
+  onSuccess: (assertion: BgForwardedAssertion) => void;
 }
 
 type ScreenState =
@@ -58,6 +46,12 @@ function base64UrlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const u8 = new Uint8Array(buf);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   return u8;
+}
+
+function bytesToBase64Url(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function toBufferSource(u8: Uint8Array): Uint8Array<ArrayBuffer> {
@@ -92,7 +86,7 @@ export function PasskeySignModal({
   open,
   vaultAddress,
   credentials,
-  txDigest,
+  challengeB64,
   onCancel,
   onSuccess,
 }: PasskeySignModalProps) {
@@ -126,10 +120,8 @@ export function PasskeySignModal({
 
   const runAssertion = async () => {
     try {
-      const nonce = crypto.getRandomValues(
-        new Uint8Array(new ArrayBuffer(16)),
-      );
-      const challenge = buildPasskeyChallenge(txDigest, nonce);
+      // Use the SW-issued challenge verbatim — the popup no longer mints one.
+      const challenge = base64UrlToBytes(challengeB64);
       const allowCredentials = credentials.map((c) => ({
         type: "public-key" as const,
         id: base64UrlToBytes(c.credentialId),
@@ -147,11 +139,16 @@ export function PasskeySignModal({
         setScreen({ kind: "error", message: "Authentication cancelled" });
         return;
       }
-      // We don't verify the signature on the wallet side — the
-      // browser's WebAuthn implementation already enforces presence
-      // / user-verification. The fact that .get() resolved IS the
-      // assertion.
-      onSuccess();
+      // Collect the assertion bytes and forward them — the SW
+      // cryptographically verifies the signature before signing. A resolved
+      // `.get()` is NOT treated as authorization on its own anymore.
+      const resp = cred.response as AuthenticatorAssertionResponse;
+      onSuccess({
+        credentialId: bytesToBase64Url(new Uint8Array(cred.rawId)),
+        authenticatorData: bytesToBase64Url(new Uint8Array(resp.authenticatorData)),
+        clientDataJSON: bytesToBase64Url(new Uint8Array(resp.clientDataJSON)),
+        signature: bytesToBase64Url(new Uint8Array(resp.signature)),
+      });
     } catch (e) {
       const err = e as DOMException | Error;
       setScreen({ kind: "error", message: describeWebAuthnError(err) });

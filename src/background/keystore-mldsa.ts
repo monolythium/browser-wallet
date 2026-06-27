@@ -1248,6 +1248,31 @@ export async function removePasskeyCredentialV4(
   return clonePasskeyState(next);
 }
 
+/** Advance a credential's stored signature counter after a verified WebAuthn
+ *  assertion (boundary 3b). No-op when the vault / credential is absent, or
+ *  when the new count would not advance (the monotonic check in
+ *  `verifyPasskeyAssertion` already gates this; the never-lower guard here is
+ *  defense-in-depth). Best-effort — the single-use challenge is the primary
+ *  replay defense; the counter catches a cloned authenticator across sessions. */
+export async function updatePasskeyCredentialSignCountV4(
+  vaultId: string,
+  credentialId: string,
+  newSignCount: number,
+): Promise<void> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.passkey) return;
+  const next = clonePasskeyState(v.passkey);
+  const idx = next.credentials.findIndex((c) => c.credentialId === credentialId);
+  if (idx < 0) return;
+  const cur = next.credentials[idx]!;
+  if (typeof cur.signCount === "number" && newSignCount <= cur.signCount) return;
+  next.credentials[idx] = { ...cur, signCount: newSignCount };
+  v.passkey = next;
+  await saveVaultsContainerV4(container);
+}
+
 /** Replace the policy. Validation runs inside `setPolicy` — bad input
  *  throws without persisting. */
 export async function setPasskeyPolicyV4(
