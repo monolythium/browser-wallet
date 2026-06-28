@@ -1,6 +1,6 @@
 {
   "name": "@monolythium/browser-wallet",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Monolythium browser wallet (Chrome, Firefox, Brave - Manifest V3)",
