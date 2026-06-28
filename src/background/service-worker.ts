@@ -8964,6 +8964,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                   ...(row.toClusterName !== undefined
                     ? { toClusterName: row.toClusterName }
                     : {}),
+                  // Parity with the by-hash loop (9014-9016): a delegation that
+                  // reaches the notification via THIS heuristic path must still
+                  // carry the weight % (delegate/redelegate) and the claim amount,
+                  // else the body builder shows the cluster alone. The heuristic
+                  // loop runs first and recordNotification dedups by txHash, so
+                  // omitting these here silently strips them from the toast.
+                  ...(row.delegationWeightBps !== undefined
+                    ? { delegationWeightBps: row.delegationWeightBps }
+                    : {}),
+                  ...(row.claimedAmount != null
+                    ? { claimedAmount: row.claimedAmount }
+                    : {}),
                 });
                 // Fire OS toast ONLY when this snapshot produced
                 // a NEW record (the dedupe set blocks already-notified

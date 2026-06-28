@@ -2946,6 +2946,71 @@ describe("wallet-activity-get", () => {
     expect(hist!.entries[0]?.blockNumber).toBe(100);
   });
 
+  it("the heuristic record path threads delegationWeightBps so a delegate toast keeps the % (item 1 fix)", async () => {
+    // A delegate retired by the indexer's delegation heuristic (NOT the by-hash
+    // status path: lyth_txStatus not_found + no receipt) is recorded via the
+    // heuristicallyMatched loop. That loop previously omitted delegationWeightBps
+    // (carried only by the by-hash loop), so the toast showed the cluster ALONE
+    // with no "· X%". This pins the spread at the heuristic record site.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getAddressActivity"] = [];
+    rpcResponses["lyth_getDelegationHistory"] = [
+      {
+        blockHeight: 1005,
+        txIndex: 0,
+        logIndex: 0,
+        wallet: DETERMINISTIC_ADDRESS.toLowerCase(),
+        cluster: 7,
+        toCluster: null,
+        kind: "delegated",
+        weightBps: 2500,
+        walletTotalBps: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 6; // nonce passed → the delegation heuristic retires it
+    const txHash = "0x" + "d1".repeat(32);
+    seedPendingRow(
+      basePending({
+        txHash,
+        opKind: "delegate",
+        clusterId: 7,
+        clusterName: "Foundation",
+        delegationWeightBps: 2500,
+        to: "0x" + "10".repeat(20),
+        broadcastBlockHeight: 1000,
+        nonce: 5,
+        amountDecimal: "0",
+      }),
+    );
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | {
+          entries: Array<{
+            kind: string;
+            clusterId?: number;
+            delegationWeightBps?: number;
+          }>;
+        }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    expect(hist!.entries[0]?.kind).toBe("delegate");
+    expect(hist!.entries[0]?.clusterId).toBe(7);
+    // The fix: the heuristic loop now threads delegationWeightBps (2500 → 25.00%
+    // in notificationBody), where it was previously dropped.
+    expect(hist!.entries[0]?.delegationWeightBps).toBe(2500);
+  });
+
   it("records a 'confirmed' contract_call when eth_getTransactionReceipt.status === 1 (b4d6101 normalizer reused)", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "not_found" };
