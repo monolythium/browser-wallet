@@ -518,6 +518,20 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   color: var(--err);
 }
 .ext-deleg-rejected .close { color: var(--err); }
+/* Home "Delegated" hero subtitle — a text-styled link to the Delegations page. */
+.ext-deleg-summary {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ext-deleg-summary:hover { color: var(--fg-300); }
 
 /* Prominent limit/clamp warning for the delegate/redelegate forms — the
    bps-headroom clamp messages (and the headroom line when exhausted) used to

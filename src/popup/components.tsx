@@ -27,7 +27,7 @@ import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
-import { clusterLabel, type DelegationsView } from "../shared/staking";
+import { type DelegationsView } from "../shared/staking";
 import {
   homeAvailableDisplay,
   homeDelegatedDisplay,
@@ -2201,6 +2201,9 @@ interface HomeProps {
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
   onOpenSend?: () => void;
   onOpenStake?: () => void;
+  /** Open the Delegations page — wired to the "Delegated" hero subtitle's ↗
+   *  affordance so the user can drill into the per-cluster breakdown. */
+  onOpenDelegations?: () => void;
   onOpenBridge?: () => void;
   /** Slot rendered at the top of the Home body
    *  for the post-onboarding hint bar (OnboardingHintBar). Optional
@@ -2223,7 +2226,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenDelegations, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2293,19 +2296,21 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
   // longer reads `indexer?.addressActivity` directly. `liveLabel` is
   // still used for the Hero card's account-name display.
   const liveLabel = indexer?.addressLabel;
-  const latestDelegation = indexer?.delegationHistory[0] ?? null;
   // Delegated effective weight = balance × totalBps/10000 — the live,
   // non-custodial contribution (the LYTH stays in account.balance and remains
   // spendable; nothing is escrowed). null delegations / totalBps 0 → "0.00"; the
   // existing degraded/paused gate still forces "—". Never a fabricated figure.
   const delegatedBps = delegations?.totalBps ?? 0;
+  // Number of distinct clusters the wallet is delegated to (one row per cluster).
+  const delegatedClusterCount = delegations?.rows.length ?? 0;
   // Float delegated LYTH — kept ONLY for the approximate fiat conversion below.
   const delegatedLyth =
     account.balance != null && delegatedBps > 0
       ? (account.balance * delegatedBps) / 10_000
       : 0;
-  // The displayed "Delegated" string uses EXACT bigint math (balance lythoshi ×
-  // totalBps / 10000) truncated to 2dp — not the lossy float above.
+  // The "Delegated" chip shows the PRECISE delegated amount (exact balance
+  // lythoshi × totalBps / 10000, truncated to 2dp) — NOT the chain-exact
+  // whole-LYTH effective weight (the Delegations page shows that floored figure).
   const stakedStr =
     hideBalanceValue || balancePaused
       ? "—"
@@ -2328,7 +2333,7 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
         {topSlot}
         {/* Hero */}
         <div className="ext-card ext-hero">
-          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : liveLabel?.displayName ?? "Available · LYTH"}</div>
+          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : activeChip === "staked" ? "Delegated · LYTH" : (liveLabel?.displayName ?? "Available · LYTH")}</div>
           {isPriv ? (
             <div className="num opaque">— amount hidden by design</div>
           ) : (
@@ -2429,11 +2434,29 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
           )}
           {!isPriv && (
             <div className="chg">
-              {activeChip === "total"
-                ? "—% · 24h · attested"
-                : devMode && latestDelegation
-                  ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
-                  : `${(delegatedBps / 100).toFixed(2)}% delegated · full balance spendable`}
+              {activeChip === "total" ? (
+                "—% · 24h · attested"
+              ) : delegatedBps > 0 ? (
+                // Total delegated across ALL clusters — the cluster COUNT plus the
+                // aggregate weight (% by default; raw bps in developer mode). The
+                // ↗ opens the per-cluster Delegations breakdown.
+                <button
+                  type="button"
+                  className="ext-deleg-summary"
+                  onClick={onOpenDelegations ?? (() => {})}
+                  aria-label="View delegations"
+                >
+                  Delegated to {delegatedClusterCount} cluster
+                  {delegatedClusterCount === 1 ? "" : "s"} ·{" "}
+                  {devMode
+                    ? `${delegatedBps} bps`
+                    : `${(delegatedBps / 100).toFixed(2)}%`}{" "}
+                  · full balance spendable
+                  <Icon name="external" size={11} />
+                </button>
+              ) : (
+                "Not delegated · full balance spendable"
+              )}
             </div>
           )}
           {isPriv && (
