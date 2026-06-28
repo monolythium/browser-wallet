@@ -6,6 +6,7 @@ import {
   lythoshiToLythDecimal,
   lythoshiToLythFixed,
   parseHexQuantity,
+  rewardsHeroValue,
 } from "./native-amount.js";
 
 describe("native amount helpers", () => {
@@ -30,6 +31,25 @@ describe("native amount helpers", () => {
     expect(lythoshiToLythFixed(BigInt("61360000000000000000"), 2)).toBe("61.36");
     // a fractional reward truncates (never rounds up) to 2dp.
     expect(lythoshiToLythFixed(BigInt("1234567890000000000"), 2)).toBe("1.23");
+  });
+
+  describe("rewardsHeroValue — NO-MOCK gated home Rewards-chip value", () => {
+    it("live positive read → the 2dp string", () => {
+      expect(rewardsHeroValue("61360000000000000000", false)).toBe("61.36");
+    });
+    it("live ZERO read → '0.00' (honest live value, not muted)", () => {
+      expect(rewardsHeroValue("0", false)).toBe("0.00");
+    });
+    it("mock read → null (muted), even with a positive amount", () => {
+      expect(rewardsHeroValue("61360000000000000000", true)).toBeNull();
+    });
+    it("error/absent read (null/undefined total) → null (muted)", () => {
+      expect(rewardsHeroValue(null, false)).toBeNull();
+      expect(rewardsHeroValue(undefined, false)).toBeNull();
+    });
+    it("malformed total → null (muted, never throws)", () => {
+      expect(rewardsHeroValue("not-a-number", false)).toBeNull();
+    });
   });
 
   describe("home Available/Delegated — exact lythoshi (no lossy float)", () => {

@@ -64,6 +64,24 @@ export function homeAvailableDisplay(balanceLythoshi: bigint, dp = 2): string {
   return lythoshiToLythFixed(balanceLythoshi, dp);
 }
 
+/** Home Rewards-chip / hero display value, NO-MOCK gated. Returns the 2dp-truncated
+ *  LYTH string ONLY for a LIVE read — a present `totalAmountLythoshi` from a
+ *  non-mock fetch — INCLUDING a live zero ("0.00"). Returns `null` (→ render a
+ *  muted "—", and hide the fiat) for a mock / error / absent read; the illustrative
+ *  mock fallback figure is NEVER shown. */
+export function rewardsHeroValue(
+  totalAmountLythoshi: string | null | undefined,
+  isMock: boolean,
+  dp = 2,
+): string | null {
+  if (totalAmountLythoshi == null || isMock) return null;
+  try {
+    return lythoshiToLythFixed(BigInt(totalAmountLythoshi), dp);
+  } catch {
+    return null;
+  }
+}
+
 /** Home "Delegated" display: the exact delegated effective weight
  *  (balance × totalBps/10000, bigint math), truncated to `dp`. Non-custodial —
  *  the LYTH stays spendable; this is the weighted contribution, not an escrow. */
