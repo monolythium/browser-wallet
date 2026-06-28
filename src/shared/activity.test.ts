@@ -1139,6 +1139,51 @@ describe("reconcilePending — delegation heuristic (C3)", () => {
       reconcilePending([pending], [{ ...redelegate, toCluster: 3 }]),
     ).toHaveLength(1);
   });
+
+  it("does NOT retire a STALE prior confirmed delegation at an EARLIER block (one-sided window)", () => {
+    // A re-delegate to the SAME cluster + SAME weight, with a prior confirmed
+    // delegate 300 blocks BEFORE the broadcast. The OLD symmetric abs-window
+    // (|700-1000| = 300 ≤ 300) wrongly matched → instant false-confirm. A real
+    // confirmation can't precede its broadcast, so the new one-sided window rejects.
+    const pending = mkPending({
+      opKind: "delegate",
+      clusterId: 7,
+      delegationWeightBps: 2500,
+      broadcastBlockHeight: 1000,
+    });
+    const stalePriorDelegate: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 700, // BEFORE the broadcast, within the old ±300 abs-window
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 2500,
+    };
+    expect(reconcilePending([pending], [stalePriorDelegate])).toHaveLength(1);
+  });
+
+  it("DOES retire a confirmed delegation AT or AFTER the broadcast within the window", () => {
+    const pending = mkPending({
+      opKind: "delegate",
+      clusterId: 7,
+      delegationWeightBps: 2500,
+      broadcastBlockHeight: 1000,
+    });
+    const atBroadcast: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 1000, // exactly at the broadcast anchor
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 2500,
+    };
+    const atWindowEdge: DelegateRow = {
+      ...atBroadcast,
+      blockHeight: 1000 + PENDING_MATCH_BLOCK_WINDOW, // last in-window block
+    };
+    expect(reconcilePending([pending], [atBroadcast])).toEqual([]);
+    expect(reconcilePending([pending], [atWindowEdge])).toEqual([]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1171,6 +1216,15 @@ describe("reconcilePending", () => {
     const pending = makePending();
     const confirmed = makeTxSend({ blockHeight: 1005 });
     expect(reconcilePending([pending], [confirmed])).toEqual([]);
+  });
+
+  it("does NOT match a STALE prior tx_send at an EARLIER block (one-sided window)", () => {
+    // Same recipient + amount, confirmed 300 blocks BEFORE the broadcast — the
+    // OLD symmetric abs-window (|700-1000| = 300 ≤ 300) wrongly matched. This is
+    // the pre-existing tx_send hole, fixed alongside the C3 delegation one.
+    const pending = makePending({ broadcastBlockHeight: 1000 });
+    const stalePriorSend = makeTxSend({ blockHeight: 700 });
+    expect(reconcilePending([pending], [stalePriorSend])).toEqual([pending]);
   });
 
   it("matches an indexer bech32m counterparty against a 0x pending `to` (the linger bug)", () => {

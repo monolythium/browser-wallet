@@ -1207,6 +1207,23 @@ function normalizeAddrForMatch(a: string): string {
   }
 }
 
+/** ONE-SIDED block-window match for the pending→confirmed heuristics. A real
+ *  confirmation is at/after its own broadcast, so the confirmed block must be
+ *  `>= broadcastBlockHeight` AND within `PENDING_MATCH_BLOCK_WINDOW` after it.
+ *  The old SYMMETRIC `Math.abs(...)` window also matched a STALE confirmed row
+ *  BEFORE the broadcast — a prior same-cluster+weight delegation (C3 over-match)
+ *  or a prior same-recipient+amount send (the pre-existing tx_send hole) — which
+ *  retired the brand-new pending row instantly (a false-confirm; the row never
+ *  showed as pending). A confirmation cannot precede its broadcast, so the
+ *  window is one-sided. */
+function withinForwardMatchWindow(
+  confirmedBlockHeight: number,
+  broadcastBlockHeight: number,
+): boolean {
+  const delta = confirmedBlockHeight - broadcastBlockHeight;
+  return delta >= 0 && delta <= PENDING_MATCH_BLOCK_WINDOW;
+}
+
 function pendingMatchesConfirmed(
   pending: PendingTxRow,
   confirmed: ConfirmedRow,
@@ -1250,8 +1267,10 @@ function pendingMatchesConfirmed(
     return false;
   }
   if (confirmed.amountDecimal !== pending.amountDecimal) return false;
-  const delta = Math.abs(confirmed.blockHeight - pending.broadcastBlockHeight);
-  return delta <= PENDING_MATCH_BLOCK_WINDOW;
+  // One-sided window: a confirmation is at/after its own broadcast, so a STALE
+  // prior send (same recipient + amount) BEFORE this broadcast no longer matches
+  // (pre-existing symmetric-window hole, fixed alongside the C3 delegation one).
+  return withinForwardMatchWindow(confirmed.blockHeight, pending.broadcastBlockHeight);
 }
 
 /** Conservative match between a pending delegation send and a confirmed
@@ -1271,10 +1290,11 @@ function pendingIsSameDelegation(
   if (pending.clusterId === undefined) return false;
   if (pending.clusterId !== confirmed.cluster) return false;
   if (pending.broadcastBlockHeight === null) return false;
-  if (
-    Math.abs(confirmed.blockHeight - pending.broadcastBlockHeight) >
-    PENDING_MATCH_BLOCK_WINDOW
-  ) {
+  // ONE-SIDED window: a real confirmation is at/after the broadcast, so a STALE
+  // prior confirmed delegation to the same cluster + weight that confirmed
+  // BEFORE this broadcast no longer matches (the symmetric abs-window let a
+  // re-delegate to the same cluster retire instantly against a prior stake).
+  if (!withinForwardMatchWindow(confirmed.blockHeight, pending.broadcastBlockHeight)) {
     return false;
   }
   // Destination cluster (redelegate) — match only when BOTH are known.
