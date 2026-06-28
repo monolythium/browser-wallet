@@ -28,6 +28,10 @@ import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
 import { clusterLabel, type DelegationsView } from "../shared/staking";
+import {
+  homeAvailableDisplay,
+  homeDelegatedDisplay,
+} from "../shared/native-amount";
 import { getLythFiatRate, formatFiat } from "../shared/fiat";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
@@ -2169,6 +2173,11 @@ interface HomeProps {
   /** Active delegations (totalBps) for the Home "Delegated" chip. null while
    *  loading / on fetch failure → the chip shows "0.00" (no fabrication). */
   delegations?: DelegationsView | null;
+  /** Exact spendable balance in lythoshi (bigint) — the precise source for the
+   *  hero "Available"/"Delegated" displays. null while loading / on an account
+   *  switch → "0.00". The lossy `account.balance` float is kept only for the
+   *  approximate fiat conversion. */
+  balanceLythoshi?: bigint | null;
   /** Cluster directory (id → name) for the Activity rows. Threaded to
    *  ActivityList so an indexer-fed delegation row (numeric id only) resolves
    *  the real cluster name, falling back to `Cluster #<id>` (no-mock). */
@@ -2214,7 +2223,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, clusterNameById, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2261,11 +2270,15 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
   // explains why (when there's a cause) and links to Monoscan. Honest absence,
   // never a misleading 0.00. (`balancePaused` ⊆ `balanceDegraded`; kept for the
   // value-unknown sub-case the exported helper documents/tests.)
+  // "Available" + "Delegated" derive from the EXACT balance lythoshi (bigint),
+  // truncated to 2dp — NOT the lossy `account.balance` float (which could round
+  // up across a 0.01 boundary and overstate funds). Falls back to "0.00" only
+  // when the exact lythoshi isn't loaded yet.
   const totalStr =
     hideBalanceValue || balancePaused
       ? "—"
-      : account.balance != null
-        ? fmt(account.balance, 2)
+      : balanceLythoshi != null
+        ? homeAvailableDisplay(balanceLythoshi, 2)
         : "0.00";
   // #42: label the hero as a retained last-known value only when the chain
   // couldn't be reached AND there's a real balance to annotate (never on the
@@ -2286,15 +2299,18 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
   // spendable; nothing is escrowed). null delegations / totalBps 0 → "0.00"; the
   // existing degraded/paused gate still forces "—". Never a fabricated figure.
   const delegatedBps = delegations?.totalBps ?? 0;
+  // Float delegated LYTH — kept ONLY for the approximate fiat conversion below.
   const delegatedLyth =
     account.balance != null && delegatedBps > 0
       ? (account.balance * delegatedBps) / 10_000
       : 0;
+  // The displayed "Delegated" string uses EXACT bigint math (balance lythoshi ×
+  // totalBps / 10000) truncated to 2dp — not the lossy float above.
   const stakedStr =
     hideBalanceValue || balancePaused
       ? "—"
-      : delegatedBps > 0
-        ? fmt(delegatedLyth, 2)
+      : delegatedBps > 0 && balanceLythoshi != null
+        ? homeDelegatedDisplay(balanceLythoshi, delegatedBps, 2)
         : "0.00";
   const heroStr = activeChip === "total" ? totalStr : stakedStr;
   const [intPart, fracPart] = heroStr.split(".");

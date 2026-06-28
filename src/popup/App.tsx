@@ -17,7 +17,7 @@ import {
   SESSION_KEY_WALLET_LOCKED,
   STORAGE_KEY_VAULTS_CONTAINER_V4,
 } from "../shared/constants";
-import { hexLythoshiToLythNumber } from "../shared/native-amount";
+import { hexLythoshiToLythNumber, parseHexQuantity } from "../shared/native-amount";
 import {
   activityPendingKey,
   validatePendingActivityCache,
@@ -398,6 +398,12 @@ export default function App() {
   // the latest refresh couldn't reach the chain (offline/untrusted). Home only
   // LABELS the retained value as stale — never fabricates or zeros it.
   const [balanceStale, setBalanceStale] = useState(false);
+  // Exact spendable balance in lythoshi (bigint) — the precise source for the
+  // Home hero's "Available"/"Delegated" displays, alongside the lossy
+  // `account.balance` float (still used for the approximate fiat conversion).
+  // Mirrors `account.balance`'s lifecycle: nulled on an account switch, kept on
+  // a same-address refresh, repopulated by the balance fetch.
+  const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   // C5: the typed reason the last balance refresh failed, so Home can pause
   // honestly on a re-genesis / wrong-chain operator instead of a bare 0.00.
   const [balanceCause, setBalanceCause] = useState<
@@ -531,6 +537,8 @@ export default function App() {
     // coming, so clear any stale flag carried from the prior account.
     if (r.account.address.toLowerCase() !== acc.addr.toLowerCase()) {
       setBalanceStale(false);
+      // Account switch — the prior lythoshi belongs to a different address.
+      setBalanceLythoshi(null);
     }
     setAcc((prev) => ({
       ...prev,
@@ -626,6 +634,8 @@ export default function App() {
       setBalanceStale(false);
       setBalanceCause(null);
       setAcc((prev) => ({ ...prev, balance: lyth }));
+      // Exact lythoshi for the hero displays (kept in sync with the float above).
+      setBalanceLythoshi(parseHexQuantity(r.balanceHex));
     } catch {
       // Malformed hex — ignore, balance stays as-is.
     }
@@ -1432,6 +1442,7 @@ export default function App() {
           indexer={indexerSnapshot}
           delegations={delegationsView}
           clusterNameById={clusterNameById}
+          balanceLythoshi={balanceLythoshi}
           balanceStale={balanceStale}
           balanceCause={balanceCause}
           chainNotLive={chainNotLive}
