@@ -63,4 +63,25 @@ describe("fiat — populated form (≈ + Intl currency string)", () => {
     expect(out.startsWith("≈ ")).toBe(true);
     expect(out).toContain("0.300");
   });
+
+  it("keeps full magnitude for an integer part above 2^53 (no float cast)", () => {
+    // Number("9007199254740993") === 9007199254740992 — the old Number(lyth)
+    // path silently dropped the final 3. The exact figure must survive.
+    expect(formatFiat("9007199254740993", "USD", 1)).toBe(
+      "≈ $9,007,199,254,740,993.00",
+    );
+  });
+
+  it("keeps fractional digits intact on a large amount", () => {
+    expect(formatFiat("9007199254740993.50", "USD", 1)).toBe(
+      "≈ $9,007,199,254,740,993.50",
+    );
+  });
+
+  it("applies a fractional rate to a large amount without magnitude loss", () => {
+    // 1000000000000000000 LYTH * 2.5 = 2500000000000000000.
+    expect(formatFiat("1000000000000000000", "USD", 2.5)).toBe(
+      "≈ $2,500,000,000,000,000,000.00",
+    );
+  });
 });
