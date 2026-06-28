@@ -80,6 +80,7 @@ import {
 import {
   isPerWalletCapRevert,
   isWalletTotalCapRevert,
+  preflightDelegationVerdict,
   PER_WALLET_CAP_REVERT_MESSAGE,
   WALLET_TOTAL_CAP_REVERT_MESSAGE,
 } from "../../shared/staking";
@@ -568,6 +569,68 @@ export function Stake({
         // estimate; redelegate carries one extra arg so we bump the
         // budget slightly for that path.
         executionUnitLimitHex = action === "redelegate" ? "0x1D4C0" : "0x186A0";
+
+        // ── Fresh dual-cap pre-flight (delegate/redelegate) ──────────────────
+        // The on-mount caps/delegations snapshot is never re-polled, so a rapid
+        // sequence can slip an over-cap tx past the form's view-only check and
+        // hit a chain admission-revert (no pending row → only the ephemeral
+        // error page). Re-read FRESH and block client-side BEFORE signing.
+        // BEST-EFFORT: on ANY read failure keep the snapshot and PROCEED — never
+        // block a real delegation on a flaky RPC (chain admission + the durable
+        // banner are the backstop). On-submit only (one round-trip while already
+        // "submitting"), not continuous polling.
+        const dstClusterId =
+          action === "delegate"
+            ? selectedCluster!.clusterId
+            : redelegateDstClusterId!;
+        let dstExistingBps =
+          delegations?.rows.find((row) => row.cluster === dstClusterId)
+            ?.weightBps ?? 0;
+        let totalBps = delegations?.totalBps ?? 0;
+        let freshCapBps = capBps;
+        try {
+          const [freshDel, freshCap] = await Promise.all([
+            bgStakingDelegations(account.addr),
+            bgStakingDelegationCap(),
+          ]);
+          if (freshDel.ok) {
+            dstExistingBps =
+              freshDel.data.rows.find((row) => row.cluster === dstClusterId)
+                ?.weightBps ?? 0;
+            totalBps = freshDel.data.totalBps;
+          }
+          if (freshCap.ok) freshCapBps = capBpsFromCapResult(freshCap);
+        } catch {
+          // keep the on-mount snapshot — best-effort, never block on a flaky read
+        }
+        const verdict = preflightDelegationVerdict({
+          action,
+          dstExistingWeightBps: dstExistingBps,
+          totalDelegatedBps: totalBps,
+          moveBps: bps,
+          capBps: freshCapBps,
+        });
+        if (!verdict.ok) {
+          setSubmitError({
+            message: verdict.message,
+            code: null,
+            method: "preflight",
+            via: null,
+          });
+          setStep("error");
+          onDelegationRejected?.({
+            clusterId: dstClusterId,
+            clusterName:
+              action === "delegate"
+                ? (selectedCluster?.name ?? null)
+                : (clusters.find((c) => c.clusterId === dstClusterId)?.name ??
+                  null),
+            kind: action,
+            message: verdict.message,
+            atMs: Date.now(),
+          });
+          return; // NO bgWalletSendTx → no signed bytes, no submit, no chain reject
+        }
       }
       // Redelegate destination cluster name (for the from→to toast — the
       // activity row resolves it from the live directory, but the toast can't).

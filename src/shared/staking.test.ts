@@ -8,8 +8,11 @@ import {
   formatWeightBpsPercent,
   isPerWalletCapRevert,
   isWalletTotalCapRevert,
+  preflightDelegationVerdict,
+  PER_WALLET_CAP_REVERT_MESSAGE,
   resolveClusterLabel,
   walletTotalHeadroomBps,
+  WALLET_TOTAL_CAP_REVERT_MESSAGE,
   DELEGATION_PER_WALLET_CAP_BPS,
 } from "./staking.js";
 
@@ -108,6 +111,79 @@ describe("dual-cap headroom (delegate form — per-cluster floor ∩ wallet-tota
 
   it("dualCapHeadroomBps: never returns negative headroom (already past the cap)", () => {
     expect(dualCapHeadroomBps(5000, 6000, 0)).toBe(0);
+  });
+});
+
+describe("preflightDelegationVerdict (on-submit dual-cap block)", () => {
+  const base = {
+    action: "delegate" as const,
+    dstExistingWeightBps: 0,
+    totalDelegatedBps: 0,
+    moveBps: 1000,
+    capBps: null,
+  };
+
+  it("ok when under BOTH caps", () => {
+    expect(preflightDelegationVerdict(base)).toEqual({ ok: true });
+  });
+
+  it("blocks (per-cluster) when the cluster move would exceed the 50% cap", () => {
+    const v = preflightDelegationVerdict({
+      ...base,
+      dstExistingWeightBps: 4500,
+      moveBps: 1000, // 5500 > 5000
+    });
+    expect(v).toEqual({ ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE });
+  });
+
+  it("per-cluster fails closed to 5000 when capBps is null (disabled aggregate)", () => {
+    // capBps null must NOT be read as 'unlimited' — the 5000 floor binds.
+    expect(
+      preflightDelegationVerdict({ ...base, dstExistingWeightBps: 5000, moveBps: 1, capBps: null }),
+    ).toEqual({ ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE });
+  });
+
+  it("blocks (wallet-total) when the delegate would push total past 100%", () => {
+    const v = preflightDelegationVerdict({
+      ...base,
+      dstExistingWeightBps: 0, // per-cluster ok
+      totalDelegatedBps: 9500,
+      moveBps: 1000, // 10500 > 10000
+    });
+    expect(v).toEqual({ ok: false, message: WALLET_TOTAL_CAP_REVERT_MESSAGE });
+  });
+
+  it("redelegate is NOT flagged over-total (moves weight, total unchanged)", () => {
+    // Same inputs that block a delegate on total — a redelegate must pass.
+    const v = preflightDelegationVerdict({
+      ...base,
+      action: "redelegate",
+      dstExistingWeightBps: 0,
+      totalDelegatedBps: 9500,
+      moveBps: 1000,
+    });
+    expect(v).toEqual({ ok: true });
+  });
+
+  it("redelegate STILL blocks on the destination per-cluster cap", () => {
+    const v = preflightDelegationVerdict({
+      ...base,
+      action: "redelegate",
+      dstExistingWeightBps: 4800,
+      moveBps: 500, // 5300 > 5000 at the destination
+    });
+    expect(v).toEqual({ ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE });
+  });
+
+  it("undelegate is never flagged (removes weight)", () => {
+    const v = preflightDelegationVerdict({
+      ...base,
+      action: "undelegate",
+      dstExistingWeightBps: 9000,
+      totalDelegatedBps: 10000,
+      moveBps: 5000,
+    });
+    expect(v).toEqual({ ok: true });
   });
 });
 

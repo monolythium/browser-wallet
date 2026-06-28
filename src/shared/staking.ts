@@ -154,6 +154,39 @@ export function isWalletTotalCapRevert(
   return r.includes("wallettotal") || r.includes("0x0205");
 }
 
+/** On-submit pre-flight verdict for a delegate/redelegate, modelling the two
+ *  chain-reachable caps so the wallet blocks an over-cap tx client-side instead
+ *  of submitting a guaranteed admission-revert:
+ *   - the binding PER-CLUSTER 50% cap (chain revert 0x0213) on the cluster the
+ *     weight LANDS on (delegate: the selected cluster; redelegate: the
+ *     destination). `capBps` is the LIVE per-cluster cap; null fails closed to
+ *     the 5000 floor via bindingPerClusterCapBps.
+ *   - the fixed 100% WALLET-TOTAL spread (chain revert 0x0205) — additive ONLY
+ *     for a delegate (a redelegate moves weight between clusters, so the total
+ *     is unchanged).
+ *  An undelegate removes weight → never over-cap. Pure (Node-unit-pinnable); the
+ *  caller does NOT sign on a `blocked` verdict. */
+export function preflightDelegationVerdict(args: {
+  action: "delegate" | "undelegate" | "redelegate";
+  /** Existing weight at the cluster the move lands on (delegate: selected;
+   *  redelegate: destination). */
+  dstExistingWeightBps: number;
+  totalDelegatedBps: number;
+  moveBps: number;
+  capBps: number | null;
+}): { ok: true } | { ok: false; message: string } {
+  const { action, dstExistingWeightBps, totalDelegatedBps, moveBps, capBps } =
+    args;
+  if (action === "undelegate") return { ok: true };
+  if (exceedsPerClusterCap(dstExistingWeightBps, moveBps, capBps)) {
+    return { ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE };
+  }
+  if (action === "delegate" && totalDelegatedBps + moveBps > 10000) {
+    return { ok: false, message: WALLET_TOTAL_CAP_REVERT_MESSAGE };
+  }
+  return { ok: true };
+}
+
 /** Display label for a delegation row's cluster. Returns the real
  *  `*.cluster.mono` name when one was captured at send time (threaded onto the
  *  confirmed row via `applyCapturedClusterNames`), otherwise an honest
