@@ -528,7 +528,9 @@ export function Stake({
         executionUnitLimitHex = "0x186A0";
         // Notification metadata: undelegate removes the FULL row, so the % to
         // show is the cluster's existing weight (no bps is encoded in `data`).
-        delegationWeightBps = existingWeightBps;
+        // Pass `undefined`, NOT 0, when the cache doesn't hold the weight — see
+        // undelegateNotificationWeightBps.
+        delegationWeightBps = undelegateNotificationWeightBps(existingWeightBps);
       } else {
         // `amountStr` is a PERCENT of balance (0–100) in both the manual
         // and autovote paths. Convert to weightBps for the calldata.
@@ -2101,6 +2103,17 @@ export function capBpsFromCapResult(capR: {
   // capBps === null is the legitimate "cap disabled (u32::MAX)" state; either
   // way a non-concrete cap collapses to null (badge hidden / unlimited).
   return capR.data?.capBps ?? null;
+}
+
+/** Notification weight for an undelegate. The op encodes no bps (it removes the
+ *  full row), so the toast's "%" is the cluster's existing weight. The on-mount
+ *  delegations cache can be stale (e.g. after an in-session delegate), making the
+ *  read 0; return `undefined`, NOT 0, so the toast shows the cluster name without
+ *  a misleading "0%" (and never the raw delegation precompile address). */
+export function undelegateNotificationWeightBps(
+  existingWeightBps: number,
+): number | undefined {
+  return existingWeightBps > 0 ? existingWeightBps : undefined;
 }
 
 export function parseLythAmountToLythoshi(s: string): bigint | null {
