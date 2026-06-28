@@ -2477,28 +2477,25 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
                   }}
                 >
                   {delegatedBps > 0 ? (
-                    <>
-                      <span>full balance spendable</span>
-                      <button
-                        type="button"
-                        className="ext-deleg-summary"
-                        onClick={onOpenStake ?? (() => {})}
-                        aria-label="Delegate"
-                      >
-                        <span>
-                          Delegated to {delegatedClusterCount} cluster
-                          {delegatedClusterCount === 1 ? "" : "s"} ·{" "}
-                          <span style={{ color: "rgba(var(--gold-glow), 1)" }}>
-                            {devMode
-                              ? `${delegatedBps} bps`
-                              : `${(delegatedBps / 100).toFixed(2)}%`}
-                          </span>
+                    <button
+                      type="button"
+                      className="ext-deleg-summary"
+                      onClick={onOpenStake ?? (() => {})}
+                      aria-label="Delegate"
+                    >
+                      <span>
+                        Delegated to {delegatedClusterCount} cluster
+                        {delegatedClusterCount === 1 ? "" : "s"} ·{" "}
+                        <span style={{ color: "rgba(var(--gold-glow), 1)" }}>
+                          {devMode
+                            ? `${delegatedBps} bps`
+                            : `${(delegatedBps / 100).toFixed(2)}%`}
                         </span>
-                        <Icon name="external" size={11} />
-                      </button>
-                    </>
+                      </span>
+                      <Icon name="external" size={11} />
+                    </button>
                   ) : (
-                    <span>Not delegated · full balance spendable</span>
+                    <span>Not delegated</span>
                   )}
                   {rewardsValue !== null && (
                     <button
