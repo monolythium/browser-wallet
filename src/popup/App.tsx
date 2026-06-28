@@ -53,6 +53,10 @@ import { DisplayCurrencySettings } from "./pages/DisplayCurrencySettings";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import {
+  DelegationRejectedBanner,
+  type DelegationRejection,
+} from "./components/DelegationRejectedBanner";
 import { Stake, clearStakeState } from "./pages/Stake";
 import { AgentPolicy } from "./pages/AgentPolicy";
 import { Delegations } from "./pages/Delegations";
@@ -436,6 +440,15 @@ export default function App() {
   const [chainList, setChainList] = useState<ChainEntry[]>([]);
   const activeChain: ChainEntry =
     chainList.find((c) => c.chainId === activeChainId) ?? TESTNET_FALLBACK;
+  // Issue B — durable over-cap rejection banner. App-level state so it SURVIVES
+  // a screen switch (App doesn't unmount; the Stake error page does). Cleared on
+  // account/chain change (no cross-account leak), on dismiss, and on a later
+  // successful delegation (Stake calls the setter with null).
+  const [delegationRejection, setDelegationRejection] =
+    useState<DelegationRejection | null>(null);
+  useEffect(() => {
+    setDelegationRejection(null);
+  }, [acc.addr, activeChainId]);
   // Cluster name directory (id → name) for the Home Activity rows. Indexer-fed
   // delegation rows carry only a numeric cluster id; this map lets them show the
   // real cluster name with a graceful fallback to `Cluster #<id>` (no-mock).
@@ -1240,6 +1253,11 @@ export default function App() {
         />
       )}
 
+      <DelegationRejectedBanner
+        rejection={delegationRejection}
+        onDismiss={() => setDelegationRejection(null)}
+      />
+
       {screen === "home" && walletUpdateAvailable && (
         <button
           type="button"
@@ -1984,6 +2002,7 @@ export default function App() {
             setScreen("cluster-detail");
           }}
           onOpenOperators={() => navigateTo("operator-directory")}
+          onDelegationRejected={setDelegationRejection}
           onBack={() => {
             const wasDeepLinked = stakeDeepLink !== null;
             setStakeDeepLink(null);

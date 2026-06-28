@@ -511,6 +511,13 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   opacity: 0.7;
 }
 .ext-indexer-stale .close:hover { opacity: 1; }
+/* Over-cap delegation rejection — danger tone over the shared banner layout. */
+.ext-deleg-rejected {
+  background: rgba(255, 107, 107, 0.10);
+  border-color: rgba(255, 107, 107, 0.28);
+  color: var(--err);
+}
+.ext-deleg-rejected .close { color: var(--err); }
 
 /* Prominent limit/clamp warning for the delegate/redelegate forms — the
    bps-headroom clamp messages (and the headroom line when exhausted) used to

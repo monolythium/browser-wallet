@@ -37,6 +37,7 @@ import { RedelegateForm } from "../components/RedelegateForm";
 import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
+import type { DelegationRejection } from "../components/DelegationRejectedBanner";
 import { useFeature } from "../hooks/useFeature";
 import {
   bgStakingAutovoteSeed,
@@ -225,6 +226,11 @@ interface StakeProps {
   /** Opens the operator directory — wired to the genesis-mismatch error's
    *  "Operators" word so it becomes a button (mirrors Send). */
   onOpenOperators?: () => void;
+  /** Raise (or clear, with null) the App-level durable over-cap rejection
+   *  banner. Called with a rejection when a delegate/redelegate is blocked by
+   *  the pre-flight or rejected at chain admission, and with null on a
+   *  successful delegation. App owns the state so the banner survives navigation. */
+  onDelegationRejected?: (rejection: DelegationRejection | null) => void;
   onBack: () => void;
 }
 
@@ -235,6 +241,7 @@ export function Stake({
   initialClusterId,
   onShowClusterDetail,
   onOpenOperators,
+  onDelegationRejected,
   onBack,
 }: StakeProps) {
   // Restore prior Stake state when the user returns from a sibling
@@ -594,6 +601,8 @@ export function Stake({
       if (r.ok) {
         setTxHash(r.result.txHash);
         setStep("success");
+        // A delegation succeeded → retire any stale over-cap rejection banner.
+        if (action !== "claim") onDelegationRejected?.(null);
       } else {
         const code = typeof r.code === "number" ? r.code : null;
         // Map the chain's cap reverts — PerWalletCapExceeded (0x0213) and
@@ -601,6 +610,9 @@ export function Stake({
         // prevent, but could still slip through on a race or a future cap
         // change — to clear messages instead of a generic "rejected". Specific
         // to those codes; other revert codes keep the raw reason.
+        const isCapRevert =
+          isPerWalletCapRevert(r.reason, code) ||
+          isWalletTotalCapRevert(r.reason, code);
         const message = isPerWalletCapRevert(r.reason, code)
           ? PER_WALLET_CAP_REVERT_MESSAGE
           : isWalletTotalCapRevert(r.reason, code)
@@ -613,6 +625,26 @@ export function Stake({
           via: typeof r.via === "string" ? r.via : null,
         });
         setStep("error");
+        // DURABLE signal: a residual-race cap rejection at chain admission still
+        // surfaces after the user navigates away from this ephemeral error page.
+        if (isCapRevert && (action === "delegate" || action === "redelegate")) {
+          const rejClusterId =
+            action === "redelegate" && redelegateDstClusterId !== null
+              ? redelegateDstClusterId
+              : selectedCluster!.clusterId;
+          const rejClusterName =
+            action === "redelegate" && redelegateDstClusterId !== null
+              ? (clusters.find((c) => c.clusterId === redelegateDstClusterId)?.name ??
+                null)
+              : (selectedCluster?.name ?? null);
+          onDelegationRejected?.({
+            clusterId: rejClusterId,
+            clusterName: rejClusterName,
+            kind: action,
+            message,
+            atMs: Date.now(),
+          });
+        }
       }
     } catch (e) {
       setSubmitError({
