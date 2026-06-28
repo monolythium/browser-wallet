@@ -108,6 +108,7 @@ import {
   bgWalletActivityGet,
   bgWalletIndexerSnapshot,
   bgStakingDelegations,
+  bgStakingPendingRewards,
   bgStakingClusterDirectory,
   bgWalletActiveChain,
   bgWalletSetActiveChain,
@@ -127,7 +128,7 @@ import {
   type ChainEntry,
   type WalletIndexerSnapshot,
 } from "./bg";
-import type { DelegationsView } from "../shared/staking";
+import type { DelegationsView, PendingRewardsView } from "../shared/staking";
 
 type Screen =
   | "loading"
@@ -428,13 +429,34 @@ export default function App() {
   // Active delegations (totalBps) for the Home "Delegated" chip. Best-effort:
   // null while loading / on fetch failure → Home shows "0.00" (no fabrication).
   const [delegationsView, setDelegationsView] = useState<DelegationsView | null>(null);
+  // Pending rewards for the Home total. NO-MOCK: only a LIVE (non-mock) positive
+  // total surfaces a number on Home (gated at the render via
+  // pendingRewardsArePositive); mock/error/absent → links only, no number.
+  const [homeRewards, setHomeRewards] = useState<PendingRewardsView | null>(null);
+  const [homeRewardsMock, setHomeRewardsMock] = useState(false);
   const refreshDelegations = useCallback(async () => {
     if (!acc.addr.startsWith("0x")) {
       setDelegationsView(null);
+      setHomeRewards(null);
+      setHomeRewardsMock(false);
       return;
     }
     const r = await bgStakingDelegations(acc.addr);
     setDelegationsView(r.ok ? r.data : null);
+    // Rewards depend on the active delegation set; fan out after it resolves.
+    if (r.ok) {
+      const rew = await bgStakingPendingRewards(acc.addr, r.data.rows);
+      if (rew.ok) {
+        setHomeRewards(rew.data);
+        setHomeRewardsMock(rew.via === "mock");
+      } else {
+        setHomeRewards(null);
+        setHomeRewardsMock(false);
+      }
+    } else {
+      setHomeRewards(null);
+      setHomeRewardsMock(false);
+    }
   }, [acc.addr]);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
@@ -1441,6 +1463,8 @@ export default function App() {
           network={activeChain}
           indexer={indexerSnapshot}
           delegations={delegationsView}
+          pendingRewards={homeRewards}
+          pendingRewardsMock={homeRewardsMock}
           clusterNameById={clusterNameById}
           balanceLythoshi={balanceLythoshi}
           balanceStale={balanceStale}

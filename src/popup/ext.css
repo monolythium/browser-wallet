@@ -532,6 +532,29 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   gap: 4px;
 }
 .ext-deleg-summary:hover { color: var(--fg-300); }
+/* Home pending-rewards row — the (no-mock-gated) total + Delegations/Claim links. */
+.ext-home-rewards {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+  font-family: var(--f-sans);
+  font-size: 11px;
+}
+.ext-home-rewards .amt { color: var(--ok); font-weight: 600; }
+.ext-home-rewards .lnk {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--fg-400);
+  cursor: pointer;
+  font: inherit;
+}
+.ext-home-rewards .lnk:hover { color: var(--fg-200); }
 
 /* Prominent limit/clamp warning for the delegate/redelegate forms — the
    bps-headroom clamp messages (and the headroom line when exhausted) used to

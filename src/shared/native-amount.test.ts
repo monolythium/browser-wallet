@@ -25,6 +25,13 @@ describe("native amount helpers", () => {
     expect(lythoshiToLythFixed(99_999000000000000000n, 2)).toBe("99.99");
   });
 
+  it("formats a pending-rewards totalAmountLythoshi at 2dp (home rewards total)", () => {
+    // 61.36 LYTH — the live `lyth_pendingRewards.totalAmountLythoshi` (== claimable()).
+    expect(lythoshiToLythFixed(BigInt("61360000000000000000"), 2)).toBe("61.36");
+    // a fractional reward truncates (never rounds up) to 2dp.
+    expect(lythoshiToLythFixed(BigInt("1234567890000000000"), 2)).toBe("1.23");
+  });
+
   describe("home Available/Delegated — exact lythoshi (no lossy float)", () => {
     it("homeAvailableDisplay: 2dp-truncated exact balance", () => {
       expect(homeAvailableDisplay(99_990000000000000000n, 2)).toBe("99.99");

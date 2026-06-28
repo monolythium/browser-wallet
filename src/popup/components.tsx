@@ -27,11 +27,13 @@ import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
 import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
-import { type DelegationsView } from "../shared/staking";
+import { type DelegationsView, type PendingRewardsView } from "../shared/staking";
 import {
   homeAvailableDisplay,
   homeDelegatedDisplay,
+  lythoshiToLythFixed,
 } from "../shared/native-amount";
+import { pendingRewardsArePositive } from "./components/RewardCard";
 import { getLythFiatRate, formatFiat } from "../shared/fiat";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
@@ -2173,6 +2175,13 @@ interface HomeProps {
   /** Active delegations (totalBps) for the Home "Delegated" chip. null while
    *  loading / on fetch failure → the chip shows "0.00" (no fabrication). */
   delegations?: DelegationsView | null;
+  /** Pending delegation rewards (== the chain's canonical claimable). The TOTAL
+   *  is shown on Home ONLY on a LIVE positive read (no-mock gate); mock/error/
+   *  absent → the rewards links render without a number (honest absence). */
+  pendingRewards?: PendingRewardsView | null;
+  /** True when the pending-rewards read fell back to illustrative mock data
+   *  (`via:"mock"`). A mock read NEVER surfaces a number. */
+  pendingRewardsMock?: boolean;
   /** Exact spendable balance in lythoshi (bigint) — the precise source for the
    *  hero "Available"/"Delegated" displays. null while loading / on an account
    *  switch → "0.00". The lossy `account.balance` float is kept only for the
@@ -2226,7 +2235,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenDelegations, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenDelegations, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2303,6 +2312,22 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
   const delegatedBps = delegations?.totalBps ?? 0;
   // Number of distinct clusters the wallet is delegated to (one row per cluster).
   const delegatedClusterCount = delegations?.rows.length ?? 0;
+  // Pending-rewards NO-MOCK gate: the TOTAL number renders ONLY on a LIVE,
+  // positive read (reuse RewardCard's `pendingRewardsArePositive` — !mock && >0).
+  // The chain-fixed `lyth_pendingRewards.totalAmountLythoshi` == on-chain
+  // claimable() (verified live). mock/error/absent/zero → no number, links only.
+  const showRewardsTotal = pendingRewardsArePositive(
+    pendingRewards ?? null,
+    pendingRewardsMock ?? false,
+  );
+  const rewardsTotalStr =
+    showRewardsTotal && pendingRewards
+      ? lythoshiToLythFixed(BigInt(pendingRewards.totalAmountLythoshi), 2)
+      : null;
+  // Surface the rewards row when the user is delegated OR has positive rewards
+  // (mirrors RewardCard's surface condition); the LINKS show regardless of the
+  // number gate (existing routes, not an unreliable figure).
+  const showRewardsRow = !isPriv && (showRewardsTotal || delegatedBps > 0);
   // Float delegated LYTH — kept ONLY for the approximate fiat conversion below.
   const delegatedLyth =
     account.balance != null && delegatedBps > 0
@@ -2486,6 +2511,30 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
                 active={activeChip === "staked"}
                 onClick={() => setActiveChip("staked")}
               />
+            </div>
+          )}
+
+          {showRewardsRow && (
+            <div className="ext-home-rewards">
+              {rewardsTotalStr !== null && (
+                <span className="amt">+{rewardsTotalStr} LYTH rewards</span>
+              )}
+              <button
+                type="button"
+                className="lnk"
+                onClick={onOpenDelegations ?? (() => {})}
+              >
+                Delegations
+                <Icon name="external" size={10} />
+              </button>
+              <button
+                type="button"
+                className="lnk"
+                onClick={onOpenDelegations ?? (() => {})}
+              >
+                Claim
+                <Icon name="external" size={10} />
+              </button>
             </div>
           )}
 
