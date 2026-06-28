@@ -93,6 +93,35 @@ describe("decodeClaimedAmountLythoshi", () => {
     expect(decodeClaimedAmountLythoshi([noise, claimedLogBytes(amount)])).toBe("42");
   });
 
+  it("decodes the amount regardless of the autoCompound flag (word-1)", () => {
+    const amount = 1234567890123456789n;
+    expect(decodeClaimedAmountLythoshi([claimedLogBytes(amount, 1)])).toBe(
+      amount.toString(10),
+    );
+  });
+
+  it("returns null when the data omits the autoCompound word (SDK requires both words)", () => {
+    // 32 bytes — amount word only, no autoCompound word. The SDK decoder
+    // throws "data shorter than amount + autoCompound words" → caught → null.
+    const log = {
+      address: PRECOMPILE,
+      topics: [CLAIMED_EVENT_TOPIC0, WALLET_TOPIC],
+      data: [...word(5n)],
+    };
+    expect(decodeClaimedAmountLythoshi([log])).toBeNull();
+  });
+
+  it("returns null when the indexed wallet topic is absent (SDK requires 2 topics)", () => {
+    // topic0 only, no indexed wallet topic. The SDK decoder throws on
+    // topics.length !== 2 → caught → null (a real Claimed log carries both).
+    const log = {
+      address: PRECOMPILE,
+      topics: [CLAIMED_EVENT_TOPIC0],
+      data: [...word(7n), ...word(0n)],
+    };
+    expect(decodeClaimedAmountLythoshi([log])).toBeNull();
+  });
+
   describe("MAX_PLAUSIBLE_CLAIM_LYTHOSHI bound (P5-004)", () => {
     it("pins the cap at 200M LYTH (2x genesis supply)", () => {
       expect(MAX_PLAUSIBLE_CLAIM_LYTHOSHI).toBe(200_000_000n * LYTHOSHI_PER_LYTH);
