@@ -31,9 +31,8 @@ import { type DelegationsView, type PendingRewardsView } from "../shared/staking
 import {
   homeAvailableDisplay,
   homeDelegatedDisplay,
-  lythoshiToLythFixed,
+  rewardsHeroValue,
 } from "../shared/native-amount";
-import { pendingRewardsArePositive } from "./components/RewardCard";
 import { getLythFiatRate, formatFiat } from "../shared/fiat";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
@@ -2115,10 +2114,13 @@ interface HeroChipProps {
   value: string;
   active: boolean;
   disabled?: boolean;
+  /** Dim the value to --fg-500 — used for the Rewards chip's muted "—" (no live
+   *  number). */
+  muted?: boolean;
   onClick?: () => void;
 }
 
-function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
+function HeroChip({ label, value, active, disabled, muted, onClick }: HeroChipProps) {
   return (
     <div
       onClick={disabled ? undefined : onClick}
@@ -2156,7 +2158,7 @@ function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
         style={{
           fontSize: 16,
           fontWeight: 600,
-          color: "var(--fg-100)",
+          color: muted ? "var(--fg-500)" : "var(--fg-100)",
           marginTop: 4,
           letterSpacing: "-0.01em",
         }}
@@ -2209,10 +2211,10 @@ interface HomeProps {
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
   onOpenSend?: () => void;
+  /** Open the delegate (Stake) page — wired to every home hero affordance: the
+   *  Delegated/Rewards chip subtitles' ↗ (the home no longer links to the
+   *  Delegations VIEW page; claiming stays on Delegations' RewardCard). */
   onOpenStake?: () => void;
-  /** Open the Delegations page — wired to the "Delegated" hero subtitle's ↗
-   *  affordance so the user can drill into the per-cluster breakdown. */
-  onOpenDelegations?: () => void;
   onOpenBridge?: () => void;
   /** Slot rendered at the top of the Home body
    *  for the post-onboarding hint bar (OnboardingHintBar). Optional
@@ -2235,7 +2237,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenDelegations, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2312,22 +2314,17 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
   const delegatedBps = delegations?.totalBps ?? 0;
   // Number of distinct clusters the wallet is delegated to (one row per cluster).
   const delegatedClusterCount = delegations?.rows.length ?? 0;
-  // Pending-rewards NO-MOCK gate: the TOTAL number renders ONLY on a LIVE,
-  // positive read (reuse RewardCard's `pendingRewardsArePositive` — !mock && >0).
-  // The chain-fixed `lyth_pendingRewards.totalAmountLythoshi` == on-chain
-  // claimable() (verified live). mock/error/absent/zero → no number, links only.
-  const showRewardsTotal = pendingRewardsArePositive(
-    pendingRewards ?? null,
+  // Pending-rewards NO-MOCK gate. Shown INSIDE the Delegated view (tap the
+  // Delegated chip) — NOT a separate chip (a 3rd chip muddied "Total"). A LIVE
+  // read (non-mock, present total) yields the 2dp string (incl. a live "0.00");
+  // mock/error/absent → null → no rewards line. The chain-fixed
+  // `lyth_pendingRewards.totalAmountLythoshi` == on-chain claimable() (verified
+  // live); the illustrative mock figure is NEVER shown.
+  const rewardsValue = rewardsHeroValue(
+    pendingRewards?.totalAmountLythoshi ?? null,
     pendingRewardsMock ?? false,
+    2,
   );
-  const rewardsTotalStr =
-    showRewardsTotal && pendingRewards
-      ? lythoshiToLythFixed(BigInt(pendingRewards.totalAmountLythoshi), 2)
-      : null;
-  // Surface the rewards row when the user is delegated OR has positive rewards
-  // (mirrors RewardCard's surface condition); the LINKS show regardless of the
-  // number gate (existing routes, not an unreliable figure).
-  const showRewardsRow = !isPriv && (showRewardsTotal || delegatedBps > 0);
   // Float delegated LYTH — kept ONLY for the approximate fiat conversion below.
   const delegatedLyth =
     account.balance != null && delegatedBps > 0
@@ -2342,6 +2339,7 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
       : delegatedBps > 0 && balanceLythoshi != null
         ? homeDelegatedDisplay(balanceLythoshi, delegatedBps, 2)
         : "0.00";
+  // Big hero shows the ACTIVE chip's value (the 2 chips toggle this).
   const heroStr = activeChip === "total" ? totalStr : stakedStr;
   const [intPart, fracPart] = heroStr.split(".");
 
@@ -2358,7 +2356,7 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
         {topSlot}
         {/* Hero */}
         <div className="ext-card ext-hero">
-          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : activeChip === "staked" ? "Delegated · LYTH" : (liveLabel?.displayName ?? "Available · LYTH")}</div>
+          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : activeChip === "staked" ? "Delegated · LYTH" : (liveLabel?.displayName ?? "Total · LYTH")}</div>
           {isPriv ? (
             <div className="num opaque">— amount hidden by design</div>
           ) : (
@@ -2461,26 +2459,64 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
             <div className="chg">
               {activeChip === "total" ? (
                 "—% · 24h · attested"
-              ) : delegatedBps > 0 ? (
-                // Total delegated across ALL clusters — the cluster COUNT plus the
-                // aggregate weight (% by default; raw bps in developer mode). The
-                // ↗ opens the per-cluster Delegations breakdown.
-                <button
-                  type="button"
-                  className="ext-deleg-summary"
-                  onClick={onOpenDelegations ?? (() => {})}
-                  aria-label="View delegations"
-                >
-                  Delegated to {delegatedClusterCount} cluster
-                  {delegatedClusterCount === 1 ? "" : "s"} ·{" "}
-                  {devMode
-                    ? `${delegatedBps} bps`
-                    : `${(delegatedBps / 100).toFixed(2)}%`}{" "}
-                  · full balance spendable
-                  <Icon name="external" size={11} />
-                </button>
               ) : (
-                "Not delegated · full balance spendable"
+                // Delegated view — three left-aligned, stacked lines: the
+                // non-custodial reassurance, the delegation summary, and the
+                // pending rewards. The two value lines route to the delegate page
+                // (↗). General text is the theme primary (white); the %/bps + the
+                // LYTH amount use the theme accent. Rewards are NO-MOCK gated
+                // (rewardsValue !== null, incl. a live "0.00"; mock/error/absent →
+                // no line, never the mock figure).
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    gap: 3,
+                    color: "var(--fg-100)",
+                  }}
+                >
+                  {delegatedBps > 0 ? (
+                    <>
+                      <span>full balance spendable</span>
+                      <button
+                        type="button"
+                        className="ext-deleg-summary"
+                        onClick={onOpenStake ?? (() => {})}
+                        aria-label="Delegate"
+                      >
+                        <span>
+                          Delegated to {delegatedClusterCount} cluster
+                          {delegatedClusterCount === 1 ? "" : "s"} ·{" "}
+                          <span style={{ color: "rgba(var(--gold-glow), 1)" }}>
+                            {devMode
+                              ? `${delegatedBps} bps`
+                              : `${(delegatedBps / 100).toFixed(2)}%`}
+                          </span>
+                        </span>
+                        <Icon name="external" size={11} />
+                      </button>
+                    </>
+                  ) : (
+                    <span>Not delegated · full balance spendable</span>
+                  )}
+                  {rewardsValue !== null && (
+                    <button
+                      type="button"
+                      className="ext-deleg-summary"
+                      onClick={onOpenStake ?? (() => {})}
+                      aria-label="Delegate"
+                    >
+                      <span>
+                        <span style={{ color: "rgba(var(--gold-glow), 1)" }}>
+                          {rewardsValue} LYTH
+                        </span>{" "}
+                        pending rewards
+                      </span>
+                      <Icon name="external" size={11} />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -2511,30 +2547,6 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
                 active={activeChip === "staked"}
                 onClick={() => setActiveChip("staked")}
               />
-            </div>
-          )}
-
-          {showRewardsRow && (
-            <div className="ext-home-rewards">
-              {rewardsTotalStr !== null && (
-                <span className="amt">+{rewardsTotalStr} LYTH rewards</span>
-              )}
-              <button
-                type="button"
-                className="lnk"
-                onClick={onOpenDelegations ?? (() => {})}
-              >
-                Delegations
-                <Icon name="external" size={10} />
-              </button>
-              <button
-                type="button"
-                className="lnk"
-                onClick={onOpenDelegations ?? (() => {})}
-              >
-                Claim
-                <Icon name="external" size={10} />
-              </button>
             </div>
           )}
 

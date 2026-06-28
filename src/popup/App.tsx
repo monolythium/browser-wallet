@@ -1483,7 +1483,6 @@ export default function App() {
           onOpenReceive={() => setScreen("receive")}
           onOpenSend={() => setScreen("send")}
           onOpenStake={() => setScreen("stake")}
-          onOpenDelegations={() => setScreen("delegations")}
           onOpenBridge={() => setScreen("bridge")}
           // "New wallet" from the VaultPicker
           // dropdown routes through navigateTo so the screen stack

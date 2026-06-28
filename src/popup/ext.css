@@ -272,7 +272,7 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
 .ext.light .ext-hero .num .frac { color:#1a1a24; }
 .ext.light .ext-hero .num .d { color:#606369; }
 .ext-hero .num.opaque { color: var(--fg-400); font-size:22px; font-family: var(--f-sans); font-style:italic; font-weight:400; }
-.ext-hero .chg { font-family: var(--f-mono); font-size:11px; margin-top:8px; color: var(--ok); }
+.ext-hero .chg { font-family: var(--f-mono); font-size:11.5px; margin-top:8px; color: var(--ok); }
 .ext.light .ext-hero .chg { color:#2a7a3f; }
 
 /* Primary actions row — gradient primary, glass secondaries */
@@ -532,29 +532,6 @@ html[data-mode="sidepanel"] .ext > .ext-demo-banner {
   gap: 4px;
 }
 .ext-deleg-summary:hover { color: var(--fg-300); }
-/* Home pending-rewards row — the (no-mock-gated) total + Delegations/Claim links. */
-.ext-home-rewards {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-  font-family: var(--f-sans);
-  font-size: 11px;
-}
-.ext-home-rewards .amt { color: var(--ok); font-weight: 600; }
-.ext-home-rewards .lnk {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  color: var(--fg-400);
-  cursor: pointer;
-  font: inherit;
-}
-.ext-home-rewards .lnk:hover { color: var(--fg-200); }
 
 /* Prominent limit/clamp warning for the delegate/redelegate forms — the
    bps-headroom clamp messages (and the headroom line when exhausted) used to
