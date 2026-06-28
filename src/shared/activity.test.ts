@@ -193,10 +193,23 @@ describe("validateActivityRow", () => {
       logIndex: 0,
       cluster: 7,
       weightBps: 1234,
+      principalLythoshi: "42",
     };
     const undel = { ...del, kind: "undelegate" };
     expect(validateActivityRow(del)).toEqual(del);
     expect(validateActivityRow(undel)).toEqual(undel);
+  });
+
+  it("defaults principalLythoshi to '' for an old cached row that predates the field", () => {
+    const oldDel = {
+      kind: "delegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 1234,
+    };
+    expect(validateActivityRow(oldDel)).toEqual({ ...oldDel, principalLythoshi: "" });
   });
 
   it("round-trips an optional clusterName on delegate / undelegate / redelegate rows", () => {
@@ -207,6 +220,7 @@ describe("validateActivityRow", () => {
       logIndex: 0,
       cluster: 0,
       weightBps: 1234,
+      principalLythoshi: "7",
       clusterName: "halcyon.cluster.mono",
     };
     expect(validateActivityRow(del)).toEqual(del);
@@ -218,6 +232,7 @@ describe("validateActivityRow", () => {
       cluster: 3,
       toCluster: 9,
       weightBps: 500,
+      principalLythoshi: "3",
       clusterName: "salt.cluster.mono",
     };
     expect(validateActivityRow(redel)).toEqual(redel);
@@ -250,6 +265,7 @@ describe("validateActivityRow", () => {
       logIndex: 0,
       cluster: 7,
       weightBps: null,
+      principalLythoshi: "",
     };
     expect(validateActivityRow(del)).toEqual(del);
   });
@@ -263,6 +279,7 @@ describe("validateActivityRow", () => {
       cluster: 3,
       toCluster: null,
       weightBps: 500,
+      principalLythoshi: "",
     };
     expect(validateActivityRow(r)).toEqual(r);
   });
@@ -482,6 +499,7 @@ describe("applyCapturedClusterNames", () => {
     logIndex: 0,
     cluster: 0,
     weightBps: 5000,
+    principalLythoshi: "",
     ...over,
   });
   const pendingNamed = (over: Partial<PendingTxRow> = {}): PendingTxRow => ({
@@ -640,8 +658,8 @@ describe("mapAddressActivityToRows", () => {
     expect(rows[0]?.kind).toBe("token_transfer");
   });
 
-  it("suppresses delegation entries whose anchor is in delegationKeys", () => {
-    const keys = new Set(["100.0.0"]);
+  it("suppresses delegation entries whose anchor+kind is in delegationKeys", () => {
+    const keys = new Set(["100.0.0.delegate"]);
     const rows = mapAddressActivityToRows(
       [
         makeActivity({
@@ -654,6 +672,41 @@ describe("mapAddressActivityToRows", () => {
       keys,
     );
     expect(rows).toHaveLength(0);
+  });
+
+  it("does NOT suppress a cross-kind entry at the same anchor (delegate key, undelegate entry)", () => {
+    // Same anchor (indexer zeroes txIndex/logIndex), different kind: the
+    // undelegate must survive — the old anchor-only suppression wrongly dropped it.
+    const keys = new Set(["100.0.0.delegate"]);
+    const rows = mapAddressActivityToRows(
+      [
+        makeActivity({
+          kind: "delegation",
+          subKind: "undelegated",
+          cluster: 7,
+          weightBps: 5000,
+        }),
+      ],
+      keys,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("undelegate");
+  });
+
+  it("carries the activity `amount` onto the delegation row as principalLythoshi", () => {
+    const rows = mapAddressActivityToRows(
+      [
+        makeActivity({
+          kind: "delegation",
+          subKind: "delegated",
+          cluster: 7,
+          weightBps: 500,
+          amount: "27",
+        }),
+      ],
+      new Set(),
+    );
+    expect((rows[0] as DelegateRow).principalLythoshi).toBe("27");
   });
 
   it("produces a fallback DelegateRow when delegation anchor is NOT in keys", () => {
@@ -790,7 +843,7 @@ describe("mapAddressActivityToRows", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("delegationKeySet", () => {
-  it("builds keys with dot-separated anchor parts", () => {
+  it("builds keys with dot-separated anchor parts + kind", () => {
     const rows: DelegateRow[] = [
       {
         kind: "delegate",
@@ -799,10 +852,11 @@ describe("delegationKeySet", () => {
         logIndex: 5,
         cluster: 1,
         weightBps: 1000,
+        principalLythoshi: "42",
       },
     ];
     const keys = delegationKeySet(rows);
-    expect(keys.has("100.2.5")).toBe(true);
+    expect(keys.has("100.2.5.delegate")).toBe(true);
     expect(keys.size).toBe(1);
   });
 
@@ -814,9 +868,23 @@ describe("delegationKeySet", () => {
       logIndex: 0,
       cluster: 1,
       weightBps: 1000,
+      principalLythoshi: "1",
     };
     const keys = delegationKeySet([row, row]);
     expect(keys.size).toBe(1);
+  });
+
+  it("distinguishes a delegate from an undelegate at the SAME anchor (kind in key)", () => {
+    // The indexer hardcodes txIndex/logIndex to 0; a cross-kind same-block pair
+    // must NOT collapse to one suppression key (else one is wrongly suppressed).
+    const anchor = { blockHeight: 100, txIndex: 0, logIndex: 0, cluster: 1 };
+    const keys = delegationKeySet([
+      { kind: "delegate", ...anchor, weightBps: 500, principalLythoshi: "5" },
+      { kind: "undelegate", ...anchor, weightBps: 5000, principalLythoshi: "5" },
+    ]);
+    expect(keys.has("100.0.0.delegate")).toBe(true);
+    expect(keys.has("100.0.0.undelegate")).toBe(true);
+    expect(keys.size).toBe(2);
   });
 });
 
@@ -1067,6 +1135,7 @@ describe("reconcilePending — delegation heuristic (C3)", () => {
     logIndex: 0,
     cluster: 7,
     weightBps: 2500,
+    principalLythoshi: "",
     ...overrides,
   });
 
@@ -1112,6 +1181,7 @@ describe("reconcilePending — delegation heuristic (C3)", () => {
       logIndex: 0,
       cluster: 7,
       weightBps: 2500,
+      principalLythoshi: "",
     };
     expect(reconcilePending([mkPending({ opKind: "undelegate" })], [delegate])).toHaveLength(
       1,
@@ -1132,6 +1202,7 @@ describe("reconcilePending — delegation heuristic (C3)", () => {
       cluster: 7,
       toCluster: 9,
       weightBps: 2500,
+      principalLythoshi: "",
     };
     expect(reconcilePending([pending], [redelegate])).toEqual([]);
     // destination mismatch → not retired
@@ -1158,6 +1229,7 @@ describe("reconcilePending — delegation heuristic (C3)", () => {
       logIndex: 0,
       cluster: 7,
       weightBps: 2500,
+      principalLythoshi: "",
     };
     expect(reconcilePending([pending], [stalePriorDelegate])).toHaveLength(1);
   });
@@ -1176,6 +1248,7 @@ describe("reconcilePending — delegation heuristic (C3)", () => {
       logIndex: 0,
       cluster: 7,
       weightBps: 2500,
+      principalLythoshi: "",
     };
     const atWindowEdge: DelegateRow = {
       ...atBroadcast,
@@ -1262,6 +1335,7 @@ describe("reconcilePending", () => {
       logIndex: 0,
       cluster: 1,
       weightBps: 1000,
+      principalLythoshi: "",
     };
     expect(reconcilePending([pending], [delegate])).toEqual([]);
   });
@@ -1557,6 +1631,95 @@ describe("mergeIndexerSnapshot", () => {
     expect(r.confirmed).toHaveLength(1);
     expect(r.confirmed[0]?.kind).toBe("redelegate");
     expect((r.confirmed[0] as RedelegateRow).toCluster).toBeNull();
+  });
+
+  it("SAME-BLOCK FIX: two delegates at the SAME (block,0,0) with distinct principal BOTH survive", () => {
+    // The indexer hardcodes txIndex/logIndex to 0, so two delegates in one block
+    // share the (block,txIndex,logIndex) anchor. The per-event principal splits
+    // them; both must render — the "4 confirmed, 3 shown" bug.
+    const mk = (principalLythoshi: string, walletTotalBps: number) => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster: 0,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps,
+      principalLythoshi,
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk("10", 1000), mk("5", 500)] },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(2);
+  });
+
+  it("SAME-BLOCK graceful: same anchor+kind with NO principal (indexer omitted it) collapses to one — never a duplicate", () => {
+    const mk = () => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster: 0,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps: null,
+      // principalLythoshi omitted → "" → equal keys → collapse (pre-fix behaviour)
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk(), mk()] },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(1);
+  });
+
+  it("SAME-BLOCK cross-kind: a delegate + an undelegate at the SAME anchor BOTH survive", () => {
+    const base = {
+      blockHeight: 8657,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster: 1,
+      toCluster: null,
+      walletTotalBps: null,
+    };
+    const r = mergeIndexerSnapshot(
+      {
+        activity: [],
+        delegation: [
+          { ...base, kind: "delegated", weightBps: 500, principalLythoshi: "5" },
+          { ...base, kind: "undelegated", weightBps: 5000, principalLythoshi: "50" },
+        ],
+      },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.map((c) => c.kind).sort()).toEqual(["delegate", "undelegate"]);
+  });
+
+  it("CROSS-STREAM still collapses: the same event in both streams → one row (suppression on contracted anchor+kind)", () => {
+    const r = mergeIndexerSnapshot(
+      {
+        activity: [
+          {
+            blockHeight: 8705, txIndex: 0, logIndex: 0, kind: "delegation",
+            direction: null, counterparty: null, tokenId: null,
+            amount: "27", cluster: 0, weightBps: 500, subKind: "delegated",
+          },
+        ],
+        delegation: [
+          {
+            blockHeight: 8705, txIndex: 0, logIndex: 0, wallet: "0xself",
+            cluster: 0, toCluster: null, kind: "delegated", weightBps: 500,
+            walletTotalBps: null, principalLythoshi: "27",
+          },
+        ],
+      },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(1);
   });
 
   it("respects the rolling window cap at ACTIVITY_ROLLING_WINDOW", () => {
@@ -1898,6 +2061,7 @@ describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
       logIndex: 0,
       cluster: 0,
       weightBps: 5000,
+      principalLythoshi: "",
       ...over,
     };
   }

@@ -274,6 +274,15 @@ export interface DelegateRow extends ConfirmedAnchor {
   kind: "delegate";
   cluster: number;
   weightBps: number | null;
+  /** Cumulative staked principal (lythoshi) the indexer reports for this event —
+   *  `principalLythoshi` on the delegation-history stream, `amount` on the
+   *  activity stream (identical per event). Used ONLY as a same-block dedup
+   *  discriminator: the indexer hardcodes txIndex/logIndex to 0, so two
+   *  delegations in one block share the (block,txIndex,logIndex) anchor; this
+   *  monotonic value splits them. "" when the indexer omits it — degrades to the
+   *  pre-fix collapse, never a duplicate (cross-stream dedup stays on the
+   *  contracted anchor+kind, not this field). */
+  principalLythoshi: string;
   /** Real `*.cluster.mono` name the wallet captured at send time (threaded
    *  off the matching pending row by `applyCapturedClusterNames`). The indexer
    *  stream carries only the numeric `cluster` id (§C — no name field, no
@@ -288,6 +297,8 @@ export interface UndelegateRow extends ConfirmedAnchor {
   kind: "undelegate";
   cluster: number;
   weightBps: number | null;
+  /** Same-block dedup discriminator; see DelegateRow.principalLythoshi. */
+  principalLythoshi: string;
   /** Send-time `*.cluster.mono` name; see DelegateRow.clusterName. */
   clusterName?: string;
 }
@@ -300,6 +311,8 @@ export interface RedelegateRow extends ConfirmedAnchor {
   cluster: number;                     // source
   toCluster: number | null;            // destination (null only on activity-stream fallback)
   weightBps: number | null;
+  /** Same-block dedup discriminator; see DelegateRow.principalLythoshi. */
+  principalLythoshi: string;
   /** Send-time name of the SOURCE `cluster` (redelegate captures the source per
    *  commit 7dbb4ea); see DelegateRow.clusterName. The destination `toCluster`
    *  has no captured name. */
@@ -548,6 +561,8 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         logIndex: r.logIndex as number,
         cluster: r.cluster,
         weightBps: r.weightBps,
+        principalLythoshi:
+          typeof r.principalLythoshi === "string" ? r.principalLythoshi : "",
         ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
@@ -569,6 +584,8 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         cluster: r.cluster,
         toCluster: r.toCluster,
         weightBps: r.weightBps,
+        principalLythoshi:
+          typeof r.principalLythoshi === "string" ? r.principalLythoshi : "",
         ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
@@ -707,6 +724,10 @@ export interface RawDelegationHistory {
   kind: string;
   weightBps: number;
   walletTotalBps: number | null;
+  /** Cumulative staked principal (lythoshi). On the live wire (verified
+   *  2026-06-28) but not yet in the SDK `DelegationHistoryRecord` contract —
+   *  optional, read defensively as a same-block dedup discriminator only. */
+  principalLythoshi?: string | null;
 }
 
 /** Map the rich `lyth_getDelegationHistory` stream to the canonical delegation
@@ -726,6 +747,7 @@ export function mapDelegationHistoryToRows(
           logIndex: e.logIndex,
           cluster: e.cluster,
           weightBps: e.weightBps,
+          principalLythoshi: e.principalLythoshi ?? "",
         });
         break;
       case "undelegated":
@@ -736,6 +758,7 @@ export function mapDelegationHistoryToRows(
           logIndex: e.logIndex,
           cluster: e.cluster,
           weightBps: e.weightBps,
+          principalLythoshi: e.principalLythoshi ?? "",
         });
         break;
       case "redelegated":
@@ -747,6 +770,7 @@ export function mapDelegationHistoryToRows(
           cluster: e.cluster,
           toCluster: e.toCluster,
           weightBps: e.weightBps,
+          principalLythoshi: e.principalLythoshi ?? "",
         });
         break;
       default:
@@ -770,8 +794,6 @@ export function mapAddressActivityToRows(
 ): ConfirmedRow[] {
   const out: ConfirmedRow[] = [];
   for (const e of entries) {
-    const anchorKey = `${e.blockHeight}.${e.txIndex}.${e.logIndex}`;
-
     if (e.kind === "transfer") {
       // Native LYTH arrives with a zero (Hash::ZERO) or null tokenId — route it
       // to tx_send/tx_receive by direction. Only a real (non-zero) MRC-20 token
@@ -813,18 +835,13 @@ export function mapAddressActivityToRows(
     }
 
     if (e.kind === "delegation") {
-      // Dedupe: when the delegation-history stream
-      // already has this anchor, drop the activity-stream copy (richer
-      // fields live on the history-stream row). Otherwise produce a
-      // fallback row from subKind.
-      if (delegationKeys.has(anchorKey)) continue;
       // Reward claim (#3 / upstream #74): the indexer surfaces it as
       // subKind:"claimed" with the claimed reward in `amount` (decimal lythoshi
-      // — the native LYTH moved, NOT the staked principal). Handled BEFORE the
-      // cluster-null guard below: a claim carries cluster:0 (not a real
-      // delegation target), so it must never be dropped for "lacking" a cluster.
-      // delegation-history never surfaces claims, so this anchor is never in
-      // `delegationKeys` — the activity stream is the sole claim source.
+      // — the native LYTH moved, NOT the staked principal). Handled FIRST: a
+      // claim carries cluster:0 (not a real delegation target), so it must never
+      // be dropped for "lacking" a cluster, and delegation-history never surfaces
+      // claims, so a claim is never a cross-stream duplicate (never suppressed —
+      // even when it shares a block with a real delegation).
       if (e.subKind === "claimed") {
         out.push({
           kind: "claim",
@@ -838,8 +855,32 @@ export function mapAddressActivityToRows(
         continue;
       }
       if (e.cluster === null) continue;
-      switch (e.subKind) {
-        case "delegated":
+      // Canonical confirmed-row kind (matches mapDelegationHistoryToRows).
+      const kind =
+        e.subKind === "delegated"
+          ? ("delegate" as const)
+          : e.subKind === "undelegated"
+            ? ("undelegate" as const)
+            : e.subKind === "redelegated"
+              ? ("redelegate" as const)
+              : null;
+      if (kind === null) continue; // unknown subKind — drop
+      // Cross-stream dedupe on the CONTRACTED anchor + kind: when the richer
+      // delegation-history stream already carries this event, drop the
+      // activity-stream copy. Kind-aware (vs the old anchor-only check) so a
+      // same-block cross-kind pair — e.g. a delegate + an undelegate the indexer
+      // reports at the same hardcoded txIndex/logIndex (always 0) — is no longer
+      // mutually suppressed.
+      if (
+        delegationKeys.has(`${e.blockHeight}.${e.txIndex}.${e.logIndex}.${kind}`)
+      ) {
+        continue;
+      }
+      // `amount` is the cumulative staked principal (== history principalLythoshi);
+      // captured as the same-block dedup discriminator (see DelegateRow).
+      const principalLythoshi = e.amount ?? "";
+      switch (kind) {
+        case "delegate":
           out.push({
             kind: "delegate",
             blockHeight: e.blockHeight,
@@ -847,9 +888,10 @@ export function mapAddressActivityToRows(
             logIndex: e.logIndex,
             cluster: e.cluster,
             weightBps: e.weightBps,
+            principalLythoshi,
           });
           break;
-        case "undelegated":
+        case "undelegate":
           out.push({
             kind: "undelegate",
             blockHeight: e.blockHeight,
@@ -857,9 +899,10 @@ export function mapAddressActivityToRows(
             logIndex: e.logIndex,
             cluster: e.cluster,
             weightBps: e.weightBps,
+            principalLythoshi,
           });
           break;
-        case "redelegated":
+        case "redelegate":
           out.push({
             kind: "redelegate",
             blockHeight: e.blockHeight,
@@ -868,10 +911,8 @@ export function mapAddressActivityToRows(
             cluster: e.cluster,
             toCluster: null,             // activity stream doesn't carry destination
             weightBps: e.weightBps,
+            principalLythoshi,
           });
-          break;
-        default:
-          // Unknown subKind — drop.
           break;
       }
       continue;
@@ -1328,14 +1369,36 @@ export function reconcilePending(
   );
 }
 
-/** Build the dedupe key-set from delegation-history rows. Exposed for the
- *  SW handler / tests so they can drive mapAddressActivityToRows. */
+/** Within-stream dedup / React identity key for a confirmed row. Delegation
+ *  rows append the per-event `principalLythoshi` so two delegations the indexer
+ *  reports at the SAME (blockHeight, txIndex, logIndex) anchor — it hardcodes
+ *  txIndex and logIndex to 0, so the anchor degrades to blockHeight alone —
+ *  don't collapse into one row. Non-delegation rows keep the anchor+kind key (a
+ *  self-transfer's in/out legs share the u32::MAX logIndex sentinel and are
+ *  split by kind). Empty `principalLythoshi` (indexer omitted it) degrades to
+ *  the pre-fix collapse, never a duplicate. */
+export function confirmedRowDedupKey(r: ConfirmedRow): string {
+  const base = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
+  return r.kind === "delegate" || r.kind === "undelegate" || r.kind === "redelegate"
+    ? `${base}.${r.principalLythoshi}`
+    : base;
+}
+
+/** Build the cross-stream suppression key-set from delegation-history rows.
+ *  Exposed for the SW handler / tests so they can drive mapAddressActivityToRows. */
 export function delegationKeySet(
   rows: Array<DelegateRow | UndelegateRow | RedelegateRow>,
 ): Set<string> {
   const out = new Set<string>();
   for (const r of rows) {
-    out.add(`${r.blockHeight}.${r.txIndex}.${r.logIndex}`);
+    // Anchor + KIND (both contracted) — the cross-stream suppression key. The
+    // per-event principal is deliberately NOT included here: keying suppression
+    // on it would make cross-stream dedup depend on an uncontracted wire field
+    // (history principalLythoshi), risking DUPLICATE rows if the indexer ever
+    // dropped it. Same-block splitting is done within-stream by
+    // confirmedRowDedupKey (merge + render), which degrades to a harmless
+    // collapse — never a duplicate — when the principal is absent.
+    out.add(`${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`);
   }
   return out;
 }
@@ -1469,18 +1532,20 @@ export function mergeIndexerSnapshot(
 
   const merged: ConfirmedRow[] = [];
   const seen = new Set<string>();
-  // Key by anchor + kind so a self-transfer's in/out pair (identical anchor —
-  // native transfers share the u32::MAX logIndex sentinel) both survive, while
-  // a same-kind cross-stream duplicate still collapses to the first (richer
-  // delegation-history) copy.
+  // Key by anchor + kind (+ per-event principal for delegations) so a
+  // self-transfer's in/out pair (identical anchor — native transfers share the
+  // u32::MAX logIndex sentinel) both survive, two delegations in one block (the
+  // indexer hardcodes txIndex/logIndex to 0) both survive, while a same-kind
+  // cross-stream duplicate still collapses to the first (richer
+  // delegation-history) copy. See confirmedRowDedupKey.
   for (const r of delegationRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
+    const k = confirmedRowDedupKey(r);
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);
   }
   for (const r of activityRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
+    const k = confirmedRowDedupKey(r);
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);

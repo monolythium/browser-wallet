@@ -12,6 +12,7 @@ const row: UndelegateRow = {
   cluster: 1,
   weightBps: 5000,
   clusterName: "halcyon",
+  principalLythoshi: "",
 };
 
 describe("UndelegateRowBody (B + C + E)", () => {

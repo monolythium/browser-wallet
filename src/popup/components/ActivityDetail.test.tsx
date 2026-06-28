@@ -91,6 +91,7 @@ describe("ActivityDetail.rowDescription (D)", () => {
     const row: ActivityRow = {
       kind: "redelegate", blockHeight: 1, txIndex: 0, logIndex: 0,
       cluster: 1, toCluster: 2, weightBps: 1250, clusterName: "halcyon",
+      principalLythoshi: "",
     };
     expect(rowDescription(row, undefined, dir)).toBe(
       "Redelegated 12.50% from halcyon to polar",
@@ -101,10 +102,12 @@ describe("ActivityDetail.rowDescription (D)", () => {
     const del: ActivityRow = {
       kind: "delegate", blockHeight: 1, txIndex: 0, logIndex: 0,
       cluster: 1, weightBps: 5000, clusterName: "halcyon",
+      principalLythoshi: "",
     };
     const undel: ActivityRow = {
       kind: "undelegate", blockHeight: 1, txIndex: 0, logIndex: 0,
       cluster: 1, weightBps: 5000, clusterName: "halcyon",
+      principalLythoshi: "",
     };
     expect(rowDescription(del, undefined, dir)).toBe("Delegated to halcyon");
     expect(rowDescription(undel, undefined, dir)).toBe("Undelegated from halcyon");

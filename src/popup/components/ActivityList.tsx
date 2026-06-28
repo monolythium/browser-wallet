@@ -19,6 +19,7 @@ import { ActivityRow } from "./ActivityRow.js";
 import { ActivityDetail } from "./ActivityDetail.js";
 import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
 import {
+  confirmedRowDedupKey,
   mergeActivityNewestFirst,
   type ActivityRow as ActivityRowType,
 } from "../../shared/activity.js";
@@ -386,7 +387,7 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
               const key =
                 row.kind === "pending_tx"
                   ? `pending-${row.txHash}`
-                  : `${row.blockHeight}-${row.txIndex}-${row.logIndex}-${row.kind}`;
+                  : confirmedRowDedupKey(row);
               return (
                 <div
                   key={key}

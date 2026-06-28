@@ -14,6 +14,7 @@ function redelegateRow(p: Partial<RedelegateRow> = {}): RedelegateRow {
     toCluster: 2,
     weightBps: 1250,
     clusterName: "halcyon",
+    principalLythoshi: "",
     ...p,
   };
 }
@@ -65,6 +66,7 @@ describe("RedelegateRowBody — from→to label + % weight badge at the line end
       cluster: 3,
       toCluster: null,
       weightBps: 1250,
+      principalLythoshi: "",
     };
     const html = renderToStaticMarkup(
       <RedelegateRowBody row={row} clusterNameById={undefined} />,

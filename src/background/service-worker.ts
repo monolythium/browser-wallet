@@ -5066,6 +5066,17 @@ function validateRawDelegationHistory(input: unknown): RawDelegationHistory | nu
   if (typeof r.kind !== "string") return null;
   if (!isFiniteNum(r.weightBps)) return null;
   if (r.walletTotalBps !== null && !isFiniteNum(r.walletTotalBps)) return null;
+  // Optional, off-contract (on the live wire 2026-06-28 but not in the SDK
+  // DelegationHistoryRecord): the cumulative staked principal, preserved as a
+  // same-block dedup discriminator. Tolerate absent/null; reject only a
+  // present-but-wrong-typed value.
+  if (
+    r.principalLythoshi !== undefined &&
+    r.principalLythoshi !== null &&
+    typeof r.principalLythoshi !== "string"
+  ) {
+    return null;
+  }
   return {
     blockHeight: r.blockHeight,
     txIndex: r.txIndex,
@@ -5076,6 +5087,9 @@ function validateRawDelegationHistory(input: unknown): RawDelegationHistory | nu
     kind: r.kind,
     weightBps: r.weightBps,
     walletTotalBps: r.walletTotalBps,
+    ...(typeof r.principalLythoshi === "string"
+      ? { principalLythoshi: r.principalLythoshi }
+      : {}),
   };
 }
 
