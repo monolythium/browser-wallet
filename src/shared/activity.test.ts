@@ -1722,6 +1722,68 @@ describe("mergeIndexerSnapshot", () => {
     expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(1);
   });
 
+  it("SAME-BLOCK distinct clusters: two delegates to DIFFERENT clusters at one anchor BOTH survive even with an equal principal", () => {
+    // The dedup key folds in cluster, so a principal tie can't collapse two
+    // genuinely distinct same-block events.
+    const mk = (cluster: number) => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps: null,
+      principalLythoshi: "100",
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk(0), mk(1)] },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(2);
+  });
+
+  it("SAME-BLOCK cluster names: each of two same-block delegates gets its OWN captured name (not cross-labelled)", () => {
+    const mk = (cluster: number) => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps: null,
+      principalLythoshi: cluster === 0 ? "10" : "20",
+    });
+    const pend = (clusterId: number, clusterName: string): PendingTxRow => ({
+      kind: "pending_tx",
+      txHash: `0x${clusterId}`,
+      to: "0x100a",
+      amountDecimal: "0",
+      broadcastedAtMs: 1,
+      broadcastBlockHeight: 8705,
+      via: "operator-1",
+      confirmedBlockHeight: 8705,
+      confirmedTxIndex: 0, // indexer hardcodes txIndex=0 for both
+      clusterId,
+      clusterName,
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk(0), mk(1)] },
+      1_700_000_000_000,
+      { pending: [pend(0, "alpha.cluster.mono"), pend(1, "beta.cluster.mono")] },
+    );
+    const byCluster = new Map(
+      r.confirmed
+        .filter((c): c is DelegateRow => c.kind === "delegate")
+        .map((c) => [c.cluster, c.clusterName]),
+    );
+    expect(byCluster.get(0)).toBe("alpha.cluster.mono");
+    expect(byCluster.get(1)).toBe("beta.cluster.mono");
+  });
+
   it("respects the rolling window cap at ACTIVITY_ROLLING_WINDOW", () => {
     // Generate 150 activity entries; merged cache should hold exactly 100,
     // newest first.

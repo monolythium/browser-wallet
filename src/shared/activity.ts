@@ -1379,9 +1379,17 @@ export function reconcilePending(
  *  the pre-fix collapse, never a duplicate. */
 export function confirmedRowDedupKey(r: ConfirmedRow): string {
   const base = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
-  return r.kind === "delegate" || r.kind === "undelegate" || r.kind === "redelegate"
-    ? `${base}.${r.principalLythoshi}`
-    : base;
+  // Delegations: fold in every distinguishing per-event field (cluster, the
+  // redelegate destination, weight, and the principal) so two genuinely distinct
+  // same-block events collapse only when the indexer reports them as truly
+  // identical — robust even if the principal alone happens to tie.
+  if (r.kind === "delegate" || r.kind === "undelegate") {
+    return `${base}.${r.cluster}.${r.weightBps}.${r.principalLythoshi}`;
+  }
+  if (r.kind === "redelegate") {
+    return `${base}.${r.cluster}.${r.toCluster}.${r.weightBps}.${r.principalLythoshi}`;
+  }
+  return base;
 }
 
 /** Build the cross-stream suppression key-set from delegation-history rows.
@@ -1438,18 +1446,24 @@ export function applyCapturedClusterNames(
   if (pending.length === 0 && prevConfirmed.length === 0) return confirmed;
   return confirmed.map((row) => {
     if (!isDelegationRow(row) || row.clusterName !== undefined) return row;
+    // Match on the (block, txIndex) inclusion slot AND the cluster: the indexer
+    // hardcodes txIndex to 0, so two same-block delegations share the slot —
+    // without the cluster guard the SAME name would be threaded onto both (and a
+    // cross-cluster pair mislabelled). The (source) cluster is the disambiguator.
     const prevNamed = prevConfirmed.find(
       (p): p is DelegateRow | UndelegateRow | RedelegateRow =>
         isDelegationRow(p) &&
         p.clusterName !== undefined &&
         p.blockHeight === row.blockHeight &&
-        p.txIndex === row.txIndex,
+        p.txIndex === row.txIndex &&
+        p.cluster === row.cluster,
     );
     const pendNamed = pending.find(
       (p) =>
         p.clusterName !== undefined &&
         p.confirmedBlockHeight === row.blockHeight &&
-        p.confirmedTxIndex === row.txIndex,
+        p.confirmedTxIndex === row.txIndex &&
+        p.clusterId === row.cluster,
     );
     const name = prevNamed?.clusterName ?? pendNamed?.clusterName;
     return name !== undefined ? { ...row, clusterName: name } : row;
