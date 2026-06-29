@@ -24,6 +24,7 @@ import {
   seedReconnectingHealth,
   shouldLabelBalanceStale,
   shouldPauseBalanceDisplay,
+  balanceIsLoading,
   pausedBalanceMonoscanUrl,
   Bridge,
   bridgeRouteDisclosureHasRequiredFloorData,
@@ -784,6 +785,86 @@ describe("AssetList hideBalance (#3 — hide the LYTH amount when non-live)", ()
     );
     expect(html).toMatch(/<div class="amt">—<\/div>/);
     expect(html).not.toMatch(/<div class="amt">12[.,]50<\/div>/);
+  });
+});
+
+// Item 4 (0-flash) — the loading skeleton replaces the misleading "0.00".
+describe("balanceIsLoading (item 4 — skeleton vs literal 0.00)", () => {
+  it("is true ONLY for a public null balance on a healthy chain", () => {
+    expect(balanceIsLoading(false, false, false, null)).toBe(true);
+  });
+  it("is false once the balance has resolved (a real value shows as-is)", () => {
+    expect(balanceIsLoading(false, false, false, 1234n)).toBe(false);
+    expect(balanceIsLoading(false, false, false, 0n)).toBe(false); // a real live 0 is not 'loading'
+  });
+  it("is false when the value is hidden/degraded or paused (— branch wins)", () => {
+    expect(balanceIsLoading(false, true, false, null)).toBe(false); // hideBalanceValue
+    expect(balanceIsLoading(false, false, true, null)).toBe(false); // balancePaused
+  });
+  it("is false for a private account (hidden by design)", () => {
+    expect(balanceIsLoading(true, false, false, null)).toBe(false);
+  });
+});
+
+describe("AssetList balanceLoading (item 4 — skeleton, never literal 0.00)", () => {
+  const network = {
+    chainId: "0x1",
+    name: "Monolythium Testnet",
+    rpc: "http://localhost:8545",
+    chainIdNum: 1,
+    builtin: true,
+    active: true,
+  } satisfies ChainEntry;
+  const loadingAccount = {
+    id: "a",
+    label: "a",
+    denom: "public",
+    addr: "0x1111111111111111111111111111111111111111",
+    algo: "slhdsa",
+    balance: null,
+    custody: "sw",
+  } satisfies Account;
+
+  it("renders a loading skeleton (aria-busy), NOT '0.00', while loading", () => {
+    const html = renderToStaticMarkup(
+      <AssetList
+        account={loadingAccount}
+        network={network}
+        indexer={null}
+        balanceLoading
+      />,
+    );
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain('<div class="amt">0.00</div>');
+    // The degraded/paused "—" is a different state and must not appear here.
+    expect(html).not.toMatch(/<div class="amt">—<\/div>/);
+  });
+
+  it("hideBalance ('—') still takes precedence over balanceLoading", () => {
+    const html = renderToStaticMarkup(
+      <AssetList
+        account={loadingAccount}
+        network={network}
+        indexer={null}
+        hideBalance
+        balanceLoading
+      />,
+    );
+    expect(html).toMatch(/<div class="amt">—<\/div>/);
+    expect(html).not.toContain('aria-busy="true"');
+  });
+
+  it("a resolved balance shows the number even if balanceLoading is stale-false", () => {
+    const html = renderToStaticMarkup(
+      <AssetList
+        account={{ ...loadingAccount, balance: 12.5 }}
+        network={network}
+        indexer={null}
+        balanceLoading={false}
+      />,
+    );
+    expect(html).toMatch(/<div class="amt">12[.,]50<\/div>/);
+    expect(html).not.toContain('aria-busy="true"');
   });
 });
 

@@ -427,6 +427,27 @@ export function shouldLabelBalanceStale(
 }
 
 /**
+ * Item 4 (0-flash): whether the Home hero + Assets row must render a LOADING
+ * skeleton instead of a literal "0.00". True only in the genuinely-loading
+ * case — a public balance not yet resolved (`balanceLythoshi == null`) on a
+ * chain that is NOT degraded/paused. On a fresh popup mount (the action popup
+ * is destroyed on minimize and re-mounted on restore) the balance starts null
+ * and the hero used to paint "0.00" for the ~1-2s round-trip, which reads as
+ * "funds gone". This routes that window to a skeleton instead. The existing
+ * "—" degraded/paused branch (hideBalanceValue || balancePaused) is unchanged
+ * and takes precedence; a real (non-null) balance is always shown as-is. Pure +
+ * exported for unit tests.
+ */
+export function balanceIsLoading(
+  isPriv: boolean,
+  hideBalanceValue: boolean,
+  balancePaused: boolean,
+  balanceLythoshi: bigint | null | undefined,
+): boolean {
+  return !isPriv && !hideBalanceValue && !balancePaused && balanceLythoshi == null;
+}
+
+/**
  * C5 (no-mock / R2): whether the Home hero should PAUSE the balance display
  * instead of rendering a misleading bare "0.00". True only when the balance is
  * genuinely UNKNOWN (null/undefined — never a real value, which is shown as-is)
@@ -1135,9 +1156,13 @@ interface AssetListProps {
    *  matches the hidden hero value instead of showing a figure the wallet can't
    *  currently confirm. */
   hideBalance?: boolean;
+  /** Item 4 (0-flash): the balance hasn't resolved yet on a HEALTHY chain
+   *  (fresh popup mount / restore). Render a loading skeleton in the amount
+   *  cell instead of a literal "0.00". `hideBalance` ("—") takes precedence. */
+  balanceLoading?: boolean;
 }
 
-export function AssetList({ account, network, indexer, hideBalance }: AssetListProps) {
+export function AssetList({ account, network, indexer, hideBalance, balanceLoading }: AssetListProps) {
   const lythAmount = account.balance;
   const [displayCurrency] = useDisplayCurrencyPref();
   const liveRows = indexer?.tokenBalances ?? [];
@@ -1182,7 +1207,28 @@ export function AssetList({ account, network, indexer, hideBalance }: AssetListP
         <div className="ext-asset__spark" />
         <div className="ext-asset__right">
           <div className="amt">
-            {hideBalance ? "—" : lythAmount != null ? fmt(lythAmount, 2) : "0.00"}
+            {hideBalance ? (
+              "—"
+            ) : balanceLoading ? (
+              // Item 4 — loading skeleton, never a literal "0.00".
+              <span
+                aria-busy="true"
+                aria-label="Balance loading"
+                style={{
+                  display: "inline-block",
+                  width: "4ch",
+                  height: "1em",
+                  borderRadius: 6,
+                  background: "var(--ink-300)",
+                  opacity: 0.4,
+                  verticalAlign: "middle",
+                }}
+              />
+            ) : lythAmount != null ? (
+              fmt(lythAmount, 2)
+            ) : (
+              "0.00"
+            )}
           </div>
           {/* Fiat equivalent of the LYTH balance — sized to match the amount
              above, neutral (not the green change colour). No oracle → the rate
@@ -2294,6 +2340,17 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
       : balanceLythoshi != null
         ? homeAvailableDisplay(balanceLythoshi, 2)
         : "0.00";
+  // Item 4 (0-flash): the balance hasn't resolved yet on a healthy chain (fresh
+  // popup mount / restore). The hero + Assets row render a loading skeleton in
+  // this window instead of the misleading literal "0.00" (the totalStr/stakedStr
+  // "0.00" fallbacks above are now only reached defensively — this guards the
+  // render). The "—" degraded/paused branch is unchanged and takes precedence.
+  const balanceLoading = balanceIsLoading(
+    isPriv,
+    hideBalanceValue,
+    balancePaused,
+    balanceLythoshi,
+  );
   // #42: label the hero as a retained last-known value only when the chain
   // couldn't be reached AND there's a real balance to annotate (never on the
   // pending "0.00"). Annotate-only — the value itself is untouched.
@@ -2359,6 +2416,24 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
           <div className="lbl">{isPriv ? "Private balance · LYTH-p" : activeChip === "staked" ? "Delegated · LYTH" : (liveLabel?.displayName ?? "Total · LYTH")}</div>
           {isPriv ? (
             <div className="num opaque">— amount hidden by design</div>
+          ) : balanceLoading ? (
+            // Item 4 — loading skeleton (NOT a literal "0.00", which reads as
+            // real funds). A dim placeholder bar, mirroring the Activity
+            // skeleton's var(--ink-300) treatment; replaced the instant the
+            // balance resolves (or the C2 last-known seed lands).
+            <div
+              className="num"
+              aria-busy="true"
+              aria-label="Balance loading"
+              style={{
+                display: "inline-block",
+                width: "5ch",
+                height: "1em",
+                borderRadius: 8,
+                background: "var(--ink-300)",
+                opacity: 0.4,
+              }}
+            />
           ) : (
             <div
               className="num"
@@ -2381,7 +2456,7 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
              match the "LYTH" unit label (.d) beside the amount. With no oracle
              the rate is null, so this renders the selected currency's symbol +
              em-dash (e.g. "$—") — never a fabricated "$0". */}
-          {!isPriv && !hideBalanceValue && !balancePaused && (
+          {!isPriv && !hideBalanceValue && !balancePaused && !balanceLoading && (
             <div
               style={{
                 fontFamily: "var(--f-mono)",
@@ -2609,6 +2684,7 @@ export function Home({ account, network, indexer, delegations, pendingRewards, p
                 network={network}
                 indexer={indexer}
                 hideBalance={hideBalanceValue}
+                balanceLoading={balanceLoading}
               />
             </div>
           )}
