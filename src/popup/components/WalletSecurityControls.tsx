@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { Icon } from "../Icon";
+import { Modal } from "./Modal";
 import {
   bgGetAutoLockMinutes,
   bgGetUiOpenMode,
@@ -16,6 +17,18 @@ import {
 } from "../bg";
 
 const FALLBACK_OPTIONS: readonly number[] = [5, 15, 30, 60];
+
+/** True when changing the auto-lock from `current` to `next` is an INCREASE
+ *  (a longer, weaker-security window) that must be confirmed before applying. A
+ *  decrease or the same value never warns; a null `current` (not yet loaded)
+ *  never warns. The predicate only fires on a NEW pick, so an existing higher
+ *  value is never warned retroactively (grandfathered). Exported for unit tests. */
+export function autoLockIncreaseNeedsConfirm(
+  current: number | null,
+  next: number,
+): boolean {
+  return current !== null && next > current;
+}
 
 const subLabel: CSSProperties = {
   fontFamily: "var(--f-mono)",
@@ -60,6 +73,11 @@ export function WalletSecurityControls({
   const [autoLock, setAutoLock] = useState<number | null>(null);
   const [options, setOptions] = useState<readonly number[]>(FALLBACK_OPTIONS);
   const [savingAutoLock, setSavingAutoLock] = useState(false);
+  // The minutes value awaiting confirmation when the user picks a LONGER
+  // auto-lock (a weaker-security increase). null = no dialog open.
+  const [pendingIncreaseMinutes, setPendingIncreaseMinutes] = useState<
+    number | null
+  >(null);
 
   const [uiMode, setUiMode] = useState<UiOpenMode | null>(null);
   const [savingUiMode, setSavingUiMode] = useState(false);
@@ -83,12 +101,32 @@ export function WalletSecurityControls({
     };
   }, []);
 
-  const handlePickAutoLock = async (minutes: number) => {
-    if (savingAutoLock || minutes === autoLock) return;
+  const applyAutoLock = async (minutes: number) => {
     setSavingAutoLock(true);
     const r = await bgSetAutoLockMinutes(minutes);
     if (r.ok) setAutoLock(r.autoLockMinutes);
     setSavingAutoLock(false);
+  };
+
+  const handlePickAutoLock = (minutes: number) => {
+    if (savingAutoLock || minutes === autoLock) return;
+    // Warn + require explicit confirm when INCREASING the auto-lock window (a
+    // longer unlocked window is weaker security). A decrease (or same value)
+    // applies directly. Existing higher values are grandfathered — the dialog
+    // only gates a NEW increase action, never retroactively. Cancel reverts
+    // automatically: the active button tracks `autoLock`, which only changes on
+    // a successful apply.
+    if (autoLockIncreaseNeedsConfirm(autoLock, minutes)) {
+      setPendingIncreaseMinutes(minutes);
+      return;
+    }
+    void applyAutoLock(minutes);
+  };
+
+  const confirmIncrease = () => {
+    const m = pendingIncreaseMinutes;
+    setPendingIncreaseMinutes(null);
+    if (m !== null) void applyAutoLock(m);
   };
 
   const handlePickUiMode = async (mode: UiOpenMode) => {
@@ -241,6 +279,79 @@ export function WalletSecurityControls({
           )}
         </>
       )}
+
+      <Modal
+        open={pendingIncreaseMinutes !== null}
+        onClose={() => setPendingIncreaseMinutes(null)}
+        title="Longer auto-lock, weaker security"
+        titleAccent="var(--gold)"
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: "var(--fg-200)",
+          }}
+        >
+          <p style={{ margin: 0 }}>
+            You&apos;re about to keep your wallet unlocked for up to{" "}
+            {pendingIncreaseMinutes} minutes of inactivity.
+          </p>
+          <p style={{ margin: 0 }}>
+            During that window, anyone who can reach your device — shared,
+            borrowed, lost, or left unattended — could send funds or sign
+            transactions without your password.
+          </p>
+          <p style={{ margin: 0 }}>
+            Only use a longer time on a personal device you keep secure. If
+            anyone else might use it, a shorter auto-lock is safer.
+          </p>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 8,
+            marginTop: 4,
+          }}
+        >
+          <button
+            onClick={() => setPendingIncreaseMinutes(null)}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--fg-700)",
+              background: "rgba(255,255,255,0.04)",
+              color: "var(--fg-100)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmIncrease}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--gold)",
+              background: "var(--gold-bg)",
+              color: "var(--gold)",
+              fontFamily: "var(--f-sans)",
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Use {pendingIncreaseMinutes} minutes
+          </button>
+        </div>
+      </Modal>
     </>
   );
 
