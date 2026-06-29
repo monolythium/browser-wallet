@@ -5931,6 +5931,38 @@ export async function detectAndNotifyIncoming(
   }
 }
 
+/** C3 (2a) — fetch + merge the indexer snapshot down to the confirmed-row list
+ *  {@link detectAndNotifyIncoming} needs, reusing the SAME fetch
+ *  ({@link fetchIndexerSnapshot}) + merge ({@link mergeIndexerSnapshot}) the
+ *  open-surface `wallet-activity-get` path uses — no new query / RPC shape.
+ *  DETECTION-ONLY: it does NOT write the activity cache (the alarm's contract
+ *  is notification detection/dispatch). `prevConfirmed` keeps a delegation's
+ *  send-time cluster name sticky across the rebuild, mirroring the handler.
+ *  Returns null when the activity stream itself errored, so a partial/empty
+ *  merge can't mis-baseline the watermark — the next tick recovers. */
+async function fetchConfirmedRowsForIncoming(
+  address: string,
+  chainIdHex: string,
+  prevConfirmed: ConfirmedRow[],
+  now: number,
+): Promise<ConfirmedRow[] | null> {
+  try {
+    const fresh = await fetchIndexerSnapshot(address, chainIdHex, {
+      includeMrcAccount: false,
+    });
+    if (fresh.errors.addressActivity !== undefined) return null;
+    const activity = validateRawActivityList(fresh.addressActivity);
+    const delegation = validateRawDelegationList(fresh.delegationHistory);
+    const merged = mergeIndexerSnapshot({ activity, delegation }, now, {
+      pending: [],
+      confirmed: prevConfirmed,
+    });
+    return merged.confirmed;
+  } catch {
+    return null;
+  }
+}
+
 /** Headless background poll core. Enumerates every
  *  `mono.activity.pending.*` scope, asks the chain whether each KNOWN
  *  pending tx has reached a terminal state, and runs the SAME
@@ -6086,6 +6118,32 @@ export async function pollPendingAndNotify(): Promise<{
       // A confirmed claim is a settled record, NOT in-flight — exclude it from
       // `remaining` so it never keeps the alarm armed (kept rows still do).
       remaining += kept.length;
+      // C3 (2a) — also detect INCOMING transfers for this scope while the poll
+      // is awake (it runs whenever this addr/chain has a pending tx), so a
+      // receive that lands while every wallet surface is closed still
+      // toasts/badges. detectAndNotifyIncoming previously had a single
+      // open-surface call site. Reuse the SAME fetch+merge the open-surface
+      // snapshot uses (detection-only — no activity-cache write); the toast
+      // respects the `unlocked` gate computed once per tick above. Best-effort:
+      // any failure leaves the watermark untouched and recovers next tick.
+      const prevConfirmedForIncoming =
+        validateActivityCache(all[activityCacheKey(addressLower, chainIdHex)])
+          ?.confirmed ?? [];
+      const confirmedForIncoming = await fetchConfirmedRowsForIncoming(
+        addressLower,
+        chainIdHex,
+        prevConfirmedForIncoming,
+        now,
+      );
+      if (confirmedForIncoming !== null) {
+        await detectAndNotifyIncoming(
+          addressLower,
+          chainIdHex,
+          confirmedForIncoming,
+          surfaceOpen,
+          unlocked,
+        );
+      }
     }
     await refreshUnreadBadge({
       unlocked,

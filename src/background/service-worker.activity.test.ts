@@ -6544,6 +6544,54 @@ describe("notif-poll alarm lifecycle + back-off", () => {
       (created.at(-1)!.info as { periodInMinutes: number }).periodInMinutes,
     ).toBe(1);
   });
+
+  it("C3 (2a) — the closed-surface poll detects an INCOMING transfer and toasts", async () => {
+    // A still-pending tx keeps this scope in the poll loop; the focus is the
+    // incoming detection, not the send (which stays pending so the alarm
+    // doesn't clear). Closed surface ⇒ presence false ⇒ unread record.
+    mockIsWalletSurfaceOpen.mockResolvedValue(false);
+    storageLocal[pk(ADDR, CHAIN)] = { pending: [row()] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null; // send still pending
+    // Watermark BELOW the incoming block so the receive is genuinely new.
+    storageLocal[`mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`] = {
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 4294967295,
+      blockIds: [],
+    };
+    // The REUSED snapshot fetch surfaces one incoming native transfer.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 205,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0x" + "9".repeat(40),
+        tokenId: null,
+        amount: "7",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    fireNotifPoll();
+    await flushAsync();
+    // The "Received" record was written for this scope by the closed-surface
+    // poll (previously this only happened on an open-surface snapshot).
+    const hist = storageLocal[
+      `mono.notifications.history.${ADDR}.${CHAIN}.v1`
+    ] as { entries: Array<{ kind: string; status: string; read: boolean }> } | undefined;
+    expect(
+      hist?.entries.some((e) => e.kind === "receive" && e.status === "confirmed"),
+    ).toBe(true);
+    // Closed surface → recorded unread, and the toast fired (unlocked gate).
+    expect(mockFireOsNotification).toHaveBeenCalled();
+  });
 });
 
 // Presence-aware read on the poll path (isWalletSurfaceOpen is
