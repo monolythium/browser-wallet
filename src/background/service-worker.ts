@@ -5844,9 +5844,11 @@ export async function detectAndNotifyIncoming(
       // the top block's receive ids so a future same-block arrival is still
       // distinguishable. A negative sentinel when there's nothing yet so the
       // first-ever incoming still notifies next cycle.
-      // NOTE: the baseline anchor still scans ALL confirmed rows here (2b is
-      // fixed in the next commit); the top-block ids are receive-derived.
-      const top = maxConfirmedAnchor(confirmed);
+      // 2b — baseline over RECEIVES ONLY: a higher-anchored non-receive row
+      // (e.g. an outgoing send, incl. a self-send's out-leg) must not push the
+      // watermark past the newest genuine receive, or early receives below it
+      // would never pass the detection gate.
+      const top = maxConfirmedAnchor(receives);
       const baseline: IncomingWatermark =
         top === null
           ? { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] }

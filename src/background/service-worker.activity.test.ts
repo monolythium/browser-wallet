@@ -6419,6 +6419,41 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
     const wm = storageLocal[wmKey] as { blockIds?: string[] };
     expect(Array.isArray(wm.blockIds)).toBe(true);
   });
+
+  it("2b — a higher-anchored outgoing row does NOT baseline past an earlier receive", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    const send = (block: number) => ({
+      kind: "tx_send" as const,
+      blockHeight: block,
+      txIndex: 0,
+      logIndex: U32MAX,
+      counterparty: "0x" + "6".repeat(40),
+      amountDecimal: "9",
+    });
+    // First run (no watermark): newest row is an OUTGOING send at block 200,
+    // the newest RECEIVE is at block 100. The baseline must pin to the receive
+    // (100), not the send (200) — else a later receive below 200 is suppressed.
+    await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [send(200), nrx(100)] as never,
+      false,
+      true,
+    );
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+    // A genuine receive arrives at block 150 — newer than the receive baseline
+    // (100) but OLDER than the send (200). It must notify.
+    const added = await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [send(200), nrx(150), nrx(100)] as never,
+      false,
+      true,
+    );
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+  });
 });
 
 // The notif-poll alarm lifecycle + back-off. Drives the captured
