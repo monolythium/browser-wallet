@@ -4322,9 +4322,11 @@ describe("fired auto-lock clears the session-MEK rehydrate cap (#17)", () => {
     for (const fire of capturedAlarmListeners) fire({ name: ALARM_AUTO_LOCK });
     await new Promise((r) => setTimeout(r, 10));
 
-    // triggerAutoLock cleared the MEK AND the rehydrate cap, so a subsequent SW
+    // triggerAutoLock cleared the MEK AND both deadlines, so a subsequent SW
     // boot has nothing to rehydrate from — a fired auto-lock can NEVER silently
-    // re-unlock. (mekRehydrateExpiredV4 also fails closed on the absent key.)
+    // re-unlock. (tryRestoreFromSessionV4 also fails closed on the absent
+    // auto-lock deadline, the single restore authority post-2026-06-28; the
+    // legacy rehydrate key is still purged here as one-release cleanup.)
     expect(storageSession[SESSION_KEY_MEK_V4]).toBeUndefined();
     expect(storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE]).toBeUndefined();
     expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBeUndefined();
@@ -7897,7 +7899,7 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
 
   it("get-auto-lock-minutes returns the persisted value, not the in-memory default", async () => {
     // The persisted 60 lives only on disk; the freshly-imported SW's in-memory
-    // session.autoLockMinutes is the 15 default (the fresh-unlock-after-update
+    // session.autoLockMinutes is the 5 default (the fresh-unlock-after-update
     // state). The display must reflect the on-disk value.
     storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = 60;
     const res = (await dispatchPopup({
@@ -7905,6 +7907,18 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
       op: "get-auto-lock-minutes",
     })) as { autoLockMinutes: number };
     expect(res.autoLockMinutes).toBe(60);
+  });
+
+  it("get-auto-lock-minutes falls back to the 5-min default when unset (C2)", async () => {
+    // No persisted value on disk → readAutoLockMinutes returns
+    // AUTO_LOCK_MINUTES_DEFAULT, lowered to 5 in the 2026-06-28 overhaul. The UI
+    // reads this verbatim, so an unset wallet shows 5 (never a hardcoded 15).
+    delete storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES];
+    const res = (await dispatchPopup({
+      kind: "popup",
+      op: "get-auto-lock-minutes",
+    })) as { autoLockMinutes: number };
+    expect(res.autoLockMinutes).toBe(5);
   });
 
   it("a fresh keystore-unlock arms the lock from the persisted value (not the default)", async () => {
@@ -7918,6 +7932,6 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
     const armed = alarmCreateCalls.filter((c) => c.name === ALARM_AUTO_LOCK);
     expect(armed.length).toBeGreaterThan(0); // the lock ALWAYS arms when unlocked
     const last = armed[armed.length - 1]!.info as { delayInMinutes: number };
-    expect(last.delayInMinutes).toBe(60); // from persisted, not the 15 default
+    expect(last.delayInMinutes).toBe(60); // from persisted, not the 5 default
   });
 });

@@ -1,6 +1,6 @@
 import type { CurrencyCode } from "./iso4217";
 
-export const AUTO_LOCK_MINUTES_DEFAULT = 15;
+export const AUTO_LOCK_MINUTES_DEFAULT = 5;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
 
 /** The exact word the user types to confirm the destructive no-re-auth wipe.
