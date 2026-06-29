@@ -3,6 +3,8 @@ import { getRpcEndpoints } from "@monolythium/core-sdk";
 
 import { buildExtensionCsp, applyHardenedCsp } from "./csp.js";
 
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 describe("buildExtensionCsp — strict prod connect-src (P6-001 drift guard)", () => {
   const endpoints = getRpcEndpoints("testnet-69420");
   const csp = buildExtensionCsp(endpoints);
@@ -24,7 +26,7 @@ describe("buildExtensionCsp — strict prod connect-src (P6-001 drift guard)", (
     for (const ep of endpoints) {
       const u = new URL(ep.url);
       expect(csp).toContain(u.origin); // http://<ip>:8545
-      const host = u.hostname.replace(/\./g, "\\.");
+      const host = escapeRegExp(u.hostname);
       expect(csp).toMatch(new RegExp(`wss?://${host}:`)); // ws://<ip>:8546
     }
   });
