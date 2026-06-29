@@ -631,4 +631,54 @@ describe("notifications-store", () => {
     expect(r.flipped).toBe(false);
     expect(await getUnread()).toBe(1); // B's record still unread on disk
   });
+
+  // ── C3 — concurrent recordNotification serialization (lost-update + dup) ──
+
+  it("C3: two CONCURRENT records (distinct txHashes, one scope) BOTH land — no lost update", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    // Fired without awaiting between them → their read-modify-writes interleave.
+    // Without the per-key lock, both would read an empty history and the second
+    // write would clobber the first. The lock serializes them.
+    const [r1, r2] = await Promise.all([
+      recordNotification(baseInput({ txHash: HASH_1 })),
+      recordNotification(baseInput({ txHash: HASH_2 })),
+    ]);
+    expect(r1.added).toBe(true);
+    expect(r2.added).toBe(true);
+    const entries = await listNotifications(ADDR_A, CHAIN_A);
+    expect(entries.map((e) => e.txHash).sort()).toEqual([HASH_1, HASH_2].sort());
+  });
+
+  it("C3: two CONCURRENT records of the SAME txHash → exactly one record, no duplicate", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    const [r1, r2] = await Promise.all([
+      recordNotification(baseInput({ txHash: HASH_1 })),
+      recordNotification(baseInput({ txHash: HASH_1 })),
+    ]);
+    // Exactly one wins the dedup; the other is a no-op (no double history row,
+    // no double toast).
+    expect([r1.added, r2.added].filter(Boolean)).toHaveLength(1);
+    const entries = await listNotifications(ADDR_A, CHAIN_A);
+    expect(entries).toHaveLength(1);
+  });
+
+  it("C3: FIVE concurrent records (burst, distinct txHashes) all land", async () => {
+    const { recordNotification, listNotifications } = await import(
+      "./notifications-store.js"
+    );
+    const hashes = Array.from(
+      { length: 5 },
+      (_, i) => "0x" + i.toString(16).padStart(2, "0").repeat(32),
+    );
+    const results = await Promise.all(
+      hashes.map((txHash) => recordNotification(baseInput({ txHash }))),
+    );
+    expect(results.every((r) => r.added)).toBe(true);
+    const entries = await listNotifications(ADDR_A, CHAIN_A);
+    expect(entries.map((e) => e.txHash).sort()).toEqual([...hashes].sort());
+  });
 });

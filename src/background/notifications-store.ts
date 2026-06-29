@@ -39,6 +39,7 @@ import {
   type NotificationRecord,
   type TxOpKind,
 } from "../shared/notifications.js";
+import { withKeyLock } from "./storage-lock.js";
 
 async function readStorage(key: string): Promise<unknown> {
   return new Promise((resolve) => {
@@ -112,9 +113,17 @@ export interface RecordNotificationInput {
 export async function recordNotification(
   input: RecordNotificationInput,
 ): Promise<{ added: boolean; record: NotificationRecord | null }> {
+  const setKey = notifiedSetKey(input.addressLower, input.chainIdHex);
+  // Serialize the read-check-write on this (address,chain) notification scope so
+  // concurrent recorders (the popup snapshot path racing the headless poll
+  // alarm) can neither LOSE a record (two distinct txHashes both reading the
+  // same history then last-write-wins clobbering one) nor DOUBLE-write one (the
+  // same txHash passing the dedup check twice → duplicate row + double toast).
+  // The lock is keyed on setKey, which also guards the history key written in
+  // the same op (both written atomically below).
+  return withKeyLock(setKey, async () => {
   try {
     const id = notificationId(input.chainIdHex, input.txHash);
-    const setKey = notifiedSetKey(input.addressLower, input.chainIdHex);
     const seen = parseNotifiedSetEnvelope(await readStorage(setKey)) ?? {
       schemaVersion: 0 as const,
       ids: [],
@@ -164,6 +173,7 @@ export async function recordNotification(
   } catch {
     return { added: false, record: null };
   }
+  });
 }
 
 /** Read the incoming-detection watermark for a scope (null when unset → the
