@@ -204,6 +204,16 @@ export interface IncomingWatermark {
   blockHeight: number;
   txIndex: number;
   logIndex: number;
+  /** 2c — the incoming-transfer ids ({@link incomingTransferId}) already
+   *  accounted for within the TOP block (`blockHeight`). Native transfers all
+   *  carry txIndex 0 + logIndex u32::MAX, so the (block,txIndex,logIndex)
+   *  comparison alone can't tell two same-block receives apart; this set
+   *  records which same-block receives have already been notified/baselined so
+   *  a genuinely-new one still fires while an already-seen one does not.
+   *  ABSENT (a legacy watermark written before 2c) ⇒ the top block is treated
+   *  as fully history — matching the pre-2c strict-after behavior, so a
+   *  version upgrade never re-toasts an already-notified receive. */
+  blockIds?: string[];
 }
 
 /** Per-(address, chain) incoming-watermark storage key. */
@@ -212,6 +222,26 @@ export function incomingWatermarkKey(
   chainIdHex: string,
 ): string {
   return `mono.notifications.incoming-watermark.${addressLower}.${chainIdHex}.v1`;
+}
+
+/** 2c — dedupe id for an INCOMING (tx_receive) transfer. Native transfers all
+ *  carry txIndex 0 + logIndex u32::MAX (a sentinel), so the raw anchor is NOT
+ *  unique within a block: two same-block receives — or a self-send's in-leg vs
+ *  another receive — collide on `in:<block>.<txIndex>.<logIndex>` alone. Fold
+ *  the counterparty, the amount, and a stable within-block occurrence index
+ *  (`seq`, assigned oldest-first so a newly-arrived duplicate gets a fresh seq
+ *  and existing ids never shift) so distinct same-block receives get distinct
+ *  ids. counterparty/amount are 0x-hex / decimal — neither contains the ":"
+ *  separator, so the id is unambiguous. */
+export function incomingTransferId(
+  blockHeight: number,
+  txIndex: number,
+  logIndex: number,
+  counterparty: string | null,
+  amountDecimal: string | null,
+  seq: number,
+): string {
+  return `in:${blockHeight}.${txIndex}.${logIndex}:${counterparty ?? ""}:${amountDecimal ?? ""}:${seq}`;
 }
 
 /** True when anchor `a` is strictly newer than watermark `b`
@@ -239,10 +269,18 @@ export function parseIncomingWatermark(raw: unknown): IncomingWatermark | null {
   ) {
     return null;
   }
+  // 2c — carry the per-top-block accounted-id set when present. A malformed /
+  // absent blockIds (legacy watermark) parses without the field, which the
+  // detector reads as "top block is history" (no re-toast on upgrade).
+  const blockIds =
+    Array.isArray(r.blockIds) && r.blockIds.every((s) => typeof s === "string")
+      ? (r.blockIds as string[])
+      : undefined;
   return {
     blockHeight: r.blockHeight,
     txIndex: r.txIndex,
     logIndex: r.logIndex,
+    ...(blockIds !== undefined ? { blockIds } : {}),
   };
 }
 

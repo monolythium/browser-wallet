@@ -156,6 +156,7 @@ import {
 // and threads it ONLY to persistPendingRowBackground — never to the signer.
 import {
   anchorAfter,
+  incomingTransferId,
   isTxOpKind,
   type IncomingWatermark,
   type TxOpKind,
@@ -5776,17 +5777,23 @@ function maxConfirmedAnchor(confirmed: ConfirmedRow[]): IncomingWatermark | null
   return max;
 }
 
-/** Item 7b — incoming-transfer detection (OPEN-SURFACE / UNLOCKED-ONLY).
+/** Item 7b — incoming-transfer detection.
  *  Diffs the confirmed `tx_receive` rows (incoming LYTH the indexer already
  *  surfaced) against the per-(addr,chain) watermark; records + toasts the new
  *  ones; advances the watermark. On first run it ONLY establishes a baseline
- *  (the current newest anchor) so a fresh/returning wallet never toasts its
- *  history. Read-only + best-effort — nothing here touches signing/broadcast.
- *  Option (a): no closed/locked poll, so this runs only when an open surface
- *  drove the snapshot fetch (⇒ the wallet is unlocked, address available).
- *  Incoming entries carry no tx hash, so the dedupe id is anchor-derived
- *  (`in:<block>.<txIndex>.<logIndex>`). Returns the count recorded.
- *  Exported for unit tests (driven against the in-memory chrome stub). */
+ *  (the current newest receive anchor + its top-block ids) so a fresh/returning
+ *  wallet never toasts its history. Read-only + best-effort — nothing here
+ *  touches signing/broadcast. Runs from the open-surface activity snapshot AND
+ *  (C3 / 2a) the closed-surface alarm poll; the toast is gated by `unlocked`.
+ *
+ *  2c — incoming entries carry no tx hash and every NATIVE transfer shares the
+ *  same anchor within a block (txIndex 0 + logIndex u32::MAX), so the dedupe id
+ *  folds counterparty + amount + a stable within-block sequence index
+ *  ({@link incomingTransferId}). The watermark carries the set of accounted ids
+ *  in its top block so a same-block receive (incl. a self-send's in-leg) that is
+ *  genuinely new still fires while an already-seen one does not. Returns the
+ *  count recorded. Exported for unit tests (driven against the in-memory chrome
+ *  stub). */
 export async function detectAndNotifyIncoming(
   addressLower: string,
   chainIdHex: string,
@@ -5795,34 +5802,88 @@ export async function detectAndNotifyIncoming(
   unlocked: boolean,
 ): Promise<number> {
   try {
+    // 2c — work over RECEIVES ONLY. Native transfers all carry txIndex 0 +
+    // logIndex u32::MAX, so within a block the anchor can't tell two receives
+    // apart; the id folds counterparty + amount + a stable within-block
+    // sequence (older same-(counterparty,amount) receives counted first, so a
+    // newly-arrived duplicate gets a fresh seq and existing ids never shift).
+    const receives = confirmed.filter(
+      (r): r is Extract<ConfirmedRow, { kind: "tx_receive" }> =>
+        r.kind === "tx_receive",
+    );
+    const withIds = receives.map((r, i) => {
+      let seq = 0;
+      for (let j = i + 1; j < receives.length; j++) {
+        const o = receives[j]!;
+        if (
+          o.blockHeight === r.blockHeight &&
+          (o.counterparty ?? "") === (r.counterparty ?? "") &&
+          (o.amountDecimal ?? "") === (r.amountDecimal ?? "")
+        ) {
+          seq++;
+        }
+      }
+      return {
+        row: r,
+        id: incomingTransferId(
+          r.blockHeight,
+          r.txIndex,
+          r.logIndex,
+          r.counterparty,
+          r.amountDecimal,
+          seq,
+        ),
+      };
+    });
+    const idsInBlock = (block: number): string[] =>
+      withIds.filter((x) => x.row.blockHeight === block).map((x) => x.id);
+
     const wm = await getIncomingWatermark(addressLower, chainIdHex);
     if (wm === null) {
-      // Baseline — everything currently in view is history; no toasts. A
-      // negative sentinel when there's nothing yet so the first-ever incoming
-      // still notifies next cycle.
-      const baseline =
-        maxConfirmedAnchor(confirmed) ??
-        { blockHeight: -1, txIndex: -1, logIndex: -1 };
+      // Baseline — everything currently in view is history; no toasts. Record
+      // the top block's receive ids so a future same-block arrival is still
+      // distinguishable. A negative sentinel when there's nothing yet so the
+      // first-ever incoming still notifies next cycle.
+      // NOTE: the baseline anchor still scans ALL confirmed rows here (2b is
+      // fixed in the next commit); the top-block ids are receive-derived.
+      const top = maxConfirmedAnchor(confirmed);
+      const baseline: IncomingWatermark =
+        top === null
+          ? { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] }
+          : { ...top, blockIds: idsInBlock(top.blockHeight) };
       await setIncomingWatermark(addressLower, chainIdHex, baseline);
       return 0;
     }
     // Item 7c — the incoming-transfer TOAST is gated by its own toggle (default
     // on); the in-app record is always written regardless (§0.4).
     const incomingToastEnabled = await getIncomingEnabled();
+    // 2c — within the watermark's own block the strict anchor compare can't
+    // distinguish receives, so use the accounted-id set. A LEGACY watermark
+    // (no blockIds) predates 2c: treat its whole boundary block as history, so
+    // a version upgrade never re-toasts a receive that was already notified
+    // under the old id scheme.
+    const legacyBoundaryIsHistory = wm.blockIds === undefined;
+    const accounted = new Set(wm.blockIds ?? []);
     let added = 0;
-    let maxSeen = wm;
-    for (const r of confirmed) {
-      if (r.kind !== "tx_receive") continue;
-      if (!anchorAfter(r, wm)) continue;
+    for (const { row, id } of withIds) {
+      let isNew: boolean;
+      if (row.blockHeight > wm.blockHeight) {
+        isNew = true;
+      } else if (row.blockHeight === wm.blockHeight) {
+        isNew = legacyBoundaryIsHistory ? false : !accounted.has(id);
+      } else {
+        isNew = false;
+      }
+      if (!isNew) continue;
       const result = await recordNotification({
         addressLower,
         chainIdHex,
-        txHash: `in:${r.blockHeight}.${r.txIndex}.${r.logIndex}`,
+        txHash: id,
         status: "confirmed",
-        blockNumber: r.blockHeight,
+        blockNumber: row.blockHeight,
         kind: "receive",
-        amountDecimal: r.amountDecimal ?? "0",
-        counterparty: r.counterparty ?? "",
+        amountDecimal: row.amountDecimal ?? "0",
+        counterparty: row.counterparty ?? "",
         read: surfaceOpen,
       });
       if (result.added && result.record !== null) {
@@ -5831,15 +5892,36 @@ export async function detectAndNotifyIncoming(
           await fireOsNotification(result.record, { unlocked });
         }
       }
-      const anchor = {
-        blockHeight: r.blockHeight,
-        txIndex: r.txIndex,
-        logIndex: r.logIndex,
-      };
-      if (anchorAfter(anchor, maxSeen)) maxSeen = anchor;
     }
-    if (anchorAfter(maxSeen, wm)) {
-      await setIncomingWatermark(addressLower, chainIdHex, maxSeen);
+    // Advance / migrate the watermark to the newest receive block in view,
+    // accounting for every receive id in that block (those just notified + any
+    // already-accounted from a prior cycle on the SAME block). A legacy
+    // watermark on the same top block is upgraded in place to carry blockIds
+    // (its boundary-block receives were treated as history above → no toast).
+    // Receives in blocks below the new top fall out of scope next cycle. Never
+    // regress below the existing watermark.
+    const newTop = maxConfirmedAnchor(receives);
+    if (newTop !== null && newTop.blockHeight >= wm.blockHeight) {
+      const nextIds = new Set(idsInBlock(newTop.blockHeight));
+      if (newTop.blockHeight === wm.blockHeight) {
+        for (const id of accounted) nextIds.add(id);
+      }
+      const next: IncomingWatermark = {
+        blockHeight: newTop.blockHeight,
+        txIndex: newTop.txIndex,
+        logIndex: newTop.logIndex,
+        blockIds: [...nextIds],
+      };
+      const changed =
+        next.blockHeight !== wm.blockHeight ||
+        next.txIndex !== wm.txIndex ||
+        next.logIndex !== wm.logIndex ||
+        wm.blockIds === undefined ||
+        next.blockIds!.length !== wm.blockIds.length ||
+        next.blockIds!.some((id) => !accounted.has(id));
+      if (changed) {
+        await setIncomingWatermark(addressLower, chainIdHex, next);
+      }
     }
     return added;
   } catch {

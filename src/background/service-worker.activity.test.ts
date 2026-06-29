@@ -6320,6 +6320,105 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
     // …but the toast is suppressed by the toggle.
     expect(mockFireOsNotification).not.toHaveBeenCalled();
   });
+
+  // 2c — native transfers all share (block, 0, u32::MAX). The in: id folds
+  // counterparty + amount + a within-block sequence so distinct same-block
+  // receives each get a unique id; the watermark's per-block id-set stops an
+  // already-notified one from re-firing. logIndex sentinel mirrors live shape.
+  const U32MAX = 4294967295;
+  const nrx = (block: number, over: Record<string, unknown> = {}) => ({
+    kind: "tx_receive" as const,
+    blockHeight: block,
+    txIndex: 0,
+    logIndex: U32MAX,
+    counterparty: "0x" + "5".repeat(40),
+    amountDecimal: "1",
+    ...over,
+  });
+
+  it("2c — multiple receives in the SAME block all notify (distinct ids)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    const a = nrx(105, { counterparty: "0x" + "a".repeat(40), amountDecimal: "2" });
+    const b = nrx(105, { counterparty: "0x" + "b".repeat(40), amountDecimal: "3" });
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [a, b] as never, false, true);
+    expect(added).toBe(2);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(2);
+    // Both same-block ids are now accounted for in the watermark's top block.
+    const wm = storageLocal[wmKey] as { blockHeight: number; blockIds: string[] };
+    expect(wm.blockHeight).toBe(105);
+    expect(wm.blockIds).toHaveLength(2);
+  });
+
+  it("2c — a self-send's in-leg notifies even with a same-anchor out row present", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    const self = "0x" + "7".repeat(40);
+    const inLeg = nrx(200, { counterparty: self, amountDecimal: "5" });
+    // The out-leg is a tx_send sharing the SAME anchor as the in-leg. It is
+    // handled by the tracked-pending path (→ "Sent"), NOT here; this asserts it
+    // does not suppress the in-leg's "Received".
+    const outLeg = {
+      kind: "tx_send" as const,
+      blockHeight: 200,
+      txIndex: 0,
+      logIndex: U32MAX,
+      counterparty: self,
+      amountDecimal: "5",
+    };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [outLeg, inLeg] as never, false, true);
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: Array<{ kind: string }> };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
+  });
+
+  it("2c — sequential receives across blocks each notify", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    await detectAndNotifyIncoming(ADDR, CHAIN, [nrx(101)] as never, false, true);
+    await detectAndNotifyIncoming(ADDR, CHAIN, [nrx(102), nrx(101)] as never, false, true);
+    await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [nrx(103), nrx(102), nrx(101)] as never,
+      false,
+      true,
+    );
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(3);
+  });
+
+  it("2c — an already-notified same-block receive does NOT re-notify on refresh", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    const a = nrx(105, { counterparty: "0x" + "a".repeat(40), amountDecimal: "2" });
+    const b = nrx(105, { counterparty: "0x" + "b".repeat(40), amountDecimal: "3" });
+    await detectAndNotifyIncoming(ADDR, CHAIN, [a, b] as never, false, true);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2);
+    // A NEW same-block receive c lands; a and b are unchanged and must not refire.
+    const c = nrx(105, { counterparty: "0x" + "c".repeat(40), amountDecimal: "4" });
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [c, a, b] as never, false, true);
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(3);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(3);
+  });
+
+  it("2c — a legacy watermark (no blockIds) treats its boundary block as history (no upgrade re-toast)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    // Legacy shape: no blockIds. The boundary-block receive was already
+    // notified pre-2c; it must NOT re-fire after the id-scheme change.
+    storageLocal[wmKey] = { blockHeight: 105, txIndex: 0, logIndex: U32MAX };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [nrx(105)] as never, false, true);
+    expect(added).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    // The watermark is upgraded in place to carry blockIds going forward.
+    const wm = storageLocal[wmKey] as { blockIds?: string[] };
+    expect(Array.isArray(wm.blockIds)).toBe(true);
+  });
 });
 
 // The notif-poll alarm lifecycle + back-off. Drives the captured
