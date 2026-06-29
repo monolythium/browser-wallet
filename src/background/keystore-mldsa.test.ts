@@ -1847,28 +1847,34 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
   });
 
   const MEK_KEY = "mono.session.mek.v4";
-  const DEADLINE_KEY = "mono.session.mek.rehydrate.deadline";
+  // 2026-06-28 auto-lock overhaul: the configured auto-lock deadline is now the
+  // single restore authority (SESSION_KEY_AUTO_LOCK_DEADLINE), replacing the old
+  // independent 5-min rehydrate cap. In production the SW's resetAutoLock writes
+  // this; these keystore unit tests seed it directly.
+  const AUTOLOCK_KEY = "autoLockDeadline";
 
   it(
-    "rehydrates within the cap and refuses + wipes the session MEK once past it",
+    "rehydrates within the auto-lock window and refuses + wipes the session MEK once past it",
     async () => {
       const ks1 = await import("./keystore-mldsa.js");
       await ks1.createVaultFromNewMnemonic("rehydrate-cap-password");
-      // MEK + a FUTURE rehydrate deadline are mirrored to session.
+      // The MEK is mirrored to session; the auto-lock deadline (the single
+      // restore authority, written by the SW's resetAutoLock in production) is
+      // seeded here in the FUTURE to model an unlocked, within-window session.
       expect(typeof session[MEK_KEY]).toBe("string");
-      expect(typeof session[DEADLINE_KEY]).toBe("number");
-      expect(session[DEADLINE_KEY] as number).toBeGreaterThan(Date.now());
+      session[AUTOLOCK_KEY] = Date.now() + 60_000;
 
       // Simulate an SW restart: fresh module state (locked), session intact.
       vi.resetModules();
       const ks2 = await import("./keystore-mldsa.js");
       expect(ks2.isUnlockedV4()).toBe(false);
-      // Within the cap → silent rehydrate succeeds.
+      // Within the window → silent rehydrate succeeds.
       expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(true);
       expect(ks2.isUnlockedV4()).toBe(true);
 
-      // Expire the cap, restart again → restore refused + session MEK wiped.
-      session[DEADLINE_KEY] = Date.now() - 1;
+      // Expire the auto-lock deadline, restart again → restore refused + session
+      // MEK wiped (no restore past the deadline).
+      session[AUTOLOCK_KEY] = Date.now() - 1;
       vi.resetModules();
       const ks3 = await import("./keystore-mldsa.js");
       expect((await ks3.tryRestoreFromSessionV4()).ok).toBe(false);
@@ -1879,12 +1885,14 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
   );
 
   it(
-    "treats an absent rehydrate deadline as expired (fail closed)",
+    "treats an absent auto-lock deadline as expired (fail closed)",
     async () => {
       const ks1 = await import("./keystore-mldsa.js");
       await ks1.createVaultFromNewMnemonic("rehydrate-absent-password");
-      // Drop ONLY the deadline, keep the MEK (a pre-upgrade session shape).
-      delete session[DEADLINE_KEY];
+      // MEK present, but NO auto-lock deadline (the single restore authority) →
+      // fail-closed: refuse + wipe. Never restore on a missing bound.
+      expect(typeof session[MEK_KEY]).toBe("string");
+      expect(session[AUTOLOCK_KEY]).toBeUndefined();
       vi.resetModules();
       const ks2 = await import("./keystore-mldsa.js");
       expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(false);
@@ -1894,22 +1902,21 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
   );
 
   it(
-    "a fired lock clears the session MEK + rehydrate deadline; a subsequent restore refuses (#17)",
+    "a fired lock clears the session MEK; a subsequent restore refuses (#17)",
     async () => {
       const ks1 = await import("./keystore-mldsa.js");
       await ks1.createVaultFromNewMnemonic("fired-lock-password");
-      // Unlocked → MEK + a future rehydrate deadline are mirrored to session.
+      // Unlocked, within-window session.
       expect(typeof session[MEK_KEY]).toBe("string");
-      expect(typeof session[DEADLINE_KEY]).toBe("number");
+      session[AUTOLOCK_KEY] = Date.now() + 60_000;
 
       // A fired auto-lock invokes lockV4() (its keystore step), which clears the
-      // session MEK AND the rehydrate deadline via clearMekFromSessionV4 — so a
-      // within-cap restore after a fired auto-lock has nothing to re-unlock from.
+      // session MEK via clearMekFromSessionV4 — so a within-window restore after
+      // a fired auto-lock has no MEK to re-unlock from.
       ks1.lockV4();
       await new Promise((r) => setTimeout(r, 10)); // fire-and-forget session clear
 
       expect(session[MEK_KEY]).toBeUndefined();
-      expect(session[DEADLINE_KEY]).toBeUndefined();
 
       // A subsequent SW boot refuses the password-less restore (fail closed).
       vi.resetModules();
