@@ -159,8 +159,13 @@ import {
   incomingTransferId,
   isTxOpKind,
   type IncomingWatermark,
+  type NotificationRecord,
   type TxOpKind,
 } from "../shared/notifications.js";
+// Per-key serialization for the chrome.storage.local read-modify-write paths
+// (pending store / local-claims / sent-addresses / notification history) so a
+// burst of concurrent writers can't last-write-wins clobber each other.
+import { withKeyLock } from "./storage-lock.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
   DAILY_CAP_WINDOW_MS,
@@ -5403,12 +5408,6 @@ async function persistPendingRowBackground(args: {
     const amountDecimal = lythoshiHexToLythDecimal(args.valueWeiHex);
     const addrLower = args.address.toLowerCase();
     const pendingKey = activityPendingKey(addrLower, args.chainIdHex);
-    const stored = await new Promise<unknown>((resolve) => {
-      chrome.storage.local.get([pendingKey], (res) =>
-        resolve(res?.[pendingKey]),
-      );
-    });
-    const prev = validatePendingActivityCache(stored)?.pending ?? [];
     // A reward claim is a durable local record (the indexer never emits a claim
     // event): mark it source:"local-claim" so it is TTL-exempt + routes render
     // to claimedAmount, and mirror it into the localclaims store below.
@@ -5435,32 +5434,49 @@ async function persistPendingRowBackground(args: {
         : {}),
       ...(args.nonce !== undefined ? { nonce: args.nonce } : {}),
     };
-    // Transition the prior rows (no fresh nonce read at broadcast → null →
-    // time-only states + preserve any prior `dropped`, never a 5-min vanish).
-    const evicted = transitionPending(prev, null, now);
-    const next = [row, ...evicted];
-    await new Promise<void>((resolve) => {
-      chrome.storage.local.set(
-        { [pendingKey]: { pending: next } },
-        () => resolve(),
-      );
+    // Serialize the read-modify-write on the pending key so a burst of
+    // concurrent persists (e.g. 5 txs back-to-back) can't last-write-wins
+    // clobber each other: RE-READ the freshest list INSIDE the lock, then
+    // prepend. The eth_blockNumber fetch + row build stay OUTSIDE the lock (no
+    // network I/O under the lock). Still fire-and-forget at the call site —
+    // submit never awaits this, so submit latency / the signing path are
+    // unaffected.
+    await withKeyLock(pendingKey, async () => {
+      const stored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([pendingKey], (res) =>
+          resolve(res?.[pendingKey]),
+        );
+      });
+      const prev = validatePendingActivityCache(stored)?.pending ?? [];
+      // Transition the prior rows (no fresh nonce read at broadcast → null →
+      // time-only states + preserve any prior `dropped`, never a 5-min vanish).
+      const next = [row, ...transitionPending(prev, null, now)];
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [pendingKey]: { pending: next } },
+          () => resolve(),
+        );
+      });
     });
     // Mirror the claim into the durable local-claims store (the source of truth
     // that survives a lost pending cache; re-injected each poll by
     // applyLocalClaims). Dedup by txHash (intra-store identity); cap to newest.
     if (isClaim) {
       const claimsKey = activityLocalClaimsKey(addrLower, args.chainIdHex);
-      const storedClaims = await new Promise<unknown>((resolve) => {
-        chrome.storage.local.get([claimsKey], (res) => resolve(res?.[claimsKey]));
-      });
-      const prevClaims = validateLocalClaimsCache(storedClaims)?.claims ?? [];
-      const deduped = prevClaims.filter((c) => c.txHash !== row.txHash);
-      const nextClaims = [row, ...deduped].slice(0, LOCAL_CLAIMS_CAP);
-      await new Promise<void>((resolve) => {
-        chrome.storage.local.set(
-          { [claimsKey]: { claims: nextClaims } },
-          () => resolve(),
-        );
+      // Same lost-update hazard as the pending store — serialize + re-read.
+      await withKeyLock(claimsKey, async () => {
+        const storedClaims = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([claimsKey], (res) => resolve(res?.[claimsKey]));
+        });
+        const prevClaims = validateLocalClaimsCache(storedClaims)?.claims ?? [];
+        const deduped = prevClaims.filter((c) => c.txHash !== row.txHash);
+        const nextClaims = [row, ...deduped].slice(0, LOCAL_CLAIMS_CAP);
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set(
+            { [claimsKey]: { claims: nextClaims } },
+            () => resolve(),
+          );
+        });
       });
     }
     // A pending row now exists → arm the headless poll so this tx's
@@ -5484,19 +5500,24 @@ async function persistPendingRowBackground(args: {
         : null;
     if (tag) {
       const sentKey = sentAddressesKey(addrLower, args.chainIdHex);
-      const sentStored = await new Promise<unknown>((resolve) => {
-        chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
-      });
-      const nextEntries = addSentEntry(
-        parseSentEntries(sentStored),
-        recipientLower,
-        tag,
-      );
-      await new Promise<void>((resolve) => {
-        chrome.storage.local.set(
-          { [sentKey]: { v: 1, entries: nextEntries } },
-          () => resolve(),
+      const sentTag = tag;
+      // Concurrent persists to the same scope each append a sent-addr entry —
+      // serialize + re-read so none is clobbered.
+      await withKeyLock(sentKey, async () => {
+        const sentStored = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
+        });
+        const nextEntries = addSentEntry(
+          parseSentEntries(sentStored),
+          recipientLower,
+          sentTag,
         );
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set(
+            { [sentKey]: { v: 1, entries: nextEntries } },
+            () => resolve(),
+          );
+        });
       });
     }
   } catch {
@@ -6104,17 +6125,10 @@ export async function pollPendingAndNotify(): Promise<{
               : r;
           });
       }
-      const writtenChanged =
-        writtenPending.length !== pending.length ||
-        writtenPending.some((row, i) => row !== pending[i]);
-      if (writtenChanged) {
-        await new Promise<void>((resolve) => {
-          chrome.storage.local.set(
-            { [key]: { pending: writtenPending } },
-            () => resolve(),
-          );
-        });
-      }
+      // Serialize + carry over rows a concurrent persist added after the bulk
+      // get(null) read at the top of this tick (the widest read-write window),
+      // so the per-scope writeback can't clobber a freshly-broadcast row.
+      await commitPendingWithCarryOver(key, pending, writtenPending);
       // A confirmed claim is a settled record, NOT in-flight — exclude it from
       // `remaining` so it never keeps the alarm armed (kept rows still do).
       remaining += kept.length;
@@ -6176,6 +6190,51 @@ async function writeActivityStorage(
       writes[pendingKey] = { pending: nextPending };
     }
     chrome.storage.local.set(writes, () => resolve());
+  });
+}
+
+/** Serialize a pending-key write under the per-key lock with CARRY-OVER: re-read
+ *  the freshest stored pending list INSIDE the lock and preserve any row a
+ *  concurrent writer (e.g. a burst persist) added after `prevRows` was read —
+ *  i.e. rows whose txHash is in neither `prevRows` (so we never resurrect a row
+ *  this snapshot intentionally dropped) nor `computedRows` (no duplicate). New
+ *  rows go on top (matching the persist prepend). Writes only when the merged
+ *  list differs from the freshest stored list (no spurious onChanged). Returns
+ *  the merged list intended for storage. Used by the pending-only writers
+ *  (the fast-path + indexer-outage activity-get branches); the main merge path
+ *  inlines the same carry-over so it can also write the cache key in one set. */
+async function commitPendingWithCarryOver(
+  pendingKey: string,
+  prevRows: PendingTxRow[],
+  computedRows: PendingTxRow[],
+): Promise<PendingTxRow[]> {
+  return withKeyLock(pendingKey, async () => {
+    const freshest =
+      validatePendingActivityCache(
+        await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([pendingKey], (res) =>
+            resolve(res?.[pendingKey]),
+          );
+        }),
+      )?.pending ?? [];
+    const prevHashes = new Set(prevRows.map((r) => r.txHash));
+    const resultHashes = new Set(computedRows.map((r) => r.txHash));
+    const carried = freshest.filter(
+      (r) => !prevHashes.has(r.txHash) && !resultHashes.has(r.txHash),
+    );
+    const merged = [...carried, ...computedRows];
+    const changed =
+      merged.length !== freshest.length ||
+      merged.some((row, i) => row !== freshest[i]);
+    if (changed) {
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [pendingKey]: { pending: merged } },
+          () => resolve(),
+        );
+      });
+    }
+    return merged;
   });
 }
 
@@ -8766,29 +8825,34 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing address, chainIdHex, or txHash" };
       }
       const dismissKey = activityPendingKey(dp.address.toLowerCase(), dp.chainIdHex);
-      const dismissStored = await new Promise<unknown>((resolve) => {
-        chrome.storage.local.get([dismissKey], (res) =>
-          resolve(res?.[dismissKey]),
-        );
-      });
-      const dismissPrev =
-        validatePendingActivityCache(dismissStored)?.pending ?? [];
-      const dismissNext = dismissPrev.filter(
-        (r) =>
-          !(
-            r.txHash === dp.txHash &&
-            r.source !== "local-claim" &&
-            (r.lifecycle === "dropped" || r.lifecycle === "expired")
-          ),
-      );
-      if (dismissNext.length !== dismissPrev.length) {
-        await new Promise<void>((resolve) => {
-          chrome.storage.local.set(
-            { [dismissKey]: { pending: dismissNext } },
-            () => resolve(),
+      const dismissTxHash = dp.txHash;
+      // Serialize + re-read so a dismiss can't clobber a concurrent persist /
+      // snapshot writeback on the same pending key.
+      await withKeyLock(dismissKey, async () => {
+        const dismissStored = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([dismissKey], (res) =>
+            resolve(res?.[dismissKey]),
           );
         });
-      }
+        const dismissPrev =
+          validatePendingActivityCache(dismissStored)?.pending ?? [];
+        const dismissNext = dismissPrev.filter(
+          (r) =>
+            !(
+              r.txHash === dismissTxHash &&
+              r.source !== "local-claim" &&
+              (r.lifecycle === "dropped" || r.lifecycle === "expired")
+            ),
+        );
+        if (dismissNext.length !== dismissPrev.length) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [dismissKey]: { pending: dismissNext } },
+              () => resolve(),
+            );
+          });
+        }
+      });
       return { ok: true };
     }
     case "wallet-activity-get": {
@@ -8884,18 +8948,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // still fires). Prevents a stale row matching a re-injected claim.
           prevCache.confirmed,
         );
-        if (
-          pending.length !== prevPending.length ||
-          pending.some((row, i) => row !== prevPending[i])
-        ) {
-          await new Promise<void>((resolve) => {
-            chrome.storage.local.set(
-              { [pendingKey]: { pending } },
-              () => resolve(),
-            );
-          });
-        }
-        return { ok: true, cache: prevCache, pending, errors: {} };
+        const committed = await commitPendingWithCarryOver(
+          pendingKey,
+          prevPending,
+          pending,
+        );
+        return { ok: true, cache: prevCache, pending: committed, errors: {} };
       }
       // Receipt classification is indexer-independent — it asks the chain
       // directly (lyth_txStatus + eth_getTransactionReceipt on the pending
@@ -8954,18 +9012,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // backstop no-ops (the bridged receipt anchor still retires).
           prevCache.confirmed,
         );
-        if (
-          pending.length !== prevPending.length ||
-          pending.some((row, i) => row !== prevPending[i])
-        ) {
-          await new Promise<void>((resolve) => {
-            chrome.storage.local.set(
-              { [pendingKey]: { pending } },
-              () => resolve(),
-            );
-          });
-        }
-        return { ok: true, cache: prevCache, pending, errors: fresh.errors };
+        const committed = await commitPendingWithCarryOver(
+          pendingKey,
+          prevPending,
+          pending,
+        );
+        return { ok: true, cache: prevCache, pending: committed, errors: fresh.errors };
       }
       const activity = validateRawActivityList(fresh.addressActivity);
       const delegation = validateRawDelegationList(fresh.delegationHistory);
@@ -9025,176 +9077,219 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // already-retired prior claim can't vanish a brand-new un-anchored claim.
         prevCache?.confirmed ?? [],
       );
-      await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
-      // Keep the durable store in sync with the merged survivors (anchored copies
-      // + cross-stream-retired claims dropped). Only write when it changed.
-      const liveClaims = nextPending.filter((p) => p.source === "local-claim");
-      const claimsChanged =
-        liveClaims.length !== prevClaims.length ||
-        liveClaims.some((c, i) => c !== prevClaims[i]);
-      if (claimsChanged) {
-        await new Promise<void>((resolve) => {
-          chrome.storage.local.set(
-            { [localClaimsKey]: { claims: liveClaims } },
-            () => resolve(),
+      // C4 — record the self-sent terminal notifications DURABLY *before* the
+      // pending rows are dropped, so an MV3 SW teardown between the snapshot
+      // response and the (still-deferred) toast can't lose them. The OS toast +
+      // incoming-detection + badge stay deferred below for snapshot latency;
+      // only the durable in-app record is moved earlier. recordNotification
+      // dedups by chainIdHex:txHash — NEVER the (block,txIndex) anchor (the
+      // indexer hardcodes txIndex=0, so same-block delegations would collide) —
+      // so the deferred path never double-records, and a row whose detached
+      // toast was lost still has its durable record (+ re-fires via the alarm).
+      // GUARDED: a record failure must NEVER block the pending-row drop below.
+      const notifAddressLower = p.address.toLowerCase();
+      const notifChainIdHex = p.chainIdHex;
+      // reconciledHashes (the indexer anchor survivors) is computed in the main
+      // body above; the complement = the rows the indexer matched THIS tick.
+      const heuristicallyMatched = prevPending.filter(
+        (r) => !reconciledHashes.has(r.txHash),
+      );
+      // Presence + lock state at observe-time (gate the record's read flag + the
+      // deferred toast). A surface open now ⇒ record read (no badge bump).
+      const notifSurfaceOpen = await isWalletSurfaceOpen();
+      const notifUnlocked = isUnlockedV4();
+      const addedRecords: NotificationRecord[] = [];
+      try {
+        for (const row of heuristicallyMatched) {
+          // The matched confirmed row's blockHeight is the most precise block we
+          // have; null when no exact match is found (defensive — should be rare).
+          const match = nextCache.confirmed.find(
+            (c) =>
+              c.kind === "tx_send" &&
+              c.counterparty != null &&
+              c.counterparty.toLowerCase() === row.to.toLowerCase() &&
+              c.amountDecimal === row.amountDecimal,
           );
-        });
+          // Heuristic match = a confirmed self-paid tx_send → capture the
+          // native-receipt LYTH fee (best-effort).
+          const feeLythoshi = await fetchConfirmedFeeLythoshi(row.txHash);
+          const result = await recordNotification({
+            addressLower: notifAddressLower,
+            chainIdHex: notifChainIdHex,
+            txHash: row.txHash,
+            status: "confirmed",
+            blockNumber: match ? match.blockHeight : null,
+            // Broadcast-time tag if present; else coarse "send" (the heuristic
+            // match path is by definition a tx_send).
+            kind: row.opKind ?? "send",
+            amountDecimal: row.amountDecimal,
+            counterparty: row.to,
+            read: notifSurfaceOpen,
+            ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+            ...(row.clusterId !== undefined ? { clusterId: row.clusterId } : {}),
+            ...(row.clusterName !== undefined
+              ? { clusterName: row.clusterName }
+              : {}),
+            ...(row.toClusterId !== undefined ? { toClusterId: row.toClusterId } : {}),
+            ...(row.toClusterName !== undefined
+              ? { toClusterName: row.toClusterName }
+              : {}),
+            // Parity with the by-hash loop: a delegation reaching the
+            // notification via THIS heuristic path must still carry the weight %
+            // (delegate/redelegate) and the claim amount, else the body builder
+            // shows the cluster alone. The heuristic loop runs first and
+            // recordNotification dedups by txHash, so omitting these here would
+            // silently strip them.
+            ...(row.delegationWeightBps !== undefined
+              ? { delegationWeightBps: row.delegationWeightBps }
+              : {}),
+            ...(row.claimedAmount != null
+              ? { claimedAmount: row.claimedAmount }
+              : {}),
+          });
+          if (result.added && result.record !== null) {
+            addedRecords.push(result.record);
+          }
+        }
+        for (const t of terminalByHash) {
+          // Capture the LYTH fee for confirmed self-paid txs (native receipt);
+          // best-effort — failed/zero-fee leaves it unset.
+          const feeLythoshi =
+            t.status === "confirmed"
+              ? await fetchConfirmedFeeLythoshi(t.row.txHash)
+              : undefined;
+          const result = await recordNotification({
+            addressLower: notifAddressLower,
+            chainIdHex: notifChainIdHex,
+            txHash: t.row.txHash,
+            status: t.status,
+            blockNumber: t.blockNumber,
+            // Broadcast-time tag; else coarse "contract_call" (the status-RPC
+            // path catches every non-tx_send tracked tx).
+            kind: t.row.opKind ?? "contract_call",
+            amountDecimal: t.row.amountDecimal,
+            counterparty: t.row.to,
+            read: notifSurfaceOpen,
+            ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+            ...(t.row.clusterId !== undefined
+              ? { clusterId: t.row.clusterId }
+              : {}),
+            ...(t.row.clusterName !== undefined
+              ? { clusterName: t.row.clusterName }
+              : {}),
+            ...(t.row.toClusterId !== undefined
+              ? { toClusterId: t.row.toClusterId }
+              : {}),
+            ...(t.row.toClusterName !== undefined
+              ? { toClusterName: t.row.toClusterName }
+              : {}),
+            ...(t.claimedAmountLythoshi != null
+              ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
+              : {}),
+            ...(t.row.delegationWeightBps !== undefined
+              ? { delegationWeightBps: t.row.delegationWeightBps }
+              : {}),
+          });
+          if (result.added && result.record !== null) {
+            addedRecords.push(result.record);
+          }
+        }
+      } catch {
+        // GUARD: a notification-record failure must NOT block the drop below.
       }
-      // Notifications hook — post-write microtask. The hook records
-      // one notification per row that just reached a TERMINAL state (the
-      // confirmed/failed bit from the indexer reconcile or the receipt-RPC
-      // classifier above) and explicitly DOES NOT record TTL-evicted rows.
-      // Scheduled as a microtask so the snapshot response returns before any
-      // notification I/O — a slow/failed notification write must never delay
-      // or break activity persistence. See plan §P6.
-      {
-        // reconciledHashes is computed once in the main body above (the indexer
-        // anchor survivors); reuse it so the heuristic notification set stays
-        // exactly "rows the indexer matched" — unchanged by the receipt reorder.
-        const heuristicallyMatched = prevPending.filter(
-          (r) => !reconciledHashes.has(r.txHash),
+      // Commit the pending list (serialized + carry-over) — this is the drop of
+      // the now-notified terminal rows. Re-read the freshest list inside the
+      // lock and preserve any row a concurrent persist added during the fetch.
+      const committedPending = await withKeyLock(pendingKey, async () => {
+        const freshest =
+          validatePendingActivityCache(
+            await new Promise<unknown>((resolve) => {
+              chrome.storage.local.get([pendingKey], (res) =>
+                resolve(res?.[pendingKey]),
+              );
+            }),
+          )?.pending ?? [];
+        const prevHashes = new Set(prevPending.map((r) => r.txHash));
+        const resultHashes = new Set(nextPending.map((r) => r.txHash));
+        const carried = freshest.filter(
+          (r) => !prevHashes.has(r.txHash) && !resultHashes.has(r.txHash),
         );
-        const addressLower = p.address.toLowerCase();
-        const chainIdHex = p.chainIdHex;
+        const merged = [...carried, ...nextPending];
+        await writeActivityStorage(cacheKey, pendingKey, nextCache, freshest, merged);
+        return merged;
+      });
+      // Keep the durable local-claims store in sync (serialized + carry-over):
+      // re-read inside the lock + preserve a claim a concurrent persist added
+      // after our prevClaims read, so the snapshot's liveClaims write can't
+      // clobber it.
+      const liveClaims = committedPending.filter((p) => p.source === "local-claim");
+      await withKeyLock(localClaimsKey, async () => {
+        const freshestClaims =
+          validateLocalClaimsCache(
+            await new Promise<unknown>((resolve) => {
+              chrome.storage.local.get([localClaimsKey], (res) =>
+                resolve(res?.[localClaimsKey]),
+              );
+            }),
+          )?.claims ?? [];
+        const prevClaimHashes = new Set(prevClaims.map((c) => c.txHash));
+        const liveHashes = new Set(liveClaims.map((c) => c.txHash));
+        const carriedClaims = freshestClaims.filter(
+          (c) => !prevClaimHashes.has(c.txHash) && !liveHashes.has(c.txHash),
+        );
+        const nextClaimsList = [...carriedClaims, ...liveClaims].slice(
+          0,
+          LOCAL_CLAIMS_CAP,
+        );
+        const changed =
+          nextClaimsList.length !== freshestClaims.length ||
+          nextClaimsList.some((c, i) => c !== freshestClaims[i]);
+        if (changed) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [localClaimsKey]: { claims: nextClaimsList } },
+              () => resolve(),
+            );
+          });
+        }
+      });
+      // Deferred (post-response) OS toast + incoming-transfer detection + badge.
+      // The durable records were already written inline above; here we only FIRE
+      // the toasts for the freshly-added records and run the open-surface
+      // incoming detection — kept off the response path because toast I/O is
+      // slow. Read-only; nothing here touches the signer.
+      {
+        const recordsToToast = addedRecords;
+        const detectAddressLower = notifAddressLower;
+        const detectChainIdHex = notifChainIdHex;
+        const confirmedForIncoming = nextCache.confirmed;
+        const toastSurfaceOpen = notifSurfaceOpen;
+        const toastUnlocked = notifUnlocked;
         queueMicrotask(() => {
           void (async () => {
             try {
-              // C3 — presence at observe-time, computed ONCE per batch and
-              // threaded into both record loops. A surface open now ⇒ record
-              // read (no badge bump); closed ⇒ accumulate unread. Defaults
-              // false on any error. (On the popup path a surface is typically
-              // open, so this is usually read:true; the poll path supplies
-              // the closed→unread case.)
-              const surfaceOpen = await isWalletSurfaceOpen();
-              // Lock state for the toast/badge gates (orthogonal to presence).
-              const unlocked = isUnlockedV4();
-              let anyAdded = false;
-              for (const row of heuristicallyMatched) {
-                // The matched confirmed row's blockHeight is the most
-                // precise block we have. Falls back to null when no exact
-                // match is found (defensive — should be rare).
-                const match = nextCache.confirmed.find(
-                  (c) =>
-                    c.kind === "tx_send" &&
-                    c.counterparty != null &&
-                    c.counterparty.toLowerCase() === row.to.toLowerCase() &&
-                    c.amountDecimal === row.amountDecimal,
-                );
-                // Heuristic match = a confirmed self-paid tx_send → capture
-                // the native-receipt LYTH fee (best-effort).
-                const feeLythoshi = await fetchConfirmedFeeLythoshi(row.txHash);
-                const result = await recordNotification({
-                  addressLower,
-                  chainIdHex,
-                  txHash: row.txHash,
-                  status: "confirmed",
-                  blockNumber: match ? match.blockHeight : null,
-                  // Prefer the broadcast-time tag if the
-                  // popup supplied one; otherwise fall back to the
-                  // coarse "send" (Phase-1 behavior — the heuristic
-                  // match path is by definition a tx_send).
-                  kind: row.opKind ?? "send",
-                  amountDecimal: row.amountDecimal,
-                  counterparty: row.to,
-                  read: surfaceOpen,
-                  ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
-                  ...(row.clusterId !== undefined ? { clusterId: row.clusterId } : {}),
-                  ...(row.clusterName !== undefined
-                    ? { clusterName: row.clusterName }
-                    : {}),
-                  ...(row.toClusterId !== undefined ? { toClusterId: row.toClusterId } : {}),
-                  ...(row.toClusterName !== undefined
-                    ? { toClusterName: row.toClusterName }
-                    : {}),
-                  // Parity with the by-hash loop (9014-9016): a delegation that
-                  // reaches the notification via THIS heuristic path must still
-                  // carry the weight % (delegate/redelegate) and the claim amount,
-                  // else the body builder shows the cluster alone. The heuristic
-                  // loop runs first and recordNotification dedups by txHash, so
-                  // omitting these here silently strips them from the toast.
-                  ...(row.delegationWeightBps !== undefined
-                    ? { delegationWeightBps: row.delegationWeightBps }
-                    : {}),
-                  ...(row.claimedAmount != null
-                    ? { claimedAmount: row.claimedAmount }
-                    : {}),
-                });
-                // Fire OS toast ONLY when this snapshot produced
-                // a NEW record (the dedupe set blocks already-notified
-                // txs). §0.4 honored: every toast derives from a
-                // wallet-own tracked-tx transition.
-                if (result.added && result.record !== null) {
-                  anyAdded = true;
-                  await fireOsNotification(result.record, { unlocked });
-                }
-              }
-              for (const t of terminalByHash) {
-                // Capture the LYTH fee for confirmed self-paid txs (native
-                // receipt); best-effort — failed/zero-fee leaves it unset.
-                const feeLythoshi =
-                  t.status === "confirmed"
-                    ? await fetchConfirmedFeeLythoshi(t.row.txHash)
-                    : undefined;
-                const result = await recordNotification({
-                  addressLower,
-                  chainIdHex,
-                  txHash: t.row.txHash,
-                  status: t.status,
-                  blockNumber: t.blockNumber,
-                  // Prefer the broadcast-time tag; otherwise
-                  // fall back to the coarse "contract_call" (Phase-1
-                  // behavior — the status-RPC path catches every
-                  // non-tx_send tracked tx).
-                  kind: t.row.opKind ?? "contract_call",
-                  amountDecimal: t.row.amountDecimal,
-                  counterparty: t.row.to,
-                  read: surfaceOpen,
-                  ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
-                  ...(t.row.clusterId !== undefined
-                    ? { clusterId: t.row.clusterId }
-                    : {}),
-                  ...(t.row.clusterName !== undefined
-                    ? { clusterName: t.row.clusterName }
-                    : {}),
-                  ...(t.row.toClusterId !== undefined
-                    ? { toClusterId: t.row.toClusterId }
-                    : {}),
-                  ...(t.row.toClusterName !== undefined
-                    ? { toClusterName: t.row.toClusterName }
-                    : {}),
-                  ...(t.claimedAmountLythoshi != null
-                    ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
-                    : {}),
-                  ...(t.row.delegationWeightBps !== undefined
-                    ? { delegationWeightBps: t.row.delegationWeightBps }
-                    : {}),
-                });
-                if (result.added && result.record !== null) {
-                  anyAdded = true;
-                  await fireOsNotification(result.record, { unlocked });
-                }
+              let anyAdded = recordsToToast.length > 0;
+              for (const record of recordsToToast) {
+                await fireOsNotification(record, { unlocked: toastUnlocked });
               }
               // Item 7b — incoming-transfer detection (open-surface ⇒ unlocked).
-              // The snapshot is already fetched; diff its confirmed tx_receive
-              // rows against the per-scope watermark → record + toast new ones.
-              // Read-only; nothing here touches the signer. Option (a): no
-              // closed/locked poll.
+              // Diff the snapshot's confirmed tx_receive rows against the
+              // per-scope watermark → record + toast new ones. Read-only.
               const incomingAdded = await detectAndNotifyIncoming(
-                addressLower,
-                chainIdHex,
-                nextCache.confirmed,
-                surfaceOpen,
-                unlocked,
+                detectAddressLower,
+                detectChainIdHex,
+                confirmedForIncoming,
+                toastSurfaceOpen,
+                toastUnlocked,
               );
               if (incomingAdded > 0) anyAdded = true;
-              // Single badge refresh per batch. getUnread reads
-              // chrome.storage so it sees every record this loop wrote;
-              // one call covers both heuristic + status-RPC paths.
+              // Single badge refresh per batch; getUnread sees every record the
+              // inline loop wrote.
               if (anyAdded) {
                 await refreshUnreadBadge({
-        unlocked,
-        activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
-      });
+                  unlocked: toastUnlocked,
+                  activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+                });
               }
             } catch {
               // Best-effort; never break the snapshot response.
@@ -9202,7 +9297,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           })();
         });
       }
-      return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
+      return { ok: true, cache: nextCache, pending: committedPending, errors: fresh.errors };
     }
     case "wallet-activity-failed": {
       // Failed txs are NOT in the success-only indexer activity stream, so the

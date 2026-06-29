@@ -3235,11 +3235,11 @@ describe("wallet-activity-get", () => {
     expect(hist!.entries[0]?.kind).toBe("contract_call");
   });
 
-  it("snapshot response returns BEFORE notification writes complete (post-write microtask placement)", async () => {
+  it("C4: snapshot writes the durable record INLINE before the response (record-before-drop); toast stays deferred", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found" };
     // Readable confirmed receipt so the row terminalizes and the notification
-    // I/O is queued (F-3.10/#27: found-without-receipt no longer confirms).
+    // is recorded (F-3.10/#27: found-without-receipt no longer confirms).
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 400 };
     const txHash = "0x" + "55".repeat(32);
     seedPendingCustom({
@@ -3248,20 +3248,27 @@ describe("wallet-activity-get", () => {
       amountDecimal: "0.01",
       broadcastBlockHeight: 400,
     });
+    mockFireOsNotification.mockClear();
 
-    const dispatched = dispatchPopup({
+    await dispatchPopup({
       kind: "popup",
       op: "wallet-activity-get",
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     });
-    await dispatched;
-    // Immediately after the handler resolves, the notification I/O is
-    // still pending in the microtask + chrome.storage callback queue —
-    // the handler must NOT have awaited it.
-    expect(storageLocal[NOTIF_HISTORY_KEY]).toBeUndefined();
-    // Drain queues — the notification lands now.
+    // C4 — the DURABLE in-app record is now written INLINE, before the pending
+    // row is dropped and before the handler resolves, so an MV3 SW teardown
+    // between the response and the deferred toast can't lose it. (Pre-C4 this
+    // record was deferred to a post-response microtask and was undefined here.)
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ txHash: string }> }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    expect(hist!.entries[0]?.txHash).toBe(txHash);
+    // The OS TOAST stays deferred (kept off the response path for latency); it
+    // fires once the post-response microtask drains.
     await flushNotificationMicrotasks();
-    expect(storageLocal[NOTIF_HISTORY_KEY]).toBeDefined();
+    expect(mockFireOsNotification).toHaveBeenCalled();
   });
 });
 
