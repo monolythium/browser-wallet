@@ -96,6 +96,11 @@ import { isHardenedBuild } from "../shared/build-mode";
 import { type Account } from "./demo-data";
 import { runMountHydrationLoads } from "./mount-hydration";
 import {
+  lastKnownBalanceKey,
+  makeLastKnownBalance,
+  selectSeedBalanceHex,
+} from "./last-known-balance";
+import {
   bgListPending,
   bgKeystoreStatus,
   bgKeystoreLock,
@@ -658,6 +663,22 @@ export default function App() {
       setAcc((prev) => ({ ...prev, balance: lyth }));
       // Exact lythoshi for the hero displays (kept in sync with the float above).
       setBalanceLythoshi(parseHexQuantity(r.balanceHex));
+      // Item 4 (0-flash) — persist the CONFIRMED LIVE balance so the next fresh
+      // popup mount (minimize→restore destroys + re-mounts the popup) can seed
+      // this last-known figure instantly instead of flashing a skeleton/"0.00".
+      // NO-MOCK: written ONLY here, from a genuine live read, keyed by
+      // addr+chainId. Best-effort fire-and-forget; a write failure just means
+      // the next mount seeds from the prior record (or shows the skeleton).
+      const addrLower = acc.addr.toLowerCase();
+      const chainId = activeChain.chainId;
+      void chrome.storage.local.set({
+        [lastKnownBalanceKey(addrLower, chainId)]: makeLastKnownBalance(
+          r.balanceHex,
+          addrLower,
+          chainId,
+          Date.now(),
+        ),
+      });
     } catch {
       // Malformed hex — ignore, balance stays as-is.
     }
@@ -893,6 +914,61 @@ export default function App() {
   useEffect(() => {
     void refreshBalance();
   }, [refreshBalance]);
+
+  // Item 4 (0-flash) — seed the hero/Assets row from the PERSISTED last-known
+  // live balance on a fresh mount, so a minimize→restore shows the real
+  // last-known figure (dimmed + "last known") almost immediately instead of a
+  // skeleton/"0.00" while the live fetch round-trips. Fires on acc.addr
+  // readiness (the same 0x gate refreshBalance uses), in parallel with the live
+  // fetch above — the chrome.storage read is ~ms, so it almost always wins and
+  // C1's skeleton covers the sub-ms gap + the no-persisted case.
+  //
+  // NO-MOCK: seeds ONLY a genuine prior live read, keyed by addr+chainId and
+  // ignored on any mismatch (selectSeedBalanceHex); routes through the EXISTING
+  // balanceStale labeling (never presented as live); the live refreshBalance
+  // then clears balanceStale and overwrites with the confirmed value. The ref
+  // guards the race where the live fetch resolves first — we never re-flag a
+  // freshly-confirmed value as stale.
+  const balanceLythoshiRef = useRef(balanceLythoshi);
+  useEffect(() => {
+    balanceLythoshiRef.current = balanceLythoshi;
+  }, [balanceLythoshi]);
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) return;
+    if (balanceLythoshiRef.current != null) return;
+    let cancelled = false;
+    const addrLower = acc.addr.toLowerCase();
+    const chainId = activeChain.chainId;
+    chrome.storage.local.get([lastKnownBalanceKey(addrLower, chainId)], (res) => {
+      if (cancelled) return;
+      // The live fetch may have already landed — never overwrite or re-stale it.
+      if (balanceLythoshiRef.current != null) return;
+      const hex = selectSeedBalanceHex(
+        res?.[lastKnownBalanceKey(addrLower, chainId)],
+        addrLower,
+        chainId,
+      );
+      if (hex === null) return; // no valid matching record → C1 skeleton
+      const seeded = parseHexQuantity(hex);
+      if (seeded === null) return;
+      const lyth = hexLythoshiToLythNumber(hex);
+      if (lyth === null) return;
+      setBalanceLythoshi(seeded);
+      // Keep the float in lockstep (the Assets row + fiat read it) — but only
+      // for the still-matching account that still has no balance.
+      setAcc((prev) =>
+        prev.addr.toLowerCase() === addrLower && prev.balance == null
+          ? { ...prev, balance: lyth }
+          : prev,
+      );
+      // Label as last-known until the live fetch confirms (reuses the existing
+      // #42 balanceStale dim + "last known" UI — no new label concept).
+      setBalanceStale(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [acc.addr, activeChain.chainId]);
 
   // Dep-driven activity refresh. Same shape as the balance
   // effect above. When (acc.addr, activeChain.chainId) changes, the
