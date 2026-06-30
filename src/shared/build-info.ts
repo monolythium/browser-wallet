@@ -33,36 +33,37 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value = the 2026-06-28 v2 re-genesis (protocore v0.2.4-testnet,
- *  mono-core @ 862f6bc0), where `lyth_chainStats.genesisHash`
- *  reports the registry identity hash below. CONFIRMED 2026-06-28 against
- *  the live 2×10 operator fleet (chain-registry pin follows).
- *  The installed SDK (0.5.2) registry snapshot (`TESTNET_69420.genesis_hash`)
- *  and SDK_REGISTRY_GENESIS_HASH below are both pinned to this same 0xaabb
- *  re-genesis value, so there is no SDK-vs-pin lag at present; the About drift
- *  banner only surfaces if a future SDK sync drifts the registry value out from
- *  under this pin. Bumping this security pin is a human-reviewer decision; the
- *  live-registry fetch shows the current GitHub-registry value alongside. */
+ *  Current value = the 2026-06-30 v0.3.0 lifecycle-active re-genesis
+ *  (protocore v0.3.0-testnet, mono-core @ 4d781ed9), where
+ *  `lyth_chainStats.genesisHash` reports the registry identity hash below.
+ *  CONFIRMED 2026-06-30 against the live 2×10 operator fleet (chain-registry
+ *  pin follows). The installed SDK (0.6.1) registry snapshot
+ *  (`TESTNET_69420.genesis_hash`) and SDK_REGISTRY_GENESIS_HASH below are both
+ *  pinned to this same 0xdc0ff48 re-genesis value, so there is no SDK-vs-pin
+ *  lag at present; the About drift banner only surfaces if a future SDK sync
+ *  drifts the registry value out from under this pin. Bumping this security pin
+ *  is a human-reviewer decision; the live-registry fetch shows the current
+ *  GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
-  "0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995";
+  "0xdc0ff48230ce904893ee3184c331b405251a2dd7491e856b1d4be3944413f315";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
  *  exposes the chain identity hash used by the registry / p2p binding,
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
- *  header hash. They are not the same value (verified against the live v0.2.4
- *  chain, genesis 0xaabb0f1e…). */
+ *  header hash. They are not the same value (verified against the live v0.3.0
+ *  chain, genesis 0xdc0ff48…). */
 export const TESTNET_BLOCK0_HASH =
-  "0xd0181ed88345a8849f6633120bd6139a037ebf5036af264a9fb02414bbbb941d";
+  "0x635a90bc52a734ce7df6bfc48b5ec305f42b19a9cc1e7289b638081159bda6af";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
- *  the v0.2.4-testnet re-genesis value (2026-06-28) so it does not lag
+ *  the v0.3.0-testnet re-genesis value (2026-06-30) so it does not lag
  *  behind the installed SDK snapshot (`TESTNET_69420.genesis_hash`), which
  *  is bumped on the next SDK rebuild/publish. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995";
+  "0xdc0ff48230ce904893ee3184c331b405251a2dd7491e856b1d4be3944413f315";
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
