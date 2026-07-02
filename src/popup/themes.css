@@ -6,14 +6,11 @@
 
 /* ---------- DEFAULT (warm amber — the original cockpit palette) ---------- */
 html[data-theme="default"] {
-  --ink:     #0e1012;
   --ink-000: #0e1012;
   --ink-050: #111316;
   --ink-100: #15181c;
   --ink-200: #1b1e23;
   --ink-300: #22262c;
-  --ink-400: #2a2e35;
-  --ink-500: #343941;
 
   --fg-100: #f2efe9;
   --fg-200: #d7d3cb;
@@ -22,44 +19,32 @@ html[data-theme="default"] {
   --fg-500: #4f4d48;
   --fg-600: #34332f;
   --fg-700: #1f1e1b;
-  --fg-800: #161512;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #2f343b;
 
   --gold:      #e8a942;
   --gold-hi:   #f0bc67;
-  --gold-lo:   #c58f34;
   --gold-bg:   rgba(232, 169, 66, 0.14);
-  --gold-soft: rgba(232, 169, 66, 0.2);
   --gold-glow: 232, 169, 66;
 
   --ok:    #7fc39a;
   --warn:  #e8b96a;
   --warn-glow: 232, 185, 106;
-  --alert: #e88a7a;
   --err:   #e88a7a;
   --info:  #8ab4d6;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #d7d3cb;
-  --denom-private-bg: #1b1e23;
-  --denom-private-ring: #343941;
 }
 
 /* ---------- MONOLYTHIUM (indigo → violet) ---------- */
 html[data-theme="monolythium"] {
-  --ink:     #0a0b14;
   --ink-000: #0a0b14;
   --ink-050: #0d0e18;
   --ink-100: #10121c;
   --ink-200: #151723;
   --ink-300: #1b1e2c;
-  --ink-400: #232638;
-  --ink-500: #2c3044;
 
   --fg-100: #ecedf3;
   --fg-200: #c9ccd8;
@@ -68,45 +53,33 @@ html[data-theme="monolythium"] {
   --fg-500: #464a5c;
   --fg-600: #2d3040;
   --fg-700: #1a1c28;
-  --fg-800: #12131c;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #262a3e;
 
   /* Primary indigo #6366F1; hover/active violet #8B5CF6 */
   --gold:      #6366F1;
   --gold-hi:   #8B5CF6;
-  --gold-lo:   #4F52D9;
   --gold-bg:   rgba(99, 102, 241, 0.14);
-  --gold-soft: rgba(99, 102, 241, 0.2);
   --gold-glow: 99, 102, 241;
 
   --ok:    #7ee3c1;
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
-  --alert: #ff8a9a;
   --err:   #ff8a9a;
   --info:  #8B5CF6;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #c9ccd8;
-  --denom-private-bg: #151723;
-  --denom-private-ring: #2c3044;
 }
 
 /* ---------- MONOLABS (teal) ---------- */
 html[data-theme="monolabs"] {
-  --ink:     #071412;
   --ink-000: #071412;
   --ink-050: #0a1816;
   --ink-100: #0e1e1b;
   --ink-200: #142724;
   --ink-300: #19302c;
-  --ink-400: #1f3a36;
-  --ink-500: #274741;
 
   --fg-100: #e8f1ef;
   --fg-200: #c5d6d2;
@@ -115,45 +88,33 @@ html[data-theme="monolabs"] {
   --fg-500: #455753;
   --fg-600: #2c3d39;
   --fg-700: #1a2623;
-  --fg-800: #10191a;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #22423c;
 
   /* Teal #3bd0c4 */
   --gold:      #3bd0c4;
   --gold-hi:   #5EDDD2;
-  --gold-lo:   #2BB5AB;
   --gold-bg:   rgba(59, 208, 196, 0.14);
-  --gold-soft: rgba(59, 208, 196, 0.2);
   --gold-glow: 59, 208, 196;
 
   --ok:    #7ee3c1;
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
-  --alert: #f08a8a;
   --err:   #f08a8a;
   --info:  #3bd0c4;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #c5d6d2;
-  --denom-private-bg: #142724;
-  --denom-private-ring: #274741;
 }
 
 /* ---------- MONOPLAY (crimson) ---------- */
 html[data-theme="monoplay"] {
-  --ink:     #140909;
   --ink-000: #140909;
   --ink-050: #180c0c;
   --ink-100: #1d0f10;
   --ink-200: #261416;
   --ink-300: #2f1a1d;
-  --ink-400: #3a2124;
-  --ink-500: #4a2a2e;
 
   --fg-100: #f3ecec;
   --fg-200: #d6c9c9;
@@ -162,45 +123,33 @@ html[data-theme="monoplay"] {
   --fg-500: #574b4b;
   --fg-600: #3a3131;
   --fg-700: #231c1c;
-  --fg-800: #171212;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #402429;
 
   /* Crimson #d22d3d */
   --gold:      #d22d3d;
   --gold-hi:   #E04B5B;
-  --gold-lo:   #B22331;
   --gold-bg:   rgba(210, 45, 61, 0.14);
-  --gold-soft: rgba(210, 45, 61, 0.2);
   --gold-glow: 210, 45, 61;
 
   --ok:    #7ec39a;
   --warn:  #e8b96a;
   --warn-glow: 232, 185, 106;
-  --alert: #ff8a6b;
   --err:   #ff8a6b;
   --info:  #d88a95;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #d6c9c9;
-  --denom-private-bg: #261416;
-  --denom-private-ring: #4a2a2e;
 }
 
 /* ---------- MONO (pure black, thin stroke, amber accent) ---------- */
 html[data-theme="mono"] {
-  --ink:     #000000;
   --ink-000: #000000;
   --ink-050: #000000;
   --ink-100: #060606;
   --ink-200: #0a0a0a;
   --ink-300: #121212;
-  --ink-400: #1a1a1a;
-  --ink-500: #222222;
 
   --fg-100: #f3efe5;
   --fg-200: #c8c3b5;
@@ -209,32 +158,23 @@ html[data-theme="mono"] {
   --fg-500: #3d3a32;
   --fg-600: #2a2822;
   --fg-700: #1a1917;
-  --fg-800: #0e0d0b;
 
   --surface-0: #000000;
   --surface-1: #000000;
   --surface-2: #0a0a0a;
-  --surface-3: #121212;
 
   --gold:      #EFC25B;
   --gold-hi:   #F7D178;
-  --gold-lo:   #D2A33F;
   --gold-bg:   rgba(239, 194, 91, 0.10);
-  --gold-soft: rgba(239, 194, 91, 0.16);
   --gold-glow: 239, 194, 91;
 
   --ok:    #7fc39a;
   --warn:  #e8b96a;
   --warn-glow: 232, 185, 106;
-  --alert: #e88a7a;
   --err:   #e88a7a;
   --info:  #8ab4d6;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #c8c3b5;
-  --denom-private-bg: #0a0a0a;
-  --denom-private-ring: #222222;
 }
 
 /* Mono theme: thin stroke borders on cards, no fill lift */
@@ -247,14 +187,11 @@ html[data-theme="mono"] .card {
 
 /* ---------- GLASS (Monoscan-style frosted liquid glass) ---------- */
 html[data-theme="glass"] {
-  --ink:     #0a0b14;
   --ink-000: #0a0b14;
   --ink-050: #0b0d18;
   --ink-100: #0f1120;
   --ink-200: #151828;
   --ink-300: #1c2033;
-  --ink-400: #252942;
-  --ink-500: #2f3452;
 
   --fg-100: #f2f4fb;
   --fg-200: #cdd2e3;
@@ -263,9 +200,8 @@ html[data-theme="glass"] {
   --fg-500: #464a63;
   --fg-600: #2d3048;
   --fg-700: #1a1c2c;
-  --fg-800: #11131f;
 
-  /* Glass tokens — override the system so EVERY .glass / .studio-card gets frosted */
+  /* Glass tokens — override the system so every .glass surface gets frosted */
   --glass-fill:         rgba(255, 255, 255, 0.04);
   --glass-fill-strong:  rgba(255, 255, 255, 0.07);
   --glass-fill-hover:   rgba(255, 255, 255, 0.08);
@@ -280,28 +216,20 @@ html[data-theme="glass"] {
   --surface-0: transparent;
   --surface-1: var(--glass-fill);
   --surface-2: var(--glass-fill-strong);
-  --surface-3: var(--glass-fill-hover);
 
   /* Cool periwinkle accent — reads well on frosted pane */
   --gold:      #7fb2ff;
   --gold-hi:   #a5c8ff;
-  --gold-lo:   #5a90e8;
   --gold-bg:   rgba(127, 178, 255, 0.14);
-  --gold-soft: rgba(127, 178, 255, 0.2);
   --gold-glow: 127, 178, 255;
 
   --ok:    #7ee3c1;
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
-  --alert: #ff8fb8;
   --err:   #ff8fb8;
   --info:  #7fb2ff;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #cdd2e3;
-  --denom-private-bg: rgba(255,255,255,0.04);
-  --denom-private-ring: rgba(255,255,255,0.12);
 }
 
 /* Glass body: Monoscan's layered bloom (amber + violet nebula + vignette) */
@@ -330,8 +258,7 @@ html[data-theme="glass"] body::after {
 
 /* Frosted cards — apply to every surface type in the app */
 html[data-theme="glass"] .glass,
-html[data-theme="glass"] .card,
-html[data-theme="glass"] .ms-card {
+html[data-theme="glass"] .card {
   background: rgba(255, 255, 255, 0.04) !important;
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
@@ -343,10 +270,7 @@ html[data-theme="glass"] .ms-card {
 }
 
 /* Nav + rail get the same frosted treatment */
-html[data-theme="glass"] .studio-topnav,
-html[data-theme="glass"] .sidebar,
-html[data-theme="glass"] .ask-rail,
-html[data-theme="glass"] .topbar {
+html[data-theme="glass"] .sidebar {
   background: rgba(10, 12, 26, 0.4) !important;
   backdrop-filter: blur(30px) saturate(160%);
   -webkit-backdrop-filter: blur(30px) saturate(160%);
@@ -354,33 +278,10 @@ html[data-theme="glass"] .topbar {
 }
 
 /* Dropdowns & menus — OPAQUE on Glass (user asked them to stay solid) */
-html[data-theme="glass"] .studio-user-menu,
-html[data-theme="glass"] .studio-nav-dropdown {
-  background: #151828 !important;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 40px 80px -20px rgba(0, 0, 0, 0.6) !important;
-}
 
 /* Buttons on glass: soft glass pill when not primary */
-html[data-theme="glass"] .btn:not(.btn--primary):not(.btn--gold) {
-  background: rgba(255, 255, 255, 0.06) !important;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
-}
 
 /* Primary button: subtle lumen glow */
-html[data-theme="glass"] .btn--primary,
-html[data-theme="glass"] .btn--gold {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 0 20px rgba(127, 178, 255, 0.25),
-    0 8px 24px -6px rgba(127, 178, 255, 0.4) !important;
-}
 
 /* Remove opaque mono-theme border override if user switches from mono → glass */
 html[data-theme="glass"] .glass,
@@ -390,14 +291,11 @@ html[data-theme="glass"] .card {
 
 /* ---------- AURORA (deep purple nebula, pink/violet accent) ---------- */
 html[data-theme="aurora"] {
-  --ink:     #0d0820;
   --ink-000: #0d0820;
   --ink-050: #120b28;
   --ink-100: #160e30;
   --ink-200: #1d123c;
   --ink-300: #251848;
-  --ink-400: #2e1f56;
-  --ink-500: #3a2968;
 
   --fg-100: #f0eafa;
   --fg-200: #d4c8ec;
@@ -406,33 +304,24 @@ html[data-theme="aurora"] {
   --fg-500: #4c4366;
   --fg-600: #2f2847;
   --fg-700: #1c1632;
-  --fg-800: #130d22;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #2e1f56;
 
   /* Aurora pink-violet */
   --gold:      #d36bff;
   --gold-hi:   #e28cff;
-  --gold-lo:   #a84dd5;
   --gold-bg:   rgba(211, 107, 255, 0.14);
-  --gold-soft: rgba(211, 107, 255, 0.2);
   --gold-glow: 211, 107, 255;
 
   --ok:    #7ee3c1;
   --warn:  #f4c97a;
   --warn-glow: 244, 201, 122;
-  --alert: #ff89b0;
   --err:   #ff89b0;
   --info:  #6c9dff;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #d4c8ec;
-  --denom-private-bg: #1d123c;
-  --denom-private-ring: #3a2968;
 }
 /* Aurora: gradient backdrop */
 html[data-theme="aurora"] body {
@@ -444,14 +333,11 @@ html[data-theme="aurora"] body {
 
 /* ---------- CRIMSON (burgundy / wine, warm red accent) ---------- */
 html[data-theme="crimson"] {
-  --ink:     #0f0607;
   --ink-000: #0f0607;
   --ink-050: #150808;
   --ink-100: #1c0b0b;
   --ink-200: #24100f;
   --ink-300: #2e1615;
-  --ink-400: #3a1d1c;
-  --ink-500: #4a2626;
 
   --fg-100: #f6ece9;
   --fg-200: #dac6c0;
@@ -460,45 +346,33 @@ html[data-theme="crimson"] {
   --fg-500: #544544;
   --fg-600: #3a2d2d;
   --fg-700: #231a1a;
-  --fg-800: #15100f;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #401e1d;
 
   /* Crimson red */
   --gold:      #ff5a5a;
   --gold-hi:   #ff7b7b;
-  --gold-lo:   #d64545;
   --gold-bg:   rgba(255, 90, 90, 0.14);
-  --gold-soft: rgba(255, 90, 90, 0.2);
   --gold-glow: 255, 90, 90;
 
   --ok:    #8cc59a;
   --warn:  #f0b86a;
   --warn-glow: 240, 184, 106;
-  --alert: #ffa07a;
   --err:   #ffa07a;
   --info:  #e29090;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #dac6c0;
-  --denom-private-bg: #24100f;
-  --denom-private-ring: #4a2626;
 }
 
 /* ---------- NEON (pure black, cyan/green glow) ---------- */
 html[data-theme="neon"] {
-  --ink:     #000000;
   --ink-000: #000000;
   --ink-050: #020404;
   --ink-100: #05090a;
   --ink-200: #091012;
   --ink-300: #0d1719;
-  --ink-400: #122024;
-  --ink-500: #182a2f;
 
   --fg-100: #e8fffc;
   --fg-200: #a8d4d0;
@@ -507,50 +381,34 @@ html[data-theme="neon"] {
   --fg-500: #2e4341;
   --fg-600: #1a2c2b;
   --fg-700: #0f1a1a;
-  --fg-800: #070d0d;
 
   --surface-0: #000000;
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #122024;
 
   /* Neon cyan */
   --gold:      #00ffc8;
   --gold-hi:   #5cffd8;
-  --gold-lo:   #00d4a6;
   --gold-bg:   rgba(0, 255, 200, 0.10);
-  --gold-soft: rgba(0, 255, 200, 0.18);
   --gold-glow: 0, 255, 200;
 
   --ok:    #00ffc8;
   --warn:  #ffd54a;
   --warn-glow: 255, 213, 74;
-  --alert: #ff4f8a;
   --err:   #ff4f8a;
   --info:  #4ab8ff;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #a8d4d0;
-  --denom-private-bg: #091012;
-  --denom-private-ring: #182a2f;
 }
 /* Neon: extra glow on primary elements */
-html[data-theme="neon"] .btn--primary,
-html[data-theme="neon"] .btn--gold {
-  box-shadow: 0 0 12px rgba(0, 255, 200, 0.35), 0 0 32px rgba(0, 255, 200, 0.18) !important;
-}
 
 /* ---------- MIDNIGHT (deep violet, purple accent) ---------- */
 html[data-theme="midnight"] {
-  --ink:     #0a0615;
   --ink-000: #0a0615;
   --ink-050: #0d081c;
   --ink-100: #120c24;
   --ink-200: #18112e;
   --ink-300: #1f1738;
-  --ink-400: #281f48;
-  --ink-500: #33285c;
 
   --fg-100: #ece6f9;
   --fg-200: #c4bae1;
@@ -559,45 +417,33 @@ html[data-theme="midnight"] {
   --fg-500: #443c62;
   --fg-600: #2a2446;
   --fg-700: #18132a;
-  --fg-800: #0e0a1c;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #281f48;
 
   /* Midnight violet */
   --gold:      #9d7cff;
   --gold-hi:   #b79bff;
-  --gold-lo:   #7c5cd9;
   --gold-bg:   rgba(157, 124, 255, 0.14);
-  --gold-soft: rgba(157, 124, 255, 0.2);
   --gold-glow: 157, 124, 255;
 
   --ok:    #7ed8b0;
   --warn:  #f0c870;
   --warn-glow: 240, 200, 112;
-  --alert: #ff8ca8;
   --err:   #ff8ca8;
   --info:  #9d7cff;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #c4bae1;
-  --denom-private-bg: #18112e;
-  --denom-private-ring: #33285c;
 }
 
 /* ---------- RETRO (warm sepia, amber CRT) ---------- */
 html[data-theme="retro"] {
-  --ink:     #1a140a;
   --ink-000: #1a140a;
   --ink-050: #1f180c;
   --ink-100: #241c0f;
   --ink-200: #2b2113;
   --ink-300: #342818;
-  --ink-400: #41321f;
-  --ink-500: #524028;
 
   --fg-100: #f4e4c1;
   --fg-200: #d8c49a;
@@ -606,33 +452,24 @@ html[data-theme="retro"] {
   --fg-500: #4f4130;
   --fg-600: #332a20;
   --fg-700: #1f1912;
-  --fg-800: #14100a;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-200);
   --surface-2: var(--ink-300);
-  --surface-3: #41321f;
 
   /* Retro amber/phosphor */
   --gold:      #ffb347;
   --gold-hi:   #ffc87a;
-  --gold-lo:   #d48a2a;
   --gold-bg:   rgba(255, 179, 71, 0.14);
-  --gold-soft: rgba(255, 179, 71, 0.2);
   --gold-glow: 255, 179, 71;
 
   --ok:    #bfcf5a;
   --warn:  #ffc87a;
   --warn-glow: 255, 200, 122;
-  --alert: #ff8a5a;
   --err:   #ff8a5a;
   --info:  #e4a864;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #d8c49a;
-  --denom-private-bg: #2b2113;
-  --denom-private-ring: #524028;
 }
 /* Retro: subtle scanline overlay */
 html[data-theme="retro"] body::after {
@@ -651,14 +488,11 @@ html[data-theme="retro"] body::after {
 
 /* ---------- LIGHT (bright canvas, warm amber) ---------- */
 html[data-theme="light"] {
-  --ink:     #ffffff;
   --ink-000: #ffffff;
   --ink-050: #fafaf8;
   --ink-100: #f5f5f2;
   --ink-200: #efeeea;
   --ink-300: #e8e6e0;
-  --ink-400: #ddd9d1;
-  --ink-500: #c8c3b8;
 
   /* Reverse fg ramp for light mode — 100 = darkest ink */
   --fg-100: #1a1916;
@@ -668,36 +502,25 @@ html[data-theme="light"] {
   --fg-500: #b0ac9e;
   --fg-600: #d4d0c2;
   --fg-700: #e8e4d6;
-  --fg-800: #f2eedd;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-100);
   --surface-2: var(--ink-200);
-  --surface-3: var(--ink-300);
 
   --gold:      #c8871f;
   --gold-hi:   #e0a03a;
-  --gold-lo:   #a66d12;
   --gold-bg:   rgba(200, 135, 31, 0.12);
-  --gold-soft: rgba(200, 135, 31, 0.18);
   --gold-glow: 200, 135, 31;
 
   --ok:    #2f8a5a;
   --warn:  #c88b1a;
   --warn-glow: 200, 139, 26;
-  --alert: #b54a3a;
   --err:   #b54a3a;
   --info:  #3b6a8a;
 
-  --denom-public-fg: var(--gold);
-  --denom-public-bg: var(--gold-bg);
   --denom-private-fg: #3f3d36;
-  --denom-private-bg: #efeeea;
-  --denom-private-ring: #ddd9d1;
 
   /* Shadows adjusted for light backgrounds */
-  --shadow-1: 0 1px 2px rgba(20, 16, 8, 0.06);
-  --shadow-2: 0 6px 20px -8px rgba(20, 16, 8, 0.12);
   --shadow-3: 0 24px 48px -16px rgba(20, 16, 8, 0.18);
 }
 
@@ -706,10 +529,7 @@ html[data-theme="light"] body {
   background: var(--ink-050);
   color: var(--fg-100);
 }
-html[data-theme="light"] .ask-rail,
-html[data-theme="light"] .sidebar,
-html[data-theme="light"] .studio-topnav,
-html[data-theme="light"] .topbar {
+html[data-theme="light"] .sidebar {
   background: var(--surface-0) !important;
   color: var(--fg-100);
 }
@@ -717,10 +537,6 @@ html[data-theme="light"] .glass,
 html[data-theme="light"] .card {
   background: var(--surface-1) !important;
   color: var(--fg-100);
-}
-html[data-theme="light"] .btn--primary,
-html[data-theme="light"] .btn--gold {
-  color: #fff !important;
 }
 
 /* ---------- Dark-theme legibility pass ----------
@@ -815,14 +631,11 @@ html[data-theme="midnight"] body {
    wallet is in a different operational context.
    ============================================================ */
 html body[data-denom="private"] {
-  --ink:     #07080c;
   --ink-000: #07080c;
   --ink-050: #0a0c11;
   --ink-100: #0d0f15;
   --ink-200: #11141b;
   --ink-300: #161a22;
-  --ink-400: #1c212b;
-  --ink-500: #242a36;
 
   --fg-100: #d8dde8;
   --fg-200: #a0a7b5;
@@ -831,26 +644,21 @@ html body[data-denom="private"] {
   --fg-500: #636b7d;
   --fg-600: #252a34;
   --fg-700: #171a22;
-  --fg-800: #0d0f15;
 
   --surface-0: var(--ink-050);
   --surface-1: var(--ink-100);
   --surface-2: var(--ink-200);
-  --surface-3: var(--ink-300);
 
   /* Muted blue phosphor replaces gold everywhere */
   --gold:      #8fb3ff;
   --gold-hi:   #b3cbff;
-  --gold-lo:   #5a7fd0;
   --gold-bg:   rgba(143, 179, 255, 0.08);
-  --gold-soft: rgba(143, 179, 255, 0.14);
   --gold-glow: 143, 179, 255;
 
   /* Dimmed status colours */
   --ok:    #7ac8a6;
   --warn:  #d4b06b;
   --warn-glow: 212, 176, 107;
-  --alert: #c87a9a;
   --err:   #c87a9a;
   --info:  #8fb3ff;
 
@@ -888,12 +696,3 @@ html body[data-denom="private"]::before {
 }
 
 /* Hairline treatments — tighter borders, less shadow */
-html body[data-denom="private"] .w-card,
-html body[data-denom="private"] .w-hero,
-html body[data-denom="private"] .w-modal,
-html body[data-denom="private"] .w-drawer {
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.03),
-    0 20px 40px -30px rgba(0,0,0,0.8) !important;
-  border-color: rgba(255, 255, 255, 0.05) !important;
-}
