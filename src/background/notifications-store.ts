@@ -59,6 +59,21 @@ async function writeStorage(entries: Record<string, unknown>): Promise<void> {
   });
 }
 
+/** The per-scope lock key that `recordNotification` serializes on for a given
+ *  notification-history key. `recordNotification` writes the history key under a
+ *  lock keyed on the sibling notified-SET key (`notifiedSetKey`), so the
+ *  mark-as-read mutators — which read-modify-write the SAME history key — MUST
+ *  acquire that identical lock to avoid a lost-update race with a concurrent
+ *  recorder (the popup snapshot path racing the headless poll alarm). The two
+ *  keys share one `<addr>.<chain>.v1` suffix and differ only in their
+ *  `history`/`notified` segment, so a prefix swap yields the exact lock key. */
+function scopeLockKeyForHistoryKey(historyKey: string): string {
+  return historyKey.replace(
+    "mono.notifications.history.",
+    "mono.notifications.notified.",
+  );
+}
+
 /** Input shape for the chokepoint hook — every field is already pre-
  *  normalized at the call site (status as the literal `"confirmed"` or
  *  `"failed"`, blockNumber as a finite number or null, etc.). */
@@ -231,23 +246,29 @@ export async function markAllRead(
   addressLower: string,
   chainIdHex: string,
 ): Promise<{ flipped: number }> {
-  try {
-    const key = notificationsHistoryKey(addressLower, chainIdHex);
-    const env = parseHistoryEnvelope(await readStorage(key));
-    if (!env) return { flipped: 0 };
-    let flipped = 0;
-    const next = env.entries.map((r) => {
-      if (r.read) return r;
-      flipped++;
-      return { ...r, read: true };
-    });
-    if (flipped > 0) {
-      await writeStorage({ [key]: { schemaVersion: 0, entries: next } });
+  // Serialize the read-modify-write on this scope's history against a
+  // concurrent `recordNotification` (which writes the same history key under
+  // the sibling notified-set lock) so a flip can neither clobber a
+  // just-appended record nor be clobbered by one. Re-read INSIDE the lock.
+  return withKeyLock(notifiedSetKey(addressLower, chainIdHex), async () => {
+    try {
+      const key = notificationsHistoryKey(addressLower, chainIdHex);
+      const env = parseHistoryEnvelope(await readStorage(key));
+      if (!env) return { flipped: 0 };
+      let flipped = 0;
+      const next = env.entries.map((r) => {
+        if (r.read) return r;
+        flipped++;
+        return { ...r, read: true };
+      });
+      if (flipped > 0) {
+        await writeStorage({ [key]: { schemaVersion: 0, entries: next } });
+      }
+      return { flipped };
+    } catch {
+      return { flipped: 0 };
     }
-    return { flipped };
-  } catch {
-    return { flipped: 0 };
-  }
+  });
 }
 
 /** S6 #44 B3 — 3-way active-address scope shared by every notification
@@ -304,22 +325,34 @@ export async function markNotificationRead(
   activeAddrLower?: string | null,
 ): Promise<{ flipped: boolean }> {
   try {
+    // Enumerate candidate scopes once, then re-read + write each under its
+    // per-scope lock (the SAME lock `recordNotification` holds) so this flip
+    // can't race a concurrent recorder into a lost update.
     const all = await readAllStorage();
-    for (const [k, v] of Object.entries(all)) {
-      if (!k.startsWith("mono.notifications.history.")) continue;
-      if (!keyMatchesActive(k, activeAddrLower)) continue;
-      const env = parseHistoryEnvelope(v);
-      if (!env) continue;
-      let flipped = false;
-      const next = env.entries.map((r) => {
-        if (r.id !== id || r.read) return r;
-        flipped = true;
-        return { ...r, read: true };
-      });
-      if (flipped) {
-        await writeStorage({ [k]: { schemaVersion: 0, entries: next } });
-        return { flipped: true };
-      }
+    const keys = Object.keys(all).filter(
+      (k) =>
+        k.startsWith("mono.notifications.history.") &&
+        keyMatchesActive(k, activeAddrLower),
+    );
+    for (const k of keys) {
+      const flipped = await withKeyLock(
+        scopeLockKeyForHistoryKey(k),
+        async () => {
+          const env = parseHistoryEnvelope(await readStorage(k));
+          if (!env) return false;
+          let didFlip = false;
+          const next = env.entries.map((r) => {
+            if (r.id !== id || r.read) return r;
+            didFlip = true;
+            return { ...r, read: true };
+          });
+          if (didFlip) {
+            await writeStorage({ [k]: { schemaVersion: 0, entries: next } });
+          }
+          return didFlip;
+        },
+      );
+      if (flipped) return { flipped: true };
     }
     return { flipped: false };
   } catch {
@@ -337,27 +370,33 @@ export async function markAllNotificationsRead(
   activeAddrLower?: string | null,
 ): Promise<{ flipped: number }> {
   try {
+    // Enumerate matching scopes once, then re-read + write each under its
+    // per-scope lock (the SAME lock `recordNotification` holds) so a flip can't
+    // clobber — or be clobbered by — a concurrent recorder. Per-scope writes
+    // replace the earlier single batched write; the serialization requires
+    // holding each scope's lock across its own read-modify-write.
     const all = await readAllStorage();
+    const keys = Object.keys(all).filter(
+      (k) =>
+        k.startsWith("mono.notifications.history.") &&
+        keyMatchesActive(k, activeAddrLower),
+    );
     let flipped = 0;
-    const writes: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(all)) {
-      if (!k.startsWith("mono.notifications.history.")) continue;
-      if (!keyMatchesActive(k, activeAddrLower)) continue;
-      const env = parseHistoryEnvelope(v);
-      if (!env) continue;
-      let scopeChanged = false;
-      const next = env.entries.map((r) => {
-        if (r.read) return r;
-        flipped++;
-        scopeChanged = true;
-        return { ...r, read: true };
+    for (const k of keys) {
+      flipped += await withKeyLock(scopeLockKeyForHistoryKey(k), async () => {
+        const env = parseHistoryEnvelope(await readStorage(k));
+        if (!env) return 0;
+        let scopeFlipped = 0;
+        const next = env.entries.map((r) => {
+          if (r.read) return r;
+          scopeFlipped++;
+          return { ...r, read: true };
+        });
+        if (scopeFlipped > 0) {
+          await writeStorage({ [k]: { schemaVersion: 0, entries: next } });
+        }
+        return scopeFlipped;
       });
-      if (scopeChanged) {
-        writes[k] = { schemaVersion: 0, entries: next };
-      }
-    }
-    if (Object.keys(writes).length > 0) {
-      await writeStorage(writes);
     }
     return { flipped };
   } catch {
