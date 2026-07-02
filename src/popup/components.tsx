@@ -1,8 +1,8 @@
 // Component port from designs/src/ext-popup.jsx + ext-app.jsx + ext-requests.jsx.
-// Surface-only. No keystore, no RPC, no signing here. The home / accounts /
-// networks / settings views still source mock data from `demo-data` because
-// the chain-side reads they need (balances, asset prices, activity log) are
-// not in the SDK yet — see `TODO(monolythium-vision)` markers below.
+// Surface-only. No keystore, no RPC, no signing here. Live data (balances,
+// activity, fees, chain health) arrives via the bg.ts IPC helpers; `demo-data`
+// now supplies only the `Account`/`Custody` shapes imported below. Remaining
+// unwired reads are marked with `TODO(monolythium-vision)`.
 //
 // Approval views (ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain)
 // at the bottom of this file render REAL payloads passed in by the service
