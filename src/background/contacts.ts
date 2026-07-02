@@ -97,10 +97,3 @@ export async function renameContact(
   existing.name = newName;
   await saveContacts(map);
 }
-
-export async function isContactKnown(
-  addressLower: string,
-): Promise<boolean> {
-  const map = await loadContacts();
-  return Object.prototype.hasOwnProperty.call(map, addressLower.toLowerCase());
-}

@@ -35,9 +35,7 @@
 
 import {
   spendingPolicyAddressHex,
-  encodeSetPolicyCalldata,
   encodeSetPolicyClaimCalldata,
-  encodeClaimPolicyByAddressCalldata,
   encodeEnableCalldata,
   encodeDisableCalldata,
   composeClaimBoundMessage,
@@ -71,10 +69,6 @@ export const SPENDING_POLICY_CLAIM_UNIT_LIMIT_HEX = "0x7A120"; // 500000
  *  Both carry only the 20-byte sub-account address — selector-sized. */
 export const SPENDING_POLICY_TOGGLE_UNIT_LIMIT_HEX = "0x14820"; // 84000
 
-/** Conservative execution-unit budget for the re-claim (`setPolicy`)
- *  path — policy dimensions, no embedded pubkey/sig. */
-export const SPENDING_POLICY_SET_UNIT_LIMIT_HEX = "0x30D40"; // 200000
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Method encoders (delegated to the chain-canonical SDK 0.3.10 encoders)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -91,24 +85,6 @@ export function encodeSetPolicyClaim(
   subAccountSig: Uint8Array,
 ): string {
   return encodeSetPolicyClaimCalldata(args, subAccountPubkey, subAccountSig);
-}
-
-/** `claimPolicyByAddress` calldata (selector `0x0c21376c`) for a
- *  sub-account whose pubkey is ALREADY recorded on-chain (pubkey
- *  registry). Only the sub-account signature (3309 bytes) rides in the
- *  calldata — no pubkey. */
-export function encodeClaimByAddress(
-  args: SpendingPolicyArgs,
-  subAccountSig: Uint8Array,
-): string {
-  return encodeClaimPolicyByAddressCalldata(args, subAccountSig);
-}
-
-/** `setPolicy` calldata (selector `0x8da1a765`) — the RE-CLAIM / legacy
- *  path used once the principal is already recorded against the
- *  sub-account on-chain. No embedded pubkey/sig. */
-export function encodeSetPolicy(args: SpendingPolicyArgs): string {
-  return encodeSetPolicyCalldata(args);
 }
 
 /** `enable` calldata (selector `0x5bfa1b68`) — un-revoke a previously
