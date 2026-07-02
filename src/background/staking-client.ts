@@ -47,8 +47,6 @@ import {
   type PendingRewardsRow,
   type PendingRewardsView,
   type ClusterServiceTiers,
-  type RedemptionQueueRow,
-  type RedemptionQueueView,
   type StakingResult,
   type WalletOperatorInfo,
 } from "../shared/staking.js";
@@ -978,27 +976,6 @@ interface RawPendingRewardsRow {
   unsettledAmountLythoshi?: unknown;
 }
 
-interface RawRedemptionQueueResponse {
-  wallet?: unknown;
-  tickets?: unknown;
-  rows?: unknown;
-  count?: unknown;
-  returned?: unknown;
-  block?: unknown;
-}
-
-interface RawRedemptionTicket {
-  index?: unknown;
-  cluster?: unknown;
-  weightBps?: unknown;
-  amount?: unknown;
-  amountLythoshi?: unknown;
-  createdHeight?: unknown;
-  maturityHeight?: unknown;
-  mature?: unknown;
-  unlockAt?: unknown;
-}
-
 function parseNonNegativeIntegerQuantity(raw: unknown): bigint | null {
   if (typeof raw === "bigint") return raw >= 0n ? raw : null;
   if (typeof raw === "number") {
@@ -1114,66 +1091,6 @@ function mockPendingRewardsView(
   };
 }
 
-function normaliseOptionalUnlockAt(raw: unknown): number | null {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 0) {
-    return Number.NaN;
-  }
-  return raw;
-}
-
-function normaliseRedemptionTicket(rawTicket: unknown): RedemptionQueueRow | null {
-  if (!rawTicket || typeof rawTicket !== "object") return null;
-  const raw = rawTicket as RawRedemptionTicket;
-  const index = parseNonNegativeIntegerQuantity(raw.index);
-  const createdHeight = parseNonNegativeIntegerQuantity(raw.createdHeight);
-  const maturityHeight = parseNonNegativeIntegerQuantity(raw.maturityHeight);
-  const amountRaw =
-    raw.amount !== undefined ? raw.amount : raw.amountLythoshi;
-  const amount =
-    amountRaw === undefined ? null : parseNonNegativeIntegerQuantity(amountRaw);
-  const unlockAt = normaliseOptionalUnlockAt(raw.unlockAt);
-  if (
-    index === null ||
-    index > BigInt(Number.MAX_SAFE_INTEGER) ||
-    typeof raw.cluster !== "number" ||
-    !Number.isSafeInteger(raw.cluster) ||
-    raw.cluster < 0 ||
-    typeof raw.weightBps !== "number" ||
-    !Number.isSafeInteger(raw.weightBps) ||
-    raw.weightBps < 0 ||
-    raw.weightBps > 10_000 ||
-    createdHeight === null ||
-    maturityHeight === null ||
-    maturityHeight < createdHeight ||
-    amount === null && amountRaw !== undefined ||
-    Number.isNaN(unlockAt) ||
-    !(typeof raw.mature === "boolean" || raw.mature === null)
-  ) {
-    return null;
-  }
-
-  return {
-    index: Number(index),
-    cluster: raw.cluster,
-    weightBps: raw.weightBps,
-    amountLythoshi: amount === null ? null : amount.toString(10),
-    amountWei: amount === null ? "0x0" : lythoshiHex(amount),
-    unlockAt,
-    createdHeight: createdHeight.toString(10),
-    maturityHeight: maturityHeight.toString(10),
-    mature: raw.mature,
-  };
-}
-
-function isRedemptionQueueUnavailableError(e: unknown): boolean {
-  return isRpcUnavailableError(e, "lyth_redemptionQueue");
-}
-
-function mockRedemptionQueueView(wallet: string): RedemptionQueueView {
-  return { wallet, rows: [] };
-}
-
 /** Per-account pending rewards. The wallet calls the chain's
  *  `lyth_pendingRewards(wallet)` first and preserves the RPC `via` on a
  *  successful parse. If the method is absent on the contacted operator or
@@ -1255,82 +1172,6 @@ export async function readPendingRewards(
       };
     }
     const reason = (e as Error)?.message ?? "lyth_pendingRewards failed";
-    return { ok: false, reason };
-  }
-}
-
-/** Redemption queue. The wallet calls the chain's
- *  `lyth_redemptionQueue(wallet)` first and preserves the RPC `via` on
- *  a successful parse. It only falls back to the old empty envelope when
- *  the method is absent on the contacted operator or the testnet is
- *  unreachable. Live malformed responses fail so a bad operator cannot
- *  silently turn pending tickets into an empty mock queue. */
-export async function readRedemptionQueue(
-  wallet: string,
-): Promise<StakingResult<RedemptionQueueView>> {
-  try {
-    // bech32m for wallet param (chain rejects 0x; this was the
-    // user-reported "wallet must be mono bech32m" error on the
-    // redemption-queue surface).
-    const walletForChain = userAddressForNativeRpc(wallet);
-    const { result, via } = await testnetJsonRpc<RawRedemptionQueueResponse>(
-      "lyth_redemptionQueue",
-      [walletForChain],
-    );
-    if (!result || typeof result !== "object") {
-      return { ok: false, reason: "malformed lyth_redemptionQueue response" };
-    }
-    const raw = result as RawRedemptionQueueResponse;
-    const tickets = Array.isArray(raw.tickets)
-      ? raw.tickets
-      : Array.isArray(raw.rows)
-        ? raw.rows
-        : null;
-    const count =
-      raw.count === undefined ? null : parseNonNegativeIntegerQuantity(raw.count);
-    const returned =
-      raw.returned === undefined
-        ? null
-        : parseNonNegativeIntegerQuantity(raw.returned);
-    if (
-      typeof raw.wallet !== "string" ||
-      tickets === null ||
-      (count === null && raw.count !== undefined) ||
-      (returned === null && raw.returned !== undefined)
-    ) {
-      return { ok: false, reason: "malformed lyth_redemptionQueue response" };
-    }
-
-    const rows: RedemptionQueueRow[] = [];
-    for (const rawTicket of tickets) {
-      const row = normaliseRedemptionTicket(rawTicket);
-      if (row === null) {
-        return { ok: false, reason: "malformed lyth_redemptionQueue response" };
-      }
-      rows.push(row);
-    }
-
-    if (returned !== null && returned !== BigInt(rows.length)) {
-      return { ok: false, reason: "malformed lyth_redemptionQueue response" };
-    }
-
-    return {
-      ok: true,
-      via,
-      data: {
-        wallet: raw.wallet,
-        rows,
-      },
-    };
-  } catch (e) {
-    if (isRedemptionQueueUnavailableError(e)) {
-      return {
-        ok: true,
-        via: "mock",
-        data: mockRedemptionQueueView(wallet),
-      };
-    }
-    const reason = (e as Error)?.message ?? "lyth_redemptionQueue failed";
     return { ok: false, reason };
   }
 }
