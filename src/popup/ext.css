@@ -334,12 +334,6 @@ html[data-mode="sidepanel"] .ext > .ext-body {
 @keyframes ext-pending-spin {
   to { transform: rotate(360deg); }
 }
-/* InlineSpinner pulse for the LoadingState primitive.
-   Three dots fading in/out at staggered phases. */
-@keyframes ext-spinner-pulse {
-  0%, 80%, 100% { opacity: 0.2; }
-  40% { opacity: 1; }
-}
 /* ChainStatusBanner long-label marquee (#42). "UNTRUSTED OPERATOR" overflows
    the banner's left segment, so it scrolls as a seamless ticker: the track
    holds two copies of the label and translates -50% per cycle (exactly one
