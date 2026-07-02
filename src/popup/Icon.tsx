@@ -3,9 +3,9 @@
 import { addressToBech32m } from "../shared/bech32m.js";
 
 export type IconName =
-  | "send" | "qr" | "receive" | "stake" | "swap" | "chev" | "chev-d"
+  | "send" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "clock" | "close" | "back" | "settings" | "lock" | "eye" | "search"
-  | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
+  | "shield" | "warn" | "tpm" | "hw" | "passkey" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
@@ -203,16 +203,6 @@ export function Icon({ name, size = 16 }: IconProps) {
           <rect x="14" y="14" width="7" height="7" rx="1.5" />
         </svg>
       );
-    case "qr":
-      return (
-        <svg {...props}>
-          <rect x="3" y="3" width="7" height="7" />
-          <rect x="14" y="3" width="7" height="7" />
-          <rect x="3" y="14" width="7" height="7" />
-          <rect x="14" y="14" width="3" height="3" />
-          <rect x="18" y="18" width="3" height="3" />
-        </svg>
-      );
     case "receive":
       return (
         <svg {...props}>
@@ -358,15 +348,6 @@ export function Icon({ name, size = 16 }: IconProps) {
       return (
         <svg {...props}>
           <path d="M15 7a4 4 0 1 1-4 4M11 11l-7 7v3h3l7-7" />
-        </svg>
-      );
-    case "face":
-      return (
-        <svg {...props} strokeWidth={1.5}>
-          <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
-          <circle cx="9" cy="11" r="0.8" fill="currentColor" />
-          <circle cx="15" cy="11" r="0.8" fill="currentColor" />
-          <path d="M9 15c.8 1 2 1.5 3 1.5S14.2 16 15 15" />
         </svg>
       );
     case "bridge":
