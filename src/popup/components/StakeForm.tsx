@@ -381,7 +381,7 @@ export function StakeForm({
             delegate more.
           </div>
         )}
-        {overCap && (
+        {overCap && !atPerClusterCap && (
           <div className="ext-warn-prominent">
             Delegation would exceed the {(bindingCapBps / 100).toFixed(0)}%
             per-wallet cap for one cluster by{" "}

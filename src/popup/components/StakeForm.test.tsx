@@ -129,6 +129,17 @@ describe("StakeForm — at-per-cluster-cap copy (Section A)", () => {
     expect(html).toContain("already delegated the 50% per-cluster maximum");
   });
 
+  it("at-cap + positive %: the redundant over-cap banner is deduped (B.7, render-only)", () => {
+    // When already AT the cap, show only the clearer "choose another cluster"
+    // banner — suppress the redundant "exceed by X%" banner. Logic (the
+    // "Reduce to cap" block above) is unchanged.
+    const html = renderToStaticMarkup(
+      <StakeForm {...baseProps} existingWeightBps={5000} amountStr="10" />,
+    );
+    expect(html).toContain("already delegated the 50% per-cluster maximum");
+    expect(html).not.toContain("per-wallet cap for one cluster by");
+  });
+
   it("always shows the per-wallet cluster-limit note (at 0% and at 50% existing)", () => {
     const note = "Per-wallet limit: 50% to any one cluster";
     expect(
