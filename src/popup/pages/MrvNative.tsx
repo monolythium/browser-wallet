@@ -13,7 +13,6 @@ import {
   type NativeMarketOrderBookDeltasOutcome,
   type SendTxResult,
   type WalletMrvNoEvmArchiveVerification,
-  type WalletMrvNoEvmFinalityVerification,
   type WalletMrvNoEvmReceiptProofTranscript,
   type WalletMrvNoEvmReceiptProofVerification,
   type WalletMrvNativeReceipt,
@@ -1120,12 +1119,8 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
       : state.phase === "reverted"
         ? "Receipt status: reverted"
         : "Receipt status: included, status unavailable";
-  const noEvmProof = state.receipt.nativeReceipt?.noEvmProof ?? null;
-  const hasFinalityEvidence = noEvmProof?.finalityEvidence != null;
   const archiveVerification =
     state.receipt.nativeReceipt?.noEvmArchiveVerification ?? null;
-  const finalityVerification =
-    state.receipt.nativeReceipt?.noEvmFinalityVerification ?? null;
 
   return (
     <div style={isReverted ? receiptErrorBox : receiptBox}>
@@ -1171,7 +1166,6 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
               proof={state.receipt.nativeReceipt.noEvmProof}
               verification={state.receipt.nativeReceipt.noEvmProofVerification}
               archiveVerification={archiveVerification}
-              finalityVerification={finalityVerification}
             />
           )}
         </>
@@ -1194,13 +1188,9 @@ function MrvNativeReceiptStatus({ state }: { state: MrvNativeReceiptState }) {
         <div style={submitMeta}>Native receipt evidence unavailable.</div>
       )}
       <div style={submitMeta}>
-        {hasFinalityEvidence
-          ? finalityVerification?.status === "verified"
-            ? "Receipt self-check and wallet-side round-finality verification is shown."
-            : finalityVerification?.status === "mismatch"
-              ? "Receipt self-check and round-certificate material are shown; wallet-side round-finality verification did not pass."
-              : "Receipt self-check and parsed round-certificate material are shown; wallet-side round-finality verification is not configured here."
-          : "Transcript self-consistency only; anchor-level round finality is not established here."}
+        Receipt transcript self-check and wallet-side archive signature
+        verification are shown; anchor-level round finality is not established
+        here.
       </div>
     </div>
   );
@@ -1210,12 +1200,10 @@ function MrvNoEvmReceiptProofTranscriptDetails({
   proof,
   verification,
   archiveVerification,
-  finalityVerification,
 }: {
   proof: WalletMrvNoEvmReceiptProofTranscript;
   verification: WalletMrvNoEvmReceiptProofVerification | null;
   archiveVerification: WalletMrvNoEvmArchiveVerification | null;
-  finalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }) {
   const isVerified = verification?.status === "verified";
   const isCompact = proof.proofKind === "compactInclusion";
@@ -1243,12 +1231,6 @@ function MrvNoEvmReceiptProofTranscriptDetails({
     proof.targetReceiptBytes === null
       ? null
       : Math.max(0, (proof.targetReceiptBytes.length - 2) / 2);
-  const finalityStatusStyle =
-    finalityVerification?.status === "verified"
-      ? receiptProofVerifiedMeta
-      : finalityVerification?.status === "mismatch"
-        ? receiptProofMismatchMeta
-        : submitMeta;
   const archiveStatusStyle =
     archiveVerification?.status === "verified"
       ? receiptProofVerifiedMeta
@@ -1272,10 +1254,8 @@ function MrvNoEvmReceiptProofTranscriptDetails({
         {statusText}
       </div>
       <div style={submitMeta}>
-        Source: {sourceText}.{" "}
-        {proof.finalityEvidence === null
-          ? "Anchor-level round finality is not established here."
-          : "Round-certificate material is present."}
+        Source: {sourceText}. Anchor-level round finality is not established
+        here.
       </div>
       {proof.archiveProof !== null && (
         <>
@@ -1285,7 +1265,7 @@ function MrvNoEvmReceiptProofTranscriptDetails({
             {proof.archiveProof.signatures.length > 0
               ? `present (${proof.archiveProof.signatures.length})`
               : "absent"}
-            ; finality evidence is reported separately.
+            .
           </div>
           <div style={archiveStatusStyle}>
             Archive signature check:{" "}
@@ -1323,8 +1303,7 @@ function MrvNoEvmReceiptProofTranscriptDetails({
             <>
               <div style={submitMeta}>
                 Snapshot archive signature digest material is present; this is
-                not anchor-level round finality, and archive signature verification is
-                reported separately.
+                not anchor-level round finality.
               </div>
               <ReceiptProofHashRow
                 label="Archive signature digest"
@@ -1339,7 +1318,7 @@ function MrvNoEvmReceiptProofTranscriptDetails({
                 {proof.archiveProof.coveringSnapshot.signatures.length > 0
                   ? `present (${proof.archiveProof.coveringSnapshot.signatures.length})`
                   : "absent"}
-                . Archive signature verification is reported separately.
+                .
               </div>
               <div style={submitMeta}>
                 Snapshot height {proof.archiveProof.coveringSnapshot.snapshotHeight} ·
@@ -1364,47 +1343,6 @@ function MrvNoEvmReceiptProofTranscriptDetails({
               />
             </>
           )}
-        </>
-      )}
-      {proof.finalityEvidence === null ? (
-        <div style={submitMeta}>
-          Finality evidence: absent; missing proof material remains authoritative.
-        </div>
-      ) : (
-        <>
-          <div style={finalityStatusStyle}>
-            {finalityVerification?.status === "verified"
-              ? "Finality evidence: wallet-verified round certificate"
-              : finalityVerification?.status === "mismatch"
-                ? "Finality evidence: round certificate verification mismatch"
-                : "Finality evidence: round certificate parsed, not wallet-verified"}{" "}
-            · round {proof.finalityEvidence.round} · signer count{" "}
-            {proof.finalityEvidence.certificate.signerCount}.
-          </div>
-          {finalityVerification?.reason && (
-            <div style={submitMeta}>Wallet round-finality check: {finalityVerification.reason}.</div>
-          )}
-          {finalityVerification?.details !== null &&
-            finalityVerification?.details !== undefined && (
-              <ReceiptProofHashRow
-                label="Round threshold check"
-                value={`${finalityVerification.details.acceptedSignatureCount}/${finalityVerification.details.requiredSignatureCount} signatures · ${finalityVerification.details.signatureValid ? "signature valid" : "signature invalid"}`}
-              />
-            )}
-          <ReceiptProofHashRow
-            label="Certificate signature"
-            value={proof.finalityEvidence.certificate.signature}
-          />
-          <ReceiptProofHashRow
-            label="Certificate signers"
-            value={formatSignerIndices(
-              proof.finalityEvidence.certificate.signerIndices,
-            )}
-          />
-          <ReceiptProofHashRow
-            label="Certificate bitmap"
-            value={proof.finalityEvidence.certificate.signersBitmap}
-          />
         </>
       )}
       <div style={submitMeta}>
@@ -1551,10 +1489,6 @@ function formatArchiveVerificationIssues(
         : `${issue.message} (${issue.signerId})`,
     )
     .join("; ");
-}
-
-function formatSignerIndices(indices: number[]): string {
-  return indices.length === 0 ? "none" : indices.join(", ");
 }
 
 function ReceiptProofHashRow({ label, value }: { label: string; value: string }) {

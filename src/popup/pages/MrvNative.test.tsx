@@ -24,8 +24,6 @@ import {
 } from "../../shared/__fixtures__/golden.js";
 import type {
   WalletMrvNoEvmArchiveVerification,
-  WalletMrvNoEvmFinalityEvidence,
-  WalletMrvNoEvmFinalityVerification,
   WalletMrvNoEvmCompactReceiptProofTranscript,
   WalletMrvNativeSubmissionPlan,
   WalletMrvNoEvmReceiptProofTranscript,
@@ -70,18 +68,6 @@ const ARCHIVE_COVERING_SNAPSHOT = {
 };
 const MISSING_FINALITY_PROOF_MATERIAL =
   "round certificate for block round";
-const NO_EVM_FINALITY_EVIDENCE: WalletMrvNoEvmFinalityEvidence = {
-  schema: "mono.no_evm_receipt_finality.v1",
-  source: "roundCertificate",
-  round: 57,
-  certificate: {
-    round: 57,
-    signature: "0x1234",
-    signersBitmap: "0xabcd",
-    signerIndices: [1, 3],
-    signerCount: 2,
-  },
-};
 const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   schema: "mono.no_evm_receipt_proof.v1",
   proofKind: "boundedCacheTranscript",
@@ -89,7 +75,6 @@ const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   historySource: "liveBlockCache",
   compactInclusionProof: null,
   archiveProof: null,
-  finalityEvidence: null,
   missingProofMaterial: [MISSING_FINALITY_PROOF_MATERIAL],
   rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
@@ -115,36 +100,6 @@ const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification 
   transcriptCount: 2,
   computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
   computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
-};
-const NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED: WalletMrvNoEvmFinalityVerification = {
-  status: "unverified",
-  reason: "trusted round-finality config not configured",
-  details: null,
-};
-const NO_EVM_FINALITY_VERIFICATION_VERIFIED: WalletMrvNoEvmFinalityVerification = {
-  status: "verified",
-  reason: null,
-  details: {
-    finalityEvidencePresent: true,
-    signerCountMatches: true,
-    signerBitmapMatchesIndices: true,
-    signerIndicesInRange: true,
-    allSignersTrusted: true,
-    thresholdMet: true,
-    signatureValid: true,
-    acceptedSignatureCount: 2,
-    requiredSignatureCount: 2,
-    verified: true,
-  },
-};
-const NO_EVM_FINALITY_VERIFICATION_MISMATCH: WalletMrvNoEvmFinalityVerification = {
-  status: "mismatch",
-  reason: "round-finality evidence did not verify against configured trust inputs",
-  details: {
-    ...NO_EVM_FINALITY_VERIFICATION_VERIFIED.details!,
-    signatureValid: false,
-    verified: false,
-  },
 };
 const NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED: WalletMrvNoEvmArchiveVerification = {
   status: "unconfigured",
@@ -206,7 +161,6 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmCompactReceipt
     contentHash: `0x${"9".repeat(64)}`,
     signatures: [],
   },
-  finalityEvidence: NO_EVM_FINALITY_EVIDENCE,
   missingProofMaterial: [],
   rootAlgorithm:
     "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
@@ -525,7 +479,6 @@ describe("MrvNative", () => {
               noEvmProofStatus: "missing",
               noEvmProofVerification: null,
               noEvmArchiveVerification: null,
-              noEvmFinalityVerification: null,
             },
           },
         }}
@@ -563,7 +516,6 @@ describe("MrvNative", () => {
               noEvmProofStatus: "transcript-verified",
               noEvmProofVerification: NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: null,
-              noEvmFinalityVerification: null,
             },
           },
         }}
@@ -576,7 +528,9 @@ describe("MrvNative", () => {
     expect(proofHtml).toContain("keccak256(monolythium/v2/receipts_root/1)");
     expect(proofHtml).toContain("txIndex 1");
     expect(proofHtml).toContain("transcript blobs 2");
-    expect(proofHtml).toContain("Finality evidence: absent");
+    expect(proofHtml).toContain(
+      "Anchor-level round finality is not established here",
+    );
     expect(proofHtml).toContain(MISSING_FINALITY_PROOF_MATERIAL);
     expect(proofHtml).toContain("Count check");
     expect(proofHtml).toContain("Root check");
@@ -605,8 +559,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -622,20 +574,13 @@ describe("MrvNative", () => {
       "Wallet archive check: trusted archive signer config not configured",
     );
     expect(compactArchiveHtml).not.toContain("Archive signature digest");
-    expect(compactArchiveHtml).toContain("round certificate");
-    expect(compactArchiveHtml).toContain("round 57");
-    expect(compactArchiveHtml).toContain("signer count 2");
-    expect(compactArchiveHtml).toContain("0x1234");
-    expect(compactArchiveHtml).toContain("1, 3");
-    expect(compactArchiveHtml).toContain("0xabcd");
+    // The BLS round-finality layer was retired with core-sdk 0.6.x; receipt
+    // trust rests on the transcript self-check plus archive signatures. The
+    // wallet no longer parses or displays round-certificate material.
+    expect(compactArchiveHtml).not.toContain("round certificate");
+    expect(compactArchiveHtml).not.toContain("round-finality");
     expect(compactArchiveHtml).toContain(
-      "round certificate parsed, not wallet-verified",
-    );
-    expect(compactArchiveHtml).toContain(
-      "Wallet round-finality check: trusted round-finality config not configured",
-    );
-    expect(compactArchiveHtml).toContain(
-      "wallet-side round-finality verification is not configured here",
+      "Anchor-level round finality is not established here",
     );
     expect(compactArchiveHtml).toContain("Compact inclusion self-check verified");
     expect(compactArchiveHtml).toContain("target-only receipt evidence");
@@ -644,84 +589,6 @@ describe("MrvNative", () => {
     expect(compactArchiveHtml).toContain("Index check");
     expect(compactArchiveHtml).toContain("Leaf check");
     expect(compactArchiveHtml).toContain("Path check");
-
-    const verifiedFinalityHtml = renderToStaticMarkup(
-      <MrvNativePlanPreview
-        plan={plan}
-        onSubmit={() => undefined}
-        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
-        receiptState={{
-          phase: "included",
-          receipt: {
-            txHash: SUBMITTED_TX_HASH,
-            status: "0x1",
-            blockNumber: "0x65",
-            contractAddress: null,
-            nativeReceipt: {
-              schema: "riscv.receipt.v1",
-              txType: 0x41,
-              artifactHash: "0x" + "b".repeat(64),
-              receiptCommitment: RECEIPT_COMMITMENT,
-              eventCount: 1,
-              noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
-              noEvmProofStatus: "proof-verified",
-              noEvmProofVerification:
-                INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
-              noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification: NO_EVM_FINALITY_VERIFICATION_VERIFIED,
-            },
-          },
-        }}
-      />,
-    );
-    expect(verifiedFinalityHtml).toContain(
-      "wallet-verified round certificate",
-    );
-    expect(verifiedFinalityHtml).toContain("Round threshold check");
-    expect(verifiedFinalityHtml).toContain("2/2 signatures · signature valid");
-    expect(verifiedFinalityHtml).toContain(
-      "wallet-side round-finality verification is shown",
-    );
-
-    const mismatchFinalityHtml = renderToStaticMarkup(
-      <MrvNativePlanPreview
-        plan={plan}
-        onSubmit={() => undefined}
-        submitResult={{ txHash: SUBMITTED_TX_HASH, via: "mock-operator" }}
-        receiptState={{
-          phase: "included",
-          receipt: {
-            txHash: SUBMITTED_TX_HASH,
-            status: "0x1",
-            blockNumber: "0x65",
-            contractAddress: null,
-            nativeReceipt: {
-              schema: "riscv.receipt.v1",
-              txType: 0x41,
-              artifactHash: "0x" + "b".repeat(64),
-              receiptCommitment: RECEIPT_COMMITMENT,
-              eventCount: 1,
-              noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
-              noEvmProofStatus: "proof-verified",
-              noEvmProofVerification:
-                INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
-              noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification: NO_EVM_FINALITY_VERIFICATION_MISMATCH,
-            },
-          },
-        }}
-      />,
-    );
-    expect(mismatchFinalityHtml).toContain(
-      "round certificate verification mismatch",
-    );
-    expect(mismatchFinalityHtml).toContain(
-      "Wallet round-finality check: round-finality evidence did not verify against configured trust inputs",
-    );
-    expect(mismatchFinalityHtml).toContain("2/2 signatures · signature invalid");
-    expect(mismatchFinalityHtml).toContain(
-      "wallet-side round-finality verification did not pass",
-    );
 
     const digestArchiveProof: WalletMrvNoEvmCompactReceiptProofTranscript = {
       ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
@@ -753,8 +620,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -763,9 +628,7 @@ describe("MrvNative", () => {
     expect(digestArchiveHtml).toContain(
       "Snapshot archive signature digest material is present",
     );
-    expect(digestArchiveHtml).toContain(
-      "not anchor-level round finality, and archive signature verification is reported separately",
-    );
+    expect(digestArchiveHtml).toContain("not anchor-level round finality");
     expect(digestArchiveHtml).toContain("Archive signature digest");
     expect(digestArchiveHtml).toContain(ARCHIVE_SIGNATURE_DIGEST);
 
@@ -799,17 +662,13 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
       />,
     );
     expect(coveringSnapshotHtml).toContain("Covering snapshot parsed");
-    expect(coveringSnapshotHtml).toContain(
-      "Archive signature verification is reported separately",
-    );
+    expect(coveringSnapshotHtml).toContain("archive snapshot signatures");
     expect(coveringSnapshotHtml).toContain("Snapshot height 101");
     expect(coveringSnapshotHtml).toContain("checkpoint 0-101");
     expect(coveringSnapshotHtml).toContain("Snapshot manifest");
@@ -852,8 +711,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_VERIFIED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -889,8 +746,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_MISMATCH,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -929,8 +784,6 @@ describe("MrvNative", () => {
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification:
                 NO_EVM_ARCHIVE_VERIFICATION_CONFIG_INVALID,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -973,7 +826,6 @@ describe("MrvNative", () => {
                 receiptsRootMatches: false,
               },
               noEvmArchiveVerification: null,
-              noEvmFinalityVerification: null,
             },
           },
         }}
