@@ -36,7 +36,8 @@ export function SlhDsaRotationRehearsal() {
         aria-expanded={open}
       >
         <span>
-          <Icon name="shield" size={11} /> What happens during a G3 emergency?
+          <Icon name="shield" size={11} /> What happens in a cryptographic
+          emergency?
         </span>
         <Icon name="chev" size={11} />
       </button>
@@ -73,9 +74,9 @@ export function SlhDsaRotationRehearsal() {
           </div>
           <ol style={listStyle}>
             <li>
-              <strong>Wait for the G3 declaration.</strong> The wallet
-              will surface it as a chain-wide banner with the activation
-              block height + an "I'm ready to rotate" CTA.
+              <strong>Wait for the emergency declaration.</strong> When the
+              chain's rotation mechanism goes live, the wallet would prompt
+              you to rotate.
             </li>
             <li>
               <strong>Re-import your 24-word backup phrase.</strong> The
@@ -107,10 +108,9 @@ export function SlhDsaRotationRehearsal() {
               lineHeight: 1.5,
             }}
           >
-            The actual rotation UI is a Phase 10.2 deliverable — the
-            G3 declaration framework is still landing on the chain side.
-            Today's setup ensures the slot is registered + the mnemonic
-            is in your cold storage so you're ready when it does.
+            Backup-key rotation isn't available in the wallet yet —
+            registering your backup now and keeping the recovery phrase in
+            cold storage is what lets you rotate when it is.
           </div>
         </div>
       )}
