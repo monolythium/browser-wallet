@@ -26,6 +26,7 @@ import {
   lythoshiToLythDecimal,
   parseHexQuantity,
 } from "../../shared/native-amount";
+import { MAX_EXECUTION_UNIT_PRICE_LYTHOSHI } from "../../shared/operator-bounds";
 
 export interface MultisigProposalDetailProps {
   proposal: PendingProposal;
@@ -95,6 +96,31 @@ function ActionSummary({
       <Row label="To">{bech32mDisplay(action.to)}</Row>
       <Row label="Value">{formatLythoshiValue(valueLythoshiHex)}</Row>
       <Row label="Chain">{action.chainIdHex}</Row>
+      {/* P3-009 — gas limit is hashed + signed by every co-signer; show it
+          (when present) so it's WYSIWYS, not a field they sign blind. */}
+      {action.gasLimitHex != null && action.gasLimitHex !== "" && (
+        <Row label="Gas limit">{formatGasLimit(action.gasLimitHex)}</Row>
+      )}
+      {/* P3-004 — the executor sets the fee at EXECUTION (the live network
+          price); the wallet clamps the per-execution-unit price to
+          MAX_EXECUTION_UNIT_PRICE_LYTHOSHI so a malicious/MITM operator can't
+          inflate it. Show that cap so co-signers see the worst-case rate they
+          implicitly approve. Display-only — the fee is NOT part of the signed
+          proposal digest. */}
+      <Row label="Max fee rate">
+        {`≤ ${lythoshiToLythDecimal(MAX_EXECUTION_UNIT_PRICE_LYTHOSHI)} LYTH / unit`}
+      </Row>
+      <div
+        style={{
+          fontSize: 10,
+          lineHeight: 1.5,
+          color: "var(--fg-500, #8a8f98)",
+          padding: "2px 0 0",
+        }}
+      >
+        Live network price at execution, capped — the executor&apos;s wallet
+        refuses a higher fee.
+      </div>
       {hasData && action.kind === "contract" && (
         <CalldataView data={action.data ?? "0x"} to={action.to} />
       )}
@@ -449,6 +475,15 @@ export function formatLythoshiValue(hexLythoshi: string): string {
   const lythoshi = parseHexQuantity(hexLythoshi);
   if (lythoshi == null) return "? LYTH";
   return `${lythoshiToLythDecimal(lythoshi)} LYTH`;
+}
+
+/** Format a gas/execution-unit limit hex for the co-signer summary: a human
+ *  decimal with the raw hex (what is signed) alongside. Falls back to the raw
+ *  hex if unparseable. */
+export function formatGasLimit(hex: string): string {
+  const n = parseHexQuantity(hex);
+  if (n == null) return hex;
+  return `${n.toLocaleString("en-US")} (${hex})`;
 }
 
 /** Truncate a hex blob to "0xabcd…wxyz" for tight UI rows. Pure. */

@@ -21,14 +21,15 @@ export function DelegateRowBody({ row, clusterNameById }: DelegateRowBodyProps) 
   // weightBps is a delegation WEIGHT share (basis points), not a LYTH amount —
   // render it as a percentage. The LYTH principal is surfaced in the tx-detail
   // popup via a block-lookup of the delegate tx value.
+  const label = `Delegated to ${resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)}`;
   return (
     <div className="ext-act-row">
       <div className="dir out">
         <Icon name="stake" size={13} />
       </div>
       <div className="ext-act-row__main">
-        <div className="ext-act-row__who">
-          Delegated to {resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)}
+        <div className="ext-act-row__who" title={label}>
+          {label}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>

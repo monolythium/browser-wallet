@@ -65,6 +65,10 @@ export interface KeystoreStatus {
    * was retired in favour of ML-DSA-65 — kept in the union so the
    * Settings panel's pre-PQ fallback render path still typechecks. */
   algo: SignAlgo;
+  /** P1-003: set when a stored container predates the V5 always-AAD seal and
+   *  cannot be opened — the locked screen shows "restore from your recovery
+   *  phrase" instead of a password prompt. Absent/false in the normal case. */
+  legacyRestoreRequired?: boolean;
 }
 
 export interface SendTxView {
@@ -371,10 +375,10 @@ export async function bgKeystoreReset(
  * popup-access attacker can wipe but gets no key material; the security
  * boundary is the 24-word recovery phrase, not the popup.
  */
-export async function bgKeystoreWipeUnauth(): Promise<
-  { ok: true } | { ok: false; reason?: string }
-> {
-  return send("keystore-wipe-unauth");
+export async function bgKeystoreWipeUnauth(
+  confirmToken: string,
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
+  return send("keystore-wipe-unauth", { confirmToken });
 }
 
 /**
@@ -449,6 +453,26 @@ export async function bgWalletTxFee(
   | { ok: false; reason?: string }
 > {
   return send("wallet-tx-fee", { txHash });
+}
+
+/** P5-007 — ask the SW whether `recipient` is a wallet-VERIFIED sent-address for
+ *  (vault, chain). The MEK is SW-only, so HMAC verification lives there. Returns
+ *  a plain boolean; ANY error (transport, locked, malformed) → false, so the
+ *  first-time-send warning fails safe to firing. Advisory-only — never a gate. */
+export async function bgRecipientSentVerified(
+  vaultAddrLower: string,
+  chainIdHex: string,
+  recipient: string,
+): Promise<boolean> {
+  try {
+    const r = await send<{ ok?: boolean; verified?: boolean }>(
+      "wallet-recipient-sent-verified",
+      { vaultAddrLower, chainIdHex, recipient },
+    );
+    return r?.verified === true;
+  } catch {
+    return false;
+  }
 }
 
 export interface WalletAddressLabel {
@@ -527,6 +551,17 @@ export async function bgWalletActivityGet(
   | { ok: false; reason?: string }
 > {
   return send("wallet-activity-get", { address, chainIdHex });
+}
+
+/** Dismiss a TERMINAL (dropped/expired) pending row from the activity list.
+ *  Display/state only — the SW removes the local pending-row record by txHash;
+ *  it refuses to remove a durable claim or a still-live (pending/slow) row. */
+export async function bgDismissPendingTx(args: {
+  address: string;
+  chainIdHex: string;
+  txHash: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return send("wallet-dismiss-pending", args);
 }
 
 /** Failed txs for (address, chain), sourced from the notification history
@@ -1013,6 +1048,12 @@ export async function bgWalletSendTx(args: {
     maxPriorityFeePerGasHex: string;
     executionUnitLimitHex: string;
   };
+  /** boundary 3b — the SW-minted single-use challenge id + the forwarded
+   *  WebAuthn assertion for an under-limit passkey send. The SW consumes the
+   *  challenge, re-binds it to this tx's intent, and cryptographically verifies
+   *  the assertion before signing. Omit on non-passkey sends. */
+  passkeyChallengeId?: string;
+  passkeyAssertion?: BgForwardedAssertion;
 }): Promise<
   { ok: true; result: SendTxResult }
   | {
@@ -1025,6 +1066,9 @@ export async function bgWalletSendTx(args: {
        *  no/empty password supplied; "wrong_password"/"rate_limited" = a
        *  supplied password failed the SW-side re-auth. */
       passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+      /** boundary 3b Part 2: the credential that signed predates the public-key
+       *  capture — the user must re-register it before it can authorize. */
+      passkeyReregister?: "required";
       secondsRemaining?: number;
     }
 > {
@@ -1037,6 +1081,7 @@ export async function bgWalletSendTx(args: {
         method?: string;
         via?: string;
         passkeyElevation?: "required" | "wrong_password" | "rate_limited";
+        passkeyReregister?: "required";
         secondsRemaining?: number;
       };
   const { executionUnitLimitHex, ...rest } = args;
@@ -1340,8 +1385,9 @@ export async function bgListPending(): Promise<PendingApproval[]> {
 export async function bgResolveApproval(
   id: string,
   decision: { ok: boolean; reason?: string },
+  windowId?: number,
 ): Promise<{ found: boolean }> {
-  return send<{ found: boolean }>("resolve", { id, decision });
+  return send<{ found: boolean }>("resolve", { id, decision, windowId });
 }
 
 export async function bgFocusApproval(id: string): Promise<{ focused: boolean }> {
@@ -2303,6 +2349,14 @@ export interface BgPasskeyCredential {
   name: string;
   kind: BgAuthenticatorKind;
   createdAt: number;
+  /** base64url(SPKI DER) of the credential public key — sent on a new
+   *  registration (the SW requires it). Optional on the type so reads of
+   *  legacy credentials (registered before this field) don't break. */
+  publicKeySpki?: string;
+  /** COSE alg id: -7 (ES256) / -257 (RS256). */
+  alg?: number;
+  /** Authenticator signature counter from the registration authData. */
+  signCount?: number;
 }
 
 export async function bgPasskeyGetState(
@@ -2332,11 +2386,31 @@ export async function bgPasskeySetPolicy(args: {
   return send("passkey-set-policy", args);
 }
 
+/** A WebAuthn assertion (base64url) forwarded from the popup's
+ *  `navigator.credentials.get()` to the SW verify gate (boundary 3b). */
+export interface BgForwardedAssertion {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+}
+
 /** Wire-format passkey decision — mirrors `PolicyDecision` in
  *  `shared/passkey.ts` with lythoshi bigint values encoded as hex strings. */
 export type BgPasskeyDecision =
-  | { kind: "passkey-ok"; credentials: BgPasskeyCredential[] }
+  | {
+      kind: "passkey-ok";
+      credentials: BgPasskeyCredential[];
+      /** boundary 3b: the SW-minted single-use challenge id + bytes (base64url)
+       *  the popup must pass to `.get()`. The popup never builds its own
+       *  challenge anymore. */
+      challengeId?: string;
+      challengeB64?: string;
+    }
   | { kind: "password-required"; reason: "disabled" | "no-credential" }
+  /** boundary 3b Part 2: every registered credential predates the public-key
+   *  capture and cannot authorize a signature — the user must re-register. */
+  | { kind: "reregister-required" }
   | {
       kind: "over-limit";
       mode: BgPolicyMode;
@@ -2347,11 +2421,17 @@ export type BgPasskeyDecision =
     };
 
 /** Consult the policy for a tx value. The wallet UI runs this before
- *  the preview screen so the user sees which unlock path applies. */
+ *  the preview screen so the user sees which unlock path applies. On a
+ *  `passkey-ok` decision the SW also mints the tx-bound challenge, so `to` +
+ *  `chainIdHex` (the intent it binds to) are required for a single-vault send. */
 export async function bgPasskeyEvaluate(args: {
   vaultId: string;
   /** Compatibility field name; hex lythoshi. */
   valueWeiHex: string;
+  /** Recipient + chain — bound into the minted challenge's intent digest. */
+  to?: string;
+  chainIdHex?: string;
+  data?: string;
 }): Promise<
   | { ok: true; decision: BgPasskeyDecision }
   | { ok: false; reason: string }
@@ -2359,16 +2439,9 @@ export async function bgPasskeyEvaluate(args: {
   return send("passkey-evaluate", args);
 }
 
-/** Append to the in-memory daily-cap ledger after a successful
- *  passkey-unlocked tx submit. Caller is the popup Send flow on the
- *  Confirm → submit → success transition. */
-export async function bgPasskeyRecordUsage(args: {
-  vaultId: string;
-  /** Compatibility field name; hex lythoshi. */
-  valueWeiHex: string;
-}): Promise<{ ok: boolean; reason?: string }> {
-  return send("passkey-record-usage", args);
-}
+// The passkey daily-cap usage ledger is appended by the service worker itself
+// (in wallet-send-tx, on a successful daily-mode passkey send) — the SW is the
+// authoritative counter, so there is no popup-side record-usage IPC.
 
 // Two-tier UX feature toggles
 import {
@@ -2468,14 +2541,19 @@ export async function bgSlhDsaBackupConfirmColdStorage(
 /** Drop the backup record. Settings → Security exposes this as an
  *  explicit "Generate new key" action — chain registration becomes
  *  irrecoverable for the vault address after a clear+regenerate
- *  cycle. */
+ *  cycle. Password-gated: the SW verifies the master password
+ *  (verify-only, no unlock) before deleting, sharing the unlock
+ *  brute-force lockout. `reason` is `"wrong_password"` / `"locked_out"`
+ *  / `"missing password"` on failure (`secondsRemaining` for the rate-
+ *  limited cases). */
 export async function bgSlhDsaBackupClear(
   vaultId: string,
+  password: string,
 ): Promise<
   | { ok: true; cleared: boolean }
-  | { ok: false; reason: string }
+  | { ok: false; reason: string; secondsRemaining?: number }
 > {
-  return send("slh-dsa-backup-clear", { vaultId });
+  return send("slh-dsa-backup-clear", { vaultId, password });
 }
 
 /** Light wrapper around `eth_getTransactionReceipt` used to poll a

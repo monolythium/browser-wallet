@@ -22,10 +22,10 @@ describe("txTypeLabel", () => {
   });
 
   it("names the delegation family", () => {
-    expect(txTypeLabel({ kind: "delegate", cluster: 0, weightBps: 100, ...anchor })).toBe("Delegate");
-    expect(txTypeLabel({ kind: "undelegate", cluster: 0, weightBps: 100, ...anchor })).toBe("Undelegate");
+    expect(txTypeLabel({ kind: "delegate", cluster: 0, weightBps: 100, principalLythoshi: "", ...anchor })).toBe("Delegate");
+    expect(txTypeLabel({ kind: "undelegate", cluster: 0, weightBps: 100, principalLythoshi: "", ...anchor })).toBe("Undelegate");
     expect(
-      txTypeLabel({ kind: "redelegate", cluster: 0, toCluster: 1, weightBps: 100, ...anchor }),
+      txTypeLabel({ kind: "redelegate", cluster: 0, toCluster: 1, weightBps: 100, principalLythoshi: "", ...anchor }),
     ).toBe("Redelegate");
   });
 

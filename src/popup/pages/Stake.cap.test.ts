@@ -7,7 +7,10 @@
 // page wires `setCapBps(capBpsFromCapResult(capR))`).
 
 import { describe, expect, it } from "vitest";
-import { capBpsFromCapResult } from "./Stake.js";
+import {
+  capBpsFromCapResult,
+  undelegateNotificationWeightBps,
+} from "./Stake.js";
 
 describe("capBpsFromCapResult — no-mock delegation cap (F-3.8/#25)", () => {
   it("adopts a concrete cap from a LIVE read", () => {
@@ -33,5 +36,16 @@ describe("capBpsFromCapResult — no-mock delegation cap (F-3.8/#25)", () => {
 
   it("returns null when a live read carries no data (defensive)", () => {
     expect(capBpsFromCapResult({ ok: true, via: "operator-1" })).toBeNull();
+  });
+});
+
+describe("undelegateNotificationWeightBps — never emit 0 for the toast %", () => {
+  it("passes a known weight through unchanged", () => {
+    expect(undelegateNotificationWeightBps(5000)).toBe(5000);
+    expect(undelegateNotificationWeightBps(1)).toBe(1);
+  });
+
+  it("maps 0 (stale/absent cache row) to undefined — not a misleading 0%", () => {
+    expect(undelegateNotificationWeightBps(0)).toBeUndefined();
   });
 });

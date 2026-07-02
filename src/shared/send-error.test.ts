@@ -324,20 +324,23 @@ describe("classifySendError — shared -32047 code disambiguated by inner (Part 
   // the inner MESSAGE, not the code, so once C1 unwraps the wrapper the two
   // distinct inner Display strings route to distinct kinds — they must never
   // cross-classify. (Exact mono-core Display strings used below.)
-  it("plaintext-not-allowed -32047 → 'Encrypted transactions required', never spending-policy", () => {
+  it("plaintext-not-allowed -32047 → generic 'Transaction not accepted' (no stale 'Encrypted' copy), never spending-policy", () => {
     const r = classifySendError(
       "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
     );
     expect(r.kind).toBe("plaintext-not-allowed");
-    expect(r.headline).toBe("Encrypted transactions required");
+    expect(r.headline).toBe("Transaction not accepted");
+    // DEC-024 deleted the seal lane — no "Encrypted" copy anywhere here.
+    expect(r.headline.toLowerCase()).not.toContain("encrypt");
+    expect(r.body.toLowerCase()).not.toContain("encrypt");
   });
 
-  it("SpendingPolicyCreateForbidden -32047 → spending-policy-blocked, never 'Encrypted transactions required'", () => {
+  it("SpendingPolicyCreateForbidden -32047 → spending-policy-blocked, never plaintext-not-allowed", () => {
     const r = classifySendError(
       "upstream unavailable: mempool: spending-policy: CREATE not permitted from sub-accounts with destination policy configured",
     );
     expect(r.kind).toBe("spending-policy-blocked");
-    expect(r.headline).not.toBe("Encrypted transactions required");
+    expect(r.headline).not.toBe("Transaction not accepted");
   });
 
   it("the two -32047 inners do not cross-classify", () => {
@@ -400,5 +403,44 @@ describe("classifySendError — shared -32047 code disambiguated by inner (Part 
         "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
       ).kind,
     ).toBe("plaintext-not-allowed");
+  });
+});
+
+describe("classifySendError — duplicate vs replace-underpriced are DISTINCT (no stale 'Encrypted' copy)", () => {
+  const dup = classifySendError(
+    "upstream unavailable: mempool: duplicate tx already known",
+  );
+  const repl = classifySendError(
+    "upstream unavailable: mempool: replace underpriced",
+  );
+
+  it("both classify as nonce-conflict (classification structure unchanged)", () => {
+    expect(dup.kind).toBe("nonce-conflict");
+    expect(repl.kind).toBe("nonce-conflict");
+  });
+
+  it("the two inner strings map to DISTINCT headlines + bodies", () => {
+    expect(dup.headline).not.toBe(repl.headline);
+    expect(dup.body).not.toBe(repl.body);
+  });
+
+  it("the duplicate message advises waiting and NOT resubmitting (no fee-bump advice)", () => {
+    expect(dup.body.toLowerCase()).toMatch(/wait for it to confirm/);
+    expect(dup.body.toLowerCase()).not.toMatch(/higher fee|resubmit with|bump|replace it/);
+  });
+
+  it("the replace-underpriced message advises waiting (no replace-by-fee advice — no wallet path yet)", () => {
+    expect(repl.body.toLowerCase()).toMatch(/wait for it to confirm/);
+    expect(repl.body.toLowerCase()).not.toMatch(/higher fee|10%|bump|replace it/);
+  });
+
+  it("NO tx-error copy mentions 'encrypt' (DEC-024 deleted the seal lane)", () => {
+    const pna = classifySendError(
+      "upstream unavailable: mempool: plaintext mempool entry not allowed: encrypted envelope required",
+    );
+    for (const s of [dup, repl, pna]) {
+      expect(s.headline.toLowerCase()).not.toContain("encrypt");
+      expect(s.body.toLowerCase()).not.toContain("encrypt");
+    }
   });
 });

@@ -93,6 +93,15 @@ describe("bridge postMessage source guard (F-2.1/F-2.2)", () => {
     messageListener!({ source: stubWindow, origin: "https://dapp.example", data: { source: "evil", id: "x", args: {} } });
     expect(rpcForwards(before)).toHaveLength(0);
   });
+
+  it("ignores an envelope whose ev.origin is not this page's origin (P4-003)", async () => {
+    await loadBridge();
+    const before = sendMessageCalls.length;
+    // Passes the ev.source check (same window object) but the origin string is
+    // a different origin → the new ev.origin guard drops it.
+    messageListener!({ source: stubWindow, origin: "https://evil.example", data: pageEnvelope });
+    expect(rpcForwards(before)).toHaveLength(0);
+  });
 });
 
 // ---- BROKEN-1/2 fix — announce reply relayed as the initial-state sync ----

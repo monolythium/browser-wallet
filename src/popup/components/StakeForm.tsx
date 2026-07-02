@@ -144,6 +144,10 @@ export function StakeForm({
   // Fail-closed: a null cap does NOT lift the per-cluster cap.
   const overCap = exceedsPerClusterCap(existingWeightBps, additionalBps, capBps);
   const bindingCapBps = bindingPerClusterCapBps(capBps);
+  // Already at the per-cluster cap (0 headroom because existing weight is the
+  // whole cap) — surface WHY (not just the preset clamp's "Only 0.00% left").
+  // Display-only: `overCap` already blocks the Continue button at 0 headroom.
+  const atPerClusterCap = existingWeightBps >= bindingCapBps;
   // Global ceiling: total delegated weight across ALL clusters ≤ 100%. The
   // binding headroom is the smaller of the per-cluster cap headroom and this.
   const globalHeadroomBps = Math.max(0, 10000 - totalDelegatedBps);
@@ -356,8 +360,27 @@ export function StakeForm({
           locked or sent to a delegation contract. The effective weight tracks
           your live balance at the next settlement.
         </div>
+        {/* Always-on informational note (not a warning) — the per-wallet
+            anti-capture limit, so the cap isn't a surprise at submit time. */}
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 9.5,
+            color: "var(--fg-500)",
+            marginTop: 6,
+          }}
+        >
+          Per-wallet limit: {(bindingCapBps / 100).toFixed(0)}% to any one cluster.
+        </div>
         {/* Limit/clamp warnings + the headroom line sit LAST in the card, right
             above the Continue action, so they're seen just before submitting. */}
+        {atPerClusterCap && (
+          <div className="ext-warn-prominent">
+            You&apos;ve already delegated the {(bindingCapBps / 100).toFixed(0)}%
+            per-cluster maximum to this cluster — choose another cluster to
+            delegate more.
+          </div>
+        )}
         {overCap && (
           <div className="ext-warn-prominent">
             Delegation would exceed the {(bindingCapBps / 100).toFixed(0)}%
@@ -376,7 +399,7 @@ export function StakeForm({
             — total delegation across all clusters can&apos;t exceed 100%.
           </div>
         )}
-        {presetWarning !== null && (
+        {presetWarning !== null && !atPerClusterCap && (
           <div className="ext-warn-prominent">{presetWarning}</div>
         )}
         {roundsToZeroBps && (

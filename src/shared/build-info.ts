@@ -34,15 +34,17 @@ export const SDK_PACKAGE_VERSION: string =
  *  takes precedence and the human reviewer decides whether to bump it.
  *
  *  Current value = the 2026-07-02 v0.3.2 lifecycle re-genesis
- *  (protocore v0.3.2-testnet, mono-core @ 3c698c85), where
+ *  (release v0.3.2-testnet, mono-core master @ 3c698c85), where
  *  `lyth_chainStats.genesisHash` reports the registry identity hash below.
- *  CONFIRMED 2026-07-02 against the live 2×10 operator fleet (chain-registry
- *  pin follows). SDK_REGISTRY_GENESIS_HASH below mirrors the v0.3.2
- *  chain-registry snapshot (`@monolythium/core-sdk` ≥ 0.6.2); the About drift
- *  banner surfaces whenever the installed SDK's `TESTNET_69420.genesis_hash`
- *  differs from this pin, in which case this security pin takes precedence.
- *  Bumping this security pin is a human-reviewer decision; the live-registry
- *  fetch shows the current GitHub-registry value alongside. */
+ *  CONFIRMED 2026-07-02 against the live operator fleet (7 operators all
+ *  byte-identical) + the GitHub chain-registry (matching). The
+ *  SDK_REGISTRY_GENESIS_HASH below mirrors the v0.3.2 chain-registry snapshot;
+ *  the About drift banner surfaces whenever the installed SDK's
+ *  `TESTNET_69420.genesis_hash` differs from this pin (the bundled
+ *  `@monolythium/core-sdk` 0.6.0 still carries the far-older 0xaabb0f1e
+ *  snapshot), in which case this security pin takes precedence. Bumping this
+ *  security pin is a human-reviewer decision; the live-registry fetch shows
+ *  the current GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
   "0x323399b40e190833242318122d06a1c3ab0914e838cb044230b1bf44acfb183e";
 
@@ -58,9 +60,10 @@ export const TESTNET_BLOCK0_HASH =
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
- *  the v0.3.2-testnet re-genesis value (2026-07-02) so it does not lag
- *  behind the installed SDK snapshot (`TESTNET_69420.genesis_hash`), which
- *  is bumped on the next SDK rebuild/publish. */
+ *  the v0.3.2-testnet re-genesis value (2026-07-02) — matching the live
+ *  GitHub chain-registry — so it does not lag. The installed SDK snapshot
+ *  (`TESTNET_69420.genesis_hash`, bundled 0.6.0) still reports the older
+ *  0xaabb0f1e value until the next SDK rebuild/publish. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
   "0x323399b40e190833242318122d06a1c3ab0914e838cb044230b1bf44acfb183e";
 
@@ -185,16 +188,25 @@ export const EXTERNAL_LINKS: ReadonlyArray<{
  *  link (honest absence; never synthesize a hash). */
 export const MONOSCAN_TX_BASE = "https://monoscan.xyz/#/tx/";
 
-/** Build the Monoscan URL for a canonical transaction hash. */
+/** Build the Monoscan URL for a canonical transaction hash. The hash is
+ *  `encodeURIComponent`-encoded — a no-op for a valid 0x-hex hash (its charset
+ *  is URL-safe), but it percent-encodes any metacharacter in a malformed value
+ *  so the interpolated component can never carry markup into an `href` (mirrors
+ *  `monoscanAddressUrl`; defense-in-depth across every tx-link call site). */
 export function monoscanTxUrl(txHash: string): string {
-  return `${MONOSCAN_TX_BASE}${txHash}`;
+  return `${MONOSCAN_TX_BASE}${encodeURIComponent(txHash)}`;
 }
 
 /** Monoscan address (wallet) page base. Takes a bech32m address — `mono…`
  *  for accounts, `monoc…` for clusters — never the raw `0x` form. */
 export const MONOSCAN_ADDRESS_BASE = "https://monoscan.xyz/#/wallet/";
 
-/** Build the Monoscan address-page URL for a bech32m address. */
+/** Build the Monoscan address-page URL for a bech32m address. The address
+ *  component is `encodeURIComponent`-encoded: a no-op for a valid bech32m (its
+ *  charset is URL-safe), but it percent-encodes any HTML metacharacters in a
+ *  malformed value so the interpolated component can never carry markup into an
+ *  `href` (CodeQL js/xss-through-dom — a modeled sanitizer, defense-in-depth
+ *  across every address-link call site). */
 export function monoscanAddressUrl(bech32mAddr: string): string {
-  return `${MONOSCAN_ADDRESS_BASE}${bech32mAddr}`;
+  return `${MONOSCAN_ADDRESS_BASE}${encodeURIComponent(bech32mAddr)}`;
 }

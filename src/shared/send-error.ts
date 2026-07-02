@@ -197,27 +197,21 @@ function classifyInnerError(
     };
   }
 
-  // DEFENSIVE: a network that rejects a plaintext tx as "plaintext mempool entry
-  // not allowed: encrypted envelope required" (native code -32040
-  // PlaintextNotAllowed, surfaced on the wire as -32047 because the broadcaster
-  // flattens it into UpstreamUnavailable — see the unwrap-inner note above).
+  // DEFENSIVE / UNREACHABLE-ON-MONOLYTHIUM: a "plaintext mempool entry not
+  // allowed: encrypted envelope required" rejection. Post-DEC-024 the
+  // encrypted/sealed mempool lane is DELETED chain-wide — the chain admits
+  // PLAINTEXT ONLY, so it can no longer reject a tx for being plaintext and this
+  // branch never fires from the live chain. Kept (with generic, NO-"encrypted"
+  // copy) as a defensive catch IF some other network ever emitted such a string,
+  // and to preserve the ordering/hoist guarantees the tests below pin.
   //
-  // This is NOT expected on a Monolythium network: encryption is OPTIONAL and
-  // costs more — the encrypted mempool is never mandatory, so plaintext is always
-  // admitted. The wallet also no longer silently downgrades: an opt-in private
-  // send that can't fetch the seal roster fails before broadcast (the popup
-  // offers an explicit plaintext-fallback confirm), so a plaintext tx never
-  // reaches the chain "by accident". This branch is kept only so that IF some
-  // network were ever configured encrypted-required and a plaintext tx hit it,
-  // the user sees an honest explanation instead of a raw debugger string.
-  //
-  // MUST precede the chain-quarantined branch below: the chain wraps this as
-  // "upstream unavailable: mempool: plaintext … not allowed …", so the generic
-  // "upstream unavailable" match would otherwise intercept it and show the wrong
-  // (operator-outage) message. The predicate stays SPECIFIC (the plaintext /
-  // encrypted-envelope substring) so a genuine "upstream unavailable" outage
-  // WITHOUT that substring still falls through to chain-quarantined — see the
-  // send-error.test ordering regression guard.
+  // MUST precede the chain-quarantined branch below: such a string arrives
+  // wrapped as "upstream unavailable: mempool: plaintext … not allowed …", so
+  // the generic "upstream unavailable" match would otherwise intercept it. The
+  // predicate stays SPECIFIC (the plaintext / encrypted-envelope substring) so a
+  // genuine "upstream unavailable" outage WITHOUT that substring still falls
+  // through to chain-quarantined — see the send-error.test ordering + storage-
+  // read-hoist guards.
   if (
     (lower.includes("plaintext") &&
       (lower.includes("not allowed") || lower.includes("encrypted envelope"))) ||
@@ -225,12 +219,10 @@ function classifyInnerError(
   ) {
     return {
       kind: "plaintext-not-allowed",
-      headline: "Encrypted transactions required",
+      headline: "Transaction not accepted",
       body:
-        "This network requires encrypted transactions, but the encrypted " +
-        "submission path was unavailable for this transaction, so the network " +
-        "rejected it. Your funds are unaffected — nothing was transferred. " +
-        "Try again in a moment.",
+        "The network rejected this transaction's submission format. Your funds " +
+        "are unaffected — nothing was transferred. Try again in a moment.",
       severity: "err",
     };
   }
@@ -238,9 +230,9 @@ function classifyInnerError(
   // Execution-unit limit below the chain's intrinsic floor. The chain wraps it
   // as "upstream unavailable: mempool: tx execution-unit limit X below intrinsic
   // floor Y" (-32047), which the chain-quarantined branch below would otherwise
-  // steal — so it MUST be checked first. Encrypted (sealed) submissions carry a
-  // much higher floor (~250k); the wallet raises the limit automatically for
-  // them, so a residual hit here is rare and means the raise was still short.
+  // steal — so it MUST be checked first. The wallet sizes the execution-unit
+  // limit to the chain's intrinsic floor automatically, so a residual hit here
+  // is rare and means the auto-sizing was still short.
   if (
     lower.includes("below intrinsic floor") ||
     (lower.includes("execution-unit limit") && lower.includes("intrinsic"))
@@ -256,25 +248,48 @@ function classifyInnerError(
     };
   }
 
-  // Replacement / already-pending: the chain wraps "upstream unavailable:
-  // mempool: replace underpriced" — a duplicate-nonce submission whose fee does
-  // not outbid the tx already pending at that nonce. Encrypted (sealed) txs sit
-  // in the mailbox longer before reveal, so a retry while the first is still
-  // pending lands here. Checked above chain-quarantined, which would otherwise
-  // steal the "upstream unavailable" wrapper.
+  // DUPLICATE (mono-core DuplicateKnown): the chain wraps "upstream unavailable:
+  // mempool: duplicate tx already known" — the EXACT same tx (same hash) is
+  // already in the mempool. Fired BEFORE any replacement logic, so resubmitting
+  // the identical tx just re-hits this; the only useful action is to WAIT.
+  // Checked above chain-quarantined, which would otherwise steal the "upstream
+  // unavailable" wrapper.
+  //
+  // NOTE: no replace-by-fee advice — there is no wallet UI path to replace a
+  // pending tx today. Copy to be revisited when the replace/speed-up feature
+  // lands.
+  if (
+    lower.includes("duplicate tx already known") ||
+    lower.includes("already known")
+  ) {
+    return {
+      kind: "nonce-conflict",
+      headline: "Transaction already submitted",
+      body:
+        "This transaction is already in the mempool and hasn't confirmed yet. " +
+        "Wait for it to confirm — resubmitting the same transaction won't help. " +
+        "Your funds are unaffected: this was rejected before inclusion.",
+      severity: "warn",
+    };
+  }
+
+  // REPLACE-UNDERPRICED (mono-core ReplaceUnderpriced): "upstream unavailable:
+  // mempool: replace underpriced" — a DIFFERENT tx at a nonce that already has
+  // one pending, whose tip doesn't clear the chain's replacement bump. Until the
+  // replace/speed-up feature lands the wallet can't bump the tip in place, so the
+  // honest action is to WAIT for the pending tx to confirm. Copy to be revisited
+  // when that feature lands.
   if (
     lower.includes("replace underpriced") ||
-    lower.includes("replacement transaction underpriced") ||
-    lower.includes("already known")
+    lower.includes("replacement transaction underpriced")
   ) {
     return {
       kind: "nonce-conflict",
       headline: "Transaction already pending",
       body:
-        "A transaction at this nonce is already pending. Encrypted transactions " +
-        "take longer to confirm — wait for it to complete, or resubmit with a " +
-        "higher fee to replace it. Your funds are unaffected: this was rejected " +
-        "before inclusion.",
+        "A transaction at this nonce is already pending and hasn't confirmed " +
+        "yet. Wait for it to confirm. Your funds are unaffected: this was " +
+        "rejected before inclusion.",
       severity: "warn",
     };
   }
@@ -307,7 +322,7 @@ function classifyInnerError(
   // clear` command — useless and alarming to a normal user. Plain body +
   // "See Operators"; the raw detail is shown only in developer mode at the
   // render sites. (Checked AFTER plaintext-not-allowed above so a wrapped
-  // encrypted-required rejection routes to the specific message.)
+  // plaintext-not-allowed rejection routes to the specific message.)
   if (
     lower.includes("quarantin") ||
     lower.includes("checkpointstaterootmismatch") ||

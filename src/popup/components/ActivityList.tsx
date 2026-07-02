@@ -9,7 +9,8 @@
 //
 // Empty/error/stale state copy is locked verbatim per the plan.
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { bgDismissPendingTx } from "../bg.js";
 import { useActivity } from "../hooks/useActivity.js";
 import { useActivityKind } from "../hooks/useActivityKind.js";
 import { useNameResolution } from "../hooks/useNameResolution.js";
@@ -18,6 +19,7 @@ import { ActivityRow } from "./ActivityRow.js";
 import { ActivityDetail } from "./ActivityDetail.js";
 import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
 import {
+  confirmedRowDedupKey,
   mergeActivityNewestFirst,
   type ActivityRow as ActivityRowType,
 } from "../../shared/activity.js";
@@ -174,10 +176,11 @@ function emptyState(envelope: WalletActivityKindEnvelope | null) {
   if (envelope.kind === "private") {
     return (
       <div style={base}>
-        <div style={{ marginBottom: 8 }}>Private activity placeholder.</div>
+        <div style={{ marginBottom: 8 }}>
+          Private transfer details aren't viewable in the wallet yet.
+        </div>
         <div style={{ fontSize: 11, color: "var(--fg-600)" }}>
-          Viewing your private transfers requires the meta-address surface
-          shipping in Phase 12.
+          Private activity is opaque to the public indexer.
         </div>
       </div>
     );
@@ -248,6 +251,18 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
     chainIdHex,
   );
   const indexerStatus = useIndexerStatus(chainIdHex);
+  // Dismiss a TERMINAL (dropped/expired) pending row, then refresh. The SW
+  // refuses to remove a durable claim or a still-live row, so this is safe.
+  const handleDismissPending = useCallback(
+    (txHash: string) => {
+      if (!addr || !chainIdHex) return;
+      void (async () => {
+        await bgDismissPendingTx({ address: addr, chainIdHex, txHash });
+        void refresh();
+      })();
+    },
+    [addr, chainIdHex, refresh],
+  );
   // Kind probe runs in parallel with the activity
   // fetch. Used only by the empty-state branch — when rows arrive,
   // the envelope is irrelevant.
@@ -373,7 +388,7 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
               const key =
                 row.kind === "pending_tx"
                   ? `pending-${row.txHash}`
-                  : `${row.blockHeight}-${row.txIndex}-${row.logIndex}-${row.kind}`;
+                  : confirmedRowDedupKey(row);
               return (
                 <div
                   key={key}
@@ -392,6 +407,7 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
                     row={row}
                     counterpartyLabel={label}
                     clusterNameById={clusterNameById}
+                    onDismissPending={handleDismissPending}
                   />
                 </div>
               );

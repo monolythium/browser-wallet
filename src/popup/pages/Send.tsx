@@ -14,12 +14,13 @@ import { Icon } from "../Icon";
 import {
   bgMultisigPropose,
   bgPasskeyEvaluate,
-  bgPasskeyRecordUsage,
   bgPreviewTransactionHooks,
+  bgRecipientSentVerified,
   bgWalletBalance,
   bgWalletResolveName,
   bgWalletFeeSuggestion,
   bgWalletSendTx,
+  type BgForwardedAssertion,
   type BgPasskeyDecision,
   type FeeSuggestion,
   type PreviewTransactionHooksOutcome,
@@ -32,11 +33,11 @@ import { useFeature } from "../hooks/useFeature";
 import type { TransactionHookPreview } from "../../shared/audit-followup-types";
 import { PasskeySignModal } from "../components/PasskeySignModal";
 import { Modal } from "../components/Modal";
-import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { Account } from "../demo-data";
 import {
   bech32mDisplay,
   bech32mToAddress,
+  tryDecodeBech32m,
   type AddressKind,
 } from "../../shared/bech32m";
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
@@ -62,11 +63,6 @@ import {
   type PendingActivityCache,
 } from "../../shared/activity";
 import {
-  sentAddressesKey,
-  parseSentAddresses,
-  isSentAddress,
-} from "../../shared/sent-addresses";
-import {
   FEE_MULTIPLIER_BPS_BASE,
   LYTHOSHI_PER_LYTH,
   NATIVE_LYTH_DECIMALS,
@@ -79,6 +75,7 @@ import {
   parseNativeHexQuantity,
   scaleByBps,
 } from "../../shared/native-fee-display";
+import { MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI } from "../../shared/operator-bounds";
 import { lythoshiToLythDecimal } from "../../shared/native-amount";
 import { getLythFiatRate, formatFiat } from "../../shared/fiat";
 import { useDisplayCurrencyPref } from "../hooks/useDisplayPrefs";
@@ -110,22 +107,23 @@ interface SendProps {
 
 type Step = "form" | "preview" | "sending" | "success" | "error";
 
-type FeeTier = "slow" | "normal" | "fast";
+type FeeTier = "normal" | "fast";
 
+// Slow (0.5x) was removed: the suggestFee priority tip is always the 1e9
+// mempool floor by construction, so 0.5x always clamped back up to the floor
+// — i.e. permanently identical to Normal. Normal (1x) is the default + the
+// going rate; Fast (2x) is the only above-floor option.
 const TIER_MULTIPLIERS_BPS: Record<FeeTier, bigint> = {
-  slow: 5_000n,
   normal: FEE_MULTIPLIER_BPS_BASE,
   fast: 20_000n,
 };
 
 const TIER_MULTIPLIER_TEXT: Record<FeeTier, string> = {
-  slow: "0.5",
   normal: "1",
   fast: "2",
 };
 
 const TIER_LABELS: Record<FeeTier, string> = {
-  slow: "Slow",
   normal: "Normal",
   fast: "Fast",
 };
@@ -142,11 +140,9 @@ const ADMISSION_REJECT_CODE_HI = -32020;
 // doesn't supply one.
 const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
-// Mempool per-execution-unit priority-tip floor (crates/boundary/mempool):
-// a tip below this is rejected at admission with -32047. `suggestFee` returns
-// the floor as the priority tip, so the "Slow" 0.5x tier would scale it to
-// ~5e8 — below the floor. Clamp the tier-scaled tip up to the floor.
-const MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI = 1_000_000_000n; // 1 gwei
+// MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI is the single source of truth in
+// shared/operator-bounds (imported above) — both the submit clamp here and the
+// display clamp in native-fee-display reference the one constant.
 
 export function Send({
   account,
@@ -386,11 +382,16 @@ export function Send({
     if (
       singleVaultId !== undefined &&
       multisigVaultId === undefined &&
-      amountLythoshi !== null
+      amountLythoshi !== null &&
+      effectiveAddr0x !== null
     ) {
+      // Pass the recipient + chain so the SW can bind the minted passkey
+      // challenge to this exact tx intent (boundary 3b). Native send → no data.
       const r = await bgPasskeyEvaluate({
         vaultId: singleVaultId,
         valueWeiHex: "0x" + amountLythoshi.toString(16),
+        to: effectiveAddr0x,
+        chainIdHex: chainId,
       });
       setPasskeyDecision(r.ok ? r.decision : null);
     } else {
@@ -402,6 +403,10 @@ export function Send({
   const handleConfirm = async (opts?: {
     elevatedPassword?: string;
     viaElevated?: boolean;
+    /** boundary 3b — the collected passkey assertion + its challenge id,
+     *  forwarded to the SW verify gate for an under-limit passkey send. */
+    passkeyAssertion?: BgForwardedAssertion;
+    passkeyChallengeId?: string;
   }) => {
     if (amountLythoshi === null) return;
     if (effectiveAddr0x === null) return; // form button is gated; defensive
@@ -492,25 +497,22 @@ export function Send({
         ...(opts?.elevatedPassword
           ? { elevatedPassword: opts.elevatedPassword }
           : {}),
+        // boundary 3b — present only on the under-limit passkey path; the SW
+        // consumes the challenge + verifies the assertion before signing.
+        ...(opts?.passkeyAssertion && opts?.passkeyChallengeId
+          ? {
+              passkeyAssertion: opts.passkeyAssertion,
+              passkeyChallengeId: opts.passkeyChallengeId,
+            }
+          : {}),
         ...(signedFee ? { signedFee } : {}),
       });
       if (r.ok) {
         if (opts?.viaElevated) setElevatedOpen(false);
         setTxHash(r.result.txHash);
-        // Record passkey-unlocked txs against the daily-cap ledger.
-        // The SW prunes on read; this fire-and-forget call appends.
-        // Only fires when the policy decision was passkey-ok and a
-        // passkey assertion succeeded — over-limit / password-required
-        // txs do not contribute to the cap.
-        if (
-          singleVaultId !== undefined &&
-          passkeyDecision?.kind === "passkey-ok"
-        ) {
-          void bgPasskeyRecordUsage({
-            vaultId: singleVaultId,
-            valueWeiHex: valueLythoshiHex,
-          });
-        }
+        // The daily-cap usage ledger is appended by the service worker itself
+        // on a successful daily-mode passkey send (the SW is the authoritative
+        // counter) — no popup-side record-usage call.
         setStep("success");
         // CX4 — the "Add to contacts" affordance now lives inline on the
         // receipt's To row (shown when the recipient is neither a saved
@@ -530,6 +532,18 @@ export function Send({
               : null,
         );
         if (!opts?.viaElevated) setStep("preview");
+      } else if (r.passkeyReregister) {
+        // boundary 3b Part 2 — the credential predates the public-key capture
+        // and can't authorize; send the user to Security to re-register.
+        if (opts?.viaElevated) setElevatedOpen(false);
+        setSubmitError({
+          message:
+            "This passkey was set up before a security upgrade and can no longer approve transactions. Re-register it in Settings → Security, or turn off the passkey spending limit.",
+          code: null,
+          method: null,
+          via: null,
+        });
+        setStep("error");
       } else {
         if (opts?.viaElevated) setElevatedOpen(false);
         setSubmitError({
@@ -574,9 +588,24 @@ export function Send({
 
   if (step === "preview") {
     const needsPasskey = passkeyDecision?.kind === "passkey-ok";
+    const passkeyChallengeB64 =
+      passkeyDecision?.kind === "passkey-ok" ? passkeyDecision.challengeB64 : undefined;
+    const passkeyChallengeId =
+      passkeyDecision?.kind === "passkey-ok" ? passkeyDecision.challengeId : undefined;
     const onPreviewConfirm = () => {
-      if (needsPasskey) {
+      if (needsPasskey && passkeyChallengeB64) {
         setPasskeyModalOpen(true);
+      } else if (passkeyDecision?.kind === "reregister-required") {
+        // boundary 3b Part 2 — no usable (pubkey-bearing) credential. Don't
+        // degrade to popup-only trust; route the user to re-register.
+        setSubmitError({
+          message:
+            "This passkey was set up before a security upgrade and can no longer approve transactions. Re-register it in Settings → Security, or turn off the passkey spending limit.",
+          code: null,
+          method: null,
+          via: null,
+        });
+        setStep("error");
       } else if (passkeyDecision?.kind === "over-limit") {
         // T1-04(a) — above the passkey cap: require an account-password
         // re-auth (the SW enforces this regardless; the modal collects it).
@@ -587,22 +616,6 @@ export function Send({
         void handleConfirm();
       }
     };
-
-    // Build a stable tx digest for the WebAuthn challenge. Binds the
-    // assertion to the specific (to, value, chainId) so a captured
-    // assertion cannot be replayed for a different tx via the same
-    // wallet. We hash the wire-format strings — close enough for the
-    // local-presence-check the wallet uses today; the future
-    // chain-side passkey precompile will use the chain's
-    // canonical txHash for the same binding.
-    const txDigest =
-      needsPasskey && effectiveAddr0x !== null && amountLythoshi !== null
-        ? keccak_256(
-            new TextEncoder().encode(
-              `${effectiveAddr0x}|${amountLythoshi.toString(16)}|${chainId}`,
-            ),
-          )
-        : new Uint8Array(32);
 
     return (
       <>
@@ -620,19 +633,25 @@ export function Send({
           recipientRegisteredName={recipientRegisteredName}
           finalityPosture={finalityPostureFor(chainId)}
         />
-        {needsPasskey && passkeyDecision?.kind === "passkey-ok" && (
-          <PasskeySignModal
-            open={passkeyModalOpen}
-            vaultAddress={account.addr}
-            credentials={passkeyDecision.credentials}
-            txDigest={txDigest}
-            onCancel={() => setPasskeyModalOpen(false)}
-            onSuccess={() => {
-              setPasskeyModalOpen(false);
-              void handleConfirm();
-            }}
-          />
-        )}
+        {needsPasskey &&
+          passkeyDecision?.kind === "passkey-ok" &&
+          passkeyChallengeB64 &&
+          passkeyChallengeId && (
+            <PasskeySignModal
+              open={passkeyModalOpen}
+              vaultAddress={account.addr}
+              credentials={passkeyDecision.credentials}
+              challengeB64={passkeyChallengeB64}
+              onCancel={() => setPasskeyModalOpen(false)}
+              onSuccess={(assertion) => {
+                setPasskeyModalOpen(false);
+                void handleConfirm({
+                  passkeyAssertion: assertion,
+                  passkeyChallengeId,
+                });
+              }}
+            />
+          )}
         <Modal
           open={elevatedOpen}
           onClose={() => {
@@ -1631,20 +1650,27 @@ function useRecipientFamiliarity(
     const accLower = accountAddr.toLowerCase();
     const confirmedKey = activityCacheKey(accLower, chainIdHex);
     const pendingKey = activityPendingKey(accLower, chainIdHex);
-    // CX3 — durable per-(vault,chain) sent-address log. Written on every
-    // successful send and never TTL-evicted, so a known recipient stays
-    // "seen" even after the pending row's 5-min TTL lapses and before an
-    // indexer refresh re-caches the confirmed send (the old re-warn bug).
-    const sentKey = sentAddressesKey(accLower, chainIdHex);
     let cancelled = false;
     setState("unknown");
 
-    chrome.storage.local.get([confirmedKey, pendingKey, sentKey], (res) => {
+    void (async () => {
+      // CX3 — durable per-(vault,chain) sent-address log keeps a recipient
+      // "seen" after the pending row's 5-min TTL lapses and before an indexer
+      // refresh re-caches the confirmed send (the old re-warn bug). P5-007 —
+      // each entry is HMAC-tagged and the MEK is SW-only, so the "verified
+      // sent" bit is resolved by the SW (fails safe to false on lock/error →
+      // the warning fires). confirmed/pending remain local reads.
+      const [local, inSent] = await Promise.all([
+        new Promise<Record<string, unknown>>((resolve) => {
+          chrome.storage.local.get([confirmedKey, pendingKey], (res) =>
+            resolve(res ?? {}),
+          );
+        }),
+        bgRecipientSentVerified(accLower, chainIdHex, target),
+      ]);
       if (cancelled) return;
-      const confirmed = res?.[confirmedKey] as ActivityCache | undefined;
-      const pending = res?.[pendingKey] as PendingActivityCache | undefined;
-
-      const inSent = isSentAddress(parseSentAddresses(res?.[sentKey]), target);
+      const confirmed = local[confirmedKey] as ActivityCache | undefined;
+      const pending = local[pendingKey] as PendingActivityCache | undefined;
       const inConfirmed = (confirmed?.confirmed ?? []).some((r) => {
         if (r.kind === "tx_send") return r.counterparty === target;
         if (r.kind === "token_transfer")
@@ -1655,7 +1681,7 @@ function useRecipientFamiliarity(
         (r) => r.to.toLowerCase() === target,
       );
       setState(inSent || inConfirmed || inPending ? "seen" : "new");
-    });
+    })();
 
     return () => {
       cancelled = true;
@@ -1824,6 +1850,28 @@ function PasskeyDecisionBadge({
             Below the configured limit — Confirm will use your passkey instead
             of asking for your password.
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (decision.kind === "reregister-required") {
+    return (
+      <div
+        style={{
+          padding: "8px 10px",
+          borderRadius: 8,
+          background: "rgba(242,180,65,0.08)",
+          border: "1px solid rgba(242,180,65,0.4)",
+          color: "var(--fg-100)",
+          fontSize: 11.5,
+          lineHeight: 1.5,
+        }}
+      >
+        <div style={{ fontWeight: 600 }}>Passkey needs re-registering</div>
+        <div style={{ fontSize: 10.5, color: "var(--fg-300)" }}>
+          This passkey predates a security upgrade and can't approve transactions.
+          Re-register it in Settings → Security, or turn off the passkey limit.
         </div>
       </div>
     );
@@ -2434,9 +2482,19 @@ interface SuccessViewProps {
 }
 
 /** A bech32m address rendered as a Monoscan address-page link. Addresses are
- *  always bech32m (`mono…`); the raw 0x form is never shown (§22.7). */
-function AddressLink({ addr0x, kind }: { addr0x: string; kind?: AddressKind }) {
+ *  always bech32m (`mono…`); the raw 0x form is never shown (§22.7).
+ *
+ *  Only a value that decodes as a well-formed bech32m becomes a Monoscan link —
+ *  a strict bech32m decode (`tryDecodeBech32m`) gates the value before it reaches
+ *  the `href`, so an unresolved/garbage recipient renders as inert plain text
+ *  (no `<a>`), not a link to a non-existent Monoscan page. Closes the CodeQL
+ *  js/xss-through-dom taint path (recipient input → href) with a real validation;
+ *  see `_dev-notes/.../2026-06-24_codeql-xss-through-dom-inspect.md`. */
+export function AddressLink({ addr0x, kind }: { addr0x: string; kind?: AddressKind }) {
   const bech = bech32mDisplay(addr0x, kind);
+  if (tryDecodeBech32m(bech) === null) {
+    return <span style={{ fontFamily: "var(--f-mono)" }}>{bech}</span>;
+  }
   return (
     <ExternalLink
       href={monoscanAddressUrl(bech)}

@@ -243,12 +243,22 @@ export function notificationBody(record: NotificationRecord): string {
   // weight; legacy rows without a captured bps fall through to the generic body
   // below).
   if (
-    (record.kind === "delegate" ||
-      record.kind === "redelegate" ||
-      record.kind === "undelegate") &&
-    record.delegationWeightBps !== undefined
+    record.kind === "delegate" ||
+    record.kind === "redelegate" ||
+    record.kind === "undelegate"
   ) {
-    const pct = `${(record.delegationWeightBps / 100).toFixed(2)}%`;
+    // ROBUST: a delegation is a 0-value precompile call whose counterparty IS the
+    // delegation module (0x100A). NEVER fall to the generic counterparty body —
+    // that is what produced the "0x100A" toast. ALWAYS show the CLUSTER (the
+    // action + status come from notificationTitle). Append " · X%" ONLY when a
+    // valid bps (1..10000) was captured; an undelegate whose existing weight was
+    // unknown/0 (stale delegations cache) shows the cluster ALONE — never the raw
+    // address, never a misleading "0%".
+    const bps = record.delegationWeightBps;
+    const pctRaw =
+      typeof bps === "number" && bps >= 1 && bps <= 10_000
+        ? `${(bps / 100).toFixed(2)}%`
+        : null;
     const from =
       record.clusterName ??
       (record.clusterId !== undefined ? `cluster #${record.clusterId}` : null);
@@ -264,11 +274,15 @@ export function notificationBody(record: NotificationRecord): string {
       if (to !== null) {
         const both = from !== null ? `${from} → ${to}` : to;
         const cluster = both.length <= REDELEGATE_CLUSTER_BUDGET ? both : to;
-        return `${cluster} · ${pct}`;
+        return pctRaw !== null ? `${cluster} · ${pctRaw}` : cluster;
       }
       // No captured destination (legacy) — fall through to the source-only form.
     }
-    return from ? `${from} · ${pct}` : pct;
+    if (from !== null) return pctRaw !== null ? `${from} · ${pctRaw}` : from;
+    // No cluster captured — show the weight alone when known; else fall to the
+    // action label. Either way NEVER 0x100A; the title carries action + status.
+    if (pctRaw !== null) return pctRaw;
+    return notificationTitle(record.kind, record.status);
   }
   const short = shortCounterparty(record.counterparty);
   if (isZeroAmount(record.amountDecimal)) {
@@ -373,14 +387,18 @@ export async function refreshUnreadBadge(opts?: {
   }
 }
 
+/** Canonical 0x-hex tx-hash shape. Full charset validation (not just the `0x`
+ *  prefix) so a malformed/hostile tail can't reach the Monoscan URL. */
+const TX_HASH_RE = /^0x[0-9a-fA-F]+$/;
+
 /** Pure helper — derive the canonical inner tx hash from a notification
  *  id. The id is `${chainIdHex}:${txHash}` (see `shared/notifications.ts`).
- *  Returns `null` when the id doesn't contain a parseable 0x txHash, so
+ *  Returns `null` when the id doesn't contain a well-formed 0x-hex txHash, so
  *  the caller can short-circuit without opening a bad Monoscan URL. */
 export function parseTxHashFromNotificationId(id: string): string | null {
   const idx = id.indexOf(":");
   const tail = idx >= 0 ? id.slice(idx + 1) : id;
-  return tail.startsWith("0x") ? tail : null;
+  return TX_HASH_RE.test(tail) ? tail : null;
 }
 
 /** Click handler logic, split out from the listener registration so it's

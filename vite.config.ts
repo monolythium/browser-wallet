@@ -1,8 +1,12 @@
-import { readFileSync } from "node:fs";
-import { defineConfig } from "vite";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { crx } from "@crxjs/vite-plugin";
+import { getRpcEndpoints } from "@monolythium/core-sdk";
 import manifest from "./manifest.json" with { type: "json" };
+import { applyHardenedCsp } from "./src/buildtime/csp";
+import { applyDynamicWarUrl } from "./src/buildtime/manifest-war";
 
 // Read the ACTUALLY-INSTALLED @monolythium/core-sdk version at build time and
 // inject it into the bundle (the About page reads it via __SDK_INSTALLED_VERSION__).
@@ -25,8 +29,38 @@ function readInstalledSdkVersion(): string {
   }
 }
 
+/**
+ * Post-bundle manifest hardening (edits the emitted dist/manifest.json):
+ *  - P6-001: inject the strict `connect-src` allowlist (from the SDK fleet),
+ *    PRODUCTION ONLY (dev leaves the CSP unset so crxjs HMR + custom RPC/chains
+ *    keep working, and the committed manifest.json stays CSP-free).
+ *  - P6-003: flip `web_accessible_resources[].use_dynamic_url` to true
+ *    (anti-fingerprinting), in BOTH prod and dev.
+ *
+ * crxjs emits manifest.json from its own (later) generateBundle, so it isn't in
+ * the bundle when an ordinary post-plugin's generateBundle runs — hook
+ * writeBundle and edit the file on disk, after Rollup has written it.
+ */
+function hardenedManifestPlugin(mode: string): Plugin {
+  return {
+    name: "mono-hardened-manifest",
+    enforce: "post",
+    writeBundle(options) {
+      const file = join(options.dir ?? "dist", "manifest.json");
+      const src = readFileSync(file, "utf8");
+      let out = applyDynamicWarUrl(src); // always (hygiene, not a boundary)
+      out = applyHardenedCsp(
+        out,
+        getRpcEndpoints("testnet-69420"),
+        mode === "production", // prod-only
+      );
+      if (out !== src) writeFileSync(file, out);
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), crx({ manifest })],
+  plugins: [react(), crx({ manifest }), hardenedManifestPlugin(mode)],
   define: {
     __SDK_INSTALLED_VERSION__: JSON.stringify(readInstalledSdkVersion()),
   },

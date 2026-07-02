@@ -1,6 +1,6 @@
 import { Icon } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
-import { renderCounterparty } from "../ActivityRow.js";
+import { renderCounterparty, counterpartyText } from "../ActivityRow.js";
 import type { TxReceiveRow } from "../../../shared/activity.js";
 import type { NameLabel } from "../../../shared/name-resolution.js";
 
@@ -10,13 +10,14 @@ export interface TxReceiveRowBodyProps {
 }
 
 export function TxReceiveRowBody({ row, counterpartyLabel }: TxReceiveRowBodyProps) {
+  const title = `Received ${row.amountDecimal ?? "?"} LYTH from ${counterpartyText(row.counterparty, counterpartyLabel)}`;
   return (
     <div className="ext-act-row">
       <div className="dir in">
         <Icon name="receive" size={13} />
       </div>
       <div className="ext-act-row__main">
-        <div className="ext-act-row__who">
+        <div className="ext-act-row__who" title={title}>
           Received {row.amountDecimal ?? "?"} LYTH from{" "}
           {renderCounterparty(row.counterparty, counterpartyLabel)}
         </div>

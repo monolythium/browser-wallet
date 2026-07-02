@@ -64,9 +64,6 @@ export interface SlhDsaBackupRevealModalProps {
   mode: RevealMode;
   /** Active vault id — the IPC takes vaultId as its only payload. */
   vaultId: string;
-  /** Short-form address (e.g. `mono1abc…xyz` or `0x12…34`) to
-   *  include in the downloaded text file's header. */
-  vaultAddressLabel: string;
   /** Dismiss without persisting any state change. The SW-side
    *  `chainRegistrationStatus` + `coldStorageConfirmed` flags are
    *  untouched until the user explicitly attests + closes. */
@@ -88,7 +85,6 @@ export function SlhDsaBackupRevealModal({
   open,
   mode,
   vaultId,
-  vaultAddressLabel,
   onClose,
   onConfirmed,
 }: SlhDsaBackupRevealModalProps) {
@@ -147,6 +143,20 @@ export function SlhDsaBackupRevealModal({
     setScreen({ kind: "reveal", mnemonic: res.mnemonic, held: false });
   };
 
+  // Re-reveal the EXISTING backup phrase (re-export path), regardless of the
+  // modal's entry mode. Offered on the "already exists" error so a user who
+  // hit the generate guard can write down the phrase they already have — the
+  // preferred path, since it preserves any on-chain registration.
+  const revealExisting = async () => {
+    setScreen({ kind: "loading" });
+    const r = await bgSlhDsaBackupRecoverMnemonic(vaultId);
+    if (!r.ok) {
+      setScreen({ kind: "error", message: r.reason });
+      return;
+    }
+    setScreen({ kind: "reveal", mnemonic: r.mnemonic, held: false });
+  };
+
   const onRevealPressStart = () => {
     if (screen.kind !== "reveal" || screen.held) return;
     if (holdTimerRef.current !== null) clearTimeout(holdTimerRef.current);
@@ -188,22 +198,6 @@ export function SlhDsaBackupRevealModal({
     const ok = await clearClipboardNow();
     setClearState(ok ? "cleared" : "failed");
     if (ok) setCopied(false);
-  };
-
-  const handleDownload = () => {
-    if (screen.kind !== "reveal" || !screen.held) return;
-    const shortLabel = vaultAddressLabel.replace(/[^a-z0-9]/gi, "");
-    const filename = `monolythium-emergency-backup-${shortLabel.slice(0, 12)}.txt`;
-    const body = buildDownloadText(screen.mnemonic, vaultAddressLabel);
-    const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   const handleConfirm = async () => {
@@ -260,21 +254,66 @@ export function SlhDsaBackupRevealModal({
       {screen.kind === "error" && (
         <>
           <div style={errBox}>{screen.message}</div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 8,
-              marginTop: 10,
-            }}
-          >
-            <button onClick={onClose} style={btnGhost}>
-              Close
-            </button>
-            <button onClick={() => void startKeygen()} style={btnPrimary}>
-              Try again
-            </button>
-          </div>
+          {isBackupAlreadyExistsError(screen.message) ? (
+            <>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--fg-300)",
+                  lineHeight: 1.5,
+                  margin: "10px 0",
+                }}
+              >
+                You already have an emergency backup for this account. To write
+                the existing phrase down again, <strong>re-export</strong> it —
+                this keeps your on-chain registration intact. To start over with
+                a new key, close this and use{" "}
+                <strong>“Generate a new backup key”</strong> on the backup card
+                (you'll confirm with your password before it is cleared).
+              </div>
+              <button
+                onClick={() => void revealExisting()}
+                style={{
+                  ...btnPrimary,
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                }}
+              >
+                <Icon name="eye" size={11} /> Re-export the existing phrase
+                (recommended)
+              </button>
+              <button
+                onClick={onClose}
+                style={{
+                  ...btnGhost,
+                  width: "100%",
+                  marginTop: 8,
+                  justifyContent: "center",
+                }}
+              >
+                Close
+              </button>
+            </>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 8,
+                marginTop: 10,
+              }}
+            >
+              <button onClick={onClose} style={btnGhost}>
+                Close
+              </button>
+              <button onClick={() => void startKeygen()} style={btnPrimary}>
+                Try again
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -334,9 +373,6 @@ export function SlhDsaBackupRevealModal({
                 <button onClick={() => void handleCopy()} style={btnGhost}>
                   <Icon name="eye" size={11} />{" "}
                   {copied ? "Copied — auto-clears in ~30 s" : "Copy"}
-                </button>
-                <button onClick={handleDownload} style={btnGhost}>
-                  Download .txt
                 </button>
                 <button onClick={() => void handleClear()} style={btnGhost}>
                   <Icon
@@ -515,33 +551,13 @@ function ExplainerScreen({
 // Helpers + styles
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Build the downloaded .txt body. Plaintext with a security
- *  warning header so the file is obviously sensitive at a glance. */
-export function buildDownloadText(
-  mnemonic: string,
-  vaultAddressLabel: string,
-): string {
-  const created = new Date().toISOString();
-  return [
-    "# Monolythium Wallet — Emergency Recovery Backup",
-    "",
-    "DO NOT share this file with anyone.",
-    "DO NOT upload it to cloud storage, email, or chat.",
-    "Anyone with this 24-word phrase can rotate to your emergency",
-    "key and take over your account during a cryptographic emergency.",
-    "",
-    `Vault address: ${vaultAddressLabel}`,
-    `Created at:    ${created}`,
-    "Algorithm:     SLH-DSA-SHA2-128s (NIST FIPS 205)",
-    "",
-    "----- BEGIN BIP-39 (24 words) -----",
-    mnemonic,
-    "----- END BIP-39 -----",
-    "",
-    "Store this on paper in a fire-safe / safe-deposit box.",
-    "Verify a copy before destroying the original.",
-    "",
-  ].join("\n");
+/** The generate guard throws "backup already exists — clear it first or use
+ *  the re-export flow" when a backup is already present. The error screen keys
+ *  off this to offer the Re-export (preferred, preserves registration) +
+ *  clear-from-the-card affordances instead of a bare "Try again", so a user who
+ *  hit the guard isn't stranded on a raw error (P2-003/P6-006). */
+export function isBackupAlreadyExistsError(message: string): boolean {
+  return message.toLowerCase().includes("already exists");
 }
 
 const errBox: CSSProperties = {

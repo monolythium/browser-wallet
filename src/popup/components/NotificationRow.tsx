@@ -5,7 +5,7 @@
 // optional unread dot. Tapping it opens the shared `NotificationDetail` popup
 // at the call site.
 
-import { Icon, type IconName } from "../Icon";
+import { Icon, iconForDelegationKind, type IconName } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import {
   notificationTitle,
@@ -30,9 +30,9 @@ function iconForKind(kind: TxOpKind): IconName {
     case "delegate":
     case "undelegate":
     case "redelegate":
-      return "stake";
+      return iconForDelegationKind(kind);
     case "claim":
-      return "receive";
+      return "reward";
     case "emergency-key":
       return "shield";
     case "agent-policy":
@@ -133,6 +133,7 @@ export function NotificationRow({
       <div className="ext-act-row__main" style={{ minWidth: 0 }}>
         <div
           className="ext-act-row__who"
+          title={title}
           style={{
             fontSize: 13,
             fontWeight: 600,
@@ -146,6 +147,7 @@ export function NotificationRow({
         </div>
         <div
           className="ext-act-row__meta"
+          title={metaText}
           style={{
             fontSize: 10.5,
             color: "var(--fg-400)",

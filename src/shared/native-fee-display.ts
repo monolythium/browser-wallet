@@ -7,6 +7,7 @@ import {
   NATIVE_LYTH_DECIMALS,
   type NativeReceiptFee,
 } from "@monolythium/core-sdk";
+import { MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI } from "./operator-bounds";
 
 // Native LYTH precision sourced from the SDK (single source of truth) so the
 // wallet and chain can never drift on the decimal count. The chain migrated
@@ -133,7 +134,15 @@ export function nativeFeeDisplayFromBaseAndPriority(
   }
 
   const multiplierBps = input.priorityMultiplierBps ?? FEE_MULTIPLIER_BPS_BASE;
-  const scaledPriorityPrice = scaleByBps(priorityPrice, multiplierBps);
+  // Match the submit path (Send.tsx): a tier multiplier (e.g. "Slow" 0.5x) must
+  // never push the priority tip below the mempool floor. The submit path clamps
+  // the SIGNED tip to the floor, so the displayed total (and the Max reservation
+  // derived from it) must clamp identically or it under-reports vs the broadcast.
+  const tieredPriorityPrice = scaleByBps(priorityPrice, multiplierBps);
+  const scaledPriorityPrice =
+    tieredPriorityPrice < MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI
+      ? MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI
+      : tieredPriorityPrice;
   const totalLythoshi = (basePrice + scaledPriorityPrice) * executionUnits;
   return makeNativeFeeDisplay(totalLythoshi, "legacy-compat", [
     `execution units ${executionUnits.toString(10)}`,

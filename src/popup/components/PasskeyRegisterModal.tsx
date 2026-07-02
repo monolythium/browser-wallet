@@ -40,6 +40,7 @@ import {
   type BgAuthenticatorKind,
   type BgPasskeyState,
 } from "../bg";
+import { PASSKEY_USER_VERIFICATION } from "../../shared/passkey";
 
 export interface PasskeyRegisterModalProps {
   open: boolean;
@@ -61,6 +62,15 @@ type ScreenState =
   | { kind: "registering" }
   | { kind: "error"; message: string }
   | { kind: "done" };
+
+/** Signature counter from a WebAuthn registration's authenticator data.
+ *  Layout: `rpIdHash[32] || flags[1] || signCount[4]` — read the big-endian
+ *  u32 at byte offset 33. Returns 0 when the buffer is unavailable or too
+ *  short (many platform authenticators report 0 anyway). */
+function readSignCount(authData: ArrayBuffer | null): number {
+  if (!authData || authData.byteLength < 37) return 0;
+  return new DataView(authData).getUint32(33, false);
+}
 
 function bytesToBase64Url(b: ArrayBuffer | Uint8Array): string {
   const u8 = b instanceof Uint8Array ? b : new Uint8Array(b);
@@ -114,8 +124,8 @@ export function PasskeyRegisterModal({
     return (
       <Modal open={open} onClose={onClose} title="Register a passkey">
         <div style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}>
-          Your browser does not support WebAuthn / passkeys. Phase 9's
-          fast-unlock surface requires a browser with{" "}
+          Your browser does not support WebAuthn / passkeys. Passkey approvals
+          require a browser with{" "}
           <code>navigator.credentials</code> support — Chrome 67+, Firefox 60+,
           Edge 18+, or Safari 13+.
         </div>
@@ -138,6 +148,9 @@ export function PasskeyRegisterModal({
     setScreen({ kind: "registering" });
 
     let credentialId: string;
+    let publicKeySpki: string;
+    let alg: number;
+    let signCount: number;
     try {
       // Use a freshly-allocated ArrayBuffer-backed Uint8Array so the
       // DOM `BufferSource` constraint accepts the value — `Uint8Array
@@ -174,7 +187,7 @@ export function PasskeyRegisterModal({
           authenticatorSelection: {
             authenticatorAttachment:
               kind === "platform" ? "platform" : "cross-platform",
-            userVerification: "preferred",
+            userVerification: PASSKEY_USER_VERIFICATION,
             // Non-resident keys — the wallet remembers
             // `allowCredentials[].id` itself on future `.get()` calls.
             residentKey: "discouraged",
@@ -194,6 +207,26 @@ export function PasskeyRegisterModal({
         return;
       }
       credentialId = bytesToBase64Url(cred.rawId);
+      // Part 1a — capture the credential PUBLIC KEY so the SW can verify the
+      // assertion later (Option A). `getPublicKey()` returns SPKI DER (or null
+      // if the browser can't export the alg — fail closed, never store a
+      // pubkey-less credential). `getPublicKeyAlgorithm()` is the COSE alg id
+      // (-7 ES256 / -257 RS256, the registered set). `signCount` is the
+      // big-endian u32 in the registration authData.
+      const att = cred.response as AuthenticatorAttestationResponse;
+      const spki = att.getPublicKey?.() ?? null;
+      if (!spki) {
+        setScreen({
+          kind: "error",
+          message:
+            "Your authenticator returned a key format the wallet can't use " +
+            "for transaction signing — try another authenticator",
+        });
+        return;
+      }
+      publicKeySpki = bytesToBase64Url(spki);
+      alg = att.getPublicKeyAlgorithm();
+      signCount = readSignCount(att.getAuthenticatorData?.() ?? null);
     } catch (e) {
       const err = e as DOMException | Error;
       const msg = describeWebAuthnError(err);
@@ -209,6 +242,9 @@ export function PasskeyRegisterModal({
         name: trimmed,
         kind,
         createdAt: Date.now(),
+        publicKeySpki,
+        alg,
+        signCount,
       },
     });
     if (!res.ok) {
@@ -224,10 +260,11 @@ export function PasskeyRegisterModal({
       {screen.kind === "form" && (
         <>
           <div style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}>
-            Register a Windows Hello, Touch ID, or security-key passkey so the
-            wallet can ask for it instead of your password on small-value
-            transfers. The private key never leaves the authenticator. The
-            wallet only stores the public credential ID.
+            Register a Windows Hello, Touch ID, or security-key passkey to
+            approve transfers up to your limit — the wallet verifies it before
+            signing, instead of asking for your password. Larger sends still
+            need your password. The private key never leaves the authenticator;
+            the wallet stores only the public credential.
           </div>
 
           <label style={{ display: "block", marginTop: 8 }}>
@@ -373,8 +410,8 @@ export function PasskeyRegisterModal({
               background: "rgba(126,227,193,0.08)",
             }}
           >
-            Passkey registered. Enable the policy on the Security page to
-            start using it on small-value transfers.
+            Passkey registered. Enable the policy on the Security page to approve
+            transfers up to your limit with it.
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
             <button onClick={onClose} style={btnPrimary}>

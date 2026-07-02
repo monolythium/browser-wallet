@@ -8,14 +8,12 @@ import { SlhDsaBackupCard } from "../components/SlhDsaBackupCard";
 interface EmergencyRecoveryProps {
   onBack: () => void;
   vaultId: string;
-  vaultAddress: string;
   chainIdHex: string;
 }
 
 export function EmergencyRecovery({
   onBack,
   vaultId,
-  vaultAddress,
   chainIdHex,
 }: EmergencyRecoveryProps) {
   return (
@@ -34,7 +32,6 @@ export function EmergencyRecovery({
       <div className="ext-body">
         <SlhDsaBackupCard
           vaultId={vaultId}
-          vaultAddressLabel={vaultAddress}
           chainIdHex={chainIdHex}
         />
       </div>

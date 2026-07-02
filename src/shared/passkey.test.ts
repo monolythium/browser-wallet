@@ -11,6 +11,7 @@ import {
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
   MAX_CREDENTIALS_PER_VAULT,
+  PASSKEY_USER_VERIFICATION,
   MAX_PASSKEY_LIMIT_LYTHOSHI,
   MIN_PASSKEY_LIMIT_LYTHOSHI,
   appendCredential,
@@ -26,6 +27,15 @@ import {
   validatePasskeyPolicy,
   type PasskeyCredential,
 } from "./passkey.js";
+
+describe("PASSKEY_USER_VERIFICATION (P6-004)", () => {
+  it("requires user verification on register + sign (single source for both)", () => {
+    expect(PASSKEY_USER_VERIFICATION).toBe("required");
+    // The weaker WebAuthn values that would let an authenticator skip the
+    // biometric/PIN check must never be the policy.
+    expect(["preferred", "discouraged"]).not.toContain(PASSKEY_USER_VERIFICATION);
+  });
+});
 
 function fakeCred(
   i: number,

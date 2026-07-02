@@ -24,9 +24,15 @@ import {
 import { Icon, fmt, shortAddr } from "./Icon";
 import type { IconName } from "./Icon";
 import { addressToBech32m, bech32mDisplay } from "../shared/bech32m";
+import { hexOrUtf8ToBytes } from "../background/typed-data";
 import { monoscanAddressUrl } from "../shared/build-info";
 import { ExternalLink } from "./components/ExternalLink";
-import { clusterLabel, type DelegationsView } from "../shared/staking";
+import { type DelegationsView, type PendingRewardsView } from "../shared/staking";
+import {
+  homeAvailableDisplay,
+  homeDelegatedDisplay,
+  rewardsHeroValue,
+} from "../shared/native-amount";
 import { getLythFiatRate, formatFiat } from "../shared/fiat";
 import { RevealableAddressBlock } from "./components/RevealableAddressBlock";
 import { Footer } from "./components/Footer";
@@ -418,6 +424,27 @@ export function shouldLabelBalanceStale(
   balance: number | null,
 ): boolean {
   return !isPriv && balanceStale === true && balance != null;
+}
+
+/**
+ * Item 4 (0-flash): whether the Home hero + Assets row must render a LOADING
+ * skeleton instead of a literal "0.00". True only in the genuinely-loading
+ * case — a public balance not yet resolved (`balanceLythoshi == null`) on a
+ * chain that is NOT degraded/paused. On a fresh popup mount (the action popup
+ * is destroyed on minimize and re-mounted on restore) the balance starts null
+ * and the hero used to paint "0.00" for the ~1-2s round-trip, which reads as
+ * "funds gone". This routes that window to a skeleton instead. The existing
+ * "—" degraded/paused branch (hideBalanceValue || balancePaused) is unchanged
+ * and takes precedence; a real (non-null) balance is always shown as-is. Pure +
+ * exported for unit tests.
+ */
+export function balanceIsLoading(
+  isPriv: boolean,
+  hideBalanceValue: boolean,
+  balancePaused: boolean,
+  balanceLythoshi: bigint | null | undefined,
+): boolean {
+  return !isPriv && !hideBalanceValue && !balancePaused && balanceLythoshi == null;
 }
 
 /**
@@ -1129,9 +1156,13 @@ interface AssetListProps {
    *  matches the hidden hero value instead of showing a figure the wallet can't
    *  currently confirm. */
   hideBalance?: boolean;
+  /** Item 4 (0-flash): the balance hasn't resolved yet on a HEALTHY chain
+   *  (fresh popup mount / restore). Render a loading skeleton in the amount
+   *  cell instead of a literal "0.00". `hideBalance` ("—") takes precedence. */
+  balanceLoading?: boolean;
 }
 
-export function AssetList({ account, network, indexer, hideBalance }: AssetListProps) {
+export function AssetList({ account, network, indexer, hideBalance, balanceLoading }: AssetListProps) {
   const lythAmount = account.balance;
   const [displayCurrency] = useDisplayCurrencyPref();
   const liveRows = indexer?.tokenBalances ?? [];
@@ -1176,7 +1207,28 @@ export function AssetList({ account, network, indexer, hideBalance }: AssetListP
         <div className="ext-asset__spark" />
         <div className="ext-asset__right">
           <div className="amt">
-            {hideBalance ? "—" : lythAmount != null ? fmt(lythAmount, 2) : "0.00"}
+            {hideBalance ? (
+              "—"
+            ) : balanceLoading ? (
+              // Item 4 — loading skeleton, never a literal "0.00".
+              <span
+                aria-busy="true"
+                aria-label="Balance loading"
+                style={{
+                  display: "inline-block",
+                  width: "4ch",
+                  height: "1em",
+                  borderRadius: 6,
+                  background: "var(--ink-300)",
+                  opacity: 0.4,
+                  verticalAlign: "middle",
+                }}
+              />
+            ) : lythAmount != null ? (
+              fmt(lythAmount, 2)
+            ) : (
+              "0.00"
+            )}
           </div>
           {/* Fiat equivalent of the LYTH balance — sized to match the amount
              above, neutral (not the green change colour). No oracle → the rate
@@ -2108,10 +2160,13 @@ interface HeroChipProps {
   value: string;
   active: boolean;
   disabled?: boolean;
+  /** Dim the value to --fg-500 — used for the Rewards chip's muted "—" (no live
+   *  number). */
+  muted?: boolean;
   onClick?: () => void;
 }
 
-function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
+function HeroChip({ label, value, active, disabled, muted, onClick }: HeroChipProps) {
   return (
     <div
       onClick={disabled ? undefined : onClick}
@@ -2149,7 +2204,7 @@ function HeroChip({ label, value, active, disabled, onClick }: HeroChipProps) {
         style={{
           fontSize: 16,
           fontWeight: 600,
-          color: "var(--fg-100)",
+          color: muted ? "var(--fg-500)" : "var(--fg-100)",
           marginTop: 4,
           letterSpacing: "-0.01em",
         }}
@@ -2168,6 +2223,18 @@ interface HomeProps {
   /** Active delegations (totalBps) for the Home "Delegated" chip. null while
    *  loading / on fetch failure → the chip shows "0.00" (no fabrication). */
   delegations?: DelegationsView | null;
+  /** Pending delegation rewards (== the chain's canonical claimable). The TOTAL
+   *  is shown on Home ONLY on a LIVE positive read (no-mock gate); mock/error/
+   *  absent → the rewards links render without a number (honest absence). */
+  pendingRewards?: PendingRewardsView | null;
+  /** True when the pending-rewards read fell back to illustrative mock data
+   *  (`via:"mock"`). A mock read NEVER surfaces a number. */
+  pendingRewardsMock?: boolean;
+  /** Exact spendable balance in lythoshi (bigint) — the precise source for the
+   *  hero "Available"/"Delegated" displays. null while loading / on an account
+   *  switch → "0.00". The lossy `account.balance` float is kept only for the
+   *  approximate fiat conversion. */
+  balanceLythoshi?: bigint | null;
   /** Cluster directory (id → name) for the Activity rows. Threaded to
    *  ActivityList so an indexer-fed delegation row (numeric id only) resolves
    *  the real cluster name, falling back to `Cluster #<id>` (no-mock). */
@@ -2190,6 +2257,9 @@ interface HomeProps {
   onOpenReceive: () => void;
   /** Optional so a wallet harness without the route wired still compiles cleanly. */
   onOpenSend?: () => void;
+  /** Open the delegate (Stake) page — wired to every home hero affordance: the
+   *  Delegated/Rewards chip subtitles' ↗ (the home no longer links to the
+   *  Delegations VIEW page; claiming stays on Delegations' RewardCard). */
   onOpenStake?: () => void;
   onOpenBridge?: () => void;
   /** Slot rendered at the top of the Home body
@@ -2213,7 +2283,7 @@ interface HomeProps {
   onVaultComplete?: () => void;
 }
 
-export function Home({ account, network, indexer, delegations, clusterNameById, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
+export function Home({ account, network, indexer, delegations, pendingRewards, pendingRewardsMock, clusterNameById, balanceLythoshi, balanceStale, balanceCause, chainNotLive, activeVaultLabel, onSettings, onOpenReceive, onOpenSend, onOpenStake, onOpenBridge, topSlot, onNewWalletFlow, onVaultComplete }: HomeProps) {
   const [tab, setTab] = useState<"assets" | "activity">("assets");
   const [activeChip, setActiveChip] = useState<"total" | "staked">("total");
   const devMode = useFeature("DEVELOPER_MODE");
@@ -2260,12 +2330,27 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
   // explains why (when there's a cause) and links to Monoscan. Honest absence,
   // never a misleading 0.00. (`balancePaused` ⊆ `balanceDegraded`; kept for the
   // value-unknown sub-case the exported helper documents/tests.)
+  // "Available" + "Delegated" derive from the EXACT balance lythoshi (bigint),
+  // truncated to 2dp — NOT the lossy `account.balance` float (which could round
+  // up across a 0.01 boundary and overstate funds). Falls back to "0.00" only
+  // when the exact lythoshi isn't loaded yet.
   const totalStr =
     hideBalanceValue || balancePaused
       ? "—"
-      : account.balance != null
-        ? fmt(account.balance, 2)
+      : balanceLythoshi != null
+        ? homeAvailableDisplay(balanceLythoshi, 2)
         : "0.00";
+  // Item 4 (0-flash): the balance hasn't resolved yet on a healthy chain (fresh
+  // popup mount / restore). The hero + Assets row render a loading skeleton in
+  // this window instead of the misleading literal "0.00" (the totalStr/stakedStr
+  // "0.00" fallbacks above are now only reached defensively — this guards the
+  // render). The "—" degraded/paused branch is unchanged and takes precedence.
+  const balanceLoading = balanceIsLoading(
+    isPriv,
+    hideBalanceValue,
+    balancePaused,
+    balanceLythoshi,
+  );
   // #42: label the hero as a retained last-known value only when the chain
   // couldn't be reached AND there's a real balance to annotate (never on the
   // pending "0.00"). Annotate-only — the value itself is untouched.
@@ -2279,22 +2364,39 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
   // longer reads `indexer?.addressActivity` directly. `liveLabel` is
   // still used for the Hero card's account-name display.
   const liveLabel = indexer?.addressLabel;
-  const latestDelegation = indexer?.delegationHistory[0] ?? null;
   // Delegated effective weight = balance × totalBps/10000 — the live,
   // non-custodial contribution (the LYTH stays in account.balance and remains
   // spendable; nothing is escrowed). null delegations / totalBps 0 → "0.00"; the
   // existing degraded/paused gate still forces "—". Never a fabricated figure.
   const delegatedBps = delegations?.totalBps ?? 0;
+  // Number of distinct clusters the wallet is delegated to (one row per cluster).
+  const delegatedClusterCount = delegations?.rows.length ?? 0;
+  // Pending-rewards NO-MOCK gate. Shown INSIDE the Delegated view (tap the
+  // Delegated chip) — NOT a separate chip (a 3rd chip muddied "Total"). A LIVE
+  // read (non-mock, present total) yields the 2dp string (incl. a live "0.00");
+  // mock/error/absent → null → no rewards line. The chain-fixed
+  // `lyth_pendingRewards.totalAmountLythoshi` == on-chain claimable() (verified
+  // live); the illustrative mock figure is NEVER shown.
+  const rewardsValue = rewardsHeroValue(
+    pendingRewards?.totalAmountLythoshi ?? null,
+    pendingRewardsMock ?? false,
+    2,
+  );
+  // Float delegated LYTH — kept ONLY for the approximate fiat conversion below.
   const delegatedLyth =
     account.balance != null && delegatedBps > 0
       ? (account.balance * delegatedBps) / 10_000
       : 0;
+  // The "Delegated" chip shows the PRECISE delegated amount (exact balance
+  // lythoshi × totalBps / 10000, truncated to 2dp) — NOT the chain-exact
+  // whole-LYTH effective weight (the Delegations page shows that floored figure).
   const stakedStr =
     hideBalanceValue || balancePaused
       ? "—"
-      : delegatedBps > 0
-        ? fmt(delegatedLyth, 2)
+      : delegatedBps > 0 && balanceLythoshi != null
+        ? homeDelegatedDisplay(balanceLythoshi, delegatedBps, 2)
         : "0.00";
+  // Big hero shows the ACTIVE chip's value (the 2 chips toggle this).
   const heroStr = activeChip === "total" ? totalStr : stakedStr;
   const [intPart, fracPart] = heroStr.split(".");
 
@@ -2311,9 +2413,27 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
         {topSlot}
         {/* Hero */}
         <div className="ext-card ext-hero">
-          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : liveLabel?.displayName ?? "Available · LYTH"}</div>
+          <div className="lbl">{isPriv ? "Private balance · LYTH-p" : activeChip === "staked" ? "Delegated · LYTH" : (liveLabel?.displayName ?? "Total · LYTH")}</div>
           {isPriv ? (
             <div className="num opaque">— amount hidden by design</div>
+          ) : balanceLoading ? (
+            // Item 4 — loading skeleton (NOT a literal "0.00", which reads as
+            // real funds). A dim placeholder bar, mirroring the Activity
+            // skeleton's var(--ink-300) treatment; replaced the instant the
+            // balance resolves (or the C2 last-known seed lands).
+            <div
+              className="num"
+              aria-busy="true"
+              aria-label="Balance loading"
+              style={{
+                display: "inline-block",
+                width: "5ch",
+                height: "1em",
+                borderRadius: 8,
+                background: "var(--ink-300)",
+                opacity: 0.4,
+              }}
+            />
           ) : (
             <div
               className="num"
@@ -2336,7 +2456,7 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
              match the "LYTH" unit label (.d) beside the amount. With no oracle
              the rate is null, so this renders the selected currency's symbol +
              em-dash (e.g. "$—") — never a fabricated "$0". */}
-          {!isPriv && !hideBalanceValue && !balancePaused && (
+          {!isPriv && !hideBalanceValue && !balancePaused && !balanceLoading && (
             <div
               style={{
                 fontFamily: "var(--f-mono)",
@@ -2412,11 +2532,64 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
           )}
           {!isPriv && (
             <div className="chg">
-              {activeChip === "total"
-                ? "—% · 24h · attested"
-                : devMode && latestDelegation
-                  ? `${latestDelegation.kind} · ${clusterLabel(latestDelegation.cluster)} · ${latestDelegation.weightBps} bps`
-                  : `${(delegatedBps / 100).toFixed(2)}% delegated · full balance spendable`}
+              {activeChip === "total" ? (
+                "—% · 24h · attested"
+              ) : (
+                // Delegated view — three left-aligned, stacked lines: the
+                // non-custodial reassurance, the delegation summary, and the
+                // pending rewards. The two value lines route to the delegate page
+                // (↗). General text is the theme primary (white); the %/bps + the
+                // LYTH amount use the theme accent. Rewards are NO-MOCK gated
+                // (rewardsValue !== null, incl. a live "0.00"; mock/error/absent →
+                // no line, never the mock figure).
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    gap: 3,
+                    color: "var(--fg-100)",
+                  }}
+                >
+                  {delegatedBps > 0 ? (
+                    <button
+                      type="button"
+                      className="ext-deleg-summary"
+                      onClick={onOpenStake ?? (() => {})}
+                      aria-label="Delegate"
+                    >
+                      <span>
+                        Delegated to {delegatedClusterCount} cluster
+                        {delegatedClusterCount === 1 ? "" : "s"} ·{" "}
+                        <span style={{ color: "rgba(var(--gold-glow), 1)" }}>
+                          {devMode
+                            ? `${delegatedBps} bps`
+                            : `${(delegatedBps / 100).toFixed(2)}%`}
+                        </span>
+                      </span>
+                      <Icon name="external" size={11} />
+                    </button>
+                  ) : (
+                    <span>Not delegated</span>
+                  )}
+                  {rewardsValue !== null && (
+                    <button
+                      type="button"
+                      className="ext-deleg-summary"
+                      onClick={onOpenStake ?? (() => {})}
+                      aria-label="Delegate"
+                    >
+                      <span>
+                        <span style={{ color: "rgba(var(--gold-glow), 1)" }}>
+                          {rewardsValue} LYTH
+                        </span>{" "}
+                        pending rewards
+                      </span>
+                      <Icon name="external" size={11} />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {isPriv && (
@@ -2511,6 +2684,7 @@ export function Home({ account, network, indexer, delegations, clusterNameById, 
                 network={network}
                 indexer={indexer}
                 hideBalance={hideBalanceValue}
+                balanceLoading={balanceLoading}
               />
             </div>
           )}
@@ -3390,9 +3564,22 @@ interface NetworksProps {
   onBack: () => void;
   onOpenDetail: (chainId: string) => void;
   onOpenAddCustom: () => void;
+  /** False in a hardened (production) build (and in dev without DEVELOPER_MODE):
+   *  a custom chain's RPC isn't in the strict connect-src allowlist, so the
+   *  entry is hidden rather than letting a user add an unreachable chain. */
+  canAddCustom: boolean;
 }
 
-export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCustom }: NetworksProps) {
+/** Muted advisory line under the custom-chain entry — shared by the dev-only
+ *  note (entry shown) and the "not available in this build" note (hidden). */
+const customChainNoteStyle: CSSProperties = {
+  fontSize: 11,
+  color: "var(--fg-400)",
+  textAlign: "center",
+  padding: "8px 4px",
+};
+
+export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCustom, canAddCustom }: NetworksProps) {
   const builtin = chains.filter((c) => c.builtin);
   const custom = chains.filter((c) => !c.builtin);
   return (
@@ -3417,13 +3604,26 @@ export function Networks({ current, chains, onBack, onOpenDetail, onOpenAddCusto
           onOpenDetail={onOpenDetail}
           emptyHint="No custom chains added yet."
         />
-        <button
-          className="ext-act"
-          onClick={onOpenAddCustom}
-          style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
-        >
-          <Icon name="plus" size={13} /> Add custom chain
-        </button>
+        {canAddCustom ? (
+          <>
+            <button
+              className="ext-act"
+              onClick={onOpenAddCustom}
+              style={{ width: "100%", padding: "10px", flexDirection: "row", gap: 8 }}
+            >
+              <Icon name="plus" size={13} /> Add custom chain
+            </button>
+            {/* Dev mode is a runtime escape hatch; remind that the feature is
+                absent from production (hardened) builds. */}
+            <div style={customChainNoteStyle}>
+              Dev mode only — custom chains aren’t available in production builds.
+            </div>
+          </>
+        ) : (
+          <div style={customChainNoteStyle}>
+            Custom chains aren’t available in this build.
+          </div>
+        )}
       </div>
     </>
   );
@@ -3686,17 +3886,6 @@ export { ReqSheet };
 // ---------------------------------------------------------------------------
 
 // Hex / bytes helpers that don't drag a Buffer dep in.
-
-function hexToBytes(hex: string): Uint8Array {
-  const r = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (r.length === 0) return new Uint8Array(0);
-  const padded = r.length % 2 === 1 ? "0" + r : r;
-  const out = new Uint8Array(padded.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(padded.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
 
 function bytesToUtf8IfPrintable(b: Uint8Array): string | null {
   try {
@@ -4746,7 +4935,11 @@ export function ReqSendTx({
   chain,
 }: ReqSendTxProps) {
   const { tx, view, origin } = request;
-  const [tier, setTier] = useState<FeeTier>("medium");
+  // P3-001 — the dApp fee is shown READ-ONLY: the selector never bound the
+  // signed fee (the SW signs the raw dApp price), so a picker was a false
+  // affordance. Pin the display at medium (1x = the raw signed price) → the fee
+  // shown is exactly the fee signed.
+  const tier: FeeTier = "medium";
   const [showRaw, setShowRaw] = useState(false);
   const [showSim, setShowSim] = useState(true);
   const [showFeeDetails, setShowFeeDetails] = useState(false);
@@ -4876,31 +5069,6 @@ export function ReqSendTx({
             </button>
           )}
         </div>
-        {!hasStructuredFee && (
-          <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-            {(["low", "medium", "high"] as FeeTier[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTier(t)}
-                style={{
-                  flex: 1,
-                  padding: "7px 6px",
-                  borderRadius: 8,
-                  fontSize: 10,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                  fontFamily: "var(--f-mono)",
-                  background: tier === t ? "var(--gold-bg)" : "transparent",
-                  color: tier === t ? "var(--gold)" : "var(--fg-300)",
-                  border: tier === t ? "1px solid rgba(124,127,255,0.4)" : "1px solid var(--fg-700)",
-                  cursor: "pointer",
-                }}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        )}
         {feeDisplay?.source === "structured" ? (
           <>
             <div className="req-kv">
@@ -5051,7 +5219,10 @@ export function ReqPersonalSignReal({
 }: ReqPersonalSignRealProps) {
   const { message, address, origin } = request;
   const isHex = message.startsWith("0x") || message.startsWith("0X");
-  const bytes = isHex ? hexToBytes(message) : new TextEncoder().encode(message);
+  // P3-003 — decode via the SAME helper the signer uses (hexOrUtf8ToBytes) so the
+  // displayed bytes are EXACTLY the signed bytes (odd-length 0x-hex previously
+  // diverged: popup padded to [0x01] while the signer UTF-8'd to [0x30,0x78,0x31]).
+  const bytes = hexOrUtf8ToBytes(message);
   const utf8 = isHex ? bytesToUtf8IfPrintable(bytes) : message;
   const [showRaw, setShowRaw] = useState(false);
 

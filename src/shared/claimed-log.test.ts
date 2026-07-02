@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { decodeClaimedAmountLythoshi, CLAIMED_EVENT_TOPIC0 } from "./claimed-log.js";
+import {
+  decodeClaimedAmountLythoshi,
+  CLAIMED_EVENT_TOPIC0,
+  MAX_PLAUSIBLE_CLAIM_LYTHOSHI,
+} from "./claimed-log.js";
+import { LYTHOSHI_PER_LYTH } from "@monolythium/core-sdk";
 
 const PRECOMPILE = "0x000000000000000000000000000000000000100a";
 const WALLET_TOPIC =
@@ -86,5 +91,57 @@ describe("decodeClaimedAmountLythoshi", () => {
     const noise = { address: "0x" + "1".repeat(40), topics: ["0x" + "2".repeat(64)], data: [] };
     const amount = 42n;
     expect(decodeClaimedAmountLythoshi([noise, claimedLogBytes(amount)])).toBe("42");
+  });
+
+  it("decodes the amount regardless of the autoCompound flag (word-1)", () => {
+    const amount = 1234567890123456789n;
+    expect(decodeClaimedAmountLythoshi([claimedLogBytes(amount, 1)])).toBe(
+      amount.toString(10),
+    );
+  });
+
+  it("returns null when the data omits the autoCompound word (SDK requires both words)", () => {
+    // 32 bytes — amount word only, no autoCompound word. The SDK decoder
+    // throws "data shorter than amount + autoCompound words" → caught → null.
+    const log = {
+      address: PRECOMPILE,
+      topics: [CLAIMED_EVENT_TOPIC0, WALLET_TOPIC],
+      data: [...word(5n)],
+    };
+    expect(decodeClaimedAmountLythoshi([log])).toBeNull();
+  });
+
+  it("returns null when the indexed wallet topic is absent (SDK requires 2 topics)", () => {
+    // topic0 only, no indexed wallet topic. The SDK decoder throws on
+    // topics.length !== 2 → caught → null (a real Claimed log carries both).
+    const log = {
+      address: PRECOMPILE,
+      topics: [CLAIMED_EVENT_TOPIC0],
+      data: [...word(7n), ...word(0n)],
+    };
+    expect(decodeClaimedAmountLythoshi([log])).toBeNull();
+  });
+
+  describe("MAX_PLAUSIBLE_CLAIM_LYTHOSHI bound (P5-004)", () => {
+    it("pins the cap at 200M LYTH (2x genesis supply)", () => {
+      expect(MAX_PLAUSIBLE_CLAIM_LYTHOSHI).toBe(200_000_000n * LYTHOSHI_PER_LYTH);
+    });
+
+    it("decodes an at-the-cap amount normally", () => {
+      const atCap = MAX_PLAUSIBLE_CLAIM_LYTHOSHI;
+      expect(decodeClaimedAmountLythoshi([claimedLogBytes(atCap)])).toBe(
+        atCap.toString(10),
+      );
+    });
+
+    it("returns null (undecodable → bare render) for an over-bound amount, never a huge number", () => {
+      const overBound = MAX_PLAUSIBLE_CLAIM_LYTHOSHI + 1n;
+      expect(decodeClaimedAmountLythoshi([claimedLogBytes(overBound)])).toBeNull();
+    });
+
+    it("rejects an absurd near-uint256-max echo as undecodable", () => {
+      const absurd = (1n << 255n); // ~5.8e76 lythoshi
+      expect(decodeClaimedAmountLythoshi([claimedLogBytes(absurd)])).toBeNull();
+    });
   });
 });

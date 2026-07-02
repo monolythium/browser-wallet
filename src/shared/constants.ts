@@ -1,7 +1,11 @@
 import type { CurrencyCode } from "./iso4217";
 
-export const AUTO_LOCK_MINUTES_DEFAULT = 15;
+export const AUTO_LOCK_MINUTES_DEFAULT = 5;
 export const AUTO_LOCK_OPTIONS = [5, 15, 30, 60] as const;
+
+/** The exact word the user types to confirm the destructive no-re-auth wipe.
+ *  Single source for the SW verify (P4-004) + both confirm screens. */
+export const WIPE_CONFIRM_WORD = "DELETE";
 
 export const ALARM_AUTO_LOCK = "monolythium.autolock";
 
@@ -72,16 +76,19 @@ export const SESSION_KEY_UNLOCK_LOCKOUT_UNTIL = "unlockLockoutUntil";
 // vault without prompting for the password. Cleared on lock /
 // auto-lock fire / wipe.
 export const SESSION_KEY_MEK_V4 = "mono.session.mek.v4";
-// T1-03 (Item B) — hard cap on the password-less session-MEK rehydrate window,
-// independent of the (user-configurable, up to 60 min) auto-lock window. The
-// deadline is written when the MEK is persisted AND refreshed on every genuine
-// user action (resetAutoLock), so the window slides to "MEK_REHYDRATE_MAX_MINUTES
-// since last activity". Once past it, tryRestoreFromSessionV4 refuses and wipes
-// the session MEK, forcing a fresh password unlock. Bounds the local/evil-maid
-// re-unlock window without retyping the password during continuous use.
+// LEGACY (2026-06-28 auto-lock overhaul) — the password-less session-MEK restore
+// window is now governed SOLELY by the configured auto-lock deadline
+// (SESSION_KEY_AUTO_LOCK_DEADLINE): tryRestoreFromSessionV4 refuses + wipes once
+// that deadline is absent or passed, so the user's configured auto-lock IS the
+// intended exposure bound (default 5 min, max 60), with the increase-warning
+// dialog as explicit consent for a longer window. The former independent 5-min
+// cap (MEK_REHYDRATE_MAX_MINUTES) is REMOVED — it shadowed the configured timer
+// and relocked at ~5 min of idle regardless of the setting. This key is no longer
+// WRITTEN; it is only REMOVED (clearMekFromSessionV4 / triggerAutoLock /
+// resetAutoLock-when-locked) to purge any stale deadline a pre-overhaul unlock
+// left in the same browser session.
 export const SESSION_KEY_MEK_REHYDRATE_DEADLINE =
   "mono.session.mek.rehydrate.deadline";
-export const MEK_REHYDRATE_MAX_MINUTES = 5;
 
 // Highest threshold first so lockoutMsFor() returns the longest matching window.
 export const LOCKOUT_THRESHOLDS = [

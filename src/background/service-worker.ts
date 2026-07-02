@@ -4,7 +4,7 @@
 //   - eth_accounts
 //   - eth_requestAccounts        (real popup approval)
 //   - eth_chainId / net_version
-//   - eth_sendTransaction        (native ML-DSA encrypted submission)
+//   - eth_sendTransaction        (native ML-DSA submission)
 //   - eth_sign / personal_sign   (native wallet signing)
 //   - eth_signTypedData_v4       (EIP-712 typed-data signing)
 //   - wallet_switchEthereumChain
@@ -79,6 +79,7 @@ import {
   getUnlockedPublicKeyV4,
   // Multi-vault surface.
   hasContainerV4,
+  storedContainerNeedsRestoreV4,
   unlockContainerV4,
   selectActiveVaultV4,
   listVaultsV4,
@@ -97,6 +98,7 @@ import {
   addPasskeyCredentialV4,
   removePasskeyCredentialV4,
   setPasskeyPolicyV4,
+  updatePasskeyCredentialSignCountV4,
   // SLH-DSA emergency-backup surface.
   // `writeSlhDsaBackupV4` is not used directly by any IPC — the
   // SW writes through the higher-level helpers (`generateSlhDsaBackupV4`,
@@ -110,6 +112,9 @@ import {
   setSlhDsaRegistrationStatusV4,
   // Session-rehydrate across MV3 SW hibernation.
   tryRestoreFromSessionV4,
+  // P5-007 — sent-address integrity HMAC (keyed by a MEK-derived sub-key).
+  computeSentAddrTagV4,
+  verifySentAddrTagV4,
 } from "./keystore-mldsa.js";
 // Notifications — the chokepoint hook in wallet-indexer-snapshot
 // calls this to record one notification per tracked-tx terminal transition.
@@ -151,19 +156,28 @@ import {
 // and threads it ONLY to persistPendingRowBackground — never to the signer.
 import {
   anchorAfter,
+  incomingTransferId,
   isTxOpKind,
   type IncomingWatermark,
+  type NotificationRecord,
   type TxOpKind,
 } from "../shared/notifications.js";
+// Per-key serialization for the chrome.storage.local read-modify-write paths
+// (pending store / local-claims / sent-addresses / notification history) so a
+// burst of concurrent writers can't last-write-wins clobber each other.
+import { withKeyLock } from "./storage-lock.js";
 import type { PasskeyCredential, PasskeyPolicy } from "../shared/passkey.js";
 import {
   DAILY_CAP_WINDOW_MS,
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
+  buildPasskeyChallenge,
+  buildTxIntentDigest,
   evaluatePolicy as evaluatePasskeyPolicy,
   validateCredentialName,
   validatePasskeyPolicy,
 } from "../shared/passkey.js";
+import { verifyPasskeyAssertion } from "./passkey-verify.js";
 import { loadTwoTierState } from "./two-tier-features-store.js";
 import { isPasswordValid } from "../lib/password-validation.js";
 import {
@@ -194,7 +208,6 @@ import { keccak_256, shake256 } from "@noble/hashes/sha3.js";
 import {
   chainRequiresMlDsa,
   TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX,
-  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
   MAX_EXECUTION_UNIT_LIMIT,
   probeFirstAliveOperator,
   BUILTIN_CHAINS as BUILTIN_CHAINS_LIST,
@@ -207,9 +220,15 @@ import {
   snapshotGenesisCache,
   classifyNoOperatorReason,
   clearGenesisCache,
+  SESSION_KEY_GENESIS_CACHE,
   rehydrateGenesisCache,
 } from "./networks.js";
-import { clampToSaneBound } from "../shared/operator-bounds.js";
+import { isHardenedBuild } from "../shared/build-mode.js";
+import { hardenedChains } from "../shared/hardened-dial.js";
+import {
+  clampToSaneBound,
+  MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
+} from "../shared/operator-bounds.js";
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
   validateOperatorList,
@@ -219,7 +238,7 @@ import {
   activityPendingKey,
   activityLocalClaimsKey,
   mergeIndexerSnapshot,
-  evictExpiredPending,
+  transitionPending,
   applyLocalClaims,
   reconcilePending,
   validateActivityCache,
@@ -235,8 +254,9 @@ import {
 import { isCurrencyCode, type CurrencyCode } from "../shared/iso4217.js";
 import {
   sentAddressesKey,
-  parseSentAddresses,
-  addToSentList,
+  parseSentEntries,
+  addSentEntry,
+  canonicalSentAddrMessage,
 } from "../shared/sent-addresses.js";
 import {
   DEMO_ADDR_SENTINELS_LOWER,
@@ -570,7 +590,6 @@ import {
   SESSION_KEY_AUTO_LOCK_DEADLINE,
   SESSION_KEY_MEK_V4,
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
-  MEK_REHYDRATE_MAX_MINUTES,
   SESSION_KEY_UNLOCK_FAIL_COUNT,
   SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
   SESSION_KEY_WALLET_LOCKED,
@@ -578,6 +597,7 @@ import {
   STORAGE_KEY_UI_OPEN_MODE,
   UI_OPEN_MODE_DEFAULT,
   UI_OPEN_MODE_VALUES,
+  WIPE_CONFIRM_WORD,
   type UiOpenMode,
 } from "../shared/constants.js";
 
@@ -649,7 +669,11 @@ const ACTIVE_CHAIN_STORAGE_KEY = "mono.chain.active";
 let userChains: Record<string, NetInfo> = {};
 
 function chainRegistry(): Record<string, NetInfo> {
-  return { ...BUILTIN_CHAINS, ...userChains };
+  // Hardened builds dial ONLY the allowlisted built-in chain — the strict
+  // connect-src can't cover a user-added chain's RPC. Stored custom chains are
+  // ignored here (not deleted); loadActiveChainId's lookup-miss guard then
+  // reverts the active chain to the built-in default. Dev builds keep them.
+  return hardenedChains(BUILTIN_CHAINS, userChains, isHardenedBuild());
 }
 
 function lookupChain(id: string): NetInfo | null {
@@ -1074,13 +1098,12 @@ async function resetAutoLock(): Promise<void> {
     await chrome.storage.session.set({
       [SESSION_KEY_AUTO_LOCK_DEADLINE]: deadline,
       [SESSION_KEY_WALLET_LOCKED]: false,
-      // T1-03 (Item B): slide the session-MEK rehydrate cap forward on every
-      // genuine user action so the password-less window is "5 min since last
-      // activity", not 5 min since unlock.
-      [SESSION_KEY_MEK_REHYDRATE_DEADLINE]:
-        Date.now() + MEK_REHYDRATE_MAX_MINUTES * 60_000,
     });
   } else {
+    // 2026-06-28 auto-lock overhaul: SESSION_KEY_AUTO_LOCK_DEADLINE is now the
+    // single restore authority. Still purge the legacy rehydrate-deadline key so
+    // a stale one left by a pre-overhaul unlock in this browser session can't
+    // linger (it is no longer written; this is cleanup-only).
     await chrome.storage.session.remove([
       SESSION_KEY_AUTO_LOCK_DEADLINE,
       SESSION_KEY_MEK_REHYDRATE_DEADLINE,
@@ -1282,7 +1305,23 @@ async function clearNotifPollAlarm(): Promise<void> {
   }
 }
 
-/** True if ANY `mono.activity.pending.*` scope holds ≥1 row. Lock-independent
+/** True if a pending-cache row still keeps the notification-poll alarm armed.
+ *  A CONFIRMED reward claim (source:"local-claim" with an inclusion block
+ *  stamped) is a SETTLED durable record retained only for display — it is
+ *  excluded from `pollPendingAndNotify`'s `remaining` count, so it must be
+ *  excluded here too. Otherwise the lingering settled claim keeps
+ *  `hasAnyPendingTx` true forever, the poll's `remaining === 0` clear guard
+ *  never fires, and the SW wakes on the poll cadence indefinitely. A claim that
+ *  is still in-flight (no confirmedBlockHeight yet) DOES keep the alarm armed. */
+function pendingRowKeepsPollAlarm(r: PendingTxRow): boolean {
+  if (r.source === "local-claim" && r.confirmedBlockHeight !== undefined) {
+    return false;
+  }
+  return true;
+}
+
+/** True if ANY `mono.activity.pending.*` scope holds ≥1 row that still counts as
+ *  in-flight work (per {@link pendingRowKeepsPollAlarm}). Lock-independent
  *  prefix-scan; used for the boot re-arm + the clear/re-create race guard. */
 async function hasAnyPendingTx(): Promise<boolean> {
   try {
@@ -1291,7 +1330,8 @@ async function hasAnyPendingTx(): Promise<boolean> {
     });
     for (const key of Object.keys(all)) {
       if (!key.startsWith("mono.activity.pending.")) continue;
-      if ((validatePendingActivityCache(all[key])?.pending ?? []).length > 0) {
+      const rows = validatePendingActivityCache(all[key])?.pending ?? [];
+      if (rows.some(pendingRowKeepsPollAlarm)) {
         return true;
       }
     }
@@ -1776,7 +1816,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       const arr = Array.isArray(params) ? params : [];
       const txReq = (arr[0] as EthSendTransactionRequest | undefined) ?? {};
       if (!chainRequiresMlDsa(session.chainId)) {
-        return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
+        return err(4200, "eth_sendTransaction only supports native Monolythium Testnet sends");
       }
       // S6 #45 B1: refuse single-signer sends from a multisig active vault —
       // they must go through the propose/approve ceremony (not this lone-
@@ -1785,12 +1825,24 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         return err(ERR_UNAUTHORIZED, MULTISIG_SEND_REFUSAL);
       }
 
+      // P3-002 — the wallet signs only with the active vault's key (one account
+      // per connection), so a dApp-supplied `from` naming a different address can
+      // never be honored: reject it (and never let it poison the nonce read).
+      const activeFrom = getUnlockedAddressV4();
+      if (
+        typeof txReq.from === "string" &&
+        activeFrom != null &&
+        txReq.from.toLowerCase() !== activeFrom.toLowerCase()
+      ) {
+        return err(ERR_UNAUTHORIZED, "from does not match the connected account");
+      }
+
       // NN-01: snapshot the active vault id at view-build time (synchronously,
       // before any await / the separate-window approval) so a vault-select
       // landing DURING the approval await is caught at sign time. The popup
-      // displays `txReq.from ?? getUnlockedAddressV4()` off the same global, so
-      // this binds the signer to the displayed vault. Coalesced post-unlock
-      // below for the locked-at-view-build case (no false abort).
+      // shows the ACTIVE vault address as the signer, so this binds the signer
+      // to the displayed (active) vault. Coalesced post-unlock below for the
+      // locked-at-view-build case (no false abort).
       const boundVaultIdAtView = getActiveVaultIdV4();
       // Build the approval view BEFORE opening the popup so the user sees
       // real numbers (execution-unit estimate, simulation outcome, nonce)
@@ -1889,7 +1941,7 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
         }
       }
 
-      return err(4200, "eth_sendTransaction only supports native encrypted Monolythium Testnet sends");
+      return err(4200, "eth_sendTransaction only supports native Monolythium Testnet sends");
     }
 
     case "monolythium_submitMrvNativePlan": {
@@ -2230,6 +2282,11 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       if (!Array.isArray(p?.rpcUrls) || (p?.rpcUrls?.length ?? 0) === 0) {
         return err(-32602, "wallet_addEthereumChain: rpcUrls must be a non-empty array");
       }
+      // P4-002 — only a connected origin may trigger an actual chain-add (mirrors
+      // wallet_switchEthereumChain). The EIP-3085 no-op above still answers anyone.
+      if (!session.connectedOrigins.has(origin)) {
+        return err(ERR_UNAUTHORIZED, "origin not connected — call eth_requestAccounts first");
+      }
       const spec: AddChainSpec = {
         chainId: requested,
         chainName: typeof p?.chainName === "string" ? p.chainName : "Unnamed chain",
@@ -2265,6 +2322,23 @@ function bytesToHex(b: Uint8Array): string {
   let s = "";
   for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
   return s;
+}
+
+function bytesToBase64Url(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Decode a base64url string to bytes. Throws on malformed input (callers in
+ *  the passkey verify gate treat a throw as a rejected assertion). */
+function base64UrlToBytes(s: string): Uint8Array {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const norm = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  const bin = atob(norm);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function parseHexQuantity(hex: string): number {
@@ -2342,14 +2416,13 @@ async function buildSendTxView(
   if (!net) return view;
 
   const client = rpcClientFor(chainId);
-  // SEPARATE FINDING (NOT NN-01; tracked for its own triage): the approval view
-  // displays `txReq.from ?? getUnlockedAddressV4()`, but the wallet always SIGNS
-  // with the active vault's backend. A dApp-supplied `from` that differs from
-  // the active vault is a pre-existing display-vs-sign WYSIWYS gap, independent
-  // of the NN-01 active-vault TOCTOU (which binds the signer to the active vault
-  // via boundVaultId). Do not conflate the two.
+  // P3-002 — the approval UI always shows the ACTIVE vault address as the signer
+  // (never `txReq.from`); a dApp `from` that differs is rejected at the
+  // eth_sendTransaction entry, and the nonce below is read for the active
+  // address. So there is no display-vs-sign gap here. NN-01 separately binds the
+  // signer to the active vault via boundVaultId; do not conflate the two.
   const fromAddr =
-    txReq.from ?? getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
+    getUnlockedAddressV4() ?? "0x0000000000000000000000000000000000000000";
 
   const [pricePerExecutionUnitLythoshiHex, nonce] = await Promise.all([
     view.pricePerExecutionUnitLythoshiHex != null
@@ -2628,6 +2701,237 @@ async function recordPasskeyUsageEntry(
   }
 }
 
+// ── Pending per-tx passkey challenges (boundary 3b) ──────────────────────────
+//
+// The SW mints a single-use, tx-intent-bound challenge at `passkey-evaluate`
+// and persists it here; the verify gate in `wallet-send-tx` CONSUMES it
+// (delete-on-read) before checking the forwarded assertion. Kept in
+// `chrome.storage.session` (NOT module memory) so it survives an MV3 SW
+// hibernation during the up-to-60s authenticator prompt. Entries are bounded
+// by a short TTL + prune-on-write.
+const SESSION_KEY_PASSKEY_CHALLENGES = "mono.session.passkey-challenges.v1";
+const PASSKEY_CHALLENGE_TTL_MS = 2 * 60_000; // ~2 min — covers the WebAuthn prompt
+interface PasskeyChallengeRecord {
+  /** base64url of the challenge bytes the popup must pass to `.get()`. */
+  challengeB64: string;
+  /** hex of the tx-intent digest the assertion is bound to. */
+  intentDigestHex: string;
+  /** the vault the challenge was minted for. */
+  vaultId: string;
+  /** epoch ms after which the challenge is rejected. */
+  expiresAt: number;
+}
+type PasskeyChallengeWire = Record<string, PasskeyChallengeRecord>;
+
+async function readPasskeyChallengeWire(): Promise<PasskeyChallengeWire> {
+  try {
+    const raw = await chrome.storage.session.get(SESSION_KEY_PASSKEY_CHALLENGES);
+    const stored = raw[SESSION_KEY_PASSKEY_CHALLENGES];
+    if (!stored || typeof stored !== "object") return {};
+    return stored as PasskeyChallengeWire;
+  } catch {
+    return {};
+  }
+}
+
+/** Persist a pending challenge (pruning expired entries) and return its id. */
+async function putPendingPasskeyChallenge(
+  rec: PasskeyChallengeRecord,
+): Promise<string> {
+  const wire = await readPasskeyChallengeWire();
+  const now = Date.now();
+  for (const [id, r] of Object.entries(wire)) {
+    if (!r || typeof r.expiresAt !== "number" || r.expiresAt < now) {
+      delete wire[id];
+    }
+  }
+  const challengeId = crypto.randomUUID();
+  wire[challengeId] = rec;
+  try {
+    await chrome.storage.session.set({ [SESSION_KEY_PASSKEY_CHALLENGES]: wire });
+  } catch {
+    // best-effort; a failed persist surfaces as "challenge not found" at verify.
+  }
+  return challengeId;
+}
+
+/** Read AND DELETE a pending challenge — single-use, one-shot. Deletes
+ *  regardless of the record's validity so a failed attempt can never be
+ *  replayed. Returns null when absent or structurally invalid. */
+async function consumePendingPasskeyChallenge(
+  challengeId: string,
+): Promise<PasskeyChallengeRecord | null> {
+  const wire = await readPasskeyChallengeWire();
+  const rec = wire[challengeId];
+  if (rec) {
+    delete wire[challengeId];
+    try {
+      await chrome.storage.session.set({
+        [SESSION_KEY_PASSKEY_CHALLENGES]: wire,
+      });
+    } catch {
+      // best-effort delete; the TTL is the backstop.
+    }
+  }
+  if (
+    !rec ||
+    typeof rec.challengeB64 !== "string" ||
+    typeof rec.intentDigestHex !== "string" ||
+    typeof rec.vaultId !== "string" ||
+    typeof rec.expiresAt !== "number"
+  ) {
+    return null;
+  }
+  return rec;
+}
+
+/** The (base64url-encoded) assertion the popup forwards from
+ *  `navigator.credentials.get()`. */
+interface ForwardedAssertion {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+}
+
+function isForwardedAssertion(x: unknown): x is ForwardedAssertion {
+  if (!x || typeof x !== "object") return false;
+  const a = x as Record<string, unknown>;
+  return (
+    typeof a.credentialId === "string" &&
+    typeof a.authenticatorData === "string" &&
+    typeof a.clientDataJSON === "string" &&
+    typeof a.signature === "string"
+  );
+}
+
+type PasskeySendGateResult =
+  | {
+      ok: true;
+      signCountUpdate: { credentialId: string; newSignCount: number };
+    }
+  | {
+      ok: false;
+      reject: { ok: false; reason: string; passkeyReregister?: "required" };
+    };
+
+/** The boundary-3b verify gate for an under-limit passkey send. Consumes the
+ *  single-use challenge, checks expiry + vault binding, recomputes the tx
+ *  intent digest and requires it to match the minted one (binds the assertion
+ *  to THIS exact tx), then cryptographically verifies the assertion via
+ *  `verifyPasskeyAssertion`. Returns a typed reject on any failure — the caller
+ *  signs ONLY on `{ ok: true }`. */
+async function verifyPasskeyAssertionForSend(args: {
+  to: string;
+  valueWeiHex: string;
+  data?: string;
+  chainIdHex: string;
+  challengeId: unknown;
+  assertion: unknown;
+  activeVaultId: string;
+  credentials: PasskeyCredential[];
+}): Promise<PasskeySendGateResult> {
+  const { challengeId, assertion } = args;
+  if (typeof challengeId !== "string" || !isForwardedAssertion(assertion)) {
+    return { ok: false, reject: { ok: false, reason: "passkey assertion required" } };
+  }
+  // CONSUME the challenge FIRST — single-use, deleted before verify so a
+  // failed attempt cannot be replayed.
+  const pending = await consumePendingPasskeyChallenge(challengeId);
+  if (!pending) {
+    return {
+      ok: false,
+      reject: { ok: false, reason: "passkey challenge not found or already used" },
+    };
+  }
+  if (Date.now() > pending.expiresAt) {
+    return { ok: false, reject: { ok: false, reason: "passkey challenge expired" } };
+  }
+  if (pending.vaultId !== args.activeVaultId) {
+    return {
+      ok: false,
+      reject: { ok: false, reason: "passkey challenge vault mismatch" },
+    };
+  }
+  // RECOMPUTE the intent digest from the ACTUAL send fields and require a
+  // match — a compromised popup cannot swap the recipient/value/data/chain
+  // after collecting the assertion.
+  const intentDigest = buildTxIntentDigest({
+    to: args.to,
+    valueWeiHex: args.valueWeiHex,
+    ...(args.data !== undefined ? { data: args.data } : {}),
+    chainIdHex: args.chainIdHex,
+  });
+  if (bytesToHex(intentDigest) !== pending.intentDigestHex) {
+    return {
+      ok: false,
+      reject: {
+        ok: false,
+        reason: "passkey assertion does not match this transaction",
+      },
+    };
+  }
+  const cred = args.credentials.find(
+    (c) => c.credentialId === assertion.credentialId,
+  );
+  if (!cred) {
+    return {
+      ok: false,
+      reject: { ok: false, reason: "passkey credential not recognized" },
+    };
+  }
+  let decoded: {
+    authenticatorData: Uint8Array;
+    clientDataJSON: Uint8Array;
+    signature: Uint8Array;
+    credentialId: string;
+  };
+  try {
+    decoded = {
+      authenticatorData: base64UrlToBytes(assertion.authenticatorData),
+      clientDataJSON: base64UrlToBytes(assertion.clientDataJSON),
+      signature: base64UrlToBytes(assertion.signature),
+      credentialId: assertion.credentialId,
+    };
+  } catch {
+    return { ok: false, reject: { ok: false, reason: "passkey assertion is malformed" } };
+  }
+  const verify = await verifyPasskeyAssertion({
+    assertion: decoded,
+    expectedChallenge: base64UrlToBytes(pending.challengeB64),
+    expectedOrigin: `chrome-extension://${chrome.runtime.id}`,
+    expectedRpId: chrome.runtime.id,
+    credential: {
+      ...(cred.publicKeySpki !== undefined ? { publicKeySpki: cred.publicKeySpki } : {}),
+      ...(cred.alg !== undefined ? { alg: cred.alg } : {}),
+      ...(cred.signCount !== undefined ? { signCount: cred.signCount } : {}),
+    },
+  });
+  if (!verify.ok) {
+    if (verify.reason === "no-pubkey") {
+      // Part 2: a pubkey-less (pre-upgrade) credential cannot sign — route the
+      // user to re-register rather than degrading to popup-only trust.
+      return {
+        ok: false,
+        reject: {
+          ok: false,
+          passkeyReregister: "required",
+          reason:
+            "this passkey predates an encryption upgrade — re-register it in Security to sign",
+        },
+      };
+    }
+    return { ok: false, reject: { ok: false, reason: "passkey verification failed" } };
+  }
+  return {
+    ok: true,
+    signCountUpdate: {
+      credentialId: assertion.credentialId,
+      newSignCount: verify.newSignCount ?? 0,
+    },
+  };
+}
+
 /**
  * Suggest `(maxFeePerGas, maxPriorityFeePerGas, baseFeePerGas)` for a
  * given chain. On the testnet the values come from the native
@@ -2809,11 +3113,22 @@ function parsePasskeyCredential(raw: unknown): PasskeyCredential | null {
   if (typeof r.name !== "string") return null;
   if (r.kind !== "platform" && r.kind !== "cross-platform") return null;
   if (typeof r.createdAt !== "number") return null;
+  // Part 1a — a NEW registration must carry the credential public key so the
+  // SW can verify the assertion later (Option A). Reject a pubkey-less
+  // registration here; never store one. `signCount` defaults to 0.
+  if (typeof r.publicKeySpki !== "string" || r.publicKeySpki.length === 0) {
+    return null;
+  }
+  if (typeof r.alg !== "number") return null;
+  const signCount = typeof r.signCount === "number" ? r.signCount : 0;
   return {
     credentialId: r.credentialId,
     name: r.name,
     kind: r.kind,
     createdAt: r.createdAt,
+    publicKeySpki: r.publicKeySpki,
+    alg: r.alg,
+    signCount,
   };
 }
 
@@ -4553,6 +4868,14 @@ async function readNativeAgentStateLookup(
   };
 }
 
+/** Row caps the wallet ASKS each activity stream for. The SAME constant bounds
+ *  both the RPC `limit` request param AND the wallet-side defensive slice in
+ *  `extractAddressActivity`, so a rogue/buggy operator that echoes more rows
+ *  than requested can't drive a render/processing DoS — the wallet processes at
+ *  most what it asked for (P5-005). */
+const ADDRESS_ACTIVITY_RPC_LIMIT = 30;
+const DELEGATION_HISTORY_RPC_LIMIT = 20;
+
 /** Extract the row array from a `lyth_getAddressActivity` response, tolerating
  *  BOTH shapes during the v2 fleet migration: a legacy operator returns a bare
  *  array; a v2 operator wraps it in an envelope `{schemaVersion, …, nextCursor,
@@ -4567,17 +4890,26 @@ async function readNativeAgentStateLookup(
  *  Also applied to `lyth_getDelegationHistory`, which is still a bare array
  *  today (only `getAddressActivity` was enveloped). On a bare array the helper
  *  is a pure no-op, so it harmlessly future-proofs that stream against a later
- *  envelope migration that follows the same `.activity` shape. */
-function extractAddressActivity(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (
+ *  envelope migration that follows the same `.activity` shape.
+ *
+ *  P5-005: the resolved rows are re-sliced to `limit` — the same value sent as
+ *  the RPC `limit` param — so an operator echoing MORE rows than requested
+ *  (semi-trusted input) can't drive a render/processing DoS. The wallet renders
+ *  at most the window it asked for, regardless of what the operator returns. */
+function extractAddressActivity(value: unknown, limit: number): unknown[] {
+  let rows: unknown[];
+  if (Array.isArray(value)) {
+    rows = value;
+  } else if (
     value !== null &&
     typeof value === "object" &&
     Array.isArray((value as { activity?: unknown }).activity)
   ) {
-    return (value as { activity: unknown[] }).activity;
+    rows = (value as { activity: unknown[] }).activity;
+  } else {
+    return [];
   }
-  return [];
+  return rows.length > limit ? rows.slice(0, limit) : rows;
 }
 
 /** Parallel-fetch the indexer streams used by popup-facing
@@ -4615,8 +4947,14 @@ async function fetchIndexerSnapshot(
         }),
     readNativeAgentStateLookup(address),
     settleTestnetRpc<unknown | null>("lyth_getAddressLabel", [addressForChain]),
-    settleTestnetRpc<unknown>("lyth_getDelegationHistory", [addressForChain, 20]),
-    settleTestnetRpc<unknown>("lyth_getAddressActivity", [addressForChain, 30]),
+    settleTestnetRpc<unknown>("lyth_getDelegationHistory", [
+      addressForChain,
+      DELEGATION_HISTORY_RPC_LIMIT,
+    ]),
+    settleTestnetRpc<unknown>("lyth_getAddressActivity", [
+      addressForChain,
+      ADDRESS_ACTIVITY_RPC_LIMIT,
+    ]),
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
@@ -4643,8 +4981,14 @@ async function fetchIndexerSnapshot(
     mrcAccount: mrcAccount.value,
     nativeAgentState: nativeAgentState.value,
     addressLabel: addressLabel.value ?? null,
-    delegationHistory: extractAddressActivity(delegationHistory.value),
-    addressActivity: extractAddressActivity(addressActivity.value),
+    delegationHistory: extractAddressActivity(
+      delegationHistory.value,
+      DELEGATION_HISTORY_RPC_LIMIT,
+    ),
+    addressActivity: extractAddressActivity(
+      addressActivity.value,
+      ADDRESS_ACTIVITY_RPC_LIMIT,
+    ),
     errors,
   };
 }
@@ -4743,6 +5087,17 @@ function validateRawDelegationHistory(input: unknown): RawDelegationHistory | nu
   if (typeof r.kind !== "string") return null;
   if (!isFiniteNum(r.weightBps)) return null;
   if (r.walletTotalBps !== null && !isFiniteNum(r.walletTotalBps)) return null;
+  // Optional, off-contract (on the live wire 2026-06-28 but not in the SDK
+  // DelegationHistoryRecord): the cumulative staked principal, preserved as a
+  // same-block dedup discriminator. Tolerate absent/null; reject only a
+  // present-but-wrong-typed value.
+  if (
+    r.principalLythoshi !== undefined &&
+    r.principalLythoshi !== null &&
+    typeof r.principalLythoshi !== "string"
+  ) {
+    return null;
+  }
   return {
     blockHeight: r.blockHeight,
     txIndex: r.txIndex,
@@ -4753,6 +5108,9 @@ function validateRawDelegationHistory(input: unknown): RawDelegationHistory | nu
     kind: r.kind,
     weightBps: r.weightBps,
     walletTotalBps: r.walletTotalBps,
+    ...(typeof r.principalLythoshi === "string"
+      ? { principalLythoshi: r.principalLythoshi }
+      : {}),
   };
 }
 
@@ -5042,6 +5400,10 @@ async function persistPendingRowBackground(args: {
   rateAtClaim?: number | null;
   currency?: CurrencyCode;
   delegationWeightBps?: number;
+  /** The nonce this tx was broadcast with — ALREADY chosen + signed (nextNonceHex
+   *  is untouched); persisted into the pending row PURELY for the drop-detection
+   *  lifecycle. Never re-signed. */
+  nonce?: number;
 }): Promise<void> {
   try {
     const now = Date.now();
@@ -5061,12 +5423,6 @@ async function persistPendingRowBackground(args: {
     const amountDecimal = lythoshiHexToLythDecimal(args.valueWeiHex);
     const addrLower = args.address.toLowerCase();
     const pendingKey = activityPendingKey(addrLower, args.chainIdHex);
-    const stored = await new Promise<unknown>((resolve) => {
-      chrome.storage.local.get([pendingKey], (res) =>
-        resolve(res?.[pendingKey]),
-      );
-    });
-    const prev = validatePendingActivityCache(stored)?.pending ?? [];
     // A reward claim is a durable local record (the indexer never emits a claim
     // event): mark it source:"local-claim" so it is TTL-exempt + routes render
     // to claimedAmount, and mirror it into the localclaims store below.
@@ -5091,31 +5447,51 @@ async function persistPendingRowBackground(args: {
       ...(args.delegationWeightBps !== undefined
         ? { delegationWeightBps: args.delegationWeightBps }
         : {}),
+      ...(args.nonce !== undefined ? { nonce: args.nonce } : {}),
     };
-    const evicted = evictExpiredPending(prev, now);
-    const next = [row, ...evicted];
-    await new Promise<void>((resolve) => {
-      chrome.storage.local.set(
-        { [pendingKey]: { pending: next } },
-        () => resolve(),
-      );
+    // Serialize the read-modify-write on the pending key so a burst of
+    // concurrent persists (e.g. 5 txs back-to-back) can't last-write-wins
+    // clobber each other: RE-READ the freshest list INSIDE the lock, then
+    // prepend. The eth_blockNumber fetch + row build stay OUTSIDE the lock (no
+    // network I/O under the lock). Still fire-and-forget at the call site —
+    // submit never awaits this, so submit latency / the signing path are
+    // unaffected.
+    await withKeyLock(pendingKey, async () => {
+      const stored = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([pendingKey], (res) =>
+          resolve(res?.[pendingKey]),
+        );
+      });
+      const prev = validatePendingActivityCache(stored)?.pending ?? [];
+      // Transition the prior rows (no fresh nonce read at broadcast → null →
+      // time-only states + preserve any prior `dropped`, never a 5-min vanish).
+      const next = [row, ...transitionPending(prev, null, now)];
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [pendingKey]: { pending: next } },
+          () => resolve(),
+        );
+      });
     });
     // Mirror the claim into the durable local-claims store (the source of truth
     // that survives a lost pending cache; re-injected each poll by
     // applyLocalClaims). Dedup by txHash (intra-store identity); cap to newest.
     if (isClaim) {
       const claimsKey = activityLocalClaimsKey(addrLower, args.chainIdHex);
-      const storedClaims = await new Promise<unknown>((resolve) => {
-        chrome.storage.local.get([claimsKey], (res) => resolve(res?.[claimsKey]));
-      });
-      const prevClaims = validateLocalClaimsCache(storedClaims)?.claims ?? [];
-      const deduped = prevClaims.filter((c) => c.txHash !== row.txHash);
-      const nextClaims = [row, ...deduped].slice(0, LOCAL_CLAIMS_CAP);
-      await new Promise<void>((resolve) => {
-        chrome.storage.local.set(
-          { [claimsKey]: { claims: nextClaims } },
-          () => resolve(),
-        );
+      // Same lost-update hazard as the pending store — serialize + re-read.
+      await withKeyLock(claimsKey, async () => {
+        const storedClaims = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([claimsKey], (res) => resolve(res?.[claimsKey]));
+        });
+        const prevClaims = validateLocalClaimsCache(storedClaims)?.claims ?? [];
+        const deduped = prevClaims.filter((c) => c.txHash !== row.txHash);
+        const nextClaims = [row, ...deduped].slice(0, LOCAL_CLAIMS_CAP);
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set(
+            { [claimsKey]: { claims: nextClaims } },
+            () => resolve(),
+          );
+        });
       });
     }
     // A pending row now exists → arm the headless poll so this tx's
@@ -5125,14 +5501,40 @@ async function persistPendingRowBackground(args: {
     // CX3 — record the recipient in the durable sent-address log so repeat
     // sends to it aren't re-warned as "first-time" once the pending row's TTL
     // lapses (independent of any indexer refresh). Best-effort.
-    const sentKey = sentAddressesKey(addrLower, args.chainIdHex);
-    const sentStored = await new Promise<unknown>((resolve) => {
-      chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
-    });
-    const nextSent = addToSentList(parseSentAddresses(sentStored), args.to);
-    await new Promise<void>((resolve) => {
-      chrome.storage.local.set({ [sentKey]: { addrs: nextSent } }, () => resolve());
-    });
+    // P5-007 — bind the entry to a wallet HMAC tag so a disk-planted entry can't
+    // suppress the warning. The tag is keyed by a MEK-derived sub-key (the
+    // vault is unlocked here — the send just signed). If the keystore raced into
+    // a lock (no MEK → tag null), write NOTHING rather than an untagged entry:
+    // the recipient re-warns next time and self-heals on the next real send.
+    const recipientLower = args.to.toLowerCase();
+    const tag =
+      getUnlockedAddressV4()?.toLowerCase() === addrLower
+        ? computeSentAddrTagV4(
+            canonicalSentAddrMessage(addrLower, args.chainIdHex, recipientLower),
+          )
+        : null;
+    if (tag) {
+      const sentKey = sentAddressesKey(addrLower, args.chainIdHex);
+      const sentTag = tag;
+      // Concurrent persists to the same scope each append a sent-addr entry —
+      // serialize + re-read so none is clobbered.
+      await withKeyLock(sentKey, async () => {
+        const sentStored = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
+        });
+        const nextEntries = addSentEntry(
+          parseSentEntries(sentStored),
+          recipientLower,
+          sentTag,
+        );
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set(
+            { [sentKey]: { v: 1, entries: nextEntries } },
+            () => resolve(),
+          );
+        });
+      });
+    }
   } catch {
     // Swallow. The broadcast handler has already returned. A
     // pending-write failure is silent UX degradation only — the user
@@ -5411,17 +5813,23 @@ function maxConfirmedAnchor(confirmed: ConfirmedRow[]): IncomingWatermark | null
   return max;
 }
 
-/** Item 7b — incoming-transfer detection (OPEN-SURFACE / UNLOCKED-ONLY).
+/** Item 7b — incoming-transfer detection.
  *  Diffs the confirmed `tx_receive` rows (incoming LYTH the indexer already
  *  surfaced) against the per-(addr,chain) watermark; records + toasts the new
  *  ones; advances the watermark. On first run it ONLY establishes a baseline
- *  (the current newest anchor) so a fresh/returning wallet never toasts its
- *  history. Read-only + best-effort — nothing here touches signing/broadcast.
- *  Option (a): no closed/locked poll, so this runs only when an open surface
- *  drove the snapshot fetch (⇒ the wallet is unlocked, address available).
- *  Incoming entries carry no tx hash, so the dedupe id is anchor-derived
- *  (`in:<block>.<txIndex>.<logIndex>`). Returns the count recorded.
- *  Exported for unit tests (driven against the in-memory chrome stub). */
+ *  (the current newest receive anchor + its top-block ids) so a fresh/returning
+ *  wallet never toasts its history. Read-only + best-effort — nothing here
+ *  touches signing/broadcast. Runs from the open-surface activity snapshot AND
+ *  (C3 / 2a) the closed-surface alarm poll; the toast is gated by `unlocked`.
+ *
+ *  2c — incoming entries carry no tx hash and every NATIVE transfer shares the
+ *  same anchor within a block (txIndex 0 + logIndex u32::MAX), so the dedupe id
+ *  folds counterparty + amount + a stable within-block sequence index
+ *  ({@link incomingTransferId}). The watermark carries the set of accounted ids
+ *  in its top block so a same-block receive (incl. a self-send's in-leg) that is
+ *  genuinely new still fires while an already-seen one does not. Returns the
+ *  count recorded. Exported for unit tests (driven against the in-memory chrome
+ *  stub). */
 export async function detectAndNotifyIncoming(
   addressLower: string,
   chainIdHex: string,
@@ -5430,34 +5838,90 @@ export async function detectAndNotifyIncoming(
   unlocked: boolean,
 ): Promise<number> {
   try {
+    // 2c — work over RECEIVES ONLY. Native transfers all carry txIndex 0 +
+    // logIndex u32::MAX, so within a block the anchor can't tell two receives
+    // apart; the id folds counterparty + amount + a stable within-block
+    // sequence (older same-(counterparty,amount) receives counted first, so a
+    // newly-arrived duplicate gets a fresh seq and existing ids never shift).
+    const receives = confirmed.filter(
+      (r): r is Extract<ConfirmedRow, { kind: "tx_receive" }> =>
+        r.kind === "tx_receive",
+    );
+    const withIds = receives.map((r, i) => {
+      let seq = 0;
+      for (let j = i + 1; j < receives.length; j++) {
+        const o = receives[j]!;
+        if (
+          o.blockHeight === r.blockHeight &&
+          (o.counterparty ?? "") === (r.counterparty ?? "") &&
+          (o.amountDecimal ?? "") === (r.amountDecimal ?? "")
+        ) {
+          seq++;
+        }
+      }
+      return {
+        row: r,
+        id: incomingTransferId(
+          r.blockHeight,
+          r.txIndex,
+          r.logIndex,
+          r.counterparty,
+          r.amountDecimal,
+          seq,
+        ),
+      };
+    });
+    const idsInBlock = (block: number): string[] =>
+      withIds.filter((x) => x.row.blockHeight === block).map((x) => x.id);
+
     const wm = await getIncomingWatermark(addressLower, chainIdHex);
     if (wm === null) {
-      // Baseline — everything currently in view is history; no toasts. A
-      // negative sentinel when there's nothing yet so the first-ever incoming
-      // still notifies next cycle.
-      const baseline =
-        maxConfirmedAnchor(confirmed) ??
-        { blockHeight: -1, txIndex: -1, logIndex: -1 };
+      // Baseline — everything currently in view is history; no toasts. Record
+      // the top block's receive ids so a future same-block arrival is still
+      // distinguishable. A negative sentinel when there's nothing yet so the
+      // first-ever incoming still notifies next cycle.
+      // 2b — baseline over RECEIVES ONLY: a higher-anchored non-receive row
+      // (e.g. an outgoing send, incl. a self-send's out-leg) must not push the
+      // watermark past the newest genuine receive, or early receives below it
+      // would never pass the detection gate.
+      const top = maxConfirmedAnchor(receives);
+      const baseline: IncomingWatermark =
+        top === null
+          ? { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] }
+          : { ...top, blockIds: idsInBlock(top.blockHeight) };
       await setIncomingWatermark(addressLower, chainIdHex, baseline);
       return 0;
     }
     // Item 7c — the incoming-transfer TOAST is gated by its own toggle (default
     // on); the in-app record is always written regardless (§0.4).
     const incomingToastEnabled = await getIncomingEnabled();
+    // 2c — within the watermark's own block the strict anchor compare can't
+    // distinguish receives, so use the accounted-id set. A LEGACY watermark
+    // (no blockIds) predates 2c: treat its whole boundary block as history, so
+    // a version upgrade never re-toasts a receive that was already notified
+    // under the old id scheme.
+    const legacyBoundaryIsHistory = wm.blockIds === undefined;
+    const accounted = new Set(wm.blockIds ?? []);
     let added = 0;
-    let maxSeen = wm;
-    for (const r of confirmed) {
-      if (r.kind !== "tx_receive") continue;
-      if (!anchorAfter(r, wm)) continue;
+    for (const { row, id } of withIds) {
+      let isNew: boolean;
+      if (row.blockHeight > wm.blockHeight) {
+        isNew = true;
+      } else if (row.blockHeight === wm.blockHeight) {
+        isNew = legacyBoundaryIsHistory ? false : !accounted.has(id);
+      } else {
+        isNew = false;
+      }
+      if (!isNew) continue;
       const result = await recordNotification({
         addressLower,
         chainIdHex,
-        txHash: `in:${r.blockHeight}.${r.txIndex}.${r.logIndex}`,
+        txHash: id,
         status: "confirmed",
-        blockNumber: r.blockHeight,
+        blockNumber: row.blockHeight,
         kind: "receive",
-        amountDecimal: r.amountDecimal ?? "0",
-        counterparty: r.counterparty ?? "",
+        amountDecimal: row.amountDecimal ?? "0",
+        counterparty: row.counterparty ?? "",
         read: surfaceOpen,
       });
       if (result.added && result.record !== null) {
@@ -5466,19 +5930,72 @@ export async function detectAndNotifyIncoming(
           await fireOsNotification(result.record, { unlocked });
         }
       }
-      const anchor = {
-        blockHeight: r.blockHeight,
-        txIndex: r.txIndex,
-        logIndex: r.logIndex,
-      };
-      if (anchorAfter(anchor, maxSeen)) maxSeen = anchor;
     }
-    if (anchorAfter(maxSeen, wm)) {
-      await setIncomingWatermark(addressLower, chainIdHex, maxSeen);
+    // Advance / migrate the watermark to the newest receive block in view,
+    // accounting for every receive id in that block (those just notified + any
+    // already-accounted from a prior cycle on the SAME block). A legacy
+    // watermark on the same top block is upgraded in place to carry blockIds
+    // (its boundary-block receives were treated as history above → no toast).
+    // Receives in blocks below the new top fall out of scope next cycle. Never
+    // regress below the existing watermark.
+    const newTop = maxConfirmedAnchor(receives);
+    if (newTop !== null && newTop.blockHeight >= wm.blockHeight) {
+      const nextIds = new Set(idsInBlock(newTop.blockHeight));
+      if (newTop.blockHeight === wm.blockHeight) {
+        for (const id of accounted) nextIds.add(id);
+      }
+      const next: IncomingWatermark = {
+        blockHeight: newTop.blockHeight,
+        txIndex: newTop.txIndex,
+        logIndex: newTop.logIndex,
+        blockIds: [...nextIds],
+      };
+      const changed =
+        next.blockHeight !== wm.blockHeight ||
+        next.txIndex !== wm.txIndex ||
+        next.logIndex !== wm.logIndex ||
+        wm.blockIds === undefined ||
+        next.blockIds!.length !== wm.blockIds.length ||
+        next.blockIds!.some((id) => !accounted.has(id));
+      if (changed) {
+        await setIncomingWatermark(addressLower, chainIdHex, next);
+      }
     }
     return added;
   } catch {
     return 0;
+  }
+}
+
+/** C3 (2a) — fetch + merge the indexer snapshot down to the confirmed-row list
+ *  {@link detectAndNotifyIncoming} needs, reusing the SAME fetch
+ *  ({@link fetchIndexerSnapshot}) + merge ({@link mergeIndexerSnapshot}) the
+ *  open-surface `wallet-activity-get` path uses — no new query / RPC shape.
+ *  DETECTION-ONLY: it does NOT write the activity cache (the alarm's contract
+ *  is notification detection/dispatch). `prevConfirmed` keeps a delegation's
+ *  send-time cluster name sticky across the rebuild, mirroring the handler.
+ *  Returns null when the activity stream itself errored, so a partial/empty
+ *  merge can't mis-baseline the watermark — the next tick recovers. */
+async function fetchConfirmedRowsForIncoming(
+  address: string,
+  chainIdHex: string,
+  prevConfirmed: ConfirmedRow[],
+  now: number,
+): Promise<ConfirmedRow[] | null> {
+  try {
+    const fresh = await fetchIndexerSnapshot(address, chainIdHex, {
+      includeMrcAccount: false,
+    });
+    if (fresh.errors.addressActivity !== undefined) return null;
+    const activity = validateRawActivityList(fresh.addressActivity);
+    const delegation = validateRawDelegationList(fresh.delegationHistory);
+    const merged = mergeIndexerSnapshot({ activity, delegation }, now, {
+      pending: [],
+      confirmed: prevConfirmed,
+    });
+    return merged.confirmed;
+  } catch {
+    return null;
   }
 }
 
@@ -5537,8 +6054,11 @@ export async function pollPendingAndNotify(): Promise<{
         remaining += pending.length;
         continue;
       }
-      // TTL-evict FIRST so an expired row is neither notified nor re-polled.
-      const live = evictExpiredPending(pending, now);
+      // Transition FIRST (the lifecycle replaces the blind 5-min TTL): a row
+      // slower than 5 min stays live for the receipt check + remaining count
+      // instead of vanishing on writeback. No fresh nonce read in the alarm →
+      // null → time-only states + preserve a prior `dropped` (never un-drop).
+      const live = transitionPending(pending, null, now);
       const { kept, terminal, rpcFailures } = await dropConfirmedPendingByHash(
         live,
         { timeoutMs: NOTIF_POLL_RPC_TIMEOUT_MS },
@@ -5620,20 +6140,39 @@ export async function pollPendingAndNotify(): Promise<{
               : r;
           });
       }
-      const writtenChanged =
-        writtenPending.length !== pending.length ||
-        writtenPending.some((row, i) => row !== pending[i]);
-      if (writtenChanged) {
-        await new Promise<void>((resolve) => {
-          chrome.storage.local.set(
-            { [key]: { pending: writtenPending } },
-            () => resolve(),
-          );
-        });
-      }
+      // Serialize + carry over rows a concurrent persist added after the bulk
+      // get(null) read at the top of this tick (the widest read-write window),
+      // so the per-scope writeback can't clobber a freshly-broadcast row.
+      await commitPendingWithCarryOver(key, pending, writtenPending);
       // A confirmed claim is a settled record, NOT in-flight — exclude it from
       // `remaining` so it never keeps the alarm armed (kept rows still do).
       remaining += kept.length;
+      // C3 (2a) — also detect INCOMING transfers for this scope while the poll
+      // is awake (it runs whenever this addr/chain has a pending tx), so a
+      // receive that lands while every wallet surface is closed still
+      // toasts/badges. detectAndNotifyIncoming previously had a single
+      // open-surface call site. Reuse the SAME fetch+merge the open-surface
+      // snapshot uses (detection-only — no activity-cache write); the toast
+      // respects the `unlocked` gate computed once per tick above. Best-effort:
+      // any failure leaves the watermark untouched and recovers next tick.
+      const prevConfirmedForIncoming =
+        validateActivityCache(all[activityCacheKey(addressLower, chainIdHex)])
+          ?.confirmed ?? [];
+      const confirmedForIncoming = await fetchConfirmedRowsForIncoming(
+        addressLower,
+        chainIdHex,
+        prevConfirmedForIncoming,
+        now,
+      );
+      if (confirmedForIncoming !== null) {
+        await detectAndNotifyIncoming(
+          addressLower,
+          chainIdHex,
+          confirmedForIncoming,
+          surfaceOpen,
+          unlocked,
+        );
+      }
     }
     await refreshUnreadBadge({
       unlocked,
@@ -5669,13 +6208,62 @@ async function writeActivityStorage(
   });
 }
 
+/** Serialize a pending-key write under the per-key lock with CARRY-OVER: re-read
+ *  the freshest stored pending list INSIDE the lock and preserve any row a
+ *  concurrent writer (e.g. a burst persist) added after `prevRows` was read —
+ *  i.e. rows whose txHash is in neither `prevRows` (so we never resurrect a row
+ *  this snapshot intentionally dropped) nor `computedRows` (no duplicate). New
+ *  rows go on top (matching the persist prepend). Writes only when the merged
+ *  list differs from the freshest stored list (no spurious onChanged). Returns
+ *  the merged list intended for storage. Used by the pending-only writers
+ *  (the fast-path + indexer-outage activity-get branches); the main merge path
+ *  inlines the same carry-over so it can also write the cache key in one set. */
+async function commitPendingWithCarryOver(
+  pendingKey: string,
+  prevRows: PendingTxRow[],
+  computedRows: PendingTxRow[],
+): Promise<PendingTxRow[]> {
+  return withKeyLock(pendingKey, async () => {
+    const freshest =
+      validatePendingActivityCache(
+        await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([pendingKey], (res) =>
+            resolve(res?.[pendingKey]),
+          );
+        }),
+      )?.pending ?? [];
+    const prevHashes = new Set(prevRows.map((r) => r.txHash));
+    const resultHashes = new Set(computedRows.map((r) => r.txHash));
+    const carried = freshest.filter(
+      (r) => !prevHashes.has(r.txHash) && !resultHashes.has(r.txHash),
+    );
+    const merged = [...carried, ...computedRows];
+    const changed =
+      merged.length !== freshest.length ||
+      merged.some((row, i) => row !== freshest[i]);
+    if (changed) {
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set(
+          { [pendingKey]: { pending: merged } },
+          () => resolve(),
+        );
+      });
+    }
+    return merged;
+  });
+}
+
 async function handlePopup(message: PopupMessage): Promise<unknown> {
   switch (message.op) {
     case "list-pending":
       return listPending();
     case "resolve": {
-      const p = message.payload as { id: string; decision: ApprovalDecision };
-      const found = resolveApproval(p.id, p.decision);
+      const p = message.payload as {
+        id: string;
+        decision: ApprovalDecision;
+        windowId?: number;
+      };
+      const found = resolveApproval(p.id, p.decision, p.windowId);
       return { found };
     }
     case "focus-approval": {
@@ -5706,6 +6294,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // racing SW boot doesn't report a false "locked" the popup can't
       // recover from. See ensureUnlockRestored.
       await ensureUnlockRestored();
+      // P1-003: a stored pre-V5 (no-AAD) container is surfaced as "present but
+      // needs restore" — hasVault:true so the popup routes to the locked screen,
+      // which shows the restore-from-phrase message (legacyRestoreRequired).
+      // Read-only detection; never decrypts.
+      if (await storedContainerNeedsRestoreV4()) {
+        return {
+          hasVault: true,
+          legacyVault: false,
+          unlocked: false,
+          address: null,
+          custody: "sw" as const,
+          algo: "mldsa" as const,
+          legacyRestoreRequired: true as const,
+        };
+      }
       // v4 (ML-DSA-65) is the only vault format. A populated multi-vault
       // container (mono.vaults.v4) means "wallet present"; its absence means
       // "no wallet" → the popup routes to Welcome. The v2/v1 "vault format
@@ -6142,6 +6745,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     }
     case "keystore-unlock": {
       const p = message.payload as { password: string };
+      // P1-003: a stored pre-V5 (no-AAD) container can't be opened by the V5
+      // AAD-bound seal. Detect it (read-only — never decrypts) and tell the
+      // user to restore from their recovery phrase, instead of a misleading
+      // wrong-password from the AEAD failure.
+      if (await storedContainerNeedsRestoreV4()) {
+        return { ok: false, reason: "legacy_restore_required" };
+      }
       // v4 multi-vault container unlock. Rate limiting counts every
       // wrong-password attempt against the shared SESSION_KEY_UNLOCK_FAIL_COUNT.
       if (await hasContainerV4()) {
@@ -6347,6 +6957,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         await chrome.storage.session.remove([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+          // P2-007 — also clear non-secret device-handoff residue so a prior
+          // owner's operator hint / genesis cache / passkey-usage ledger /
+          // pending-nonce don't survive a full wipe.
+          SESSION_KEY_LAST_OPERATOR,
+          SESSION_KEY_GENESIS_CACHE,
+          SESSION_KEY_PASSKEY_USAGE,
+          PENDING_NONCE_KEY,
         ]);
         await triggerAutoLock();
       } finally {
@@ -6359,6 +6976,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       return { ok: true };
     }
     case "keystore-wipe-unauth": {
+      // P4-004 — require the SW-verified confirm token (the word the user
+      // typed), not just the UI's disabled-button gate, so a tokenless or
+      // scripted message can't trigger the wipe.
+      const wp = message.payload as { confirmToken?: string } | undefined;
+      if (wp?.confirmToken !== WIPE_CONFIRM_WORD) {
+        return { ok: false, reason: "missing_confirm" };
+      }
       // No-re-auth wipe used by the Welcome → Forgot password? path: the
       // user has no password to enter, so the security boundary is the
       // 24-word recovery phrase (which is what restores funds elsewhere).
@@ -6398,6 +7022,13 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         await chrome.storage.session.remove([
           SESSION_KEY_UNLOCK_FAIL_COUNT,
           SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+          // P2-007 — also clear non-secret device-handoff residue so a prior
+          // owner's operator hint / genesis cache / passkey-usage ledger /
+          // pending-nonce don't survive a full wipe.
+          SESSION_KEY_LAST_OPERATOR,
+          SESSION_KEY_GENESIS_CACHE,
+          SESSION_KEY_PASSKEY_USAGE,
+          PENDING_NONCE_KEY,
         ]);
         await triggerAutoLock();
       } finally {
@@ -6973,6 +7604,8 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           createdAt: now,
           expiresAt: now + DEFAULT_GOV_PROPOSAL_TTL_MS,
           vaultAddress: target.addr,
+          // P1-006 — bind the active chain into the signed governance digest.
+          chainIdHex: session.chainId,
           action: p.action,
           approvals: [],
           rejections: [],
@@ -7281,6 +7914,28 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               `${proposal.rejections.length} rejections`,
           };
         }
+        // T3-03 parity with the tx-path multisig-execute (~L7419): re-verify the
+        // collected approval SIGNATURES against the LIVE governance-proposal
+        // digest before applying — not just the approvals[] COUNT that
+        // isGovernanceExecutable checks. A local executor who edited
+        // proposal.action after collecting approvals would still pass the count
+        // gate, but the stored signatures (over the original action's digest) no
+        // longer cover the tampered action. verifyGovernanceApprovals re-hashes
+        // the live action and counts only signatures that still verify. Fail
+        // closed.
+        const { validApprovals } = verifyGovernanceApprovals(
+          proposal,
+          meta.signers,
+        );
+        if (validApprovals.size < meta.threshold) {
+          return {
+            ok: false,
+            reason:
+              `governance approval signatures do not verify against the action: ` +
+              `${validApprovals.size}/${meta.threshold} valid ` +
+              `(of ${proposal.approvals.length} recorded)`,
+          };
+        }
         const next = applyGovernance(
           meta.signers,
           meta.threshold,
@@ -7374,10 +8029,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "passkey-evaluate": {
       // Send-flow consults this before showing the preview screen.
       // Returns a decision the popup uses to pick the unlock-mode
-      // badge + whether to run a passkey ceremony before submit.
+      // badge + whether to run a passkey ceremony before submit. On a
+      // `passkey-ok` decision the SW also MINTS the single-use, tx-intent-bound
+      // challenge (boundary 3b) — `to` + `chainIdHex` bind it to this exact tx.
       const p = (message.payload ?? {}) as {
         vaultId?: string;
         valueWeiHex?: string;
+        to?: string;
+        chainIdHex?: string;
+        data?: string;
       };
       if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
         return { ok: false, reason: "missing vaultId or valueWeiHex" };
@@ -7412,14 +8072,57 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           };
         }
         if (decision.kind === "passkey-ok") {
-          // Surface the active credentials so the popup can build the
-          // `allowCredentials[]` list for `navigator.credentials.get()`
-          // without a second round-trip.
+          // boundary 3b: only credentials with a captured public key can be
+          // SW-verified. Build `allowCredentials[]` from those so the
+          // authenticator can't return an unverifiable (pre-upgrade)
+          // assertion.
+          const verifiable = state.credentials.filter(
+            (c) => typeof c.publicKeySpki === "string" && c.publicKeySpki.length > 0,
+          );
+          if (verifiable.length === 0) {
+            // Part 2: every credential predates the public-key capture — the
+            // user must re-register before a passkey can authorize a signature.
+            return {
+              ok: true,
+              decision: { kind: "reregister-required" as const },
+            };
+          }
+          // Mint the single-use, tx-intent-bound challenge ONLY when the caller
+          // supplies the recipient + chain (the Send flow). A badge-only query
+          // (no to/chainId) returns passkey-ok WITHOUT a challenge — a send
+          // still has to mint via a to/chainId evaluate, so it can't sign off a
+          // challenge-less decision.
+          if (typeof p.to === "string" && typeof p.chainIdHex === "string") {
+            const intentDigest = buildTxIntentDigest({
+              to: p.to,
+              valueWeiHex: p.valueWeiHex,
+              ...(typeof p.data === "string" ? { data: p.data } : {}),
+              chainIdHex: p.chainIdHex,
+            });
+            const challengeNonce = crypto.getRandomValues(new Uint8Array(16));
+            const challengeBytes = buildPasskeyChallenge(intentDigest, challengeNonce);
+            const challengeB64 = bytesToBase64Url(challengeBytes);
+            const challengeId = await putPendingPasskeyChallenge({
+              challengeB64,
+              intentDigestHex: bytesToHex(intentDigest),
+              vaultId: p.vaultId,
+              expiresAt: Date.now() + PASSKEY_CHALLENGE_TTL_MS,
+            });
+            return {
+              ok: true,
+              decision: {
+                kind: "passkey-ok" as const,
+                credentials: verifiable.map((c) => ({ ...c })),
+                challengeId,
+                challengeB64,
+              },
+            };
+          }
           return {
             ok: true,
             decision: {
               kind: "passkey-ok" as const,
-              credentials: state.credentials.map((c) => ({ ...c })),
+              credentials: verifiable.map((c) => ({ ...c })),
             },
           };
         }
@@ -7433,27 +8136,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
       }
-    }
-    case "passkey-record-usage": {
-      // Append a compatibility-shaped `{at, valueWei}` entry containing
-      // lythoshi to the in-memory daily-cap ledger. Popup calls this after
-      // a successful passkey-unlocked tx submit. Prune-on-read keeps the
-      // list bounded — no explicit GC required.
-      const p = (message.payload ?? {}) as {
-        vaultId?: string;
-        valueWeiHex?: string;
-      };
-      if (typeof p.vaultId !== "string" || typeof p.valueWeiHex !== "string") {
-        return { ok: false, reason: "missing vaultId or valueWeiHex" };
-      }
-      let valueLythoshi: bigint;
-      try {
-        valueLythoshi = BigInt(p.valueWeiHex);
-      } catch {
-        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
-      }
-      await recordPasskeyUsageEntry(p.vaultId, valueLythoshi);
-      return { ok: true };
     }
     case "passkey-set-policy": {
       // Replace the policy atomically. The wallet now enforces the
@@ -7662,15 +8344,66 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
     }
     case "slh-dsa-backup-clear": {
-      // Escape hatch for users who want to abandon the local
-      // record and regenerate. Surfaces an explicit warning UX in
-      // because a prior on-chain registration becomes
-      // irrecoverable for this vault address (the precompile is
-      // one-time-per-address).
-      const p = (message.payload ?? {}) as { vaultId?: string };
+      // Escape hatch for users who want to abandon the local record and
+      // regenerate. PASSWORD-GATED (verify-only, no unlock side-effect): the
+      // record carries the only recoverable emergency-key secret, and a prior
+      // on-chain registration becomes irrecoverable after a clear+regenerate
+      // (the 0x1100 precompile is one-time-per-address). Gating it also closes
+      // the prior gap where any local IPC actor could delete the record on a
+      // bare {vaultId}. Mirrors the passkey over-limit re-auth gate: shared
+      // brute-force lockout, verify-only, never `unlockContainerV4`.
+      const p = (message.payload ?? {}) as {
+        vaultId?: string;
+        password?: unknown;
+      };
       if (typeof p.vaultId !== "string") {
         return { ok: false, reason: "missing vaultId" };
       }
+      if (typeof p.password !== "string" || p.password.length === 0) {
+        return { ok: false, reason: "missing password" };
+      }
+      const ses = await chrome.storage.session.get([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
+      let failCount =
+        typeof ses[SESSION_KEY_UNLOCK_FAIL_COUNT] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_FAIL_COUNT] as number)
+          : 0;
+      let lockoutUntil =
+        typeof ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] === "number"
+          ? (ses[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] as number)
+          : 0;
+      const nowMs = Date.now();
+      // Honour an active lockout BEFORE spending an Argon2id verify.
+      if (lockoutUntil > nowMs) {
+        return {
+          ok: false,
+          reason: "locked_out",
+          secondsRemaining: Math.ceil((lockoutUntil - nowMs) / 1000),
+        };
+      }
+      const verified = await verifyContainerPasswordV4(p.password);
+      if (!verified) {
+        failCount += 1;
+        const ms = lockoutMsFor(failCount);
+        if (ms > 0) lockoutUntil = Date.now() + ms;
+        await chrome.storage.session.set({
+          [SESSION_KEY_UNLOCK_FAIL_COUNT]: failCount,
+          [SESSION_KEY_UNLOCK_LOCKOUT_UNTIL]: lockoutUntil,
+        });
+        return {
+          ok: false,
+          reason: "wrong_password",
+          secondsRemaining: ms > 0 ? Math.ceil(ms / 1000) : 0,
+        };
+      }
+      // Correct password — clear the shared fail/lockout counters as the
+      // unlock path does, then delete the record.
+      await chrome.storage.session.remove([
+        SESSION_KEY_UNLOCK_FAIL_COUNT,
+        SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
+      ]);
       try {
         const cleared = await clearSlhDsaBackupV4(p.vaultId);
         return { ok: true, cleared };
@@ -7849,6 +8582,46 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const feeLythoshi = await fetchConfirmedFeeLythoshi(p.txHash);
       return { ok: true, feeLythoshi: feeLythoshi ?? null };
+    }
+    case "wallet-recipient-sent-verified": {
+      // P5-007 — answer "is <recipient> a wallet-VERIFIED sent-address for
+      // (vault, chain)?" for the popup's first-time-send warning. Reads the
+      // durable sent-address log and verifies the entry's wallet HMAC (the MEK
+      // is SW-only, so the popup can't verify itself). Advisory-only: the bit
+      // gates a phishing-friction warning, never a send. Fail-safe: a missing
+      // entry, a forged/legacy/untagged entry, a locked container, or any read
+      // error all return verified:false → the popup shows the warning.
+      const p = message.payload as {
+        vaultAddrLower?: unknown;
+        chainIdHex?: unknown;
+        recipient?: unknown;
+      };
+      if (
+        typeof p?.vaultAddrLower !== "string" ||
+        typeof p?.chainIdHex !== "string" ||
+        typeof p?.recipient !== "string" ||
+        p.recipient.length === 0
+      ) {
+        return { ok: true, verified: false };
+      }
+      const vaultAddrLower = p.vaultAddrLower.toLowerCase();
+      const recipientLower = p.recipient.toLowerCase();
+      try {
+        const sentKey = sentAddressesKey(vaultAddrLower, p.chainIdHex);
+        const stored = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([sentKey], (res) => resolve(res?.[sentKey]));
+        });
+        const entry = parseSentEntries(stored).find((e) => e.a === recipientLower);
+        const verified =
+          !!entry &&
+          verifySentAddrTagV4(
+            canonicalSentAddrMessage(vaultAddrLower, p.chainIdHex, recipientLower),
+            entry.t,
+          );
+        return { ok: true, verified };
+      } catch {
+        return { ok: true, verified: false };
+      }
     }
     case "wallet-chain-block-number": {
       // Real chain-liveness probe for the popup's status-bar health
@@ -8071,6 +8844,54 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         },
       };
     }
+    case "wallet-dismiss-pending": {
+      // User-dismiss of a TERMINAL pending row (lifecycle dropped/expired) from
+      // the activity list. Display/state only — removes the local pending-row
+      // record by txHash; never touches a durable claim or a still-live
+      // (pending/slow) row, so a possibly-live tx can't be dismissed away.
+      const dp = message.payload as {
+        address?: unknown;
+        chainIdHex?: unknown;
+        txHash?: unknown;
+      };
+      if (
+        typeof dp?.address !== "string" ||
+        typeof dp?.chainIdHex !== "string" ||
+        typeof dp?.txHash !== "string"
+      ) {
+        return { ok: false, reason: "missing address, chainIdHex, or txHash" };
+      }
+      const dismissKey = activityPendingKey(dp.address.toLowerCase(), dp.chainIdHex);
+      const dismissTxHash = dp.txHash;
+      // Serialize + re-read so a dismiss can't clobber a concurrent persist /
+      // snapshot writeback on the same pending key.
+      await withKeyLock(dismissKey, async () => {
+        const dismissStored = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([dismissKey], (res) =>
+            resolve(res?.[dismissKey]),
+          );
+        });
+        const dismissPrev =
+          validatePendingActivityCache(dismissStored)?.pending ?? [];
+        const dismissNext = dismissPrev.filter(
+          (r) =>
+            !(
+              r.txHash === dismissTxHash &&
+              r.source !== "local-claim" &&
+              (r.lifecycle === "dropped" || r.lifecycle === "expired")
+            ),
+        );
+        if (dismissNext.length !== dismissPrev.length) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [dismissKey]: { pending: dismissNext } },
+              () => resolve(),
+            );
+          });
+        }
+      });
+      return { ok: true };
+    }
     case "wallet-activity-get": {
       // Read-through cache. Hits chrome.storage.local first;
       // if the cache is fresher than CACHE_STALENESS_MS, returns it
@@ -8126,32 +8947,50 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // the NON-claim pending rows only; claim rows still ride through the fresh
       // path (evictExpiredPending exempts them).
       const nonClaimPending = prevPending.filter((p) => p.source !== "local-claim");
+      // A still-pending local-claim must keep the FULL reconcile running (the
+      // receipt pass + the fresh indexer fetch) until it RETIRES — the fast-path
+      // skips both, so the "Pending · Rewards claimed" row strands next to the
+      // confirmed indexer row until a reopen/alarm. A local-claim is present in
+      // prevPending ONLY while un-retired (applyLocalClaims removes it on retire),
+      // so this gates the fast-path solely for the un-retired window, then it
+      // resumes — bounded extra reconciling, not a permanent fast-path removal.
+      // Supersedes the belt-2 "claims don't gate isFresh" rule now that a
+      // confirmed claim reliably retires (the receipt anchor OR the confirmed-row
+      // block-window backstop in applyLocalClaims). A durable claim absent from
+      // the pending cache (Gap B) keeps prevPending empty → still fast-paths +
+      // re-injects below.
+      const hasUnretiredClaim = prevPending.some((p) => p.source === "local-claim");
       const isFresh =
         prevCache !== null &&
         now - prevCache.lastFetchedAtMs < CACHE_STALENESS_MS &&
-        nonClaimPending.length === 0;
+        nonClaimPending.length === 0 &&
+        !hasUnretiredClaim;
       if (isFresh) {
         // Re-inject durable claims even on the fast path (Gap B): if the alarm
         // or any writer dropped a claim from the pending cache, the durable
         // store re-surfaces it here. applyLocalClaims dedups by txHash + cross-
-        // stream-suppresses by anchor; belt-2 (claims don't gate isFresh) intact.
+        // stream-suppresses by anchor (and the block-window backstop). This path
+        // is reached only when no UN-RETIRED claim sits in the pending cache (an
+        // un-retired claim now gates isFresh, above) — i.e. a durable claim the
+        // pending cache lost, which we re-surface without an RPC.
         const pending = applyLocalClaims(
-          evictExpiredPending(prevPending, now),
+          // Fast path runs only when there are no non-claim pending rows
+          // (isFresh gate); no fresh nonce read → null → time-only + preserve
+          // dropped.
+          transitionPending(prevPending, null, now),
           prevClaims,
           prevCache.confirmed,
+          // No fresh fetch on the fast path → no newly-surfaced rows; pass the
+          // same confirmed list as prior so the backstop no-ops (anchored retire
+          // still fires). Prevents a stale row matching a re-injected claim.
+          prevCache.confirmed,
         );
-        if (
-          pending.length !== prevPending.length ||
-          pending.some((row, i) => row !== prevPending[i])
-        ) {
-          await new Promise<void>((resolve) => {
-            chrome.storage.local.set(
-              { [pendingKey]: { pending } },
-              () => resolve(),
-            );
-          });
-        }
-        return { ok: true, cache: prevCache, pending, errors: {} };
+        const committed = await commitPendingWithCarryOver(
+          pendingKey,
+          prevPending,
+          pending,
+        );
+        return { ok: true, cache: prevCache, pending: committed, errors: {} };
       }
       // Receipt classification is indexer-independent — it asks the chain
       // directly (lyth_txStatus + eth_getTransactionReceipt on the pending
@@ -8162,12 +9001,29 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // pending" beat. The indexer anchor match (reconcilePending) still runs
       // AFTER the fetch (it needs the freshly indexed confirmed rows); the
       // early receipt pass only feeds the indexer-lag bridge below.
-      const [fresh, receiptPass] = await Promise.all([
+      const [fresh, receiptPass, committedNonceHex] = await Promise.all([
         fetchIndexerSnapshot(p.address, p.chainIdHex, {
           includeMrcAccount: false,
         }),
         dropConfirmedPendingByHash(prevPending),
+        // Committed nonce for the drop-detection lifecycle — READ only (the
+        // signed nonce is unchanged). Indexer-independent (eth_getTransactionCount),
+        // so it works even on the indexer-outage path below. Only read when there
+        // are pending rows to classify (no extra RPC on the common no-pending
+        // fetch). `null` (no rows / failure) → transitionPending never declares
+        // `dropped`.
+        prevPending.length > 0
+          ? testnetTransactionCountHex(p.address).catch(() => null)
+          : Promise.resolve(null),
       ]);
+      let committedNonce: number | null = null;
+      if (committedNonceHex !== null) {
+        try {
+          committedNonce = Number(BigInt(committedNonceHex));
+        } catch {
+          committedNonce = null;
+        }
+      }
       const { kept: receiptKept, terminal: terminalByHash } = receiptPass;
       const activityOk = fresh.errors.addressActivity === undefined;
       const delegationOk = fresh.errors.delegationHistory === undefined;
@@ -8182,25 +9038,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // reconcilePending retires them. TTL backstop still runs; re-inject
         // durable claims too (Gap B) so an outage never drops a claim.
         const pending = applyLocalClaims(
-          evictExpiredPending(
+          transitionPending(
             [...receiptKept, ...bridgeConfirmedTerminals(terminalByHash)],
+            committedNonce,
             now,
           ),
           prevClaims,
           prevCache.confirmed,
+          // Indexer outage → no fresh confirmed rows; same list as prior so the
+          // backstop no-ops (the bridged receipt anchor still retires).
+          prevCache.confirmed,
         );
-        if (
-          pending.length !== prevPending.length ||
-          pending.some((row, i) => row !== prevPending[i])
-        ) {
-          await new Promise<void>((resolve) => {
-            chrome.storage.local.set(
-              { [pendingKey]: { pending } },
-              () => resolve(),
-            );
-          });
-        }
-        return { ok: true, cache: prevCache, pending, errors: fresh.errors };
+        const committed = await commitPendingWithCarryOver(
+          pendingKey,
+          prevPending,
+          pending,
+        );
+        return { ok: true, cache: prevCache, pending: committed, errors: fresh.errors };
       }
       const activity = validateRawActivityList(fresh.addressActivity);
       const delegation = validateRawDelegationList(fresh.delegationHistory);
@@ -8240,7 +9094,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const survivors = [...receiptKept, ...bridgedConfirmed].filter((r) =>
         reconciledHashes.has(r.txHash),
       );
-      const evictedPending = evictExpiredPending(survivors, now);
+      const evictedPending = transitionPending(survivors, committedNonce, now);
       // Re-inject the durable local-claim rows (the local-claim bridges the
       // pre-confirm window + carries the receipt-decoded amount). applyLocalClaims
       // dedups by txHash (the receipt-bridged pending copy wins) and CROSS-STREAM
@@ -8255,165 +9109,224 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         evictedPending,
         prevClaims,
         nextCache.confirmed,
+        // The PRIOR confirmed cache (before this fetch) scopes the no-receipt
+        // backstop to claim rows that JUST surfaced — a stale row from an
+        // already-retired prior claim can't vanish a brand-new un-anchored claim.
+        prevCache?.confirmed ?? [],
       );
-      await writeActivityStorage(cacheKey, pendingKey, nextCache, prevPending, nextPending);
-      // Keep the durable store in sync with the merged survivors (anchored copies
-      // + cross-stream-retired claims dropped). Only write when it changed.
-      const liveClaims = nextPending.filter((p) => p.source === "local-claim");
-      const claimsChanged =
-        liveClaims.length !== prevClaims.length ||
-        liveClaims.some((c, i) => c !== prevClaims[i]);
-      if (claimsChanged) {
-        await new Promise<void>((resolve) => {
-          chrome.storage.local.set(
-            { [localClaimsKey]: { claims: liveClaims } },
-            () => resolve(),
+      // C4 — record the self-sent terminal notifications DURABLY *before* the
+      // pending rows are dropped, so an MV3 SW teardown between the snapshot
+      // response and the (still-deferred) toast can't lose them. The OS toast +
+      // incoming-detection + badge stay deferred below for snapshot latency;
+      // only the durable in-app record is moved earlier. recordNotification
+      // dedups by chainIdHex:txHash — NEVER the (block,txIndex) anchor (the
+      // indexer hardcodes txIndex=0, so same-block delegations would collide) —
+      // so the deferred path never double-records, and a row whose detached
+      // toast was lost still has its durable record (+ re-fires via the alarm).
+      // GUARDED: a record failure must NEVER block the pending-row drop below.
+      const notifAddressLower = p.address.toLowerCase();
+      const notifChainIdHex = p.chainIdHex;
+      // reconciledHashes (the indexer anchor survivors) is computed in the main
+      // body above; the complement = the rows the indexer matched THIS tick.
+      const heuristicallyMatched = prevPending.filter(
+        (r) => !reconciledHashes.has(r.txHash),
+      );
+      // Presence + lock state at observe-time (gate the record's read flag + the
+      // deferred toast). A surface open now ⇒ record read (no badge bump).
+      const notifSurfaceOpen = await isWalletSurfaceOpen();
+      const notifUnlocked = isUnlockedV4();
+      const addedRecords: NotificationRecord[] = [];
+      try {
+        for (const row of heuristicallyMatched) {
+          // The matched confirmed row's blockHeight is the most precise block we
+          // have; null when no exact match is found (defensive — should be rare).
+          const match = nextCache.confirmed.find(
+            (c) =>
+              c.kind === "tx_send" &&
+              c.counterparty != null &&
+              c.counterparty.toLowerCase() === row.to.toLowerCase() &&
+              c.amountDecimal === row.amountDecimal,
           );
-        });
+          // Heuristic match = a confirmed self-paid tx_send → capture the
+          // native-receipt LYTH fee (best-effort).
+          const feeLythoshi = await fetchConfirmedFeeLythoshi(row.txHash);
+          const result = await recordNotification({
+            addressLower: notifAddressLower,
+            chainIdHex: notifChainIdHex,
+            txHash: row.txHash,
+            status: "confirmed",
+            blockNumber: match ? match.blockHeight : null,
+            // Broadcast-time tag if present; else coarse "send" (the heuristic
+            // match path is by definition a tx_send).
+            kind: row.opKind ?? "send",
+            amountDecimal: row.amountDecimal,
+            counterparty: row.to,
+            read: notifSurfaceOpen,
+            ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+            ...(row.clusterId !== undefined ? { clusterId: row.clusterId } : {}),
+            ...(row.clusterName !== undefined
+              ? { clusterName: row.clusterName }
+              : {}),
+            ...(row.toClusterId !== undefined ? { toClusterId: row.toClusterId } : {}),
+            ...(row.toClusterName !== undefined
+              ? { toClusterName: row.toClusterName }
+              : {}),
+            // Parity with the by-hash loop: a delegation reaching the
+            // notification via THIS heuristic path must still carry the weight %
+            // (delegate/redelegate) and the claim amount, else the body builder
+            // shows the cluster alone. The heuristic loop runs first and
+            // recordNotification dedups by txHash, so omitting these here would
+            // silently strip them.
+            ...(row.delegationWeightBps !== undefined
+              ? { delegationWeightBps: row.delegationWeightBps }
+              : {}),
+            ...(row.claimedAmount != null
+              ? { claimedAmount: row.claimedAmount }
+              : {}),
+          });
+          if (result.added && result.record !== null) {
+            addedRecords.push(result.record);
+          }
+        }
+        for (const t of terminalByHash) {
+          // Capture the LYTH fee for confirmed self-paid txs (native receipt);
+          // best-effort — failed/zero-fee leaves it unset.
+          const feeLythoshi =
+            t.status === "confirmed"
+              ? await fetchConfirmedFeeLythoshi(t.row.txHash)
+              : undefined;
+          const result = await recordNotification({
+            addressLower: notifAddressLower,
+            chainIdHex: notifChainIdHex,
+            txHash: t.row.txHash,
+            status: t.status,
+            blockNumber: t.blockNumber,
+            // Broadcast-time tag; else coarse "contract_call" (the status-RPC
+            // path catches every non-tx_send tracked tx).
+            kind: t.row.opKind ?? "contract_call",
+            amountDecimal: t.row.amountDecimal,
+            counterparty: t.row.to,
+            read: notifSurfaceOpen,
+            ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
+            ...(t.row.clusterId !== undefined
+              ? { clusterId: t.row.clusterId }
+              : {}),
+            ...(t.row.clusterName !== undefined
+              ? { clusterName: t.row.clusterName }
+              : {}),
+            ...(t.row.toClusterId !== undefined
+              ? { toClusterId: t.row.toClusterId }
+              : {}),
+            ...(t.row.toClusterName !== undefined
+              ? { toClusterName: t.row.toClusterName }
+              : {}),
+            ...(t.claimedAmountLythoshi != null
+              ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
+              : {}),
+            ...(t.row.delegationWeightBps !== undefined
+              ? { delegationWeightBps: t.row.delegationWeightBps }
+              : {}),
+          });
+          if (result.added && result.record !== null) {
+            addedRecords.push(result.record);
+          }
+        }
+      } catch {
+        // GUARD: a notification-record failure must NOT block the drop below.
       }
-      // Notifications hook — post-write microtask. The hook records
-      // one notification per row that just reached a TERMINAL state (the
-      // confirmed/failed bit from the indexer reconcile or the receipt-RPC
-      // classifier above) and explicitly DOES NOT record TTL-evicted rows.
-      // Scheduled as a microtask so the snapshot response returns before any
-      // notification I/O — a slow/failed notification write must never delay
-      // or break activity persistence. See plan §P6.
-      {
-        // reconciledHashes is computed once in the main body above (the indexer
-        // anchor survivors); reuse it so the heuristic notification set stays
-        // exactly "rows the indexer matched" — unchanged by the receipt reorder.
-        const heuristicallyMatched = prevPending.filter(
-          (r) => !reconciledHashes.has(r.txHash),
+      // Commit the pending list (serialized + carry-over) — this is the drop of
+      // the now-notified terminal rows. Re-read the freshest list inside the
+      // lock and preserve any row a concurrent persist added during the fetch.
+      const committedPending = await withKeyLock(pendingKey, async () => {
+        const freshest =
+          validatePendingActivityCache(
+            await new Promise<unknown>((resolve) => {
+              chrome.storage.local.get([pendingKey], (res) =>
+                resolve(res?.[pendingKey]),
+              );
+            }),
+          )?.pending ?? [];
+        const prevHashes = new Set(prevPending.map((r) => r.txHash));
+        const resultHashes = new Set(nextPending.map((r) => r.txHash));
+        const carried = freshest.filter(
+          (r) => !prevHashes.has(r.txHash) && !resultHashes.has(r.txHash),
         );
-        const addressLower = p.address.toLowerCase();
-        const chainIdHex = p.chainIdHex;
+        const merged = [...carried, ...nextPending];
+        await writeActivityStorage(cacheKey, pendingKey, nextCache, freshest, merged);
+        return merged;
+      });
+      // Keep the durable local-claims store in sync (serialized + carry-over):
+      // re-read inside the lock + preserve a claim a concurrent persist added
+      // after our prevClaims read, so the snapshot's liveClaims write can't
+      // clobber it.
+      const liveClaims = committedPending.filter((p) => p.source === "local-claim");
+      await withKeyLock(localClaimsKey, async () => {
+        const freshestClaims =
+          validateLocalClaimsCache(
+            await new Promise<unknown>((resolve) => {
+              chrome.storage.local.get([localClaimsKey], (res) =>
+                resolve(res?.[localClaimsKey]),
+              );
+            }),
+          )?.claims ?? [];
+        const prevClaimHashes = new Set(prevClaims.map((c) => c.txHash));
+        const liveHashes = new Set(liveClaims.map((c) => c.txHash));
+        const carriedClaims = freshestClaims.filter(
+          (c) => !prevClaimHashes.has(c.txHash) && !liveHashes.has(c.txHash),
+        );
+        const nextClaimsList = [...carriedClaims, ...liveClaims].slice(
+          0,
+          LOCAL_CLAIMS_CAP,
+        );
+        const changed =
+          nextClaimsList.length !== freshestClaims.length ||
+          nextClaimsList.some((c, i) => c !== freshestClaims[i]);
+        if (changed) {
+          await new Promise<void>((resolve) => {
+            chrome.storage.local.set(
+              { [localClaimsKey]: { claims: nextClaimsList } },
+              () => resolve(),
+            );
+          });
+        }
+      });
+      // Deferred (post-response) OS toast + incoming-transfer detection + badge.
+      // The durable records were already written inline above; here we only FIRE
+      // the toasts for the freshly-added records and run the open-surface
+      // incoming detection — kept off the response path because toast I/O is
+      // slow. Read-only; nothing here touches the signer.
+      {
+        const recordsToToast = addedRecords;
+        const detectAddressLower = notifAddressLower;
+        const detectChainIdHex = notifChainIdHex;
+        const confirmedForIncoming = nextCache.confirmed;
+        const toastSurfaceOpen = notifSurfaceOpen;
+        const toastUnlocked = notifUnlocked;
         queueMicrotask(() => {
           void (async () => {
             try {
-              // C3 — presence at observe-time, computed ONCE per batch and
-              // threaded into both record loops. A surface open now ⇒ record
-              // read (no badge bump); closed ⇒ accumulate unread. Defaults
-              // false on any error. (On the popup path a surface is typically
-              // open, so this is usually read:true; the poll path supplies
-              // the closed→unread case.)
-              const surfaceOpen = await isWalletSurfaceOpen();
-              // Lock state for the toast/badge gates (orthogonal to presence).
-              const unlocked = isUnlockedV4();
-              let anyAdded = false;
-              for (const row of heuristicallyMatched) {
-                // The matched confirmed row's blockHeight is the most
-                // precise block we have. Falls back to null when no exact
-                // match is found (defensive — should be rare).
-                const match = nextCache.confirmed.find(
-                  (c) =>
-                    c.kind === "tx_send" &&
-                    c.counterparty != null &&
-                    c.counterparty.toLowerCase() === row.to.toLowerCase() &&
-                    c.amountDecimal === row.amountDecimal,
-                );
-                // Heuristic match = a confirmed self-paid tx_send → capture
-                // the native-receipt LYTH fee (best-effort).
-                const feeLythoshi = await fetchConfirmedFeeLythoshi(row.txHash);
-                const result = await recordNotification({
-                  addressLower,
-                  chainIdHex,
-                  txHash: row.txHash,
-                  status: "confirmed",
-                  blockNumber: match ? match.blockHeight : null,
-                  // Prefer the broadcast-time tag if the
-                  // popup supplied one; otherwise fall back to the
-                  // coarse "send" (Phase-1 behavior — the heuristic
-                  // match path is by definition a tx_send).
-                  kind: row.opKind ?? "send",
-                  amountDecimal: row.amountDecimal,
-                  counterparty: row.to,
-                  read: surfaceOpen,
-                  ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
-                  ...(row.clusterId !== undefined ? { clusterId: row.clusterId } : {}),
-                  ...(row.clusterName !== undefined
-                    ? { clusterName: row.clusterName }
-                    : {}),
-                  ...(row.toClusterId !== undefined ? { toClusterId: row.toClusterId } : {}),
-                  ...(row.toClusterName !== undefined
-                    ? { toClusterName: row.toClusterName }
-                    : {}),
-                });
-                // Fire OS toast ONLY when this snapshot produced
-                // a NEW record (the dedupe set blocks already-notified
-                // txs). §0.4 honored: every toast derives from a
-                // wallet-own tracked-tx transition.
-                if (result.added && result.record !== null) {
-                  anyAdded = true;
-                  await fireOsNotification(result.record, { unlocked });
-                }
-              }
-              for (const t of terminalByHash) {
-                // Capture the LYTH fee for confirmed self-paid txs (native
-                // receipt); best-effort — failed/zero-fee leaves it unset.
-                const feeLythoshi =
-                  t.status === "confirmed"
-                    ? await fetchConfirmedFeeLythoshi(t.row.txHash)
-                    : undefined;
-                const result = await recordNotification({
-                  addressLower,
-                  chainIdHex,
-                  txHash: t.row.txHash,
-                  status: t.status,
-                  blockNumber: t.blockNumber,
-                  // Prefer the broadcast-time tag; otherwise
-                  // fall back to the coarse "contract_call" (Phase-1
-                  // behavior — the status-RPC path catches every
-                  // non-tx_send tracked tx).
-                  kind: t.row.opKind ?? "contract_call",
-                  amountDecimal: t.row.amountDecimal,
-                  counterparty: t.row.to,
-                  read: surfaceOpen,
-                  ...(feeLythoshi !== undefined ? { feeLythoshi } : {}),
-                  ...(t.row.clusterId !== undefined
-                    ? { clusterId: t.row.clusterId }
-                    : {}),
-                  ...(t.row.clusterName !== undefined
-                    ? { clusterName: t.row.clusterName }
-                    : {}),
-                  ...(t.row.toClusterId !== undefined
-                    ? { toClusterId: t.row.toClusterId }
-                    : {}),
-                  ...(t.row.toClusterName !== undefined
-                    ? { toClusterName: t.row.toClusterName }
-                    : {}),
-                  ...(t.claimedAmountLythoshi != null
-                    ? { claimedAmount: lythoshiDecimalToLythDecimal(t.claimedAmountLythoshi) }
-                    : {}),
-                  ...(t.row.delegationWeightBps !== undefined
-                    ? { delegationWeightBps: t.row.delegationWeightBps }
-                    : {}),
-                });
-                if (result.added && result.record !== null) {
-                  anyAdded = true;
-                  await fireOsNotification(result.record, { unlocked });
-                }
+              let anyAdded = recordsToToast.length > 0;
+              for (const record of recordsToToast) {
+                await fireOsNotification(record, { unlocked: toastUnlocked });
               }
               // Item 7b — incoming-transfer detection (open-surface ⇒ unlocked).
-              // The snapshot is already fetched; diff its confirmed tx_receive
-              // rows against the per-scope watermark → record + toast new ones.
-              // Read-only; nothing here touches the signer. Option (a): no
-              // closed/locked poll.
+              // Diff the snapshot's confirmed tx_receive rows against the
+              // per-scope watermark → record + toast new ones. Read-only.
               const incomingAdded = await detectAndNotifyIncoming(
-                addressLower,
-                chainIdHex,
-                nextCache.confirmed,
-                surfaceOpen,
-                unlocked,
+                detectAddressLower,
+                detectChainIdHex,
+                confirmedForIncoming,
+                toastSurfaceOpen,
+                toastUnlocked,
               );
               if (incomingAdded > 0) anyAdded = true;
-              // Single badge refresh per batch. getUnread reads
-              // chrome.storage so it sees every record this loop wrote;
-              // one call covers both heuristic + status-RPC paths.
+              // Single badge refresh per batch; getUnread sees every record the
+              // inline loop wrote.
               if (anyAdded) {
                 await refreshUnreadBadge({
-        unlocked,
-        activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
-      });
+                  unlocked: toastUnlocked,
+                  activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
+                });
               }
             } catch {
               // Best-effort; never break the snapshot response.
@@ -8421,7 +9334,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           })();
         });
       }
-      return { ok: true, cache: nextCache, pending: nextPending, errors: fresh.errors };
+      return { ok: true, cache: nextCache, pending: committedPending, errors: fresh.errors };
     }
     case "wallet-activity-failed": {
       // Failed txs are NOT in the success-only indexer activity stream, so the
@@ -9600,6 +10513,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // clamp) instead of re-reading the operator, closing the display-vs-
         // sign double-read and the Slow/Fast tier-multiplier desync.
         signedFee?: unknown;
+        // boundary 3b — the single-use challenge id + the forwarded WebAuthn
+        // assertion for an under-limit passkey send. The SW CONSUMES the
+        // challenge, re-binds it to this tx's intent, and cryptographically
+        // verifies the assertion before signing (verifyPasskeyAssertionForSend).
+        passkeyChallengeId?: unknown;
+        passkeyAssertion?: unknown;
       };
       if (
         typeof p?.to !== "string" ||
@@ -9697,32 +10616,58 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: MULTISIG_SEND_REFUSAL };
       }
       // T1-04(a): LOCAL defense-in-depth enforcement of the per-vault passkey
-      // spending cap on BARE VALUE TRANSFERS (real contract calls are out of
-      // policy scope). Until now the cap was advisory (popup amber badge
-      // only); enforce it here so the displayed limit is a real block. An
-      // over-limit send requires an SW-VERIFIED password re-auth — NOT a
-      // popup-asserted flag, which the already-unlocked local IPC actor this
-      // gate targets could forge. This is local defense-in-depth, NOT
-      // cryptographic passkey authorization (that needs the chain precompile).
+      // signing gate + spending cap on every VALUE-AFFECTING send. Until now the
+      // cap was advisory (popup amber badge only); enforce it here so the
+      // displayed limit is a real block. An over-limit send requires an
+      // SW-VERIFIED password re-auth — NOT a popup-asserted flag, which the
+      // already-unlocked local IPC actor this gate targets could forge. This is
+      // local defense-in-depth, NOT cryptographic passkey authorization (that
+      // needs the chain precompile).
       //
-      // A bare value transfer is `data === undefined` OR an empty `data` of
-      // "0x": tx-mldsa normalizes input to "0x" either way, so a "0x" data
-      // field is byte-identical to a native transfer and must be capped too —
-      // otherwise an over-limit native-equivalent transfer could slip past the
-      // cap by sending data:"0x". (data === "" is already rejected by the
-      // 0x-prefix validation above; only "0x" reaches here.)
+      // SCOPE: the gate covers a bare value transfer (`data === undefined` OR an
+      // empty `data` of "0x" — tx-mldsa normalizes input to "0x" either way, so
+      // a "0x" data field is byte-identical to a native transfer; data === "" is
+      // already rejected by the 0x-prefix validation above, only "0x" reaches
+      // here) AND any DATA-CARRYING send that still spends native value (staking
+      // 0x1006, escrow, …). A data-carrying call is NOT exempt: it would
+      // otherwise bypass both the passkey requirement and the cap despite moving
+      // value. A zero-value read-only / contract call carries no native spend and
+      // stays ungated (the cap governs native value only).
+      // Part 3 (passkey daily cap): a daily-mode passkey-unlocked send to
+      // count, captured in the gate below and appended AFTER the submit
+      // succeeds so the SW — not the popup — is the authoritative counter.
+      let passkeyDailyAppend: { vaultId: string; value: bigint } | null = null;
+      // boundary 3b: an under-limit passkey send's verified signCount advance,
+      // persisted AFTER a successful submit (alongside the daily append).
+      let passkeySignCountUpdate: {
+        vaultId: string;
+        credentialId: string;
+        newSignCount: number;
+      } | null = null;
       const isBareValueTransfer = p.data === undefined || p.data === "0x";
-      if (isBareValueTransfer) {
+      // T1-04(a) scope FIX: the passkey signing gate + spending-cap MUST cover
+      // ANY value-affecting send, not just bare value transfers. On chain-69420
+      // a data-carrying call (staking 0x1006, escrow, …) moves/locks native
+      // value through the tx `value` field, so a send that carried a non-empty
+      // `data` previously slipped past BOTH the passkey requirement and the cap.
+      // Gate on value movement instead of the presence of `data`: bare transfers
+      // (any value, unchanged) OR a data-carrying tx that spends native value.
+      // A zero-value read-only / contract call carries no native spend and stays
+      // ungated (the cap governs native value only). The cap amount is the
+      // native tx value, which reflects the spend for data-carrying txs too.
+      let sendValueWei: bigint;
+      try {
+        sendValueWei = BigInt(p.valueWeiHex);
+      } catch {
+        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
+      }
+      const gatePasskeyPolicy = isBareValueTransfer || sendValueWei > 0n;
+      if (gatePasskeyPolicy) {
         const activeVaultId = getActiveVaultIdV4();
         if (activeVaultId) {
           const pkState = await readPasskeyStateV4(activeVaultId);
           if (pkState.policy.enabled && pkState.credentials.length > 0) {
-            let pkValue: bigint;
-            try {
-              pkValue = BigInt(p.valueWeiHex);
-            } catch {
-              return { ok: false, reason: "valueWeiHex is not a hex bigint" };
-            }
+            const pkValue = sendValueWei;
             const recentUsage = await readPasskeyUsageEntries(activeVaultId);
             const decision = evaluatePasskeyPolicy({
               state: pkState,
@@ -9792,6 +10737,36 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
                 SESSION_KEY_UNLOCK_FAIL_COUNT,
                 SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
               ]);
+            } else {
+              // boundary 3b: an UNDER-LIMIT passkey send. Previously this path
+              // signed on the popup's say-so alone (P3-005 popup-only). The SW
+              // now REQUIRES a cryptographically-verified WebAuthn assertion
+              // over a fresh, single-use, intent-bound challenge — signs only
+              // on { ok: true }.
+              const gate = await verifyPasskeyAssertionForSend({
+                to: p.to,
+                valueWeiHex: p.valueWeiHex,
+                ...(p.data !== undefined ? { data: p.data } : {}),
+                chainIdHex: p.chainIdHex,
+                challengeId: p.passkeyChallengeId,
+                assertion: p.passkeyAssertion,
+                activeVaultId,
+                credentials: pkState.credentials,
+              });
+              if (!gate.ok) return gate.reject;
+              passkeySignCountUpdate = {
+                vaultId: activeVaultId,
+                credentialId: gate.signCountUpdate.credentialId,
+                newSignCount: gate.signCountUpdate.newSignCount,
+              };
+              if (pkState.policy.mode === "daily") {
+                // Part 3: a daily-mode passkey-unlocked (under-cap) send. The SW
+                // is the authoritative daily-cap counter — append to the usage
+                // ledger ourselves AFTER the submit succeeds (below) so a
+                // compromised popup that skips the (removed) record-usage IPC
+                // can't keep used = 0.
+                passkeyDailyAppend = { vaultId: activeVaultId, value: pkValue };
+              }
             }
           }
         }
@@ -9855,6 +10830,35 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         // Awaited (small session write) so the next send sees it immediately.
         // Only the success path reaches here — a reject throws to the catch.
         await recordSubmittedNonce(fromAddr, p.chainIdHex, nonceHex);
+        // Part 3: SW-authoritative daily-cap count. A daily-mode passkey-
+        // unlocked send was just submitted — append to the usage ledger here
+        // (success path only) so the SW, not the popup, is the counter.
+        // Best-effort: the tx already broadcast.
+        if (passkeyDailyAppend) {
+          try {
+            await recordPasskeyUsageEntry(
+              passkeyDailyAppend.vaultId,
+              passkeyDailyAppend.value,
+            );
+          } catch {
+            // ledger append best-effort; the submit already succeeded.
+          }
+        }
+        // boundary 3b: persist the verified signCount advance (success path
+        // only). Best-effort — the single-use challenge already prevents replay
+        // of this assertion; the counter is cross-session cloned-authenticator
+        // defense.
+        if (passkeySignCountUpdate) {
+          try {
+            await updatePasskeyCredentialSignCountV4(
+              passkeySignCountUpdate.vaultId,
+              passkeySignCountUpdate.credentialId,
+              passkeySignCountUpdate.newSignCount,
+            );
+          } catch {
+            // best-effort.
+          }
+        }
         // Fire-and-forget pending-row write. Unawaited so
         // Send-screen response latency is preserved (pending row lands
         // ~50-200ms after the popup receives txHash). Errors are
@@ -9869,6 +10873,10 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           to: p.to,
           valueWeiHex: p.valueWeiHex,
           via,
+          // The nonce was already chosen + signed above (nextNonceHex untouched);
+          // persist it for the pending-row drop-detection lifecycle. Display/state
+          // only — never re-signed.
+          nonce: Number(BigInt(nonceHex)),
           // Metadata-only: opKind never reached submitPlaintextMlDsaTx —
           // it travels straight from the popup → here → the pending-row
           // record for the notifications hook to read back.

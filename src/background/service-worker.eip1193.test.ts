@@ -111,6 +111,7 @@ let activeVaultMultisig = false;
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => vaultExists),
   hasContainerV4: vi.fn(async () => vaultExists),
+  storedContainerNeedsRestoreV4: vi.fn(async () => false),
   unlockContainerV4: vi.fn(async () => ({
     address: DETERMINISTIC_ADDRESS,
     vaultId: "v1",
@@ -395,7 +396,7 @@ describe("EIP-1193 conformance — service-worker request router", () => {
 
     expect(r.result).toBeUndefined();
     expect(r.error?.code).toBe(4200);
-    expect(r.error?.message).toMatch(/native encrypted Monolythium Testnet sends/);
+    expect(r.error?.message).toMatch(/native Monolythium Testnet sends/);
     expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
     const methods = rpcCalls.map((c) => c.method);
     expect(methods).not.toContain("eth_getTransactionCount");
@@ -435,6 +436,43 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     } finally {
       activeVaultMultisig = false;
     }
+  });
+
+  describe("P3-002 — from is bound to the active address", () => {
+    async function connectedNativeOrigin(origin: string): Promise<void> {
+      await connectOrigin(origin);
+      await dispatch("wallet_switchEthereumChain", [{ chainId: TESTNET_CHAIN_ID_HEX }], origin);
+    }
+
+    it("with NO from → proceeds to the approval (nonce read for the active address)", async () => {
+      const origin = "https://p3002-no-from.example";
+      await connectedNativeOrigin(origin);
+      approvalDecision = { ok: false, reason: "rejected" }; // stop at the approval, don't sign
+      const r = await dispatch("eth_sendTransaction", [{ to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
+      expect(r.error?.code).toBe(4001); // reached the approval
+      expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
+    });
+
+    it("with from == the active address → proceeds to the approval", async () => {
+      const origin = "https://p3002-from-match.example";
+      await connectedNativeOrigin(origin);
+      approvalDecision = { ok: false, reason: "rejected" };
+      const r = await dispatch("eth_sendTransaction", [{ from: DETERMINISTIC_ADDRESS, to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
+      expect(r.error?.code).toBe(4001);
+      expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(true);
+    });
+
+    it("with from != the active address → rejected (4100), no approval, nonce never read for the foreign address", async () => {
+      const origin = "https://p3002-from-mismatch.example";
+      await connectedNativeOrigin(origin);
+      const r = await dispatch("eth_sendTransaction", [{ from: "0x00000000000000000000000000000000000000ff", to: "0x0000000000000000000000000000000000000001", value: "0x0" }], origin);
+      expect(r.result).toBeUndefined();
+      expect(r.error?.code).toBe(4100);
+      expect(r.error?.message).toMatch(/from does not match/i);
+      // Rejected BEFORE buildSendTxView → no approval, and no nonce RPC at all.
+      expect(enqueuedApprovals.some((a) => a.kind === "send_tx")).toBe(false);
+      expect(rpcCalls.map((c) => c.method)).not.toContain("lyth_getTransactionCount");
+    });
   });
 
   // ---- 6. personal_sign ----
@@ -577,6 +615,39 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     expect(r.error?.message).toMatch(/wallet_addEthereumChain/);
   });
 
+  describe("P4-002 — addEthereumChain connected-origin gate", () => {
+    const CUSTOM = {
+      chainId: "0xABCD",
+      chainName: "P4-002 chain",
+      rpcUrls: ["https://rpc.p4002.example"],
+    };
+
+    it("rejects a custom-chain add from an UNCONNECTED origin (4100), no approval", async () => {
+      const r = await dispatch("wallet_addEthereumChain", [CUSTOM], "https://unconnected-p4002.example");
+      expect(r.result).toBeUndefined();
+      expect(r.error?.code).toBe(4100);
+      expect(enqueuedApprovals.some((a) => a.kind === "add_chain")).toBe(false);
+    });
+
+    it("allows a custom-chain add from a CONNECTED origin (reaches the approval)", async () => {
+      const origin = "https://connected-p4002.example";
+      await connectOrigin(origin);
+      const r = await dispatch("wallet_addEthereumChain", [CUSTOM], origin);
+      expect(r.error).toBeUndefined();
+      expect(enqueuedApprovals.some((a) => a.kind === "add_chain")).toBe(true);
+    });
+
+    it("a known/built-in chain no-ops (ok null) even for an unconnected origin (EIP-3085)", async () => {
+      const r = await dispatch(
+        "wallet_addEthereumChain",
+        [{ chainId: TESTNET_CHAIN_ID_HEX }],
+        "https://unconnected-known-p4002.example",
+      );
+      expect(r.error).toBeUndefined();
+      expect(r.result).toBeNull();
+    });
+  });
+
   it("wallet_switchEthereumChain without a chainId param returns -32602", async () => {
     const r = await dispatch("wallet_switchEthereumChain", [{}]);
     expect(r.error?.code).toBe(-32602);
@@ -655,6 +726,8 @@ describe("EIP-1193 conformance — service-worker request router", () => {
 
     it("chain-add-manual rejects collision with an existing chain", async () => {
       // Pre-populate via the dApp path (auto-approved by the approvals mock).
+      // P4-002 — the dApp add now requires a connected origin, so connect first.
+      await connectOrigin("https://dapp-add.example");
       await dispatch("wallet_addEthereumChain", [{
         chainId: FOREIGN_CHAIN,
         chainName: "Existing chain",

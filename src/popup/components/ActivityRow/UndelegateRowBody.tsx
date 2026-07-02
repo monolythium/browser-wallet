@@ -11,14 +11,15 @@ export interface UndelegateRowBodyProps {
 }
 
 export function UndelegateRowBody({ row, clusterNameById }: UndelegateRowBodyProps) {
+  const label = `Undelegated from ${resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)}`;
   return (
     <div className="ext-act-row">
-      <div className="dir in">
-        <Icon name="stake" size={13} />
+      <div className="dir out">
+        <Icon name="unstake" size={13} />
       </div>
       <div className="ext-act-row__main">
-        <div className="ext-act-row__who">
-          Undelegated from {resolveClusterLabel(row.cluster, row.clusterName, clusterNameById)}
+        <div className="ext-act-row__who" title={label}>
+          {label}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>

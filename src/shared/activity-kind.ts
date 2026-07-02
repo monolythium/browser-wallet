@@ -149,7 +149,7 @@ export function activityKindLabel(kind: WalletActivityKind): string {
     case "pruned":
       return "Older activity pruned";
     case "private":
-      return "Private activity (Phase 12)";
+      return "Private activity";
     case "unknown":
       return "History temporarily unavailable";
   }

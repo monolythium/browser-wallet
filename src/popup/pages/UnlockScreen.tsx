@@ -9,11 +9,7 @@ import { Modal } from "../components/Modal";
 import { PasswordInput } from "../components/PasswordInput";
 import { WalletLockLogo } from "../components/WalletLockLogo";
 import { bech32mDisplay } from "../../shared/bech32m";
-
-/** The exact word the user must type to confirm the destructive unauthenticated
- *  wipe — same gate as ResetWallet / ForgotPassword, so an irreversible action
- *  always demands a deliberate keystroke, not a single click. */
-const RESET_CONFIRM_WORD = "DELETE";
+import { WIPE_CONFIRM_WORD as RESET_CONFIRM_WORD } from "../../shared/constants";
 
 interface UnlockScreenProps {
   /** Truncated address chip rendered above the password field, in bech32m form (e.g. "mono1abc…wxyz"). */
@@ -37,6 +33,10 @@ interface UnlockScreenProps {
    *  the post-wipe landing (Welcome). This component fires the wipe
    *  IPC itself; the callback only handles the screen change. */
   onForgotReset?: () => void;
+  /** P1-003: when true, a stored vault predates the V5 encryption upgrade and
+   *  cannot be opened — show a "restore from your recovery phrase" message +
+   *  the restore entry point instead of the password field. */
+  legacyRestoreRequired?: boolean;
 }
 
 function shortAddress(addr: string | null): string {
@@ -51,6 +51,7 @@ export function UnlockScreen({
   chain,
   onForgotImport,
   onForgotReset,
+  legacyRestoreRequired = false,
 }: UnlockScreenProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -146,7 +147,7 @@ export function UnlockScreen({
     setResetting(true);
     setResetError(null);
     try {
-      const r = await bgKeystoreWipeUnauth();
+      const r = await bgKeystoreWipeUnauth(resetConfirmInput.trim().toUpperCase());
       if (!r.ok) {
         setResetError(
           r.reason === "rate_limited"
@@ -193,63 +194,110 @@ export function UnlockScreen({
         )}
       </div>
 
-      <div
-        style={{
-          padding: "16px 18px 12px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
-      >
-        <PasswordInput
-          label="Password"
-          value={password}
-          onChange={setPassword}
-          autoComplete="current-password"
-          autoFocus
-          disabled={secondsRemaining > 0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void handleSubmit();
+      {legacyRestoreRequired ? (
+        <div
+          style={{
+            padding: "16px 18px 12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
           }}
-        />
-
-        {error && (
+        >
           <div
             style={{
-              fontFamily: "var(--f-mono)",
-              fontSize: 11,
-              color: "var(--err)",
-              lineHeight: 1.4,
-            }}
-          >
-            {secondsRemaining > 0
-              ? `Too many attempts. Try again in ${secondsRemaining}s.`
-              : error}
-          </div>
-        )}
-
-        {/* Forgot password? entry. Hidden in the
-           approval-window unlock prompt (no callbacks passed). */}
-        {showForgotLink && (
-          <button
-            type="button"
-            onClick={() => setForgotOpen(true)}
-            style={{
-              alignSelf: "flex-start",
-              background: "transparent",
-              border: "none",
-              padding: "4px 0",
-              color: "var(--gold)",
-              fontFamily: "var(--f-sans)",
               fontSize: 12,
-              textDecoration: "underline",
-              cursor: "pointer",
+              color: "var(--fg-200)",
+              lineHeight: 1.5,
+              padding: 12,
+              border: "1px solid rgba(244,201,122,0.4)",
+              borderRadius: 8,
+              background: "rgba(244,201,122,0.06)",
             }}
           >
-            Forgot your password?
-          </button>
-        )}
-      </div>
+            This wallet predates an encryption upgrade and can no longer be
+            unlocked with your password. Restore it from your 24-word recovery
+            phrase to continue — your address is unchanged.
+          </div>
+          {showForgotLink && (
+            <button
+              type="button"
+              onClick={() => setForgotOpen(true)}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--gold)",
+                background: "var(--gold-bg)",
+                color: "var(--gold)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Restore from recovery phrase
+            </button>
+          )}
+        </div>
+      ) : (
+        <div
+          style={{
+            padding: "16px 18px 12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <PasswordInput
+            label="Password"
+            value={password}
+            onChange={setPassword}
+            autoComplete="current-password"
+            autoFocus
+            disabled={secondsRemaining > 0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSubmit();
+            }}
+          />
+
+          {error && (
+            <div
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                color: "var(--err)",
+                lineHeight: 1.4,
+              }}
+            >
+              {secondsRemaining > 0
+                ? `Too many attempts. Try again in ${secondsRemaining}s.`
+                : error}
+            </div>
+          )}
+
+          {/* Forgot password? entry. Hidden in the
+             approval-window unlock prompt (no callbacks passed). */}
+          {showForgotLink && (
+            <button
+              type="button"
+              onClick={() => setForgotOpen(true)}
+              style={{
+                alignSelf: "flex-start",
+                background: "transparent",
+                border: "none",
+                padding: "4px 0",
+                color: "var(--gold)",
+                fontFamily: "var(--f-sans)",
+                fontSize: 12,
+                textDecoration: "underline",
+                cursor: "pointer",
+              }}
+            >
+              Forgot your password?
+            </button>
+          )}
+        </div>
+      )}
 
       <div
         className="req-foot"

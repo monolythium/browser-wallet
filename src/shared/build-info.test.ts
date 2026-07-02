@@ -26,6 +26,16 @@ describe("monoscanTxUrl", () => {
   it("uses the #/tx/ SPA route base", () => {
     expect(MONOSCAN_TX_BASE).toBe("https://monoscan.xyz/#/tx/");
   });
+
+  it("encodeURIComponent is a no-op for valid hex but encodes metacharacters (P5-008)", () => {
+    const hash = CANONICAL_INNER_TX_HASH;
+    // Byte-identical for a real 0x-hex hash (charset is URL-safe).
+    expect(monoscanTxUrl(hash)).toBe(`${MONOSCAN_TX_BASE}${hash}`);
+    expect(monoscanTxUrl(hash)).not.toContain("%");
+    // A malformed/hostile value can't carry markup into the href.
+    expect(monoscanTxUrl("0x<script>")).toContain("%3C");
+    expect(monoscanTxUrl("0x<script>")).not.toContain("<");
+  });
 });
 
 describe("monoscanAddressUrl", () => {
@@ -35,6 +45,20 @@ describe("monoscanAddressUrl", () => {
     expect(monoscanAddressUrl(addr)).toBe(
       "https://monoscan.xyz/#/wallet/mono1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46",
     );
+  });
+
+  it("encodeURIComponent is a no-op for a valid bech32m (URL-safe charset)", () => {
+    const addr = "monoc1qypfsc5yp538a608d2z9er9mszap6lfrl3sc46";
+    expect(monoscanAddressUrl(addr)).toBe(`${MONOSCAN_ADDRESS_BASE}${addr}`);
+    expect(monoscanAddressUrl(addr)).not.toContain("%");
+  });
+
+  it("percent-encodes HTML metacharacters in a malformed value (CodeQL sanitizer)", () => {
+    const url = monoscanAddressUrl('"><script>');
+    expect(url).not.toContain("<script>");
+    expect(url).not.toContain('"');
+    expect(url).toContain("%3Cscript%3E");
+    expect(url.startsWith(MONOSCAN_ADDRESS_BASE)).toBe(true);
   });
 
   it("uses the #/wallet/ SPA route base", () => {

@@ -114,6 +114,11 @@ export function Security({
   const [registerOpen, setRegisterOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  // boundary 3b Part 2: when set, the open register modal is REPLACING this
+  // pubkey-less (pre-upgrade) credential — on success the old one is removed.
+  const [reregisterReplacingId, setReregisterReplacingId] = useState<string | null>(
+    null,
+  );
 
   const refresh = async () => {
     setLoadErr(null);
@@ -193,9 +198,10 @@ export function Security({
               marginBottom: 10,
             }}
           >
-            Use Windows Hello, Touch ID, or a security key for fast unlock on
-            small-value transfers. Password unlock is still required above
-            the configured limit and for vault management.
+            Use Windows Hello, Touch ID, or a security key to approve transfers
+            up to your limit — the wallet cryptographically verifies the passkey
+            before signing. Sends above the limit, and vault management, still
+            require your password.
           </div>
 
           {loadErr && (
@@ -225,8 +231,8 @@ export function Security({
                     {state.credentials.length === 0
                       ? "Register a passkey to enable the policy"
                       : state.policy.enabled
-                      ? "Small txs unlock with your passkey"
-                      : "All txs require password unlock"}
+                      ? "Transfers up to your limit are approved by passkey"
+                      : "All transactions require your password"}
                   </div>
                 </div>
                 <button
@@ -324,9 +330,9 @@ export function Security({
                     </span>
                   </div>
                   <div style={{ fontSize: 10.5, color: "var(--fg-400)", lineHeight: 1.5 }}>
-                    Daily cap is the rolling 24-hour total of passkey-unlocked
+                    Daily cap is the rolling 24-hour total of passkey-approved
                     transfers. Tracks against transactions signed via passkey
-                    only — password-unlocked txs do not count against it.
+                    only — password-authorized txs do not count against it.
                   </div>
                 </div>
               )}
@@ -343,61 +349,97 @@ export function Security({
 
           {state && state.credentials.length === 0 && (
             <div style={{ fontSize: 11.5, color: "var(--fg-300)", lineHeight: 1.5 }}>
-              No passkeys registered for this vault yet. Register one to enable
-              fast-unlock on small transfers.
+              No passkeys registered for this vault yet. Register one to approve
+              transfers up to your limit with a passkey.
             </div>
           )}
 
           {state && state.credentials.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {state.credentials.map((c) => (
+              {state.credentials.map((c) => {
+                const needsReregister = !c.publicKeySpki;
+                return (
                 <div
                   key={c.credentialId}
                   style={{
                     padding: "8px 10px",
                     borderRadius: 8,
-                    border: "1px solid var(--fg-700)",
-                    background: "rgba(255,255,255,0.04)",
+                    border: needsReregister
+                      ? "1px solid rgba(242,180,65,0.5)"
+                      : "1px solid var(--fg-700)",
+                    background: needsReregister
+                      ? "rgba(242,180,65,0.06)"
+                      : "rgba(255,255,255,0.04)",
                     display: "flex",
-                    alignItems: "center",
-                    gap: 8,
+                    flexDirection: "column",
+                    gap: 6,
                   }}
                 >
-                  <Icon name="passkey" size={14} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 500,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {c.name}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Icon name="passkey" size={14} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 500,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {c.name}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "var(--fg-400)",
+                          fontFamily: "var(--f-mono)",
+                        }}
+                      >
+                        {c.kind === "platform" ? "Platform" : "Security key"}
+                        {" · "}
+                        Added {new Date(c.createdAt).toLocaleDateString()}
+                      </div>
                     </div>
-                    <div
-                      style={{
-                        fontSize: 10,
-                        color: "var(--fg-400)",
-                        fontFamily: "var(--f-mono)",
-                      }}
+                    <button
+                      onClick={() => void handleRemove(c.credentialId)}
+                      disabled={saving}
+                      style={removeBtn}
+                      aria-label={`Remove ${c.name}`}
                     >
-                      {c.kind === "platform" ? "Platform" : "Security key"}
-                      {" · "}
-                      Added {new Date(c.createdAt).toLocaleDateString()}
-                    </div>
+                      Remove
+                    </button>
                   </div>
-                  <button
-                    onClick={() => void handleRemove(c.credentialId)}
-                    disabled={saving}
-                    style={removeBtn}
-                    aria-label={`Remove ${c.name}`}
-                  >
-                    Remove
-                  </button>
+                  {needsReregister && (
+                    <div
+                      style={{
+                        fontSize: 10.5,
+                        color: "var(--fg-200)",
+                        lineHeight: 1.5,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      <span>
+                        This passkey predates an encryption upgrade and can't
+                        approve transactions until you re-register it.
+                      </span>
+                      <button
+                        onClick={() => {
+                          setReregisterReplacingId(c.credentialId);
+                          setRegisterOpen(true);
+                        }}
+                        disabled={saving}
+                        style={reregisterBtn}
+                      >
+                        Re-register to enable signing
+                      </button>
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -416,7 +458,6 @@ export function Security({
         {/* SLH-DSA emergency backup card */}
         <SlhDsaBackupCard
           vaultId={vaultId}
-          vaultAddressLabel={vaultAddress}
           chainIdHex={chainIdHex}
         />
       </div>
@@ -425,10 +466,26 @@ export function Security({
         open={registerOpen}
         vaultId={vaultId}
         vaultAddress={vaultAddress}
-        onClose={() => setRegisterOpen(false)}
-        onRegistered={(s) => {
-          setState(s);
+        onClose={() => {
           setRegisterOpen(false);
+          setReregisterReplacingId(null);
+        }}
+        onRegistered={async (s) => {
+          setRegisterOpen(false);
+          // boundary 3b Part 2: when this registration replaced a pubkey-less
+          // credential, remove the old one so it can't linger as an unusable
+          // (and never popup-only-trusted) entry.
+          if (reregisterReplacingId) {
+            const oldId = reregisterReplacingId;
+            setReregisterReplacingId(null);
+            const r = await bgPasskeyRemoveCredential({
+              vaultId,
+              credentialId: oldId,
+            });
+            setState(r.ok ? r.state : s);
+          } else {
+            setState(s);
+          }
         }}
       />
     </>
@@ -490,6 +547,19 @@ const removeBtn: CSSProperties = {
   color: "var(--err)",
   fontFamily: "var(--f-sans)",
   fontSize: 10.5,
+  cursor: "pointer",
+};
+
+const reregisterBtn: CSSProperties = {
+  alignSelf: "flex-start",
+  padding: "5px 10px",
+  borderRadius: 6,
+  border: "1px solid rgba(242,180,65,0.5)",
+  background: "rgba(242,180,65,0.12)",
+  color: "var(--gold)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 10.5,
+  fontWeight: 600,
   cursor: "pointer",
 };
 

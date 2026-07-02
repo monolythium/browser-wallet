@@ -11,7 +11,26 @@ export type IconName =
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
   | "mono-mark" | "github" | "grid"
-  | "language" | "coins" | "palette";
+  | "language" | "coins" | "palette" | "unstake" | "restake" | "reward";
+
+/** Distinct glyph per delegation action so delegate / undelegate / redelegate
+ *  read apart at a glance (they all shared `stake` before). delegate keeps the
+ *  cluster `stake` glyph; undelegate gets the `unstake` (node releasing down);
+ *  redelegate gets `restake` (the same cluster with a ↔ arrow at its center —
+ *  stake moving between clusters). A failed record inherits the glyph in the
+ *  error tone via NotificationRow's status ring. */
+export function iconForDelegationKind(
+  kind: "delegate" | "undelegate" | "redelegate",
+): IconName {
+  switch (kind) {
+    case "delegate":
+      return "stake";
+    case "undelegate":
+      return "unstake";
+    case "redelegate":
+      return "restake";
+  }
+}
 
 interface IconProps {
   name: IconName;
@@ -51,6 +70,17 @@ export function Icon({ name, size = 16 }: IconProps) {
           <path d="M18.09 10.37A6 6 0 1 1 10.34 18" />
           <path d="M7 6h1v4" />
           <path d="m16.71 13.88.7.71-2.82 2.82" />
+        </svg>
+      );
+    case "reward":
+      // Gift box (lid + ribbon + bow) — a claimed staking reward. Distinct from
+      // `receive` (plain ↓), `coins` (two coins), and `gem`.
+      return (
+        <svg {...props}>
+          <rect x="3" y="8" width="18" height="4" rx="1" />
+          <path d="M5 12v9h14v-9" />
+          <path d="M12 8v13" />
+          <path d="M12 8a3 3 0 1 1 4 0M12 8a3 3 0 1 0-4 0" />
         </svg>
       );
     case "palette":
@@ -197,6 +227,35 @@ export function Icon({ name, size = 16 }: IconProps) {
           <circle cx="19" cy="7" r="2" />
           <circle cx="5" cy="17" r="2" />
           <circle cx="19" cy="17" r="2" />
+        </svg>
+      );
+    case "unstake":
+      // The `stake` cluster releasing its center weight downward — undelegate.
+      // Mirrors delegate's `stake` glyph (the same 4 satellites) so the pair
+      // reads as opposites; the center is a down arrow (weight leaving) instead
+      // of the staked node.
+      return (
+        <svg {...props}>
+          <circle cx="5" cy="7" r="2" />
+          <circle cx="19" cy="7" r="2" />
+          <circle cx="5" cy="17" r="2" />
+          <circle cx="19" cy="17" r="2" />
+          <path d="M12 7v8M9 13l3 3 3-3" />
+        </svg>
+      );
+    case "restake":
+      // The `stake` cluster with a left-right arrow at its center — redelegate
+      // (stake moving between clusters). Mirrors delegate's `stake` glyph (the
+      // same 4 satellites) so delegate / undelegate / redelegate read as a
+      // family; the center is a bidirectional ↔ arrow instead of the staked
+      // node (stake) or the down arrow (unstake).
+      return (
+        <svg {...props}>
+          <circle cx="5" cy="7" r="2" />
+          <circle cx="19" cy="7" r="2" />
+          <circle cx="5" cy="17" r="2" />
+          <circle cx="19" cy="17" r="2" />
+          <path d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3" />
         </svg>
       );
     case "swap":

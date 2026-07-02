@@ -3,11 +3,10 @@
 // Covers the additive multi-vault surface:
 //   - VEK wrap/unwrap round-trip under a MEK
 //   - sealVaultEnvelopeV4 / openVaultEnvelopeV4 round-trip
-//   - Legacy mono.vault.v4 → mono.vaults.v4 migration round-trip
-//   - Migration idempotence (second call no-ops)
-//   - Multi-vault unlock under a single MEK
-//   - Container key (mono.vaults.v4) and legacy key (mono.vault.v4)
-//     are independent — populating one does not affect the other
+//   - createVaultFromNewMnemonic commits straight into the container
+//     (mono.vaults.v4); the legacy single-vault key (mono.vault.v4) is
+//     never written, and there is no legacy->container migration at HEAD
+//   - Multi-vault unlock under a single MEK; multisig + passkey state
 //
 // The chrome.storage.local stub mirrors keystore.test.ts. Argon2id
 // dominates the per-test runtime (~1-2 s on a 2020-era laptop), so
@@ -92,15 +91,41 @@ describe("keystore-mldsa v4-multi", () => {
       const vek = generateVekV4();
       expect(vek.length).toBe(32);
 
-      const wrapped = wrapVekV4(mek, vek);
+      const wrapped = wrapVekV4(mek, vek, "v-rt");
       expect(wrapped.aead).toBe("xchacha20-poly1305");
 
-      const unwrapped = unwrapVekV4(mek, wrapped);
+      const unwrapped = unwrapVekV4(mek, wrapped, "v-rt");
       expect(unwrapped.length).toBe(32);
       expect(Array.from(unwrapped)).toEqual(Array.from(vek));
     },
     30_000,
   );
+
+  it("isVaultsContainerV4 refuses out-of-band masterKdf params (P1-002)", async () => {
+    const ks = await import("./keystore-mldsa.js");
+    const { isVaultsContainerV4, generateMasterKdfParamsV4 } = ks.__internalV4Multi;
+    const baseKdf = generateMasterKdfParamsV4(); // valid create-default (64 MiB/t3/p1)
+    const container = (kdf: Record<string, unknown>) => ({
+      version: 5,
+      algo: "ml-dsa-65",
+      kdf: "argon2id",
+      aead: "xchacha20-poly1305",
+      masterKdf: { ...baseKdf, ...kdf },
+      vaults: [],
+      activeVaultId: "v-1",
+    });
+    // The in-band create-default reads fine.
+    expect(isVaultsContainerV4(container({}))).toBe(true);
+    // m out of band — the > cap closes the OOM-on-unlock DoS; the < floor a weak KDF.
+    expect(isVaultsContainerV4(container({ m: 1024 }))).toBe(false);
+    expect(isVaultsContainerV4(container({ m: 2_000_000 }))).toBe(false);
+    // t out of band.
+    expect(isVaultsContainerV4(container({ t: 1 }))).toBe(false);
+    expect(isVaultsContainerV4(container({ t: 11 }))).toBe(false);
+    // p out of band.
+    expect(isVaultsContainerV4(container({ p: 0 }))).toBe(false);
+    expect(isVaultsContainerV4(container({ p: 5 }))).toBe(false);
+  });
 
   it(
     "unwrap with wrong MEK throws (fail-closed)",
@@ -118,9 +143,9 @@ describe("keystore-mldsa v4-multi", () => {
       const goodMek = await deriveMekV4("right-password", params);
       const badMek = await deriveMekV4("wrong-password", params);
       const vek = generateVekV4();
-      const wrapped = wrapVekV4(goodMek, vek);
+      const wrapped = wrapVekV4(goodMek, vek, "v-wm");
 
-      expect(() => unwrapVekV4(badMek, wrapped)).toThrow();
+      expect(() => unwrapVekV4(badMek, wrapped, "v-wm")).toThrow();
     },
     30_000,
   );
@@ -138,13 +163,13 @@ describe("keystore-mldsa v4-multi", () => {
       const mnemonic =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
-      const env = sealVaultEnvelopeV4(vek, seed, mnemonic);
+      const env = sealVaultEnvelopeV4(vek, seed, mnemonic, "v-env");
       expect(typeof env.seedNonce).toBe("string");
       expect(typeof env.seedCiphertext).toBe("string");
       expect(typeof env.mnemonicNonce).toBe("string");
       expect(typeof env.mnemonicCiphertext).toBe("string");
 
-      const opened = openVaultEnvelopeV4(vek, env);
+      const opened = openVaultEnvelopeV4(vek, env, "v-env");
       expect(opened.seed.length).toBe(32);
       expect(Array.from(opened.seed)).toEqual(Array.from(seed));
       expect(opened.mnemonic).toBe(mnemonic);
@@ -178,8 +203,12 @@ describe("keystore-mldsa v4-multi", () => {
 
       // Re-derive MEK, unwrap VEK, open envelope → mnemonic matches.
       const mek = await deriveMekV4(password, c.masterKdf);
-      const vek = unwrapVekV4(mek, c.vaults[0]!.wrappedKey);
-      const opened = openVaultEnvelopeV4(vek, c.vaults[0]!.envelope);
+      const vek = unwrapVekV4(mek, c.vaults[0]!.wrappedKey, c.vaults[0]!.id);
+      const opened = openVaultEnvelopeV4(
+        vek,
+        c.vaults[0]!.envelope,
+        c.vaults[0]!.id,
+      );
       expect(opened.mnemonic).toBe(mnemonic);
       expect(opened.seed.length).toBe(32);
     },
@@ -233,24 +262,26 @@ describe("keystore-mldsa v4-multi", () => {
       const mnemonicA = "vault a " + "abandon ".repeat(22).trim();
       const mnemonicB = "vault b " + "abandon ".repeat(22).trim();
 
+      const idA = crypto.randomUUID();
+      const idB = crypto.randomUUID();
       const recordA = {
-        id: crypto.randomUUID(),
+        id: idA,
         label: "Vault A",
         createdAt: Date.now(),
-        wrappedKey: wrapVekV4(mek, vekA),
-        envelope: sealVaultEnvelopeV4(vekA, seedA, mnemonicA),
+        wrappedKey: wrapVekV4(mek, vekA, idA),
+        envelope: sealVaultEnvelopeV4(vekA, seedA, mnemonicA, idA),
         addr: "0x" + "a".repeat(40),
       };
       const recordB = {
-        id: crypto.randomUUID(),
+        id: idB,
         label: "Vault B",
         createdAt: Date.now() + 1,
-        wrappedKey: wrapVekV4(mek, vekB),
-        envelope: sealVaultEnvelopeV4(vekB, seedB, mnemonicB),
+        wrappedKey: wrapVekV4(mek, vekB, idB),
+        envelope: sealVaultEnvelopeV4(vekB, seedB, mnemonicB, idB),
         addr: "0x" + "b".repeat(40),
       };
       const container = {
-        version: 4 as const,
+        version: 5 as const,
         algo: "ml-dsa-65" as const,
         kdf: "argon2id" as const,
         aead: "xchacha20-poly1305" as const,
@@ -264,18 +295,28 @@ describe("keystore-mldsa v4-multi", () => {
       const reloaded = await loadVaultsContainerV4();
       expect(reloaded).not.toBeNull();
       const mek2 = await deriveMekV4(password, reloaded!.masterKdf);
-      const unwrappedA = unwrapVekV4(mek2, reloaded!.vaults[0]!.wrappedKey);
-      const unwrappedB = unwrapVekV4(mek2, reloaded!.vaults[1]!.wrappedKey);
+      const unwrappedA = unwrapVekV4(
+        mek2,
+        reloaded!.vaults[0]!.wrappedKey,
+        reloaded!.vaults[0]!.id,
+      );
+      const unwrappedB = unwrapVekV4(
+        mek2,
+        reloaded!.vaults[1]!.wrappedKey,
+        reloaded!.vaults[1]!.id,
+      );
       expect(Array.from(unwrappedA)).toEqual(Array.from(vekA));
       expect(Array.from(unwrappedB)).toEqual(Array.from(vekB));
 
       const openedA = openVaultEnvelopeV4(
         unwrappedA,
         reloaded!.vaults[0]!.envelope,
+        reloaded!.vaults[0]!.id,
       );
       const openedB = openVaultEnvelopeV4(
         unwrappedB,
         reloaded!.vaults[1]!.envelope,
+        reloaded!.vaults[1]!.id,
       );
       expect(openedA.mnemonic).toBe(mnemonicA);
       expect(openedB.mnemonic).toBe(mnemonicB);
@@ -296,6 +337,81 @@ describe("keystore-mldsa v4-multi", () => {
     },
     10_000,
   );
+
+  // ── P1-003: canonical vaultId AAD binding (V5 always-AAD) ──────────────────
+
+  it("buildVaultAadV4 is byte-deterministic and changes with the vaultId", async () => {
+    const ks = await import("./keystore-mldsa.js");
+    const { buildVaultAadV4 } = ks.__internalV4Multi;
+    const a1 = buildVaultAadV4("vault-A");
+    const a2 = buildVaultAadV4("vault-A");
+    const b = buildVaultAadV4("vault-B");
+    // same vaultId → identical bytes (seal + open build the same AAD)
+    expect(Array.from(a1)).toEqual(Array.from(a2));
+    // different vaultId → different bytes (the binding term)
+    expect(Array.from(a1)).not.toEqual(Array.from(b));
+    // carries the format tag + the version byte (V5)
+    const tag = "mono.vault.aad.v1";
+    expect(new TextDecoder().decode(a1.slice(0, tag.length))).toBe(tag);
+    expect(a1[tag.length]).toBe(5);
+  });
+
+  it(
+    "a cross-vault ciphertext move FAILS the AAD check (wrap + envelope)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const {
+        generateMasterKdfParamsV4,
+        deriveMekV4,
+        generateVekV4,
+        wrapVekV4,
+        unwrapVekV4,
+        sealVaultEnvelopeV4,
+        openVaultEnvelopeV4,
+      } = ks.__internalV4Multi;
+
+      const mek = await deriveMekV4("pw", generateMasterKdfParamsV4());
+      const vek = generateVekV4();
+      const seed = new Uint8Array(32).fill(7);
+      const mnemonic = "alpha " + "abandon ".repeat(23).trim();
+
+      // Sealed under vault A's id.
+      const wrapped = wrapVekV4(mek, vek, "vault-A");
+      const env = sealVaultEnvelopeV4(vek, seed, mnemonic, "vault-A");
+
+      // Same id → opens fine.
+      expect(() => unwrapVekV4(mek, wrapped, "vault-A")).not.toThrow();
+      expect(openVaultEnvelopeV4(vek, env, "vault-A").mnemonic).toBe(mnemonic);
+
+      // Lifted into vault B's record → the AEAD tag check rejects both layers.
+      expect(() => unwrapVekV4(mek, wrapped, "vault-B")).toThrow();
+      expect(() => openVaultEnvelopeV4(vek, env, "vault-B")).toThrow();
+    },
+    30_000,
+  );
+
+  it("a stored V4 container is DETECTED (restore-from-phrase) without decrypting", async () => {
+    const ks = await import("./keystore-mldsa.js");
+    const { loadVaultsContainerV4 } = ks.__internalV4Multi;
+    // A legacy V4 (no-AAD) container on disk — minimal shape, real ciphertext
+    // fields are irrelevant because nothing decrypts it.
+    storage["mono.vaults.v4"] = {
+      version: 4,
+      algo: "ml-dsa-65",
+      kdf: "argon2id",
+      aead: "xchacha20-poly1305",
+      masterKdf: { kdf: "argon2id", m: 65536, t: 3, p: 1, salt: "AAAA" },
+      vaults: [{ id: "v1", wrappedKey: {}, envelope: {} }],
+      activeVaultId: "v1",
+    };
+    // Detected as needs-restore (read-only version check)…
+    expect(await ks.storedContainerNeedsRestoreV4()).toBe(true);
+    // …and the load path returns null (graceful — never decrypts the V4 blob).
+    expect(await loadVaultsContainerV4()).toBeNull();
+    // No stored container → not a restore case.
+    delete storage["mono.vaults.v4"];
+    expect(await ks.storedContainerNeedsRestoreV4()).toBe(false);
+  });
 });
 
 describe("keystore-mldsa v4-multi state machine", () => {
@@ -1117,6 +1233,55 @@ describe("keystore-mldsa passkey state", () => {
   );
 
   it(
+    "round-trips the credential public-key fields (Part 1a)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-pubkey-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const id = (await ks.listVaultsV4())![0]!.id;
+      await ks.addPasskeyCredentialV4(id, {
+        credentialId: "cred-pk",
+        name: "Key",
+        kind: "platform",
+        createdAt: 1_000_000,
+        publicKeySpki: "c3BraS1kZXItYmFzZTY0dXJs",
+        alg: -7,
+        signCount: 5,
+      });
+      // Survives the storage round-trip (passkeyStateForStorage →
+      // clonePasskeyState) intact.
+      const state = await ks.readPasskeyStateV4(id);
+      const c = state.credentials[0]!;
+      expect(c.publicKeySpki).toBe("c3BraS1kZXItYmFzZTY0dXJs");
+      expect(c.alg).toBe(-7);
+      expect(c.signCount).toBe(5);
+    },
+    120_000,
+  );
+
+  it(
+    "reads back a legacy credential with NO pubkey fields (undefined, no throw)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "pk-legacy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const id = (await ks.listVaultsV4())![0]!.id;
+      // `fakeCred` is the pre-Part-1a shape (no publicKeySpki/alg/signCount) —
+      // a vault that predates this change. It must read back cleanly.
+      await ks.addPasskeyCredentialV4(id, fakeCred(9));
+      const state = await ks.readPasskeyStateV4(id);
+      const c = state.credentials[0]!;
+      expect(c.credentialId).toBe("cred-9");
+      expect(c.publicKeySpki).toBeUndefined();
+      expect(c.alg).toBeUndefined();
+      expect(c.signCount).toBeUndefined();
+    },
+    120_000,
+  );
+
+  it(
     "removePasskeyCredentialV4 disables the policy when the last cred goes",
     async () => {
       const ks = await import("./keystore-mldsa.js");
@@ -1682,28 +1847,34 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
   });
 
   const MEK_KEY = "mono.session.mek.v4";
-  const DEADLINE_KEY = "mono.session.mek.rehydrate.deadline";
+  // 2026-06-28 auto-lock overhaul: the configured auto-lock deadline is now the
+  // single restore authority (SESSION_KEY_AUTO_LOCK_DEADLINE), replacing the old
+  // independent 5-min rehydrate cap. In production the SW's resetAutoLock writes
+  // this; these keystore unit tests seed it directly.
+  const AUTOLOCK_KEY = "autoLockDeadline";
 
   it(
-    "rehydrates within the cap and refuses + wipes the session MEK once past it",
+    "rehydrates within the auto-lock window and refuses + wipes the session MEK once past it",
     async () => {
       const ks1 = await import("./keystore-mldsa.js");
       await ks1.createVaultFromNewMnemonic("rehydrate-cap-password");
-      // MEK + a FUTURE rehydrate deadline are mirrored to session.
+      // The MEK is mirrored to session; the auto-lock deadline (the single
+      // restore authority, written by the SW's resetAutoLock in production) is
+      // seeded here in the FUTURE to model an unlocked, within-window session.
       expect(typeof session[MEK_KEY]).toBe("string");
-      expect(typeof session[DEADLINE_KEY]).toBe("number");
-      expect(session[DEADLINE_KEY] as number).toBeGreaterThan(Date.now());
+      session[AUTOLOCK_KEY] = Date.now() + 60_000;
 
       // Simulate an SW restart: fresh module state (locked), session intact.
       vi.resetModules();
       const ks2 = await import("./keystore-mldsa.js");
       expect(ks2.isUnlockedV4()).toBe(false);
-      // Within the cap → silent rehydrate succeeds.
+      // Within the window → silent rehydrate succeeds.
       expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(true);
       expect(ks2.isUnlockedV4()).toBe(true);
 
-      // Expire the cap, restart again → restore refused + session MEK wiped.
-      session[DEADLINE_KEY] = Date.now() - 1;
+      // Expire the auto-lock deadline, restart again → restore refused + session
+      // MEK wiped (no restore past the deadline).
+      session[AUTOLOCK_KEY] = Date.now() - 1;
       vi.resetModules();
       const ks3 = await import("./keystore-mldsa.js");
       expect((await ks3.tryRestoreFromSessionV4()).ok).toBe(false);
@@ -1714,12 +1885,14 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
   );
 
   it(
-    "treats an absent rehydrate deadline as expired (fail closed)",
+    "treats an absent auto-lock deadline as expired (fail closed)",
     async () => {
       const ks1 = await import("./keystore-mldsa.js");
       await ks1.createVaultFromNewMnemonic("rehydrate-absent-password");
-      // Drop ONLY the deadline, keep the MEK (a pre-upgrade session shape).
-      delete session[DEADLINE_KEY];
+      // MEK present, but NO auto-lock deadline (the single restore authority) →
+      // fail-closed: refuse + wipe. Never restore on a missing bound.
+      expect(typeof session[MEK_KEY]).toBe("string");
+      expect(session[AUTOLOCK_KEY]).toBeUndefined();
       vi.resetModules();
       const ks2 = await import("./keystore-mldsa.js");
       expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(false);
@@ -1729,28 +1902,277 @@ describe("keystore-mldsa session-MEK rehydrate cap (T1-03)", () => {
   );
 
   it(
-    "a fired lock clears the session MEK + rehydrate deadline; a subsequent restore refuses (#17)",
+    "a fired lock clears the session MEK; a subsequent restore refuses (#17)",
     async () => {
       const ks1 = await import("./keystore-mldsa.js");
       await ks1.createVaultFromNewMnemonic("fired-lock-password");
-      // Unlocked → MEK + a future rehydrate deadline are mirrored to session.
+      // Unlocked, within-window session.
       expect(typeof session[MEK_KEY]).toBe("string");
-      expect(typeof session[DEADLINE_KEY]).toBe("number");
+      session[AUTOLOCK_KEY] = Date.now() + 60_000;
 
       // A fired auto-lock invokes lockV4() (its keystore step), which clears the
-      // session MEK AND the rehydrate deadline via clearMekFromSessionV4 — so a
-      // within-cap restore after a fired auto-lock has nothing to re-unlock from.
+      // session MEK via clearMekFromSessionV4 — so a within-window restore after
+      // a fired auto-lock has no MEK to re-unlock from.
       ks1.lockV4();
       await new Promise((r) => setTimeout(r, 10)); // fire-and-forget session clear
 
       expect(session[MEK_KEY]).toBeUndefined();
-      expect(session[DEADLINE_KEY]).toBeUndefined();
 
       // A subsequent SW boot refuses the password-less restore (fail closed).
       vi.resetModules();
       const ks2 = await import("./keystore-mldsa.js");
       expect((await ks2.tryRestoreFromSessionV4()).ok).toBe(false);
       expect(ks2.isUnlockedV4()).toBe(false);
+    },
+    60_000,
+  );
+});
+
+describe("commitVaultFromSeed error-path zeroization (P2-004)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.doUnmock("@noble/hashes/argon2.js");
+    vi.doUnmock("@monolythium/core-sdk/crypto");
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  // Mock argon2 so deriveMekV4 returns a buffer we hold (to observe the wipe),
+  // and MlDsa65Backend so we can spy on dispose() + skip real keygen. The
+  // mnemonic helpers (generatePqm1Mnemonic / pqm1MnemonicToMlDsa65Seed) stay
+  // real via importOriginal.
+  function installMocks(): {
+    capturedMek: Uint8Array;
+    disposeSpy: ReturnType<typeof vi.fn>;
+  } {
+    const capturedMek = new Uint8Array(32).fill(7);
+    vi.doMock("@noble/hashes/argon2.js", () => ({
+      argon2idAsync: async () => capturedMek,
+    }));
+    const disposeSpy = vi.fn();
+    vi.doMock("@monolythium/core-sdk/crypto", async (importOriginal) => {
+      const actual = (await importOriginal()) as Record<string, unknown>;
+      return {
+        ...actual,
+        MlDsa65Backend: {
+          fromSeed: () => ({
+            getAddress: async () => "0x" + "ab".repeat(20),
+            dispose: disposeSpy,
+          }),
+        },
+      };
+    });
+    return { capturedMek, disposeSpy };
+  }
+
+  it("zeroizes the MEK + disposes the backend when the commit throws after allocation", async () => {
+    const { capturedMek, disposeSpy } = installMocks();
+    // Force saveVaultsContainerV4 to reject: storage.local.set throws. This is
+    // AFTER mek + backend are allocated and BEFORE ownership transfers.
+    const c = (
+      globalThis as unknown as {
+        chrome: { storage: { local: { set: unknown } } };
+      }
+    ).chrome;
+    c.storage.local.set = () => {
+      throw new Error("disk full");
+    };
+
+    const ks = await import("./keystore-mldsa.js");
+    await expect(ks.createVaultFromNewMnemonic("pw")).rejects.toThrow();
+
+    // The derived MEK buffer was zeroed, and the backend disposed — on throw.
+    expect(Array.from(capturedMek)).toEqual(new Array(32).fill(0));
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
+    expect(ks.isUnlockedV4()).toBe(false);
+  });
+
+  it("does NOT wipe the MEK / dispose the backend on success (ownership transfers)", async () => {
+    const { capturedMek, disposeSpy } = installMocks();
+    const ks = await import("./keystore-mldsa.js");
+
+    const { address } = await ks.createVaultFromNewMnemonic("pw");
+    expect(address).toBe("0x" + "ab".repeat(20));
+
+    // mek stays live (owned by the session), backend not disposed, unlocked.
+    expect(Array.from(capturedMek)).toEqual(new Array(32).fill(7));
+    expect(disposeSpy).not.toHaveBeenCalled();
+    expect(ks.isUnlockedV4()).toBe(true);
+  });
+});
+
+describe("sealVaultEnvelopeV4 mnPlain zeroization (P2-005)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.doUnmock("@noble/ciphers/chacha.js");
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  // Mock xchacha so the SECOND encrypt (the mnemonic) captures its arg — which
+  // IS the internal mnPlain buffer — so we can assert the finally zeroed it.
+  // The first encrypt (seed) returns a fake ciphertext.
+  function mockXchachaCapture(throwOnMnemonic: boolean): {
+    mnPlain: Uint8Array | null;
+  } {
+    const cap: { mnPlain: Uint8Array | null } = { mnPlain: null };
+    let n = 0;
+    vi.doMock("@noble/ciphers/chacha.js", async (importOriginal) => {
+      const actual = (await importOriginal()) as Record<string, unknown>;
+      return {
+        ...actual,
+        xchacha20poly1305: () => ({
+          encrypt: (data: Uint8Array) => {
+            n++;
+            if (n === 1) return new Uint8Array(data.length + 16); // seed ct (fake)
+            cap.mnPlain = data; // 2nd call's arg == mnPlain
+            if (throwOnMnemonic) throw new Error("encrypt failed");
+            return new Uint8Array(data.length + 16);
+          },
+        }),
+      };
+    });
+    return cap;
+  }
+
+  it("zeroes mnPlain in the finally even when encrypt() throws", async () => {
+    const cap = mockXchachaCapture(true);
+    const ks = await import("./keystore-mldsa.js");
+    const { generateVekV4, sealVaultEnvelopeV4 } = ks.__internalV4Multi;
+    const vek = generateVekV4();
+    const seed = new Uint8Array(32).fill(9);
+
+    expect(() =>
+      sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie", "v-zero"),
+    ).toThrow();
+    expect(cap.mnPlain).not.toBeNull();
+    expect(Array.from(cap.mnPlain!)).toEqual(
+      new Array(cap.mnPlain!.length).fill(0),
+    );
+  });
+
+  it("zeroes mnPlain on the happy path too", async () => {
+    const cap = mockXchachaCapture(false);
+    const ks = await import("./keystore-mldsa.js");
+    const { generateVekV4, sealVaultEnvelopeV4 } = ks.__internalV4Multi;
+    const vek = generateVekV4();
+    const seed = new Uint8Array(32).fill(9);
+
+    const env = sealVaultEnvelopeV4(vek, seed, "alpha bravo charlie", "v-zero");
+    expect(typeof env.mnemonicCiphertext).toBe("string");
+    expect(cap.mnPlain).not.toBeNull();
+    expect(Array.from(cap.mnPlain!)).toEqual(
+      new Array(cap.mnPlain!.length).fill(0),
+    );
+  });
+});
+
+describe("sent-address integrity HMAC (P5-007)", () => {
+  beforeEach(() => {
+    installChromeStub();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  const CHAIN = "0x10f2c"; // 69420
+  const RECIP = "0xrecipient000000000000000000000000000001";
+
+  it(
+    "computes a deterministic, cross-bound tag and verifies it; fails safe when tampered or locked",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const sa = await import("../shared/sent-addresses.js");
+      await ks.createVaultFromNewMnemonic("vault-unlock-password");
+      const vault = ks.getUnlockedAddressV4()!.toLowerCase();
+
+      const msg = sa.canonicalSentAddrMessage(vault, CHAIN, RECIP);
+      const tag = ks.computeSentAddrTagV4(msg);
+      expect(tag).toMatch(/^[0-9a-f]{64}$/); // 32-byte HMAC-SHA256, hex
+
+      // Deterministic + verifies.
+      expect(ks.computeSentAddrTagV4(msg)).toBe(tag);
+      expect(ks.verifySentAddrTagV4(msg, tag!)).toBe(true);
+
+      // Cross-binding: a tag is not valid for a different recipient / chain / vault.
+      expect(
+        ks.computeSentAddrTagV4(sa.canonicalSentAddrMessage(vault, CHAIN, "0xother")),
+      ).not.toBe(tag);
+      expect(
+        ks.verifySentAddrTagV4(sa.canonicalSentAddrMessage(vault, "0x1", RECIP), tag!),
+      ).toBe(false);
+      expect(
+        ks.verifySentAddrTagV4(
+          sa.canonicalSentAddrMessage("0xothervault", CHAIN, RECIP),
+          tag!,
+        ),
+      ).toBe(false);
+
+      // Tampered / wrong-length / non-hex tag → false, never throws.
+      expect(ks.verifySentAddrTagV4(msg, "00".repeat(32))).toBe(false);
+      expect(ks.verifySentAddrTagV4(msg, "abcd")).toBe(false); // wrong length
+      expect(ks.verifySentAddrTagV4(msg, "nothex!!")).toBe(false); // invalid hex
+
+      // Locked → compute null, verify false (fail-safe: the warning fires).
+      ks.lockV4();
+      expect(ks.computeSentAddrTagV4(msg)).toBeNull();
+      expect(ks.verifySentAddrTagV4(msg, tag!)).toBe(false);
+    },
+    60_000,
+  );
+
+  it(
+    "write→verify (handler logic): wallet entry verifies; planted/legacy/missing do not; self-heals on re-send",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const sa = await import("../shared/sent-addresses.js");
+      await ks.createVaultFromNewMnemonic("vault-unlock-password");
+      const vault = ks.getUnlockedAddressV4()!.toLowerCase();
+
+      // Exactly what the `wallet-recipient-sent-verified` handler does:
+      // read store → parseSentEntries → find addr → verify its tag.
+      const verifyFromStore = (raw: unknown, recipient: string): boolean => {
+        const e = sa
+          .parseSentEntries(raw)
+          .find((x) => x.a === recipient.toLowerCase());
+        return (
+          !!e &&
+          ks.verifySentAddrTagV4(
+            sa.canonicalSentAddrMessage(vault, CHAIN, recipient.toLowerCase()),
+            e.t,
+          )
+        );
+      };
+
+      // Wallet-written entry (the SW write path) verifies.
+      const tag = ks.computeSentAddrTagV4(
+        sa.canonicalSentAddrMessage(vault, CHAIN, RECIP),
+      )!;
+      const written = { v: 1, entries: sa.addSentEntry([], RECIP, tag) };
+      expect(verifyFromStore(written, RECIP)).toBe(true);
+
+      // Planted well-formed entry with a FORGED tag → false (warning fires).
+      const planted = { v: 1, entries: [{ a: RECIP, t: "ab".repeat(32) }] };
+      expect(verifyFromStore(planted, RECIP)).toBe(false);
+
+      // Legacy {addrs} entry → parseSentEntries drops it → false (warning fires).
+      expect(verifyFromStore({ addrs: [RECIP] }, RECIP)).toBe(false);
+
+      // Missing entry → false.
+      expect(verifyFromStore(written, "0xnotsent")).toBe(false);
+
+      // Self-heal: a legitimate re-send writes a fresh tag over the legacy list.
+      const reSent = {
+        v: 1,
+        entries: sa.addSentEntry(sa.parseSentEntries({ addrs: [RECIP] }), RECIP, tag),
+      };
+      expect(verifyFromStore(reSent, RECIP)).toBe(true);
     },
     60_000,
   );

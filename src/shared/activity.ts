@@ -43,8 +43,37 @@ export const ACTIVITY_ROLLING_WINDOW = 100;
 /** Pending-row TTL backstop: a synthetic pending row is dropped this long
  *  after broadcast regardless of whether a confirmed match was found.
  *  Five minutes covers slow blocks + bounded indexer lag; longer pending rows
- *  become user-confusing rather than informative. */
+ *  become user-confusing rather than informative.
+ *  DEPRECATED for non-claim rows: the blind TTL silently dropped txs slower
+ *  than 5 min (the ~7-8 min undelegate). Superseded by the nonce+receipt
+ *  lifecycle (`transitionPending`/`classifyStalePending`); retained only for the
+ *  legacy `evictExpiredPending` shim + its tests. */
 export const PENDING_TTL_MS = 5 * 60 * 1000;
+
+/** A pending row past this age (with no terminal receipt/indexer verdict) is
+ *  flagged "taking longer than usual" — a hint, not a removal. */
+export const PENDING_SLOW_MS = 3 * 60 * 1000;
+
+/** Debounce before declaring a nonce-passed row `dropped`: the committed nonce
+ *  advancing past the row's nonce can momentarily race a confirming receipt
+ *  (nonce advanced, receipt lagging). Require the nonce-passed-without-receipt
+ *  condition to persist this long (≈2 polls) before the `dropped` verdict, so a
+ *  just-confirmed tx surfaces its receipt within the grace instead of a wrong
+ *  terminal. MUST be paired with a persisted `noncePassedAtMs` (else the grace
+ *  re-stamps every poll and never elapses). */
+export const PENDING_DROP_GRACE_MS = 30 * 1000;
+
+/** Absolute last-resort cap: a row that never reaches a receipt/indexer/nonce
+ *  verdict transitions to a VISIBLE `expired` ("status unknown") state — far
+ *  longer than the old 5 min, and a state, not a silent vanish. */
+export const PENDING_ABSOLUTE_CAP_MS = 45 * 60 * 1000;
+
+/** Bounded display window for a TERMINAL (`dropped`/`expired`) row: it stays
+ *  VISIBLE as its terminal state until this age, then is removed (the user can
+ *  also dismiss it sooner). A `pending`/`slow` row is NEVER removed by this —
+ *  removal only ever follows an explicit terminal verdict + this generous
+ *  window, so a possibly-live tx never vanishes. */
+export const PENDING_TERMINAL_RETAIN_MS = 60 * 60 * 1000;
 
 /** Cap on the durable local-claim store per (address, chainId). Reward claims
  *  are infrequent manual actions, so a small newest-N window bounds the store
@@ -170,12 +199,41 @@ export interface PendingTxRow {
   /** Display currency the rate was captured in (loadDisplayCurrency) — frozen so
    *  the historic fiat renders in the currency selected at claim time. */
   currency?: CurrencyCode;
-  /** Delegation weight (bps) for a delegate/redelegate, captured at submit PURELY
-   *  as notification metadata (it's the same uint16 ALREADY encoded in the
-   *  calldata — the signed tx is byte-identical, this is NOT re-encoded). Lets the
-   *  notification show the % (bps/100). Absent on undelegate (no bps), claims,
-   *  ordinary sends, and legacy rows → the % is omitted (no-mock). */
+  /** Delegation weight (bps) for a delegate/undelegate/redelegate, captured at
+   *  submit PURELY as display/notification metadata (the signed tx is
+   *  byte-identical — this is NOT re-encoded). Delegate/redelegate carry the
+   *  requested weight; undelegate carries the FULL existing weight being removed
+   *  (`existingWeightBps`). Lets the row/notification show the % (bps/100). Absent
+   *  on claims, ordinary sends, and legacy rows → the % is omitted (no-mock). */
   delegationWeightBps?: number;
+  /** The nonce this tx was broadcast with — the nonce was ALREADY chosen +
+   *  signed at send (`nextNonceHex` is untouched), and is persisted here PURELY
+   *  for the pending-row drop-detection lifecycle (a committed-nonce read past
+   *  this value, with no receipt, means the tx was replaced/dropped). NEVER
+   *  re-signed, never part of the signed bytes. Absent on legacy rows + any
+   *  non-`wallet-send-tx` broadcast path → that row falls back to the time-only
+   *  lifecycle states. */
+  nonce?: number;
+  /** Drop-detection debounce stamp: the epoch-ms the poll FIRST observed the
+   *  committed nonce had passed this row's `nonce` with no receipt. The `dropped`
+   *  verdict only fires once `now - noncePassedAtMs >= PENDING_DROP_GRACE_MS`, so
+   *  this MUST survive the storage round-trip (else it re-stamps to `now` every
+   *  poll and the grace never elapses). Display/state only. */
+  noncePassedAtMs?: number;
+  /** Recomputed each poll by `transitionPending` from the row's nonce + the
+   *  committed-nonce read + age — drives the render label. `dropped`/`expired`
+   *  are VISIBLE terminal states (never a silent vanish). Display/state only;
+   *  persisting it is harmless (it is recomputed regardless). */
+  lifecycle?: PendingLifecycle;
+}
+
+/** Pending-row lifecycle (display/state). Primary terminal verdict is a receipt
+ *  or an indexer match (handled in the SW poll); these are the *time/nonce*
+ *  states for a row that has neither yet. */
+export type PendingLifecycle = "pending" | "slow" | "dropped" | "expired";
+
+function isPendingLifecycle(v: unknown): v is PendingLifecycle {
+  return v === "pending" || v === "slow" || v === "dropped" || v === "expired";
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -216,6 +274,15 @@ export interface DelegateRow extends ConfirmedAnchor {
   kind: "delegate";
   cluster: number;
   weightBps: number | null;
+  /** Cumulative staked principal (lythoshi) the indexer reports for this event —
+   *  `principalLythoshi` on the delegation-history stream, `amount` on the
+   *  activity stream (identical per event). Used ONLY as a same-block dedup
+   *  discriminator: the indexer hardcodes txIndex/logIndex to 0, so two
+   *  delegations in one block share the (block,txIndex,logIndex) anchor; this
+   *  monotonic value splits them. "" when the indexer omits it — degrades to the
+   *  pre-fix collapse, never a duplicate (cross-stream dedup stays on the
+   *  contracted anchor+kind, not this field). */
+  principalLythoshi: string;
   /** Real `*.cluster.mono` name the wallet captured at send time (threaded
    *  off the matching pending row by `applyCapturedClusterNames`). The indexer
    *  stream carries only the numeric `cluster` id (§C — no name field, no
@@ -230,6 +297,8 @@ export interface UndelegateRow extends ConfirmedAnchor {
   kind: "undelegate";
   cluster: number;
   weightBps: number | null;
+  /** Same-block dedup discriminator; see DelegateRow.principalLythoshi. */
+  principalLythoshi: string;
   /** Send-time `*.cluster.mono` name; see DelegateRow.clusterName. */
   clusterName?: string;
 }
@@ -242,6 +311,8 @@ export interface RedelegateRow extends ConfirmedAnchor {
   cluster: number;                     // source
   toCluster: number | null;            // destination (null only on activity-stream fallback)
   weightBps: number | null;
+  /** Same-block dedup discriminator; see DelegateRow.principalLythoshi. */
+  principalLythoshi: string;
   /** Send-time name of the SOURCE `cluster` (redelegate captures the source per
    *  commit 7dbb4ea); see DelegateRow.clusterName. The destination `toCluster`
    *  has no captured name. */
@@ -401,6 +472,15 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
       const currency = isCurrencyCode(r.currency) ? r.currency : undefined;
       const delegationWeightBps =
         isFiniteNumber(r.delegationWeightBps) ? r.delegationWeightBps : undefined;
+      // Drop-detection lifecycle fields (display/state). `nonce` is captured at
+      // broadcast; `noncePassedAtMs` MUST survive so the debounce grace can
+      // elapse across polls (else it re-stamps to `now` and `dropped` never
+      // fires). `lifecycle` is recomputed each poll but survives harmlessly.
+      const nonce = isFiniteNumber(r.nonce) ? r.nonce : undefined;
+      const noncePassedAtMs = isFiniteNumber(r.noncePassedAtMs)
+        ? r.noncePassedAtMs
+        : undefined;
+      const lifecycle = isPendingLifecycle(r.lifecycle) ? r.lifecycle : undefined;
       return {
         kind: "pending_tx",
         txHash: r.txHash,
@@ -421,6 +501,9 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         ...(rateAtClaim !== undefined ? { rateAtClaim } : {}),
         ...(currency !== undefined ? { currency } : {}),
         ...(delegationWeightBps !== undefined ? { delegationWeightBps } : {}),
+        ...(nonce !== undefined ? { nonce } : {}),
+        ...(noncePassedAtMs !== undefined ? { noncePassedAtMs } : {}),
+        ...(lifecycle !== undefined ? { lifecycle } : {}),
       };
     }
 
@@ -478,6 +561,8 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         logIndex: r.logIndex as number,
         cluster: r.cluster,
         weightBps: r.weightBps,
+        principalLythoshi:
+          typeof r.principalLythoshi === "string" ? r.principalLythoshi : "",
         ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
@@ -499,6 +584,8 @@ export function validateActivityRow(input: unknown): ActivityRow | null {
         cluster: r.cluster,
         toCluster: r.toCluster,
         weightBps: r.weightBps,
+        principalLythoshi:
+          typeof r.principalLythoshi === "string" ? r.principalLythoshi : "",
         ...(clusterName !== undefined ? { clusterName } : {}),
       };
     }
@@ -637,6 +724,10 @@ export interface RawDelegationHistory {
   kind: string;
   weightBps: number;
   walletTotalBps: number | null;
+  /** Cumulative staked principal (lythoshi). On the live wire (verified
+   *  2026-06-28) but not yet in the SDK `DelegationHistoryRecord` contract —
+   *  optional, read defensively as a same-block dedup discriminator only. */
+  principalLythoshi?: string | null;
 }
 
 /** Map the rich `lyth_getDelegationHistory` stream to the canonical delegation
@@ -656,6 +747,7 @@ export function mapDelegationHistoryToRows(
           logIndex: e.logIndex,
           cluster: e.cluster,
           weightBps: e.weightBps,
+          principalLythoshi: e.principalLythoshi ?? "",
         });
         break;
       case "undelegated":
@@ -666,6 +758,7 @@ export function mapDelegationHistoryToRows(
           logIndex: e.logIndex,
           cluster: e.cluster,
           weightBps: e.weightBps,
+          principalLythoshi: e.principalLythoshi ?? "",
         });
         break;
       case "redelegated":
@@ -677,6 +770,7 @@ export function mapDelegationHistoryToRows(
           cluster: e.cluster,
           toCluster: e.toCluster,
           weightBps: e.weightBps,
+          principalLythoshi: e.principalLythoshi ?? "",
         });
         break;
       default:
@@ -700,8 +794,6 @@ export function mapAddressActivityToRows(
 ): ConfirmedRow[] {
   const out: ConfirmedRow[] = [];
   for (const e of entries) {
-    const anchorKey = `${e.blockHeight}.${e.txIndex}.${e.logIndex}`;
-
     if (e.kind === "transfer") {
       // Native LYTH arrives with a zero (Hash::ZERO) or null tokenId — route it
       // to tx_send/tx_receive by direction. Only a real (non-zero) MRC-20 token
@@ -743,18 +835,13 @@ export function mapAddressActivityToRows(
     }
 
     if (e.kind === "delegation") {
-      // Dedupe: when the delegation-history stream
-      // already has this anchor, drop the activity-stream copy (richer
-      // fields live on the history-stream row). Otherwise produce a
-      // fallback row from subKind.
-      if (delegationKeys.has(anchorKey)) continue;
       // Reward claim (#3 / upstream #74): the indexer surfaces it as
       // subKind:"claimed" with the claimed reward in `amount` (decimal lythoshi
-      // — the native LYTH moved, NOT the staked principal). Handled BEFORE the
-      // cluster-null guard below: a claim carries cluster:0 (not a real
-      // delegation target), so it must never be dropped for "lacking" a cluster.
-      // delegation-history never surfaces claims, so this anchor is never in
-      // `delegationKeys` — the activity stream is the sole claim source.
+      // — the native LYTH moved, NOT the staked principal). Handled FIRST: a
+      // claim carries cluster:0 (not a real delegation target), so it must never
+      // be dropped for "lacking" a cluster, and delegation-history never surfaces
+      // claims, so a claim is never a cross-stream duplicate (never suppressed —
+      // even when it shares a block with a real delegation).
       if (e.subKind === "claimed") {
         out.push({
           kind: "claim",
@@ -768,8 +855,32 @@ export function mapAddressActivityToRows(
         continue;
       }
       if (e.cluster === null) continue;
-      switch (e.subKind) {
-        case "delegated":
+      // Canonical confirmed-row kind (matches mapDelegationHistoryToRows).
+      const kind =
+        e.subKind === "delegated"
+          ? ("delegate" as const)
+          : e.subKind === "undelegated"
+            ? ("undelegate" as const)
+            : e.subKind === "redelegated"
+              ? ("redelegate" as const)
+              : null;
+      if (kind === null) continue; // unknown subKind — drop
+      // Cross-stream dedupe on the CONTRACTED anchor + kind: when the richer
+      // delegation-history stream already carries this event, drop the
+      // activity-stream copy. Kind-aware (vs the old anchor-only check) so a
+      // same-block cross-kind pair — e.g. a delegate + an undelegate the indexer
+      // reports at the same hardcoded txIndex/logIndex (always 0) — is no longer
+      // mutually suppressed.
+      if (
+        delegationKeys.has(`${e.blockHeight}.${e.txIndex}.${e.logIndex}.${kind}`)
+      ) {
+        continue;
+      }
+      // `amount` is the cumulative staked principal (== history principalLythoshi);
+      // captured as the same-block dedup discriminator (see DelegateRow).
+      const principalLythoshi = e.amount ?? "";
+      switch (kind) {
+        case "delegate":
           out.push({
             kind: "delegate",
             blockHeight: e.blockHeight,
@@ -777,9 +888,10 @@ export function mapAddressActivityToRows(
             logIndex: e.logIndex,
             cluster: e.cluster,
             weightBps: e.weightBps,
+            principalLythoshi,
           });
           break;
-        case "undelegated":
+        case "undelegate":
           out.push({
             kind: "undelegate",
             blockHeight: e.blockHeight,
@@ -787,9 +899,10 @@ export function mapAddressActivityToRows(
             logIndex: e.logIndex,
             cluster: e.cluster,
             weightBps: e.weightBps,
+            principalLythoshi,
           });
           break;
-        case "redelegated":
+        case "redelegate":
           out.push({
             kind: "redelegate",
             blockHeight: e.blockHeight,
@@ -798,10 +911,8 @@ export function mapAddressActivityToRows(
             cluster: e.cluster,
             toCluster: null,             // activity stream doesn't carry destination
             weightBps: e.weightBps,
+            principalLythoshi,
           });
-          break;
-        default:
-          // Unknown subKind — drop.
           break;
       }
       continue;
@@ -856,6 +967,98 @@ export function evictExpiredPending(
   );
 }
 
+/** Classify a still-pending row (one that has NO terminal receipt and NO indexer
+ *  match yet — the caller applies those first) into its time/nonce lifecycle.
+ *  PURE: the committed nonce + receipt verdicts are read by the SW poll and
+ *  passed in. Never removes a row; only labels it.
+ *
+ *  - claim rows are EXEMPT (durable) — the caller skips them; this returns
+ *    `pending` defensively.
+ *  - `committedNonce > row.nonce` (both known) → the nonce was consumed by a
+ *    DIFFERENT tx and this row has no receipt → it was replaced/dropped. Gated by
+ *    `PENDING_DROP_GRACE_MS` via `noncePassedAtMs` (the returned value the caller
+ *    persists) so a confirming-receipt race resolves first: within the grace →
+ *    `slow`; past it → `dropped`.
+ *  - `committedNonce === null` (count RPC failed) or `nonce` unknown or
+ *    `committedNonce <= row.nonce` (incl. a nonce gap) → NEVER `dropped`; falls
+ *    to the time-only states (`expired` past the absolute cap, else `slow` past
+ *    the slow threshold, else `pending`), and any stale `noncePassedAtMs` is
+ *    cleared (a regressed/un-passed nonce is no longer "passed"). */
+export function classifyStalePending(
+  row: PendingTxRow,
+  committedNonce: number | null,
+  now: number,
+): { status: PendingLifecycle; noncePassedAtMs?: number } {
+  if (row.source === "local-claim") return { status: "pending" };
+  const noncePassed =
+    committedNonce !== null &&
+    row.nonce !== undefined &&
+    committedNonce > row.nonce;
+  if (noncePassed) {
+    // Stamp the clock the first poll observed; a later poll past the grace → dropped.
+    const since = row.noncePassedAtMs ?? now;
+    if (now - since >= PENDING_DROP_GRACE_MS) {
+      return { status: "dropped", noncePassedAtMs: since };
+    }
+    return { status: "slow", noncePassedAtMs: since };
+  }
+  // A failed committed-nonce read (null) is NO evidence the tx came back: never
+  // ADVANCE to dropped, but also never REGRESS a verdict already reached (a null
+  // pass would otherwise un-drop a dropped row and persist it on writeback). A
+  // REAL read that is <= the row nonce (a genuine re-org regression) DOES un-drop
+  // — it falls through to the time-only states below and clears the stamp.
+  if (committedNonce === null && row.lifecycle === "dropped") {
+    return row.noncePassedAtMs !== undefined
+      ? { status: "dropped", noncePassedAtMs: row.noncePassedAtMs }
+      : { status: "dropped" };
+  }
+  const age = now - row.broadcastedAtMs;
+  if (age >= PENDING_ABSOLUTE_CAP_MS) return { status: "expired" };
+  if (age >= PENDING_SLOW_MS) return { status: "slow" };
+  return { status: "pending" };
+}
+
+/** Transition every pending row to its lifecycle state (replaces the blind
+ *  `evictExpiredPending` TTL). NEVER removes a `pending`/`slow` row — the core
+ *  "never silently vanish" guarantee. A TERMINAL (`dropped`/`expired`) row is
+ *  retained as a VISIBLE terminal until `PENDING_TERMINAL_RETAIN_MS` (then
+ *  removed; the user can dismiss sooner), so removal only ever follows an
+ *  explicit terminal verdict + a generous window. Claim rows are passed through
+ *  untouched (durable). `committedNonce` is the SW's committed-nonce read this
+ *  poll (`null` when the RPC failed → time-only states, never `dropped`). */
+export function transitionPending(
+  pending: PendingTxRow[],
+  committedNonce: number | null,
+  now: number,
+): PendingTxRow[] {
+  const out: PendingTxRow[] = [];
+  for (const row of pending) {
+    // Durable claims (exempt) and receipt-bridged rows (already terminal-
+    // confirmed; the render shows them as confirmed regardless of lifecycle) are
+    // passed through untouched — drop-detection applies only to rows with no
+    // terminal verdict yet.
+    if (row.source === "local-claim" || row.confirmedBlockHeight !== undefined) {
+      out.push(row);
+      continue;
+    }
+    const { status, noncePassedAtMs } = classifyStalePending(row, committedNonce, now);
+    const isTerminal = status === "dropped" || status === "expired";
+    if (isTerminal && now - row.broadcastedAtMs >= PENDING_TERMINAL_RETAIN_MS) {
+      continue; // bounded removal of a long-visible terminal row
+    }
+    const next: PendingTxRow = { ...row, lifecycle: status };
+    // Set the fresh debounce stamp, or clear a stale one (a regressed/un-passed
+    // nonce is no longer "passed").
+    if (noncePassedAtMs !== undefined) {
+      next.noncePassedAtMs = noncePassedAtMs;
+    } else {
+      delete next.noncePassedAtMs;
+    }
+    out.push(next);
+  }
+  return out;
+}
+
 /** True when a local-claim's reward amount is NOT yet resolved. `claimedAmount`
  *  is decoded from the Claimed log only on a later reconcile (it is null at
  *  broadcast), so the App's reconcile poll counts such a claim as "pending" to
@@ -881,17 +1084,32 @@ export function localClaimAwaitingAmount(row: PendingTxRow): boolean {
  *     resident in `pending` (the broadcast-written, receipt-bridged copy),
  *     deduped by `txHash`; the pending-resident copy wins (it carries the
  *     freshest receipt-bridge (block,txIndex) anchor).
- *   - CROSS-STREAM: drop a claim once the indexer surfaces a CONFIRMED row at
- *     its bridged inclusion slot — matched by the `(blockHeight, txIndex)`
+ *   - CROSS-STREAM (anchored): drop a claim once the indexer surfaces a CONFIRMED
+ *     row at its bridged inclusion slot — matched by the `(blockHeight, txIndex)`
  *     ANCHOR, never `txHash` (confirmed rows + the SDK AddressActivityEntry
  *     carry no txHash). LIVE since 2026-06-24 (the indexer now ships claim
  *     events WITH the amount): the local copy auto-retires with no double-row;
  *     `applyStickyClaimAmount` carries the amount onto a null-amount confirmed
- *     row so the retire never drops it. */
+ *     row so the retire never drops it.
+ *   - CROSS-STREAM (backstop, no anchor): a precompile claim's receipt can lag
+ *     the indexer (or never be retrievable), so the `(block,txIndex)` anchor may
+ *     never land — and the indexer's confirmed `kind:"claim"` row has no txHash
+ *     to link back. So ALSO retire an UN-anchored claim once a NEWLY-surfaced
+ *     confirmed claim row matches it by the broadcast-block window
+ *     (`backstopRetiredClaimTxHashes`, 1:1 nearest-block). Without this the
+ *     "Pending · Rewards claimed" row strands beside the confirmed `+amount ·
+ *     block` row until a reopen/alarm.
+ *
+ *  `priorConfirmed` (the confirmed rows from BEFORE this snapshot) scopes the
+ *  backstop to claim rows that just appeared — without it a STALE row from an
+ *  already-retired prior claim could window-match and VANISH a brand-new claim
+ *  (claim rows carry no txHash to disambiguate). Defaults to `[]` (every claim
+ *  row treated as new) for callers that don't track a prior snapshot. */
 export function applyLocalClaims(
   pending: PendingTxRow[],
   localClaims: PendingTxRow[],
   confirmed: ConfirmedRow[],
+  priorConfirmed: ConfirmedRow[] = [],
 ): PendingTxRow[] {
   const nonClaim = pending.filter((p) => p.source !== "local-claim");
   const byHash = new Map<string, PendingTxRow>();
@@ -901,17 +1119,106 @@ export function applyLocalClaims(
   for (const p of pending) {
     if (p.source === "local-claim") byHash.set(p.txHash, p);
   }
-  const claims = [...byHash.values()].filter(
-    (c) =>
-      c.confirmedBlockHeight === undefined ||
-      c.confirmedTxIndex === undefined ||
-      !confirmed.some(
+  const all = [...byHash.values()];
+  // Un-anchored claims a NEWLY-surfaced confirmed claim row matched by the
+  // broadcast-block window. Computed across ALL claims at once so the 1:1
+  // pairing holds (one confirmed row retires at most one claim).
+  const backstopRetired = backstopRetiredClaimTxHashes(all, confirmed, priorConfirmed);
+  const claims = all.filter((c) => {
+    // Anchored retire (existing): the indexer surfaced a confirmed row at the
+    // receipt-bridged (block, txIndex) slot.
+    const anchoredRetire =
+      c.confirmedBlockHeight !== undefined &&
+      c.confirmedTxIndex !== undefined &&
+      confirmed.some(
         (r) =>
           r.blockHeight === c.confirmedBlockHeight &&
           r.txIndex === c.confirmedTxIndex,
-      ),
-  );
+      );
+    return !(anchoredRetire || backstopRetired.has(c.txHash));
+  });
   return [...claims, ...nonClaim];
+}
+
+/** Backstop retirement for UN-ANCHORED local-claims (no `confirmedBlockHeight`).
+ *  A precompile reward claim's receipt can lag the indexer or never be
+ *  retrievable, so the `(block,txIndex)` receipt anchor — the only key the
+ *  anchored retire uses — may never land; and the indexer's confirmed
+ *  `kind:"claim"` row carries NO txHash to link it back. So pair each confirmed
+ *  claim row to AT MOST ONE pending claim by broadcast-block within
+ *  `PENDING_MATCH_BLOCK_WINDOW` (the same window the tx_send heuristic uses),
+ *  assigned GLOBALLY nearest-first (not per-claim-in-order, so a farther claim
+ *  can't grab a nearer claim's row). The 1:1 pairing stops two concurrent claims
+ *  from BOTH being retired by a single confirmed row (which would make the second
+ *  VANISH until the indexer surfaces its own row). Confirmed rows already consumed by an ANCHORED claim
+ *  are reserved first (that claim retires precisely by its slot, not here). A
+ *  claim with a null `broadcastBlockHeight` (eth_blockNumber failed at send) has
+ *  no window to match — it falls to the anchored path / TTL only, as tx_send
+ *  does. Returns the set of claim txHashes to retire via the backstop.
+ *
+ *  `priorConfirmed` scopes the eligible confirmed rows to those NEWLY surfaced
+ *  this snapshot (not already present before the fetch): a claim's own row is
+ *  new on the tick it first appears, while a stale row from an already-retired
+ *  prior claim is excluded — so a wide ±window can't cross-retire (vanish) an
+ *  unrelated new claim against an old row. */
+function backstopRetiredClaimTxHashes(
+  claims: PendingTxRow[],
+  confirmed: ConfirmedRow[],
+  priorConfirmed: ConfirmedRow[],
+): Set<string> {
+  const priorClaimAnchors = new Set(
+    priorConfirmed
+      .filter((r) => r.kind === "claim")
+      .map((r) => `${r.blockHeight}.${r.txIndex}`),
+  );
+  const confirmedClaims = confirmed.filter(
+    (r) =>
+      r.kind === "claim" &&
+      !priorClaimAnchors.has(`${r.blockHeight}.${r.txIndex}`),
+  );
+  if (confirmedClaims.length === 0) return new Set();
+  // Reserve the confirmed-claim rows already matched by an anchored claim's
+  // exact (block, txIndex) — they retire that claim, not an un-anchored one.
+  const used = new Set<number>();
+  for (const c of claims) {
+    if (c.confirmedBlockHeight === undefined || c.confirmedTxIndex === undefined) {
+      continue;
+    }
+    const i = confirmedClaims.findIndex(
+      (r) =>
+        r.blockHeight === c.confirmedBlockHeight &&
+        r.txIndex === c.confirmedTxIndex,
+    );
+    if (i >= 0) used.add(i);
+  }
+  // Build every in-window (claim, confirmed-row) pair, then assign GLOBALLY
+  // nearest-first (smallest block delta), each claim + each row used at most
+  // once. Global-nearest — not per-claim-in-order — so a farther claim can't
+  // grab a nearer claim's row and leave that claim stranded (or wrongly retired).
+  const unanchored = claims.filter(
+    (c) => c.confirmedBlockHeight === undefined && c.broadcastBlockHeight !== null,
+  );
+  const candidates: Array<{ txHash: string; rowIdx: number; delta: number }> = [];
+  for (const c of unanchored) {
+    for (let i = 0; i < confirmedClaims.length; i++) {
+      if (used.has(i)) continue; // reserved by an anchored claim
+      const delta = Math.abs(confirmedClaims[i]!.blockHeight - c.broadcastBlockHeight!);
+      if (delta <= PENDING_MATCH_BLOCK_WINDOW) {
+        candidates.push({ txHash: c.txHash, rowIdx: i, delta });
+      }
+    }
+  }
+  // Nearest first; ties broken by row index for determinism.
+  candidates.sort((a, b) => a.delta - b.delta || a.rowIdx - b.rowIdx);
+  const retired = new Set<string>();
+  const claimUsed = new Set<string>();
+  for (const cand of candidates) {
+    if (used.has(cand.rowIdx) || claimUsed.has(cand.txHash)) continue;
+    used.add(cand.rowIdx);
+    claimUsed.add(cand.txHash);
+    retired.add(cand.txHash);
+  }
+  return retired;
 }
 
 /** Heuristic match: returns true when `confirmed` plausibly represents the
@@ -941,6 +1248,23 @@ function normalizeAddrForMatch(a: string): string {
   }
 }
 
+/** ONE-SIDED block-window match for the pending→confirmed heuristics. A real
+ *  confirmation is at/after its own broadcast, so the confirmed block must be
+ *  `>= broadcastBlockHeight` AND within `PENDING_MATCH_BLOCK_WINDOW` after it.
+ *  The old SYMMETRIC `Math.abs(...)` window also matched a STALE confirmed row
+ *  BEFORE the broadcast — a prior same-cluster+weight delegation (C3 over-match)
+ *  or a prior same-recipient+amount send (the pre-existing tx_send hole) — which
+ *  retired the brand-new pending row instantly (a false-confirm; the row never
+ *  showed as pending). A confirmation cannot precede its broadcast, so the
+ *  window is one-sided. */
+function withinForwardMatchWindow(
+  confirmedBlockHeight: number,
+  broadcastBlockHeight: number,
+): boolean {
+  const delta = confirmedBlockHeight - broadcastBlockHeight;
+  return delta >= 0 && delta <= PENDING_MATCH_BLOCK_WINDOW;
+}
+
 function pendingMatchesConfirmed(
   pending: PendingTxRow,
   confirmed: ConfirmedRow,
@@ -960,9 +1284,21 @@ function pendingMatchesConfirmed(
       confirmed.txIndex === pending.confirmedTxIndex
     );
   }
-  // Heuristic match for not-yet-confirmed rows (the indexer-first path):
-  // tx_send + counterparty + amount + block window.
-  if (confirmed.kind !== "tx_send") return false;
+  // Heuristic match for not-yet-confirmed rows (the indexer-first path).
+  // tx_send rows use counterparty + amount + window (below). Delegation rows
+  // (delegate/undelegate/redelegate) surface as delegation rows, never tx_send,
+  // so without a backstop they retire ONLY via the receipt-bridge (above) — a
+  // confirmed-but-receipt-missed delegation would then be mis-flagged `dropped`
+  // by the drop-detection lifecycle. The CONSERVATIVE delegation heuristic
+  // (C3 — the interlock) lets the indexer retire it: kind-family + cluster
+  // (+ destination/weight when both known) + block window. Never matches on an
+  // ambiguous null → no false retirement.
+  if (confirmed.kind !== "tx_send") {
+    if (isDelegationRow(confirmed) && pendingIsSameDelegation(pending, confirmed)) {
+      return true;
+    }
+    return false;
+  }
   if (pending.broadcastBlockHeight === null) return false;
   if (confirmed.counterparty === null) return false;
   if (
@@ -972,8 +1308,54 @@ function pendingMatchesConfirmed(
     return false;
   }
   if (confirmed.amountDecimal !== pending.amountDecimal) return false;
-  const delta = Math.abs(confirmed.blockHeight - pending.broadcastBlockHeight);
-  return delta <= PENDING_MATCH_BLOCK_WINDOW;
+  // One-sided window: a confirmation is at/after its own broadcast, so a STALE
+  // prior send (same recipient + amount) BEFORE this broadcast no longer matches
+  // (pre-existing symmetric-window hole, fixed alongside the C3 delegation one).
+  return withinForwardMatchWindow(confirmed.blockHeight, pending.broadcastBlockHeight);
+}
+
+/** Conservative match between a pending delegation send and a confirmed
+ *  delegation row — the C3 backstop in `pendingMatchesConfirmed` that closes the
+ *  tx_send-only heuristic gap. Requires the kind FAMILY to agree
+ *  (`opKind` === confirmed `kind`), the SOURCE cluster id to match (both known),
+ *  and the confirmed block to fall within `PENDING_MATCH_BLOCK_WINDOW` of the
+ *  broadcast anchor. The redelegate destination and the weight are matched ONLY
+ *  when BOTH sides know them (the activity-stream fallback leaves
+ *  `confirmed.toCluster` / `confirmed.weightBps` null → skip, never reject) — so
+ *  a null never causes a false retirement. */
+function pendingIsSameDelegation(
+  pending: PendingTxRow,
+  confirmed: DelegateRow | UndelegateRow | RedelegateRow,
+): boolean {
+  if (pending.opKind !== confirmed.kind) return false;
+  if (pending.clusterId === undefined) return false;
+  if (pending.clusterId !== confirmed.cluster) return false;
+  if (pending.broadcastBlockHeight === null) return false;
+  // ONE-SIDED window: a real confirmation is at/after the broadcast, so a STALE
+  // prior confirmed delegation to the same cluster + weight that confirmed
+  // BEFORE this broadcast no longer matches (the symmetric abs-window let a
+  // re-delegate to the same cluster retire instantly against a prior stake).
+  if (!withinForwardMatchWindow(confirmed.blockHeight, pending.broadcastBlockHeight)) {
+    return false;
+  }
+  // Destination cluster (redelegate) — match only when BOTH are known.
+  if (
+    confirmed.kind === "redelegate" &&
+    pending.toClusterId !== undefined &&
+    confirmed.toCluster !== null &&
+    pending.toClusterId !== confirmed.toCluster
+  ) {
+    return false;
+  }
+  // Weight — match only when BOTH are known.
+  if (
+    pending.delegationWeightBps !== undefined &&
+    confirmed.weightBps !== null &&
+    pending.delegationWeightBps !== confirmed.weightBps
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /** Drop pending rows that have a matching confirmed entry in the freshly
@@ -987,14 +1369,44 @@ export function reconcilePending(
   );
 }
 
-/** Build the dedupe key-set from delegation-history rows. Exposed for the
- *  SW handler / tests so they can drive mapAddressActivityToRows. */
+/** Within-stream dedup / React identity key for a confirmed row. Delegation
+ *  rows append the per-event `principalLythoshi` so two delegations the indexer
+ *  reports at the SAME (blockHeight, txIndex, logIndex) anchor — it hardcodes
+ *  txIndex and logIndex to 0, so the anchor degrades to blockHeight alone —
+ *  don't collapse into one row. Non-delegation rows keep the anchor+kind key (a
+ *  self-transfer's in/out legs share the u32::MAX logIndex sentinel and are
+ *  split by kind). Empty `principalLythoshi` (indexer omitted it) degrades to
+ *  the pre-fix collapse, never a duplicate. */
+export function confirmedRowDedupKey(r: ConfirmedRow): string {
+  const base = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
+  // Delegations: fold in every distinguishing per-event field (cluster, the
+  // redelegate destination, weight, and the principal) so two genuinely distinct
+  // same-block events collapse only when the indexer reports them as truly
+  // identical — robust even if the principal alone happens to tie.
+  if (r.kind === "delegate" || r.kind === "undelegate") {
+    return `${base}.${r.cluster}.${r.weightBps}.${r.principalLythoshi}`;
+  }
+  if (r.kind === "redelegate") {
+    return `${base}.${r.cluster}.${r.toCluster}.${r.weightBps}.${r.principalLythoshi}`;
+  }
+  return base;
+}
+
+/** Build the cross-stream suppression key-set from delegation-history rows.
+ *  Exposed for the SW handler / tests so they can drive mapAddressActivityToRows. */
 export function delegationKeySet(
   rows: Array<DelegateRow | UndelegateRow | RedelegateRow>,
 ): Set<string> {
   const out = new Set<string>();
   for (const r of rows) {
-    out.add(`${r.blockHeight}.${r.txIndex}.${r.logIndex}`);
+    // Anchor + KIND (both contracted) — the cross-stream suppression key. The
+    // per-event principal is deliberately NOT included here: keying suppression
+    // on it would make cross-stream dedup depend on an uncontracted wire field
+    // (history principalLythoshi), risking DUPLICATE rows if the indexer ever
+    // dropped it. Same-block splitting is done within-stream by
+    // confirmedRowDedupKey (merge + render), which degrades to a harmless
+    // collapse — never a duplicate — when the principal is absent.
+    out.add(`${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`);
   }
   return out;
 }
@@ -1034,18 +1446,24 @@ export function applyCapturedClusterNames(
   if (pending.length === 0 && prevConfirmed.length === 0) return confirmed;
   return confirmed.map((row) => {
     if (!isDelegationRow(row) || row.clusterName !== undefined) return row;
+    // Match on the (block, txIndex) inclusion slot AND the cluster: the indexer
+    // hardcodes txIndex to 0, so two same-block delegations share the slot —
+    // without the cluster guard the SAME name would be threaded onto both (and a
+    // cross-cluster pair mislabelled). The (source) cluster is the disambiguator.
     const prevNamed = prevConfirmed.find(
       (p): p is DelegateRow | UndelegateRow | RedelegateRow =>
         isDelegationRow(p) &&
         p.clusterName !== undefined &&
         p.blockHeight === row.blockHeight &&
-        p.txIndex === row.txIndex,
+        p.txIndex === row.txIndex &&
+        p.cluster === row.cluster,
     );
     const pendNamed = pending.find(
       (p) =>
         p.clusterName !== undefined &&
         p.confirmedBlockHeight === row.blockHeight &&
-        p.confirmedTxIndex === row.txIndex,
+        p.confirmedTxIndex === row.txIndex &&
+        p.clusterId === row.cluster,
     );
     const name = prevNamed?.clusterName ?? pendNamed?.clusterName;
     return name !== undefined ? { ...row, clusterName: name } : row;
@@ -1128,18 +1546,20 @@ export function mergeIndexerSnapshot(
 
   const merged: ConfirmedRow[] = [];
   const seen = new Set<string>();
-  // Key by anchor + kind so a self-transfer's in/out pair (identical anchor —
-  // native transfers share the u32::MAX logIndex sentinel) both survive, while
-  // a same-kind cross-stream duplicate still collapses to the first (richer
-  // delegation-history) copy.
+  // Key by anchor + kind (+ per-event principal for delegations) so a
+  // self-transfer's in/out pair (identical anchor — native transfers share the
+  // u32::MAX logIndex sentinel) both survive, two delegations in one block (the
+  // indexer hardcodes txIndex/logIndex to 0) both survive, while a same-kind
+  // cross-stream duplicate still collapses to the first (richer
+  // delegation-history) copy. See confirmedRowDedupKey.
   for (const r of delegationRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
+    const k = confirmedRowDedupKey(r);
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);
   }
   for (const r of activityRows) {
-    const k = `${r.blockHeight}.${r.txIndex}.${r.logIndex}.${r.kind}`;
+    const k = confirmedRowDedupKey(r);
     if (seen.has(k)) continue;
     seen.add(k);
     merged.push(r);

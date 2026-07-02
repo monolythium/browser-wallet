@@ -168,7 +168,11 @@ export function Delegations({
 
   const totalDelegatedLythoshi = useMemo(() => {
     if (delegations === null || balanceLythoshi === null) return null;
-    return (balanceLythoshi * BigInt(delegations.totalBps)) / 10_000n;
+    // Chain-EXACT effective weight: floor to WHOLE LYTH — matching the per-row
+    // value (:365) and Stake/Unstake. Fractional LYTH casts no vote / earns
+    // nothing, so the summary must show the same floored figure, not the
+    // precise (unfloored) amount it showed before.
+    return effectiveWeightWholeLythoshi(delegations.totalBps, balanceLythoshi);
   }, [delegations, balanceLythoshi]);
 
   // Claim handler — same encoded selector + tx envelope as Stake.tsx

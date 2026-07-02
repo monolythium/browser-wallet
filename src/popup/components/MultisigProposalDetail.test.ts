@@ -4,15 +4,19 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  formatGasLimit,
   formatLythoshiValue,
   formatRemaining,
   MultisigProposalDetail,
   shortenHex,
 } from "./MultisigProposalDetail.js";
-import type {
-  MultisigSigner,
-  PendingProposal,
+import {
+  hashTxProposal,
+  type MultisigSigner,
+  type PendingProposal,
 } from "../../shared/multisig.js";
+import { lythoshiToLythDecimal } from "../../shared/native-amount.js";
+import { MAX_EXECUTION_UNIT_PRICE_LYTHOSHI } from "../../shared/operator-bounds.js";
 
 describe("formatRemaining", () => {
   const MIN = 60 * 1000;
@@ -91,7 +95,10 @@ describe("MultisigProposalDetail value display", () => {
     },
   ];
 
-  function makeProposal(valueWeiHex: string): PendingProposal {
+  function makeProposal(
+    valueWeiHex: string,
+    gasLimitHex?: string,
+  ): PendingProposal {
     return {
       id: "p-1",
       proposedBy: "s-1",
@@ -103,6 +110,7 @@ describe("MultisigProposalDetail value display", () => {
         to: "0x" + "44".repeat(20),
         valueWeiHex,
         chainIdHex: "0x10F2C",
+        ...(gasLimitHex != null ? { gasLimitHex } : {}),
       },
       approvals: [{ signerId: "s-1", signature: "0x01", signedAt: NOW }],
       rejections: [],
@@ -110,6 +118,32 @@ describe("MultisigProposalDetail value display", () => {
       txHash: null,
     };
   }
+
+  it("renders the gas-limit row (decimal + hex) when present (P3-009)", () => {
+    const html = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX, "0x5208"),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(html).toContain(">Gas limit</div>");
+    expect(html).toContain("21,000");
+    expect(html).toContain("0x5208");
+  });
+
+  it("omits the gas-limit row when absent (P3-009)", () => {
+    const html = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(html).not.toContain(">Gas limit</div>");
+  });
 
   it("renders native LYTH instead of the raw compatibility value", () => {
     const html = renderToStaticMarkup(
@@ -126,6 +160,72 @@ describe("MultisigProposalDetail value display", () => {
     expect(html).not.toContain("Value (wei)");
     expect(html).not.toContain("valueWeiHex");
     expect(html).not.toContain(">1000000000000000000</div>");
+  });
+
+  // ── P3-004 — execution fee ceiling (display-only) ──────────────────────────
+
+  it("renders the max-fee-rate cap row formatted from the ceiling constant", () => {
+    const html = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(html).toContain(">Max fee rate</div>");
+    expect(html).toContain("≤ 0.001 LYTH / unit");
+    expect(html).toContain("refuses a higher fee");
+    // The displayed value tracks the constant (= 0.001 LYTH/unit @ 18 dec).
+    expect(lythoshiToLythDecimal(MAX_EXECUTION_UNIT_PRICE_LYTHOSHI)).toBe("0.001");
+  });
+
+  it("shows the cap row regardless of gas-limit presence (Design A)", () => {
+    const withLimit = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX, "0x5208"),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    const noLimit = renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal: makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX),
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(withLimit).toContain(">Max fee rate</div>");
+    expect(noLimit).toContain(">Max fee rate</div>");
+  });
+
+  it("does NOT change the signed proposal digest (display-only)", () => {
+    const proposal = makeProposal(ONE_LYTH_IN_LYTHOSHI_HEX, "0x5208");
+    // The fee ceiling is a rendered constant, never part of the proposal — the
+    // signed digest must be identical before/after the component renders it.
+    const before = Array.from(hashTxProposal(proposal));
+    renderToStaticMarkup(
+      createElement(MultisigProposalDetail, {
+        proposal,
+        signers,
+        threshold: 2,
+        now: NOW,
+      }),
+    );
+    expect(Array.from(hashTxProposal(proposal))).toEqual(before);
+  });
+});
+
+describe("formatGasLimit (P3-009)", () => {
+  it("renders the decimal + raw hex for a valid limit", () => {
+    expect(formatGasLimit("0x5208")).toBe("21,000 (0x5208)");
+    expect(formatGasLimit("0x0")).toBe("0 (0x0)");
+  });
+
+  it("falls back to the raw hex when unparseable", () => {
+    expect(formatGasLimit("not-hex")).toBe("not-hex");
   });
 });
 

@@ -37,12 +37,28 @@ export interface ActivityRowProps {
    *  bodies — resolves the numeric cluster id to its real name, else
    *  `Cluster #<id>` (no-mock). Other kinds ignore it. */
   clusterNameById?: ReadonlyMap<number, string | null> | undefined;
+  /** Dismiss a TERMINAL (dropped/expired) pending row — threaded to
+   *  PendingTxRowBody, which shows the affordance only for those states. */
+  onDismissPending?: (txHash: string) => void;
 }
 
-export function ActivityRow({ row, counterpartyLabel, clusterNameById }: ActivityRowProps) {
+export function ActivityRow({
+  row,
+  counterpartyLabel,
+  clusterNameById,
+  onDismissPending,
+}: ActivityRowProps) {
   switch (row.kind) {
     case "pending_tx":
-      return <PendingTxRowBody row={row} counterpartyLabel={counterpartyLabel} />;
+      return (
+        <PendingTxRowBody
+          row={row}
+          counterpartyLabel={counterpartyLabel}
+          {...(onDismissPending
+            ? { onDismiss: () => onDismissPending(row.txHash) }
+            : {})}
+        />
+      );
     case "tx_send":
       return <TxSendRowBody row={row} counterpartyLabel={counterpartyLabel} />;
     case "tx_receive":
@@ -94,6 +110,22 @@ export function renderCounterparty(
   // Fallback: bech32m short form. shortBech32m handles non-0x input
   // defensively (returns the input unchanged); the indexer always
   // surfaces 0x form so this is the common path.
+  try {
+    return shortBech32m(addr, 6);
+  } catch {
+    return addr;
+  }
+}
+
+// Plain-TEXT counterparty (no CategoryBadge JSX) for a row's `title` hover
+// attribute — the displayName when resolved, else the short bech32m. Mirrors
+// renderCounterparty's fallback so the tooltip text matches the rendered line.
+export function counterpartyText(
+  addr: string | null,
+  label: NameLabel | undefined,
+): string {
+  if (!addr) return "unknown";
+  if (label && label.displayName) return label.displayName;
   try {
     return shortBech32m(addr, 6);
   } catch {

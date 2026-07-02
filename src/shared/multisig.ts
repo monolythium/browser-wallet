@@ -234,6 +234,10 @@ export interface GovernanceProposal {
   createdAt: number;
   expiresAt: number;
   vaultAddress: string;
+  /** Chain this governance decision is bound to (0x-hex). Mixed into the signed
+   *  digest (P1-006) so a proposal signed on one chain can't be replayed on
+   *  another — parity with the tx path's action.chainIdHex. */
+  chainIdHex: string;
   action: GovernanceAction;
   approvals: ProposalSignature[];
   rejections: ProposalSignature[];
@@ -393,6 +397,9 @@ export function hashGovernanceProposal(p: GovernanceProposal): Uint8Array {
     domain: GOV_HASH_DOMAIN,
     proposalId: p.id,
     vaultAddress: p.vaultAddress.toLowerCase(),
+    // P1-006 — bind the chain so a governance proposal signed on one chain can't
+    // be replayed on another (parity with the tx hash's action.chainIdHex).
+    chainIdHex: p.chainIdHex.toLowerCase(),
     action: normalizeGovernanceAction(p.action),
   });
   return keccak_256(new TextEncoder().encode(body));
@@ -539,10 +546,22 @@ export function serializeProposalForShare(
   return bytesToBase64(new TextEncoder().encode(json));
 }
 
+/** P5-006 — hard size cap on a shared-proposal blob, checked on the trimmed
+ *  input BEFORE base64-decode + JSON.parse so an oversized blob can't DoS
+ *  either step. Sized to comfortably fit the worst-case REAL proposal: up to
+ *  MAX_SIGNERS (16) approvals + 16 rejections = 32 ProposalSignature records,
+ *  each carrying a 0x-hex ML-DSA-65 signature (3309 bytes → 6620 hex chars)
+ *  plus a little metadata (~6.7 KB each ≈ 215 KB), plus contract calldata and
+ *  envelope fields, base64-inflated (×4/3 ≈ 290 KB). 512 KB leaves headroom
+ *  above that while rejecting a multi-MB DoS blob. NOTE: a "few KB" cap would
+ *  reject legitimate multi-signer proposals — a single ML-DSA-65 signature
+ *  alone is ~6.6 KB of hex. */
+export const MAX_SHARED_PROPOSAL_BYTES = 512 * 1024;
+
 /** Decode a shared-proposal blob back to an envelope. Throws on
- *  malformed base64, malformed JSON, missing version tag, or
- *  structural mismatch with the kind discriminator. Does NOT verify
- *  signatures — caller must run {@link verifyProposalApprovals} or
+ *  an over-cap blob (P5-006), malformed base64, malformed JSON, missing
+ *  version tag, or structural mismatch with the kind discriminator. Does NOT
+ *  verify signatures — caller must run {@link verifyProposalApprovals} or
  *  the governance equivalent before trusting the contents. */
 export function deserializeSharedProposal(
   blob: string,
@@ -550,6 +569,13 @@ export function deserializeSharedProposal(
   const trimmed = blob.trim();
   if (trimmed.length === 0) {
     throw new Error("empty shared-proposal blob");
+  }
+  // P5-006: reject an oversized blob BEFORE base64ToBytes + JSON.parse so
+  // neither expensive step runs on attacker-sized input.
+  if (trimmed.length > MAX_SHARED_PROPOSAL_BYTES) {
+    throw new Error(
+      `shared-proposal blob exceeds the ${MAX_SHARED_PROPOSAL_BYTES}-byte cap`,
+    );
   }
   let bytes: Uint8Array;
   try {

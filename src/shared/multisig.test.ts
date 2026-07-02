@@ -15,6 +15,7 @@ import {
   assertSignerSetUnique,
   defaultThreshold,
   deserializeSharedProposal,
+  MAX_SHARED_PROPOSAL_BYTES,
   hashGovernanceProposal,
   hashTxProposal,
   isExecutable,
@@ -92,6 +93,7 @@ function makeGovProposal(
     createdAt: now,
     expiresAt: now + DEFAULT_TX_PROPOSAL_TTL_MS,
     vaultAddress: fakeAddress(0xcd),
+    chainIdHex: "0x10f2c",
     approvals: [],
     rejections: [],
     status: "pending",
@@ -305,6 +307,22 @@ describe("hashGovernanceProposal", () => {
     });
     expect(hashGovernanceProposal(g1)).toEqual(hashGovernanceProposal(g1));
     expect(hashGovernanceProposal(g1)).not.toEqual(hashGovernanceProposal(g2));
+  });
+
+  it("binds chainId — identical proposals on different chains hash differently (P1-006)", () => {
+    const mk = (chainIdHex: string) =>
+      makeGovProposal({
+        id: "g-chain",
+        action: { kind: "change-threshold", threshold: 2 },
+        chainIdHex,
+      });
+    expect(hashGovernanceProposal(mk("0x10f2c"))).not.toEqual(
+      hashGovernanceProposal(mk("0x1")),
+    );
+    // The hash lowercases chainIdHex, so casing alone doesn't change it.
+    expect(hashGovernanceProposal(mk("0x10f2c"))).toEqual(
+      hashGovernanceProposal(mk("0x10F2C")),
+    );
   });
 
   it("encodes domain tags as documented", () => {
@@ -683,6 +701,29 @@ describe("serializeProposalForShare + deserializeSharedProposal", () => {
     );
     expect(() => deserializeSharedProposal(badEnv)).toThrow(/kind/);
   });
+
+  describe("size cap (P5-006)", () => {
+    it("pins the cap at 512 KB", () => {
+      expect(MAX_SHARED_PROPOSAL_BYTES).toBe(512 * 1024);
+    });
+
+    it("early-throws on an over-cap blob BEFORE base64/JSON parse", () => {
+      // All-'A' is valid base64, so without the size guard this would decode
+      // and only fail at JSON.parse (/JSON/). Throwing the cap message proves
+      // the early-throw fired before base64ToBytes + JSON.parse.
+      const oversized = "A".repeat(MAX_SHARED_PROPOSAL_BYTES + 1);
+      expect(() => deserializeSharedProposal(oversized)).toThrow(/cap/);
+      expect(() => deserializeSharedProposal(oversized)).not.toThrow(/JSON/);
+    });
+
+    it("accepts a real proposal blob at/under the cap (multi-signature)", () => {
+      const p = makeProposal({ id: "p-capped" });
+      const blob = serializeProposalForShare(p, "tx");
+      expect(blob.length).toBeLessThanOrEqual(MAX_SHARED_PROPOSAL_BYTES);
+      const env = deserializeSharedProposal(blob);
+      expect(env.proposal.id).toBe(p.id);
+    });
+  });
 });
 
 describe("verifyProposalApprovals + verifyGovernanceApprovals (signature filter)", () => {
@@ -793,6 +834,46 @@ describe("verifyProposalApprovals + verifyGovernanceApprovals (signature filter)
     });
     const r = verifyGovernanceApprovals(g, signers);
     expect(r.validApprovals.size).toBe(0);
+  });
+
+  it("a real-signed governance proposal verifies, and can't be replayed to another chain (P1-006)", () => {
+    const kpA = ml_dsa65.keygen(new Uint8Array(32).fill(0x33));
+    const kpB = ml_dsa65.keygen(new Uint8Array(32).fill(0x44));
+    const signers = [
+      makeSigner({ id: "s-a", address: fakeAddress(0x01), pubkey: bytesToHex0x(kpA.publicKey) }),
+      makeSigner({ id: "s-b", address: fakeAddress(0x02), pubkey: bytesToHex0x(kpB.publicKey) }),
+    ];
+    const threshold = 2;
+
+    const g = makeGovProposal({
+      id: "g-real",
+      action: { kind: "change-threshold", threshold: 2 },
+      chainIdHex: "0x10f2c",
+    });
+    const digest = hashGovernanceProposal(g);
+    g.approvals = [
+      {
+        signerId: "s-a",
+        signature: bytesToHex0x(ml_dsa65.sign(digest, kpA.secretKey, { extraEntropy: false })),
+        signedAt: 1,
+      },
+      {
+        signerId: "s-b",
+        signature: bytesToHex0x(ml_dsa65.sign(digest, kpB.secretKey, { extraEntropy: false })),
+        signedAt: 2,
+      },
+    ];
+
+    // The co-sign flow verifies on the chainId-bound digest → executable.
+    const ok = verifyGovernanceApprovals(g, signers);
+    expect(ok.validApprovals.size).toBe(2);
+    expect(ok.validApprovals.size).toBeGreaterThanOrEqual(threshold);
+
+    // Replay to another chain: same proposal + signatures, different chainIdHex
+    // → the re-hashed digest changes → the real signatures no longer verify.
+    const replayed: GovernanceProposal = { ...g, chainIdHex: "0x1" };
+    const after = verifyGovernanceApprovals(replayed, signers);
+    expect(after.validApprovals.size).toBe(0);
   });
 });
 

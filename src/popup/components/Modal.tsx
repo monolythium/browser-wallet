@@ -25,6 +25,10 @@ export interface ModalProps {
   title?: ReactNode;
   /** Title color override (e.g. gold for warning modals). */
   titleAccent?: string;
+  /** Optional secondary line rendered BENEATH the title (muted, smaller) — and
+   *  the title is enlarged when present. Opt-in: when omitted the header is
+   *  byte-identical to before (no extra node, title stays 12px). */
+  description?: ReactNode;
   /** When true, render a top-right "×" close button in the header. Opt-in so
    *  existing modals are visually unchanged. */
   showClose?: boolean;
@@ -36,7 +40,7 @@ export interface ModalProps {
 // per Modal instance to keep ids unique across multiple open modals.
 let modalIdCounter = 0;
 
-export function Modal({ open, onClose, title, titleAccent, showClose, children }: ModalProps) {
+export function Modal({ open, onClose, title, titleAccent, description, showClose, children }: ModalProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -98,7 +102,7 @@ export function Modal({ open, onClose, title, titleAccent, showClose, children }
             id={titleId}
             style={{
               fontWeight: 600,
-              fontSize: 12,
+              fontSize: description != null ? 13.5 : 12,
               display: "flex",
               alignItems: "center",
               gap: 6,
@@ -122,7 +126,7 @@ export function Modal({ open, onClose, title, titleAccent, showClose, children }
                 id={titleId}
                 style={{
                   fontWeight: 600,
-                  fontSize: 12,
+                  fontSize: description != null ? 13.5 : 12,
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 6,
@@ -158,6 +162,20 @@ export function Modal({ open, onClose, title, titleAccent, showClose, children }
             >
               ×
             </button>
+          </div>
+        )}
+        {description != null && (
+          // Secondary line beneath the (enlarged) title. The −6 margin tucks it
+          // under the title against the card's 10px column gap.
+          <div
+            style={{
+              marginTop: -6,
+              fontSize: 11,
+              lineHeight: 1.4,
+              color: "var(--fg-100)",
+            }}
+          >
+            {description}
           </div>
         )}
         {children}

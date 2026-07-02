@@ -27,12 +27,19 @@ import {
   applyCapturedClusterNames,
   mergeActivityNewestFirst,
   evictExpiredPending,
+  classifyStalePending,
+  transitionPending,
+  PENDING_SLOW_MS,
+  PENDING_DROP_GRACE_MS,
+  PENDING_ABSOLUTE_CAP_MS,
+  PENDING_TERMINAL_RETAIN_MS,
   reconcilePending,
   NATIVE_LYTH_TOKEN_ID,
   isNativeLythTokenId,
   type PendingTxRow,
   type ConfirmedRow,
   type DelegateRow,
+  type UndelegateRow,
   type RedelegateRow,
   type TxSendRow,
   type ClaimRow,
@@ -186,10 +193,23 @@ describe("validateActivityRow", () => {
       logIndex: 0,
       cluster: 7,
       weightBps: 1234,
+      principalLythoshi: "42",
     };
     const undel = { ...del, kind: "undelegate" };
     expect(validateActivityRow(del)).toEqual(del);
     expect(validateActivityRow(undel)).toEqual(undel);
+  });
+
+  it("defaults principalLythoshi to '' for an old cached row that predates the field", () => {
+    const oldDel = {
+      kind: "delegate",
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 1234,
+    };
+    expect(validateActivityRow(oldDel)).toEqual({ ...oldDel, principalLythoshi: "" });
   });
 
   it("round-trips an optional clusterName on delegate / undelegate / redelegate rows", () => {
@@ -200,6 +220,7 @@ describe("validateActivityRow", () => {
       logIndex: 0,
       cluster: 0,
       weightBps: 1234,
+      principalLythoshi: "7",
       clusterName: "halcyon.cluster.mono",
     };
     expect(validateActivityRow(del)).toEqual(del);
@@ -211,6 +232,7 @@ describe("validateActivityRow", () => {
       cluster: 3,
       toCluster: 9,
       weightBps: 500,
+      principalLythoshi: "3",
       clusterName: "salt.cluster.mono",
     };
     expect(validateActivityRow(redel)).toEqual(redel);
@@ -243,6 +265,7 @@ describe("validateActivityRow", () => {
       logIndex: 0,
       cluster: 7,
       weightBps: null,
+      principalLythoshi: "",
     };
     expect(validateActivityRow(del)).toEqual(del);
   });
@@ -256,6 +279,7 @@ describe("validateActivityRow", () => {
       cluster: 3,
       toCluster: null,
       weightBps: 500,
+      principalLythoshi: "",
     };
     expect(validateActivityRow(r)).toEqual(r);
   });
@@ -475,6 +499,7 @@ describe("applyCapturedClusterNames", () => {
     logIndex: 0,
     cluster: 0,
     weightBps: 5000,
+    principalLythoshi: "",
     ...over,
   });
   const pendingNamed = (over: Partial<PendingTxRow> = {}): PendingTxRow => ({
@@ -633,8 +658,8 @@ describe("mapAddressActivityToRows", () => {
     expect(rows[0]?.kind).toBe("token_transfer");
   });
 
-  it("suppresses delegation entries whose anchor is in delegationKeys", () => {
-    const keys = new Set(["100.0.0"]);
+  it("suppresses delegation entries whose anchor+kind is in delegationKeys", () => {
+    const keys = new Set(["100.0.0.delegate"]);
     const rows = mapAddressActivityToRows(
       [
         makeActivity({
@@ -647,6 +672,41 @@ describe("mapAddressActivityToRows", () => {
       keys,
     );
     expect(rows).toHaveLength(0);
+  });
+
+  it("does NOT suppress a cross-kind entry at the same anchor (delegate key, undelegate entry)", () => {
+    // Same anchor (indexer zeroes txIndex/logIndex), different kind: the
+    // undelegate must survive — the old anchor-only suppression wrongly dropped it.
+    const keys = new Set(["100.0.0.delegate"]);
+    const rows = mapAddressActivityToRows(
+      [
+        makeActivity({
+          kind: "delegation",
+          subKind: "undelegated",
+          cluster: 7,
+          weightBps: 5000,
+        }),
+      ],
+      keys,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("undelegate");
+  });
+
+  it("carries the activity `amount` onto the delegation row as principalLythoshi", () => {
+    const rows = mapAddressActivityToRows(
+      [
+        makeActivity({
+          kind: "delegation",
+          subKind: "delegated",
+          cluster: 7,
+          weightBps: 500,
+          amount: "27",
+        }),
+      ],
+      new Set(),
+    );
+    expect((rows[0] as DelegateRow).principalLythoshi).toBe("27");
   });
 
   it("produces a fallback DelegateRow when delegation anchor is NOT in keys", () => {
@@ -783,7 +843,7 @@ describe("mapAddressActivityToRows", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("delegationKeySet", () => {
-  it("builds keys with dot-separated anchor parts", () => {
+  it("builds keys with dot-separated anchor parts + kind", () => {
     const rows: DelegateRow[] = [
       {
         kind: "delegate",
@@ -792,10 +852,11 @@ describe("delegationKeySet", () => {
         logIndex: 5,
         cluster: 1,
         weightBps: 1000,
+        principalLythoshi: "42",
       },
     ];
     const keys = delegationKeySet(rows);
-    expect(keys.has("100.2.5")).toBe(true);
+    expect(keys.has("100.2.5.delegate")).toBe(true);
     expect(keys.size).toBe(1);
   });
 
@@ -807,9 +868,23 @@ describe("delegationKeySet", () => {
       logIndex: 0,
       cluster: 1,
       weightBps: 1000,
+      principalLythoshi: "1",
     };
     const keys = delegationKeySet([row, row]);
     expect(keys.size).toBe(1);
+  });
+
+  it("distinguishes a delegate from an undelegate at the SAME anchor (kind in key)", () => {
+    // The indexer hardcodes txIndex/logIndex to 0; a cross-kind same-block pair
+    // must NOT collapse to one suppression key (else one is wrongly suppressed).
+    const anchor = { blockHeight: 100, txIndex: 0, logIndex: 0, cluster: 1 };
+    const keys = delegationKeySet([
+      { kind: "delegate", ...anchor, weightBps: 500, principalLythoshi: "5" },
+      { kind: "undelegate", ...anchor, weightBps: 5000, principalLythoshi: "5" },
+    ]);
+    expect(keys.has("100.0.0.delegate")).toBe(true);
+    expect(keys.has("100.0.0.undelegate")).toBe(true);
+    expect(keys.size).toBe(2);
   });
 });
 
@@ -850,6 +925,341 @@ describe("evictExpiredPending", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// classifyStalePending — drop-detection lifecycle (C2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("classifyStalePending", () => {
+  const NOW = 1_000_000_000;
+  const mk = (overrides: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xtx",
+    to: "0xabc",
+    amountDecimal: "1",
+    broadcastedAtMs: NOW - 1000, // young by default
+    broadcastBlockHeight: 100,
+    via: "op",
+    nonce: 5,
+    ...overrides,
+  });
+
+  it("nonce passed + no receipt + past grace → dropped", () => {
+    const row = mk({ noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1 });
+    expect(classifyStalePending(row, 6, NOW)).toEqual({
+      status: "dropped",
+      noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1,
+    });
+  });
+
+  it("nonce passed, FIRST observation (within grace) → slow + stamps the clock", () => {
+    const row = mk(); // no noncePassedAtMs yet
+    expect(classifyStalePending(row, 6, NOW)).toEqual({
+      status: "slow",
+      noncePassedAtMs: NOW,
+    });
+  });
+
+  it("committedNonce === null → NEVER dropped (no fresh signal)", () => {
+    const row = mk({ noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1 });
+    const r = classifyStalePending(row, null, NOW);
+    expect(r.status).not.toBe("dropped");
+  });
+
+  it("committedNonce === null PRESERVES a prior dropped verdict (no un-drop on a failed read)", () => {
+    const row = mk({ lifecycle: "dropped", noncePassedAtMs: NOW - 999_999 });
+    expect(classifyStalePending(row, null, NOW)).toEqual({
+      status: "dropped",
+      noncePassedAtMs: NOW - 999_999,
+    });
+  });
+
+  it("a REAL read ≤ row.nonce un-drops (re-org regression) → time-only", () => {
+    const row = mk({ nonce: 5, lifecycle: "dropped", broadcastedAtMs: NOW - 1000 });
+    // committed regressed back to 5 (== row.nonce) → not passed → re-evaluate.
+    expect(classifyStalePending(row, 5, NOW).status).toBe("pending");
+  });
+
+  it("nonce ≤ committed-not-greater → time-only by age (pending / slow / expired)", () => {
+    expect(classifyStalePending(mk({ broadcastedAtMs: NOW - 1000 }), 5, NOW).status).toBe(
+      "pending",
+    );
+    expect(
+      classifyStalePending(mk({ broadcastedAtMs: NOW - PENDING_SLOW_MS }), 5, NOW).status,
+    ).toBe("slow");
+    expect(
+      classifyStalePending(mk({ broadcastedAtMs: NOW - PENDING_ABSOLUTE_CAP_MS }), 5, NOW)
+        .status,
+    ).toBe("expired");
+  });
+
+  it("nonce gap (row.nonce > committed) → pending, never dropped", () => {
+    const row = mk({ nonce: 7, broadcastedAtMs: NOW - 1000 });
+    expect(classifyStalePending(row, 5, NOW).status).toBe("pending");
+  });
+
+  it("claim rows are exempt (always pending)", () => {
+    const row = mk({ source: "local-claim", nonce: 5 });
+    expect(classifyStalePending(row, 9999, NOW).status).toBe("pending");
+  });
+
+  it("nonce-less rows fall to time-only (never dropped)", () => {
+    const row = mk({ broadcastedAtMs: NOW - PENDING_SLOW_MS });
+    delete (row as { nonce?: number }).nonce; // legacy / non-send-tx broadcaster
+    expect(classifyStalePending(row, 9999, NOW).status).toBe("slow");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// transitionPending — never silently vanish (C2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("transitionPending", () => {
+  const NOW = 1_000_000_000;
+  const mk = (overrides: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xtx",
+    to: "0xabc",
+    amountDecimal: "1",
+    broadcastedAtMs: NOW - 1000,
+    broadcastBlockHeight: 100,
+    via: "op",
+    nonce: 5,
+    ...overrides,
+  });
+
+  it("never removes a pending/slow row (the core guarantee)", () => {
+    const young = mk({ txHash: "0xa", broadcastedAtMs: NOW - 1000 });
+    const slow = mk({ txHash: "0xb", broadcastedAtMs: NOW - PENDING_SLOW_MS });
+    const out = transitionPending([young, slow], 5, NOW);
+    expect(out).toHaveLength(2);
+    expect(out.map((r) => r.lifecycle)).toEqual(["pending", "slow"]);
+  });
+
+  it("tags a dropped row but keeps it visible within the retain window", () => {
+    const dropped = mk({
+      broadcastedAtMs: NOW - 10 * 60 * 1000, // 10m — well under retain
+      noncePassedAtMs: NOW - PENDING_DROP_GRACE_MS - 1,
+    });
+    const out = transitionPending([dropped], 6, NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.lifecycle).toBe("dropped");
+  });
+
+  it("removes a TERMINAL row only past PENDING_TERMINAL_RETAIN_MS", () => {
+    const old = mk({
+      broadcastedAtMs: NOW - PENDING_TERMINAL_RETAIN_MS, // at the bound
+      noncePassedAtMs: NOW - PENDING_TERMINAL_RETAIN_MS,
+    });
+    expect(transitionPending([old], 6, NOW)).toHaveLength(0);
+  });
+
+  it("passes claim rows through untouched (durable)", () => {
+    const claim = mk({ source: "local-claim", broadcastedAtMs: NOW - 2 * 60 * 60 * 1000 });
+    const out = transitionPending([claim], 9999, NOW);
+    expect(out).toEqual([claim]); // same object ref, no lifecycle added
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// validatePendingActivityCache — nonce + noncePassedAtMs survive (C1 / added-req-1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("pending-row lifecycle field survival", () => {
+  it("nonce + noncePassedAtMs + lifecycle survive a cache round-trip", () => {
+    const row: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xtx",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: 123,
+      broadcastBlockHeight: 100,
+      via: "op",
+      nonce: 5,
+      noncePassedAtMs: 999,
+      lifecycle: "dropped",
+    };
+    const out = validatePendingActivityCache({ pending: [JSON.parse(JSON.stringify(row))] });
+    expect(out?.pending[0]?.nonce).toBe(5);
+    expect(out?.pending[0]?.noncePassedAtMs).toBe(999);
+    expect(out?.pending[0]?.lifecycle).toBe("dropped");
+  });
+
+  it("a row whose nonce passed > grace ago across TWO persisted polls → dropped", () => {
+    const T0 = 5_000_000;
+    const base: PendingTxRow = {
+      kind: "pending_tx",
+      txHash: "0xtx",
+      to: "0xabc",
+      amountDecimal: "1",
+      broadcastedAtMs: T0 - 1000,
+      broadcastBlockHeight: 100,
+      via: "op",
+      nonce: 5,
+    };
+    // Poll 1 at T0: nonce just passed → slow, stamps noncePassedAtMs = T0.
+    const poll1 = transitionPending([base], 6, T0);
+    expect(poll1[0]!.lifecycle).toBe("slow");
+    expect(poll1[0]!.noncePassedAtMs).toBe(T0);
+    // Persist + round-trip (the stamp MUST survive, else the grace re-stamps).
+    const persisted =
+      validatePendingActivityCache({ pending: JSON.parse(JSON.stringify(poll1)) })?.pending ??
+      [];
+    expect(persisted[0]?.noncePassedAtMs).toBe(T0);
+    // Poll 2 past the grace → dropped (only works because the stamp survived).
+    const poll2 = transitionPending(persisted, 6, T0 + PENDING_DROP_GRACE_MS + 1);
+    expect(poll2[0]!.lifecycle).toBe("dropped");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// pendingMatchesConfirmed — delegation heuristic (C3), exercised via reconcilePending
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("reconcilePending — delegation heuristic (C3)", () => {
+  const mkPending = (overrides: Partial<PendingTxRow> = {}): PendingTxRow => ({
+    kind: "pending_tx",
+    txHash: "0xtx",
+    to: "0x" + "11".repeat(20), // the delegation module, never a tx_send counterparty
+    amountDecimal: "0",
+    broadcastedAtMs: 1,
+    broadcastBlockHeight: 1000,
+    via: "op",
+    opKind: "undelegate",
+    clusterId: 7,
+    delegationWeightBps: 2500,
+    ...overrides,
+  });
+  const mkUndelegate = (overrides: Partial<UndelegateRow> = {}): UndelegateRow => ({
+    kind: "undelegate",
+    blockHeight: 1005,
+    txIndex: 0,
+    logIndex: 0,
+    cluster: 7,
+    weightBps: 2500,
+    principalLythoshi: "",
+    ...overrides,
+  });
+
+  it("retires a pending undelegate against a confirmed undelegate (cluster + window)", () => {
+    expect(reconcilePending([mkPending()], [mkUndelegate()])).toEqual([]);
+  });
+
+  it("does NOT retire on a cluster mismatch", () => {
+    expect(
+      reconcilePending([mkPending({ clusterId: 7 })], [mkUndelegate({ cluster: 9 })]),
+    ).toHaveLength(1);
+  });
+
+  it("does NOT retire on a weight MISMATCH (both known, different)", () => {
+    expect(
+      reconcilePending(
+        [mkPending({ delegationWeightBps: 2500 })],
+        [mkUndelegate({ weightBps: 3000 })],
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("DOES retire despite a null confirmed weight (conservative skip, not reject)", () => {
+    expect(
+      reconcilePending([mkPending()], [mkUndelegate({ weightBps: null })]),
+    ).toEqual([]);
+  });
+
+  it("does NOT retire outside the block window", () => {
+    expect(
+      reconcilePending(
+        [mkPending({ broadcastBlockHeight: 1000 })],
+        [mkUndelegate({ blockHeight: 1000 + PENDING_MATCH_BLOCK_WINDOW + 1 })],
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does NOT retire against a DIFFERENT delegation kind", () => {
+    const delegate: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 1005,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 2500,
+      principalLythoshi: "",
+    };
+    expect(reconcilePending([mkPending({ opKind: "undelegate" })], [delegate])).toHaveLength(
+      1,
+    );
+  });
+
+  it("redelegate matches on source + destination when both known", () => {
+    const pending = mkPending({
+      opKind: "redelegate",
+      clusterId: 7,
+      toClusterId: 9,
+    });
+    const redelegate: RedelegateRow = {
+      kind: "redelegate",
+      blockHeight: 1005,
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      toCluster: 9,
+      weightBps: 2500,
+      principalLythoshi: "",
+    };
+    expect(reconcilePending([pending], [redelegate])).toEqual([]);
+    // destination mismatch → not retired
+    expect(
+      reconcilePending([pending], [{ ...redelegate, toCluster: 3 }]),
+    ).toHaveLength(1);
+  });
+
+  it("does NOT retire a STALE prior confirmed delegation at an EARLIER block (one-sided window)", () => {
+    // A re-delegate to the SAME cluster + SAME weight, with a prior confirmed
+    // delegate 300 blocks BEFORE the broadcast. The OLD symmetric abs-window
+    // (|700-1000| = 300 ≤ 300) wrongly matched → instant false-confirm. A real
+    // confirmation can't precede its broadcast, so the new one-sided window rejects.
+    const pending = mkPending({
+      opKind: "delegate",
+      clusterId: 7,
+      delegationWeightBps: 2500,
+      broadcastBlockHeight: 1000,
+    });
+    const stalePriorDelegate: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 700, // BEFORE the broadcast, within the old ±300 abs-window
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 2500,
+      principalLythoshi: "",
+    };
+    expect(reconcilePending([pending], [stalePriorDelegate])).toHaveLength(1);
+  });
+
+  it("DOES retire a confirmed delegation AT or AFTER the broadcast within the window", () => {
+    const pending = mkPending({
+      opKind: "delegate",
+      clusterId: 7,
+      delegationWeightBps: 2500,
+      broadcastBlockHeight: 1000,
+    });
+    const atBroadcast: DelegateRow = {
+      kind: "delegate",
+      blockHeight: 1000, // exactly at the broadcast anchor
+      txIndex: 0,
+      logIndex: 0,
+      cluster: 7,
+      weightBps: 2500,
+      principalLythoshi: "",
+    };
+    const atWindowEdge: DelegateRow = {
+      ...atBroadcast,
+      blockHeight: 1000 + PENDING_MATCH_BLOCK_WINDOW, // last in-window block
+    };
+    expect(reconcilePending([pending], [atBroadcast])).toEqual([]);
+    expect(reconcilePending([pending], [atWindowEdge])).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // reconcilePending — heuristic match against confirmed stream
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -879,6 +1289,15 @@ describe("reconcilePending", () => {
     const pending = makePending();
     const confirmed = makeTxSend({ blockHeight: 1005 });
     expect(reconcilePending([pending], [confirmed])).toEqual([]);
+  });
+
+  it("does NOT match a STALE prior tx_send at an EARLIER block (one-sided window)", () => {
+    // Same recipient + amount, confirmed 300 blocks BEFORE the broadcast — the
+    // OLD symmetric abs-window (|700-1000| = 300 ≤ 300) wrongly matched. This is
+    // the pre-existing tx_send hole, fixed alongside the C3 delegation one.
+    const pending = makePending({ broadcastBlockHeight: 1000 });
+    const stalePriorSend = makeTxSend({ blockHeight: 700 });
+    expect(reconcilePending([pending], [stalePriorSend])).toEqual([pending]);
   });
 
   it("matches an indexer bech32m counterparty against a 0x pending `to` (the linger bug)", () => {
@@ -916,6 +1335,7 @@ describe("reconcilePending", () => {
       logIndex: 0,
       cluster: 1,
       weightBps: 1000,
+      principalLythoshi: "",
     };
     expect(reconcilePending([pending], [delegate])).toEqual([]);
   });
@@ -1211,6 +1631,157 @@ describe("mergeIndexerSnapshot", () => {
     expect(r.confirmed).toHaveLength(1);
     expect(r.confirmed[0]?.kind).toBe("redelegate");
     expect((r.confirmed[0] as RedelegateRow).toCluster).toBeNull();
+  });
+
+  it("SAME-BLOCK FIX: two delegates at the SAME (block,0,0) with distinct principal BOTH survive", () => {
+    // The indexer hardcodes txIndex/logIndex to 0, so two delegates in one block
+    // share the (block,txIndex,logIndex) anchor. The per-event principal splits
+    // them; both must render — the "4 confirmed, 3 shown" bug.
+    const mk = (principalLythoshi: string, walletTotalBps: number) => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster: 0,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps,
+      principalLythoshi,
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk("10", 1000), mk("5", 500)] },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(2);
+  });
+
+  it("SAME-BLOCK graceful: same anchor+kind with NO principal (indexer omitted it) collapses to one — never a duplicate", () => {
+    const mk = () => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster: 0,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps: null,
+      // principalLythoshi omitted → "" → equal keys → collapse (pre-fix behaviour)
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk(), mk()] },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(1);
+  });
+
+  it("SAME-BLOCK cross-kind: a delegate + an undelegate at the SAME anchor BOTH survive", () => {
+    const base = {
+      blockHeight: 8657,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster: 1,
+      toCluster: null,
+      walletTotalBps: null,
+    };
+    const r = mergeIndexerSnapshot(
+      {
+        activity: [],
+        delegation: [
+          { ...base, kind: "delegated", weightBps: 500, principalLythoshi: "5" },
+          { ...base, kind: "undelegated", weightBps: 5000, principalLythoshi: "50" },
+        ],
+      },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.map((c) => c.kind).sort()).toEqual(["delegate", "undelegate"]);
+  });
+
+  it("CROSS-STREAM still collapses: the same event in both streams → one row (suppression on contracted anchor+kind)", () => {
+    const r = mergeIndexerSnapshot(
+      {
+        activity: [
+          {
+            blockHeight: 8705, txIndex: 0, logIndex: 0, kind: "delegation",
+            direction: null, counterparty: null, tokenId: null,
+            amount: "27", cluster: 0, weightBps: 500, subKind: "delegated",
+          },
+        ],
+        delegation: [
+          {
+            blockHeight: 8705, txIndex: 0, logIndex: 0, wallet: "0xself",
+            cluster: 0, toCluster: null, kind: "delegated", weightBps: 500,
+            walletTotalBps: null, principalLythoshi: "27",
+          },
+        ],
+      },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(1);
+  });
+
+  it("SAME-BLOCK distinct clusters: two delegates to DIFFERENT clusters at one anchor BOTH survive even with an equal principal", () => {
+    // The dedup key folds in cluster, so a principal tie can't collapse two
+    // genuinely distinct same-block events.
+    const mk = (cluster: number) => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps: null,
+      principalLythoshi: "100",
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk(0), mk(1)] },
+      1_700_000_000_000,
+    );
+    expect(r.confirmed.filter((c) => c.kind === "delegate")).toHaveLength(2);
+  });
+
+  it("SAME-BLOCK cluster names: each of two same-block delegates gets its OWN captured name (not cross-labelled)", () => {
+    const mk = (cluster: number) => ({
+      blockHeight: 8705,
+      txIndex: 0,
+      logIndex: 0,
+      wallet: "0xself",
+      cluster,
+      toCluster: null,
+      kind: "delegated" as const,
+      weightBps: 500,
+      walletTotalBps: null,
+      principalLythoshi: cluster === 0 ? "10" : "20",
+    });
+    const pend = (clusterId: number, clusterName: string): PendingTxRow => ({
+      kind: "pending_tx",
+      txHash: `0x${clusterId}`,
+      to: "0x100a",
+      amountDecimal: "0",
+      broadcastedAtMs: 1,
+      broadcastBlockHeight: 8705,
+      via: "operator-1",
+      confirmedBlockHeight: 8705,
+      confirmedTxIndex: 0, // indexer hardcodes txIndex=0 for both
+      clusterId,
+      clusterName,
+    });
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [mk(0), mk(1)] },
+      1_700_000_000_000,
+      { pending: [pend(0, "alpha.cluster.mono"), pend(1, "beta.cluster.mono")] },
+    );
+    const byCluster = new Map(
+      r.confirmed
+        .filter((c): c is DelegateRow => c.kind === "delegate")
+        .map((c) => [c.cluster, c.clusterName]),
+    );
+    expect(byCluster.get(0)).toBe("alpha.cluster.mono");
+    expect(byCluster.get(1)).toBe("beta.cluster.mono");
   });
 
   it("respects the rolling window cap at ACTIVITY_ROLLING_WINDOW", () => {
@@ -1552,6 +2123,7 @@ describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
       logIndex: 0,
       cluster: 0,
       weightBps: 5000,
+      principalLythoshi: "",
       ...over,
     };
   }
@@ -1613,6 +2185,122 @@ describe("applyLocalClaims — re-inject + two-phase dedup (C2)", () => {
     };
     const out = applyLocalClaims([ordinary], [claimRow({ txHash: "0xc1" })], []);
     expect(out.map((p) => p.txHash).sort()).toEqual(["0xc1", "0xord"]);
+  });
+
+  // ── Backstop retire (Commit 2): a confirmed claim row with NO receipt anchor
+  //    on the local copy retires it by the broadcast-block window. ──
+
+  it("BACKSTOP: a confirmed claim row retires an UN-anchored local-claim by the broadcast-block window", () => {
+    // No receipt ever landed → the local-claim has no (block,txIndex) anchor.
+    const unanchored = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100
+    // The indexer's confirmed claim row (no txHash) within ±300 blocks retires it.
+    const out = applyLocalClaims([unanchored], [unanchored], [claimConfirmed(150, 0, "6.51")]);
+    expect(out.some((p) => p.source === "local-claim")).toBe(false);
+  });
+
+  it("BACKSTOP: does NOT retire when the confirmed claim is outside the block window", () => {
+    const unanchored = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100
+    // |500 - 100| = 400 > PENDING_MATCH_BLOCK_WINDOW (300).
+    const out = applyLocalClaims([unanchored], [unanchored], [claimConfirmed(500, 0, "6.51")]);
+    expect(out.some((p) => p.txHash === "0xc1")).toBe(true);
+  });
+
+  it("BACKSTOP: does NOT retire on a non-claim confirmed row in the window", () => {
+    const unanchored = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100
+    // A delegate row at block 150 is in-window but the wrong kind — claims only.
+    const out = applyLocalClaims([unanchored], [unanchored], [confirmed({ blockHeight: 150, txIndex: 0 })]);
+    expect(out.some((p) => p.txHash === "0xc1")).toBe(true);
+  });
+
+  it("BACKSTOP 1:1: one confirmed claim row retires only the NEAREST un-anchored claim", () => {
+    const c1 = stickyLocalClaim("0xc1", { claimedAmount: null }); // bbh 100, |101-100|=1
+    const c2: PendingTxRow = {
+      ...stickyLocalClaim("0xc2", { claimedAmount: null }),
+      broadcastBlockHeight: 105, // |101-105|=4
+    };
+    const out = applyLocalClaims([c1, c2], [c1, c2], [claimConfirmed(101, 0, "6.51")]);
+    const survivors = out.filter((p) => p.source === "local-claim").map((p) => p.txHash);
+    expect(survivors).toEqual(["0xc2"]); // nearest (0xc1) retired; 0xc2 survives until its own row
+  });
+
+  it("BACKSTOP: an anchored claim reserves its confirmed row so an un-anchored claim can't steal it", () => {
+    const anchored = stickyLocalClaim("0xA", {
+      claimedAmount: "1",
+      confirmedBlockHeight: 200,
+      confirmedTxIndex: 0,
+    });
+    const unanchored = stickyLocalClaim("0xB", { claimedAmount: null }); // bbh 100, |200-100|=100 ≤ 300
+    const out = applyLocalClaims(
+      [anchored, unanchored],
+      [anchored, unanchored],
+      [claimConfirmed(200, 0, "1")],
+    );
+    // 0xA retires by its exact (200,0) anchor; that confirmed claim row is reserved
+    // by 0xA, so 0xB does NOT steal it → 0xB survives until its own confirmed row.
+    expect(out.filter((p) => p.source === "local-claim").map((p) => p.txHash)).toEqual([
+      "0xB",
+    ]);
+  });
+
+  // ── No-vanish: the backstop only fires on NEWLY-surfaced confirmed rows. ──
+
+  it("BACKSTOP no-vanish: a STALE prior confirmed claim row does NOT retire a new un-anchored claim", () => {
+    // New claim @1050, un-anchored (receipt lag). A prior claim's row @1000 is
+    // still in the rolling window (its own claim already retired + left the store)
+    // — |1000-1050| = 50 ≤ window, but it is NOT newly surfaced → must NOT match.
+    const fresh: PendingTxRow = {
+      ...stickyLocalClaim("0xnew", { claimedAmount: null }),
+      broadcastBlockHeight: 1050,
+    };
+    const staleRow = claimConfirmed(1000, 0, "9.9");
+    const out = applyLocalClaims([fresh], [fresh], [staleRow], /* prior */ [staleRow]);
+    expect(out.some((p) => p.txHash === "0xnew")).toBe(true); // survives until its OWN row
+  });
+
+  it("BACKSTOP: a NEWLY-surfaced confirmed claim row (absent from prior) retires the new claim; the stale one is ignored", () => {
+    const fresh: PendingTxRow = {
+      ...stickyLocalClaim("0xnew", { claimedAmount: null }),
+      broadcastBlockHeight: 1050,
+    };
+    const ownRow = claimConfirmed(1052, 0, "9.9"); // just indexed (not in prior)
+    const staleRow = claimConfirmed(1000, 0, "1.0"); // in the window AND in prior
+    const out = applyLocalClaims(
+      [fresh],
+      [fresh],
+      [ownRow, staleRow],
+      /* prior */ [staleRow],
+    );
+    expect(out.some((p) => p.txHash === "0xnew")).toBe(false); // retired by its own new row
+  });
+
+  it("BACKSTOP: a null-broadcastBlockHeight claim is NOT backstop-retired (no window)", () => {
+    const nullBbh: PendingTxRow = {
+      ...stickyLocalClaim("0xnb", { claimedAmount: null }),
+      broadcastBlockHeight: null,
+    };
+    const out = applyLocalClaims([nullBbh], [nullBbh], [claimConfirmed(150, 0, "1")]);
+    expect(out.some((p) => p.txHash === "0xnb")).toBe(true);
+  });
+
+  it("BACKSTOP multi-pair: two confirmed rows retire two un-anchored claims 1:1 (no cross-steal)", () => {
+    const a: PendingTxRow = { ...stickyLocalClaim("0xa", { claimedAmount: null }), broadcastBlockHeight: 100 };
+    const b: PendingTxRow = { ...stickyLocalClaim("0xb", { claimedAmount: null }), broadcastBlockHeight: 200 };
+    const out = applyLocalClaims(
+      [a, b],
+      [a, b],
+      [claimConfirmed(101, 0, "1"), claimConfirmed(201, 1, "2")],
+    );
+    expect(out.some((p) => p.source === "local-claim")).toBe(false); // both retired to their nearest
+  });
+
+  it("BACKSTOP global-nearest: the NEAREST claim wins the row even if a farther claim sorts first", () => {
+    // c1 has the lower broadcast block (sorts first) but is FAR from the row;
+    // c2 is NEAR. Global-nearest must give the row to c2, not c1.
+    const c1: PendingTxRow = { ...stickyLocalClaim("0xc1", { claimedAmount: null }), broadcastBlockHeight: 100 };
+    const c2: PendingTxRow = { ...stickyLocalClaim("0xc2", { claimedAmount: null }), broadcastBlockHeight: 200 };
+    const out = applyLocalClaims([c1, c2], [c1, c2], [claimConfirmed(201, 0, "1")]);
+    const survivors = out.filter((p) => p.source === "local-claim").map((p) => p.txHash);
+    expect(survivors).toEqual(["0xc1"]); // c2 (delta 1) retired; c1 (delta 101) survives its own row
   });
 });
 

@@ -372,6 +372,8 @@ vi.mock("./networks.js", () => ({
   // C7: liveness fast-path gate. Default false (operator trusted) so the
   // chain-block fast-path proceeds as before in these tests.
   operatorDefinitivelyUntrusted: vi.fn(() => false),
+  // P2-007 — the wipe handlers remove this session key as device-handoff residue.
+  SESSION_KEY_GENESIS_CACHE: "mono.session.genesis-cache.v2",
 }));
 
 // Keystore (v4) — fixed unlocked address, never actually signs. The
@@ -394,9 +396,26 @@ let correctElevatedPassword = "correct-horse-battery-staple";
 // null (no multisig vault) so it is inert for every non-multisig test.
 let multisigMetaForTest: unknown = null;
 
+// M2 harness: governance-execute re-verifies co-signer signatures over the live
+// governance-proposal digest, which needs live ML-DSA sigs. This hoisted holder
+// lets each test control how many approvals re-verify (the mock reads it).
+const govApprovals = vi.hoisted(() => ({ valid: new Set<string>(["s1"]) }));
+
+// Spy for the SLH-DSA backup clear seam — `vi.hoisted` so it is initialized
+// before the (hoisted) keystore mock factory closes over it; lets the
+// clear-gate tests assert delete-or-not.
+const mockClearSlhDsaBackupV4 = vi.hoisted(() => vi.fn(async () => true));
+
+// Spy for the boundary-3b signCount persistence seam (best-effort, post-submit).
+const mockUpdateSignCount = vi.hoisted(() =>
+  vi.fn(async (_v: string, _c: string, _n: number) => {}),
+);
+
 vi.mock("./keystore-mldsa.js", () => ({
   hasVaultV4: vi.fn(async () => true),
+  clearSlhDsaBackupV4: mockClearSlhDsaBackupV4,
   hasContainerV4: vi.fn(async () => true),
+  storedContainerNeedsRestoreV4: vi.fn(async () => false),
   unlockContainerV4: vi.fn(async () => ({
     address: DETERMINISTIC_ADDRESS,
     vaultId: "v1",
@@ -405,6 +424,7 @@ vi.mock("./keystore-mldsa.js", () => ({
   // T1-04(a) passkey-cap gate seams. Default-inert (null active vault).
   getActiveVaultIdV4: vi.fn(() => activePasskeyVaultId),
   readPasskeyStateV4: vi.fn(async () => passkeyStateForTest),
+  updatePasskeyCredentialSignCountV4: mockUpdateSignCount,
   verifyContainerPasswordV4: vi.fn(
     async (pw: string) => pw === correctElevatedPassword,
   ),
@@ -444,6 +464,13 @@ vi.mock("../shared/multisig.js", async (importOriginal) => {
     isExecutable: vi.fn(() => true),
     verifyProposalApprovals: vi.fn(() => ({
       validApprovals: new Set(["s1"]),
+    })),
+    // M2: governance-execute now re-verifies co-signer signatures too; stub it
+    // to a test-controlled set (real ML-DSA verification is covered in
+    // shared/multisig.test.ts). isGovernanceExecutable stays REAL (count-based).
+    verifyGovernanceApprovals: vi.fn(() => ({
+      validApprovals: govApprovals.valid,
+      validRejections: new Set<string>(),
     })),
   };
 });
@@ -517,6 +544,8 @@ import {
   SESSION_KEY_AUTO_LOCK_DEADLINE,
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
   SESSION_KEY_MEK_V4,
+  SESSION_KEY_UNLOCK_FAIL_COUNT,
+  SESSION_KEY_UNLOCK_LOCKOUT_UNTIL,
   STORAGE_KEY_AUTO_LOCK_MINUTES,
 } from "../shared/constants.js";
 import {
@@ -811,7 +840,7 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
 
   it("keystore-wipe-unauth removes every mono.* local key, keeps non-mono", async () => {
     seedFamilies();
-    const r = (await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" })) as { ok: boolean };
+    const r = (await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } })) as { ok: boolean };
     expect(r.ok).toBe(true);
     for (const k of SENSITIVE) expect(storageLocal[k]).toBeUndefined();
     expect(storageLocal["nonmono.keep"]).toBe("survives");
@@ -829,13 +858,83 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     expect(storageLocal["nonmono.keep"]).toBe("survives");
   });
 
+  it("clears non-secret session residue on both wipe paths (P2-007)", async () => {
+    // Device-handoff residue: not secret, but a prior owner's operator hint /
+    // genesis cache / passkey-usage ledger / pending nonce must not survive.
+    const RESIDUE = [
+      "mono.session.operator.v1",
+      "mono.session.genesis-cache.v2",
+      "mono.session.passkey-usage.v1",
+      "mono.nonce.pending",
+    ];
+
+    for (const k of RESIDUE) storageSession[k] = { seeded: true };
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
+    for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
+
+    for (const k of RESIDUE) storageSession[k] = { seeded: true };
+    await dispatchPopup({
+      kind: "popup",
+      op: "keystore-reset",
+      payload: { password: "pw" },
+    });
+    for (const k of RESIDUE) expect(storageSession[k]).toBeUndefined();
+  });
+
+  it("keystore-wipe-unauth requires the SW-verified confirm token (P4-004)", async () => {
+    storageLocal["mono.vaults.v4"] = { seeded: true };
+    // No token → rejected, no wipe.
+    const noTok = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+    })) as { ok: boolean; reason?: string };
+    expect(noTok.ok).toBe(false);
+    expect(noTok.reason).toBe("missing_confirm");
+    expect(storageLocal["mono.vaults.v4"]).toBeDefined();
+
+    // Wrong token (case-sensitive) → rejected, no wipe.
+    const badTok = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "delete" },
+    })) as { ok: boolean; reason?: string };
+    expect(badTok.ok).toBe(false);
+    expect(badTok.reason).toBe("missing_confirm");
+    expect(storageLocal["mono.vaults.v4"]).toBeDefined();
+
+    // Correct token → wipes.
+    const ok = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    })) as { ok: boolean };
+    expect(ok.ok).toBe(true);
+    expect(storageLocal["mono.vaults.v4"]).toBeUndefined();
+  });
+
+  it("the 5 s rate-limit still bites a second token-bearing wipe (P4-004)", async () => {
+    const first = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    })) as { ok: boolean };
+    expect(first.ok).toBe(true);
+    const second = (await dispatchPopup({
+      kind: "popup",
+      op: "keystore-wipe-unauth",
+      payload: { confirmToken: "DELETE" },
+    })) as { ok: boolean; reason?: string };
+    expect(second.ok).toBe(false);
+    expect(second.reason).toBe("rate_limited");
+  });
+
   it("closes the connected-sites carryover: a previously-connected origin no longer leaks the address after wipe + re-unlock", async () => {
     const origin = "https://prior-owner-dapp.example";
     await dispatchRpc("eth_requestAccounts", [], origin); // connects → session.connectedOrigins has origin
     const before = await dispatchRpc("eth_accounts", [], origin);
     expect(before.result).toEqual([DETERMINISTIC_ADDRESS]); // connected → address visible
 
-    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" }); // clears connectedOrigins + locks
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } }); // clears connectedOrigins + locks
     unlocked = true; // simulate the NEW owner importing + unlocking a fresh vault
 
     const after = await dispatchRpc("eth_accounts", [], origin);
@@ -861,13 +960,13 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
     );
     // The rejection propagates to the router catch; dispatchPopup resolves with
     // { error }. What matters is that finally { lockV4() } ran first.
-    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
     expect(unlocked).toBe(false); // lockV4 (mock sets unlocked=false) ran via finally
   });
 
   it("C2: clears the toolbar badge on wipe-unauth (no stale unread count for the next owner)", async () => {
     mockRefreshUnreadBadge.mockClear();
-    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth" });
+    await dispatchPopup({ kind: "popup", op: "keystore-wipe-unauth", payload: { confirmToken: "DELETE" } });
     // The wipe path's only refreshUnreadBadge call is the C2 clear — locked +
     // null scope → after the store is wiped it resolves to an empty badge.
     expect(mockRefreshUnreadBadge).toHaveBeenCalledWith({
@@ -880,6 +979,62 @@ describe("keystore wipe-scope — default-deny (S6 #43 B2)", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // wallet-indexer-snapshot
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe("slh-dsa-backup-clear — password gate", () => {
+  const VAULT = "v1";
+  const GOOD = "correct-horse-battery-staple";
+
+  it("rejects with NO password and does not delete", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("missing password");
+    expect(mockClearSlhDsaBackupV4).not.toHaveBeenCalled();
+  });
+
+  it("rejects a WRONG password, increments the shared fail count, no delete", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT, password: "nope" },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("wrong_password");
+    expect(mockClearSlhDsaBackupV4).not.toHaveBeenCalled();
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBe(1);
+  });
+
+  it("honours an active lockout WITHOUT verifying or deleting", async () => {
+    storageSession[SESSION_KEY_UNLOCK_LOCKOUT_UNTIL] = Date.now() + 60_000;
+    const keystore = await import("./keystore-mldsa.js");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT, password: GOOD },
+    })) as { ok: boolean; reason?: string; secondsRemaining?: number };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("locked_out");
+    expect(r.secondsRemaining).toBeGreaterThan(0);
+    expect(keystore.verifyContainerPasswordV4).not.toHaveBeenCalled();
+    expect(mockClearSlhDsaBackupV4).not.toHaveBeenCalled();
+  });
+
+  it("CORRECT password clears the record and resets the fail count", async () => {
+    storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT] = 2;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "slh-dsa-backup-clear",
+      payload: { vaultId: VAULT, password: GOOD },
+    })) as { ok: boolean; cleared?: boolean };
+    expect(r.ok).toBe(true);
+    expect(r.cleared).toBe(true);
+    expect(mockClearSlhDsaBackupV4).toHaveBeenCalledWith(VAULT);
+    expect(storageSession[SESSION_KEY_UNLOCK_FAIL_COUNT]).toBeUndefined();
+  });
+});
 
 describe("wallet-indexer-snapshot", () => {
   it("validates token balances while preserving optional MRC identity", async () => {
@@ -1516,6 +1671,78 @@ describe("wallet-indexer-snapshot", () => {
       params: [],
     });
   });
+
+  it("caps operator-returned activity + delegation arrays at the requested limit (P5-005)", async () => {
+    // A rogue/buggy operator echoes far more rows than the wallet asked for.
+    const overActivity = Array.from({ length: 45 }, (_, i) => ({
+      blockHeight: 1000 + i,
+      txIndex: 0,
+      logIndex: 0,
+      kind: "transfer",
+      direction: "out",
+      counterparty: "0xdead",
+      tokenId: null,
+      amount: "1.0",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    }));
+    const overDelegation = Array.from({ length: 35 }, (_, i) => ({
+      blockHeight: 2000 + i,
+      kind: "delegate",
+    }));
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = overDelegation;
+    rpcResponses["lyth_getAddressActivity"] = overActivity;
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as {
+      ok: true;
+      snapshot: { addressActivity: unknown[]; delegationHistory: unknown[] };
+    };
+
+    expect(r.ok).toBe(true);
+    // Re-sliced wallet-side to the limit the wallet requested, regardless of
+    // how many the operator echoed (30 for activity, 20 for delegation).
+    expect(r.snapshot.addressActivity).toHaveLength(30);
+    expect(r.snapshot.delegationHistory).toHaveLength(20);
+    // The first-N rows are kept, in operator order (no fabrication, no reorder).
+    expect((r.snapshot.addressActivity[0] as { blockHeight: number }).blockHeight).toBe(1000);
+    expect((r.snapshot.addressActivity[29] as { blockHeight: number }).blockHeight).toBe(1029);
+  });
+
+  it("leaves an at/under-limit activity array unchanged (P5-005)", async () => {
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      blockHeight: 1000 + i,
+      txIndex: 0,
+      logIndex: 0,
+      kind: "transfer",
+      direction: "out",
+      counterparty: "0xdead",
+      tokenId: null,
+      amount: "1.0",
+      cluster: null,
+      weightBps: null,
+      subKind: null,
+    }));
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = rows;
+
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-indexer-snapshot",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; snapshot: { addressActivity: unknown[] } };
+
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.addressActivity).toHaveLength(5);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1750,6 +1977,39 @@ describe("wallet-activity-get", () => {
     expect(r.pending[0]!.source).toBe("local-claim");
   });
 
+  it("Commit 1: an UN-RETIRED local-claim IN the pending cache forces the full reconcile (no fast-path skip)", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    const claimHash = "0x" + "e".repeat(64);
+    seedEmptyIndexer(); // indexer reachable but no confirmed claim row → claim can't retire
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    // FRESH confirmed cache (would fast-path) + the claim resident in the PENDING
+    // cache (un-retired). claimedAmount is FILLED ("6.51") — yet it must STILL
+    // force the full reconcile, because retirement (not the amount) is the gate.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [],
+      lastFetchedAtMs: Date.now(),
+    };
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      pending: [durableClaim(claimHash)],
+    };
+    storageLocal[`mono.activity.localclaims.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      claims: [durableClaim(claimHash)],
+    };
+    const before = rpcCalls.length;
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    })) as { ok: true; pending: Array<Record<string, unknown>> };
+    expect(r.ok).toBe(true);
+    // Fast-path SKIPPED — the full reconcile (indexer fetch + receipt pass) fired RPCs.
+    expect(rpcCalls.length).toBeGreaterThan(before);
+    // No confirmed claim row exists, so the claim still pends (would retire once
+    // the indexer surfaces it — covered by the backstop + integration tests).
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(true);
+  });
+
   it("Gap B: total-outage path re-injects a durable claim absent from the pending cache", async () => {
     const addr = DETERMINISTIC_ADDRESS.toLowerCase();
     const claimHash = "0x" + "d".repeat(64);
@@ -1925,6 +2185,120 @@ describe("wallet-activity-get", () => {
     // Failed rows are not bridged into the pending list (surfaced via the
     // failed-row notification path instead).
     expect(r.pending).toHaveLength(0);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Drop-detection lifecycle (C4) — the poll reads the committed nonce and
+  // classifies a still-pending row (no receipt, not indexed) into the
+  // pending/slow/dropped/expired lifecycle instead of the blind 5-min vanish.
+  // ───────────────────────────────────────────────────────────────────────────
+  function seedPendingRow(row: Record<string, unknown>) {
+    const pendingKey = `mono.activity.pending.${DETERMINISTIC_ADDRESS.toLowerCase()}.${TESTNET_CHAIN_ID_HEX}`;
+    storageLocal[pendingKey] = { pending: [row] };
+  }
+  function basePending(over: Record<string, unknown> = {}) {
+    return {
+      kind: "pending_tx",
+      txHash: "0x" + "a1".repeat(32),
+      to: "0xrecipient",
+      amountDecimal: "0.01",
+      broadcastedAtMs: Date.now(),
+      broadcastBlockHeight: 1000,
+      via: "op",
+      nonce: 5,
+      ...over,
+    };
+  }
+
+  it("a >5-min un-confirmed send is NOT dropped — stays visible as `slow` (no 5-min vanish)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 5; // committed == row nonce → not passed
+    seedPendingRow(basePending({ broadcastedAtMs: Date.now() - 6 * 60 * 1000, nonce: 5 }));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ lifecycle?: string }>;
+    };
+    expect(r.pending).toHaveLength(1); // still visible, NOT dropped
+    expect(r.pending[0]?.lifecycle).toBe("slow");
+  });
+
+  it("a nonce-passed, no-receipt row → `dropped` (the stamp survived a prior poll, past the grace)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 6; // committed > row nonce 5 → passed
+    // noncePassedAtMs stamped by a prior poll, well past the 30s drop grace.
+    seedPendingRow(
+      basePending({
+        nonce: 5,
+        noncePassedAtMs: Date.now() - 60_000,
+        broadcastedAtMs: Date.now() - 2 * 60 * 1000,
+      }),
+    );
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ lifecycle?: string }>;
+    };
+    expect(r.pending).toHaveLength(1); // visible terminal, not vanished
+    expect(r.pending[0]?.lifecycle).toBe("dropped");
+  });
+
+  it("a receipt-confirmed row still bridges even with the nonce passed (receipt wins over drop-detection)", async () => {
+    seedEmptyIndexer();
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 200, tx_index: 0 };
+    rpcResponses["lyth_getTransactionCount"] = 6; // passed — would be dropped if it reached the classifier
+    seedPendingRow(basePending({ nonce: 5 }));
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: Array<{ confirmedBlockHeight?: number; lifecycle?: string }>;
+    };
+    expect(r.pending).toHaveLength(1);
+    expect(r.pending[0]?.confirmedBlockHeight).toBe(200); // bridged-confirmed
+    expect(r.pending[0]?.lifecycle).toBeUndefined(); // bridged rows aren't lifecycle-tagged
+  });
+
+  it("the delegation heuristic retires a receipt-missed confirmed undelegate (NOT mis-flagged dropped)", async () => {
+    // No receipt, but the indexer surfaces the confirmed undelegate AND the nonce
+    // has passed (would be dropped) — the C3 heuristic retires it first.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getAddressActivity"] = [];
+    rpcResponses["lyth_getDelegationHistory"] = [
+      {
+        blockHeight: 1005,
+        txIndex: 0,
+        logIndex: 0,
+        wallet: DETERMINISTIC_ADDRESS.toLowerCase(),
+        cluster: 7,
+        toCluster: null,
+        kind: "undelegated",
+        weightBps: 2500,
+        walletTotalBps: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 6; // passed → would be dropped without the heuristic
+    seedPendingRow(
+      basePending({
+        opKind: "undelegate",
+        clusterId: 7,
+        to: "0x" + "11".repeat(20),
+        broadcastBlockHeight: 1000,
+        nonce: 5,
+        amountDecimal: "0",
+      }),
+    );
+    const r = (await getActivity()) as {
+      ok: true;
+      pending: unknown[];
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.pending).toHaveLength(0); // retired by the heuristic, NOT lingering/dropped
+    expect(r.cache.confirmed.some((c) => c.kind === "undelegate")).toBe(true);
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -2274,6 +2648,145 @@ describe("wallet-activity-get", () => {
     expect(claim?.amountDecimal).toBe("1.5"); // sticky — not erased to null on the rebuild
   });
 
+  // ── INTEGRATION (mandatory): the "Pending · Rewards claimed" persists-bug.
+  //    The indexer confirms the claim BEFORE the receipt is available, so the
+  //    receipt anchor never lands — the pending row must still drop IN-SESSION. ──
+  it("CLAIM PENDING (integration): indexer-confirmed claim retires a null-amount, NO-receipt local-claim in-session (no reopen)", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    // The indexer surfaces the confirmed claim (kind:"delegation"/subKind:"claimed",
+    // NO txHash) within ±300 blocks of the broadcast block (100).
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    // Receipt NOT available (the precompile-claim lag) → no (block,txIndex) anchor.
+    rpcResponses["lyth_txStatus"] = { status: "pending" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    const claimHash = "0x" + "ca".repeat(32);
+    seedClaimPending(claimHash); // un-anchored, claimedAmount null
+
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      pending: Array<{ txHash: string }>;
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
+    // Dropped IN-SESSION by the confirmed-row block-window backstop — no reopen,
+    // no receipt. (Commit 1 keeps the full reconcile running; Commit 2 retires.)
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(false);
+    // Exactly one claim row remains: the indexer's confirmed row, no double-row.
+    expect(r.cache.confirmed.filter((c) => c.kind === "claim")).toHaveLength(1);
+  });
+
+  it("CLAIM PENDING (integration): when the receipt DOES land, the anchored retire still fires (no regression)", async () => {
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    // Receipt lands → stamps the exact (200,0) anchor (+ decodes the amount).
+    rpcResponses["lyth_txStatus"] = { status: "found", blockNumber: 200 };
+    rpcResponses["eth_getTransactionReceipt"] = claimedReceipt(1500000000000000000n, 200);
+    const claimHash = "0x" + "cb".repeat(32);
+    seedClaimPending(claimHash);
+
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      pending: Array<{ txHash: string }>;
+      cache: { confirmed: Array<{ kind: string }> };
+    };
+    expect(r.ok).toBe(true);
+    // Retired by the precise (block,txIndex) anchor — the existing path still works.
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(false);
+    expect(r.cache.confirmed.filter((c) => c.kind === "claim")).toHaveLength(1);
+  });
+
+  it("CLAIM PENDING (integration): a STALE prior confirmed claim row does NOT vanish a new un-anchored claim", async () => {
+    const addr = DETERMINISTIC_ADDRESS.toLowerCase();
+    // Prior cache already holds a PRIOR claim's confirmed row @1000 (its own claim
+    // long retired + gone from the store). STALE so the full reconcile runs.
+    storageLocal[`mono.activity.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      confirmed: [
+        { kind: "claim", blockHeight: 1000, txIndex: 0, logIndex: 0, amountDecimal: "9.9" },
+      ],
+      lastFetchedAtMs: Date.now() - 600_000,
+    };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    // The indexer still only has the OLD row @1000 — the new claim's row (~1050)
+    // is not indexed yet.
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 1000,
+        txIndex: 0,
+        logIndex: 0,
+        kind: "delegation",
+        subKind: "claimed",
+        direction: null,
+        counterparty: null,
+        tokenId: null,
+        amount: null,
+        cluster: 0,
+        weightBps: 0,
+      },
+    ];
+    // New claim @1050, un-anchored (no receipt). |1000-1050| = 50 ≤ window — the
+    // OLD (un-scoped) backstop would have VANISHED it against the stale @1000 row.
+    rpcResponses["lyth_txStatus"] = { status: "pending" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    const claimHash = "0x" + "cc".repeat(32);
+    storageLocal[`mono.activity.pending.${addr}.${TESTNET_CHAIN_ID_HEX}`] = {
+      pending: [
+        {
+          kind: "pending_tx",
+          txHash: claimHash,
+          to: "0x000000000000000000000000000000000000100a",
+          amountDecimal: "0",
+          broadcastedAtMs: Date.now(),
+          broadcastBlockHeight: 1050,
+          via: "operator-test",
+          opKind: "claim",
+          source: "local-claim",
+        },
+      ],
+    };
+    const r = (await getActivity()) as unknown as {
+      ok: true;
+      pending: Array<{ txHash: string }>;
+    };
+    expect(r.ok).toBe(true);
+    // The @1000 row is NOT newly surfaced (it's in the prior cache) → the new
+    // claim survives until its OWN row is indexed. No vanish.
+    expect(r.pending.some((p) => p.txHash === claimHash)).toBe(true);
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // Bug A F1 — when pending rows exist, wallet-activity-get bypasses the 30s
   // staleness short-circuit and falls through to the authoritative reconcile
@@ -2443,6 +2956,71 @@ describe("wallet-activity-get", () => {
     expect(hist!.entries[0]?.status).toBe("confirmed");
     expect(hist!.entries[0]?.kind).toBe("send");
     expect(hist!.entries[0]?.blockNumber).toBe(100);
+  });
+
+  it("the heuristic record path threads delegationWeightBps so a delegate toast keeps the % (item 1 fix)", async () => {
+    // A delegate retired by the indexer's delegation heuristic (NOT the by-hash
+    // status path: lyth_txStatus not_found + no receipt) is recorded via the
+    // heuristicallyMatched loop. That loop previously omitted delegationWeightBps
+    // (carried only by the by-hash loop), so the toast showed the cluster ALONE
+    // with no "· X%". This pins the spread at the heuristic record site.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getAddressActivity"] = [];
+    rpcResponses["lyth_getDelegationHistory"] = [
+      {
+        blockHeight: 1005,
+        txIndex: 0,
+        logIndex: 0,
+        wallet: DETERMINISTIC_ADDRESS.toLowerCase(),
+        cluster: 7,
+        toCluster: null,
+        kind: "delegated",
+        weightBps: 2500,
+        walletTotalBps: null,
+      },
+    ];
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null;
+    rpcResponses["lyth_getTransactionCount"] = 6; // nonce passed → the delegation heuristic retires it
+    const txHash = "0x" + "d1".repeat(32);
+    seedPendingRow(
+      basePending({
+        txHash,
+        opKind: "delegate",
+        clusterId: 7,
+        clusterName: "Foundation",
+        delegationWeightBps: 2500,
+        to: "0x" + "10".repeat(20),
+        broadcastBlockHeight: 1000,
+        nonce: 5,
+        amountDecimal: "0",
+      }),
+    );
+
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
+    });
+    await flushNotificationMicrotasks();
+
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | {
+          entries: Array<{
+            kind: string;
+            clusterId?: number;
+            delegationWeightBps?: number;
+          }>;
+        }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    expect(hist!.entries[0]?.kind).toBe("delegate");
+    expect(hist!.entries[0]?.clusterId).toBe(7);
+    // The fix: the heuristic loop now threads delegationWeightBps (2500 → 25.00%
+    // in notificationBody), where it was previously dropped.
+    expect(hist!.entries[0]?.delegationWeightBps).toBe(2500);
   });
 
   it("records a 'confirmed' contract_call when eth_getTransactionReceipt.status === 1 (b4d6101 normalizer reused)", async () => {
@@ -2669,11 +3247,11 @@ describe("wallet-activity-get", () => {
     expect(hist!.entries[0]?.kind).toBe("contract_call");
   });
 
-  it("snapshot response returns BEFORE notification writes complete (post-write microtask placement)", async () => {
+  it("C4: snapshot writes the durable record INLINE before the response (record-before-drop); toast stays deferred", async () => {
     seedEmptyIndexer();
     rpcResponses["lyth_txStatus"] = { status: "found" };
     // Readable confirmed receipt so the row terminalizes and the notification
-    // I/O is queued (F-3.10/#27: found-without-receipt no longer confirms).
+    // is recorded (F-3.10/#27: found-without-receipt no longer confirms).
     rpcResponses["eth_getTransactionReceipt"] = { status: "0x1", blockNumber: 400 };
     const txHash = "0x" + "55".repeat(32);
     seedPendingCustom({
@@ -2682,20 +3260,27 @@ describe("wallet-activity-get", () => {
       amountDecimal: "0.01",
       broadcastBlockHeight: 400,
     });
+    mockFireOsNotification.mockClear();
 
-    const dispatched = dispatchPopup({
+    await dispatchPopup({
       kind: "popup",
       op: "wallet-activity-get",
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     });
-    await dispatched;
-    // Immediately after the handler resolves, the notification I/O is
-    // still pending in the microtask + chrome.storage callback queue —
-    // the handler must NOT have awaited it.
-    expect(storageLocal[NOTIF_HISTORY_KEY]).toBeUndefined();
-    // Drain queues — the notification lands now.
+    // C4 — the DURABLE in-app record is now written INLINE, before the pending
+    // row is dropped and before the handler resolves, so an MV3 SW teardown
+    // between the response and the deferred toast can't lose it. (Pre-C4 this
+    // record was deferred to a post-response microtask and was undefined here.)
+    const hist = storageLocal[NOTIF_HISTORY_KEY] as
+      | { entries: Array<{ txHash: string }> }
+      | undefined;
+    expect(hist).toBeDefined();
+    expect(hist!.entries).toHaveLength(1);
+    expect(hist!.entries[0]?.txHash).toBe(txHash);
+    // The OS TOAST stays deferred (kept off the response path for latency); it
+    // fires once the post-response microtask drains.
     await flushNotificationMicrotasks();
-    expect(storageLocal[NOTIF_HISTORY_KEY]).toBeDefined();
+    expect(mockFireOsNotification).toHaveBeenCalled();
   });
 });
 
@@ -3749,9 +4334,11 @@ describe("fired auto-lock clears the session-MEK rehydrate cap (#17)", () => {
     for (const fire of capturedAlarmListeners) fire({ name: ALARM_AUTO_LOCK });
     await new Promise((r) => setTimeout(r, 10));
 
-    // triggerAutoLock cleared the MEK AND the rehydrate cap, so a subsequent SW
+    // triggerAutoLock cleared the MEK AND both deadlines, so a subsequent SW
     // boot has nothing to rehydrate from — a fired auto-lock can NEVER silently
-    // re-unlock. (mekRehydrateExpiredV4 also fails closed on the absent key.)
+    // re-unlock. (tryRestoreFromSessionV4 also fails closed on the absent
+    // auto-lock deadline, the single restore authority post-2026-06-28; the
+    // legacy rehydrate key is still purged here as one-release cleanup.)
     expect(storageSession[SESSION_KEY_MEK_V4]).toBeUndefined();
     expect(storageSession[SESSION_KEY_MEK_REHYDRATE_DEADLINE]).toBeUndefined();
     expect(storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE]).toBeUndefined();
@@ -5754,6 +6341,140 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
     // …but the toast is suppressed by the toggle.
     expect(mockFireOsNotification).not.toHaveBeenCalled();
   });
+
+  // 2c — native transfers all share (block, 0, u32::MAX). The in: id folds
+  // counterparty + amount + a within-block sequence so distinct same-block
+  // receives each get a unique id; the watermark's per-block id-set stops an
+  // already-notified one from re-firing. logIndex sentinel mirrors live shape.
+  const U32MAX = 4294967295;
+  const nrx = (block: number, over: Record<string, unknown> = {}) => ({
+    kind: "tx_receive" as const,
+    blockHeight: block,
+    txIndex: 0,
+    logIndex: U32MAX,
+    counterparty: "0x" + "5".repeat(40),
+    amountDecimal: "1",
+    ...over,
+  });
+
+  it("2c — multiple receives in the SAME block all notify (distinct ids)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    const a = nrx(105, { counterparty: "0x" + "a".repeat(40), amountDecimal: "2" });
+    const b = nrx(105, { counterparty: "0x" + "b".repeat(40), amountDecimal: "3" });
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [a, b] as never, false, true);
+    expect(added).toBe(2);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(2);
+    // Both same-block ids are now accounted for in the watermark's top block.
+    const wm = storageLocal[wmKey] as { blockHeight: number; blockIds: string[] };
+    expect(wm.blockHeight).toBe(105);
+    expect(wm.blockIds).toHaveLength(2);
+  });
+
+  it("2c — a self-send's in-leg notifies even with a same-anchor out row present", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    const self = "0x" + "7".repeat(40);
+    const inLeg = nrx(200, { counterparty: self, amountDecimal: "5" });
+    // The out-leg is a tx_send sharing the SAME anchor as the in-leg. It is
+    // handled by the tracked-pending path (→ "Sent"), NOT here; this asserts it
+    // does not suppress the in-leg's "Received".
+    const outLeg = {
+      kind: "tx_send" as const,
+      blockHeight: 200,
+      txIndex: 0,
+      logIndex: U32MAX,
+      counterparty: self,
+      amountDecimal: "5",
+    };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [outLeg, inLeg] as never, false, true);
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: Array<{ kind: string }> };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
+  });
+
+  it("2c — sequential receives across blocks each notify", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    await detectAndNotifyIncoming(ADDR, CHAIN, [nrx(101)] as never, false, true);
+    await detectAndNotifyIncoming(ADDR, CHAIN, [nrx(102), nrx(101)] as never, false, true);
+    await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [nrx(103), nrx(102), nrx(101)] as never,
+      false,
+      true,
+    );
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(3);
+  });
+
+  it("2c — an already-notified same-block receive does NOT re-notify on refresh", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: U32MAX, blockIds: [] };
+    const a = nrx(105, { counterparty: "0x" + "a".repeat(40), amountDecimal: "2" });
+    const b = nrx(105, { counterparty: "0x" + "b".repeat(40), amountDecimal: "3" });
+    await detectAndNotifyIncoming(ADDR, CHAIN, [a, b] as never, false, true);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2);
+    // A NEW same-block receive c lands; a and b are unchanged and must not refire.
+    const c = nrx(105, { counterparty: "0x" + "c".repeat(40), amountDecimal: "4" });
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [c, a, b] as never, false, true);
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(3);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(3);
+  });
+
+  it("2c — a legacy watermark (no blockIds) treats its boundary block as history (no upgrade re-toast)", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    // Legacy shape: no blockIds. The boundary-block receive was already
+    // notified pre-2c; it must NOT re-fire after the id-scheme change.
+    storageLocal[wmKey] = { blockHeight: 105, txIndex: 0, logIndex: U32MAX };
+    const added = await detectAndNotifyIncoming(ADDR, CHAIN, [nrx(105)] as never, false, true);
+    expect(added).toBe(0);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    // The watermark is upgraded in place to carry blockIds going forward.
+    const wm = storageLocal[wmKey] as { blockIds?: string[] };
+    expect(Array.isArray(wm.blockIds)).toBe(true);
+  });
+
+  it("2b — a higher-anchored outgoing row does NOT baseline past an earlier receive", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    const send = (block: number) => ({
+      kind: "tx_send" as const,
+      blockHeight: block,
+      txIndex: 0,
+      logIndex: U32MAX,
+      counterparty: "0x" + "6".repeat(40),
+      amountDecimal: "9",
+    });
+    // First run (no watermark): newest row is an OUTGOING send at block 200,
+    // the newest RECEIVE is at block 100. The baseline must pin to the receive
+    // (100), not the send (200) — else a later receive below 200 is suppressed.
+    await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [send(200), nrx(100)] as never,
+      false,
+      true,
+    );
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+    // A genuine receive arrives at block 150 — newer than the receive baseline
+    // (100) but OLDER than the send (200). It must notify.
+    const added = await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      [send(200), nrx(150), nrx(100)] as never,
+      false,
+      true,
+    );
+    expect(added).toBe(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+  });
 });
 
 // The notif-poll alarm lifecycle + back-off. Drives the captured
@@ -5825,6 +6546,28 @@ describe("notif-poll alarm lifecycle + back-off", () => {
     expect(alarmClearCalls).not.toContain(ALARM_NOTIF_POLL);
   });
 
+  it("M3: a confirmed reward CLAIM retires → alarm clears (the settled claim no longer strands it)", async () => {
+    // A confirmed reward claim is re-bridged back into the pending cache as a
+    // durable DISPLAY record, but it is excluded from the poll's `remaining`.
+    // hasAnyPendingTx must also exclude the settled claim, or the clear-guard
+    // never fires and the SW wakes on the poll cadence forever.
+    storageLocal[pk(ADDR, CHAIN)] = {
+      pending: [row({ opKind: "claim", source: "local-claim", claimedAmount: "6.51" })],
+    };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+    fireNotifPoll();
+    await flushAsync();
+    expect(alarmClearCalls).toContain(ALARM_NOTIF_POLL);
+    // The claim survives in the cache as a durable record (not deleted).
+    const cache = storageLocal[pk(ADDR, CHAIN)] as {
+      pending: Array<{ source?: string; confirmedBlockHeight?: number }>;
+    };
+    const claim = cache.pending.find((r) => r.source === "local-claim");
+    expect(claim).toBeDefined();
+    expect(claim!.confirmedBlockHeight).toBe(123);
+  });
+
   it("backs off (lengthens the period) on consecutive all-operator failures", async () => {
     // A clean empty tick first resets any back-off carried from a prior test.
     fireNotifPoll();
@@ -5843,6 +6586,54 @@ describe("notif-poll alarm lifecycle + back-off", () => {
     expect(
       (created.at(-1)!.info as { periodInMinutes: number }).periodInMinutes,
     ).toBe(1);
+  });
+
+  it("C3 (2a) — the closed-surface poll detects an INCOMING transfer and toasts", async () => {
+    // A still-pending tx keeps this scope in the poll loop; the focus is the
+    // incoming detection, not the send (which stays pending so the alarm
+    // doesn't clear). Closed surface ⇒ presence false ⇒ unread record.
+    mockIsWalletSurfaceOpen.mockResolvedValue(false);
+    storageLocal[pk(ADDR, CHAIN)] = { pending: [row()] };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = null; // send still pending
+    // Watermark BELOW the incoming block so the receive is genuinely new.
+    storageLocal[`mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`] = {
+      blockHeight: 100,
+      txIndex: 0,
+      logIndex: 4294967295,
+      blockIds: [],
+    };
+    // The REUSED snapshot fetch surfaces one incoming native transfer.
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 205,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0x" + "9".repeat(40),
+        tokenId: null,
+        amount: "7",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    fireNotifPoll();
+    await flushAsync();
+    // The "Received" record was written for this scope by the closed-surface
+    // poll (previously this only happened on an open-surface snapshot).
+    const hist = storageLocal[
+      `mono.notifications.history.${ADDR}.${CHAIN}.v1`
+    ] as { entries: Array<{ kind: string; status: string; read: boolean }> } | undefined;
+    expect(
+      hist?.entries.some((e) => e.kind === "receive" && e.status === "confirmed"),
+    ).toBe(true);
+    // Closed surface → recorded unread, and the toast fired (unlocked gate).
+    expect(mockFireOsNotification).toHaveBeenCalled();
   });
 });
 
@@ -5923,6 +6714,171 @@ describe("notification settings IPC — boolean validation at the boundary", () 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// boundary 3b helpers — construct a REAL WebAuthn assertion over the SW-minted
+// challenge (chrome.runtime.id is "test" → rpId "test", origin
+// "chrome-extension://test"), exactly as the verify gate expects. Mirrors the
+// passkey-verify unit-test approach: generate a P-256 key, build authData +
+// clientDataJSON, sign, DER-encode the signature.
+const _pkEnc = new TextEncoder();
+function _pkB64Url(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function _pkConcat(...arrs: Uint8Array[]): Uint8Array {
+  const total = arrs.reduce((n, a) => n + a.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const a of arrs) {
+    out.set(a, o);
+    o += a.length;
+  }
+  return out;
+}
+function _pkToBuf(b: Uint8Array): ArrayBuffer {
+  const a = new ArrayBuffer(b.length);
+  new Uint8Array(a).set(b);
+  return a;
+}
+async function _pkSha256(b: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", _pkToBuf(b)));
+}
+async function _pkAuthData(
+  rpId: string,
+  flags: number,
+  signCount: number,
+): Promise<Uint8Array> {
+  const rpIdHash = await _pkSha256(_pkEnc.encode(rpId));
+  const sc = new Uint8Array(4);
+  new DataView(sc.buffer).setUint32(0, signCount, false);
+  return _pkConcat(rpIdHash, new Uint8Array([flags]), sc);
+}
+function _pkRawToDer(raw: Uint8Array): Uint8Array {
+  const derInt = (b: Uint8Array): Uint8Array => {
+    let i = 0;
+    while (i < b.length - 1 && b[i] === 0x00) i++;
+    let v = b.subarray(i);
+    if (v[0]! & 0x80) v = _pkConcat(new Uint8Array([0x00]), v);
+    return v;
+  };
+  const r = derInt(raw.subarray(0, 32));
+  const s = derInt(raw.subarray(32, 64));
+  const body = _pkConcat(
+    new Uint8Array([0x02, r.length]),
+    r,
+    new Uint8Array([0x02, s.length]),
+    s,
+  );
+  return _pkConcat(new Uint8Array([0x30, body.length]), body);
+}
+
+interface TestCred {
+  cred: Record<string, unknown>;
+  priv: CryptoKey;
+}
+/** A pubkey-bearing ES256 credential (the shape readPasskeyStateV4 returns). */
+async function makeEs256Cred(
+  credentialId: string,
+  signCount = 0,
+): Promise<TestCred> {
+  const kp = (await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const spki = _pkB64Url(
+    new Uint8Array(await crypto.subtle.exportKey("spki", kp.publicKey)),
+  );
+  return {
+    cred: {
+      credentialId,
+      name: "Key",
+      kind: "platform",
+      createdAt: 1,
+      publicKeySpki: spki,
+      alg: -7,
+      signCount,
+    },
+    priv: kp.privateKey,
+  };
+}
+
+interface ForwardedAssertion {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+}
+async function buildAssertion(opts: {
+  challengeB64: string;
+  priv: CryptoKey;
+  credentialId: string;
+  rpId?: string;
+  origin?: string;
+  flags?: number;
+  signCount?: number;
+}): Promise<ForwardedAssertion> {
+  const rpId = opts.rpId ?? "test";
+  const origin = opts.origin ?? "chrome-extension://test";
+  const flags = opts.flags ?? 0x05; // UP + UV
+  const signCount = opts.signCount ?? 9;
+  const authData = await _pkAuthData(rpId, flags, signCount);
+  const clientDataJSON = _pkEnc.encode(
+    JSON.stringify({ type: "webauthn.get", challenge: opts.challengeB64, origin }),
+  );
+  const signedData = _pkConcat(authData, await _pkSha256(clientDataJSON));
+  const rawSig = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      opts.priv,
+      _pkToBuf(signedData),
+    ),
+  );
+  return {
+    credentialId: opts.credentialId,
+    authenticatorData: _pkB64Url(authData),
+    clientDataJSON: _pkB64Url(clientDataJSON),
+    signature: _pkB64Url(_pkRawToDer(rawSig)),
+  };
+}
+/** Mint a challenge via `passkey-evaluate` and build a valid assertion over it. */
+async function mintAndAssert(opts: {
+  vaultId: string;
+  to: string;
+  valueWei: bigint;
+  chainIdHex: string;
+  priv: CryptoKey;
+  credentialId: string;
+  signCount?: number;
+  data?: string;
+}): Promise<{ challengeId: string; challengeB64: string; assertion: ForwardedAssertion }> {
+  const ev = (await dispatchPopup({
+    kind: "popup",
+    op: "passkey-evaluate",
+    payload: {
+      vaultId: opts.vaultId,
+      valueWeiHex: "0x" + opts.valueWei.toString(16),
+      to: opts.to,
+      chainIdHex: opts.chainIdHex,
+      ...(opts.data !== undefined ? { data: opts.data } : {}),
+    },
+  })) as {
+    ok: boolean;
+    decision?: { kind: string; challengeId?: string; challengeB64?: string };
+  };
+  if (!ev.ok || ev.decision?.kind !== "passkey-ok" || !ev.decision.challengeId) {
+    throw new Error(`mint failed: ${JSON.stringify(ev)}`);
+  }
+  const challengeB64 = ev.decision.challengeB64!;
+  const assertion = await buildAssertion({
+    challengeB64,
+    priv: opts.priv,
+    credentialId: opts.credentialId,
+    ...(opts.signCount !== undefined ? { signCount: opts.signCount } : {}),
+  });
+  return { challengeId: ev.decision.challengeId, challengeB64, assertion };
+}
+
 // T1-04(a) — passkey spending cap enforced at the SW signing boundary.
 // The gate is INERT unless a test opts in via activePasskeyVaultId +
 // passkeyStateForTest (default null/disabled — see the keystore mock).
@@ -5932,11 +6888,14 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   const OVER = "0x" + (LIMIT_LYTHOSHI * 2n).toString(16); // 200 LYTH
   const UNDER = "0x" + (LIMIT_LYTHOSHI / 2n).toString(16); // 50 LYTH
 
-  function enablePerTxCap() {
+  let perTxPriv: CryptoKey;
+  async function enablePerTxCap() {
+    const { cred, priv } = await makeEs256Cred("c1");
+    perTxPriv = priv;
     activePasskeyVaultId = "v1";
     passkeyStateForTest = {
       policy: { enabled: true, mode: "per-tx", limitWei: LIMIT_LYTHOSHI },
-      credentials: [{ credentialId: "c1" }],
+      credentials: [cred],
     };
   }
 
@@ -5956,7 +6915,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   }
 
   it("over-limit value send with NO password → passkeyElevation:required, no broadcast", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -5969,7 +6928,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   });
 
   it("over-limit value send with the CORRECT password is SW-verified and broadcasts", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -5982,7 +6941,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   });
 
   it("over-limit value send with a WRONG password → passkeyElevation:wrong_password, no broadcast", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -5995,17 +6954,40 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
-  it("under-limit value send broadcasts with no elevation required", async () => {
-    enablePerTxCap();
+  it("under-limit value send with a VERIFIED passkey assertion broadcasts", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: LIMIT_LYTHOSHI / 2n,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv: perTxPriv,
+      credentialId: "c1",
+    });
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; passkeyElevation?: string };
+    expect(r.ok).toBe(true);
+    expect(r.passkeyElevation).toBeUndefined();
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("under-limit value send with NO assertion is REJECTED (boundary 3b)", async () => {
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
       valueWeiHex: UNDER,
       chainIdHex: TESTNET_CHAIN_ID_HEX,
-    })) as { ok: boolean; passkeyElevation?: string };
-    expect(r.ok).toBe(true);
-    expect(r.passkeyElevation).toBeUndefined();
-    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("passkey assertion required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
   it("policy disabled → gate inert, over-limit value send broadcasts", async () => {
@@ -6024,12 +7006,88 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
-  it("data (contract-call) send bypasses the value-only cap even when over-limit", async () => {
-    enablePerTxCap();
+  it("M1: data-carrying OVER-limit VALUE send is now capped — no password → required, no broadcast", async () => {
+    // A staking/precompile call (0x1006) that moves native value via the tx
+    // `value` field previously slipped past the cap by carrying `data`. It is
+    // now gated exactly like a bare value transfer.
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: OVER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("M1: data-carrying OVER-limit VALUE send broadcasts with the CORRECT elevated password", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: OVER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "correct-horse-battery-staple",
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("M1: data-carrying UNDER-limit VALUE send broadcasts with a VERIFIED assertion bound to the data", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0x0000000000000000000000000000000000001006",
+      valueWei: LIMIT_LYTHOSHI / 2n,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv: perTxPriv,
+      credentialId: "c1",
+      data: "0xdeadbeef",
+    });
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: UNDER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; passkeyElevation?: string };
+    expect(r.ok).toBe(true);
+    expect(r.passkeyElevation).toBeUndefined();
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("M1: data-carrying UNDER-limit VALUE send with NO assertion is REJECTED", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: UNDER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("passkey assertion required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("M1: ZERO-value data (read-only contract) call stays ungated under a passkey cap", async () => {
+    // No native spend ⇒ the cap (which governs native value) does not apply,
+    // so a read-only / zero-value contract call broadcasts without a passkey.
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0x0000000000000000000000000000000000001001",
-      valueWeiHex: OVER,
+      valueWeiHex: "0x0",
       data: "0xdeadbeef",
       gasLimitHex: "0x30d40",
       chainIdHex: TESTNET_CHAIN_ID_HEX,
@@ -6039,7 +7097,7 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
   });
 
   it("empty-data (0x) over-limit send is treated as a bare value transfer and is capped (#36)", async () => {
-    enablePerTxCap();
+    await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0xrecipient",
@@ -6056,28 +7114,94 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// #36 — passkey daily-usage ledger persisted to chrome.storage.session so it
-// survives MV3 SW hibernation instead of resetting the rolling window.
+// Part 1a — the add-credential IPC requires the credential public key so a
+// pubkey-less credential can never be stored (Option A's SW-verify needs it).
 // ─────────────────────────────────────────────────────────────────────────────
-describe("passkey daily-usage ledger persistence (#36)", () => {
+describe("passkey-add-credential requires the public key (Part 1a)", () => {
+  function add(credential: Record<string, unknown>) {
+    return dispatchPopup({
+      kind: "popup",
+      op: "passkey-add-credential",
+      payload: { vaultId: "v1", credential },
+    }) as Promise<{ ok: boolean; reason?: string }>;
+  }
+
+  it("rejects a new registration with NO publicKeySpki — never stores a pubkey-less credential", async () => {
+    const r = await add({
+      credentialId: "c1",
+      name: "Key",
+      kind: "platform",
+      createdAt: 1,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("invalid credential shape");
+  });
+
+  it("rejects a registration missing the alg", async () => {
+    const r = await add({
+      credentialId: "c1",
+      name: "Key",
+      kind: "platform",
+      createdAt: 1,
+      publicKeySpki: "c3BraQ",
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("invalid credential shape");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part 3 — the SW is the authoritative passkey daily-cap counter. The ledger
+// APPEND lives in wallet-send-tx (not a popup IPC), persisted to
+// chrome.storage.session so it survives MV3 SW hibernation AND a compromised
+// popup that skips reporting.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("passkey daily-cap — SW is the authoritative counter (Part 3)", () => {
   const LYTH = 1_000_000_000_000_000_000n; // 1e18 lythoshi
   const DAILY_CAP = 100n * LYTH;
   const SESSION_KEY = "mono.session.passkey-usage.v1";
   const hex = (v: bigint) => "0x" + v.toString(16);
 
-  function enableDailyCap() {
+  let dailyPriv: CryptoKey;
+  async function enableDailyCap() {
+    const { cred, priv } = await makeEs256Cred("c1");
+    dailyPriv = priv;
     activePasskeyVaultId = "v1";
     passkeyStateForTest = {
       policy: { enabled: true, mode: "daily", dailyCapWei: DAILY_CAP },
-      credentials: [{ credentialId: "c1" }],
+      credentials: [cred],
     };
   }
-
-  function record(vaultId: string, valueWei: bigint) {
-    return dispatchPopup({
-      kind: "popup",
-      op: "passkey-record-usage",
-      payload: { vaultId, valueWeiHex: hex(valueWei) },
+  function seedNonceAndFee() {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+  // A full under-cap passkey send: mint the challenge, build a valid assertion,
+  // forward it (boundary 3b requires a verified assertion to sign).
+  async function sendPasskey(valueWei: bigint) {
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv: dailyPriv,
+      credentialId: "c1",
+    });
+    return send({
+      to: "0xrecipient",
+      valueWeiHex: hex(valueWei),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
     });
   }
   function evaluate(vaultId: string, valueWei: bigint) {
@@ -6087,37 +7211,77 @@ describe("passkey daily-usage ledger persistence (#36)", () => {
       payload: { vaultId, valueWeiHex: hex(valueWei) },
     }) as Promise<{ ok: boolean; decision?: { kind: string; mode?: string } }>;
   }
+  function ledger() {
+    return (
+      storageSession[SESSION_KEY] as
+        | Record<string, { at: number; valueWei: string }[]>
+        | undefined
+    )?.v1;
+  }
 
-  it("passkey-record-usage persists to chrome.storage.session as a decimal string", async () => {
-    enableDailyCap();
-    await record("v1", 60n * LYTH);
-    const stored = storageSession[SESSION_KEY] as
-      | Record<string, { at: number; valueWei: string }[]>
-      | undefined;
-    const entries = stored?.v1;
-    expect(entries).toBeDefined();
+  it("the SW appends the ledger entry ITSELF on a daily-mode send — no popup IPC", async () => {
+    await enableDailyCap();
+    seedNonceAndFee();
+    const r = (await sendPasskey(60n * LYTH)) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    // The SW wrote the ledger; there is no popup record-usage IPC anymore.
+    const entries = ledger();
     expect(entries).toHaveLength(1);
-    // bigint is serialized as a decimal string (survives structured-clone).
     expect(entries?.[0]?.valueWei).toBe((60n * LYTH).toString());
     expect(typeof entries?.[0]?.at).toBe("number");
   });
 
-  it("recorded usage persists in session and counts toward the daily cap (survives SW restart)", async () => {
-    enableDailyCap();
-    await record("v1", 60n * LYTH);
-    // The ledger now lives ONLY in chrome.storage.session, so a fresh read
-    // (as a restarted SW would do) still sees the prior usage.
+  it("a second send over the daily cap is blocked by the SW's OWN count", async () => {
+    await enableDailyCap();
+    seedNonceAndFee();
+    // First passkey send (60 <= 100): submits + the SW appends 60.
+    await sendPasskey(60n * LYTH);
+    expect(ledger()).toHaveLength(1);
+    // Second send (60 + 50 = 110 > 100) is blocked using the SW-counted 60 —
+    // the popup never reported anything.
+    const r2 = (await send({
+      to: "0xrecipient",
+      valueWeiHex: hex(50n * LYTH),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r2.ok).toBe(false);
+    expect(r2.passkeyElevation).toBe("required");
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1); // only the first submitted
+    expect(ledger()).toHaveLength(1); // the blocked send did not append
+  });
+
+  it("an over-limit, password-elevated send does NOT append a passkey-usage entry", async () => {
+    await enableDailyCap();
+    seedNonceAndFee();
+    // 150 > the 100 cap → over-limit → password elevation (correct pw) → submits,
+    // but it is a PASSWORD-authorised send, not a passkey one — must not count.
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: hex(150n * LYTH),
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "correct-horse-battery-staple",
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    expect(ledger()).toBeUndefined(); // no passkey-usage appended
+  });
+
+  it("the SW-recorded usage counts toward the cap on a fresh read (survives SW restart)", async () => {
+    await enableDailyCap();
+    seedNonceAndFee();
+    await sendPasskey(60n * LYTH);
+    // The ledger lives only in chrome.storage.session — a fresh evaluate (as a
+    // restarted SW would do) still sees the SW-recorded 60.
     const over = await evaluate("v1", 50n * LYTH); // 60 + 50 = 110 > 100
-    expect(over.ok).toBe(true);
     expect(over.decision?.kind).toBe("over-limit");
     expect(over.decision?.mode).toBe("daily");
-
     const ok = await evaluate("v1", 30n * LYTH); // 60 + 30 = 90 <= 100
     expect(ok.decision?.kind).toBe("passkey-ok");
   });
 
   it("prunes >24h usage entries on read", async () => {
-    enableDailyCap();
+    await enableDailyCap();
     const DAY_MS = 24 * 60 * 60 * 1000;
     storageSession[SESSION_KEY] = {
       v1: [
@@ -6131,6 +7295,271 @@ describe("passkey daily-usage ledger persistence (#36)", () => {
     // With pruning: 30 + 50 = 80 <= 100 → passkey-ok.
     const r = await evaluate("v1", 50n * LYTH);
     expect(r.decision?.kind).toBe("passkey-ok");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// boundary 3b — the per-tx passkey is now a REAL SW-verified boundary. The SW
+// consumes a single-use, tx-intent-bound challenge and cryptographically
+// verifies the forwarded WebAuthn assertion before signing.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("wallet-send-tx passkey verify gate (boundary 3b)", () => {
+  const LIMIT = 100_000_000_000_000_000_000n; // 100 LYTH
+  const UNDER = LIMIT / 2n; // 50 LYTH
+  const UNDER_HEX = "0x" + UNDER.toString(16);
+
+  let priv: CryptoKey;
+  async function enable(mode: "per-tx" | "daily" = "per-tx") {
+    const { cred, priv: p } = await makeEs256Cred("c1");
+    priv = p;
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy:
+        mode === "per-tx"
+          ? { enabled: true, mode: "per-tx", limitWei: LIMIT }
+          : { enabled: true, mode: "daily", dailyCapWei: LIMIT },
+      credentials: [cred],
+    };
+  }
+  function seedNonceAndFee() {
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: "0x2540be401",
+      basePricePerExecutionUnitLythoshi: "0x1",
+      priorityTipLythoshi: "0x2540be400",
+      source: "test",
+    };
+    rpcResponses["eth_blockNumber"] = "0x64";
+  }
+  function send(payload: Record<string, unknown>) {
+    return dispatchPopup({ kind: "popup", op: "wallet-send-tx", payload });
+  }
+
+  it("a VALID assertion verifies, signs, and persists the new signCount", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+      signCount: 12,
+    });
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+    // The verified signCount advance is persisted (vault, credential, count).
+    expect(mockUpdateSignCount).toHaveBeenCalledWith("v1", "c1", 12);
+  });
+
+  it("a GARBAGE assertion is rejected with no sign", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: {
+        credentialId: "c1",
+        authenticatorData: "not-base64url-and-wrong",
+        clientDataJSON: "garbage",
+        signature: "garbage",
+      },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a REPLAYED assertion (reused challengeId) is rejected — challenge consumed", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    const first = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean };
+    expect(first.ok).toBe(true);
+    // Replay the SAME assertion + challengeId — the challenge was consumed.
+    const replay = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(replay.ok).toBe(false);
+    expect(replay.reason).toContain("already used");
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1); // only the first
+  });
+
+  it("a TX-SWAP (assertion minted for A, submitted as B) is rejected by the intent digest", async () => {
+    await enable();
+    seedNonceAndFee();
+    // Mint + sign for recipient A.
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xAAAA000000000000000000000000000000000000",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    // Submit the same assertion against a DIFFERENT recipient B.
+    const r = (await send({
+      to: "0xBBBB000000000000000000000000000000000000",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("does not match this transaction");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("an EXPIRED challenge is rejected", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    // Force the stored challenge to be in the past.
+    const wire = storageSession["mono.session.passkey-challenges.v1"] as Record<
+      string,
+      { expiresAt: number }
+    >;
+    wire[challengeId]!.expiresAt = Date.now() - 1;
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("expired");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a WRONG-VAULT challenge (minted for another vault) is rejected", async () => {
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    // Rebind the stored challenge to a different vault than the active one.
+    const wire = storageSession["mono.session.passkey-challenges.v1"] as Record<
+      string,
+      { vaultId: string }
+    >;
+    wire[challengeId]!.vaultId = "other-vault";
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("vault mismatch");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a pubkey-less credential → reregister-required at evaluate, never signs", async () => {
+    // A credential WITHOUT a public key (pre-upgrade).
+    activePasskeyVaultId = "v1";
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "per-tx", limitWei: LIMIT },
+      credentials: [{ credentialId: "c1" }],
+    };
+    seedNonceAndFee();
+    // Evaluate returns reregister-required (no challenge can be minted).
+    const ev = (await dispatchPopup({
+      kind: "popup",
+      op: "passkey-evaluate",
+      payload: {
+        vaultId: "v1",
+        valueWeiHex: UNDER_HEX,
+        to: "0xrecipient",
+        chainIdHex: TESTNET_CHAIN_ID_HEX,
+      },
+    })) as { ok: boolean; decision?: { kind: string } };
+    expect(ev.ok).toBe(true);
+    expect(ev.decision?.kind).toBe("reregister-required");
+    // And a direct send (no assertion) never signs.
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean };
+    expect(r.ok).toBe(false);
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("a verified credential whose stored record loses its pubkey → passkeyReregister at send", async () => {
+    // Mint + build a valid assertion, THEN strip the pubkey from the stored
+    // credential so the SW-side verify hits the no-pubkey route.
+    await enable();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0xrecipient",
+      valueWei: UNDER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv,
+      credentialId: "c1",
+    });
+    passkeyStateForTest = {
+      policy: { enabled: true, mode: "per-tx", limitWei: LIMIT },
+      credentials: [{ credentialId: "c1" }], // pubkey stripped
+    };
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: UNDER_HEX,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; passkeyReregister?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyReregister).toBe("required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 });
 
@@ -6412,6 +7841,73 @@ describe("multisig-execute fee ceiling (de-trust parity)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// M2 (T3-03 parity) — multisig-execute-governance re-verifies co-signer
+// signatures over the LIVE governance-proposal digest before applying, not just
+// the approval COUNT that isGovernanceExecutable checks. Fail-closed.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("multisig-execute-governance co-signer re-verification (M2)", () => {
+  beforeEach(() => {
+    multisigMetaForTest = null;
+    govApprovals.valid = new Set<string>(["s1"]);
+  });
+
+  function seedGovernanceProposal() {
+    multisigMetaForTest = {
+      threshold: 1,
+      signers: [{ id: "s1", address: DETERMINISTIC_ADDRESS, pubkey: "0x00" }],
+      proposals: [],
+      governance: [
+        {
+          id: "gov-1",
+          proposedBy: "s1",
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 3_600_000,
+          vaultAddress: DETERMINISTIC_ADDRESS,
+          chainIdHex: TESTNET_CHAIN_ID_HEX,
+          // A no-op change-threshold(1) keeps the real applyGovernance valid on
+          // the accepted path (1 signer, threshold stays 1).
+          action: { kind: "change-threshold", threshold: 1 },
+          approvals: [{ signerId: "s1" }],
+          rejections: [],
+          status: "pending",
+        },
+      ],
+    };
+  }
+
+  function executeGovernance() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "multisig-execute-governance",
+      payload: { vaultId: "ms1", proposalId: "gov-1" },
+    });
+  }
+
+  it("REJECTS when the collected signatures do not re-verify (count gate passed, sig gate fails)", async () => {
+    seedGovernanceProposal();
+    // The approval COUNT passes isGovernanceExecutable, but NO signature
+    // re-verifies against the live digest (e.g. a tampered action).
+    govApprovals.valid = new Set<string>();
+    const r = (await executeGovernance()) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("do not verify");
+  });
+
+  it("APPLIES when the re-verified signatures meet the threshold", async () => {
+    seedGovernanceProposal();
+    govApprovals.valid = new Set<string>(["s1"]);
+    const r = (await executeGovernance()) as {
+      ok: boolean;
+      threshold?: number;
+      signers?: number;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.threshold).toBe(1);
+    expect(r.signers).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // T2-02 — SW router sender authentication (fail-closed).
 // ─────────────────────────────────────────────────────────────────────────────
 describe("SW router sender authentication (T2-02)", () => {
@@ -6582,7 +8078,7 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
 
   it("get-auto-lock-minutes returns the persisted value, not the in-memory default", async () => {
     // The persisted 60 lives only on disk; the freshly-imported SW's in-memory
-    // session.autoLockMinutes is the 15 default (the fresh-unlock-after-update
+    // session.autoLockMinutes is the 5 default (the fresh-unlock-after-update
     // state). The display must reflect the on-disk value.
     storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES] = 60;
     const res = (await dispatchPopup({
@@ -6590,6 +8086,18 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
       op: "get-auto-lock-minutes",
     })) as { autoLockMinutes: number };
     expect(res.autoLockMinutes).toBe(60);
+  });
+
+  it("get-auto-lock-minutes falls back to the 5-min default when unset (C2)", async () => {
+    // No persisted value on disk → readAutoLockMinutes returns
+    // AUTO_LOCK_MINUTES_DEFAULT, lowered to 5 in the 2026-06-28 overhaul. The UI
+    // reads this verbatim, so an unset wallet shows 5 (never a hardcoded 15).
+    delete storageLocal[STORAGE_KEY_AUTO_LOCK_MINUTES];
+    const res = (await dispatchPopup({
+      kind: "popup",
+      op: "get-auto-lock-minutes",
+    })) as { autoLockMinutes: number };
+    expect(res.autoLockMinutes).toBe(5);
   });
 
   it("a fresh keystore-unlock arms the lock from the persisted value (not the default)", async () => {
@@ -6603,6 +8111,6 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
     const armed = alarmCreateCalls.filter((c) => c.name === ALARM_AUTO_LOCK);
     expect(armed.length).toBeGreaterThan(0); // the lock ALWAYS arms when unlocked
     const last = armed[armed.length - 1]!.info as { delayInMinutes: number };
-    expect(last.delayInMinutes).toBe(60); // from persisted, not the 15 default
+    expect(last.delayInMinutes).toBe(60); // from persisted, not the 5 default
   });
 });

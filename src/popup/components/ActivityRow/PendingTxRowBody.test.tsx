@@ -98,20 +98,87 @@ describe("PendingTxRowBody — suppress meaningless 0-value amount", () => {
         counterpartyLabel={undefined}
       />,
     );
-    expect(pending).toContain("Pending");
+    expect(pending).toContain("Sending"); // present-continuous (was "Pending ·")
     expect(pending).toContain("5 LYTH");
   });
 });
 
+// Drop-detection lifecycle (C4): a pending row never silently vanishes — it
+// shows slow → dropped/expired, drops the spinner on a terminal state, and
+// offers a Dismiss affordance only when terminal AND onDismiss is provided.
+describe("PendingTxRowBody — drop-detection lifecycle (C4)", () => {
+  it("slow: shows 'taking longer than usual' and keeps the spinner", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "slow" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("taking longer than usual");
+    expect(html).toContain("ext-pending-dot"); // still in-flight
+  });
+
+  it("dropped: shows the terminal note, drops the spinner, offers Dismiss", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "dropped" })}
+        counterpartyLabel={undefined}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(html).toContain("replaced or dropped"); // "Didn't confirm (replaced or dropped)"
+    expect(html).not.toContain("ext-pending-dot"); // settled — no spinner
+    expect(html).toContain("Dismiss");
+  });
+
+  it("expired: shows 'Status unknown', drops the spinner, offers Dismiss", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "expired" })}
+        counterpartyLabel={undefined}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(html).toContain("Status unknown");
+    expect(html).not.toContain("ext-pending-dot");
+    expect(html).toContain("Dismiss");
+  });
+
+  it("a terminal row WITHOUT onDismiss renders no Dismiss button", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1", lifecycle: "dropped" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("replaced or dropped");
+    expect(html).not.toContain("Dismiss");
+  });
+
+  it("default (pending): no note, keeps the spinner, never dismissible", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1" })}
+        counterpartyLabel={undefined}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(html).not.toContain("taking longer");
+    expect(html).not.toContain("replaced or dropped");
+    expect(html).toContain("ext-pending-dot");
+    expect(html).not.toContain("Dismiss");
+  });
+});
+
 describe("PendingTxRowBody — pending label", () => {
-  it("labels an unconfirmed pending row 'Pending'", () => {
+  it("labels an unconfirmed send 'Sending · …'", () => {
     const html = renderToStaticMarkup(
       <PendingTxRowBody
         row={pendingRow({ opKind: "send", amountDecimal: "5" })}
         counterpartyLabel={undefined}
       />,
     );
-    expect(html).toContain("Pending");
+    expect(html).toContain("Sending");
   });
 });
 
@@ -142,13 +209,13 @@ describe("PendingTxRowBody — reward claim claimedAmount + fiat sibling (C3)", 
     expect(html).not.toContain("$0");
   });
 
-  it("pending (not-yet-bridged) claim reads 'Pending · Rewards claimed 6.51 LYTH'", () => {
+  it("pending (not-yet-bridged) claim reads 'Claiming rewards +6.51 LYTH'", () => {
     const html = renderToStaticMarkup(
       <PendingTxRowBody row={claim()} counterpartyLabel={undefined} />,
     );
-    expect(html).toContain("Pending");
-    expect(html).toContain("Rewards claimed");
+    expect(html).toContain("Claiming rewards"); // present-continuous while pending
     expect(html).toContain("6.51 LYTH");
+    expect(html).not.toContain("Rewards claimed"); // past tense is the confirmed row
     expect(html).not.toContain("0 LYTH"); // never the suppressed "0 LYTH to <precompile>"
   });
 
@@ -186,5 +253,89 @@ describe("PendingTxRowBody — reward claim claimedAmount + fiat sibling (C3)", 
     expect(html).toContain("Rewards claimed");
     expect(html).not.toContain("0 LYTH");
     expect(html).not.toContain("LYTH"); // "0" normalized to no-figure
+  });
+});
+
+describe("PendingTxRowBody — present-continuous pending labels (B)", () => {
+  it("send: 'Sending · 1 LYTH …' (only the leading word changes)", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "send", amountDecimal: "1" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Sending · 1 LYTH to");
+    expect(html).not.toContain("Pending · 1 LYTH");
+  });
+
+  it("delegate: 'Delegating 12.50% to halcyon' (no '0 LYTH to <module>')", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({
+          opKind: "delegate",
+          delegationWeightBps: 1250,
+          clusterId: 1,
+          clusterName: "halcyon",
+        })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Delegating 12.50% to halcyon");
+    expect(html).not.toContain("0 LYTH to");
+    // Full label on hover (C).
+    expect(html).toContain('title="Delegating 12.50% to halcyon"');
+  });
+
+  it("undelegate: 'Undelegating 50.00% from halcyon'", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({
+          opKind: "undelegate",
+          delegationWeightBps: 5000,
+          clusterId: 1,
+          clusterName: "halcyon",
+        })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Undelegating 50.00% from halcyon");
+  });
+
+  it("redelegate: 'Redelegating 12.50% from halcyon to polar'", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({
+          opKind: "redelegate",
+          delegationWeightBps: 1250,
+          clusterId: 1,
+          clusterName: "halcyon",
+          toClusterId: 2,
+          toClusterName: "polar",
+        })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Redelegating 12.50% from halcyon to polar");
+  });
+
+  it("legacy delegate without a captured % omits the figure", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "delegate", clusterId: 1, clusterName: "halcyon" })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Delegating to halcyon");
+    expect(html).not.toContain("%");
+  });
+
+  it("unnamed cluster falls back to 'Cluster #<id>'", () => {
+    const html = renderToStaticMarkup(
+      <PendingTxRowBody
+        row={pendingRow({ opKind: "delegate", delegationWeightBps: 1250, clusterId: 3 })}
+        counterpartyLabel={undefined}
+      />,
+    );
+    expect(html).toContain("Delegating 12.50% to Cluster #3");
   });
 });

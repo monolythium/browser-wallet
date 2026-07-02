@@ -8,9 +8,10 @@ import { MONOLYTHIUM_TESTNET_CHAIN_ID, getRpcEndpoints } from "@monolythium/core
 import {
   STORAGE_KEY_OPERATOR_OVERRIDE,
   validateOperatorList,
-  mergeOperatorOverride,
   type OperatorEntry,
 } from "../shared/operators.js";
+import { isHardenedBuild } from "../shared/build-mode.js";
+import { hardenedOperators } from "../shared/hardened-dial.js";
 import {
   TESTNET_BLOCK0_HASH,
   TESTNET_GENESIS_HASH,
@@ -37,36 +38,11 @@ export const TESTNET_CHAIN_ID = Number(MONOLYTHIUM_TESTNET_CHAIN_ID); // 69420
  */
 export const TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX = "0x7530"; // 30000
 
-/**
- * T4-04 (Item D) — absolute sane upper bound on an operator-reported (or
- * popup-supplied) per-execution-unit PRICE. A de-trust BACKSTOP, not an
- * economic claim: the wallet signs the fee the user saw (T4-04 b1), but a
- * malicious/MITM operator (or a tampered popup) could still supply an absurd
- * `maxFeePerGas`; `clampToSaneBound` caps it here so a single unit can never be
- * priced above this line. Paired with the balance ceiling (Item C) via the
- * shared `operator-bounds` helper.
- *
- * UNIT NOTE: lythoshi-per-execution-unit, 18-decimal domain (1 LYTH = 10^18
- * lythoshi = LYTHOSHI_PER_LYTH). The realistic price is ~1e9–1e10 lythoshi/unit
- * (idle testnet; the Send page shows ~1e9), so 1e15 sits ~1e5–1e6× above real.
- * It therefore NEVER clamps a legitimate price — the dangerous direction would
- * be a too-LOW ceiling that clamps a real high price down and underprices/stalls
- * the tx — while bounding the worst-case malicious-induced fee to
- * 1e15 × 30000 units = 3e19 lythoshi = 30 LYTH per transfer (and that fee is
- * shown to the user via display==signed). The value MUST track the 18-decimal
- * domain: at the prior 8-decimal scale 1e15 read as ~10,000,000 LYTH/unit; at 18
- * decimals it means 0.001 LYTH/unit — still a safe loose ceiling, but the
- * magnitude intent changed, so the stale comment was corrected.
- *
- * VALUE-DECISION (needs-decision — deliberately NOT changed here): 1e15 is
- * loose-but-safe. Tightening toward realistic-peak-price × margin (e.g. 1e12–
- * 1e13 → ~0.03–0.3 LYTH max fee) would shrink the malicious-overpay window, but
- * is only safe if it stays comfortably above the network's realistic PEAK price
- * under congestion — which the wallet cannot observe (a fee-policy call). Kept
- * loose-but-safe pending that decision; never lower it below a wide margin over
- * the real ~1e9–1e10 price.
- */
-export const MAX_EXECUTION_UNIT_PRICE_LYTHOSHI = 1_000_000_000_000_000n; // 1e15 lythoshi/unit (18-dec; loose-but-safe — see VALUE-DECISION)
+// T4-04 (Item D) — the per-execution-unit PRICE de-trust ceiling
+// (`MAX_EXECUTION_UNIT_PRICE_LYTHOSHI`) moved to `shared/operator-bounds.ts`,
+// next to its `clampToSaneBound` consumer, so the popup can import the ceiling
+// for display (P3-004) without pulling in this background RPC graph. Value +
+// semantics unchanged; the clamp sites import it from the shared module.
 
 /**
  * F-3.11 (#28) — absolute sane upper bound on the resolved execution-unit
@@ -131,7 +107,13 @@ export async function loadOperatorOverride(): Promise<void> {
     chrome.storage.local.get([STORAGE_KEY_OPERATOR_OVERRIDE], (res) => {
       const raw = res?.[STORAGE_KEY_OPERATOR_OVERRIDE];
       const validated = validateOperatorList(raw);
-      activeOperators = mergeOperatorOverride(TESTNET_OPERATOR_RPCS_DEFAULTS, validated);
+      // Hardened builds ignore the stored override (it would brick RPC under
+      // the strict connect-src) and always dial the allowlisted defaults.
+      activeOperators = hardenedOperators(
+        TESTNET_OPERATOR_RPCS_DEFAULTS,
+        validated,
+        isHardenedBuild(),
+      );
       resolve();
     });
   });
@@ -145,7 +127,14 @@ export async function loadOperatorOverride(): Promise<void> {
 export async function setOperatorOverride(
   override: OperatorEntry[] | null,
 ): Promise<void> {
-  activeOperators = mergeOperatorOverride(TESTNET_OPERATOR_RPCS_DEFAULTS, override);
+  // Hardened builds never apply an override in memory (it would brick RPC under
+  // the strict connect-src). The override is still persisted so a later dev
+  // build honors it; in a hardened build the in-memory set stays the defaults.
+  activeOperators = hardenedOperators(
+    TESTNET_OPERATOR_RPCS_DEFAULTS,
+    override,
+    isHardenedBuild(),
+  );
   return new Promise((resolve) => {
     if (override === null) {
       chrome.storage.local.remove(STORAGE_KEY_OPERATOR_OVERRIDE, () => resolve());
@@ -377,7 +366,7 @@ const operatorWrongChainId = new Set<string>();
 // C6 (R3): bumped to v2 — the persisted blob is now pin-QUALIFIED
 // (`{ pin, entries }`). A pre-C6 v1 blob (un-qualified) lives at the old key and
 // is never read, so it can never be rehydrated as trusted.
-const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v2";
+export const SESSION_KEY_GENESIS_CACHE = "mono.session.genesis-cache.v2";
 
 /** Identity the persisted genesis blob is qualified by. If EITHER pin changes
  *  (a re-pin build), a blob persisted under the old identity is DROPPED on

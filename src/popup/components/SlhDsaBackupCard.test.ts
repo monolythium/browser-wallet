@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import {
   backupStatusLabel,
+  clearAbandonsOnChainKey,
   isBackupComplete,
   type SlhDsaBackup,
 } from "../../shared/slh-dsa-backup.js";
@@ -198,6 +199,43 @@ describe("SlhDsaBackupCard — fully registered (complete)", () => {
 
   it("STILL renders the G3 rehearsal reference (always available)", () => {
     expect(showRehearsalReference(REGISTERED)).toBe(true);
+  });
+});
+
+describe("SlhDsaBackupCard — registration-aware clear (hard warning + ack gate)", () => {
+  // The card branches the clear confirm step on `clearAbandonsOnChainKey`:
+  // true → hard warning + a required ack that gates the password + a Re-export
+  // steer; false → the normal "you'll regenerate" warning, no ack. The
+  // password-disabled / button-disabled JSX is wired directly from this
+  // predicate (`disabled={clearRequiresAck && !clearAck}`), so pinning the
+  // predicate pins the gate.
+  it("REGISTERED clear abandons the on-chain key → hard warning + ack gate", () => {
+    expect(clearAbandonsOnChainKey(REGISTERED.chainRegistrationStatus)).toBe(
+      true,
+    );
+  });
+
+  it("PENDING is treated with the same severity (tx may already be mined)", () => {
+    expect(
+      clearAbandonsOnChainKey(PENDING_REGISTRATION.chainRegistrationStatus),
+    ).toBe(true);
+  });
+
+  it("not-registered clears cleanly → normal warning, no ack", () => {
+    expect(
+      clearAbandonsOnChainKey(GENERATED_NOT_REGISTERED.chainRegistrationStatus),
+    ).toBe(false);
+  });
+
+  it("registration-failed (never landed) clears cleanly → no ack", () => {
+    expect(clearAbandonsOnChainKey("registration-failed")).toBe(false);
+  });
+
+  it("covers exactly the on-chain-binding states", () => {
+    expect(clearAbandonsOnChainKey("registered")).toBe(true);
+    expect(clearAbandonsOnChainKey("pending")).toBe(true);
+    expect(clearAbandonsOnChainKey("not-registered")).toBe(false);
+    expect(clearAbandonsOnChainKey("registration-failed")).toBe(false);
   });
 });
 

@@ -176,13 +176,13 @@ describe("fireOsNotification", () => {
     expect(call.options.type).toBe("basic");
     expect(call.options.iconUrl).toBe("icon-48.png");
     expect(call.options.title).toBe("Delegated");
-    // body = amount + " LYTH · " + short bech32m counterparty
+    // body: a delegation NEVER shows the raw precompile counterparty or an
+    // amount — with no cluster captured it falls to the action label (the title
+    // carries action+status). Never "0x…", never "LYTH".
     expect(typeof call.options.message).toBe("string");
-    expect(call.options.message as string).toContain("0.10 LYTH");
-    // Short counterparty is rendered via bech32mDisplay + truncMiddle —
-    // for a 0x address the display is the original 0x string (bech32mDisplay
-    // tries to convert and returns input on non-20-byte test input).
-    expect(call.options.message as string).toContain("·");
+    expect(call.options.message as string).toBe("Delegated");
+    expect(call.options.message as string).not.toContain("0x");
+    expect(call.options.message as string).not.toContain("LYTH");
   });
 
   it("renders the failed wording from notificationTitle for status:'failed' (never 'confirmed')", async () => {
@@ -237,6 +237,80 @@ describe("fireOsNotification", () => {
       }),
     );
     expect(captures.notificationsCreate[0]!.options.message).toBe("alpha · 25.00%");
+  });
+
+  // ROBUST: a delegation notification must NEVER show the raw 0x100A precompile
+  // address. It always shows the cluster (name or #id); the % only when bps is a
+  // valid 1..10000. Covers the undelegate-with-unknown-weight bug.
+  const PRECOMPILE = "0x000000000000000000000000000000000000100a";
+
+  it("undelegate with a known weight shows the cluster + % (never 0x100A)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "undelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        counterparty: PRECOMPILE,
+        clusterName: "genesis-cluster-2",
+        delegationWeightBps: 5000,
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("genesis-cluster-2 · 50.00%");
+    expect(msg).not.toContain("100a");
+  });
+
+  it("undelegate with UNKNOWN weight (the bug) shows the cluster ALONE — never 0x100A, never 0%", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "undelegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        counterparty: PRECOMPILE,
+        clusterName: "genesis-cluster-2",
+        // delegationWeightBps OMITTED → the sanitizer dropped a 0
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("genesis-cluster-2");
+    expect(msg).not.toContain("100a");
+    expect(msg).not.toContain("%");
+  });
+
+  it("delegate with a clusterId but no name + no bps shows 'cluster #id' (never 0x100A)", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "delegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        counterparty: PRECOMPILE,
+        clusterId: 7,
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("cluster #7");
+    expect(msg).not.toContain("100a");
+  });
+
+  it("a 0-bps delegation (sanitizer would have dropped it) still shows the cluster, not 0x100A", async () => {
+    const { fireOsNotification } = await import("./notifications-os.js");
+    await fireOsNotification(
+      baseRecord({
+        kind: "delegate",
+        status: "confirmed",
+        amountDecimal: "0",
+        counterparty: PRECOMPILE,
+        clusterName: "alpha",
+        delegationWeightBps: 0,
+      }),
+    );
+    const msg = captures.notificationsCreate[0]!.options.message as string;
+    expect(msg).toBe("alpha"); // 0 is not a valid 1..10000 → no "%"
+    expect(msg).not.toContain("100a");
+    expect(msg).not.toContain("%");
   });
 
   it("redelegate shows <from> → <to> · <%> when both clusters are known", async () => {
@@ -476,6 +550,10 @@ describe("handleNotificationClick / parseTxHashFromNotificationId", () => {
     expect(parseTxHashFromNotificationId(`${CHAIN}:${HASH}`)).toBe(HASH);
     expect(parseTxHashFromNotificationId("no-colon-no-0x")).toBeNull();
     expect(parseTxHashFromNotificationId("0xabc")).toBe("0xabc");
+    // P5-008 — full hex-charset validation: a non-hex / empty 0x tail is rejected.
+    expect(parseTxHashFromNotificationId("0xZZZ")).toBeNull();
+    expect(parseTxHashFromNotificationId(`${CHAIN}:0x12<script>`)).toBeNull();
+    expect(parseTxHashFromNotificationId("0x")).toBeNull();
   });
 });
 

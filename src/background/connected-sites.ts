@@ -18,6 +18,17 @@ export interface ConnectedSiteRecord {
 
 export type ConnectedSitesMap = Record<string, ConnectedSiteRecord>;
 
+/** True only for a canonical http(s) origin (exact round-trip, no path/query).
+ *  P4-006 — drops a corrupt/hostile stored connected-sites key on load. */
+function isCanonicalHttpOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    return (u.protocol === "https:" || u.protocol === "http:") && u.origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 export async function loadConnectedSites(): Promise<ConnectedSitesMap> {
   return new Promise((resolve) => {
     chrome.storage.local.get(STORAGE_KEY_CONNECTED_SITES, (got) => {
@@ -35,7 +46,8 @@ export async function loadConnectedSites(): Promise<ConnectedSitesMap> {
           rec &&
           typeof rec === "object" &&
           typeof (rec as ConnectedSiteRecord).address === "string" &&
-          typeof (rec as ConnectedSiteRecord).approvedAt === "number"
+          typeof (rec as ConnectedSiteRecord).approvedAt === "number" &&
+          isCanonicalHttpOrigin(origin)
         ) {
           out[origin] = rec as ConnectedSiteRecord;
         }

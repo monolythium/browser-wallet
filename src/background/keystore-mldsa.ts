@@ -46,20 +46,21 @@
 // No BIP-32 / BIP-44 derivation paths (whitepaper §21.2.1 forbids HD in
 // v1) — each vault is an independent 24-word BIP-39 recovery phrase.
 //
-// Migration from the legacy single envelope ("mono.vault.v4") to the
-// container ("mono.vaults.v4") is opportunistic, lazy, and runs inside
-// the unlock handler the first time after the v4-multi upgrade. The
-// legacy entry is left in place for one release cycle as rollback
-// safety; a later release drops it. This module lands the schema +
-// helpers + migration function only — wiring into the existing unlock
-// path is wired separately by the unlock handler.
+// Vault creation commits straight into the container ("mono.vaults.v4"):
+// createVaultFromNewMnemonic / commitVaultFromSeed assemble the container
+// shape and write it directly via saveVaultsContainerV4 — the legacy
+// single-envelope key ("mono.vault.v4") is never written. There is no
+// legacy->container migration code at HEAD: an earlier plan for a lazy
+// in-unlock migration became unnecessary once creation wrote the container
+// shape from the start, so no `migrateLegacyToContainerV4` function exists.
 //
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { argon2idAsync } from "@noble/hashes/argon2.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
+import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
-import { randomBytes } from "@noble/hashes/utils.js";
+import { hexToBytes, randomBytes } from "@noble/hashes/utils.js";
 import {
   MlDsa65Backend,
   generateMnemonic,
@@ -106,7 +107,7 @@ import {
 import {
   SESSION_KEY_MEK_V4,
   SESSION_KEY_MEK_REHYDRATE_DEADLINE,
-  MEK_REHYDRATE_MAX_MINUTES,
+  SESSION_KEY_AUTO_LOCK_DEADLINE,
 } from "../shared/constants.js";
 
 const ARGON2_M_KIB = 64 * 1024; // 64 MiB
@@ -116,7 +117,11 @@ const SALT_LEN = 16;
 const XCHACHA_NONCE_LEN = 24;
 const SEED_LEN = 32;
 
-const SCHEMA_VERSION = 4;
+// V5 (P1-003) = the always-AAD-bound vault seal. A stored V4 container (no-AAD)
+// cannot be opened by the V5 binding; it is DETECTED (read-only, never
+// decrypted) and the user restores from their recovery phrase. Testnet-clean:
+// no migration / dual-open / re-seal.
+const SCHEMA_VERSION = 5;
 const ALGO_ID = "ml-dsa-65" as const;
 const KDF_ID = "argon2id" as const;
 const AEAD_ID = "xchacha20-poly1305" as const;
@@ -139,6 +144,12 @@ const HKDF_INFO_VAULT_SEED = new TextEncoder().encode(
 );
 const HKDF_INFO_VAULT_MNEMONIC = new TextEncoder().encode(
   "mono-vault-mnemonic-vmulti-v4",
+);
+// P5-007 — info label for the sent-address integrity HMAC sub-key. DISTINCT
+// from the seed/mnemonic labels above so the integrity sub-key can never share
+// derived material with the envelope keys (domain separation by construction).
+const HKDF_INFO_SENT_ADDR_INTEGRITY = new TextEncoder().encode(
+  "mono-sent-addr-integrity-v1",
 );
 
 interface UnlockedState {
@@ -197,17 +208,12 @@ async function persistMekToSessionV4(mek: Uint8Array): Promise<void> {
   if (!sessionAreaAvailable()) return;
   const b64 = bytesToBase64(mek);
   return new Promise((resolve) => {
-    // T1-03 (Item B): write the MEK together with its rehydrate deadline so a
-    // session MEK always carries a validity bound (refreshed on activity by the
-    // SW's resetAutoLock). tryRestoreFromSessionV4 fails closed past the cap.
-    chrome.storage.session.set(
-      {
-        [SESSION_KEY_MEK_V4]: b64,
-        [SESSION_KEY_MEK_REHYDRATE_DEADLINE]:
-          Date.now() + MEK_REHYDRATE_MAX_MINUTES * 60_000,
-      },
-      () => resolve(),
-    );
+    // 2026-06-28 auto-lock overhaul: the password-less restore window is now
+    // governed SOLELY by the configured auto-lock deadline
+    // (SESSION_KEY_AUTO_LOCK_DEADLINE, set/slid by the SW's resetAutoLock and
+    // re-armed on boot) — see tryRestoreFromSessionV4. We no longer stamp an
+    // independent 5-min rehydrate cap here (it shadowed the configured timer).
+    chrome.storage.session.set({ [SESSION_KEY_MEK_V4]: b64 }, () => resolve());
   });
 }
 
@@ -221,14 +227,18 @@ async function clearMekFromSessionV4(): Promise<void> {
   });
 }
 
-/** T1-03 (Item B): true when the session-MEK rehydrate cap has lapsed (or was
- *  never written), i.e. the password-less restore window is closed. Fails
- *  closed: an absent deadline is treated as expired. */
-async function mekRehydrateExpiredV4(): Promise<boolean> {
+/** 2026-06-28 auto-lock overhaul: the configured auto-lock deadline
+ *  (SESSION_KEY_AUTO_LOCK_DEADLINE, set/slid by the SW's resetAutoLock and
+ *  re-armed on boot) is the SINGLE authority for the password-less session-MEK
+ *  restore window — replacing the former independent 5-min cap that shadowed the
+ *  configured timer. Returns true when the deadline is ABSENT or has PASSED, i.e.
+ *  the restore must be refused + the session MEK wiped. FAIL-CLOSED: a missing
+ *  deadline is treated as expired (no restore on a missing bound). */
+async function autoLockDeadlinePassedOrAbsentV4(): Promise<boolean> {
   if (!sessionAreaAvailable()) return true;
   const deadline = await new Promise<unknown>((resolve) => {
-    chrome.storage.session.get([SESSION_KEY_MEK_REHYDRATE_DEADLINE], (res) => {
-      resolve(res?.[SESSION_KEY_MEK_REHYDRATE_DEADLINE] ?? null);
+    chrome.storage.session.get([SESSION_KEY_AUTO_LOCK_DEADLINE], (res) => {
+      resolve(res?.[SESSION_KEY_AUTO_LOCK_DEADLINE] ?? null);
     });
   });
   if (typeof deadline !== "number") return true;
@@ -267,10 +277,14 @@ export async function tryRestoreFromSessionV4(): Promise<
   }
   const mek = await loadMekFromSessionV4();
   if (!mek) return { ok: false };
-  // T1-03 (Item B): refuse a password-less restore once the rehydrate cap has
-  // lapsed (5 min since last activity), and wipe the session MEK so the wallet
-  // stays locked until the user re-enters their password.
-  if (await mekRehydrateExpiredV4()) {
+  // 2026-06-28 auto-lock overhaul: the configured auto-lock deadline is the
+  // SINGLE authority for the password-less restore window. Refuse + wipe when it
+  // is absent or has passed, so the wallet stays locked until a fresh password
+  // unlock. tryRestoreFromSessionV4 enforces this ITSELF (fail-closed) so it can
+  // never restore past the deadline even if a caller forgets to gate — both
+  // production callers (boot rehydrate, ensureUnlockRestored) also pre-gate on
+  // the same key, so this is idempotent for them.
+  if (await autoLockDeadlinePassedOrAbsentV4()) {
     mek.fill(0);
     await clearMekFromSessionV4();
     return { ok: false };
@@ -390,7 +404,7 @@ interface VaultRecordV4 {
 /** Multi-vault container. Stored under
  *  chrome.storage.local["mono.vaults.v4"]. */
 interface VaultsContainerV4 {
-  version: 4;
+  version: 5;
   algo: typeof ALGO_ID;
   kdf: typeof KDF_ID;
   aead: typeof AEAD_ID;
@@ -416,6 +430,37 @@ function base64ToBytes(s: string): Uint8Array {
 
 
 // ---- v4-multi crypto helpers ----
+
+/** Canonical additional-authenticated-data for the V5 vault seal (P1-003).
+ *  Binds every per-vault ciphertext to (format tag | schema version | algo |
+ *  aead | vaultId), so a ciphertext cannot be lifted into a different vault:
+ *  opening a record under the wrong vaultId fails the AEAD tag check.
+ *  Deterministic, fixed-order, length-prefixed (every field < 256 bytes → a
+ *  1-byte length). Seal + open build identical bytes from the record id. */
+function buildVaultAadV4(vaultId: string): Uint8Array {
+  const enc = new TextEncoder();
+  const tag = enc.encode("mono.vault.aad.v1");
+  const algo = enc.encode(ALGO_ID);
+  const aead = enc.encode(AEAD_ID);
+  const id = enc.encode(vaultId);
+  if (id.length > 255) throw new Error("buildVaultAadV4: vaultId too long");
+  const out = new Uint8Array(
+    tag.length + 1 + (1 + algo.length) + (1 + aead.length) + (1 + id.length),
+  );
+  let o = 0;
+  out.set(tag, o);
+  o += tag.length;
+  out[o++] = SCHEMA_VERSION & 0xff;
+  out[o++] = algo.length;
+  out.set(algo, o);
+  o += algo.length;
+  out[o++] = aead.length;
+  out.set(aead, o);
+  o += aead.length;
+  out[o++] = id.length;
+  out.set(id, o);
+  return out;
+}
 
 /** Fresh argon2id parameters for a new container. Reuses the same
  *  cost knobs the single-vault layer uses (64 MiB / t=3 / p=1) so the
@@ -448,11 +493,15 @@ function generateVekV4(): Uint8Array {
 /** Encrypt a VEK under the MEK with XChaCha20-Poly1305. Fresh random
  *  nonce per wrap. Caller owns MEK + VEK lifetimes — this helper does
  *  not zero its inputs. */
-function wrapVekV4(mek: Uint8Array, vek: Uint8Array): WrappedVekV4 {
+function wrapVekV4(
+  mek: Uint8Array,
+  vek: Uint8Array,
+  vaultId: string,
+): WrappedVekV4 {
   if (mek.length !== MEK_LEN) throw new Error("wrapVekV4: bad MEK length");
   if (vek.length !== VEK_LEN) throw new Error("wrapVekV4: bad VEK length");
   const nonce = randomBytes(XCHACHA_NONCE_LEN);
-  const cipher = xchacha20poly1305(mek, nonce);
+  const cipher = xchacha20poly1305(mek, nonce, buildVaultAadV4(vaultId));
   const ct = cipher.encrypt(vek);
   return {
     aead: AEAD_ID,
@@ -464,14 +513,18 @@ function wrapVekV4(mek: Uint8Array, vek: Uint8Array): WrappedVekV4 {
 /** Decrypt the VEK using the MEK. Throws on AEAD failure (wrong MEK or
  *  tampered ciphertext) without leaking timing about which. Returned
  *  VEK is a fresh 32-byte buffer; caller MUST zero it after use. */
-function unwrapVekV4(mek: Uint8Array, wrapped: WrappedVekV4): Uint8Array {
+function unwrapVekV4(
+  mek: Uint8Array,
+  wrapped: WrappedVekV4,
+  vaultId: string,
+): Uint8Array {
   if (mek.length !== MEK_LEN) throw new Error("unwrapVekV4: bad MEK length");
   if (wrapped.aead !== AEAD_ID) {
     throw new Error(`unwrapVekV4: unexpected AEAD ${wrapped.aead}`);
   }
   const nonce = base64ToBytes(wrapped.nonce);
   const ct = base64ToBytes(wrapped.ciphertext);
-  const cipher = xchacha20poly1305(mek, nonce);
+  const cipher = xchacha20poly1305(mek, nonce, buildVaultAadV4(vaultId));
   const vek = cipher.decrypt(ct);
   if (vek.length !== VEK_LEN) {
     vek.fill(0);
@@ -499,12 +552,62 @@ function deriveSubKeysFromVekV4(vek: Uint8Array): {
   return { seedKey, mnemonicKey };
 }
 
+/** P5-007 — derive the sent-address-integrity sub-key from the in-session MEK.
+ *  Domain-separated from the seed/mnemonic sub-keys so it can never collide.
+ *  Returns null when the container is locked (no MEK) → callers fail safe. The
+ *  caller MUST zero the returned key after use. */
+function deriveSentAddrIntegrityKeyV4(): Uint8Array | null {
+  if (!mekCache) return null;
+  return hkdf(sha256, mekCache, undefined, HKDF_INFO_SENT_ADDR_INTEGRITY, SUBKEY_LEN);
+}
+
+/** P5-007 — compute the wallet HMAC integrity tag (hex) for a canonical
+ *  sent-address message (see `canonicalSentAddrMessage`). Returns null when the
+ *  container is locked. The MEK-derived sub-key never leaves this module and is
+ *  zeroed after use. Advisory-only: the tag gates a phishing-friction warning,
+ *  never a send. */
+export function computeSentAddrTagV4(message: string): string | null {
+  const subKey = deriveSentAddrIntegrityKeyV4();
+  if (!subKey) return null;
+  try {
+    return bytesToHex(hmac(sha256, subKey, new TextEncoder().encode(message)));
+  } finally {
+    subKey.fill(0);
+  }
+}
+
+/** P5-007 — verify a stored tag against a freshly recomputed one in CONSTANT
+ *  TIME. Returns false when the container is locked, when the stored tag isn't a
+ *  well-formed hex MAC of the right length, or on any mismatch. Never throws. */
+export function verifySentAddrTagV4(message: string, tagHex: string): boolean {
+  const subKey = deriveSentAddrIntegrityKeyV4();
+  if (!subKey) return false;
+  try {
+    const expected = hmac(sha256, subKey, new TextEncoder().encode(message));
+    let provided: Uint8Array;
+    try {
+      provided = hexToBytes(tagHex);
+    } catch {
+      return false;
+    }
+    if (provided.length !== expected.length) return false;
+    let diff = 0;
+    for (let i = 0; i < expected.length; i++) {
+      diff |= (expected[i] ?? 0) ^ (provided[i] ?? 0);
+    }
+    return diff === 0;
+  } finally {
+    subKey.fill(0);
+  }
+}
+
 /** Encrypt seed + mnemonic under a VEK. Each side gets a fresh nonce
  *  and its own HKDF sub-key. Inputs are not zeroed by this helper. */
 function sealVaultEnvelopeV4(
   vek: Uint8Array,
   seed: Uint8Array,
   mnemonic: string,
+  vaultId: string,
 ): SealedSeedRecordV4 {
   if (seed.length !== SEED_LEN) {
     throw new Error(`sealVaultEnvelopeV4: seed must be ${SEED_LEN} bytes`);
@@ -512,14 +615,15 @@ function sealVaultEnvelopeV4(
   if (mnemonic.length === 0) {
     throw new Error("sealVaultEnvelopeV4: mnemonic must be non-empty");
   }
+  const aad = buildVaultAadV4(vaultId);
   const { seedKey, mnemonicKey } = deriveSubKeysFromVekV4(vek);
+  let mnPlain: Uint8Array | null = null;
   try {
     const seedNonce = randomBytes(XCHACHA_NONCE_LEN);
-    const seedCt = xchacha20poly1305(seedKey, seedNonce).encrypt(seed);
+    const seedCt = xchacha20poly1305(seedKey, seedNonce, aad).encrypt(seed);
     const mnNonce = randomBytes(XCHACHA_NONCE_LEN);
-    const mnPlain = new TextEncoder().encode(mnemonic);
-    const mnCt = xchacha20poly1305(mnemonicKey, mnNonce).encrypt(mnPlain);
-    mnPlain.fill(0);
+    mnPlain = new TextEncoder().encode(mnemonic);
+    const mnCt = xchacha20poly1305(mnemonicKey, mnNonce, aad).encrypt(mnPlain);
     return {
       seedNonce: bytesToBase64(seedNonce),
       seedCiphertext: bytesToBase64(seedCt),
@@ -527,6 +631,10 @@ function sealVaultEnvelopeV4(
       mnemonicCiphertext: bytesToBase64(mnCt),
     };
   } finally {
+    // P2-005 — zero the mnemonic plaintext on EVERY exit, including an
+    // encrypt() throw (it was zeroed only on the happy path, leaving the UTF-8
+    // mnemonic bytes live in the heap on failure).
+    if (mnPlain) mnPlain.fill(0);
     seedKey.fill(0);
     mnemonicKey.fill(0);
   }
@@ -539,7 +647,9 @@ function sealVaultEnvelopeV4(
 function openVaultEnvelopeV4(
   vek: Uint8Array,
   env: SealedSeedRecordV4,
+  vaultId: string,
 ): { seed: Uint8Array; mnemonic: string } {
+  const aad = buildVaultAadV4(vaultId);
   const { seedKey, mnemonicKey } = deriveSubKeysFromVekV4(vek);
   try {
     const seedNonce = base64ToBytes(env.seedNonce);
@@ -549,8 +659,8 @@ function openVaultEnvelopeV4(
     let seed: Uint8Array;
     let mnPlain: Uint8Array;
     try {
-      seed = xchacha20poly1305(seedKey, seedNonce).decrypt(seedCt);
-      mnPlain = xchacha20poly1305(mnemonicKey, mnNonce).decrypt(mnCt);
+      seed = xchacha20poly1305(seedKey, seedNonce, aad).decrypt(seedCt);
+      mnPlain = xchacha20poly1305(mnemonicKey, mnNonce, aad).decrypt(mnCt);
     } catch {
       throw new Error("wrong password");
     }
@@ -580,9 +690,23 @@ function isVaultsContainerV4(raw: unknown): raw is VaultsContainerV4 {
   const mk = obj["masterKdf"] as Record<string, unknown> | undefined;
   if (!mk || typeof mk !== "object") return false;
   if (mk["kdf"] !== KDF_ID) return false;
-  if (typeof mk["m"] !== "number") return false;
-  if (typeof mk["t"] !== "number") return false;
-  if (typeof mk["p"] !== "number") return false;
+  // P1-002 — refuse out-of-band argon2id params. Integrity/DoS only (the params
+  // are AEAD-bound, NOT a confidentiality path): the m-cap stops a tampered
+  // container from driving argon2id into an OOM at unlock, and the floors stop a
+  // trivially-weak KDF (e.g. m:1) from being read. Bands: m ∈ [64 MiB, 1 GiB]
+  // KiB, t ∈ [2, 10], p ∈ [1, 4]; the create-default (64 MiB / t3 / p1) is in-band.
+  const m = mk["m"];
+  const t = mk["t"];
+  const p = mk["p"];
+  if (typeof m !== "number" || !Number.isInteger(m) || m < 65536 || m > 1048576) {
+    return false;
+  }
+  if (typeof t !== "number" || !Number.isInteger(t) || t < 2 || t > 10) {
+    return false;
+  }
+  if (typeof p !== "number" || !Number.isInteger(p) || p < 1 || p > 4) {
+    return false;
+  }
   if (typeof mk["salt"] !== "string") return false;
   const vaults = obj["vaults"];
   if (!Array.isArray(vaults)) return false;
@@ -601,6 +725,13 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
   });
   if (raw === null) return null;
   if (!isVaultsContainerV4(raw)) {
+    // P1-003: a pre-V5 container (no-AAD seal) can't be opened by the V5 AAD
+    // binding. Treat it as "no usable container" (graceful — boot stays alive);
+    // `storedContainerNeedsRestoreV4` drives the restore-from-phrase UX. This
+    // NEVER decrypts the V4 blob — a version check only. Truly unrecognised
+    // data still throws fail-closed.
+    const ver = (raw as { version?: unknown }).version;
+    if (typeof ver === "number" && ver < SCHEMA_VERSION) return null;
     throw new Error("v4 vaults container is unrecognised — refusing to read");
   }
   // Normalise the per-vault passkey state back to the
@@ -639,6 +770,22 @@ async function loadVaultsContainerV4(): Promise<VaultsContainerV4 | null> {
       return out;
     }),
   };
+}
+
+/** Read-only: is there a stored container that predates V5 (the always-AAD
+ *  seal)? Such a container can't be opened by the V5 binding — the user must
+ *  restore from their recovery phrase. DETECTION ONLY: reads the raw `version`
+ *  field; NEVER decrypts the V4 blob. Used by the unlock + status IPC to show
+ *  a clear "restore from your recovery phrase" instead of a wrong-password. */
+export async function storedContainerNeedsRestoreV4(): Promise<boolean> {
+  const raw = await new Promise<unknown>((resolve) => {
+    chrome.storage.local.get([VAULTS_CONTAINER_KEY_V4], (res) => {
+      resolve(res?.[VAULTS_CONTAINER_KEY_V4] ?? null);
+    });
+  });
+  if (!raw || typeof raw !== "object") return false;
+  const ver = (raw as { version?: unknown }).version;
+  return typeof ver === "number" && ver < SCHEMA_VERSION;
 }
 
 async function saveVaultsContainerV4(
@@ -711,10 +858,10 @@ async function loadVaultBackend(
   mek: Uint8Array,
   vault: VaultRecordV4,
 ): Promise<UnlockedState> {
-  const vek = unwrapVekV4(mek, vault.wrappedKey);
+  const vek = unwrapVekV4(mek, vault.wrappedKey, vault.id);
   let seed: Uint8Array;
   try {
-    const opened = openVaultEnvelopeV4(vek, vault.envelope);
+    const opened = openVaultEnvelopeV4(vek, vault.envelope, vault.id);
     seed = opened.seed;
     // mnemonic not needed for backend instantiation; let it fall out of scope.
   } finally {
@@ -994,10 +1141,10 @@ export async function signWithVaultV4(
   if (!container) throw new Error("no v4 vaults container");
   const v = container.vaults.find((rec) => rec.id === vaultId);
   if (!v) throw new Error("unknown vault id");
-  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  const vek = unwrapVekV4(mekCache, v.wrappedKey, v.id);
   let seed: Uint8Array;
   try {
-    const opened = openVaultEnvelopeV4(vek, v.envelope);
+    const opened = openVaultEnvelopeV4(vek, v.envelope, v.id);
     seed = opened.seed;
   } finally {
     vek.fill(0);
@@ -1023,10 +1170,10 @@ export async function getVaultPubkeyV4(vaultId: string): Promise<string> {
   if (!container) throw new Error("no v4 vaults container");
   const v = container.vaults.find((rec) => rec.id === vaultId);
   if (!v) throw new Error("unknown vault id");
-  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  const vek = unwrapVekV4(mekCache, v.wrappedKey, v.id);
   let seed: Uint8Array;
   try {
-    const opened = openVaultEnvelopeV4(vek, v.envelope);
+    const opened = openVaultEnvelopeV4(vek, v.envelope, v.id);
     seed = opened.seed;
   } finally {
     vek.fill(0);
@@ -1160,6 +1307,31 @@ export async function removePasskeyCredentialV4(
   return clonePasskeyState(next);
 }
 
+/** Advance a credential's stored signature counter after a verified WebAuthn
+ *  assertion (boundary 3b). No-op when the vault / credential is absent, or
+ *  when the new count would not advance (the monotonic check in
+ *  `verifyPasskeyAssertion` already gates this; the never-lower guard here is
+ *  defense-in-depth). Best-effort — the single-use challenge is the primary
+ *  replay defense; the counter catches a cloned authenticator across sessions. */
+export async function updatePasskeyCredentialSignCountV4(
+  vaultId: string,
+  credentialId: string,
+  newSignCount: number,
+): Promise<void> {
+  const container = await loadVaultsContainerV4();
+  if (!container) return;
+  const v = container.vaults.find((rec) => rec.id === vaultId);
+  if (!v || !v.passkey) return;
+  const next = clonePasskeyState(v.passkey);
+  const idx = next.credentials.findIndex((c) => c.credentialId === credentialId);
+  if (idx < 0) return;
+  const cur = next.credentials[idx]!;
+  if (typeof cur.signCount === "number" && newSignCount <= cur.signCount) return;
+  next.credentials[idx] = { ...cur, signCount: newSignCount };
+  v.passkey = next;
+  await saveVaultsContainerV4(container);
+}
+
 /** Replace the policy. Validation runs inside `setPolicy` — bad input
  *  throws without persisting. */
 export async function setPasskeyPolicyV4(
@@ -1283,7 +1455,7 @@ export async function generateSlhDsaBackupV4(
   // Unwrap the VEK locally, run keygen, zero the VEK before return.
   // The VEK never escapes this function's stack — the keygen module
   // gets it by-reference and zeroes its working secret too.
-  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  const vek = unwrapVekV4(mekCache, v.wrappedKey, v.id);
   let prepared: { mnemonic: string; backup: SlhDsaBackup };
   try {
     prepared = prepareSlhDsaBackup({ vek });
@@ -1317,7 +1489,7 @@ export async function recoverSlhDsaMnemonicV4(
     throw new Error("no backup configured for this vault");
   }
 
-  const vek = unwrapVekV4(mekCache, v.wrappedKey);
+  const vek = unwrapVekV4(mekCache, v.wrappedKey, v.id);
   try {
     return recoverBackupMnemonic(vek, v.slhDsaBackup);
   } finally {
@@ -1592,17 +1764,20 @@ async function appendVaultRecord(
     // change them); only the default for new records changes.
     label = `Wallet ${container.vaults.length + 1}`;
   }
+  // V5 (P1-003): the id is generated BEFORE the seal so it can be bound into
+  // the AAD (wrap + envelope), which prevents a cross-vault ciphertext lift.
+  const vaultId = crypto.randomUUID();
   const vek = generateVekV4();
   let wrappedKey: WrappedVekV4;
   let envelope: SealedSeedRecordV4;
   try {
-    wrappedKey = wrapVekV4(mek, vek);
-    envelope = sealVaultEnvelopeV4(vek, seed, mnemonic);
+    wrappedKey = wrapVekV4(mek, vek, vaultId);
+    envelope = sealVaultEnvelopeV4(vek, seed, mnemonic, vaultId);
   } finally {
     vek.fill(0);
   }
   const record: VaultRecordV4 = {
-    id: crypto.randomUUID(),
+    id: vaultId,
     label,
     createdAt: Date.now(),
     wrappedKey,
@@ -1682,7 +1857,7 @@ export async function verifyContainerPasswordV4(
   if (!active) return false;
   const mek = await deriveMekV4(password, container.masterKdf);
   try {
-    const vek = unwrapVekV4(mek, active.wrappedKey);
+    const vek = unwrapVekV4(mek, active.wrappedKey, active.id);
     vek.fill(0);
     return true;
   } catch {
@@ -1779,53 +1954,69 @@ async function commitVaultFromSeed(
   // (`unlocked = { backend, address }`, unlock-on-create), so it must NOT be
   // disposed here — lockV4() wipes it (S1-01) when the session ends.
   const backend = MlDsa65Backend.fromSeed(seed);
-  const address = await backend.getAddress();
-
-  // Build a fresh container holding this one vault, master-password-
-  // unlocked. Mirrors migrateLegacyToContainerV4's container assembly,
-  // but seeded from the freshly generated seed/mnemonic instead of a
-  // decrypted legacy envelope. No single-vault `mono.vault.v4` write —
-  // create commits straight into the `mono.vaults.v4` container shape.
-  const masterKdf = generateMasterKdfParamsV4();
-  const mek = await deriveMekV4(password, masterKdf);
-  const vek = generateVekV4();
-  let wrappedKey: WrappedVekV4;
-  let envelope: SealedSeedRecordV4;
+  // P2-004 — until ownership of `mek` + `backend` transfers to the session
+  // (mekCache / unlocked) below, any throw must zeroize the derived MEK and
+  // dispose the backend so a mid-commit failure can't leave key material live
+  // in the heap. On success they're owned by the session — do NOT wipe.
+  let mek: Uint8Array | null = null;
+  let committed = false;
   try {
-    wrappedKey = wrapVekV4(mek, vek);
-    envelope = sealVaultEnvelopeV4(vek, seed, mnemonic);
-  } finally {
-    vek.fill(0);
-  }
-  const record: VaultRecordV4 = {
-    id: crypto.randomUUID(),
-    label: "Wallet 1",
-    createdAt: Date.now(),
-    wrappedKey,
-    envelope,
-    addr: address,
-  };
-  const container: VaultsContainerV4 = {
-    version: SCHEMA_VERSION,
-    algo: ALGO_ID,
-    kdf: KDF_ID,
-    aead: AEAD_ID,
-    masterKdf,
-    vaults: [record],
-    activeVaultId: record.id,
-  };
-  await saveVaultsContainerV4(container);
+    const address = await backend.getAddress();
 
-  // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
-  // `mek` — ownership transfers to mekCache). This reproduces the exact
-  // end state the d67de85 follow-up unlockContainerV4 call established,
-  // inline, so no single-vault write + migration round-trip is needed.
-  if (mekCache) mekCache.fill(0);
-  mekCache = mek;
-  unlocked = { backend, address };
-  activeContainerVaultId = record.id;
-  await persistMekToSessionV4(mek);
-  return address;
+    // Build a fresh container holding this one vault, master-password-
+    // unlocked, seeded from the freshly generated seed/mnemonic. No
+    // single-vault `mono.vault.v4` write — create commits straight into
+    // the `mono.vaults.v4` container shape.
+    const masterKdf = generateMasterKdfParamsV4();
+    mek = await deriveMekV4(password, masterKdf);
+    // V5 (P1-003): id generated before the seal so it binds into the AAD.
+    const vaultId = crypto.randomUUID();
+    const vek = generateVekV4();
+    let wrappedKey: WrappedVekV4;
+    let envelope: SealedSeedRecordV4;
+    try {
+      wrappedKey = wrapVekV4(mek, vek, vaultId);
+      envelope = sealVaultEnvelopeV4(vek, seed, mnemonic, vaultId);
+    } finally {
+      vek.fill(0);
+    }
+    const record: VaultRecordV4 = {
+      id: vaultId,
+      label: "Wallet 1",
+      createdAt: Date.now(),
+      wrappedKey,
+      envelope,
+      addr: address,
+    };
+    const container: VaultsContainerV4 = {
+      version: SCHEMA_VERSION,
+      algo: ALGO_ID,
+      kdf: KDF_ID,
+      aead: AEAD_ID,
+      masterKdf,
+      vaults: [record],
+      activeVaultId: record.id,
+    };
+    await saveVaultsContainerV4(container);
+
+    // Unlock-on-create: same state-set as unlockContainerV4 (do NOT zero
+    // `mek` — ownership transfers to mekCache). This reproduces the exact
+    // end state the d67de85 follow-up unlockContainerV4 call established,
+    // inline, so no single-vault write + re-unlock round-trip is needed.
+    if (mekCache) mekCache.fill(0);
+    mekCache = mek;
+    unlocked = { backend, address };
+    activeContainerVaultId = record.id;
+    committed = true; // ownership of mek + backend now held by the session
+    await persistMekToSessionV4(mek);
+    return address;
+  } catch (e) {
+    if (!committed) {
+      if (mek) mek.fill(0);
+      backend.dispose();
+    }
+    throw e;
+  }
 }
 
 
@@ -1850,10 +2041,10 @@ export async function exportMnemonicV4(
   try {
     // Wrong password → MEK mismatch → AEAD failure here (unwrap or open),
     // which throws — the handler maps any throw to wrong-password.
-    const vek = unwrapVekV4(mek, active.wrappedKey);
+    const vek = unwrapVekV4(mek, active.wrappedKey, active.id);
     let opened: { seed: Uint8Array; mnemonic: string };
     try {
-      opened = openVaultEnvelopeV4(vek, active.envelope);
+      opened = openVaultEnvelopeV4(vek, active.envelope, active.id);
     } finally {
       vek.fill(0);
     }
@@ -1940,6 +2131,7 @@ export const __internalV4Multi = {
   generateMasterKdfParamsV4,
   deriveMekV4,
   generateVekV4,
+  buildVaultAadV4,
   wrapVekV4,
   unwrapVekV4,
   sealVaultEnvelopeV4,

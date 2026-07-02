@@ -17,10 +17,9 @@ import {
   SESSION_KEY_WALLET_LOCKED,
   STORAGE_KEY_VAULTS_CONTAINER_V4,
 } from "../shared/constants";
-import { hexLythoshiToLythNumber } from "../shared/native-amount";
+import { hexLythoshiToLythNumber, parseHexQuantity } from "../shared/native-amount";
 import {
   activityPendingKey,
-  localClaimAwaitingAmount,
   validatePendingActivityCache,
 } from "../shared/activity";
 import {
@@ -54,6 +53,10 @@ import { DisplayCurrencySettings } from "./pages/DisplayCurrencySettings";
 import { UnifiedOnboardingHintBar } from "./components/UnifiedOnboardingHintBar";
 import { SetupHealthChip } from "./components/SetupHealthChip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import {
+  DelegationRejectedBanner,
+  type DelegationRejection,
+} from "./components/DelegationRejectedBanner";
 import { Stake, clearStakeState } from "./pages/Stake";
 import { AgentPolicy } from "./pages/AgentPolicy";
 import { Delegations } from "./pages/Delegations";
@@ -89,8 +92,14 @@ import { explainImportError } from "./lib/import-error";
 import { Contacts } from "./pages/Contacts";
 import { MultisigList } from "./pages/MultisigList";
 import { useFeature } from "./hooks/useFeature";
+import { isHardenedBuild } from "../shared/build-mode";
 import { type Account } from "./demo-data";
 import { runMountHydrationLoads } from "./mount-hydration";
+import {
+  lastKnownBalanceKey,
+  makeLastKnownBalance,
+  selectSeedBalanceHex,
+} from "./last-known-balance";
 import {
   bgListPending,
   bgKeystoreStatus,
@@ -104,6 +113,7 @@ import {
   bgWalletActivityGet,
   bgWalletIndexerSnapshot,
   bgStakingDelegations,
+  bgStakingPendingRewards,
   bgStakingClusterDirectory,
   bgWalletActiveChain,
   bgWalletSetActiveChain,
@@ -123,7 +133,7 @@ import {
   type ChainEntry,
   type WalletIndexerSnapshot,
 } from "./bg";
-import type { DelegationsView } from "../shared/staking";
+import type { DelegationsView, PendingRewardsView } from "../shared/staking";
 
 type Screen =
   | "loading"
@@ -245,6 +255,12 @@ export default function App() {
   // popup matches the pre-v5 experience exactly. Flip on via Settings →
   // Features.
   const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
+  const developerMode = useFeature("DEVELOPER_MODE");
+  // Custom chains only exist where the strict connect-src allows their RPC:
+  // never in a hardened (production) build, and even in a dev build only under
+  // DEVELOPER_MODE (mirrors the custom-operators gate). The hardened SW also
+  // refuses to dial custom chains (commit 1); this just hides the entry.
+  const canAddCustomChain = !isHardenedBuild() && developerMode;
   // Current UI open mode (popup vs sidepanel). The
   // MainMenu's "Switch to ..." item reads this to label the toggle as
   // the OPPOSITE option. null while the SW IPC is in flight; modes
@@ -388,6 +404,12 @@ export default function App() {
   // the latest refresh couldn't reach the chain (offline/untrusted). Home only
   // LABELS the retained value as stale — never fabricates or zeros it.
   const [balanceStale, setBalanceStale] = useState(false);
+  // Exact spendable balance in lythoshi (bigint) — the precise source for the
+  // Home hero's "Available"/"Delegated" displays, alongside the lossy
+  // `account.balance` float (still used for the approximate fiat conversion).
+  // Mirrors `account.balance`'s lifecycle: nulled on an account switch, kept on
+  // a same-address refresh, repopulated by the balance fetch.
+  const [balanceLythoshi, setBalanceLythoshi] = useState<bigint | null>(null);
   // C5: the typed reason the last balance refresh failed, so Home can pause
   // honestly on a re-genesis / wrong-chain operator instead of a bare 0.00.
   const [balanceCause, setBalanceCause] = useState<
@@ -412,13 +434,34 @@ export default function App() {
   // Active delegations (totalBps) for the Home "Delegated" chip. Best-effort:
   // null while loading / on fetch failure → Home shows "0.00" (no fabrication).
   const [delegationsView, setDelegationsView] = useState<DelegationsView | null>(null);
+  // Pending rewards for the Home total. NO-MOCK: only a LIVE (non-mock) positive
+  // total surfaces a number on Home (gated at the render via
+  // pendingRewardsArePositive); mock/error/absent → links only, no number.
+  const [homeRewards, setHomeRewards] = useState<PendingRewardsView | null>(null);
+  const [homeRewardsMock, setHomeRewardsMock] = useState(false);
   const refreshDelegations = useCallback(async () => {
     if (!acc.addr.startsWith("0x")) {
       setDelegationsView(null);
+      setHomeRewards(null);
+      setHomeRewardsMock(false);
       return;
     }
     const r = await bgStakingDelegations(acc.addr);
     setDelegationsView(r.ok ? r.data : null);
+    // Rewards depend on the active delegation set; fan out after it resolves.
+    if (r.ok) {
+      const rew = await bgStakingPendingRewards(acc.addr, r.data.rows);
+      if (rew.ok) {
+        setHomeRewards(rew.data);
+        setHomeRewardsMock(rew.via === "mock");
+      } else {
+        setHomeRewards(null);
+        setHomeRewardsMock(false);
+      }
+    } else {
+      setHomeRewards(null);
+      setHomeRewardsMock(false);
+    }
   }, [acc.addr]);
   // Active-chain state. The service worker is the source of truth
   // (`mono.chain.active` in chrome.storage); we mirror it locally so
@@ -430,6 +473,15 @@ export default function App() {
   const [chainList, setChainList] = useState<ChainEntry[]>([]);
   const activeChain: ChainEntry =
     chainList.find((c) => c.chainId === activeChainId) ?? TESTNET_FALLBACK;
+  // Issue B — durable over-cap rejection banner. App-level state so it SURVIVES
+  // a screen switch (App doesn't unmount; the Stake error page does). Cleared on
+  // account/chain change (no cross-account leak), on dismiss, and on a later
+  // successful delegation (Stake calls the setter with null).
+  const [delegationRejection, setDelegationRejection] =
+    useState<DelegationRejection | null>(null);
+  useEffect(() => {
+    setDelegationRejection(null);
+  }, [acc.addr, activeChainId]);
   // Cluster name directory (id → name) for the Home Activity rows. Indexer-fed
   // delegation rows carry only a numeric cluster id; this map lets them show the
   // real cluster name with a graceful fallback to `Cluster #<id>` (no-mock).
@@ -512,6 +564,8 @@ export default function App() {
     // coming, so clear any stale flag carried from the prior account.
     if (r.account.address.toLowerCase() !== acc.addr.toLowerCase()) {
       setBalanceStale(false);
+      // Account switch — the prior lythoshi belongs to a different address.
+      setBalanceLythoshi(null);
     }
     setAcc((prev) => ({
       ...prev,
@@ -607,6 +661,24 @@ export default function App() {
       setBalanceStale(false);
       setBalanceCause(null);
       setAcc((prev) => ({ ...prev, balance: lyth }));
+      // Exact lythoshi for the hero displays (kept in sync with the float above).
+      setBalanceLythoshi(parseHexQuantity(r.balanceHex));
+      // Item 4 (0-flash) — persist the CONFIRMED LIVE balance so the next fresh
+      // popup mount (minimize→restore destroys + re-mounts the popup) can seed
+      // this last-known figure instantly instead of flashing a skeleton/"0.00".
+      // NO-MOCK: written ONLY here, from a genuine live read, keyed by
+      // addr+chainId. Best-effort fire-and-forget; a write failure just means
+      // the next mount seeds from the prior record (or shows the skeleton).
+      const addrLower = acc.addr.toLowerCase();
+      const chainId = activeChain.chainId;
+      void chrome.storage.local.set({
+        [lastKnownBalanceKey(addrLower, chainId)]: makeLastKnownBalance(
+          r.balanceHex,
+          addrLower,
+          chainId,
+          Date.now(),
+        ),
+      });
     } catch {
       // Malformed hex — ignore, balance stays as-is.
     }
@@ -843,6 +915,61 @@ export default function App() {
     void refreshBalance();
   }, [refreshBalance]);
 
+  // Item 4 (0-flash) — seed the hero/Assets row from the PERSISTED last-known
+  // live balance on a fresh mount, so a minimize→restore shows the real
+  // last-known figure (dimmed + "last known") almost immediately instead of a
+  // skeleton/"0.00" while the live fetch round-trips. Fires on acc.addr
+  // readiness (the same 0x gate refreshBalance uses), in parallel with the live
+  // fetch above — the chrome.storage read is ~ms, so it almost always wins and
+  // C1's skeleton covers the sub-ms gap + the no-persisted case.
+  //
+  // NO-MOCK: seeds ONLY a genuine prior live read, keyed by addr+chainId and
+  // ignored on any mismatch (selectSeedBalanceHex); routes through the EXISTING
+  // balanceStale labeling (never presented as live); the live refreshBalance
+  // then clears balanceStale and overwrites with the confirmed value. The ref
+  // guards the race where the live fetch resolves first — we never re-flag a
+  // freshly-confirmed value as stale.
+  const balanceLythoshiRef = useRef(balanceLythoshi);
+  useEffect(() => {
+    balanceLythoshiRef.current = balanceLythoshi;
+  }, [balanceLythoshi]);
+  useEffect(() => {
+    if (!acc.addr.startsWith("0x")) return;
+    if (balanceLythoshiRef.current != null) return;
+    let cancelled = false;
+    const addrLower = acc.addr.toLowerCase();
+    const chainId = activeChain.chainId;
+    chrome.storage.local.get([lastKnownBalanceKey(addrLower, chainId)], (res) => {
+      if (cancelled) return;
+      // The live fetch may have already landed — never overwrite or re-stale it.
+      if (balanceLythoshiRef.current != null) return;
+      const hex = selectSeedBalanceHex(
+        res?.[lastKnownBalanceKey(addrLower, chainId)],
+        addrLower,
+        chainId,
+      );
+      if (hex === null) return; // no valid matching record → C1 skeleton
+      const seeded = parseHexQuantity(hex);
+      if (seeded === null) return;
+      const lyth = hexLythoshiToLythNumber(hex);
+      if (lyth === null) return;
+      setBalanceLythoshi(seeded);
+      // Keep the float in lockstep (the Assets row + fiat read it) — but only
+      // for the still-matching account that still has no balance.
+      setAcc((prev) =>
+        prev.addr.toLowerCase() === addrLower && prev.balance == null
+          ? { ...prev, balance: lyth }
+          : prev,
+      );
+      // Label as last-known until the live fetch confirms (reuses the existing
+      // #42 balanceStale dim + "last known" UI — no new label concept).
+      setBalanceStale(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [acc.addr, activeChain.chainId]);
+
   // Dep-driven activity refresh. Same shape as the balance
   // effect above. When (acc.addr, activeChain.chainId) changes, the
   // useCallback identity flips and this effect re-fires.
@@ -865,18 +992,16 @@ export default function App() {
     const apply = (raw: unknown) => {
       if (cancelled) return;
       const v = validatePendingActivityCache(raw);
-      // A local-claim with a RESOLVED amount is a durable record, not an
-      // in-flight tx — exclude it so it doesn't keep the 1.5s reconcile poll
-      // armed forever. But a local-claim whose `claimedAmount` is still null
-      // (decoded from the Claimed log only on a later reconcile) COUNTS as
-      // pending, so the poll stays armed and the reconcile fills the amount
-      // in-session (no reopen). The indexer now also surfaces confirmed claim
-      // rows, which the merge reconciles + keeps sticky (applyStickyClaimAmount).
-      setHasPendingTx(
-        (v?.pending.filter(
-          (p) => p.source !== "local-claim" || localClaimAwaitingAmount(p),
-        ).length ?? 0) > 0,
-      );
+      // Keep the reconcile poll armed while ANY pending row exists — including an
+      // un-retired local-claim — until it is DROPPED (cross-stream retired), not
+      // just until its amount fills. A local-claim leaves the pending cache only
+      // when it retires (the SW keeps the full reconcile running while it pends,
+      // and the confirmed-row block-window backstop retires it even with no
+      // receipt), so this no longer risks a forever-poll. Closes the secondary
+      // disarm: receipt lands → amount fills → the poll would otherwise stop a
+      // beat BEFORE the indexer's confirmed row retires the row, leaving the
+      // "Pending · Rewards claimed" entry until a reopen.
+      setHasPendingTx((v?.pending.length ?? 0) > 0);
     };
     chrome.storage.local.get([key], (res) => apply(res?.[key]));
     const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
@@ -1135,7 +1260,16 @@ export default function App() {
 
   const finalizeApproval = async (ok: boolean) => {
     if (!activeApproval) return;
-    await bgResolveApproval(activeApproval.approval.id, { ok });
+    // P4-005 — report THIS window's id so the SW can verify the resolver owns
+    // the approval's window. Fail-open: if we can't read it, the SW falls back
+    // to the UUID-only resolve (this dedicated window is the only resolver).
+    let windowId: number | undefined;
+    try {
+      windowId = (await chrome.windows.getCurrent()).id;
+    } catch {
+      /* fail-open */
+    }
+    await bgResolveApproval(activeApproval.approval.id, { ok }, windowId);
     window.close();
   };
 
@@ -1226,6 +1360,11 @@ export default function App() {
             : {})}
         />
       )}
+
+      <DelegationRejectedBanner
+        rejection={delegationRejection}
+        onDismiss={() => setDelegationRejection(null)}
+      />
 
       {screen === "home" && walletUpdateAvailable && (
         <button
@@ -1374,6 +1513,7 @@ export default function App() {
       {screen === "locked" && (
         <UnlockScreen
           address={keystore?.address ?? null}
+          legacyRestoreRequired={keystore?.legacyRestoreRequired ?? false}
           onUnlocked={() => {
             // Route to Home synchronously on a successful unlock instead of
             // depending SOLELY on the cross-context walletLocked=false storage
@@ -1399,7 +1539,10 @@ export default function App() {
           network={activeChain}
           indexer={indexerSnapshot}
           delegations={delegationsView}
+          pendingRewards={homeRewards}
+          pendingRewardsMock={homeRewardsMock}
           clusterNameById={clusterNameById}
+          balanceLythoshi={balanceLythoshi}
           balanceStale={balanceStale}
           balanceCause={balanceCause}
           chainNotLive={chainNotLive}
@@ -1463,6 +1606,7 @@ export default function App() {
             setScreen("network-detail");
           }}
           onOpenAddCustom={() => setScreen("network-add")}
+          canAddCustom={canAddCustomChain}
         />
       )}
 
@@ -1493,7 +1637,7 @@ export default function App() {
         />
       )}
 
-      {screen === "network-add" && (
+      {screen === "network-add" && canAddCustomChain && (
         <AddCustomChain
           existingChainIds={new Set(chainList.map((c) => c.chainId))}
           onBack={() => setScreen("networks")}
@@ -1621,7 +1765,6 @@ export default function App() {
         <EmergencyRecovery
           onBack={navigateBack}
           vaultId={activeVaultSummary.id}
-          vaultAddress={activeVaultSummary.addr}
           chainIdHex={activeChain.chainId}
         />
       )}
@@ -1970,6 +2113,7 @@ export default function App() {
             setScreen("cluster-detail");
           }}
           onOpenOperators={() => navigateTo("operator-directory")}
+          onDelegationRejected={setDelegationRejection}
           onBack={() => {
             const wasDeepLinked = stakeDeepLink !== null;
             setStakeDeepLink(null);

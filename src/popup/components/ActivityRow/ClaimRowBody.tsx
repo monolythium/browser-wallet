@@ -25,14 +25,15 @@ export function ClaimRowBody({ row }: ClaimRowBodyProps) {
   const figure =
     row.amountDecimal && row.amountDecimal !== "0" ? row.amountDecimal : null;
   const display = figure !== null ? formatLythDecimalDisplay(figure, 4) : null;
+  const label = `Rewards claimed${display ? ` +${display} LYTH` : ""}`;
   return (
     <div className="ext-act-row">
       <div className="dir in">
-        <Icon name="receive" size={13} />
+        <Icon name="reward" size={13} />
       </div>
       <div className="ext-act-row__main">
-        <div className="ext-act-row__who">
-          Rewards claimed{display ? ` +${display} LYTH` : ""}
+        <div className="ext-act-row__who" title={label}>
+          {label}
         </div>
         <div className="ext-act-row__meta">
           <span>{txTypeLabel(row)}</span>
