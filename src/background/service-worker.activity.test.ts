@@ -663,7 +663,9 @@ function installChromeStub(): void {
       query: (_f: unknown, cb: (tabs: unknown[]) => void) => {
         cb([]);
       },
-      sendMessage: vi.fn(),
+      // MV3 chrome.tabs.sendMessage returns a Promise; broadcastEvent chains
+      // .catch on it, so the stub must too (a bare vi.fn() returns undefined).
+      sendMessage: vi.fn(() => Promise.resolve()),
     },
     windows: {
       create: vi.fn(() => Promise.resolve({ id: 1 })),
@@ -4401,6 +4403,43 @@ describe("P4-001 D1a — auto-lock fires through a pending approval", () => {
   });
 });
 
+describe("B.4 — auto-lock invalidates the in-page provider cache", () => {
+  it("emits accountsChanged:[] to connected origins on auto-lock", async () => {
+    const sendMessage = (
+      globalThis as unknown as {
+        chrome: { tabs: { sendMessage: ReturnType<typeof vi.fn> } };
+      }
+    ).chrome.tabs.sendMessage;
+
+    // Connect a dApp AND map its tab. The top-level rpc handler records
+    // sender.tab.id → origin in tabOriginById (dispatchRpc's senderless call
+    // would not), and eth_requestAccounts adds the origin to connectedOrigins.
+    const origin = "https://b4-lock-dapp.example";
+    unlocked = true;
+    await new Promise<void>((resolve) => {
+      capturedOnMessage!(
+        { kind: "rpc", id: "b4", args: { method: "eth_requestAccounts", params: [] }, origin },
+        { id: "test", tab: { id: 77 } },
+        () => resolve(),
+      );
+    });
+    // Ignore the connect-time accountsChanged:[addr] broadcast — assert only
+    // the lock-time emit below.
+    sendMessage.mockClear();
+
+    // Fire the auto-lock alarm with an elapsed deadline.
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() - 1;
+    for (const fire of capturedAlarmListeners) fire({ name: ALARM_AUTO_LOCK });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(sendMessage).toHaveBeenCalledWith(77, {
+      kind: "event",
+      event: "accountsChanged",
+      payload: [],
+    });
+  });
+});
+
 describe("P4-001 D1b — pending-approval TTL reaper", () => {
   it("enqueuing a dApp approval arms the reaper alarm", async () => {
     unlocked = true;
@@ -6753,6 +6792,23 @@ async function _pkAuthData(
   new DataView(sc.buffer).setUint32(0, signCount, false);
   return _pkConcat(rpIdHash, new Uint8Array([flags]), sc);
 }
+// Real WebAuthn authenticators emit canonical low-S; crypto.subtle.sign may
+// emit either, and the verifier's high-S guard (B.6) rejects high-S — so
+// normalize the simulated signature's s to low-S before DER-encoding.
+const _PK_P256_N =
+  0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+function _pkNormalizeLowS(raw64: Uint8Array): Uint8Array {
+  let s = 0n;
+  for (const b of raw64.subarray(32)) s = (s << 8n) | BigInt(b);
+  if (s > _PK_P256_N / 2n) {
+    let v = _PK_P256_N - s;
+    for (let i = 63; i >= 32; i--) {
+      raw64[i] = Number(v & 0xffn);
+      v >>= 8n;
+    }
+  }
+  return raw64;
+}
 function _pkRawToDer(raw: Uint8Array): Uint8Array {
   const derInt = (b: Uint8Array): Uint8Array => {
     let i = 0;
@@ -6827,11 +6883,13 @@ async function buildAssertion(opts: {
     JSON.stringify({ type: "webauthn.get", challenge: opts.challengeB64, origin }),
   );
   const signedData = _pkConcat(authData, await _pkSha256(clientDataJSON));
-  const rawSig = new Uint8Array(
-    await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
-      opts.priv,
-      _pkToBuf(signedData),
+  const rawSig = _pkNormalizeLowS(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        opts.priv,
+        _pkToBuf(signedData),
+      ),
     ),
   );
   return {

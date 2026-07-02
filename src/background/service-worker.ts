@@ -1128,6 +1128,14 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   lockV4();
+  // B.4 — tell connected origins the account is gone so an in-page provider
+  // stops answering eth_accounts from its cache while locked. provider.ts
+  // serves eth_accounts locally WITHOUT a SW round-trip, so only an
+  // accountsChanged event invalidates that cache; the connection-scoped
+  // rpc-answer gate alone never runs for those cached reads. broadcastEvent
+  // scopes account-carrying events to connectedOrigins (T2-01). Unlock
+  // re-emits [address] (see the keystore-unlock handler).
+  broadcastEvent("accountsChanged", []);
   // P4-001 D1a — a locked wallet can't sign: reject every pending dApp approval
   // so each call resolves rejected rather than hanging, and no window is stranded.
   rejectAllPending("wallet locked");
@@ -6792,10 +6800,11 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // accounts: [] (the announce state reply mirrors the eth_accounts
           // arm's locked behavior); tell connected origins the account is
           // available again. broadcastEvent scopes account-carrying events
-          // to connected origins (T2-01). The lock direction is deliberately
-          // NOT mirrored — locking has never emitted, and a dApp holding the
-          // address of a now-locked wallet learns nothing new; revoke remains
-          // the only path that retracts an address (T2-03).
+          // to connected origins (T2-01). This is the unlock half of the
+          // lock/unlock pair (B.4): auto-lock emits accountsChanged:[] to
+          // invalidate the in-page provider's eth_accounts cache (it serves
+          // that method locally without a SW round-trip), and unlock re-emits
+          // [address] here so a still-connected dApp re-learns the account.
           broadcastEvent("accountsChanged", [r.address]);
           return { ok: true, address: r.address };
         } catch {
