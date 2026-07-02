@@ -33,9 +33,12 @@ describe("RedelegateRowBody — from→to label + % weight badge at the line end
     expect(html).toContain(">weight<");
     // Hover title = the (no-%) label.
     expect(html).toContain('title="Redelegated from halcyon to polar"');
-    // Distinct icon (E): `swap` (↔), not the stake cluster.
-    expect(html).toContain('d="M7 10h14l-4-4M17 14H3l4 4"');
-    expect(html).not.toContain('cx="5" cy="7"');
+    // Distinct icon (E): `restake` — the delegate cluster satellites with a ↔
+    // arrow at the center; not the generic swap glyph, not the stake center node.
+    expect(html).toContain('d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3"'); // ↔ center arrow
+    expect(html).toContain('cx="5" cy="7"'); // shares the delegate cluster satellites
+    expect(html).not.toContain('cx="12" cy="12" r="3"'); // but not the stake center node
+    expect(html).not.toContain("M7 10h14l-4-4M17 14H3l4 4"); // not the generic swap glyph
   });
 
   it("legacy (no captured bps) → no %, the badge shows the dash", () => {

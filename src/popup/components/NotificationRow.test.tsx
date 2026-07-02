@@ -23,12 +23,12 @@ function record(over: Partial<NotificationRecord> = {}): NotificationRecord {
 }
 
 describe("NotificationRow — distinct delegation icon + failed-red (E)", () => {
-  it("a FAILED redelegate renders the distinct `swap` glyph in the error tone", () => {
+  it("a FAILED redelegate renders the distinct `restake` glyph in the error tone", () => {
     const html = renderToStaticMarkup(
       <NotificationRow record={record({ status: "failed" })} onOpen={() => {}} showUnread={false} />,
     );
     expect(html).toContain("Redelegate failed"); // notificationTitle redelegate/failed
-    expect(html).toContain('d="M7 10h14l-4-4M17 14H3l4 4"'); // swap glyph (not stake)
+    expect(html).toContain('d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3"'); // restake glyph center ↔ arrow (not stake)
     expect(html).toContain("var(--err"); // red status ring + icon color
     expect(html).not.toContain("var(--ok"); // not the confirmed-green tone
   });

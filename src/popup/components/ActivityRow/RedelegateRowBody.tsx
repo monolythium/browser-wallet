@@ -36,7 +36,7 @@ export function RedelegateRowBody({ row, clusterNameById }: RedelegateRowBodyPro
   return (
     <div className="ext-act-row">
       <div className="dir out">
-        <Icon name="swap" size={13} />
+        <Icon name="restake" size={13} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={label}>{label}</div>

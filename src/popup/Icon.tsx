@@ -11,13 +11,14 @@ export type IconName =
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
   | "contacts" | "network" | "sliders" | "server" | "gem"
   | "mono-mark" | "github" | "grid"
-  | "language" | "coins" | "palette" | "unstake" | "reward";
+  | "language" | "coins" | "palette" | "unstake" | "restake" | "reward";
 
 /** Distinct glyph per delegation action so delegate / undelegate / redelegate
  *  read apart at a glance (they all shared `stake` before). delegate keeps the
  *  cluster `stake` glyph; undelegate gets the `unstake` (node releasing down);
- *  redelegate gets `swap` (move between clusters). A failed record inherits the
- *  glyph in the error tone via NotificationRow's status ring. */
+ *  redelegate gets `restake` (the same cluster with a ↔ arrow at its center —
+ *  stake moving between clusters). A failed record inherits the glyph in the
+ *  error tone via NotificationRow's status ring. */
 export function iconForDelegationKind(
   kind: "delegate" | "undelegate" | "redelegate",
 ): IconName {
@@ -27,7 +28,7 @@ export function iconForDelegationKind(
     case "undelegate":
       return "unstake";
     case "redelegate":
-      return "swap";
+      return "restake";
   }
 }
 
@@ -240,6 +241,21 @@ export function Icon({ name, size = 16 }: IconProps) {
           <circle cx="5" cy="17" r="2" />
           <circle cx="19" cy="17" r="2" />
           <path d="M12 7v8M9 13l3 3 3-3" />
+        </svg>
+      );
+    case "restake":
+      // The `stake` cluster with a left-right arrow at its center — redelegate
+      // (stake moving between clusters). Mirrors delegate's `stake` glyph (the
+      // same 4 satellites) so delegate / undelegate / redelegate read as a
+      // family; the center is a bidirectional ↔ arrow instead of the staked
+      // node (stake) or the down arrow (unstake).
+      return (
+        <svg {...props}>
+          <circle cx="5" cy="7" r="2" />
+          <circle cx="19" cy="7" r="2" />
+          <circle cx="5" cy="17" r="2" />
+          <circle cx="19" cy="17" r="2" />
+          <path d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3" />
         </svg>
       );
     case "swap":
