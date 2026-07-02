@@ -207,11 +207,9 @@ html[data-theme="glass"] {
   --glass-fill-hover:   rgba(255, 255, 255, 0.08);
   --glass-hi:           rgba(255, 255, 255, 0.09);
   --glass-stroke:       rgba(255, 255, 255, 0.10);
-  --glass-stroke-hi:    rgba(255, 255, 255, 0.16);
   --glass-border:       rgba(255, 255, 255, 0.10);
   --glass-inner:        rgba(255, 255, 255, 0.12);
   --glass-blur:         24px;
-  --glass:              var(--glass-fill);
 
   --surface-0: transparent;
   --surface-1: var(--glass-fill);
