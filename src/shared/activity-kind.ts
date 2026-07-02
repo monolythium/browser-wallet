@@ -11,8 +11,10 @@
 //                            link to §22.5 / §30.5 explainer
 //   - "pruned"            → "older activity has been pruned; showing
 //                            recent N transactions" + retention info
-//   - "private"           → "private activity needs meta-address —
-//                            (forthcoming)" placeholder
+//   - "private"           → honest empty state: private transfers exist
+//                            but are opaque to the public indexer (no
+//                            viewer surface yet; mono-core-sdk#27 has
+//                            no builder)
 //   - <unknown string>    → forward-compatible "history unavailable"
 //
 // The chain-side activity-kind reader (previously deferred) has now
@@ -20,7 +22,8 @@
 //
 // Whitepaper alignment:
 //   §22.5  — agent precompile (zkML proof verification) — `kind = "private"`
-//            is the placeholder until meta-addresses are wired.
+//            renders the honest not-viewable-yet empty state (see
+//            ActivityList; copy per issue #25).
 //   §25.4  — Rule 9 (privacy denomination caller-origin guard) — private
 //            activity is fundamentally opaque to the public indexer.
 //   §30.5  — Foundation cluster transparency surface — "indexer_disabled"

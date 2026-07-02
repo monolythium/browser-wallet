@@ -1467,9 +1467,9 @@ async function testnetTransactionCountHex(address: string): Promise<string> {
 // is none), and TTL-healed so a dropped/never-committed tx cannot wedge the
 // nonce: past the TTL we fall back to the committed nonce.
 const PENDING_NONCE_KEY = "mono.nonce.pending"; // chrome.storage.session
-// Must exceed the encrypted-mempool reveal/commit latency (~12s) with margin so
-// a still-pending nonce isn't reused prematurely; short enough to self-heal a
-// dropped tx quickly.
+// Generous margin over the worst-case inclusion latency observed on testnet
+// (~12s) so a still-pending nonce isn't reused prematurely; short enough to
+// self-heal a dropped tx quickly.
 const PENDING_NONCE_TTL_MS = 5 * 60 * 1000;
 
 interface PendingNonceEntry {
