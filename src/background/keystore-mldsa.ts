@@ -1914,9 +1914,15 @@ export async function createVaultFromNewMnemonic(password: string): Promise<{
     out.set(randomBytes(out.length));
   });
   const seed = mnemonicToMlDsa65Seed(mnemonic);
-  const address = await commitVaultFromSeed(password, seed, mnemonic);
-  seed.fill(0);
-  return { mnemonic, address };
+  try {
+    const address = await commitVaultFromSeed(password, seed, mnemonic);
+    return { mnemonic, address };
+  } finally {
+    // Zeroize on BOTH the success and the throw path (P2 defense-in-depth,
+    // mirroring the addVault*V4 siblings) — a failed derive/write must not
+    // leave the 32-byte seed lingering in the heap.
+    seed.fill(0);
+  }
 }
 
 /** Import from a user-supplied 24-word BIP-39 recovery phrase.
@@ -1932,9 +1938,12 @@ export async function createVaultFromMnemonic(
     throw new Error("v4 vault already exists; cannot overwrite");
   }
   const seed = mnemonicToMlDsa65Seed(mnemonic);
-  const address = await commitVaultFromSeed(password, seed, mnemonic);
-  seed.fill(0);
-  return { address };
+  try {
+    const address = await commitVaultFromSeed(password, seed, mnemonic);
+    return { address };
+  } finally {
+    seed.fill(0);
+  }
 }
 
 async function commitVaultFromSeed(

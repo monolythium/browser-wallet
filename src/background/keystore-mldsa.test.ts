@@ -229,6 +229,48 @@ describe("keystore-mldsa v4-multi", () => {
   );
 
   it(
+    "createVaultFromMnemonic zeroizes the 32-byte seed when the commit throws (B.1)",
+    async () => {
+      // The seed must be wiped on the THROW path too (the `finally`), not only
+      // on success. Capture the derived seed and force the commit to throw
+      // BEFORE argon2 (MlDsa65Backend.fromSeed), then assert the buffer is 0.
+      let captured: Uint8Array | null = null;
+      vi.doMock("@monolythium/core-sdk/crypto", async () => {
+        const actual = await vi.importActual<
+          typeof import("@monolythium/core-sdk/crypto")
+        >("@monolythium/core-sdk/crypto");
+        return {
+          ...actual,
+          mnemonicToMlDsa65Seed: (m: string) => {
+            const s = actual.mnemonicToMlDsa65Seed(m);
+            captured = s;
+            return s;
+          },
+          MlDsa65Backend: {
+            fromSeed: () => {
+              throw new Error("forced commit failure");
+            },
+          },
+        };
+      });
+      try {
+        const ks = await import("./keystore-mldsa.js");
+        const mnemonic =
+          "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+        await expect(
+          ks.createVaultFromMnemonic("pw-throw-path", mnemonic),
+        ).rejects.toThrow(/forced commit failure/);
+        expect(captured).not.toBeNull();
+        expect(captured!.length).toBe(32);
+        expect(Array.from(captured!)).toEqual(new Array(32).fill(0));
+      } finally {
+        vi.doUnmock("@monolythium/core-sdk/crypto");
+      }
+    },
+    10_000,
+  );
+
+  it(
     "two vaults in one container unlock under the same MEK with distinct VEKs",
     async () => {
       const ks = await import("./keystore-mldsa.js");
