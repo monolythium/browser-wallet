@@ -6546,6 +6546,28 @@ describe("notif-poll alarm lifecycle + back-off", () => {
     expect(alarmClearCalls).not.toContain(ALARM_NOTIF_POLL);
   });
 
+  it("M3: a confirmed reward CLAIM retires → alarm clears (the settled claim no longer strands it)", async () => {
+    // A confirmed reward claim is re-bridged back into the pending cache as a
+    // durable DISPLAY record, but it is excluded from the poll's `remaining`.
+    // hasAnyPendingTx must also exclude the settled claim, or the clear-guard
+    // never fires and the SW wakes on the poll cadence forever.
+    storageLocal[pk(ADDR, CHAIN)] = {
+      pending: [row({ opKind: "claim", source: "local-claim", claimedAmount: "6.51" })],
+    };
+    rpcResponses["lyth_txStatus"] = { status: "not_found" };
+    rpcResponses["eth_getTransactionReceipt"] = { status: 1, block_number: 123 };
+    fireNotifPoll();
+    await flushAsync();
+    expect(alarmClearCalls).toContain(ALARM_NOTIF_POLL);
+    // The claim survives in the cache as a durable record (not deleted).
+    const cache = storageLocal[pk(ADDR, CHAIN)] as {
+      pending: Array<{ source?: string; confirmedBlockHeight?: number }>;
+    };
+    const claim = cache.pending.find((r) => r.source === "local-claim");
+    expect(claim).toBeDefined();
+    expect(claim!.confirmedBlockHeight).toBe(123);
+  });
+
   it("backs off (lengthens the period) on consecutive all-operator failures", async () => {
     // A clean empty tick first resets any back-off carried from a prior test.
     fireNotifPoll();

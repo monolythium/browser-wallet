@@ -1305,7 +1305,23 @@ async function clearNotifPollAlarm(): Promise<void> {
   }
 }
 
-/** True if ANY `mono.activity.pending.*` scope holds ≥1 row. Lock-independent
+/** True if a pending-cache row still keeps the notification-poll alarm armed.
+ *  A CONFIRMED reward claim (source:"local-claim" with an inclusion block
+ *  stamped) is a SETTLED durable record retained only for display — it is
+ *  excluded from `pollPendingAndNotify`'s `remaining` count, so it must be
+ *  excluded here too. Otherwise the lingering settled claim keeps
+ *  `hasAnyPendingTx` true forever, the poll's `remaining === 0` clear guard
+ *  never fires, and the SW wakes on the poll cadence indefinitely. A claim that
+ *  is still in-flight (no confirmedBlockHeight yet) DOES keep the alarm armed. */
+function pendingRowKeepsPollAlarm(r: PendingTxRow): boolean {
+  if (r.source === "local-claim" && r.confirmedBlockHeight !== undefined) {
+    return false;
+  }
+  return true;
+}
+
+/** True if ANY `mono.activity.pending.*` scope holds ≥1 row that still counts as
+ *  in-flight work (per {@link pendingRowKeepsPollAlarm}). Lock-independent
  *  prefix-scan; used for the boot re-arm + the clear/re-create race guard. */
 async function hasAnyPendingTx(): Promise<boolean> {
   try {
@@ -1314,7 +1330,8 @@ async function hasAnyPendingTx(): Promise<boolean> {
     });
     for (const key of Object.keys(all)) {
       if (!key.startsWith("mono.activity.pending.")) continue;
-      if ((validatePendingActivityCache(all[key])?.pending ?? []).length > 0) {
+      const rows = validatePendingActivityCache(all[key])?.pending ?? [];
+      if (rows.some(pendingRowKeepsPollAlarm)) {
         return true;
       }
     }
@@ -10599,20 +10616,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: MULTISIG_SEND_REFUSAL };
       }
       // T1-04(a): LOCAL defense-in-depth enforcement of the per-vault passkey
-      // spending cap on BARE VALUE TRANSFERS (real contract calls are out of
-      // policy scope). Until now the cap was advisory (popup amber badge
-      // only); enforce it here so the displayed limit is a real block. An
-      // over-limit send requires an SW-VERIFIED password re-auth — NOT a
-      // popup-asserted flag, which the already-unlocked local IPC actor this
-      // gate targets could forge. This is local defense-in-depth, NOT
-      // cryptographic passkey authorization (that needs the chain precompile).
+      // signing gate + spending cap on every VALUE-AFFECTING send. Until now the
+      // cap was advisory (popup amber badge only); enforce it here so the
+      // displayed limit is a real block. An over-limit send requires an
+      // SW-VERIFIED password re-auth — NOT a popup-asserted flag, which the
+      // already-unlocked local IPC actor this gate targets could forge. This is
+      // local defense-in-depth, NOT cryptographic passkey authorization (that
+      // needs the chain precompile).
       //
-      // A bare value transfer is `data === undefined` OR an empty `data` of
-      // "0x": tx-mldsa normalizes input to "0x" either way, so a "0x" data
-      // field is byte-identical to a native transfer and must be capped too —
-      // otherwise an over-limit native-equivalent transfer could slip past the
-      // cap by sending data:"0x". (data === "" is already rejected by the
-      // 0x-prefix validation above; only "0x" reaches here.)
+      // SCOPE: the gate covers a bare value transfer (`data === undefined` OR an
+      // empty `data` of "0x" — tx-mldsa normalizes input to "0x" either way, so
+      // a "0x" data field is byte-identical to a native transfer; data === "" is
+      // already rejected by the 0x-prefix validation above, only "0x" reaches
+      // here) AND any DATA-CARRYING send that still spends native value (staking
+      // 0x1006, escrow, …). A data-carrying call is NOT exempt: it would
+      // otherwise bypass both the passkey requirement and the cap despite moving
+      // value. A zero-value read-only / contract call carries no native spend and
+      // stays ungated (the cap governs native value only).
       // Part 3 (passkey daily cap): a daily-mode passkey-unlocked send to
       // count, captured in the gate below and appended AFTER the submit
       // succeeds so the SW — not the popup — is the authoritative counter.
