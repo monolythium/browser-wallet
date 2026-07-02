@@ -176,10 +176,11 @@ function emptyState(envelope: WalletActivityKindEnvelope | null) {
   if (envelope.kind === "private") {
     return (
       <div style={base}>
-        <div style={{ marginBottom: 8 }}>Private activity placeholder.</div>
+        <div style={{ marginBottom: 8 }}>
+          Private transfer details aren't viewable in the wallet yet.
+        </div>
         <div style={{ fontSize: 11, color: "var(--fg-600)" }}>
-          Viewing your private transfers requires the meta-address surface
-          shipping in Phase 12.
+          Private activity is opaque to the public indexer.
         </div>
       </div>
     );
