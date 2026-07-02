@@ -7479,7 +7479,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             action.kind === "send"
               ? action.valueWeiHex
               : action.valueWeiHex ?? "0x0";
-          const data = action.kind === "contract" ? action.data : action.data;
+          const data = action.data;
           // T4-04 (Item D) parity: clamp the operator-quoted per-execution-unit
           // price to the sane de-trust ceiling before signing, exactly like the
           // four other fee-bearing send paths (eth_sendTransaction, the two MRV
