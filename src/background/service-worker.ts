@@ -7897,6 +7897,28 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
               `${proposal.rejections.length} rejections`,
           };
         }
+        // T3-03 parity with the tx-path multisig-execute (~L7419): re-verify the
+        // collected approval SIGNATURES against the LIVE governance-proposal
+        // digest before applying — not just the approvals[] COUNT that
+        // isGovernanceExecutable checks. A local executor who edited
+        // proposal.action after collecting approvals would still pass the count
+        // gate, but the stored signatures (over the original action's digest) no
+        // longer cover the tampered action. verifyGovernanceApprovals re-hashes
+        // the live action and counts only signatures that still verify. Fail
+        // closed.
+        const { validApprovals } = verifyGovernanceApprovals(
+          proposal,
+          meta.signers,
+        );
+        if (validApprovals.size < meta.threshold) {
+          return {
+            ok: false,
+            reason:
+              `governance approval signatures do not verify against the action: ` +
+              `${validApprovals.size}/${meta.threshold} valid ` +
+              `(of ${proposal.approvals.length} recorded)`,
+          };
+        }
         const next = applyGovernance(
           meta.signers,
           meta.threshold,

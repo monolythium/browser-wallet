@@ -396,6 +396,11 @@ let correctElevatedPassword = "correct-horse-battery-staple";
 // null (no multisig vault) so it is inert for every non-multisig test.
 let multisigMetaForTest: unknown = null;
 
+// M2 harness: governance-execute re-verifies co-signer signatures over the live
+// governance-proposal digest, which needs live ML-DSA sigs. This hoisted holder
+// lets each test control how many approvals re-verify (the mock reads it).
+const govApprovals = vi.hoisted(() => ({ valid: new Set<string>(["s1"]) }));
+
 // Spy for the SLH-DSA backup clear seam — `vi.hoisted` so it is initialized
 // before the (hoisted) keystore mock factory closes over it; lets the
 // clear-gate tests assert delete-or-not.
@@ -459,6 +464,13 @@ vi.mock("../shared/multisig.js", async (importOriginal) => {
     isExecutable: vi.fn(() => true),
     verifyProposalApprovals: vi.fn(() => ({
       validApprovals: new Set(["s1"]),
+    })),
+    // M2: governance-execute now re-verifies co-signer signatures too; stub it
+    // to a test-controlled set (real ML-DSA verification is covered in
+    // shared/multisig.test.ts). isGovernanceExecutable stays REAL (count-based).
+    verifyGovernanceApprovals: vi.fn(() => ({
+      validApprovals: govApprovals.valid,
+      validRejections: new Set<string>(),
     })),
   };
 });
@@ -7803,6 +7815,73 @@ describe("multisig-execute fee ceiling (de-trust parity)", () => {
       }),
       "ms1",
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M2 (T3-03 parity) — multisig-execute-governance re-verifies co-signer
+// signatures over the LIVE governance-proposal digest before applying, not just
+// the approval COUNT that isGovernanceExecutable checks. Fail-closed.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("multisig-execute-governance co-signer re-verification (M2)", () => {
+  beforeEach(() => {
+    multisigMetaForTest = null;
+    govApprovals.valid = new Set<string>(["s1"]);
+  });
+
+  function seedGovernanceProposal() {
+    multisigMetaForTest = {
+      threshold: 1,
+      signers: [{ id: "s1", address: DETERMINISTIC_ADDRESS, pubkey: "0x00" }],
+      proposals: [],
+      governance: [
+        {
+          id: "gov-1",
+          proposedBy: "s1",
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 3_600_000,
+          vaultAddress: DETERMINISTIC_ADDRESS,
+          chainIdHex: TESTNET_CHAIN_ID_HEX,
+          // A no-op change-threshold(1) keeps the real applyGovernance valid on
+          // the accepted path (1 signer, threshold stays 1).
+          action: { kind: "change-threshold", threshold: 1 },
+          approvals: [{ signerId: "s1" }],
+          rejections: [],
+          status: "pending",
+        },
+      ],
+    };
+  }
+
+  function executeGovernance() {
+    return dispatchPopup({
+      kind: "popup",
+      op: "multisig-execute-governance",
+      payload: { vaultId: "ms1", proposalId: "gov-1" },
+    });
+  }
+
+  it("REJECTS when the collected signatures do not re-verify (count gate passed, sig gate fails)", async () => {
+    seedGovernanceProposal();
+    // The approval COUNT passes isGovernanceExecutable, but NO signature
+    // re-verifies against the live digest (e.g. a tampered action).
+    govApprovals.valid = new Set<string>();
+    const r = (await executeGovernance()) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("do not verify");
+  });
+
+  it("APPLIES when the re-verified signatures meet the threshold", async () => {
+    seedGovernanceProposal();
+    govApprovals.valid = new Set<string>(["s1"]);
+    const r = (await executeGovernance()) as {
+      ok: boolean;
+      threshold?: number;
+      signers?: number;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.threshold).toBe(1);
+    expect(r.signers).toBe(1);
   });
 });
 
