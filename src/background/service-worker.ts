@@ -324,7 +324,6 @@ import {
   readDelegations,
   readDelegationCap,
   readPendingRewards,
-  readRedemptionQueue,
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
 import {
@@ -10222,13 +10221,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             .map((d) => ({ cluster: d.cluster, weightBps: d.weightBps }))
         : [];
       return readPendingRewards(p.wallet, delegations);
-    }
-    case "staking-redemption-queue": {
-      const p = message.payload as { wallet?: string } | undefined;
-      if (typeof p?.wallet !== "string") {
-        return { ok: false, reason: "missing wallet" };
-      }
-      return readRedemptionQueue(p.wallet);
     }
     case "staking-delegation-history": {
       // Per-wallet delegation event timeline. Distinct from

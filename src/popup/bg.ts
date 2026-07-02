@@ -2054,8 +2054,6 @@ export type {
   PendingRewardsRow,
   PendingRewardsView,
   ClusterServiceTiers,
-  RedemptionQueueRow,
-  RedemptionQueueView,
   StakingResult,
   WalletOperatorInfo,
 } from "../shared/staking.js";
@@ -2071,7 +2069,6 @@ import type {
   DelegationRow,
   DelegationsView,
   PendingRewardsView,
-  RedemptionQueueView,
   StakingResult,
   WalletOperatorInfo,
 } from "../shared/staking.js";
@@ -2147,15 +2144,6 @@ export async function bgStakingPendingRewards(
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
   return send("staking-pending-rewards", { wallet, delegations });
-}
-
-/** Read the redemption queue for a wallet. The SW prefers live
- *  `lyth_redemptionQueue(wallet)` and only returns the empty mock shape
- *  when the method is absent or the testnet is unreachable. */
-export async function bgStakingRedemptionQueue(
-  wallet: string,
-): Promise<StakingResult<RedemptionQueueView>> {
-  return send("staking-redemption-queue", { wallet });
 }
 
 /** Read the per-wallet delegation event timeline (delegate / undelegate /

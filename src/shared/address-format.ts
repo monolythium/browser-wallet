@@ -10,7 +10,6 @@
 //
 // The chain accepts only the bech32m form on params like:
 //   - lyth_pendingRewards(wallet, block?)
-//   - lyth_redemptionQueue(wallet, block?)
 //   - lyth_getDelegations(wallet, block?)
 //   - lyth_getDelegationHistory(wallet, limit?, cursor?)
 //   - lyth_getTransactionCount(address)
