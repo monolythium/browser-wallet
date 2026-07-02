@@ -6816,6 +6816,7 @@ async function mintAndAssert(opts: {
   priv: CryptoKey;
   credentialId: string;
   signCount?: number;
+  data?: string;
 }): Promise<{ challengeId: string; challengeB64: string; assertion: ForwardedAssertion }> {
   const ev = (await dispatchPopup({
     kind: "popup",
@@ -6825,6 +6826,7 @@ async function mintAndAssert(opts: {
       valueWeiHex: "0x" + opts.valueWei.toString(16),
       to: opts.to,
       chainIdHex: opts.chainIdHex,
+      ...(opts.data !== undefined ? { data: opts.data } : {}),
     },
   })) as {
     ok: boolean;
@@ -6970,12 +6972,88 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
   });
 
-  it("data (contract-call) send bypasses the value-only cap even when over-limit", async () => {
+  it("M1: data-carrying OVER-limit VALUE send is now capped — no password → required, no broadcast", async () => {
+    // A staking/precompile call (0x1006) that moves native value via the tx
+    // `value` field previously slipped past the cap by carrying `data`. It is
+    // now gated exactly like a bare value transfer.
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: OVER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("M1: data-carrying OVER-limit VALUE send broadcasts with the CORRECT elevated password", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: OVER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      elevatedPassword: "correct-horse-battery-staple",
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("M1: data-carrying UNDER-limit VALUE send broadcasts with a VERIFIED assertion bound to the data", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const { challengeId, assertion } = await mintAndAssert({
+      vaultId: "v1",
+      to: "0x0000000000000000000000000000000000001006",
+      valueWei: LIMIT_LYTHOSHI / 2n,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      priv: perTxPriv,
+      credentialId: "c1",
+      data: "0xdeadbeef",
+    });
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: UNDER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+      passkeyChallengeId: challengeId,
+      passkeyAssertion: assertion,
+    })) as { ok: boolean; passkeyElevation?: string };
+    expect(r.ok).toBe(true);
+    expect(r.passkeyElevation).toBeUndefined();
+    expect(submitMlDsaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("M1: data-carrying UNDER-limit VALUE send with NO assertion is REJECTED", async () => {
+    await enablePerTxCap();
+    seedNonceAndFee();
+    const r = (await send({
+      to: "0x0000000000000000000000000000000000001006",
+      valueWeiHex: UNDER,
+      data: "0xdeadbeef",
+      gasLimitHex: "0x30d40",
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("passkey assertion required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("M1: ZERO-value data (read-only contract) call stays ungated under a passkey cap", async () => {
+    // No native spend ⇒ the cap (which governs native value) does not apply,
+    // so a read-only / zero-value contract call broadcasts without a passkey.
     await enablePerTxCap();
     seedNonceAndFee();
     const r = (await send({
       to: "0x0000000000000000000000000000000000001001",
-      valueWeiHex: OVER,
+      valueWeiHex: "0x0",
       data: "0xdeadbeef",
       gasLimitHex: "0x30d40",
       chainIdHex: TESTNET_CHAIN_ID_HEX,

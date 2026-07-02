@@ -10603,17 +10603,29 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         newSignCount: number;
       } | null = null;
       const isBareValueTransfer = p.data === undefined || p.data === "0x";
-      if (isBareValueTransfer) {
+      // T1-04(a) scope FIX: the passkey signing gate + spending-cap MUST cover
+      // ANY value-affecting send, not just bare value transfers. On chain-69420
+      // a data-carrying call (staking 0x1006, escrow, …) moves/locks native
+      // value through the tx `value` field, so a send that carried a non-empty
+      // `data` previously slipped past BOTH the passkey requirement and the cap.
+      // Gate on value movement instead of the presence of `data`: bare transfers
+      // (any value, unchanged) OR a data-carrying tx that spends native value.
+      // A zero-value read-only / contract call carries no native spend and stays
+      // ungated (the cap governs native value only). The cap amount is the
+      // native tx value, which reflects the spend for data-carrying txs too.
+      let sendValueWei: bigint;
+      try {
+        sendValueWei = BigInt(p.valueWeiHex);
+      } catch {
+        return { ok: false, reason: "valueWeiHex is not a hex bigint" };
+      }
+      const gatePasskeyPolicy = isBareValueTransfer || sendValueWei > 0n;
+      if (gatePasskeyPolicy) {
         const activeVaultId = getActiveVaultIdV4();
         if (activeVaultId) {
           const pkState = await readPasskeyStateV4(activeVaultId);
           if (pkState.policy.enabled && pkState.credentials.length > 0) {
-            let pkValue: bigint;
-            try {
-              pkValue = BigInt(p.valueWeiHex);
-            } catch {
-              return { ok: false, reason: "valueWeiHex is not a hex bigint" };
-            }
+            const pkValue = sendValueWei;
             const recentUsage = await readPasskeyUsageEntries(activeVaultId);
             const decision = evaluatePasskeyPolicy({
               state: pkState,
