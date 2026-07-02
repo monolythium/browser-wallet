@@ -73,12 +73,9 @@ export const MAX_CREDENTIALS_PER_VAULT = 8;
  *  local unlock gate for the ML-DSA-65 key, so a real UV check is the point. */
 export const PASSKEY_USER_VERIFICATION: UserVerificationRequirement = "required";
 
-/** Native LYTH precision sourced from the SDK (single source of truth). Chain
- *  migrated 8 → 18 decimals (1 lythoshi == 1 wei); SDK 0.3.15 carries
- *  `LYTHOSHI_PER_LYTH = 10^18`. Re-exported so existing importers keep
- *  resolving it from here. All passkey limits below are LYTH-denominated
- *  (`Nn * LYTHOSHI_PER_LYTH`), so they retain the same LYTH magnitude. */
-export { LYTHOSHI_PER_LYTH };
+// Native LYTH precision sourced from the SDK (single source of truth,
+// `LYTHOSHI_PER_LYTH = 10^18`); all passkey limits below are
+// LYTH-denominated (`Nn * LYTHOSHI_PER_LYTH`).
 
 /** Default per-tx passkey limit, in lythoshi. §28.5 Q30 anchors this to
  *  "~$500"; in the absence of a LYTH/USD oracle in the wallet today
