@@ -149,6 +149,12 @@ export async function verifyPasskeyAssertion(
       );
       // WebAuthn ES256 signatures are ASN.1 DER; crypto.subtle wants raw r||s.
       const sigRaw = derToRawEcdsaSig(assertion.signature);
+      // Reject a malleable high-S (non-canonical) signature. Conformant
+      // WebAuthn authenticators emit low-S; crypto.subtle.verify would
+      // otherwise accept either, so a high-S variant is non-canonical/suspect.
+      if (isHighS(sigRaw.subarray(32))) {
+        return { ok: false, reason: "high-s" };
+      }
       verified = await crypto.subtle.verify(
         { name: "ECDSA", hash: "SHA-256" },
         key,
@@ -225,6 +231,19 @@ export function derToRawEcdsaSig(der: Uint8Array): Uint8Array {
   out.set(leftPad32(stripLeadingZeros(r)), 0);
   out.set(leftPad32(stripLeadingZeros(s)), 32);
   return out;
+}
+
+// secp256r1 (P-256) group order n; a canonical (low-S) ECDSA signature has
+// s <= n/2. WebAuthn authenticators emit low-S; a high-S signature is the
+// malleable variant and is rejected as non-canonical.
+const P256_N_HALF =
+  0x7fffffff800000007fffffffffffffffde737d56d38bcf4279dce5617e3192a8n;
+
+/** True when the 32-byte big-endian `s` is above n/2 (non-canonical high-S). */
+export function isHighS(s32: Uint8Array): boolean {
+  let s = 0n;
+  for (const b of s32) s = (s << 8n) | BigInt(b);
+  return s > P256_N_HALF;
 }
 
 function stripLeadingZeros(b: Uint8Array): Uint8Array {
