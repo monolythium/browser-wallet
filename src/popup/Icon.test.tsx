@@ -31,7 +31,7 @@ describe("Icon — unstake glyph", () => {
 describe("Icon — restake glyph", () => {
   it("renders the restake path (cluster satellites + center ↔ arrow)", () => {
     const html = renderToStaticMarkup(<Icon name="restake" size={13} />);
-    expect(html).toContain('d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3"'); // center bidirectional arrow
+    expect(html).toContain('d="M7 12h10M10 9l-3 3 3 3M14 9l3 3-3 3"'); // center bidirectional arrow
     expect(html).toContain('cx="5" cy="7"'); // shares delegate's cluster satellites
     expect(html).not.toContain('cx="12" cy="12" r="3"'); // but NOT the stake center node
     expect(html).not.toContain("M7 10h14l-4-4M17 14H3l4 4"); // not the generic swap glyph
