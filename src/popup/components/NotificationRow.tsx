@@ -5,7 +5,7 @@
 // optional unread dot. Tapping it opens the shared `NotificationDetail` popup
 // at the call site.
 
-import { Icon, iconForDelegationKind, type IconName } from "../Icon";
+import { Icon, iconForDelegationKind, ACTIVITY_ICON_SIZE, type IconName } from "../Icon";
 import { bech32mDisplay } from "../../shared/bech32m";
 import {
   notificationTitle,
@@ -127,7 +127,7 @@ export function NotificationRow({
           background: "rgba(255,255,255,0.03)",
         }}
       >
-        <Icon name={iconForKind(record.kind)} size={13} />
+        <Icon name={iconForKind(record.kind)} size={ACTIVITY_ICON_SIZE} />
       </div>
 
       <div className="ext-act-row__main" style={{ minWidth: 0 }}>

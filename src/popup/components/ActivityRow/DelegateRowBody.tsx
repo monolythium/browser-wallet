@@ -5,7 +5,7 @@
 // (§C: no cluster name / reverse-resolver in mono-core) → they show
 // `Cluster #<id>` until a chain name source exists.
 
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { DelegateRow } from "../../../shared/activity.js";
 import { resolveClusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
@@ -25,7 +25,7 @@ export function DelegateRowBody({ row, clusterNameById }: DelegateRowBodyProps) 
   return (
     <div className="ext-act-row">
       <div className="dir out">
-        <Icon name="stake" size={13} />
+        <Icon name="stake" size={ACTIVITY_ICON_SIZE} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={label}>

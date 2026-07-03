@@ -10,7 +10,7 @@
 // without losing the %. (The detail popup + the pending row keep the inline %
 // via the shared builders — those surfaces are intentionally NOT changed here.)
 
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { RedelegateRow } from "../../../shared/activity.js";
 import { resolveClusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
@@ -36,7 +36,7 @@ export function RedelegateRowBody({ row, clusterNameById }: RedelegateRowBodyPro
   return (
     <div className="ext-act-row">
       <div className="dir out">
-        <Icon name="restake" size={13} />
+        <Icon name="restake" size={ACTIVITY_ICON_SIZE} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={label}>{label}</div>

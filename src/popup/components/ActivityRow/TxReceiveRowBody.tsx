@@ -1,4 +1,4 @@
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { renderCounterparty, counterpartyText } from "../ActivityRow.js";
 import type { TxReceiveRow } from "../../../shared/activity.js";
@@ -14,7 +14,7 @@ export function TxReceiveRowBody({ row, counterpartyLabel }: TxReceiveRowBodyPro
   return (
     <div className="ext-act-row">
       <div className="dir in">
-        <Icon name="receive" size={13} />
+        <Icon name="receive" size={ACTIVITY_ICON_SIZE} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={title}>

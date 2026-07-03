@@ -1,4 +1,4 @@
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { UndelegateRow } from "../../../shared/activity.js";
 import { resolveClusterLabel, formatWeightBpsPercent } from "../../../shared/staking.js";
@@ -15,7 +15,7 @@ export function UndelegateRowBody({ row, clusterNameById }: UndelegateRowBodyPro
   return (
     <div className="ext-act-row">
       <div className="dir out">
-        <Icon name="unstake" size={13} />
+        <Icon name="unstake" size={ACTIVITY_ICON_SIZE} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={label}>
