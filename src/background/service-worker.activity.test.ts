@@ -50,6 +50,7 @@ const mockRefreshUnreadBadge = vi.hoisted(() => vi.fn(async () => {}));
 const mockInstallNotificationsClickListener = vi.hoisted(() => vi.fn(() => {}));
 // Item 7c — incoming-toast toggle. Default ON; the toggle-OFF test overrides.
 const mockGetIncomingEnabled = vi.hoisted(() => vi.fn(async () => true));
+const mockSetIncomingEnabled = vi.hoisted(() => vi.fn(async () => {}));
 // Presence probe. Default false (closed) so existing tests
 // record read:false (today's behavior); C3 tests override per-case.
 const mockIsWalletSurfaceOpen = vi.hoisted(() => vi.fn(async () => false));
@@ -59,6 +60,7 @@ vi.mock("./notifications-os.js", () => ({
   installNotificationsClickListener: mockInstallNotificationsClickListener,
   isWalletSurfaceOpen: mockIsWalletSurfaceOpen,
   getIncomingEnabled: mockGetIncomingEnabled,
+  setIncomingEnabled: mockSetIncomingEnabled,
 }));
 
 const DETERMINISTIC_ADDRESS = DETERMINISTIC_TEST_ADDRESS;
@@ -511,6 +513,7 @@ import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_INCOMING_POLL,
   ALARM_APPROVAL_REAP,
   APPROVAL_TTL_MS,
   AUTO_LOCK_EXEMPT_OPS,
@@ -5911,8 +5914,11 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
     ...over,
   });
 
-  it("first run only establishes a baseline — no toast, no history toast-storm", async () => {
+  it("first run with a SMALL receive set notifies them (fresh-wallet fix)", async () => {
     const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    // 2 receives on a never-seen scope: genuine recent arrivals on a fresh /
+    // newly-migrated wallet, not history — notify (record + toast) instead of
+    // silently baselining, honouring "the in-app record is always kept".
     const added = await detectAndNotifyIncoming(
       ADDR,
       CHAIN,
@@ -5920,11 +5926,31 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
       true,
       true,
     );
+    expect(added).toBe(2);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(2);
+    // Watermark advances to the newest anchor in view.
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+  });
+
+  it("first run with a LARGE receive history only baselines — no toast-storm", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    // > INCOMING_FIRST_RUN_NOTIFY_CAP (10): an established / imported wallet — the
+    // whole receive history must NOT dump into notifications on first use.
+    const history = Array.from({ length: 11 }, (_, i) => rx(200 - i));
+    const added = await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      history as never,
+      true,
+      true,
+    );
     expect(added).toBe(0);
     expect(mockFireOsNotification).not.toHaveBeenCalled();
     expect(storageLocal[histKey]).toBeUndefined();
     // Watermark pinned to the newest anchor in view.
-    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 200 });
   });
 
   it("a new incoming above the watermark → one record + one toast; advances the watermark", async () => {
@@ -6102,7 +6128,9 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
       false,
       true,
     );
-    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    // The lone first-run receive is a fresh-wallet arrival (<= cap) so it
+    // notifies; the watermark still pins to the RECEIVE (100), not the send (200).
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
     expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
     // A genuine receive arrives at block 150 — newer than the receive baseline
     // (100) but OLDER than the send (200). It must notify.
@@ -6114,7 +6142,7 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
       true,
     );
     expect(added).toBe(1);
-    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2); // first-run(100) + (150)
   });
 });
 
@@ -7805,5 +7833,158 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
     expect(armed.length).toBeGreaterThan(0); // the lock ALWAYS arms when unlocked
     const last = armed[armed.length - 1]!.info as { delayInMinutes: number };
     expect(last.delayInMinutes).toBe(60); // from persisted, not the 5 default
+  });
+});
+
+describe("open-path incoming via wallet-activity-get (u32::MAX anchor)", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const wmKey = `mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`;
+  const histKey = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+  const flushAsync = async () => {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+  };
+  it("records + toasts a fresh native incoming above an established watermark", async () => {
+    unlocked = true;
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0, blockIds: [] };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0xdead",
+        tokenId: null,
+        amount: "10",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: CHAIN },
+    });
+    await flushAsync();
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: Array<{ kind: string }> };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 200 });
+  });
+});
+
+describe("incoming-poll alarm (Option 1: active-scope, low-cadence)", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const wmKey = `mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`;
+  const histKey = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+  const flushAsync = async () => {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+  };
+  const fireIncomingPoll = () => {
+    for (const l of capturedAlarmListeners) l({ name: ALARM_INCOMING_POLL });
+  };
+
+  it("enabling incoming while unlocked arms the 2-minute alarm", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: true },
+    });
+    const armed = alarmCreateCalls.filter((c) => c.name === ALARM_INCOMING_POLL);
+    expect(armed.length).toBeGreaterThan(0);
+    expect(
+      (armed[armed.length - 1]!.info as { periodInMinutes: number }).periodInMinutes,
+    ).toBe(2); // the 2-min cadence IS the throttle (dedicated alarm)
+  });
+
+  it("disabling incoming clears the alarm (and never arms it)", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(false);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: false },
+    });
+    expect(alarmClearCalls).toContain(ALARM_INCOMING_POLL);
+    expect(alarmCreateCalls.map((c) => c.name)).not.toContain(ALARM_INCOMING_POLL);
+  });
+
+  it("does NOT arm while locked — no SW wake while locked", async () => {
+    unlocked = false;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: true },
+    });
+    expect(alarmCreateCalls.map((c) => c.name)).not.toContain(ALARM_INCOMING_POLL);
+  });
+
+  it("locking clears the incoming alarm", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: true },
+    }); // arm
+    alarmClearCalls.length = 0;
+    await dispatchPopup({ kind: "popup", op: "keystore-lock" });
+    expect(alarmClearCalls).toContain(ALARM_INCOMING_POLL);
+  });
+
+  it("firing the alarm while locked self-clears and does not poll", async () => {
+    unlocked = false;
+    rpcCalls.length = 0;
+    fireIncomingPoll();
+    await flushAsync();
+    expect(alarmClearCalls).toContain(ALARM_INCOMING_POLL);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(rpcCalls.map((c) => c.method)).not.toContain("lyth_getAddressActivity");
+  });
+
+  it("firing the alarm while unlocked+enabled records+toasts a fresh incoming for the active scope with NO pending tx", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    // Established watermark so the receive is genuinely new (not a first-run
+    // baseline); NO pending cache for the scope — the whole point of Option 1.
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0, blockIds: [] };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 300,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0xdead",
+        tokenId: null,
+        amount: "7",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    fireIncomingPoll();
+    await flushAsync();
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: Array<{ kind: string }> };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
   });
 });

@@ -5481,12 +5481,21 @@ function maxConfirmedAnchor(confirmed: ConfirmedRow[]): IncomingWatermark | null
   return max;
 }
 
+/** First run for an (addr,chain) scope with THIS many receives (or fewer) in
+ *  view notifies them all instead of silently baselining: a fresh / newly
+ *  migrated wallet's receives are genuine recent arrivals the user wants (the
+ *  "in-app record is always kept" promise), not history to hide. A LARGER set is
+ *  an established / imported wallet — baseline it silently so a whole receive
+ *  history is never dumped into notifications on first use. Tunable. */
+const INCOMING_FIRST_RUN_NOTIFY_CAP = 10;
+
 /** Item 7b — incoming-transfer detection.
  *  Diffs the confirmed `tx_receive` rows (incoming LYTH the indexer already
  *  surfaced) against the per-(addr,chain) watermark; records + toasts the new
- *  ones; advances the watermark. On first run it ONLY establishes a baseline
- *  (the current newest receive anchor + its top-block ids) so a fresh/returning
- *  wallet never toasts its history. Read-only + best-effort — nothing here
+ *  ones; advances the watermark. On first run a small receive set is notified
+ *  (see {@link INCOMING_FIRST_RUN_NOTIFY_CAP}); a larger one only establishes a
+ *  baseline (the current newest receive anchor + its top-block ids) so a wallet
+ *  with real history never toasts it. Read-only + best-effort — nothing here
  *  touches signing/broadcast. Runs from the open-surface activity snapshot AND
  *  (C3 / 2a) the closed-surface alarm poll; the toast is gated by `unlocked`.
  *
@@ -5542,23 +5551,31 @@ export async function detectAndNotifyIncoming(
     const idsInBlock = (block: number): string[] =>
       withIds.filter((x) => x.row.blockHeight === block).map((x) => x.id);
 
-    const wm = await getIncomingWatermark(addressLower, chainIdHex);
+    let wm = await getIncomingWatermark(addressLower, chainIdHex);
     if (wm === null) {
-      // Baseline — everything currently in view is history; no toasts. Record
-      // the top block's receive ids so a future same-block arrival is still
-      // distinguishable. A negative sentinel when there's nothing yet so the
-      // first-ever incoming still notifies next cycle.
+      // First run for this scope. A LARGE receive history is an established /
+      // imported wallet — baseline it silently (no toasts) so we don't dump the
+      // whole history into notifications. Record the top block's receive ids so a
+      // future same-block arrival is still distinguishable; a negative sentinel
+      // when there's nothing yet so the first-ever incoming still notifies.
       // 2b — baseline over RECEIVES ONLY: a higher-anchored non-receive row
       // (e.g. an outgoing send, incl. a self-send's out-leg) must not push the
       // watermark past the newest genuine receive, or early receives below it
       // would never pass the detection gate.
-      const top = maxConfirmedAnchor(receives);
-      const baseline: IncomingWatermark =
-        top === null
-          ? { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] }
-          : { ...top, blockIds: idsInBlock(top.blockHeight) };
-      await setIncomingWatermark(addressLower, chainIdHex, baseline);
-      return 0;
+      if (receives.length > INCOMING_FIRST_RUN_NOTIFY_CAP) {
+        const top = maxConfirmedAnchor(receives);
+        const baseline: IncomingWatermark =
+          top === null
+            ? { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] }
+            : { ...top, blockIds: idsInBlock(top.blockHeight) };
+        await setIncomingWatermark(addressLower, chainIdHex, baseline);
+        return 0;
+      }
+      // A SMALL set on a fresh scope is genuine recent arrivals — notify them.
+      // Drop the watermark to a sentinel below every block so the detection loop
+      // below marks each receive new (record + toast, bounded by the cap), then
+      // advances the watermark to the newest as usual.
+      wm = { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] };
     }
     // Item 7c — the incoming-transfer TOAST is gated by its own toggle (default
     // on); the in-app record is always written regardless (§0.4).
