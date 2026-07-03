@@ -238,14 +238,17 @@ export function Icon({ name, size = 16 }: IconProps) {
       // (stake moving between clusters). Mirrors delegate's `stake` glyph (the
       // same 4 satellites) so delegate / undelegate / redelegate read as a
       // family; the center is a bidirectional ↔ arrow instead of the staked
-      // node (stake) or the down arrow (unstake).
+      // node (stake) or the down arrow (unstake). The shaft spans the full gap
+      // between the satellites (x7→17) and the two heads sit at the ends, so a
+      // clear shaft shows in the middle and the ↔ reads at 13px like unstake's
+      // single arrowhead. Heads keep unstake's weight (depth 3, half-extent 3).
       return (
         <svg {...props}>
           <circle cx="5" cy="7" r="2" />
           <circle cx="19" cy="7" r="2" />
           <circle cx="5" cy="17" r="2" />
           <circle cx="19" cy="17" r="2" />
-          <path d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3" />
+          <path d="M7 12h10M10 9l-3 3 3 3M14 9l3 3-3 3" />
         </svg>
       );
     case "swap":
