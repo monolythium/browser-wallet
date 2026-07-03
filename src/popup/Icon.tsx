@@ -33,9 +33,9 @@ export function iconForDelegationKind(
 }
 
 /** Render size for the activity- and notification-row logos. The row badge is a
- *  28px circle; 20px fills it comfortably while leaving the status ring visible.
+ *  28px circle; 18px fills it comfortably while leaving the status ring visible.
  *  Bumped up from 13px so the glyph reads at a glance in the feed. */
-export const ACTIVITY_ICON_SIZE = 20;
+export const ACTIVITY_ICON_SIZE = 18;
 
 interface IconProps {
   name: IconName;
