@@ -1234,12 +1234,18 @@ function cloneMultisigMeta(meta: MultisigVaultMeta): MultisigVaultMeta {
       rejections: p.rejections.map((a) => ({ ...a })),
       action: { ...p.action },
     })),
-    governance: meta.governance.map((g) => ({
-      ...g,
-      approvals: g.approvals.map((a) => ({ ...a })),
-      rejections: g.rejections.map((a) => ({ ...a })),
-      action: cloneGovernanceAction(g.action),
-    })),
+    // B.3 fail-closed: a governance proposal persisted before the P1-006
+    // chainIdHex binding (shipped 0.4.x) can't be re-hashed/verified — drop it
+    // from the actionable meta rather than crash later at hashGovernanceProposal.
+    // Testnet phase: no migration; the user re-creates the proposal.
+    governance: meta.governance
+      .filter((g) => typeof g.chainIdHex === "string")
+      .map((g) => ({
+        ...g,
+        approvals: g.approvals.map((a) => ({ ...a })),
+        rejections: g.rejections.map((a) => ({ ...a })),
+        action: cloneGovernanceAction(g.action),
+      })),
   };
 }
 

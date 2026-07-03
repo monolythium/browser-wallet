@@ -947,6 +947,49 @@ describe("keystore-mldsa multisig vault", () => {
   );
 
   it(
+    "readMultisigMetaV4 drops a legacy governance proposal missing chainIdHex (B.3, no throw)",
+    async () => {
+      const ks = await import("./keystore-mldsa.js");
+      const password = "ms-gov-legacy-password";
+      await ks.createVaultFromNewMnemonic(password);
+      await ks.unlockContainerV4(password);
+      const { vaultId } = await ks.addVaultMultisigV4({
+        signers: [
+          makeSigner({ id: "s-a", address: fakeAddress(0x01) }),
+          makeSigner({ id: "s-b", address: fakeAddress(0x02) }),
+        ],
+        threshold: 2,
+      });
+
+      // Inject a pre-P1-006 legacy governance proposal (no chainIdHex) + a valid
+      // one directly into the persisted container, bypassing the write path
+      // (which would filter the legacy one on the way in).
+      const govBase = {
+        proposedBy: "s-a",
+        createdAt: 1,
+        expiresAt: 1_000_000_000_000,
+        vaultAddress: fakeAddress(0xcc),
+        action: { kind: "change-threshold" as const, threshold: 1 },
+        approvals: [],
+        rejections: [],
+        status: "pending" as const,
+      };
+      const container = storage["mono.vaults.v4"] as {
+        vaults: Array<{ id: string; multisig?: { governance: unknown[] } }>;
+      };
+      const rec = container.vaults.find((r) => r.id === vaultId)!;
+      rec.multisig!.governance = [
+        { ...govBase, id: "g-legacy" }, // NO chainIdHex → dropped on load
+        { ...govBase, id: "g-valid", chainIdHex: "0x10f2c" },
+      ];
+
+      const reloaded = (await ks.readMultisigMetaV4(vaultId))!;
+      expect(reloaded.governance.map((g) => g.id)).toEqual(["g-valid"]);
+    },
+    120_000,
+  );
+
+  it(
     "readMultisigMetaV4 returns null for single vaults and unknown ids",
     async () => {
       const ks = await import("./keystore-mldsa.js");
