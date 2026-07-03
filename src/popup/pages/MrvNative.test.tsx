@@ -24,8 +24,6 @@ import {
 } from "../../shared/__fixtures__/golden.js";
 import type {
   WalletMrvNoEvmArchiveVerification,
-  WalletMrvNoEvmFinalityEvidence,
-  WalletMrvNoEvmFinalityVerification,
   WalletMrvNoEvmCompactReceiptProofTranscript,
   WalletMrvNativeSubmissionPlan,
   WalletMrvNoEvmReceiptProofTranscript,
@@ -70,18 +68,6 @@ const ARCHIVE_COVERING_SNAPSHOT = {
 };
 const MISSING_FINALITY_PROOF_MATERIAL =
   "round certificate for block round";
-const NO_EVM_FINALITY_EVIDENCE: WalletMrvNoEvmFinalityEvidence = {
-  schema: "mono.no_evm_receipt_finality.v1",
-  source: "roundCertificate",
-  round: 57,
-  certificate: {
-    round: 57,
-    signature: "0x1234",
-    signersBitmap: "0xabcd",
-    signerIndices: [1, 3],
-    signerCount: 2,
-  },
-};
 const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   schema: "mono.no_evm_receipt_proof.v1",
   proofKind: "boundedCacheTranscript",
@@ -89,7 +75,6 @@ const NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmReceiptProofTranscript = {
   historySource: "liveBlockCache",
   compactInclusionProof: null,
   archiveProof: null,
-  finalityEvidence: null,
   missingProofMaterial: [MISSING_FINALITY_PROOF_MATERIAL],
   rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
@@ -115,11 +100,6 @@ const NO_EVM_RECEIPT_PROOF_VERIFICATION: WalletMrvNoEvmReceiptProofVerification 
   transcriptCount: 2,
   computedReceiptsRoot: NO_EVM_RECEIPT_PROOF.receiptsRoot,
   computedTargetReceiptHash: NO_EVM_RECEIPT_PROOF.targetReceiptHash,
-};
-const NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED: WalletMrvNoEvmFinalityVerification = {
-  status: "unverified",
-  reason: "trusted round-finality config not configured",
-  details: null,
 };
 const NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED: WalletMrvNoEvmArchiveVerification = {
   status: "unconfigured",
@@ -181,7 +161,6 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF: WalletMrvNoEvmCompactReceipt
     contentHash: `0x${"9".repeat(64)}`,
     signatures: [],
   },
-  finalityEvidence: NO_EVM_FINALITY_EVIDENCE,
   missingProofMaterial: [],
   rootAlgorithm:
     "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
@@ -499,7 +478,6 @@ describe("MrvNative", () => {
               noEvmProofStatus: "missing",
               noEvmProofVerification: null,
               noEvmArchiveVerification: null,
-              noEvmFinalityVerification: null,
             },
           },
         }}
@@ -537,7 +515,6 @@ describe("MrvNative", () => {
               noEvmProofStatus: "transcript-verified",
               noEvmProofVerification: NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: null,
-              noEvmFinalityVerification: null,
             },
           },
         }}
@@ -578,8 +555,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -637,8 +612,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -680,8 +653,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_UNCONFIGURED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -733,8 +704,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_VERIFIED,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -770,8 +739,6 @@ describe("MrvNative", () => {
               noEvmProofVerification:
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification: NO_EVM_ARCHIVE_VERIFICATION_MISMATCH,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -810,8 +777,6 @@ describe("MrvNative", () => {
                 INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF_VERIFICATION,
               noEvmArchiveVerification:
                 NO_EVM_ARCHIVE_VERIFICATION_CONFIG_INVALID,
-              noEvmFinalityVerification:
-                NO_EVM_FINALITY_VERIFICATION_UNCONFIGURED,
             },
           },
         }}
@@ -854,7 +819,6 @@ describe("MrvNative", () => {
                 receiptsRootMatches: false,
               },
               noEvmArchiveVerification: null,
-              noEvmFinalityVerification: null,
             },
           },
         }}
