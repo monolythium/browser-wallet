@@ -529,6 +529,7 @@ import { addressToBech32m } from "../shared/bech32m.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_INCOMING_POLL,
   ALARM_APPROVAL_REAP,
   APPROVAL_TTL_MS,
   AUTO_LOCK_EXEMPT_OPS,
@@ -848,6 +849,9 @@ const bootHydrated: Promise<void> = (async () => {
   if (await hasAnyPendingTx()) {
     void ensureNotifPollAlarm();
   }
+  // Option 1 — re-arm the incoming poll on boot/reload (a reload clears alarms)
+  // if the session rehydrated unlocked and the toggle is on; clears otherwise.
+  void reconcileIncomingPollAlarm();
 
   // Pre-mark WS down for operators with no explicit `ws_url`. See
   // `prefillUnknownWsEndpointsDown` for the V4-LIVE-0008 rationale.
@@ -1077,6 +1081,10 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   lockV4();
+  // Option 1 — the incoming poll must never keep the SW awake while locked;
+  // disarm it here so every lock path (auto-lock + keystore-lock) clears it.
+  // It re-arms on the next unlock.
+  void clearIncomingPollAlarm();
   // B.4 — tell connected origins the account is gone so an in-page provider
   // stops answering eth_accounts from its cache while locked. provider.ts
   // serves eth_accounts locally WITHOUT a SW round-trip, so only an
@@ -1109,6 +1117,9 @@ async function ensureUnlockRestored(): Promise<void> {
     const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
     if (typeof deadline === "number" && Date.now() < deadline) {
       await tryRestoreFromSessionV4();
+      // Option 1 — a session restore is an unlock transition; arm the incoming
+      // poll if the toggle is on (no-op if the restore left us locked).
+      if (isUnlockedV4()) void reconcileIncomingPollAlarm();
     }
   } catch {
     // Best-effort — a restore failure leaves the wallet locked (fail-closed).
@@ -1325,6 +1336,132 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       notifPollBackoff = 0;
       await ensureNotifPollAlarm(NOTIF_POLL_PERIOD_MIN);
     }
+  })();
+});
+
+// ---- incoming-transfer poll alarm (Option 1: active-scope, low-cadence) ----
+
+/** Incoming-poll cadence (minutes). A cross-wallet receive with NO local pending
+ *  tx is otherwise never detected while every surface is closed — ALARM_NOTIF_POLL
+ *  is armed only while a tx is in-flight, and its per-scope loop skips no-pending
+ *  scopes before the incoming block. This slow background presence poll — armed
+ *  only while unlocked + the toggle is on — closes that gap by running incoming
+ *  detection for the active scope once per tick. Deliberately 2 min (not the 30 s
+ *  pending cadence): presence, not confirm-latency; the 2-min period IS the
+ *  throttle (no separate timestamp needed). */
+const INCOMING_POLL_PERIOD_MIN = 2;
+
+/** Arm condition for {@link ALARM_INCOMING_POLL}: the wallet is UNLOCKED with an
+ *  active account AND the "Incoming transfers" toggle is on (default true). Never
+ *  true while locked, so the poll never keeps the SW awake once auto-lock fires
+ *  (the deliberate lock-exposure decision). Testnet-bound by construction —
+ *  {@link pollActiveScopeIncoming} only ever queries the testnet scope. */
+async function shouldArmIncomingPoll(): Promise<boolean> {
+  try {
+    if (!isUnlockedV4()) return false;
+    if (getUnlockedAddressV4() === null) return false;
+    return await getIncomingEnabled();
+  } catch {
+    return false;
+  }
+}
+
+async function ensureIncomingPollAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.create(ALARM_INCOMING_POLL, {
+      delayInMinutes: INCOMING_POLL_PERIOD_MIN,
+      periodInMinutes: INCOMING_POLL_PERIOD_MIN,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+async function clearIncomingPollAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.clear(ALARM_INCOMING_POLL);
+  } catch {
+    // best-effort
+  }
+}
+
+/** Arm or clear {@link ALARM_INCOMING_POLL} to match {@link shouldArmIncomingPoll}.
+ *  Called at every transition that can flip the condition — unlock, session
+ *  restore, the incoming toggle, and boot (lock uses the direct clear in
+ *  triggerAutoLock). Do NOT call it per-op: re-creating a periodic alarm resets
+ *  its schedule, which would starve the 2-min fire if calls arrive faster than
+ *  the period. */
+async function reconcileIncomingPollAlarm(): Promise<void> {
+  if (await shouldArmIncomingPoll()) {
+    await ensureIncomingPollAlarm();
+  } else {
+    await clearIncomingPollAlarm();
+  }
+}
+
+/** {@link ALARM_INCOMING_POLL} core — run incoming detection for the ACTIVE
+ *  unlocked scope (testnet) even when it has no pending tx. Read-only +
+ *  best-effort, the SAME machinery the open-surface and pending-poll call sites
+ *  use: it fetches the shared indexer snapshot ({@link fetchConfirmedRowsForIncoming})
+ *  and runs the UNCHANGED {@link detectAndNotifyIncoming}. The toast still rides
+ *  that function's own toggle + `unlocked` gate (always unlocked here); the
+ *  in-app record is always written. detectAndNotifyIncoming is idempotent
+ *  (persistent watermark + deduped notified set), so overlap with the open /
+ *  pending paths never double-fires. */
+async function pollActiveScopeIncoming(): Promise<void> {
+  try {
+    const addr = getUnlockedAddressV4();
+    if (addr === null || !isUnlockedV4()) return;
+    const addressLower = addr.toLowerCase();
+    // Testnet-bound: the incoming detection + indexer snapshot are testnet-shaped;
+    // the active scope is always the testnet chain at this stage.
+    const chainIdHex = TESTNET_CHAIN_ID_HEX;
+    const now = Date.now();
+    const surfaceOpen = await isWalletSurfaceOpen();
+    const unlocked = isUnlockedV4();
+    const cacheKey = activityCacheKey(addressLower, chainIdHex);
+    const prevConfirmed =
+      validateActivityCache(
+        await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([cacheKey], (res) => resolve(res?.[cacheKey]));
+        }),
+      )?.confirmed ?? [];
+    const confirmed = await fetchConfirmedRowsForIncoming(
+      addressLower,
+      chainIdHex,
+      prevConfirmed,
+      now,
+    );
+    if (confirmed !== null) {
+      await detectAndNotifyIncoming(
+        addressLower,
+        chainIdHex,
+        confirmed,
+        surfaceOpen,
+        unlocked,
+      );
+      await refreshUnreadBadge({ unlocked, activeAddrLower: addressLower });
+    }
+  } catch {
+    // best-effort — never throws out of the alarm.
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== ALARM_INCOMING_POLL) return;
+  void (async () => {
+    // The SW may have just woken from hibernation with the in-memory unlock state
+    // reset; rehydrate it (only WITHIN the auto-lock window — tryRestoreFromSessionV4
+    // fail-closes past the deadline, never extending it) BEFORE gating, both so a
+    // live session isn't misread as locked and to resolve the module-init boot
+    // race. Then self-clear if the arm condition no longer holds (locked / toggle
+    // off / no account) — belt-and-braces atop the explicit disarm hooks.
+    await ensureUnlockRestored();
+    if (!(await shouldArmIncomingPoll())) {
+      await clearIncomingPollAlarm();
+      return;
+    }
+    await pollActiveScopeIncoming();
   })();
 });
 
@@ -6320,6 +6457,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             unlocked: true,
             activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
           });
+          // Option 1 — unlock is the primary arm transition for the incoming
+          // poll (arms when the toggle is on; otherwise a no-op).
+          void reconcileIncomingPollAlarm();
           // CT-4 — tabs that loaded while the wallet was locked synced
           // accounts: [] (the announce state reply mirrors the eth_accounts
           // arm's locked behavior); tell connected origins the account is
@@ -10627,6 +10767,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         await setIncomingEnabled(p.enabled);
+        // Option 1 — arm the active-scope incoming poll when enabled (+unlocked);
+        // clear it when disabled. reconcile reads the fresh toggle state.
+        await reconcileIncomingPollAlarm();
         return { ok: true, enabled: p.enabled };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
