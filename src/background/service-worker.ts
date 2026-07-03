@@ -10664,7 +10664,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const gatePasskeyPolicy = isBareValueTransfer || sendValueWei > 0n;
       if (gatePasskeyPolicy) {
-        const activeVaultId = getActiveVaultIdV4();
+        // B.2 — evaluate the passkey policy against the SAME vault snapshot the
+        // signer uses (boundVaultId, captured at handler entry), not a fresh
+        // re-read: a concurrent vault-select across the awaits above could
+        // otherwise let one vault's cap be checked while another vault signs.
+        // boundVaultId is already non-null (checked above).
+        const activeVaultId = boundVaultId;
         if (activeVaultId) {
           const pkState = await readPasskeyStateV4(activeVaultId);
           if (pkState.policy.enabled && pkState.credentials.length > 0) {

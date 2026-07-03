@@ -6985,6 +6985,39 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
     expect(submitMlDsaTx).not.toHaveBeenCalled();
   });
 
+  it("binds the passkey policy to the entry vault snapshot across a concurrent vault-select (B.2)", async () => {
+    await enablePerTxCap(); // active vault v1, per-tx cap
+    seedNonceAndFee();
+    // Land a concurrent vault-select AFTER the handler captured its entry
+    // snapshot (boundVaultId) but BEFORE the policy read: the multisig check
+    // (activeVaultIsMultisig → readMultisigMetaV4) is one of the awaits between
+    // them, so swap the active vault as its side effect. The policy must stay
+    // bound to the entry vault (which signs), not the swapped-in vault.
+    vi.mocked(keystoreMldsaMock.readMultisigMetaV4).mockImplementationOnce(
+      async () => {
+        activePasskeyVaultId = "v-swapped-after-entry";
+        return null; // not a multisig vault → send proceeds
+      },
+    );
+    const readPasskey = vi.mocked(keystoreMldsaMock.readPasskeyStateV4);
+    readPasskey.mockClear();
+
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+
+    // The policy was evaluated for the ENTRY vault (v1, the signer), NOT the
+    // vault the concurrent select swapped in.
+    expect(readPasskey).toHaveBeenCalledWith("v1");
+    expect(readPasskey).not.toHaveBeenCalledWith("v-swapped-after-entry");
+    // v1's cap is still enforced — elevation required, nothing signed.
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
   it("over-limit value send with the CORRECT password is SW-verified and broadcasts", async () => {
     await enablePerTxCap();
     seedNonceAndFee();
