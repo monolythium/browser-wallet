@@ -33,13 +33,13 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value = the 2026-07-03 v0.3.3 final re-genesis
- *  (release v0.3.3-testnet, mono-core master @ 92a44932), where
+ *  Current value = the 2026-07-04 v0.3.4 bridge-free re-genesis
+ *  (release v0.3.4-testnet, mono-core master @ 81ff5a2d), where
  *  `lyth_chainStats.genesisHash` reports the registry identity hash below.
- *  CONFIRMED 2026-07-03 against the live fleet
- *  (`web3_clientVersion = protocore/v2/v0.3.3-testnet+92a44932`) + the
- *  GitHub chain-registry (matching). The
- *  SDK_REGISTRY_GENESIS_HASH below mirrors the v0.3.3 chain-registry snapshot;
+ *  Mirrors the v0.3.4 chain-registry pin
+ *  (`web3_clientVersion = protocore/v2/v0.3.4-testnet+81ff5a2d`), the binding
+ *  source of truth for the live fleet's genesis. The
+ *  SDK_REGISTRY_GENESIS_HASH below mirrors the v0.3.4 chain-registry snapshot;
  *  the About drift banner surfaces whenever the installed SDK's
  *  `TESTNET_69420.genesis_hash` differs from this pin (the bundled
  *  `@monolythium/core-sdk` 0.6.0 still carries the far-older 0xaabb0f1e
@@ -47,26 +47,26 @@ export const SDK_PACKAGE_VERSION: string =
  *  security pin is a human-reviewer decision; the live-registry fetch shows
  *  the current GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
-  "0x5d5c36efebc5c18a487f6929313343a37f44562e5941b65d3c262eacf594891e";
+  "0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
  *  exposes the chain identity hash used by the registry / p2p binding,
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
- *  header hash. They are not the same value (verified against the live v0.3.3
- *  chain, genesis 0x5d5c36ef…). */
+ *  header hash. They are not the same value (per the v0.3.4 chain-registry
+ *  re-pin, genesis 0x25fd542b…). */
 export const TESTNET_BLOCK0_HASH =
-  "0xe48cf3e1e5fc36b80b09cc5339a776613d9a765bc0096f69e659e74548f6182c";
+  "0xc0374e97c937af1878ff9c8882940baf2394add10c4d94af37b788acb8294e9d";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
- *  the v0.3.3-testnet final re-genesis value (2026-07-03) — matching the
- *  live GitHub chain-registry — so it does not lag. The installed SDK
+ *  the v0.3.4-testnet bridge-free re-genesis value (2026-07-04) — matching
+ *  the live GitHub chain-registry — so it does not lag. The installed SDK
  *  snapshot (`TESTNET_69420.genesis_hash`, bundled 0.6.0) still reports the
  *  older 0xaabb0f1e value until the next SDK rebuild/publish. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0x5d5c36efebc5c18a487f6929313343a37f44562e5941b65d3c262eacf594891e";
+  "0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e";
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
