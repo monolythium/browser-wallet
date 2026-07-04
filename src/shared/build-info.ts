@@ -40,12 +40,15 @@ export const SDK_PACKAGE_VERSION: string =
  *  (`web3_clientVersion = protocore/v2/v0.3.4-testnet+81ff5a2d`), the binding
  *  source of truth for the live fleet's genesis. The
  *  SDK_REGISTRY_GENESIS_HASH below mirrors the v0.3.4 chain-registry snapshot;
- *  the About drift banner surfaces whenever the installed SDK's
- *  `TESTNET_69420.genesis_hash` differs from this pin (the bundled
- *  `@monolythium/core-sdk` 0.6.0 still carries the far-older 0xaabb0f1e
- *  snapshot), in which case this security pin takes precedence. Bumping this
- *  security pin is a human-reviewer decision; the live-registry fetch shows
- *  the current GitHub-registry value alongside. */
+ *  the About drift banner surfaces whenever the displayed registry genesis
+ *  (the live GitHub chain-registry value, or SDK_REGISTRY_GENESIS_HASH as its
+ *  fallback) differs from this pin, in which case this security pin takes
+ *  precedence. The wallet reads only `TESTNET_69420.chain_id` from the bundled
+ *  SDK — never its bundled `genesis_hash` — so this pin is independent of the
+ *  SDK version (as of `@monolythium/core-sdk` 0.6.5 the bundled snapshot
+ *  matches this pin at 0x25fd542b anyway). Bumping this security pin is a
+ *  human-reviewer decision; the live-registry fetch shows the current
+ *  GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
   "0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e";
 
@@ -62,9 +65,11 @@ export const TESTNET_BLOCK0_HASH =
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
  *  the v0.3.4-testnet bridge-free re-genesis value (2026-07-04) — matching
- *  the live GitHub chain-registry — so it does not lag. The installed SDK
- *  snapshot (`TESTNET_69420.genesis_hash`, bundled 0.6.0) still reports the
- *  older 0xaabb0f1e value until the next SDK rebuild/publish. */
+ *  the live GitHub chain-registry — so it does not lag. As of
+ *  `@monolythium/core-sdk` 0.6.5 the installed SDK's bundled
+ *  `TESTNET_69420.genesis_hash` also carries this v0.3.4 value (0x25fd542b);
+ *  earlier pins bundled an older snapshot, but the wallet reads only
+ *  `.chain_id` from the SDK bundle, never its bundled genesis_hash. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
   "0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e";
 
