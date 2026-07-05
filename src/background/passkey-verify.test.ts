@@ -6,7 +6,11 @@
 // verifier and its DER→raw conversion are exercised end-to-end, not mocked.
 
 import { describe, it, expect } from "vitest";
-import { verifyPasskeyAssertion, derToRawEcdsaSig } from "./passkey-verify.js";
+import {
+  verifyPasskeyAssertion,
+  derToRawEcdsaSig,
+  isHighS,
+} from "./passkey-verify.js";
 
 const enc = new TextEncoder();
 const RP_ID = "abcdefghijklmnopabcdefghijklmnop"; // a fake extension host id
@@ -73,6 +77,37 @@ function rawToDer(raw: Uint8Array): Uint8Array {
   return concat(new Uint8Array([0x30, body.length]), body);
 }
 
+// secp256r1 group order — used to normalize simulated signatures to canonical
+// low-S (real WebAuthn authenticators emit low-S; crypto.subtle.sign may emit
+// either, which the verifier's high-S guard would otherwise reject at random).
+const P256_N =
+  0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+function sToBig(s32: Uint8Array): bigint {
+  let v = 0n;
+  for (const b of s32) v = (v << 8n) | BigInt(b);
+  return v;
+}
+function bigToS32(v: bigint): Uint8Array {
+  const out = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+/** Force the 64-byte raw signature's `s` low (≤ n/2), mutating in place. */
+function normalizeLowS(raw64: Uint8Array): Uint8Array {
+  const s = sToBig(raw64.subarray(32));
+  if (s > P256_N / 2n) raw64.set(bigToS32(P256_N - s), 32);
+  return raw64;
+}
+/** Force `s` high (> n/2) to simulate a malleable/non-canonical signature. */
+function forceHighS(raw64: Uint8Array): Uint8Array {
+  const s = sToBig(raw64.subarray(32));
+  if (s <= P256_N / 2n) raw64.set(bigToS32(P256_N - s), 32);
+  return raw64;
+}
+
 const UP_UV = 0x05; // user-present + user-verified
 
 async function makeEs256() {
@@ -100,14 +135,16 @@ async function validEs256(opts?: {
   );
   const clientDataJSON = buildClientData(challenge, ORIGIN);
   const signedData = concat(authData, await sha256(clientDataJSON));
-  const rawSig = new Uint8Array(
-    await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
-      kp.privateKey,
-      toBuf(signedData),
+  const rawSig = normalizeLowS(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        kp.privateKey,
+        toBuf(signedData),
+      ),
     ),
   );
-  const signature = rawToDer(rawSig); // authenticators emit DER
+  const signature = rawToDer(rawSig); // authenticators emit DER (canonical low-S)
   return {
     args: {
       assertion: { authenticatorData: authData, clientDataJSON, signature, credentialId: "c" },
@@ -133,6 +170,27 @@ describe("verifyPasskeyAssertion — ES256", () => {
     const r = await verifyPasskeyAssertion(args);
     expect(r.ok).toBe(true);
     expect(r.newSignCount).toBe(7);
+  });
+
+  it("rejects a malleable high-S signature (B.6)", async () => {
+    // Rebuild the assertion's DER signature with s forced above n/2. The
+    // (r, n-s) variant still verifies under ECDSA, so the guard — not the
+    // crypto check — must reject it as non-canonical.
+    const { args, signature } = await validEs256();
+    const highRaw = forceHighS(derToRawEcdsaSig(signature));
+    args.assertion.signature = rawToDer(highRaw);
+    const r = await verifyPasskeyAssertion(args);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("high-s");
+  });
+
+  it("isHighS: true above n/2, false at/below (B.6 unit)", () => {
+    const half = bigToS32(P256_N / 2n);
+    const justAbove = bigToS32(P256_N / 2n + 1n);
+    const low = bigToS32(1n);
+    expect(isHighS(half)).toBe(false); // n/2 is still canonical (low-S)
+    expect(isHighS(justAbove)).toBe(true);
+    expect(isHighS(low)).toBe(false);
   });
 
   it("rejects a wrong challenge", async () => {

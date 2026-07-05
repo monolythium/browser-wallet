@@ -36,10 +36,8 @@ import {
   ML_DSA_65_PUBLIC_KEY_LEN,
   typedBech32ToAddress,
   verifyNoEvmArchiveProofSignatures,
-  verifyNoEvmFinalityEvidenceThreshold,
   type NoEvmArchiveSignatureVerification,
   type NoEvmArchiveTrustedSigner,
-  type NoEvmBlsFinalityVerification,
   type NoEvmReceiptTrustPolicy,
 } from "@monolythium/core-sdk";
 import {
@@ -324,7 +322,6 @@ import {
   readDelegations,
   readDelegationCap,
   readPendingRewards,
-  readRedemptionQueue,
 } from "./staking-client.js";
 import { readBridgeRoutes } from "./bridge-routes-client.js";
 import {
@@ -363,7 +360,6 @@ interface WalletMrvNativeReceiptEvidence {
   noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
   noEvmArchiveVerification: WalletMrvNoEvmArchiveVerification | null;
-  noEvmFinalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }
 
 type WalletMrvNoEvmReceiptProofKind =
@@ -405,21 +401,6 @@ interface WalletMrvNoEvmArchiveCoveringSnapshot {
   signatures: string[];
 }
 
-interface WalletMrvNoEvmFinalityCertificate {
-  round: number;
-  signature: string;
-  signersBitmap: string;
-  signerIndices: number[];
-  signerCount: number;
-}
-
-interface WalletMrvNoEvmFinalityEvidence {
-  schema: "mono.no_evm_receipt_finality.v1";
-  source: typeof MRV_ROUND_CERTIFICATE_SOURCE;
-  round: number;
-  certificate: WalletMrvNoEvmFinalityCertificate;
-}
-
 interface WalletMrvNoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   proofKind: WalletMrvNoEvmReceiptProofKind;
@@ -427,7 +408,6 @@ interface WalletMrvNoEvmReceiptProofBase {
   historySource: WalletMrvNoEvmReceiptProofHistorySource;
   compactInclusionProof: WalletMrvNoEvmCompactInclusionProof | null;
   archiveProof: WalletMrvNoEvmArchiveProof | null;
-  finalityEvidence: WalletMrvNoEvmFinalityEvidence | null;
   missingProofMaterial: string[];
   rootAlgorithm: string;
   receiptCodec: string;
@@ -488,13 +468,6 @@ interface WalletMrvNoEvmReceiptProofVerification {
   computedCompactLeafHash?: string;
 }
 
-interface WalletMrvNoEvmFinalityTrustConfig {
-  chainIdHex: string;
-  clusterPublicKey: string;
-  committeeSize: number;
-  threshold: number;
-}
-
 interface WalletMrvNoEvmArchiveTrustConfig {
   trustedPublicKeys: string[];
   threshold: number;
@@ -513,37 +486,12 @@ interface WalletMrvNoEvmArchiveVerification {
   details: NoEvmArchiveSignatureVerification | null;
 }
 
-type WalletMrvNoEvmFinalityVerificationStatus =
-  | "verified"
-  | "unverified"
-  | "mismatch";
-
-interface WalletMrvNoEvmFinalityVerification {
-  status: WalletMrvNoEvmFinalityVerificationStatus;
-  reason: string | null;
-  details: NoEvmBlsFinalityVerification | null;
-}
-
-interface ResolvedMrvNoEvmFinalityTrustConfig {
-  chainId: bigint;
-  clusterPublicKey: Uint8Array;
-  committeeSize: number;
-  threshold: number;
-  validFromRound?: bigint;
-  validToRound?: bigint;
-}
-
 interface ResolvedMrvNoEvmArchiveTrustConfig {
   trustedSigners: NoEvmArchiveTrustedSigner[];
   threshold: number;
   validFromHeight?: bigint;
   validToHeight?: bigint;
 }
-
-type WalletMrvNoEvmFinalityTrustResolution =
-  | { kind: "none" }
-  | { kind: "configured"; config: ResolvedMrvNoEvmFinalityTrustConfig }
-  | { kind: "invalid"; reason: string };
 
 type WalletMrvNoEvmArchiveTrustResolution =
   | { kind: "none" }
@@ -581,6 +529,7 @@ import { addressToBech32m } from "../shared/bech32m.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_INCOMING_POLL,
   ALARM_APPROVAL_REAP,
   APPROVAL_TTL_MS,
   AUTO_LOCK_EXEMPT_OPS,
@@ -900,6 +849,9 @@ const bootHydrated: Promise<void> = (async () => {
   if (await hasAnyPendingTx()) {
     void ensureNotifPollAlarm();
   }
+  // Option 1 — re-arm the incoming poll on boot/reload (a reload clears alarms)
+  // if the session rehydrated unlocked and the toggle is on; clears otherwise.
+  void reconcileIncomingPollAlarm();
 
   // Pre-mark WS down for operators with no explicit `ws_url`. See
   // `prefillUnknownWsEndpointsDown` for the V4-LIVE-0008 rationale.
@@ -1129,6 +1081,18 @@ async function triggerAutoLock(): Promise<void> {
   await chrome.storage.session.set({ [SESSION_KEY_WALLET_LOCKED]: true });
   await chrome.alarms.clear(ALARM_AUTO_LOCK);
   lockV4();
+  // Option 1 — the incoming poll must never keep the SW awake while locked;
+  // disarm it here so every lock path (auto-lock + keystore-lock) clears it.
+  // It re-arms on the next unlock.
+  void clearIncomingPollAlarm();
+  // B.4 — tell connected origins the account is gone so an in-page provider
+  // stops answering eth_accounts from its cache while locked. provider.ts
+  // serves eth_accounts locally WITHOUT a SW round-trip, so only an
+  // accountsChanged event invalidates that cache; the connection-scoped
+  // rpc-answer gate alone never runs for those cached reads. broadcastEvent
+  // scopes account-carrying events to connectedOrigins (T2-01). Unlock
+  // re-emits [address] (see the keystore-unlock handler).
+  broadcastEvent("accountsChanged", []);
   // P4-001 D1a — a locked wallet can't sign: reject every pending dApp approval
   // so each call resolves rejected rather than hanging, and no window is stranded.
   rejectAllPending("wallet locked");
@@ -1153,6 +1117,9 @@ async function ensureUnlockRestored(): Promise<void> {
     const deadline = ses[SESSION_KEY_AUTO_LOCK_DEADLINE];
     if (typeof deadline === "number" && Date.now() < deadline) {
       await tryRestoreFromSessionV4();
+      // Option 1 — a session restore is an unlock transition; arm the incoming
+      // poll if the toggle is on (no-op if the restore left us locked).
+      if (isUnlockedV4()) void reconcileIncomingPollAlarm();
     }
   } catch {
     // Best-effort — a restore failure leaves the wallet locked (fail-closed).
@@ -1372,6 +1339,132 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   })();
 });
 
+// ---- incoming-transfer poll alarm (Option 1: active-scope, low-cadence) ----
+
+/** Incoming-poll cadence (minutes). A cross-wallet receive with NO local pending
+ *  tx is otherwise never detected while every surface is closed — ALARM_NOTIF_POLL
+ *  is armed only while a tx is in-flight, and its per-scope loop skips no-pending
+ *  scopes before the incoming block. This slow background presence poll — armed
+ *  only while unlocked + the toggle is on — closes that gap by running incoming
+ *  detection for the active scope once per tick. Deliberately 2 min (not the 30 s
+ *  pending cadence): presence, not confirm-latency; the 2-min period IS the
+ *  throttle (no separate timestamp needed). */
+const INCOMING_POLL_PERIOD_MIN = 2;
+
+/** Arm condition for {@link ALARM_INCOMING_POLL}: the wallet is UNLOCKED with an
+ *  active account AND the "Incoming transfers" toggle is on (default true). Never
+ *  true while locked, so the poll never keeps the SW awake once auto-lock fires
+ *  (the deliberate lock-exposure decision). Testnet-bound by construction —
+ *  {@link pollActiveScopeIncoming} only ever queries the testnet scope. */
+async function shouldArmIncomingPoll(): Promise<boolean> {
+  try {
+    if (!isUnlockedV4()) return false;
+    if (getUnlockedAddressV4() === null) return false;
+    return await getIncomingEnabled();
+  } catch {
+    return false;
+  }
+}
+
+async function ensureIncomingPollAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.create(ALARM_INCOMING_POLL, {
+      delayInMinutes: INCOMING_POLL_PERIOD_MIN,
+      periodInMinutes: INCOMING_POLL_PERIOD_MIN,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+async function clearIncomingPollAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.clear(ALARM_INCOMING_POLL);
+  } catch {
+    // best-effort
+  }
+}
+
+/** Arm or clear {@link ALARM_INCOMING_POLL} to match {@link shouldArmIncomingPoll}.
+ *  Called at every transition that can flip the condition — unlock, session
+ *  restore, the incoming toggle, and boot (lock uses the direct clear in
+ *  triggerAutoLock). Do NOT call it per-op: re-creating a periodic alarm resets
+ *  its schedule, which would starve the 2-min fire if calls arrive faster than
+ *  the period. */
+async function reconcileIncomingPollAlarm(): Promise<void> {
+  if (await shouldArmIncomingPoll()) {
+    await ensureIncomingPollAlarm();
+  } else {
+    await clearIncomingPollAlarm();
+  }
+}
+
+/** {@link ALARM_INCOMING_POLL} core — run incoming detection for the ACTIVE
+ *  unlocked scope (testnet) even when it has no pending tx. Read-only +
+ *  best-effort, the SAME machinery the open-surface and pending-poll call sites
+ *  use: it fetches the shared indexer snapshot ({@link fetchConfirmedRowsForIncoming})
+ *  and runs the UNCHANGED {@link detectAndNotifyIncoming}. The toast still rides
+ *  that function's own toggle + `unlocked` gate (always unlocked here); the
+ *  in-app record is always written. detectAndNotifyIncoming is idempotent
+ *  (persistent watermark + deduped notified set), so overlap with the open /
+ *  pending paths never double-fires. */
+async function pollActiveScopeIncoming(): Promise<void> {
+  try {
+    const addr = getUnlockedAddressV4();
+    if (addr === null || !isUnlockedV4()) return;
+    const addressLower = addr.toLowerCase();
+    // Testnet-bound: the incoming detection + indexer snapshot are testnet-shaped;
+    // the active scope is always the testnet chain at this stage.
+    const chainIdHex = TESTNET_CHAIN_ID_HEX;
+    const now = Date.now();
+    const surfaceOpen = await isWalletSurfaceOpen();
+    const unlocked = isUnlockedV4();
+    const cacheKey = activityCacheKey(addressLower, chainIdHex);
+    const prevConfirmed =
+      validateActivityCache(
+        await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([cacheKey], (res) => resolve(res?.[cacheKey]));
+        }),
+      )?.confirmed ?? [];
+    const confirmed = await fetchConfirmedRowsForIncoming(
+      addressLower,
+      chainIdHex,
+      prevConfirmed,
+      now,
+    );
+    if (confirmed !== null) {
+      await detectAndNotifyIncoming(
+        addressLower,
+        chainIdHex,
+        confirmed,
+        surfaceOpen,
+        unlocked,
+      );
+      await refreshUnreadBadge({ unlocked, activeAddrLower: addressLower });
+    }
+  } catch {
+    // best-effort — never throws out of the alarm.
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== ALARM_INCOMING_POLL) return;
+  void (async () => {
+    // The SW may have just woken from hibernation with the in-memory unlock state
+    // reset; rehydrate it (only WITHIN the auto-lock window — tryRestoreFromSessionV4
+    // fail-closes past the deadline, never extending it) BEFORE gating, both so a
+    // live session isn't misread as locked and to resolve the module-init boot
+    // race. Then self-clear if the arm condition no longer holds (locked / toggle
+    // off / no account) — belt-and-braces atop the explicit disarm hooks.
+    await ensureUnlockRestored();
+    if (!(await shouldArmIncomingPoll())) {
+      await clearIncomingPollAlarm();
+      return;
+    }
+    await pollActiveScopeIncoming();
+  })();
+});
+
 // ---- Helpers ----
 
 function ok(result: unknown): RpcResponse {
@@ -1467,9 +1560,9 @@ async function testnetTransactionCountHex(address: string): Promise<string> {
 // is none), and TTL-healed so a dropped/never-committed tx cannot wedge the
 // nonce: past the TTL we fall back to the committed nonce.
 const PENDING_NONCE_KEY = "mono.nonce.pending"; // chrome.storage.session
-// Must exceed the encrypted-mempool reveal/commit latency (~12s) with margin so
-// a still-pending nonce isn't reused prematurely; short enough to self-heal a
-// dropped tx quickly.
+// Generous margin over the worst-case inclusion latency observed on testnet
+// (~12s) so a still-pending nonce isn't reused prematurely; short enough to
+// self-heal a dropped tx quickly.
 const PENDING_NONCE_TTL_MS = 5 * 60 * 1000;
 
 interface PendingNonceEntry {
@@ -3161,12 +3254,9 @@ const MRV_COMPACT_RECEIPT_NODE_DOMAIN_BYTES = new TextEncoder().encode(
 );
 const MAX_U32 = 0xffff_ffff;
 const MRV_NO_EVM_RECEIPT_TRUST_REGISTRY_NETWORK = "testnet-69420";
-const MRV_ROUND_CERTIFICATE_SOURCE = "roundCertificate";
-const MRV_LEGACY_ROUND_CERTIFICATE_SOURCE = "blsRoundCertificate";
 
 function parseMrvNativeReceiptEvidence(
   raw: unknown,
-  finalityTrust: WalletMrvNoEvmFinalityTrustResolution,
   archiveTrust: WalletMrvNoEvmArchiveTrustResolution,
 ): WalletMrvNativeReceiptEvidence | null {
   if (raw === null || typeof raw !== "object") return null;
@@ -3193,13 +3283,6 @@ function parseMrvNativeReceiptEvidence(
           archiveTrust,
           noEvmProof.blockHeight,
         );
-  const noEvmFinalityVerification =
-    noEvmProof === null
-      ? null
-      : verifyMrvNoEvmFinalityEvidence(
-          noEvmProof.finalityEvidence,
-          finalityTrust,
-        );
   return {
     schema: typeof r.schema === "string" ? r.schema : null,
     txType: typeof r.txType === "number" ? r.txType : null,
@@ -3219,7 +3302,6 @@ function parseMrvNativeReceiptEvidence(
             : "transcript-mismatch",
     noEvmProofVerification,
     noEvmArchiveVerification,
-    noEvmFinalityVerification,
   };
 }
 
@@ -3252,11 +3334,6 @@ function parseMrvNoEvmReceiptProofTranscript(
   const txIndex = parseNonNegativeU32(r.txIndex);
   const receiptCount = parsePositiveU32(r.receiptCount);
   const missingProofMaterial = parseOptionalStringArray(r.missingProofMaterial);
-  const finalityEvidence =
-    r.finalityEvidence === null || r.finalityEvidence === undefined
-      ? null
-      : parseMrvFinalityEvidence(r.finalityEvidence);
-
   if (
     rootAlgorithm === null ||
     receiptCodec === null ||
@@ -3268,9 +3345,6 @@ function parseMrvNoEvmReceiptProofTranscript(
     txIndex === null ||
     receiptCount === null ||
     missingProofMaterial === null ||
-    (finalityEvidence === null &&
-      r.finalityEvidence !== null &&
-      r.finalityEvidence !== undefined) ||
     txIndex >= receiptCount
   ) {
     return null;
@@ -3296,7 +3370,6 @@ function parseMrvNoEvmReceiptProofTranscript(
       historySource,
       compactInclusionProof: null,
       archiveProof: null,
-      finalityEvidence,
       missingProofMaterial,
       rootAlgorithm,
       receiptCodec,
@@ -3342,7 +3415,6 @@ function parseMrvNoEvmReceiptProofTranscript(
     historySource,
     compactInclusionProof,
     archiveProof,
-    finalityEvidence,
     missingProofMaterial,
     rootAlgorithm,
     receiptCodec,
@@ -3560,71 +3632,6 @@ function parseMrvArchiveProofSignatures(raw: unknown): string[] | null {
   return signatures;
 }
 
-function parseMrvFinalityEvidence(
-  raw: unknown,
-): WalletMrvNoEvmFinalityEvidence | null {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const r = raw as Record<string, unknown>;
-  if (r.schema !== "mono.no_evm_receipt_finality.v1") return null;
-  if (
-    r.source !== MRV_ROUND_CERTIFICATE_SOURCE &&
-    r.source !== MRV_LEGACY_ROUND_CERTIFICATE_SOURCE
-  ) {
-    return null;
-  }
-  const round = parseNonNegativeSafeInteger(r.round);
-  const certificate = parseMrvFinalityCertificate(r.certificate);
-  if (round === null || certificate === null || certificate.round !== round) {
-    return null;
-  }
-  return {
-    schema: "mono.no_evm_receipt_finality.v1",
-    source: MRV_ROUND_CERTIFICATE_SOURCE,
-    round,
-    certificate,
-  };
-}
-
-function parseMrvFinalityCertificate(
-  raw: unknown,
-): WalletMrvNoEvmFinalityCertificate | null {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const r = raw as Record<string, unknown>;
-  const round = parseNonNegativeSafeInteger(r.round);
-  const signature = parseMrvReceiptBytesHex(r.signature);
-  const signersBitmap = parseMrvReceiptBytesHex(r.signersBitmap);
-  const signerIndices = parseMrvSignerIndices(r.signerIndices);
-  const signerCount = parseNonNegativeU32(r.signerCount);
-  if (
-    round === null ||
-    signature === null ||
-    signersBitmap === null ||
-    signerIndices === null ||
-    signerCount === null ||
-    signerCount !== signerIndices.length
-  ) {
-    return null;
-  }
-  return {
-    round,
-    signature,
-    signersBitmap,
-    signerIndices,
-    signerCount,
-  };
-}
-
-function parseMrvSignerIndices(raw: unknown): number[] | null {
-  if (!Array.isArray(raw)) return null;
-  const indices: number[] = [];
-  for (const entry of raw) {
-    const index = parseNonNegativeU32(entry);
-    if (index === null) return null;
-    indices.push(index);
-  }
-  return indices;
-}
-
 function parseMrvHashArray(raw: unknown): string[] | null {
   if (!Array.isArray(raw)) return null;
   const hashes: string[] = [];
@@ -3644,66 +3651,6 @@ function parseBooleanArray(raw: unknown): boolean[] | null {
     values.push(entry);
   }
   return values;
-}
-
-function resolveMrvNoEvmFinalityTrustConfig(
-  raw: unknown,
-  requestChainIdHex: string,
-  readRegistryTrust: () => WalletMrvNoEvmRegistryTrustPolicyResolution,
-): WalletMrvNoEvmFinalityTrustResolution {
-  if (raw !== undefined) {
-    return raw === null
-      ? { kind: "none" }
-      : parseMrvNoEvmFinalityTrustConfig(raw, requestChainIdHex, "caller");
-  }
-
-  const envRaw = readMrvNoEvmFinalityTrustEnv();
-  if (envRaw !== null) {
-    return parseMrvNoEvmFinalityTrustConfig(
-      envRaw,
-      requestChainIdHex,
-      "environment",
-    );
-  }
-  return resolveMrvNoEvmRegistryFinalityTrustConfig(
-    readRegistryTrust(),
-    requestChainIdHex,
-  );
-}
-
-function readMrvNoEvmFinalityTrustEnv(): WalletMrvNoEvmFinalityTrustConfig | null {
-  const chainIdHex = readMrvEnvString([
-    "VITE_WALLET_MRV_FINALITY_CHAIN_ID_HEX",
-    "VITE_MONO_MRV_FINALITY_CHAIN_ID_HEX",
-  ]);
-  const clusterPublicKey = readMrvEnvString([
-    "VITE_WALLET_MRV_FINALITY_CLUSTER_PUBLIC_KEY",
-    "VITE_MONO_MRV_FINALITY_CLUSTER_PUBLIC_KEY",
-  ]);
-  const committeeSize = readMrvEnvString([
-    "VITE_WALLET_MRV_FINALITY_COMMITTEE_SIZE",
-    "VITE_MONO_MRV_FINALITY_COMMITTEE_SIZE",
-  ]);
-  const threshold = readMrvEnvString([
-    "VITE_WALLET_MRV_FINALITY_THRESHOLD",
-    "VITE_MONO_MRV_FINALITY_THRESHOLD",
-  ]);
-
-  if (
-    chainIdHex === undefined &&
-    clusterPublicKey === undefined &&
-    committeeSize === undefined &&
-    threshold === undefined
-  ) {
-    return null;
-  }
-
-  return {
-    chainIdHex: chainIdHex ?? "",
-    clusterPublicKey: clusterPublicKey ?? "",
-    committeeSize: committeeSize === undefined ? Number.NaN : Number(committeeSize),
-    threshold: threshold === undefined ? Number.NaN : Number(threshold),
-  };
 }
 
 function resolveMrvNoEvmArchiveTrustConfig(
@@ -3766,121 +3713,6 @@ function resolveMrvNoEvmRegistryReceiptTrustPolicy(
       reason: `registry no-EVM receipt trust policy failed to load: ${mrvErrorMessage(e)}`,
     };
   }
-}
-
-function resolveMrvNoEvmRegistryFinalityTrustConfig(
-  registryTrust: WalletMrvNoEvmRegistryTrustPolicyResolution,
-  requestChainIdHex: string,
-): WalletMrvNoEvmFinalityTrustResolution {
-  if (registryTrust.kind === "none") return { kind: "none" };
-  if (registryTrust.kind === "invalid") {
-    return { kind: "invalid", reason: registryTrust.reason };
-  }
-
-  const finality = registryTrust.policy.finality;
-  if (finality === undefined) return { kind: "none" };
-  if (finality.mode === "multisig") {
-    return {
-      kind: "invalid",
-      reason:
-        "registry round-finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
-    };
-  }
-
-  const chainId = parseMrvRegistryPolicyChainId(
-    finality.chainId ?? registryTrust.policy.chainId,
-  );
-  if (chainId === null) {
-    return {
-      kind: "invalid",
-      reason: "registry round-finality trust policy is missing chainId",
-    };
-  }
-  const requestChainId = parseMrvChainIdBigInt(requestChainIdHex);
-  if (requestChainId === null) {
-    return { kind: "invalid", reason: "receipt request chain id is malformed" };
-  }
-  if (chainId !== requestChainId) {
-    return {
-      kind: "invalid",
-      reason:
-        "registry round-finality chain id does not match the receipt request chain id",
-    };
-  }
-
-  const committeeSize = parsePositiveSafeIntegerValue(finality.committeeSize);
-  if (committeeSize === null) {
-    return {
-      kind: "invalid",
-      reason:
-        "registry round-finality trust policy has invalid committeeSize",
-    };
-  }
-  const threshold = parsePositiveSafeIntegerValue(finality.threshold);
-  if (threshold === null) {
-    return {
-      kind: "invalid",
-      reason: "registry round-finality trust policy has invalid threshold",
-    };
-  }
-  if (threshold > committeeSize) {
-    return {
-      kind: "invalid",
-      reason: "registry round-finality threshold exceeds committee size",
-    };
-  }
-
-  const clusterPublicKey = parseMrvTrustPolicyBytes(
-    finality.clusterPublicKey,
-    48,
-  );
-  if (clusterPublicKey === null) {
-    return {
-      kind: "invalid",
-      reason:
-        "registry round-finality clusterPublicKey must be 48 bytes",
-    };
-  }
-
-  const validFromRound = parseMrvOptionalTrustPolicyBound(
-    finality.validFromRound,
-  );
-  if (validFromRound === null) {
-    return {
-      kind: "invalid",
-      reason:
-        "registry round-finality trust policy has invalid validFromRound",
-    };
-  }
-  const validToRound = parseMrvOptionalTrustPolicyBound(finality.validToRound);
-  if (validToRound === null) {
-    return {
-      kind: "invalid",
-      reason:
-        "registry round-finality trust policy has invalid validToRound",
-    };
-  }
-  if (
-    validFromRound !== undefined &&
-    validToRound !== undefined &&
-    validFromRound > validToRound
-  ) {
-    return {
-      kind: "invalid",
-      reason:
-        "registry round-finality trust policy validFromRound exceeds validToRound",
-    };
-  }
-
-  const config: ResolvedMrvNoEvmFinalityTrustConfig = {
-    chainId,
-    clusterPublicKey,
-    committeeSize,
-    threshold,
-  };
-  if (validFromRound !== undefined) config.validFromRound = validFromRound;
-  if (validToRound !== undefined) config.validToRound = validToRound;
-  return { kind: "configured", config };
 }
 
 function resolveMrvNoEvmRegistryArchiveTrustConfig(
@@ -4046,101 +3878,6 @@ function readMrvEnvString(names: readonly string[]): string | undefined {
     }
   }
   return undefined;
-}
-
-function parseMrvNoEvmFinalityTrustConfig(
-  raw: unknown,
-  requestChainIdHex: string,
-  source: "caller" | "environment",
-): WalletMrvNoEvmFinalityTrustResolution {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality trust config must be an object`,
-    };
-  }
-  const r = raw as Record<string, unknown>;
-  const chainIdRaw = r.chainIdHex ?? r.chainId;
-  const clusterPublicKeyRaw =
-    r.clusterPublicKey ?? r.thresholdClusterPublicKey;
-  const committeeSize = parsePositiveSafeIntegerValue(r.committeeSize);
-  const threshold = parsePositiveSafeIntegerValue(r.threshold);
-  if (typeof chainIdRaw !== "string" || chainIdRaw.length === 0) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality trust config is missing chainIdHex`,
-    };
-  }
-  if (typeof clusterPublicKeyRaw !== "string" || clusterPublicKeyRaw.length === 0) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality trust config is missing clusterPublicKey`,
-    };
-  }
-  if (committeeSize === null) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality trust config has invalid committeeSize`,
-    };
-  }
-  if (threshold === null) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality trust config has invalid threshold`,
-    };
-  }
-  if (threshold > committeeSize) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality threshold exceeds committee size`,
-    };
-  }
-
-  const requestChainId = parseMrvChainIdBigInt(requestChainIdHex);
-  const configuredChainId = parseMrvChainIdBigInt(chainIdRaw);
-  if (requestChainId === null) {
-    return {
-      kind: "invalid",
-      reason: "receipt request chain id is malformed",
-    };
-  }
-  if (configuredChainId === null) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality trust config has invalid chainIdHex`,
-    };
-  }
-  if (configuredChainId !== requestChainId) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality chain id does not match the receipt request chain id`,
-    };
-  }
-
-  const clusterPublicKeyHex = parseMrvReceiptBytesHex(clusterPublicKeyRaw);
-  if (clusterPublicKeyHex === null) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality trust config has malformed clusterPublicKey`,
-    };
-  }
-  const clusterPublicKey = hexToMrvReceiptBytes(clusterPublicKeyHex);
-  if (clusterPublicKey.length !== 48) {
-    return {
-      kind: "invalid",
-      reason: `${source} round-finality clusterPublicKey must be 48 bytes`,
-    };
-  }
-
-  return {
-    kind: "configured",
-    config: {
-      chainId: configuredChainId,
-      clusterPublicKey,
-      committeeSize,
-      threshold,
-    },
-  };
 }
 
 function parseMrvNoEvmArchiveTrustConfig(
@@ -4379,75 +4116,6 @@ function archiveProofForSignatureVerification(
     signatureDigest: archiveProof.coveringSnapshot.signatureDigest,
     signatures: archiveProof.coveringSnapshot.signatures,
   };
-}
-
-function verifyMrvNoEvmFinalityEvidence(
-  finalityEvidence: WalletMrvNoEvmFinalityEvidence | null,
-  finalityTrust: WalletMrvNoEvmFinalityTrustResolution,
-): WalletMrvNoEvmFinalityVerification | null {
-  if (finalityEvidence === null) return null;
-  if (finalityTrust.kind === "none") {
-    return {
-      status: "unverified",
-      reason: "trusted round-finality config not configured",
-      details: null,
-    };
-  }
-  if (finalityTrust.kind === "invalid") {
-    return {
-      status: "mismatch",
-      reason: finalityTrust.reason,
-      details: null,
-    };
-  }
-
-  if (
-    !mrvIsWithinOptionalTrustBounds(
-      BigInt(finalityEvidence.round),
-      finalityTrust.config.validFromRound,
-      finalityTrust.config.validToRound,
-    )
-  ) {
-    return {
-      status: "mismatch",
-      reason: `round-finality trust policy is not valid at round ${finalityEvidence.round}`,
-      details: null,
-    };
-  }
-
-  try {
-    const details = verifyNoEvmFinalityEvidenceThreshold(
-      mrvFinalityEvidenceForCurrentSdk(finalityEvidence),
-      {
-        chainId: finalityTrust.config.chainId,
-        clusterPublicKey: finalityTrust.config.clusterPublicKey,
-        committeeSize: finalityTrust.config.committeeSize,
-        threshold: finalityTrust.config.threshold,
-      },
-    );
-    return {
-      status: details.verified ? "verified" : "mismatch",
-      reason: details.verified
-        ? null
-        : "round-finality evidence did not verify against configured trust inputs",
-      details,
-    };
-  } catch (e) {
-    return {
-      status: "mismatch",
-      reason: `round-finality verification failed: ${mrvErrorMessage(e)}`,
-      details: null,
-    };
-  }
-}
-
-function mrvFinalityEvidenceForCurrentSdk(
-  finalityEvidence: WalletMrvNoEvmFinalityEvidence,
-): Parameters<typeof verifyNoEvmFinalityEvidenceThreshold>[0] {
-  return {
-    ...finalityEvidence,
-    source: MRV_LEGACY_ROUND_CERTIFICATE_SOURCE,
-  } as Parameters<typeof verifyNoEvmFinalityEvidenceThreshold>[0];
 }
 
 function mrvErrorMessage(e: unknown): string {
@@ -5813,12 +5481,21 @@ function maxConfirmedAnchor(confirmed: ConfirmedRow[]): IncomingWatermark | null
   return max;
 }
 
+/** First run for an (addr,chain) scope with THIS many receives (or fewer) in
+ *  view notifies them all instead of silently baselining: a fresh / newly
+ *  migrated wallet's receives are genuine recent arrivals the user wants (the
+ *  "in-app record is always kept" promise), not history to hide. A LARGER set is
+ *  an established / imported wallet — baseline it silently so a whole receive
+ *  history is never dumped into notifications on first use. Tunable. */
+const INCOMING_FIRST_RUN_NOTIFY_CAP = 10;
+
 /** Item 7b — incoming-transfer detection.
  *  Diffs the confirmed `tx_receive` rows (incoming LYTH the indexer already
  *  surfaced) against the per-(addr,chain) watermark; records + toasts the new
- *  ones; advances the watermark. On first run it ONLY establishes a baseline
- *  (the current newest receive anchor + its top-block ids) so a fresh/returning
- *  wallet never toasts its history. Read-only + best-effort — nothing here
+ *  ones; advances the watermark. On first run a small receive set is notified
+ *  (see {@link INCOMING_FIRST_RUN_NOTIFY_CAP}); a larger one only establishes a
+ *  baseline (the current newest receive anchor + its top-block ids) so a wallet
+ *  with real history never toasts it. Read-only + best-effort — nothing here
  *  touches signing/broadcast. Runs from the open-surface activity snapshot AND
  *  (C3 / 2a) the closed-surface alarm poll; the toast is gated by `unlocked`.
  *
@@ -5874,23 +5551,31 @@ export async function detectAndNotifyIncoming(
     const idsInBlock = (block: number): string[] =>
       withIds.filter((x) => x.row.blockHeight === block).map((x) => x.id);
 
-    const wm = await getIncomingWatermark(addressLower, chainIdHex);
+    let wm = await getIncomingWatermark(addressLower, chainIdHex);
     if (wm === null) {
-      // Baseline — everything currently in view is history; no toasts. Record
-      // the top block's receive ids so a future same-block arrival is still
-      // distinguishable. A negative sentinel when there's nothing yet so the
-      // first-ever incoming still notifies next cycle.
+      // First run for this scope. A LARGE receive history is an established /
+      // imported wallet — baseline it silently (no toasts) so we don't dump the
+      // whole history into notifications. Record the top block's receive ids so a
+      // future same-block arrival is still distinguishable; a negative sentinel
+      // when there's nothing yet so the first-ever incoming still notifies.
       // 2b — baseline over RECEIVES ONLY: a higher-anchored non-receive row
       // (e.g. an outgoing send, incl. a self-send's out-leg) must not push the
       // watermark past the newest genuine receive, or early receives below it
       // would never pass the detection gate.
-      const top = maxConfirmedAnchor(receives);
-      const baseline: IncomingWatermark =
-        top === null
-          ? { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] }
-          : { ...top, blockIds: idsInBlock(top.blockHeight) };
-      await setIncomingWatermark(addressLower, chainIdHex, baseline);
-      return 0;
+      if (receives.length > INCOMING_FIRST_RUN_NOTIFY_CAP) {
+        const top = maxConfirmedAnchor(receives);
+        const baseline: IncomingWatermark =
+          top === null
+            ? { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] }
+            : { ...top, blockIds: idsInBlock(top.blockHeight) };
+        await setIncomingWatermark(addressLower, chainIdHex, baseline);
+        return 0;
+      }
+      // A SMALL set on a fresh scope is genuine recent arrivals — notify them.
+      // Drop the watermark to a sentinel below every block so the detection loop
+      // below marks each receive new (record + toast, bounded by the cap), then
+      // advances the watermark to the newest as usual.
+      wm = { blockHeight: -1, txIndex: -1, logIndex: -1, blockIds: [] };
     }
     // Item 7c — the incoming-transfer TOAST is gated by its own toggle (default
     // on); the in-app record is always written regardless (§0.4).
@@ -6789,14 +6474,18 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             unlocked: true,
             activeAddrLower: getUnlockedAddressV4()?.toLowerCase() ?? null,
           });
+          // Option 1 — unlock is the primary arm transition for the incoming
+          // poll (arms when the toggle is on; otherwise a no-op).
+          void reconcileIncomingPollAlarm();
           // CT-4 — tabs that loaded while the wallet was locked synced
           // accounts: [] (the announce state reply mirrors the eth_accounts
           // arm's locked behavior); tell connected origins the account is
           // available again. broadcastEvent scopes account-carrying events
-          // to connected origins (T2-01). The lock direction is deliberately
-          // NOT mirrored — locking has never emitted, and a dApp holding the
-          // address of a now-locked wallet learns nothing new; revoke remains
-          // the only path that retracts an address (T2-03).
+          // to connected origins (T2-01). This is the unlock half of the
+          // lock/unlock pair (B.4): auto-lock emits accountsChanged:[] to
+          // invalidate the in-page provider's eth_accounts cache (it serves
+          // that method locally without a SW round-trip), and unlock re-emits
+          // [address] here so a still-connected dApp re-learns the account.
           broadcastEvent("accountsChanged", [r.address]);
           return { ok: true, address: r.address };
         } catch {
@@ -7479,7 +7168,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             action.kind === "send"
               ? action.valueWeiHex
               : action.valueWeiHex ?? "0x0";
-          const data = action.kind === "contract" ? action.data : action.data;
+          const data = action.data;
           // T4-04 (Item D) parity: clamp the operator-quoted per-execution-unit
           // price to the sane de-trust ceiling before signing, exactly like the
           // four other fee-bearing send paths (eth_sendTransaction, the two MRV
@@ -9887,7 +9576,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const p = message.payload as {
         txHash?: string;
         chainIdHex?: string;
-        finalityTrust?: unknown;
       };
       if (
         typeof p?.txHash !== "string" ||
@@ -9914,11 +9602,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         );
         return registryTrust;
       };
-      const finalityTrust = resolveMrvNoEvmFinalityTrustConfig(
-        p.finalityTrust,
-        requestChainIdHex,
-        readRegistryTrust,
-      );
       const archiveTrust = resolveMrvNoEvmArchiveTrustConfig(
         requestChainIdHex,
         readRegistryTrust,
@@ -9941,7 +9624,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           ]);
           nativeReceipt = parseMrvNativeReceiptEvidence(
             native.result,
-            finalityTrust,
             archiveTrust,
           );
           if (nativeReceipt === null) {
@@ -10222,13 +9904,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             .map((d) => ({ cluster: d.cluster, weightBps: d.weightBps }))
         : [];
       return readPendingRewards(p.wallet, delegations);
-    }
-    case "staking-redemption-queue": {
-      const p = message.payload as { wallet?: string } | undefined;
-      if (typeof p?.wallet !== "string") {
-        return { ok: false, reason: "missing wallet" };
-      }
-      return readRedemptionQueue(p.wallet);
     }
     case "staking-delegation-history": {
       // Per-wallet delegation event timeline. Distinct from
@@ -10663,7 +10338,12 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       const gatePasskeyPolicy = isBareValueTransfer || sendValueWei > 0n;
       if (gatePasskeyPolicy) {
-        const activeVaultId = getActiveVaultIdV4();
+        // B.2 — evaluate the passkey policy against the SAME vault snapshot the
+        // signer uses (boundVaultId, captured at handler entry), not a fresh
+        // re-read: a concurrent vault-select across the awaits above could
+        // otherwise let one vault's cap be checked while another vault signs.
+        // boundVaultId is already non-null (checked above).
+        const activeVaultId = boundVaultId;
         if (activeVaultId) {
           const pkState = await readPasskeyStateV4(activeVaultId);
           if (pkState.policy.enabled && pkState.credentials.length > 0) {
@@ -11104,6 +10784,9 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       }
       try {
         await setIncomingEnabled(p.enabled);
+        // Option 1 — arm the active-scope incoming poll when enabled (+unlocked);
+        // clear it when disabled. reconcile reads the fresh toggle state.
+        await reconcileIncomingPollAlarm();
         return { ok: true, enabled: p.enabled };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };

@@ -19,6 +19,14 @@ export const ALARM_NOTIF_POLL = "monolythium.notif-poll";
  *  (P4-001 D1b). Self-limiting like ALARM_NOTIF_POLL: armed when an approval is
  *  enqueued, cleared when the bus drains. */
 export const ALARM_APPROVAL_REAP = "monolythium.approval-reap";
+
+/** Low-cadence poll that detects INCOMING transfers for the active unlocked
+ *  account even when it has no in-flight pending tx (which is the only thing that
+ *  keeps ALARM_NOTIF_POLL alive). Armed while unlocked + the "Incoming transfers"
+ *  toggle is on; cleared on lock / toggle-off / no active account, so it never
+ *  keeps the SW awake while locked. Closes the closed-surface, no-pending
+ *  cross-wallet gap (see 2026-07-02_incoming-notif-bug-inspect). */
+export const ALARM_INCOMING_POLL = "monolythium.incoming-poll";
 /** A pending approval older than this is auto-rejected. 3 min: generous for a
  *  user to act on a VISIBLE prompt (incl. reading a complex EIP-712 payload),
  *  while bounding a forgotten / flooded approval. Kept <= the 5-min shortest

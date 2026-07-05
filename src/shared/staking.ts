@@ -502,15 +502,12 @@ export interface ClusterDelegatorsView {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rewards + redemption queue (§23.4, §23.2)
+// Rewards (§23.4, §23.2)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The chain now exposes `lyth_pendingRewards(wallet)` for the rewards
-// snapshot and `lyth_redemptionQueue(wallet, [block])` for durable
-// maturity-height redemption tickets. The wallet keeps legacy `amountWei`
-// and `unlockAt` compatibility names at the IPC boundary, but the live
-// queue is block-height based; UI code must use `maturityHeight`/`mature`
-// rather than treating `unlockAt: null` as withdrawable.
+// The chain exposes `lyth_pendingRewards(wallet)` for the rewards
+// snapshot. (The redemption-queue read surface was removed — the chain
+// redeems instantly, so there is no queue to display.)
 
 /** Aggregated pending rewards across every active delegation. */
 export interface PendingRewardsRow {
@@ -554,41 +551,6 @@ export interface PendingRewardsView {
   blockHeight: string | null;
 }
 
-/** Redemption-queue row from `lyth_redemptionQueue(wallet, [block])`.
- *  The committed core reader exposes weight-bps tickets and maturity
- *  heights; `amountWei` remains a legacy compatibility field and is
- *  `"0x0"` when the live ticket has no token amount. */
-export interface RedemptionQueueRow {
-  /** Queue index in the wallet's chain-side ticket list. */
-  index: number;
-  cluster: number;
-  /** Removed delegation weight in basis points. */
-  weightBps: number;
-  /** Optional token amount, as decimal lythoshi, when a future chain/SDK
-   *  response includes it. Null for the current weight-only core ticket. */
-  amountLythoshi: string | null;
-  /** Redemption amount as hex lythoshi. The `amountWei` key remains only
-   *  for staking API compatibility. */
-  amountWei: string;
-  /** Unix timestamp the redemption clears at. The live V4.1 queue is
-   *  height-based, so this stays null unless a future chain response
-   *  explicitly supplies wall-clock unlock time. */
-  unlockAt: number | null;
-  /** Canonical block height at which the ticket was created. */
-  createdHeight: string;
-  /** Canonical block height at which the ticket becomes mature. */
-  maturityHeight: string;
-  /** Chain-side maturity probe at the requested block. Null when the
-   *  operator could not determine maturity for that block selector. */
-  mature: boolean | null;
-}
-
-/** Redemption-queue envelope keyed by wallet. */
-export interface RedemptionQueueView {
-  wallet: string;
-  rows: RedemptionQueueRow[];
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Result envelopes
 // ─────────────────────────────────────────────────────────────────────────────
@@ -601,84 +563,10 @@ export type StakingResult<T> =
   | { ok: false; reason: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock cluster fixtures
+// Mock reward-rate table
 // ─────────────────────────────────────────────────────────────────────────────
-//
-// MOCK — verify against live chain when the testnet back
-// ────────────────────────────────────────────────────
-// The testnet cluster set may be offline. The wallet's read paths
-// fall through to these fixtures when every active operator fails the
-// genesis-pin trust check or returns a transport-level error.
-//
-// Numbers are illustrative-only: they preserve the whitepaper §14 + §23
-// architecture (10 operators per cluster, 7-of-10 threshold, mixed
-// region diversity, mixed entity flags including Foundation clusters
-// per §30.5) so the UI renders the realistic shape rather than empty
-// state. The autovote algorithm gets exercised
-// against this shape directly in tests.
-
-export const MOCK_CLUSTERS: ReadonlyArray<ClusterDirectoryEntry> = [
-  {
-    clusterId: 1,
-    name: "halcyon.cluster.mono",
-    size: 10,
-    threshold: 7,
-    health: "healthy",
-    regions: ["fsn1", "nbg1", "hel1"],
-    active: true,
-    entity: "mono-labs",
-  },
-  {
-    clusterId: 2,
-    name: "north-mesh.cluster.mono",
-    size: 10,
-    threshold: 7,
-    health: "healthy",
-    regions: ["ash", "fsn1", "sin"],
-    active: true,
-    entity: "mono-labs",
-  },
-  {
-    clusterId: 3,
-    name: "polar.cluster.mono",
-    size: 10,
-    threshold: 7,
-    health: "healthy",
-    regions: ["sin", "ash"],
-    active: true,
-    entity: "independent",
-  },
-  {
-    clusterId: 4,
-    name: "ember.cluster.mono",
-    size: 10,
-    threshold: 7,
-    health: "degraded",
-    regions: ["hel1", "nbg1"],
-    active: true,
-    entity: "independent",
-  },
-  {
-    clusterId: 5,
-    name: "salt.cluster.mono",
-    size: 10,
-    threshold: 7,
-    health: "healthy",
-    regions: ["ash", "fsn1"],
-    active: true,
-    entity: "independent",
-  },
-  {
-    clusterId: 6,
-    name: null, // mid-registration cluster — no name yet
-    size: 10,
-    threshold: 7,
-    health: "healthy",
-    regions: ["sin"],
-    active: true,
-    entity: "independent",
-  },
-];
+// (The MOCK_CLUSTERS directory fixture moved to __fixtures__/mock-clusters.ts —
+// it is test-only; no shipped read path falls back to it.)
 
 /** Mock per-cluster reward-rate table, in basis points. Numbers are
  *  illustrative only. Under the service-based model a cluster's reward
@@ -758,11 +646,6 @@ export const MOCK_CLUSTER_REPUTATION: Readonly<Record<number, number>> = {
 //   ✅ `lyth_pendingRewards` — wallet calls the direct RPC first and
 //      uses the old mock derivation only when the method is unavailable
 //      or the testnet is offline.
-//
-//   ✅ `lyth_redemptionQueue` — wallet calls the direct RPC first and
-//      uses the old empty queue only when the method is unavailable or
-//      The testnet is offline. Current core tickets are maturity-height
-//      and weight-bps based; token amount remains optional.
 //
 //   ✅ `lyth_clusterApr` — chain reader exists and the wallet consumes it
 //      (readClusterApr → per-cluster aprBps). MOCK_CLUSTER_APR_BPS is now

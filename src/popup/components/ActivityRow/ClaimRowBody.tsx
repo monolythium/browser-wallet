@@ -10,7 +10,7 @@
 // local-claim, which froze them at claim time), and per the no-mock rule a
 // missing rate renders nothing rather than a fabricated value.
 
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { formatLythDecimalDisplay } from "../../../shared/lyth-units.js";
 import type { ClaimRow } from "../../../shared/activity.js";
@@ -29,7 +29,7 @@ export function ClaimRowBody({ row }: ClaimRowBodyProps) {
   return (
     <div className="ext-act-row">
       <div className="dir in">
-        <Icon name="reward" size={13} />
+        <Icon name="reward" size={ACTIVITY_ICON_SIZE} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={label}>

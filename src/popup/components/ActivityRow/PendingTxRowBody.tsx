@@ -6,7 +6,7 @@
 // The .ext-pending-dot class (ext.css, added in commit 12) gives the
 // rotating amber ring indicator.
 
-import { Icon, iconForDelegationKind, type IconName } from "../../Icon.js";
+import { Icon, iconForDelegationKind, ACTIVITY_ICON_SIZE, type IconName } from "../../Icon.js";
 import { useFeature } from "../../hooks/useFeature.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { notificationTitle } from "../../../shared/notifications.js";
@@ -146,7 +146,7 @@ export function PendingTxRowBody({ row, counterpartyLabel, onDismiss }: PendingT
             isClaim ? "dir in" : isSend ? "dir out sent-ok" : "dir out"
           }
         >
-          <Icon name={iconName} size={13} />
+          <Icon name={iconName} size={ACTIVITY_ICON_SIZE} />
         </div>
         <div className="ext-act-row__main">
           <div className="ext-act-row__who" title={bridgedTitle}>
@@ -222,7 +222,7 @@ export function PendingTxRowBody({ row, counterpartyLabel, onDismiss }: PendingT
                 ? iconForDelegationKind(opKind as "delegate" | "undelegate" | "redelegate")
                 : "send"
           }
-          size={13}
+          size={ACTIVITY_ICON_SIZE}
         />
         {/* In-flight spinner only while still possibly live; a terminal
             (dropped/expired) row is settled, so the spinner is dropped. */}

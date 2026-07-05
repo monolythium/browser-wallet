@@ -39,7 +39,6 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 // P7a self-heal test can reprogram tryRestoreFromSessionV4 for one call.
 import * as keystoreMldsaMock from "./keystore-mldsa.js";
 
-const mockVerifyNoEvmFinalityEvidenceThreshold = vi.hoisted(() => vi.fn());
 const mockGetNoEvmReceiptTrustPolicy = vi.hoisted(() => vi.fn());
 // Mock the OS notification + badge layer so existing tests
 // don't have to stub chrome.notifications + chrome.action. The Phase-2
@@ -51,6 +50,7 @@ const mockRefreshUnreadBadge = vi.hoisted(() => vi.fn(async () => {}));
 const mockInstallNotificationsClickListener = vi.hoisted(() => vi.fn(() => {}));
 // Item 7c — incoming-toast toggle. Default ON; the toggle-OFF test overrides.
 const mockGetIncomingEnabled = vi.hoisted(() => vi.fn(async () => true));
+const mockSetIncomingEnabled = vi.hoisted(() => vi.fn(async () => {}));
 // Presence probe. Default false (closed) so existing tests
 // record read:false (today's behavior); C3 tests override per-case.
 const mockIsWalletSurfaceOpen = vi.hoisted(() => vi.fn(async () => false));
@@ -60,6 +60,7 @@ vi.mock("./notifications-os.js", () => ({
   installNotificationsClickListener: mockInstallNotificationsClickListener,
   isWalletSurfaceOpen: mockIsWalletSurfaceOpen,
   getIncomingEnabled: mockGetIncomingEnabled,
+  setIncomingEnabled: mockSetIncomingEnabled,
 }));
 
 const DETERMINISTIC_ADDRESS = DETERMINISTIC_TEST_ADDRESS;
@@ -179,22 +180,8 @@ const ARCHIVE_COVERING_SNAPSHOT = {
   checkpointTo: 101,
   signatures: [ARCHIVE_PROOF_SIGNATURE],
 };
-const FINALITY_CLUSTER_PUBLIC_KEY = "0x" + "1".repeat(96);
-const REGISTRY_FINALITY_CLUSTER_PUBLIC_KEY = new Uint8Array(48).fill(0x22);
 const MISSING_FINALITY_PROOF_MATERIAL =
   "round certificate for block round";
-const NO_EVM_FINALITY_EVIDENCE = {
-  schema: "mono.no_evm_receipt_finality.v1",
-  source: "roundCertificate",
-  round: 57,
-  certificate: {
-    round: 57,
-    signature: "0x1234",
-    signersBitmap: "0xabcd",
-    signerIndices: [1, 3],
-    signerCount: 2,
-  },
-} as const;
 const NO_EVM_RECEIPT_PROOF = {
   schema: "mono.no_evm_receipt_proof.v1",
   proofKind: "boundedCacheTranscript",
@@ -202,7 +189,6 @@ const NO_EVM_RECEIPT_PROOF = {
   historySource: "liveBlockCache",
   compactInclusionProof: null,
   archiveProof: null,
-  finalityEvidence: null,
   missingProofMaterial: [MISSING_FINALITY_PROOF_MATERIAL],
   rootAlgorithm: "keccak256(monolythium/v2/receipts_root/1)",
   receiptCodec: "rlp-eth-receipt",
@@ -246,7 +232,6 @@ const INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF = {
     contentHash: "0x" + "9".repeat(64),
     signatures: [],
   },
-  finalityEvidence: NO_EVM_FINALITY_EVIDENCE,
   missingProofMaterial: [],
   rootAlgorithm:
     "keccak256-binary-merkle(monolythium/v4.1/receipt_leaf/1, monolythium/v4.1/receipt_node/1, duplicate-last padding)",
@@ -313,13 +298,6 @@ function registryReceiptTrustPolicy(): NoEvmReceiptTrustPolicy {
           signerId: REGISTRY_ARCHIVE_SIGNER.getAddress(),
         },
       ],
-    },
-    finality: {
-      mode: "cluster",
-      chainId: 69420,
-      clusterPublicKey: REGISTRY_FINALITY_CLUSTER_PUBLIC_KEY,
-      committeeSize: 7,
-      threshold: 2,
     },
   };
 }
@@ -516,8 +494,6 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
       }
     },
     MONOLYTHIUM_TESTNET_CHAIN_ID: 69420n,
-    verifyNoEvmFinalityEvidenceThreshold:
-      mockVerifyNoEvmFinalityEvidenceThreshold,
     getNoEvmReceiptTrustPolicy: mockGetNoEvmReceiptTrustPolicy,
     getRpcEndpoints: () => [
       { url: "http://test.invalid:8545", provider: "test", region: "test", tier: "official" },
@@ -537,6 +513,7 @@ import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
+  ALARM_INCOMING_POLL,
   ALARM_APPROVAL_REAP,
   APPROVAL_TTL_MS,
   AUTO_LOCK_EXEMPT_OPS,
@@ -663,7 +640,9 @@ function installChromeStub(): void {
       query: (_f: unknown, cb: (tabs: unknown[]) => void) => {
         cb([]);
       },
-      sendMessage: vi.fn(),
+      // MV3 chrome.tabs.sendMessage returns a Promise; broadcastEvent chains
+      // .catch on it, so the stub must too (a bare vi.fn() returns undefined).
+      sendMessage: vi.fn(() => Promise.resolve()),
     },
     windows: {
       create: vi.fn(() => Promise.resolve({ id: 1 })),
@@ -769,7 +748,6 @@ beforeEach(() => {
   storageSession = {};
   alarmCreateCalls.length = 0;
   alarmClearCalls.length = 0;
-  mockVerifyNoEvmFinalityEvidenceThreshold.mockReset();
   mockGetNoEvmReceiptTrustPolicy.mockReset();
   mockGetNoEvmReceiptTrustPolicy.mockReturnValue(null);
 });
@@ -4401,6 +4379,43 @@ describe("P4-001 D1a — auto-lock fires through a pending approval", () => {
   });
 });
 
+describe("B.4 — auto-lock invalidates the in-page provider cache", () => {
+  it("emits accountsChanged:[] to connected origins on auto-lock", async () => {
+    const sendMessage = (
+      globalThis as unknown as {
+        chrome: { tabs: { sendMessage: ReturnType<typeof vi.fn> } };
+      }
+    ).chrome.tabs.sendMessage;
+
+    // Connect a dApp AND map its tab. The top-level rpc handler records
+    // sender.tab.id → origin in tabOriginById (dispatchRpc's senderless call
+    // would not), and eth_requestAccounts adds the origin to connectedOrigins.
+    const origin = "https://b4-lock-dapp.example";
+    unlocked = true;
+    await new Promise<void>((resolve) => {
+      capturedOnMessage!(
+        { kind: "rpc", id: "b4", args: { method: "eth_requestAccounts", params: [] }, origin },
+        { id: "test", tab: { id: 77 } },
+        () => resolve(),
+      );
+    });
+    // Ignore the connect-time accountsChanged:[addr] broadcast — assert only
+    // the lock-time emit below.
+    sendMessage.mockClear();
+
+    // Fire the auto-lock alarm with an elapsed deadline.
+    storageSession[SESSION_KEY_AUTO_LOCK_DEADLINE] = Date.now() - 1;
+    for (const fire of capturedAlarmListeners) fire({ name: ALARM_AUTO_LOCK });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(sendMessage).toHaveBeenCalledWith(77, {
+      kind: "event",
+      event: "accountsChanged",
+      payload: [],
+    });
+  });
+});
+
 describe("P4-001 D1b — pending-approval TTL reaper", () => {
   it("enqueuing a dApp approval arms the reaper alarm", async () => {
     unlocked = true;
@@ -4550,7 +4565,6 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
           noEvmArchiveVerification: unknown;
-          noEvmFinalityVerification: unknown;
           proofLikeField?: unknown;
         } | null;
         logs?: unknown[];
@@ -4575,7 +4589,6 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProofStatus: "missing",
           noEvmProofVerification: null,
           noEvmArchiveVerification: null,
-          noEvmFinalityVerification: null,
         },
       },
       via: "mock-operator",
@@ -4619,7 +4632,6 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
           noEvmArchiveVerification: unknown;
-          noEvmFinalityVerification: unknown;
         } | null;
       };
     };
@@ -4628,7 +4640,6 @@ describe("wallet-mrv-receipt-status", () => {
       noEvmProof: NO_EVM_RECEIPT_PROOF,
       noEvmProofStatus: "transcript-verified",
       noEvmArchiveVerification: null,
-      noEvmFinalityVerification: null,
       noEvmProofVerification: {
         status: "verified",
         receiptCountMatches: true,
@@ -4670,7 +4681,6 @@ describe("wallet-mrv-receipt-status", () => {
           noEvmProofStatus: string;
           noEvmProofVerification: unknown;
           noEvmArchiveVerification: unknown;
-          noEvmFinalityVerification: unknown;
         } | null;
       };
     };
@@ -4681,11 +4691,6 @@ describe("wallet-mrv-receipt-status", () => {
       noEvmArchiveVerification: {
         status: "unconfigured",
         reason: "trusted archive signer config not configured",
-        details: null,
-      },
-      noEvmFinalityVerification: {
-        status: "unverified",
-        reason: "trusted round-finality config not configured",
         details: null,
       },
       noEvmProofVerification: {
@@ -4706,21 +4711,8 @@ describe("wallet-mrv-receipt-status", () => {
     expect(mockGetNoEvmReceiptTrustPolicy).toHaveBeenCalledWith("testnet-69420");
   });
 
-  it("uses bundled registry archive and finality trust when caller and env trust are absent", async () => {
-    const blsResult = {
-      finalityEvidencePresent: true,
-      signerCountMatches: true,
-      signerBitmapMatchesIndices: true,
-      signerIndicesInRange: true,
-      allSignersTrusted: true,
-      thresholdMet: true,
-      signatureValid: true,
-      acceptedSignatureCount: 2,
-      requiredSignatureCount: 2,
-      verified: true,
-    };
+  it("uses bundled registry archive trust when caller and env trust are absent", async () => {
     mockGetNoEvmReceiptTrustPolicy.mockReturnValue(registryReceiptTrustPolicy());
-    mockVerifyNoEvmFinalityEvidenceThreshold.mockReturnValue(blsResult);
     rpcResponses["eth_getTransactionReceipt"] = {
       transactionHash: SUBMITTED_TX_HASH,
       status: "0x1",
@@ -4752,7 +4744,6 @@ describe("wallet-mrv-receipt-status", () => {
       receipt: {
         nativeReceipt: {
           noEvmArchiveVerification: unknown;
-          noEvmFinalityVerification: unknown;
         } | null;
       };
     };
@@ -4769,169 +4760,6 @@ describe("wallet-mrv-receipt-status", () => {
         checkedSignatures: 1,
         issues: [],
       },
-    });
-    expect(mockVerifyNoEvmFinalityEvidenceThreshold).toHaveBeenCalledTimes(1);
-    const options = mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[1] as {
-      chainId: bigint;
-      clusterPublicKey: Uint8Array;
-      committeeSize: number;
-      threshold: number;
-    };
-    expect(options.chainId).toBe(69420n);
-    expect(Array.from(options.clusterPublicKey)).toEqual(
-      Array.from(REGISTRY_FINALITY_CLUSTER_PUBLIC_KEY),
-    );
-    expect(options.committeeSize).toBe(7);
-    expect(options.threshold).toBe(2);
-    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
-      status: "verified",
-      reason: null,
-      details: blsResult,
-    });
-  });
-
-  it("fails closed when registry finality trust uses unsupported multisig mode", async () => {
-    mockGetNoEvmReceiptTrustPolicy.mockReturnValue({
-      chainId: 69420,
-      finality: {
-        mode: "multisig",
-        chainId: 69420,
-        threshold: 1,
-        trustedSigners: [],
-      },
-    } satisfies NoEvmReceiptTrustPolicy);
-    rpcResponses["eth_getTransactionReceipt"] = {
-      transactionHash: SUBMITTED_TX_HASH,
-      status: "0x1",
-      blockNumber: "0x65",
-      contractAddress: null,
-    };
-    rpcResponses["lyth_nativeReceipt"] = {
-      schema: "riscv.receipt.v1",
-      txType: 0x41,
-      artifactHash: "0x" + "b".repeat(64),
-      receiptCommitment: RECEIPT_COMMITMENT,
-      eventCount: 1,
-      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
-    };
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-mrv-receipt-status",
-      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
-    })) as {
-      ok: true;
-      receipt: {
-        nativeReceipt: {
-          noEvmFinalityVerification: {
-            status: string;
-            reason: string | null;
-            details: unknown;
-          };
-        } | null;
-      };
-    };
-
-    expect(mockVerifyNoEvmFinalityEvidenceThreshold).not.toHaveBeenCalled();
-    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
-      status: "mismatch",
-      reason:
-        "registry round-finality trust mode multisig is not supported by browser wallet threshold-cluster verification",
-      details: null,
-    });
-  });
-
-  it("uses caller finality and env archive trust ahead of bundled registry trust", async () => {
-    const blsResult = {
-      finalityEvidencePresent: true,
-      signerCountMatches: true,
-      signerBitmapMatchesIndices: true,
-      signerIndicesInRange: true,
-      allSignersTrusted: true,
-      thresholdMet: true,
-      signatureValid: true,
-      acceptedSignatureCount: 2,
-      requiredSignatureCount: 2,
-      verified: true,
-    };
-    vi.stubEnv(
-      "VITE_WALLET_MRV_ARCHIVE_TRUSTED_PUBKEYS",
-      TRUSTED_ARCHIVE_PUBLIC_KEY,
-    );
-    vi.stubEnv("VITE_WALLET_MRV_ARCHIVE_SIGNATURE_THRESHOLD", "1");
-    mockGetNoEvmReceiptTrustPolicy.mockReturnValue(registryReceiptTrustPolicy());
-    mockVerifyNoEvmFinalityEvidenceThreshold.mockReturnValue(blsResult);
-    rpcResponses["eth_getTransactionReceipt"] = {
-      transactionHash: SUBMITTED_TX_HASH,
-      status: "0x1",
-      blockNumber: "0x65",
-      contractAddress: null,
-    };
-    rpcResponses["lyth_nativeReceipt"] = {
-      schema: "riscv.receipt.v1",
-      txType: 0x41,
-      artifactHash: "0x" + "b".repeat(64),
-      receiptCommitment: RECEIPT_COMMITMENT,
-      eventCount: 1,
-      noEvmProof: {
-        ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
-        archiveProof: {
-          ...INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF.archiveProof,
-          signatureDigest: ARCHIVE_SIGNATURE_DIGEST,
-          signatures: [TRUSTED_ARCHIVE_SIGNATURE],
-        },
-      },
-    };
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-mrv-receipt-status",
-      payload: {
-        txHash: SUBMITTED_TX_HASH,
-        chainIdHex: TESTNET_CHAIN_ID_HEX,
-        finalityTrust: {
-          chainIdHex: TESTNET_CHAIN_ID_HEX,
-          clusterPublicKey: FINALITY_CLUSTER_PUBLIC_KEY,
-          committeeSize: 7,
-          threshold: 2,
-        },
-      },
-    })) as {
-      ok: true;
-      receipt: {
-        nativeReceipt: {
-          noEvmArchiveVerification: unknown;
-          noEvmFinalityVerification: unknown;
-        } | null;
-      };
-    };
-
-    expect(mockGetNoEvmReceiptTrustPolicy).not.toHaveBeenCalled();
-    expect(r.receipt.nativeReceipt?.noEvmArchiveVerification).toEqual({
-      status: "verified",
-      reason: null,
-      details: {
-        verified: true,
-        threshold: 1,
-        validSigners: [TRUSTED_ARCHIVE_SIGNER.getAddress()],
-        checkedSignatures: 1,
-        issues: [],
-      },
-    });
-    const options = mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[1] as {
-      chainId: bigint;
-      clusterPublicKey: Uint8Array;
-      committeeSize: number;
-      threshold: number;
-    };
-    expect(options.chainId).toBe(69420n);
-    expect(mrvTestBytesToHex(options.clusterPublicKey)).toBe(FINALITY_CLUSTER_PUBLIC_KEY);
-    expect(options.committeeSize).toBe(7);
-    expect(options.threshold).toBe(2);
-    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
-      status: "verified",
-      reason: null,
-      details: blsResult,
     });
   });
 
@@ -5153,145 +4981,6 @@ describe("wallet-mrv-receipt-status", () => {
         "environment archive signature threshold exceeds trusted signer count",
       details: null,
     });
-  });
-
-  it("verifies round-finality evidence with caller-supplied threshold cluster trust", async () => {
-    const blsResult = {
-      finalityEvidencePresent: true,
-      signerCountMatches: true,
-      signerBitmapMatchesIndices: true,
-      signerIndicesInRange: true,
-      allSignersTrusted: true,
-      thresholdMet: true,
-      signatureValid: true,
-      acceptedSignatureCount: 2,
-      requiredSignatureCount: 2,
-      verified: true,
-    };
-    mockVerifyNoEvmFinalityEvidenceThreshold.mockReturnValue(blsResult);
-    rpcResponses["eth_getTransactionReceipt"] = {
-      transactionHash: SUBMITTED_TX_HASH,
-      status: "0x1",
-      blockNumber: "0x65",
-      contractAddress: null,
-    };
-    rpcResponses["lyth_nativeReceipt"] = {
-      schema: "riscv.receipt.v1",
-      txType: 0x41,
-      artifactHash: "0x" + "b".repeat(64),
-      receiptCommitment: RECEIPT_COMMITMENT,
-      eventCount: 1,
-      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
-    };
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-mrv-receipt-status",
-      payload: {
-        txHash: SUBMITTED_TX_HASH,
-        chainIdHex: TESTNET_CHAIN_ID_HEX,
-        finalityTrust: {
-          chainIdHex: TESTNET_CHAIN_ID_HEX,
-          clusterPublicKey: FINALITY_CLUSTER_PUBLIC_KEY,
-          committeeSize: 7,
-          threshold: 2,
-        },
-      },
-    })) as {
-      ok: true;
-      receipt: {
-        nativeReceipt: {
-          noEvmFinalityVerification: unknown;
-        } | null;
-      };
-    };
-
-    expect(mockVerifyNoEvmFinalityEvidenceThreshold).toHaveBeenCalledTimes(1);
-    expect(mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[0]).toEqual(
-      {
-        ...NO_EVM_FINALITY_EVIDENCE,
-        source: "blsRoundCertificate",
-      },
-    );
-    const options = mockVerifyNoEvmFinalityEvidenceThreshold.mock.calls[0]?.[1] as {
-      chainId: bigint;
-      clusterPublicKey: Uint8Array;
-      committeeSize: number;
-      threshold: number;
-    };
-    expect(options.chainId).toBe(69420n);
-    expect(options.clusterPublicKey).toBeInstanceOf(Uint8Array);
-    expect(options.clusterPublicKey).toHaveLength(48);
-    expect(options.committeeSize).toBe(7);
-    expect(options.threshold).toBe(2);
-    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification).toEqual({
-      status: "verified",
-      reason: null,
-      details: blsResult,
-    });
-  });
-
-  it.each([
-    [
-      "malformed cluster key",
-      {
-        chainIdHex: TESTNET_CHAIN_ID_HEX,
-        clusterPublicKey: "0x1234",
-        committeeSize: 7,
-        threshold: 2,
-      },
-      "clusterPublicKey must be 48 bytes",
-    ],
-    [
-      "mismatched chain id",
-      {
-        chainIdHex: "0x1",
-        clusterPublicKey: FINALITY_CLUSTER_PUBLIC_KEY,
-        committeeSize: 7,
-        threshold: 2,
-      },
-      "does not match the receipt request chain id",
-    ],
-  ])("fails closed on %s in caller finality trust config", async (_case, finalityTrust, reason) => {
-    rpcResponses["eth_getTransactionReceipt"] = {
-      transactionHash: SUBMITTED_TX_HASH,
-      status: "0x1",
-      blockNumber: "0x65",
-      contractAddress: null,
-    };
-    rpcResponses["lyth_nativeReceipt"] = {
-      schema: "riscv.receipt.v1",
-      txType: 0x41,
-      artifactHash: "0x" + "b".repeat(64),
-      receiptCommitment: RECEIPT_COMMITMENT,
-      eventCount: 1,
-      noEvmProof: INDEXER_ARCHIVE_COMPACT_NO_EVM_RECEIPT_PROOF,
-    };
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-mrv-receipt-status",
-      payload: {
-        txHash: SUBMITTED_TX_HASH,
-        chainIdHex: TESTNET_CHAIN_ID_HEX,
-        finalityTrust,
-      },
-    })) as {
-      ok: true;
-      receipt: {
-        nativeReceipt: {
-          noEvmFinalityVerification: { status: string; reason: string | null };
-        } | null;
-      };
-    };
-
-    expect(mockVerifyNoEvmFinalityEvidenceThreshold).not.toHaveBeenCalled();
-    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification.status).toBe(
-      "mismatch",
-    );
-    expect(r.receipt.nativeReceipt?.noEvmFinalityVerification.reason).toContain(
-      reason,
-    );
   });
 
   it("accepts non-empty archive proof signatures with the snapshot signature envelope", async () => {
@@ -5715,51 +5404,6 @@ describe("wallet-mrv-receipt-status", () => {
       noEvmProof: {
         ...NO_EVM_RECEIPT_PROOF,
         receiptCount: 3,
-      },
-    };
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-mrv-receipt-status",
-      payload: { txHash: SUBMITTED_TX_HASH, chainIdHex: TESTNET_CHAIN_ID_HEX },
-    })) as {
-      ok: true;
-      receipt: {
-        nativeReceipt: null;
-        nativeReceiptError?: { reason: string; method?: string };
-      };
-    };
-
-    expect(r.receipt.nativeReceipt).toBeNull();
-    expect(r.receipt.nativeReceiptError).toEqual({
-      reason: "lyth_nativeReceipt returned malformed native receipt",
-      method: "lyth_nativeReceipt",
-      via: "mock-operator",
-    });
-  });
-
-  it("rejects malformed no-EVM finality evidence", async () => {
-    rpcResponses["eth_getTransactionReceipt"] = {
-      transactionHash: SUBMITTED_TX_HASH,
-      status: "0x1",
-      blockNumber: "0x64",
-      contractAddress: null,
-    };
-    rpcResponses["lyth_nativeReceipt"] = {
-      schema: "riscv.receipt.v1",
-      txType: 0x41,
-      artifactHash: "0x" + "b".repeat(64),
-      receiptCommitment: RECEIPT_COMMITMENT,
-      eventCount: 1,
-      noEvmProof: {
-        ...NO_EVM_RECEIPT_PROOF,
-        finalityEvidence: {
-          ...NO_EVM_FINALITY_EVIDENCE,
-          certificate: {
-            ...NO_EVM_FINALITY_EVIDENCE.certificate,
-            signerCount: 1,
-          },
-        },
       },
     };
 
@@ -6270,8 +5914,11 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
     ...over,
   });
 
-  it("first run only establishes a baseline — no toast, no history toast-storm", async () => {
+  it("first run with a SMALL receive set notifies them (fresh-wallet fix)", async () => {
     const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    // 2 receives on a never-seen scope: genuine recent arrivals on a fresh /
+    // newly-migrated wallet, not history — notify (record + toast) instead of
+    // silently baselining, honouring "the in-app record is always kept".
     const added = await detectAndNotifyIncoming(
       ADDR,
       CHAIN,
@@ -6279,11 +5926,31 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
       true,
       true,
     );
+    expect(added).toBe(2);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2);
+    const hist = storageLocal[histKey] as { entries: unknown[] };
+    expect(hist.entries).toHaveLength(2);
+    // Watermark advances to the newest anchor in view.
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+  });
+
+  it("first run with a LARGE receive history only baselines — no toast-storm", async () => {
+    const { detectAndNotifyIncoming } = await import("./service-worker.js");
+    // > INCOMING_FIRST_RUN_NOTIFY_CAP (10): an established / imported wallet — the
+    // whole receive history must NOT dump into notifications on first use.
+    const history = Array.from({ length: 11 }, (_, i) => rx(200 - i));
+    const added = await detectAndNotifyIncoming(
+      ADDR,
+      CHAIN,
+      history as never,
+      true,
+      true,
+    );
     expect(added).toBe(0);
     expect(mockFireOsNotification).not.toHaveBeenCalled();
     expect(storageLocal[histKey]).toBeUndefined();
     // Watermark pinned to the newest anchor in view.
-    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 200 });
   });
 
   it("a new incoming above the watermark → one record + one toast; advances the watermark", async () => {
@@ -6461,7 +6128,9 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
       false,
       true,
     );
-    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    // The lone first-run receive is a fresh-wallet arrival (<= cap) so it
+    // notifies; the watermark still pins to the RECEIVE (100), not the send (200).
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
     expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 100 });
     // A genuine receive arrives at block 150 — newer than the receive baseline
     // (100) but OLDER than the send (200). It must notify.
@@ -6473,7 +6142,7 @@ describe("detectAndNotifyIncoming — incoming-transfer detection", () => {
       true,
     );
     expect(added).toBe(1);
-    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(2); // first-run(100) + (150)
   });
 });
 
@@ -6753,6 +6422,23 @@ async function _pkAuthData(
   new DataView(sc.buffer).setUint32(0, signCount, false);
   return _pkConcat(rpIdHash, new Uint8Array([flags]), sc);
 }
+// Real WebAuthn authenticators emit canonical low-S; crypto.subtle.sign may
+// emit either, and the verifier's high-S guard (B.6) rejects high-S — so
+// normalize the simulated signature's s to low-S before DER-encoding.
+const _PK_P256_N =
+  0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+function _pkNormalizeLowS(raw64: Uint8Array): Uint8Array {
+  let s = 0n;
+  for (const b of raw64.subarray(32)) s = (s << 8n) | BigInt(b);
+  if (s > _PK_P256_N / 2n) {
+    let v = _PK_P256_N - s;
+    for (let i = 63; i >= 32; i--) {
+      raw64[i] = Number(v & 0xffn);
+      v >>= 8n;
+    }
+  }
+  return raw64;
+}
 function _pkRawToDer(raw: Uint8Array): Uint8Array {
   const derInt = (b: Uint8Array): Uint8Array => {
     let i = 0;
@@ -6827,11 +6513,13 @@ async function buildAssertion(opts: {
     JSON.stringify({ type: "webauthn.get", challenge: opts.challengeB64, origin }),
   );
   const signedData = _pkConcat(authData, await _pkSha256(clientDataJSON));
-  const rawSig = new Uint8Array(
-    await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
-      opts.priv,
-      _pkToBuf(signedData),
+  const rawSig = _pkNormalizeLowS(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        opts.priv,
+        _pkToBuf(signedData),
+      ),
     ),
   );
   return {
@@ -6922,6 +6610,39 @@ describe("wallet-send-tx passkey spending cap (T1-04a)", () => {
       valueWeiHex: OVER,
       chainIdHex: TESTNET_CHAIN_ID_HEX,
     })) as { ok: false; passkeyElevation?: string };
+    expect(r.ok).toBe(false);
+    expect(r.passkeyElevation).toBe("required");
+    expect(submitMlDsaTx).not.toHaveBeenCalled();
+  });
+
+  it("binds the passkey policy to the entry vault snapshot across a concurrent vault-select (B.2)", async () => {
+    await enablePerTxCap(); // active vault v1, per-tx cap
+    seedNonceAndFee();
+    // Land a concurrent vault-select AFTER the handler captured its entry
+    // snapshot (boundVaultId) but BEFORE the policy read: the multisig check
+    // (activeVaultIsMultisig → readMultisigMetaV4) is one of the awaits between
+    // them, so swap the active vault as its side effect. The policy must stay
+    // bound to the entry vault (which signs), not the swapped-in vault.
+    vi.mocked(keystoreMldsaMock.readMultisigMetaV4).mockImplementationOnce(
+      async () => {
+        activePasskeyVaultId = "v-swapped-after-entry";
+        return null; // not a multisig vault → send proceeds
+      },
+    );
+    const readPasskey = vi.mocked(keystoreMldsaMock.readPasskeyStateV4);
+    readPasskey.mockClear();
+
+    const r = (await send({
+      to: "0xrecipient",
+      valueWeiHex: OVER,
+      chainIdHex: TESTNET_CHAIN_ID_HEX,
+    })) as { ok: false; passkeyElevation?: string };
+
+    // The policy was evaluated for the ENTRY vault (v1, the signer), NOT the
+    // vault the concurrent select swapped in.
+    expect(readPasskey).toHaveBeenCalledWith("v1");
+    expect(readPasskey).not.toHaveBeenCalledWith("v-swapped-after-entry");
+    // v1's cap is still enforced — elevation required, nothing signed.
     expect(r.ok).toBe(false);
     expect(r.passkeyElevation).toBe("required");
     expect(submitMlDsaTx).not.toHaveBeenCalled();
@@ -8112,5 +7833,158 @@ describe("auto-lock honors the persisted timeout at consume time", () => {
     expect(armed.length).toBeGreaterThan(0); // the lock ALWAYS arms when unlocked
     const last = armed[armed.length - 1]!.info as { delayInMinutes: number };
     expect(last.delayInMinutes).toBe(60); // from persisted, not the 5 default
+  });
+});
+
+describe("open-path incoming via wallet-activity-get (u32::MAX anchor)", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const wmKey = `mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`;
+  const histKey = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+  const flushAsync = async () => {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+  };
+  it("records + toasts a fresh native incoming above an established watermark", async () => {
+    unlocked = true;
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0, blockIds: [] };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 200,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0xdead",
+        tokenId: null,
+        amount: "10",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-get",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: CHAIN },
+    });
+    await flushAsync();
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: Array<{ kind: string }> };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
+    expect(storageLocal[wmKey]).toMatchObject({ blockHeight: 200 });
+  });
+});
+
+describe("incoming-poll alarm (Option 1: active-scope, low-cadence)", () => {
+  const ADDR = DETERMINISTIC_ADDRESS.toLowerCase();
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const wmKey = `mono.notifications.incoming-watermark.${ADDR}.${CHAIN}.v1`;
+  const histKey = `mono.notifications.history.${ADDR}.${CHAIN}.v1`;
+  const flushAsync = async () => {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+  };
+  const fireIncomingPoll = () => {
+    for (const l of capturedAlarmListeners) l({ name: ALARM_INCOMING_POLL });
+  };
+
+  it("enabling incoming while unlocked arms the 2-minute alarm", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: true },
+    });
+    const armed = alarmCreateCalls.filter((c) => c.name === ALARM_INCOMING_POLL);
+    expect(armed.length).toBeGreaterThan(0);
+    expect(
+      (armed[armed.length - 1]!.info as { periodInMinutes: number }).periodInMinutes,
+    ).toBe(2); // the 2-min cadence IS the throttle (dedicated alarm)
+  });
+
+  it("disabling incoming clears the alarm (and never arms it)", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(false);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: false },
+    });
+    expect(alarmClearCalls).toContain(ALARM_INCOMING_POLL);
+    expect(alarmCreateCalls.map((c) => c.name)).not.toContain(ALARM_INCOMING_POLL);
+  });
+
+  it("does NOT arm while locked — no SW wake while locked", async () => {
+    unlocked = false;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: true },
+    });
+    expect(alarmCreateCalls.map((c) => c.name)).not.toContain(ALARM_INCOMING_POLL);
+  });
+
+  it("locking clears the incoming alarm", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    await dispatchPopup({
+      kind: "popup",
+      op: "notifications-set-incoming-enabled",
+      payload: { enabled: true },
+    }); // arm
+    alarmClearCalls.length = 0;
+    await dispatchPopup({ kind: "popup", op: "keystore-lock" });
+    expect(alarmClearCalls).toContain(ALARM_INCOMING_POLL);
+  });
+
+  it("firing the alarm while locked self-clears and does not poll", async () => {
+    unlocked = false;
+    rpcCalls.length = 0;
+    fireIncomingPoll();
+    await flushAsync();
+    expect(alarmClearCalls).toContain(ALARM_INCOMING_POLL);
+    expect(mockFireOsNotification).not.toHaveBeenCalled();
+    expect(rpcCalls.map((c) => c.method)).not.toContain("lyth_getAddressActivity");
+  });
+
+  it("firing the alarm while unlocked+enabled records+toasts a fresh incoming for the active scope with NO pending tx", async () => {
+    unlocked = true;
+    mockGetIncomingEnabled.mockResolvedValue(true);
+    // Established watermark so the receive is genuinely new (not a first-run
+    // baseline); NO pending cache for the scope — the whole point of Option 1.
+    storageLocal[wmKey] = { blockHeight: 100, txIndex: 0, logIndex: 0, blockIds: [] };
+    rpcResponses["lyth_getTokenBalances"] = [];
+    rpcResponses["lyth_getAddressLabel"] = null;
+    rpcResponses["lyth_getDelegationHistory"] = [];
+    rpcResponses["lyth_getAddressActivity"] = [
+      {
+        blockHeight: 300,
+        txIndex: 0,
+        logIndex: 4294967295,
+        kind: "transfer",
+        direction: "in",
+        counterparty: "0xdead",
+        tokenId: null,
+        amount: "7",
+        cluster: null,
+        weightBps: null,
+        subKind: null,
+      },
+    ];
+    fireIncomingPoll();
+    await flushAsync();
+    expect(mockFireOsNotification).toHaveBeenCalledTimes(1);
+    const hist = storageLocal[histKey] as { entries: Array<{ kind: string }> };
+    expect(hist.entries).toHaveLength(1);
+    expect(hist.entries[0]!.kind).toBe("receive");
   });
 });

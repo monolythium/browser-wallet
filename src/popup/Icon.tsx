@@ -3,9 +3,9 @@
 import { addressToBech32m } from "../shared/bech32m.js";
 
 export type IconName =
-  | "send" | "qr" | "receive" | "stake" | "swap" | "chev" | "chev-d"
+  | "send" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "clock" | "close" | "back" | "settings" | "lock" | "eye" | "search"
-  | "shield" | "warn" | "tpm" | "hw" | "passkey" | "face" | "bridge"
+  | "shield" | "warn" | "tpm" | "hw" | "passkey" | "bridge"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
@@ -31,6 +31,11 @@ export function iconForDelegationKind(
       return "restake";
   }
 }
+
+/** Render size for the activity- and notification-row logos. The row badge is a
+ *  28px circle; 18px fills it comfortably while leaving the status ring visible.
+ *  Bumped up from 13px so the glyph reads at a glance in the feed. */
+export const ACTIVITY_ICON_SIZE = 18;
 
 interface IconProps {
   name: IconName;
@@ -203,16 +208,6 @@ export function Icon({ name, size = 16 }: IconProps) {
           <rect x="14" y="14" width="7" height="7" rx="1.5" />
         </svg>
       );
-    case "qr":
-      return (
-        <svg {...props}>
-          <rect x="3" y="3" width="7" height="7" />
-          <rect x="14" y="3" width="7" height="7" />
-          <rect x="3" y="14" width="7" height="7" />
-          <rect x="14" y="14" width="3" height="3" />
-          <rect x="18" y="18" width="3" height="3" />
-        </svg>
-      );
     case "receive":
       return (
         <svg {...props}>
@@ -248,14 +243,17 @@ export function Icon({ name, size = 16 }: IconProps) {
       // (stake moving between clusters). Mirrors delegate's `stake` glyph (the
       // same 4 satellites) so delegate / undelegate / redelegate read as a
       // family; the center is a bidirectional ↔ arrow instead of the staked
-      // node (stake) or the down arrow (unstake).
+      // node (stake) or the down arrow (unstake). The shaft spans the full gap
+      // between the satellites (x7→17) and the two heads sit at the ends, so a
+      // clear shaft shows in the middle and the ↔ reads at 13px like unstake's
+      // single arrowhead. Heads keep unstake's weight (depth 3, half-extent 3).
       return (
         <svg {...props}>
           <circle cx="5" cy="7" r="2" />
           <circle cx="19" cy="7" r="2" />
           <circle cx="5" cy="17" r="2" />
           <circle cx="19" cy="17" r="2" />
-          <path d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3" />
+          <path d="M7 12h10M10 9l-3 3 3 3M14 9l3 3-3 3" />
         </svg>
       );
     case "swap":
@@ -358,15 +356,6 @@ export function Icon({ name, size = 16 }: IconProps) {
       return (
         <svg {...props}>
           <path d="M15 7a4 4 0 1 1-4 4M11 11l-7 7v3h3l7-7" />
-        </svg>
-      );
-    case "face":
-      return (
-        <svg {...props} strokeWidth={1.5}>
-          <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
-          <circle cx="9" cy="11" r="0.8" fill="currentColor" />
-          <circle cx="15" cy="11" r="0.8" fill="currentColor" />
-          <path d="M9 15c.8 1 2 1.5 3 1.5S14.2 16 15 15" />
         </svg>
       );
     case "bridge":

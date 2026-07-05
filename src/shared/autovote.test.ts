@@ -29,8 +29,8 @@ import {
   pickMaxDiversity,
   pickMaxYield,
 } from "./autovote.js";
+import { MOCK_CLUSTERS } from "./__fixtures__/mock-clusters.js";
 import {
-  MOCK_CLUSTERS,
   MOCK_CLUSTER_APR_BPS,
   type ClusterDirectoryEntry,
 } from "./staking.js";

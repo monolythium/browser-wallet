@@ -3,7 +3,7 @@
 // exists so future cap-schedule transitions can render without a
 // wallet code change.
 
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { formatWeightBpsPercent } from "../../../shared/staking.js";
 import { useFeature } from "../../hooks/useFeature.js";
@@ -18,7 +18,7 @@ export function RebalanceRowBody({ row }: RebalanceRowBodyProps) {
   return (
     <div className="ext-act-row">
       <div className="dir out">
-        <Icon name="swap" size={13} />
+        <Icon name="swap" size={ACTIVITY_ICON_SIZE} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who">Auto-rebalanced (cap tightening)</div>

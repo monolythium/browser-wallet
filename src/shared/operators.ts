@@ -51,8 +51,14 @@ export interface OperatorEntry {
  *     (0-32 chars; allow blank for the user-supplied case), and a `rpc`
  *     that parses via `new URL()`.
  */
+/** Upper bound on a user/override-supplied operator list. The live fleet is
+ *  ~12; 64 is generous headroom while bounding a pathological input (a
+ *  tampered override could otherwise materialize an unbounded array). */
+export const MAX_OPERATORS = 64;
+
 export function validateOperatorList(input: unknown): OperatorEntry[] | null {
   if (!Array.isArray(input) || input.length === 0) return null;
+  if (input.length > MAX_OPERATORS) return null;
   const out: OperatorEntry[] = [];
   for (const entry of input) {
     if (entry === null || typeof entry !== "object") return null;

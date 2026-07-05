@@ -27,11 +27,10 @@ import { WalletSecurityControls } from "../components/WalletSecurityControls";
 import {
   DEFAULT_PASSKEY_DAILY_CAP_LYTHOSHI,
   DEFAULT_PASSKEY_LIMIT_LYTHOSHI,
-  LYTHOSHI_PER_LYTH,
   MAX_PASSKEY_LIMIT_LYTHOSHI,
   MIN_PASSKEY_LIMIT_LYTHOSHI,
 } from "../../shared/passkey";
-import { NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
+import { LYTHOSHI_PER_LYTH, NATIVE_LYTH_DECIMALS } from "@monolythium/core-sdk";
 
 export interface SecurityProps {
   onBack: () => void;

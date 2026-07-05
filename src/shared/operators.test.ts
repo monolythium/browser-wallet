@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   validateOperatorList,
   mergeOperatorOverride,
+  MAX_OPERATORS,
   type OperatorEntry,
 } from "./operators.js";
 
@@ -37,6 +38,13 @@ describe("validateOperatorList", () => {
 
   it("rejects an empty array", () => {
     expect(validateOperatorList([])).toBeNull();
+  });
+
+  it("rejects a list longer than MAX_OPERATORS (B.5)", () => {
+    const entry = { name: "n", region: "r", rpc: "http://x.example" };
+    // MAX_OPERATORS well-formed entries pass; one more is rejected wholesale.
+    expect(validateOperatorList(Array(MAX_OPERATORS).fill(entry))).not.toBeNull();
+    expect(validateOperatorList(Array(MAX_OPERATORS + 1).fill(entry))).toBeNull();
   });
 
   it("rejects entries with missing or empty name", () => {

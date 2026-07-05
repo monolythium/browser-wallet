@@ -393,6 +393,13 @@ export function hashTxProposal(p: PendingProposal): Uint8Array {
 }
 
 export function hashGovernanceProposal(p: GovernanceProposal): Uint8Array {
+  // B.3 defensive fail-closed: a legacy proposal persisted before the P1-006
+  // chainIdHex binding lacks the field. The load path filters these out, but
+  // guard here too so any stray legacy proposal fails with a clear error
+  // rather than a raw `undefined.toLowerCase()` TypeError.
+  if (typeof p.chainIdHex !== "string") {
+    throw new Error("governance proposal missing chainIdHex (legacy, unsupported)");
+  }
   const body = canonicalStringify({
     domain: GOV_HASH_DOMAIN,
     proposalId: p.id,

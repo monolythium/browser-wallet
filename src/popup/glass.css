@@ -6,10 +6,8 @@
   --glass-fill-strong: rgba(255, 255, 255, 0.07);
   --glass-fill-hover:  rgba(255, 255, 255, 0.08);
   --glass-stroke:      rgba(255, 255, 255, 0.10);
-  --glass-stroke-hi:   rgba(255, 255, 255, 0.16);
   --glass-inner:       rgba(255, 255, 255, 0.12);
   --glass-blur:        24px;
-  --glass:             var(--glass-fill);
 }
 
 /* Popup-mode sizing — fixed 380x620 so Chrome auto-measures the

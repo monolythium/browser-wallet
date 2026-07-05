@@ -28,7 +28,7 @@ describe("NotificationRow — distinct delegation icon + failed-red (E)", () => 
       <NotificationRow record={record({ status: "failed" })} onOpen={() => {}} showUnread={false} />,
     );
     expect(html).toContain("Redelegate failed"); // notificationTitle redelegate/failed
-    expect(html).toContain('d="M8 12h8M11 9l-3 3 3 3M13 9l3 3-3 3"'); // restake glyph center ↔ arrow (not stake)
+    expect(html).toContain('d="M7 12h10M10 9l-3 3 3 3M14 9l3 3-3 3"'); // restake glyph center ↔ arrow (not stake)
     expect(html).toContain("var(--err"); // red status ring + icon color
     expect(html).not.toContain("var(--ok"); // not the confirmed-green tone
   });

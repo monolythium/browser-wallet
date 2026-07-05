@@ -10,7 +10,7 @@
 /// address is opaque (not derivable without view_sk) so the body
 /// renders "to private space" rather than a counterparty.
 
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import type { CrossingToPrivateRow } from "../../../shared/activity.js";
 
@@ -22,7 +22,7 @@ export function CrossingToPrivateRowBody({ row }: CrossingToPrivateRowBodyProps)
   return (
     <div className="ext-act-row">
       <div className="dir out" style={{ position: "relative" }}>
-        <Icon name="send" size={13} />
+        <Icon name="send" size={ACTIVITY_ICON_SIZE} />
         <span
           aria-label="private"
           style={{

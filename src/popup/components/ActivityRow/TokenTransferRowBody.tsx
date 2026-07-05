@@ -1,4 +1,4 @@
-import { Icon } from "../../Icon.js";
+import { Icon, ACTIVITY_ICON_SIZE } from "../../Icon.js";
 import { txTypeLabel } from "../../../shared/tx-type-label.js";
 import { renderCounterparty, counterpartyText } from "../ActivityRow.js";
 import type { TokenTransferRow } from "../../../shared/activity.js";
@@ -23,7 +23,7 @@ export function TokenTransferRowBody({ row, counterpartyLabel }: TokenTransferRo
   return (
     <div className="ext-act-row">
       <div className={`dir ${isIn ? "in" : "out"}`}>
-        <Icon name="swap" size={13} />
+        <Icon name="swap" size={ACTIVITY_ICON_SIZE} />
       </div>
       <div className="ext-act-row__main">
         <div className="ext-act-row__who" title={title}>

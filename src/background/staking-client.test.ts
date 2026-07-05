@@ -48,7 +48,6 @@ import {
   readDelegations,
   readOperatorInfo,
   readPendingRewards,
-  readRedemptionQueue,
 } from "./staking-client.js";
 import { MOCK_CLUSTER_APR_BPS } from "../shared/staking.js";
 import { LYTHOSHI_PER_LYTH } from "../shared/native-amount.js";
@@ -1275,150 +1274,6 @@ describe("readPendingRewards", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// readRedemptionQueue
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("readRedemptionQueue", () => {
-  const wallet = "0x" + "dd".repeat(20);
-
-  it("prefers lyth_redemptionQueue and preserves the RPC via", async () => {
-    mockedRpc.mockResolvedValue({
-      via: "operator-9",
-      result: {
-        wallet,
-        tickets: [
-          {
-            index: 0,
-            cluster: 7,
-            weightBps: 2500,
-            amount: "0x5f5e100",
-            createdHeight: 10n,
-            maturityHeight: "20",
-            mature: false,
-          },
-          {
-            index: 1,
-            cluster: 8,
-            weightBps: 1000,
-            createdHeight: 12,
-            maturityHeight: 22n,
-            mature: null,
-          },
-        ],
-        count: 2,
-        returned: 2,
-        block: "latest",
-      },
-    });
-
-    const r = await readRedemptionQueue(wallet);
-    // Chain validates wallet param as bech32m; wallet converts before send.
-    expect(mockedRpc).toHaveBeenCalledWith("lyth_redemptionQueue", [
-      userAddressForNativeRpc(wallet),
-    ]);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.via).toBe("operator-9");
-    expect(r.data.wallet).toBe(wallet);
-    expect(r.data.rows).toEqual([
-      {
-        index: 0,
-        cluster: 7,
-        weightBps: 2500,
-        amountLythoshi: "100000000",
-        amountWei: "0x5f5e100",
-        unlockAt: null,
-        createdHeight: "10",
-        maturityHeight: "20",
-        mature: false,
-      },
-      {
-        index: 1,
-        cluster: 8,
-        weightBps: 1000,
-        amountLythoshi: null,
-        amountWei: "0x0",
-        unlockAt: null,
-        createdHeight: "12",
-        maturityHeight: "22",
-        mature: null,
-      },
-    ]);
-  });
-
-  it("rejects malformed lyth_redemptionQueue responses instead of mocking them", async () => {
-    mockedRpc.mockResolvedValue({
-      via: "operator-9",
-      result: {
-        wallet,
-        tickets: [
-          {
-            index: 0,
-            cluster: 7,
-            weightBps: "2500",
-            createdHeight: 10,
-            maturityHeight: 20,
-            mature: false,
-          },
-        ],
-        count: 1,
-        returned: 1,
-      },
-    });
-
-    const r = await readRedemptionQueue(wallet);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.reason).toMatch(/malformed lyth_redemptionQueue/);
-  });
-
-  it("does not mock non-absence redemption RPC errors", async () => {
-    mockedRpc.mockRejectedValue(
-      Object.assign(new Error("redemption state unavailable"), {
-        code: -32000,
-        method: "lyth_redemptionQueue",
-        via: "operator-9",
-      }),
-    );
-
-    const r = await readRedemptionQueue(wallet);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.reason).toBe("redemption state unavailable");
-  });
-
-  it("falls back to an empty mock queue when lyth_redemptionQueue is absent", async () => {
-    mockedRpc.mockRejectedValue(methodNotFoundError("lyth_redemptionQueue"));
-
-    const r = await readRedemptionQueue(wallet);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.via).toBe("mock");
-    expect(r.data.rows).toEqual([]);
-  });
-
-  it("falls back to an empty mock queue when lyth_redemptionQueue is config-disabled (-32045)", async () => {
-    mockedRpc.mockRejectedValue(methodDisabledError("lyth_redemptionQueue"));
-
-    const r = await readRedemptionQueue(wallet);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.via).toBe("mock");
-    expect(r.data.rows).toEqual([]);
-  });
-
-  it("falls back to an empty mock queue on transport failure", async () => {
-    mockedRpc.mockRejectedValue(new Error("no Monolythium Testnet operator reachable"));
-
-    const r = await readRedemptionQueue(wallet);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.via).toBe("mock");
-    expect(r.data).toEqual({ wallet, rows: [] });
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
 // readDelegationHistory (newly activated per-wallet timeline)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1589,18 +1444,6 @@ describe("bech32m wallet-param conversion (regression)", () => {
     });
     await readPendingRewards(hexWallet, []);
     const sent = captureRpcWalletParam("lyth_pendingRewards");
-    expect(sent).not.toBeNull();
-    expect(sent).not.toBe(hexWallet);
-    expect(sent?.startsWith("mono1")).toBe(true);
-  });
-
-  it("readRedemptionQueue converts 0x wallet to mono1 bech32m", async () => {
-    mockedRpc.mockResolvedValue({
-      via: "operator-1",
-      result: { wallet: hexWallet, tickets: [], count: 0, returned: 0 },
-    });
-    await readRedemptionQueue(hexWallet);
-    const sent = captureRpcWalletParam("lyth_redemptionQueue");
     expect(sent).not.toBeNull();
     expect(sent).not.toBe(hexWallet);
     expect(sent?.startsWith("mono1")).toBe(true);

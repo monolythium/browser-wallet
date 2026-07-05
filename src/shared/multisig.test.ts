@@ -309,6 +309,16 @@ describe("hashGovernanceProposal", () => {
     expect(hashGovernanceProposal(g1)).not.toEqual(hashGovernanceProposal(g2));
   });
 
+  it("throws a clear error (not a raw TypeError) on a legacy proposal missing chainIdHex (B.3)", () => {
+    const legacy = makeGovProposal({
+      id: "g-legacy",
+      action: { kind: "change-threshold", threshold: 2 },
+    });
+    // Simulate a pre-P1-006 persisted proposal that predates the chainIdHex bind.
+    delete (legacy as Partial<GovernanceProposal>).chainIdHex;
+    expect(() => hashGovernanceProposal(legacy)).toThrow(/missing chainIdHex/);
+  });
+
   it("binds chainId — identical proposals on different chains hash differently (P1-006)", () => {
     const mk = (chainIdHex: string) =>
       makeGovProposal({

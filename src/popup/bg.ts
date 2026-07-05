@@ -1167,7 +1167,6 @@ export interface WalletMrvNativeReceiptEvidence {
   noEvmProofStatus: WalletMrvNoEvmReceiptProofStatus;
   noEvmProofVerification: WalletMrvNoEvmReceiptProofVerification | null;
   noEvmArchiveVerification: WalletMrvNoEvmArchiveVerification | null;
-  noEvmFinalityVerification: WalletMrvNoEvmFinalityVerification | null;
 }
 
 export type WalletMrvNoEvmReceiptProofKind =
@@ -1209,21 +1208,6 @@ export interface WalletMrvNoEvmArchiveCoveringSnapshot {
   signatures: string[];
 }
 
-export interface WalletMrvNoEvmFinalityCertificate {
-  round: number;
-  signature: string;
-  signersBitmap: string;
-  signerIndices: number[];
-  signerCount: number;
-}
-
-export interface WalletMrvNoEvmFinalityEvidence {
-  schema: "mono.no_evm_receipt_finality.v1";
-  source: "roundCertificate";
-  round: number;
-  certificate: WalletMrvNoEvmFinalityCertificate;
-}
-
 export interface WalletMrvNoEvmReceiptProofBase {
   schema: "mono.no_evm_receipt_proof.v1";
   proofKind: WalletMrvNoEvmReceiptProofKind;
@@ -1231,7 +1215,6 @@ export interface WalletMrvNoEvmReceiptProofBase {
   historySource: WalletMrvNoEvmReceiptProofHistorySource;
   compactInclusionProof: WalletMrvNoEvmCompactInclusionProof | null;
   archiveProof: WalletMrvNoEvmArchiveProof | null;
-  finalityEvidence: WalletMrvNoEvmFinalityEvidence | null;
   missingProofMaterial: string[];
   rootAlgorithm: string;
   receiptCodec: string;
@@ -1292,13 +1275,6 @@ export interface WalletMrvNoEvmReceiptProofVerification {
   computedCompactLeafHash?: string;
 }
 
-export interface WalletMrvNoEvmFinalityTrustConfig {
-  chainIdHex: string;
-  clusterPublicKey: string;
-  committeeSize: number;
-  threshold: number;
-}
-
 export interface WalletMrvNoEvmArchiveSignatureVerificationIssue {
   code:
     | "missing_signature_digest"
@@ -1331,25 +1307,6 @@ export interface WalletMrvNoEvmArchiveVerification {
   details: WalletMrvNoEvmArchiveSignatureVerification | null;
 }
 
-export interface WalletMrvNoEvmBlsFinalityVerification {
-  finalityEvidencePresent: boolean;
-  signerCountMatches: boolean;
-  signerBitmapMatchesIndices: boolean;
-  signerIndicesInRange: boolean;
-  allSignersTrusted: boolean;
-  thresholdMet: boolean;
-  signatureValid: boolean;
-  acceptedSignatureCount: number;
-  requiredSignatureCount: number;
-  verified: boolean;
-}
-
-export interface WalletMrvNoEvmFinalityVerification {
-  status: "verified" | "unverified" | "mismatch";
-  reason: string | null;
-  details: WalletMrvNoEvmBlsFinalityVerification | null;
-}
-
 export interface WalletMrvNativeReceiptEvidenceError {
   reason: string;
   code?: number;
@@ -1360,7 +1317,6 @@ export interface WalletMrvNativeReceiptEvidenceError {
 export async function bgWalletMrvNativeReceiptStatus(args: {
   txHash: string;
   chainIdHex: string;
-  finalityTrust?: WalletMrvNoEvmFinalityTrustConfig;
 }): Promise<
   | {
       ok: true;
@@ -2054,8 +2010,6 @@ export type {
   PendingRewardsRow,
   PendingRewardsView,
   ClusterServiceTiers,
-  RedemptionQueueRow,
-  RedemptionQueueView,
   StakingResult,
   WalletOperatorInfo,
 } from "../shared/staking.js";
@@ -2071,7 +2025,6 @@ import type {
   DelegationRow,
   DelegationsView,
   PendingRewardsView,
-  RedemptionQueueView,
   StakingResult,
   WalletOperatorInfo,
 } from "../shared/staking.js";
@@ -2147,15 +2100,6 @@ export async function bgStakingPendingRewards(
   delegations: ReadonlyArray<DelegationRow>,
 ): Promise<StakingResult<PendingRewardsView>> {
   return send("staking-pending-rewards", { wallet, delegations });
-}
-
-/** Read the redemption queue for a wallet. The SW prefers live
- *  `lyth_redemptionQueue(wallet)` and only returns the empty mock shape
- *  when the method is absent or the testnet is unreachable. */
-export async function bgStakingRedemptionQueue(
-  wallet: string,
-): Promise<StakingResult<RedemptionQueueView>> {
-  return send("staking-redemption-queue", { wallet });
 }
 
 /** Read the per-wallet delegation event timeline (delegate / undelegate /
