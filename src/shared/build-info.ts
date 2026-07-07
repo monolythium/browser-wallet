@@ -33,45 +33,46 @@ export const SDK_PACKAGE_VERSION: string =
  *  registry's value out from under the wallet — in that case the pin
  *  takes precedence and the human reviewer decides whether to bump it.
  *
- *  Current value = the 2026-07-04 v0.3.4 bridge-free re-genesis
- *  (release v0.3.4-testnet, mono-core master @ 81ff5a2d), where
+ *  Current value = the 2026-07-07 v0.4.0 four-cluster re-genesis
+ *  (release v0.4.0-testnet, mono-core master @ da04f8f5), where
  *  `lyth_chainStats.genesisHash` reports the registry identity hash below.
- *  Mirrors the v0.3.4 chain-registry pin
- *  (`web3_clientVersion = protocore/v2/v0.3.4-testnet+81ff5a2d`), the binding
+ *  Mirrors the v0.4.0 chain-registry pin
+ *  (`web3_clientVersion = protocore/v2/v0.4.0-testnet+da04f8f5`), the binding
  *  source of truth for the live fleet's genesis. The
- *  SDK_REGISTRY_GENESIS_HASH below mirrors the v0.3.4 chain-registry snapshot;
+ *  SDK_REGISTRY_GENESIS_HASH below mirrors the v0.4.0 chain-registry snapshot;
  *  the About drift banner surfaces whenever the displayed registry genesis
  *  (the live GitHub chain-registry value, or SDK_REGISTRY_GENESIS_HASH as its
  *  fallback) differs from this pin, in which case this security pin takes
  *  precedence. The wallet reads only `TESTNET_69420.chain_id` from the bundled
  *  SDK — never its bundled `genesis_hash` — so this pin is independent of the
- *  SDK version (as of `@monolythium/core-sdk` 0.6.5 the bundled snapshot
- *  matches this pin at 0x25fd542b anyway). Bumping this security pin is a
+ *  SDK version (the installed `@monolythium/core-sdk` 0.6.5 still bundles the
+ *  prior 0x25fd542b snapshot, but the wallet ignores that field, so the pin
+ *  stays authoritative at 0xbe1b3a3c). Bumping this security pin is a
  *  human-reviewer decision; the live-registry fetch shows the current
  *  GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
-  "0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e";
+  "0xbe1b3a3c25c0a40a9faa9ca1b434991406f71f0e93c76c083a0e7ba44a47d33a";
 
 /** Current block-0 header hash for the same chain. This is intentionally
  *  separate from TESTNET_GENESIS_HASH: `lyth_chainStats.genesisHash`
  *  exposes the chain identity hash used by the registry / p2p binding,
  *  while `eth_getBlockByNumber("0x0", false).hash` is the EVM-facing block
- *  header hash. They are not the same value (per the v0.3.4 chain-registry
- *  re-pin, genesis 0x25fd542b…). */
+ *  header hash. They are not the same value (per the v0.4.0 chain-registry
+ *  re-pin, genesis 0xbe1b3a3c…). */
 export const TESTNET_BLOCK0_HASH =
-  "0xc0374e97c937af1878ff9c8882940baf2394add10c4d94af37b788acb8294e9d";
+  "0x3fde51cbcbd343c2a1b6724b2a8c95c514b5db22f9d442e4b13d8760107933e1";
 
 /** SDK chain-registry's current snapshot of the same hash. Surfaced on
  *  the About page when this differs from TESTNET_GENESIS_HASH so the
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
- *  the v0.3.4-testnet bridge-free re-genesis value (2026-07-04) — matching
- *  the live GitHub chain-registry — so it does not lag. As of
- *  `@monolythium/core-sdk` 0.6.5 the installed SDK's bundled
- *  `TESTNET_69420.genesis_hash` also carries this v0.3.4 value (0x25fd542b);
- *  earlier pins bundled an older snapshot, but the wallet reads only
- *  `.chain_id` from the SDK bundle, never its bundled genesis_hash. */
+ *  the v0.4.0-testnet four-cluster re-genesis value (2026-07-07) — matching
+ *  the live GitHub chain-registry (chain-registry PR #24) — so it does not
+ *  lag. The installed `@monolythium/core-sdk` 0.6.5 still bundles the prior
+ *  v0.3.4 snapshot (0x25fd542b) in `TESTNET_69420.genesis_hash`, but the
+ *  wallet reads only `.chain_id` from the SDK bundle, never its bundled
+ *  genesis_hash, so this literal tracks the live registry directly. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
-  "0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e";
+  "0xbe1b3a3c25c0a40a9faa9ca1b434991406f71f0e93c76c083a0e7ba44a47d33a";
 
 /** The testnet chain id (decimal, for display). */
 export const TESTNET_CHAIN_ID_DEC: number = TESTNET_69420.chain_id;
