@@ -22,6 +22,7 @@ import {
 } from "./networks.js";
 import { isWithinSaneBound } from "../shared/operator-bounds.js";
 import { bech32mToAddress } from "../shared/bech32m.js";
+import { extractMempoolInner } from "../shared/send-error.js";
 
 /** Sentinel thrown by the fail-closed vault-binding assert when the active
  *  vault changed between approval and the synchronous pre-sign read (NN-01
@@ -151,11 +152,96 @@ export async function testnetJsonRpc<T>(
   return p;
 }
 
+/** The one write RPC (the chain's inclusion path). Its failover/fan-out is
+ *  Part B — Part A leaves the submit path byte-identical: throw on the first
+ *  error body, no cross-operator failover here. */
+const SUBMIT_METHOD = "mesh_submitTx";
+/** `-32047` UPSTREAM_UNAVAILABLE. Bare = the operator's upstream is down (fail
+ *  over); mempool-WRAPPED (`upstream unavailable: mempool: <admission>`) = an
+ *  admission decision about a tx (propagate — every operator answers the same). */
+const UPSTREAM_UNAVAILABLE_CODE = -32047;
+/** D1: cap read-failover attempts so one bad call doesn't walk all ~12 operators
+ *  — after this many failover-band errors, surface the last one. */
+const READ_FAILOVER_ATTEMPT_CAP = 4;
+/** D2: how long a read-failover-band error deprioritizes an operator (soft, in
+ *  memory) so subsequent reads try healthier operators first. Never a hard
+ *  removal; the operator is still tried once the rest are exhausted, and the
+ *  entry clears early on its next success. */
+const DEGRADED_OPERATOR_TTL_MS = 30_000;
+/** Deterministic JSON-RPC error codes (mono-core `crates/core/rpc/src/error.rs`):
+ *  the same answer on every operator, so a read gains nothing by failing over —
+ *  throw immediately. Everything else with a numeric code is operator-scoped /
+ *  transient → fail over across the genesis-trusted fleet. (`-32047` is special,
+ *  see `readErrorShouldPropagate`.) */
+const PROPAGATE_ERROR_CODES: ReadonlySet<number> = new Set([
+  -32700, // PARSE_ERROR — our request is malformed
+  -32600, // INVALID_REQUEST
+  -32602, // INVALID_PARAMS
+  -32043, // REQUEST_TOO_LARGE
+  -32052, // FILTER_TOO_BROAD
+  -32054, // DEBUG_TRACE_TOO_LARGE
+  -32055, // UNSUPPORTED_ENCODING
+  -32056, // INVALID_SUBSCRIPTION_TOPIC
+  -32059, // INVALID_JSONRPC_VERSION
+]);
+
+/** opName -> expiry ms. A soft, in-memory deprioritize hint set on a
+ *  read-failover-band error and honored by `orderReadOperators`. Cleared on a
+ *  later success from that operator; never bypasses the genesis-trust gate. */
+const degradedOperators = new Map<string, number>();
+
+/** Test-only: clear the D2 degraded-operator hints so a suite starts from a
+ *  known state. Not used by production code. */
+export function __resetReadFailoverStateForTest(): void {
+  degradedOperators.clear();
+}
+
+type OperatorRpc = ReturnType<typeof getActiveOperators>[number];
+
+/** True when an HTTP-200 `{error}` body from a READ should PROPAGATE (throw now)
+ *  rather than fail over: deterministic codes, or a mempool-wrapped `-32047`
+ *  admission reject. `undefined` code preserves today's throw-on-error behavior.
+ *  Bare `-32047` and every other operator-scoped code return false → fail over. */
+function readErrorShouldPropagate(
+  code: number | undefined,
+  message: string | undefined,
+): boolean {
+  if (typeof code !== "number") return true;
+  if (code === UPSTREAM_UNAVAILABLE_CODE) {
+    return message != null && extractMempoolInner(message) !== null;
+  }
+  return PROPAGATE_ERROR_CODES.has(code);
+}
+
+/** Stable soft-deprioritize: operators flagged degraded within the TTL window go
+ *  LAST (still tried, never dropped), otherwise the override/hardened-dial order
+ *  is preserved verbatim. Reads iterate this; the submit path uses the raw order. */
+function orderReadOperators(
+  ops: ReadonlyArray<OperatorRpc>,
+  nowMs: number,
+): OperatorRpc[] {
+  const fresh: OperatorRpc[] = [];
+  const degraded: OperatorRpc[] = [];
+  for (const op of ops) {
+    const until = degradedOperators.get(op.name);
+    if (until !== undefined && until > nowMs) degraded.push(op);
+    else fresh.push(op);
+  }
+  return degraded.length === 0 ? fresh : [...fresh, ...degraded];
+}
+
 /**
- * Iterate the published testnet operators in order, returning the
- * first one that produces a non-error JSON-RPC response. Transport-level
- * failures trigger fallback to the next operator; RPC-level rejections
- * propagate immediately because they are state-level consensus answers.
+ * Iterate the genesis-trusted testnet operators, returning the first that
+ * produces a non-error JSON-RPC response. Transport faults AND operator-scoped /
+ * transient RPC errors (the FAILOVER band — `-32045/-32046/-32048/-32058/-32601/
+ * -32701/-32090`, bare `-32047`, etc.) advance to the next operator; only
+ * DETERMINISTIC errors (`-32602`, request-shape faults) and the `mesh_submitTx`
+ * mempool-wrapped `-32047` admission reject propagate immediately (they are the
+ * same on every operator). Reads deprioritize a recently-degraded operator (D2)
+ * and cap failover at `READ_FAILOVER_ATTEMPT_CAP` (D1). The submit path
+ * (`mesh_submitTx`) is unchanged — throw on the first error body (Part B owns
+ * write fan-out). The genesis-trust gate and operator set/order (override /
+ * hardened-dial) are unchanged.
  */
 async function _testnetJsonRpcUncoalesced<T>(
   method: string,
@@ -186,9 +272,21 @@ async function _testnetJsonRpcUncoalesced<T>(
     throw new ChainGenesisMismatchError(getActiveOperators().length);
   }
 
+  const isSubmit = method === SUBMIT_METHOD;
+  // Reads deprioritize a recently-degraded operator (D2); the submit path keeps
+  // the raw override / hardened-dial order (Part B owns write fan-out).
+  const walkOps = isSubmit
+    ? getActiveOperators()
+    : orderReadOperators(getActiveOperators(), Date.now());
   let untrustedCount = 0;
   let totalOperators = 0;
-  for (const v of getActiveOperators()) {
+  // Last FAILOVER-band read error — surfaced (with its real code) when the walk
+  // or the attempt cap is exhausted, so the caller still classifies on a code.
+  let readFailoverErr:
+    | (Error & { code?: number; via?: string; method?: string })
+    | null = null;
+  let readFailoverAttempts = 0;
+  for (const v of walkOps) {
     totalOperators++;
     // GAP #11: genesis-hash pin. Operators whose chain identity doesn't
     // match TESTNET_GENESIS_HASH are skipped — they're either on a fork
@@ -240,12 +338,26 @@ async function _testnetJsonRpcUncoalesced<T>(
       if (typeof body.error.code === "number") err.code = body.error.code;
       err.via = v.name;
       err.method = method;
-      throw err;
+      // Submit path (mesh_submitTx) is Part B — unchanged: throw on the first
+      // error body. Reads propagate deterministic errors + the mempool-wrapped
+      // -32047 admission reject immediately; the operator-scoped / transient
+      // band fails over to the next genesis-trusted operator.
+      if (isSubmit || readErrorShouldPropagate(body.error.code, body.error.message)) {
+        throw err;
+      }
+      degradedOperators.set(v.name, Date.now() + DEGRADED_OPERATOR_TTL_MS); // D2
+      readFailoverErr = err;
+      readFailoverAttempts++;
+      if (readFailoverAttempts >= READ_FAILOVER_ATTEMPT_CAP) throw err; // D1 cap
+      continue;
     }
     if (body.result === undefined) {
       lastTransportErr = new Error(`empty result body from ${v.name}`);
       continue;
     }
+    // This operator answered cleanly — clear any stale degraded flag so it
+    // recovers immediately (before the D2 TTL would).
+    degradedOperators.delete(v.name);
     return { result: body.result, via: v.name };
   }
   // If EVERY operator failed the genesis pin check,
@@ -275,7 +387,13 @@ async function _testnetJsonRpcUncoalesced<T>(
     // classifySendError would mis-key as genesis-mismatch).
     throw new Error("no Monolythium Testnet operator reachable");
   }
-  throw lastTransportErr ?? new Error("no Monolythium Testnet operator reachable");
+  // Prefer the last real FAILOVER-band RPC error (it carries a code the caller
+  // can classify) over a bare transport error.
+  throw (
+    readFailoverErr ??
+    lastTransportErr ??
+    new Error("no Monolythium Testnet operator reachable")
+  );
 }
 
 /**
