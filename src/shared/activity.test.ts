@@ -30,6 +30,7 @@ import {
   classifyStalePending,
   transitionPending,
   PENDING_SLOW_MS,
+  ADMITTED_INCLUSION_WINDOW_MS,
   PENDING_DROP_GRACE_MS,
   PENDING_ABSOLUTE_CAP_MS,
   PENDING_TERMINAL_RETAIN_MS,
@@ -993,6 +994,17 @@ describe("classifyStalePending", () => {
 
   it("nonce gap (row.nonce > committed) → pending, never dropped", () => {
     const row = mk({ nonce: 7, broadcastedAtMs: NOW - 1000 });
+    expect(classifyStalePending(row, 5, NOW).status).toBe("pending");
+  });
+
+  // D6: admitted-but-not-yet-included window (the fan-out guarantees admission).
+  it("age past the inclusion window (but < slow) → awaiting-inclusion", () => {
+    const row = mk({ broadcastedAtMs: NOW - ADMITTED_INCLUSION_WINDOW_MS });
+    expect(classifyStalePending(row, 5, NOW).status).toBe("awaiting-inclusion");
+  });
+
+  it("age just before the inclusion window → still pending", () => {
+    const row = mk({ broadcastedAtMs: NOW - (ADMITTED_INCLUSION_WINDOW_MS - 1) });
     expect(classifyStalePending(row, 5, NOW).status).toBe("pending");
   });
 
