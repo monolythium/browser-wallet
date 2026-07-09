@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { hardenedOperators, hardenedChains } from "./hardened-dial.js";
+import {
+  hardenedOperators,
+  hardenedChains,
+  overrideWithinFleet,
+} from "./hardened-dial.js";
 import type { OperatorEntry } from "./operators.js";
 
 const DEFAULTS: ReadonlyArray<OperatorEntry> = [
@@ -12,15 +16,63 @@ const OVERRIDE: OperatorEntry[] = [
 ];
 
 describe("hardenedOperators — the operator brick-preventer", () => {
-  it("HARDENED ignores a stored override and returns the allowlisted defaults", () => {
-    // The override REPLACES the fleet, so under the strict CSP it would brick
-    // every RPC. Hardened builds must always dial the defaults.
+  it("HARDENED rejects an override with a NON-FLEET host → allowlisted defaults", () => {
+    // A custom host isn't in the strict CSP allowlist, so honoring it would
+    // brick every RPC. Hardened builds fall back to the defaults.
     const got = hardenedOperators(DEFAULTS, OVERRIDE, true);
     expect(got.map((o) => o.rpc)).toEqual([
       "http://10.0.0.1:8545",
       "http://10.0.0.2:8545",
     ]);
     expect(got.map((o) => o.rpc)).not.toContain("http://198.51.100.7:8545");
+  });
+
+  it("HARDENED HONORS a within-fleet REORDER (route around a degraded default)", () => {
+    // The exact "Use this operator" case: the built-in fleet, reordered to pin
+    // a healthy operator first. Every host is already in the CSP allowlist, so
+    // it can't be blocked — it must be applied, not reverted to defaults.
+    const reordered: OperatorEntry[] = [DEFAULTS[1]!, DEFAULTS[0]!];
+    const got = hardenedOperators(DEFAULTS, reordered, true);
+    expect(got.map((o) => o.rpc)).toEqual([
+      "http://10.0.0.2:8545",
+      "http://10.0.0.1:8545",
+    ]);
+  });
+
+  it("HARDENED HONORS a within-fleet SUBSET / pin (drop a degraded default)", () => {
+    const pinned: OperatorEntry[] = [
+      { name: "pinned", region: "", rpc: "http://10.0.0.2:8545" },
+    ];
+    // Matched by rpc ORIGIN, so a renamed/blank-region entry still counts as
+    // in-fleet.
+    const got = hardenedOperators(DEFAULTS, pinned, true);
+    expect(got.map((o) => o.rpc)).toEqual(["http://10.0.0.2:8545"]);
+  });
+
+  it("HARDENED rejects a MIXED override (one custom host taints the whole list)", () => {
+    const mixed: OperatorEntry[] = [DEFAULTS[0]!, OVERRIDE[0]!];
+    expect(hardenedOperators(DEFAULTS, mixed, true).map((o) => o.rpc)).toEqual([
+      "http://10.0.0.1:8545",
+      "http://10.0.0.2:8545",
+    ]);
+  });
+
+  it("HARDENED honors a fleet entry with an in-fleet explicit wsRpc; rejects an out-of-fleet wsRpc", () => {
+    const okWs: OperatorEntry[] = [
+      { name: "operator-1", region: "fsn1", rpc: "http://10.0.0.1:8545", wsRpc: "ws://10.0.0.1:8546" },
+    ];
+    expect(hardenedOperators(DEFAULTS, okWs, true).map((o) => o.rpc)).toEqual([
+      "http://10.0.0.1:8545",
+    ]);
+    const badWs: OperatorEntry[] = [
+      { name: "operator-1", region: "fsn1", rpc: "http://10.0.0.1:8545", wsRpc: "ws://10.0.0.9:8546" },
+    ];
+    // rpc is in-fleet but the explicit wsRpc host is not → the whole override
+    // is rejected (it would trip the ws CSP), so defaults.
+    expect(hardenedOperators(DEFAULTS, badWs, true).map((o) => o.rpc)).toEqual([
+      "http://10.0.0.1:8545",
+      "http://10.0.0.2:8545",
+    ]);
   });
 
   it("HARDENED with no override → defaults", () => {
@@ -46,6 +98,31 @@ describe("hardenedOperators — the operator brick-preventer", () => {
     const got = hardenedOperators(DEFAULTS, null, true);
     got[0]!.rpc = "mutated";
     expect(DEFAULTS[0]!.rpc).toBe("http://10.0.0.1:8545");
+    // A within-fleet honored override is also a copy, not the input reference.
+    const passthrough: OperatorEntry[] = [DEFAULTS[1]!, DEFAULTS[0]!];
+    const honored = hardenedOperators(DEFAULTS, passthrough, true);
+    honored[0]!.rpc = "mutated";
+    expect(passthrough[0]!.rpc).toBe("http://10.0.0.2:8545");
+  });
+});
+
+describe("overrideWithinFleet — the CSP-safety predicate", () => {
+  it("true for a reorder, subset, and origin-matched (renamed) entry", () => {
+    expect(overrideWithinFleet(DEFAULTS, [DEFAULTS[1]!, DEFAULTS[0]!])).toBe(true);
+    expect(overrideWithinFleet(DEFAULTS, [DEFAULTS[0]!])).toBe(true);
+    expect(
+      overrideWithinFleet(DEFAULTS, [
+        { name: "x", region: "", rpc: "http://10.0.0.1:8545" },
+      ]),
+    ).toBe(true);
+  });
+
+  it("false when any entry carries a non-fleet host or unparseable rpc", () => {
+    expect(overrideWithinFleet(DEFAULTS, OVERRIDE)).toBe(false);
+    expect(overrideWithinFleet(DEFAULTS, [DEFAULTS[0]!, OVERRIDE[0]!])).toBe(false);
+    expect(
+      overrideWithinFleet(DEFAULTS, [{ name: "x", region: "", rpc: "not a url" }]),
+    ).toBe(false);
   });
 });
 

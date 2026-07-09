@@ -231,7 +231,7 @@ import {
   rehydrateGenesisCache,
 } from "./networks.js";
 import { isHardenedBuild } from "../shared/build-mode.js";
-import { hardenedChains } from "../shared/hardened-dial.js";
+import { hardenedChains, overrideWithinFleet } from "../shared/hardened-dial.js";
 import {
   clampToSaneBound,
   MAX_EXECUTION_UNIT_PRICE_LYTHOSHI,
@@ -6693,6 +6693,21 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       const validated = validateOperatorList(raw);
       if (validated === null) {
         return { ok: false, reason: "invalid operator list" };
+      }
+      // Hardened (production) builds can only dial the allowlisted built-in
+      // fleet (strict connect-src). A reorder / pin / subset of the built-in
+      // operators is applied verbatim (same origins as the allowlist — e.g.
+      // pinning a healthy default to route around a degraded one), but a
+      // genuinely CUSTOM host would be CSP-blocked → bricked. Reject that
+      // up-front with a clear reason instead of persisting an override that
+      // hardened-dial would silently narrow back to the defaults (the "Save
+      // reverts to defaults" report). Dev builds skip this and honor any host.
+      if (isHardenedBuild() && !overrideWithinFleet(getDefaultOperators(), validated)) {
+        return {
+          ok: false,
+          reason:
+            "This build only dials the built-in operators. Reorder or pin the listed operators — adding a custom RPC host needs a developer build.",
+        };
       }
       await setOperatorOverride(validated);
       cachedOperator = null;
