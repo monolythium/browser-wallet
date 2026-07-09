@@ -808,33 +808,178 @@ export async function buildPlaintextSubmission(args: {
   });
 }
 
-/** Submit a bincode-encoded chain-side `SignedTransaction` (`0x`-hex) through
- *  the plaintext `mesh_submitTx` path and validate the node's echoed canonical
- *  tx hash against the locally computed one. Mirrors the validation in the
- *  SDK's `submitPlaintextTransaction`: the node echoes the 32-byte canonical
- *  native tx hash on admission; any mismatch (or non-32-byte response) is
- *  rejected so a wallet never trusts a hash it did not derive itself. */
+/** D3: fan out a broadcast to this many genesis-trusted operators (or all, if the
+ *  trusted set is smaller). One accepting/gossiping operator is enough for
+ *  inclusion — the X1 stuck-tx mode was a single accepting-but-non-gossiping
+ *  operator sinking the send. Re-broadcasting the SAME signed bytes is
+ *  idempotent by tx hash (the chain dedupes → DuplicateKnown, never a second
+ *  inclusion), so this cannot double-spend (verified vs mono-core v0.4.0). */
+const FANOUT_BREADTH = 3;
+
+/** Per-operator outcome of one mesh_submitTx in the fan-out. */
+type FanoutOutcome =
+  | { kind: "accepted"; via: string } // echoed our canonical hash
+  | { kind: "already-known"; via: string } // our exact tx already pooled/mined here
+  | { kind: "mailbox-full"; via: string } // actor backpressure — this op didn't take it
+  | { kind: "reject"; via: string; err: Error } // deterministic admission reject of THIS tx
+  | { kind: "transient"; via: string; err?: Error }; // transport / bare band — op unavailable
+
+function stampSubmitError(
+  message: string,
+  code: number | undefined,
+  via: string,
+): Error & { code?: number; via?: string; method?: string } {
+  const err = new Error(message) as Error & {
+    code?: number;
+    via?: string;
+    method?: string;
+  };
+  if (typeof code === "number") err.code = code;
+  err.via = via;
+  err.method = SUBMIT_METHOD;
+  return err;
+}
+
+/** Submit the SAME signed bytes to ONE operator and classify the response. Never
+ *  throws (all faults become an outcome) so the parallel fan-out can aggregate.
+ *  The echoed canonical hash is validated per operator — a wallet never trusts a
+ *  hash it did not derive itself. Genesis is gated by the caller (pickFanoutTargets). */
+async function submitToOneOperator(
+  op: OperatorRpc,
+  signedTxWireHex: string,
+  expectedTxHashHex: string,
+): Promise<FanoutOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(op.rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: SUBMIT_METHOD,
+        params: [signedTxWireHex],
+      }),
+    });
+  } catch {
+    return { kind: "transient", via: op.name };
+  }
+  if (!res.ok) return { kind: "transient", via: op.name };
+  let body: { result?: unknown; error?: { code?: number; message?: string } };
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    return { kind: "transient", via: op.name };
+  }
+  if (body.error) {
+    const msg = body.error.message ?? "";
+    const inner = extractMempoolInner(msg);
+    // A mempool-wrapped error is an admission DECISION about this tx; a bare error
+    // is the operator's upstream being down (transient — other operators may take it).
+    if (inner !== null) {
+      const low = inner.toLowerCase();
+      // Our own hash already pooled here, or the nonce already mined — both mean the
+      // tx is safely known to the chain (idempotent same-hash resubmit).
+      if (low.includes("duplicate tx already known") || low.includes("already known")) {
+        return { kind: "already-known", via: op.name };
+      }
+      if (low.includes("nonce already consumed") || low.includes("already consumed")) {
+        return { kind: "already-known", via: op.name };
+      }
+      // The one genuine transient admission fault (actor backpressure).
+      if (low.includes("mailbox full")) {
+        return { kind: "mailbox-full", via: op.name };
+      }
+      // Any other admission reject (bad nonce/fee/balance/sig, replace-underpriced …)
+      // is deterministic — every honest operator rejects it the same way.
+      return { kind: "reject", via: op.name, err: stampSubmitError(msg, body.error.code, op.name) };
+    }
+    return { kind: "transient", via: op.name, err: stampSubmitError(msg, body.error.code, op.name) };
+  }
+  const echoed = typeof body.result === "string" ? body.result.toLowerCase() : "";
+  const expected = expectedTxHashHex.toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
+    return {
+      kind: "reject",
+      via: op.name,
+      err: new Error(
+        `mesh_submitTx returned a non-canonical tx hash (${String(body.result)}); refusing to trust it`,
+      ),
+    };
+  }
+  if (echoed !== expected) {
+    return {
+      kind: "reject",
+      via: op.name,
+      err: new Error(
+        `mesh_submitTx echoed tx hash ${echoed} does not match locally computed ${expected}`,
+      ),
+    };
+  }
+  return { kind: "accepted", via: op.name };
+}
+
+/** The genesis-trusted operators to fan a broadcast to: the first FANOUT_BREADTH
+ *  of the override/hardened-dial set (in its order) that pass the genesis-pin
+ *  gate. Never routes a signed tx to an untrusted operator; falls to fewer than
+ *  FANOUT_BREADTH when the trusted set is smaller. */
+async function pickFanoutTargets(): Promise<OperatorRpc[]> {
+  const targets: OperatorRpc[] = [];
+  for (const op of getActiveOperators()) {
+    if (targets.length >= FANOUT_BREADTH) break;
+    if (await verifyOperatorGenesis(op.rpc, 2_000)) targets.push(op);
+  }
+  return targets;
+}
+
+/** Broadcast a bincode-encoded chain-side `SignedTransaction` (`0x`-hex) through
+ *  the plaintext `mesh_submitTx` path, FANNING OUT the SAME signed bytes to up to
+ *  FANOUT_BREADTH genesis-trusted operators in parallel (D3/D4) so a single
+ *  accepting-but-non-gossiping operator can't silently sink the send (the X1
+ *  stuck-tx mode). Re-broadcasting identical bytes is idempotent by tx hash, so
+ *  this cannot double-spend. Success = at least ONE operator accepts or reports
+ *  our own hash already-known (D5). The echoed canonical hash is validated per
+ *  accepting operator. NO re-sign, NO new sighash — the same signed bytes go to
+ *  every operator. `via` is the first accepting operator. */
 export async function broadcastPlaintextTransaction(
   signedTxWireHex: string,
   expectedTxHashHex: string,
 ): Promise<{ txHash: string; via: string }> {
-  const { result, via } = await testnetJsonRpc<string>("mesh_submitTx", [
-    signedTxWireHex,
-  ]);
-  const echoed = typeof result === "string" ? result.toLowerCase() : "";
-  const expected = expectedTxHashHex.toLowerCase();
-  // A canonical tx hash is 32 bytes -> "0x" + 64 hex chars.
-  if (!/^0x[0-9a-f]{64}$/.test(echoed)) {
-    throw new Error(
-      `mesh_submitTx returned a non-canonical tx hash (${result}); refusing to trust it`,
-    );
+  const targets = await pickFanoutTargets();
+  if (targets.length === 0) {
+    // No genesis-trusted operator to broadcast through — mirror the read path's
+    // aggregate reason so the user sees the same actionable chain-status error.
+    const n = getActiveOperators().length;
+    const reason = classifyNoOperatorReason();
+    if (reason === "quarantined") throw new ChainQuarantinedError(n);
+    if (reason === "regenesis" || reason === "untrusted") {
+      throw new ChainGenesisMismatchError(n);
+    }
+    throw new Error("no Monolythium Testnet operator reachable");
   }
-  if (echoed !== expected) {
-    throw new Error(
-      `mesh_submitTx echoed tx hash ${echoed} does not match locally computed ${expected}`,
-    );
+  const results = await Promise.allSettled(
+    targets.map((op) => submitToOneOperator(op, signedTxWireHex, expectedTxHashHex)),
+  );
+  const settled: FanoutOutcome[] = results.map((r, i) =>
+    r.status === "fulfilled" ? r.value : { kind: "transient", via: targets[i]!.name },
+  );
+  // D5: succeed if ANY operator accepted or already-knows our hash.
+  const accepted = settled.filter(
+    (o) => o.kind === "accepted" || o.kind === "already-known",
+  );
+  if (accepted.length > 0) {
+    return { txHash: expectedTxHashHex, via: accepted[0]!.via };
   }
-  return { txHash: expectedTxHashHex, via };
+  // No acceptance. Surface a real (bad-tx) failure ONLY when EVERY target
+  // returned a deterministic admission reject — otherwise some operators were
+  // transient/backpressured and the broadcast is retryable, not doomed.
+  const rejects = settled.filter(
+    (o): o is Extract<FanoutOutcome, { kind: "reject" }> => o.kind === "reject",
+  );
+  if (rejects.length === targets.length) {
+    throw rejects[0]!.err;
+  }
+  throw new Error("no Monolythium Testnet operator accepted the broadcast");
 }
 
 /** One-shot PLAINTEXT helper used by the service worker — the tx path on the

@@ -50,6 +50,14 @@ export const ACTIVITY_ROLLING_WINDOW = 100;
  *  legacy `evictExpiredPending` shim + its tests. */
 export const PENDING_TTL_MS = 5 * 60 * 1000;
 
+/** D6: a broadcast is fanned out to several operators, so a persisted pending row
+ *  means the fleet ADMITTED the tx (≥1 operator accepted). If it still isn't
+ *  included after this window, surface an honest "broadcast · waiting for
+ *  inclusion" state (the X1 stuck-tx condition) — not a false failure, not an
+ *  infinite silent pending. Earlier than PENDING_SLOW_MS; resolves to confirmed
+ *  the moment inclusion lands. ~20s ≫ normal inclusion, well short of "slow". */
+export const ADMITTED_INCLUSION_WINDOW_MS = 20 * 1000;
+
 /** A pending row past this age (with no terminal receipt/indexer verdict) is
  *  flagged "taking longer than usual" — a hint, not a removal. */
 export const PENDING_SLOW_MS = 3 * 60 * 1000;
@@ -230,10 +238,21 @@ export interface PendingTxRow {
 /** Pending-row lifecycle (display/state). Primary terminal verdict is a receipt
  *  or an indexer match (handled in the SW poll); these are the *time/nonce*
  *  states for a row that has neither yet. */
-export type PendingLifecycle = "pending" | "slow" | "dropped" | "expired";
+export type PendingLifecycle =
+  | "pending"
+  | "awaiting-inclusion"
+  | "slow"
+  | "dropped"
+  | "expired";
 
 function isPendingLifecycle(v: unknown): v is PendingLifecycle {
-  return v === "pending" || v === "slow" || v === "dropped" || v === "expired";
+  return (
+    v === "pending" ||
+    v === "awaiting-inclusion" ||
+    v === "slow" ||
+    v === "dropped" ||
+    v === "expired"
+  );
 }
 
 /** Common shape every confirmed row carries — the on-chain ordering key. */
@@ -1015,6 +1034,9 @@ export function classifyStalePending(
   const age = now - row.broadcastedAtMs;
   if (age >= PENDING_ABSOLUTE_CAP_MS) return { status: "expired" };
   if (age >= PENDING_SLOW_MS) return { status: "slow" };
+  // D6: admitted (the fan-out broadcast succeeded) but not yet included past the
+  // window → honest "waiting for inclusion", not a silent pending.
+  if (age >= ADMITTED_INCLUSION_WINDOW_MS) return { status: "awaiting-inclusion" };
   return { status: "pending" };
 }
 
