@@ -836,7 +836,7 @@ export type NativeAgentStateOutcome =
  *
  *  This is intentionally NOT per-RPC-endpoint attribution. The chain
  *  method is keyed on consensus authority index; mapping the wallet's
- *  RPC operators back to BLS validator slots would require chaining
+ *  RPC operators back to ML-DSA-65 authority slots would require chaining
  *  `lyth_resolveOperatorAuthority` + `lyth_clusterStatus.members[]`
  *  per row, which is deferred to a future commit. */
 export async function bgChainSigningActivity(args?: {
@@ -949,9 +949,9 @@ export async function bgWalletOperatorStatus(): Promise<
  * Read the active chain's current block number. Used by the popup's
  * chain-health poll to drive the LIVE / STALLED / OFFLINE state machine —
  * the popup compares blockHex across ticks, sets STALLED if it doesn't
- * advance for 30+ seconds, OFFLINE if a tick errors. The service worker
+ * advance for 15+ seconds, OFFLINE if a tick errors. The service worker
  * shares its operator cache with `bgWalletOperatorStatus` so the operator
- * probe doesn't re-run on every 8s health tick.
+ * probe doesn't re-run on every 5s health tick.
  */
 export async function bgWalletChainBlockNumber(): Promise<
   { ok: true; blockHex: string; operator: string | null }

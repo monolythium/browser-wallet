@@ -113,7 +113,7 @@ import {
 
 // `ChainHealth` reflects the popup's read of chain liveness via an
 // `eth_blockNumber` poll on the active operator. LOADING is the initial
-// state before the first tick lands; STALLED is gated behind a 30-second
+// state before the first tick lands; STALLED is gated behind a 15-second
 // no-advance threshold so it never fires from a single missed tick or
 // on the loading-to-live transition itself.
 type ChainHealth =

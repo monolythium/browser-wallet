@@ -52,8 +52,9 @@ export interface OperatorEntry {
  *     that parses via `new URL()`.
  */
 /** Upper bound on a user/override-supplied operator list. The live fleet is
- *  ~12; 64 is generous headroom while bounding a pathological input (a
- *  tampered override could otherwise materialize an unbounded array). */
+ *  ~40 (v0.4.0 four-cluster, 4×10); 64 is generous headroom while bounding a
+ *  pathological input (a tampered override could otherwise materialize an
+ *  unbounded array). */
 export const MAX_OPERATORS = 64;
 
 export function validateOperatorList(input: unknown): OperatorEntry[] | null {

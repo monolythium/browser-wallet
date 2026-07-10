@@ -932,8 +932,8 @@ function sameOperators(
  *
  *  Per-RPC-endpoint attribution is intentionally out of scope: the
  *  wallet's Operators page manages transport-layer RPC URLs, while
- *  `lyth_signingActivity` is keyed on the consensus BLS authority
- *  slot. Mapping the two would require chaining
+ *  `lyth_signingActivity` is keyed on the consensus ML-DSA-65 aggregate-cert
+ *  authority slot. Mapping the two would require chaining
  *  `lyth_resolveOperatorAuthority` over `lyth_clusterStatus.members`
  *  per row, which is deferred. The card title is explicit about that
  *  scope so users don't misread it as per-RPC health. */

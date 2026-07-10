@@ -233,7 +233,7 @@ const TESTNET_FALLBACK: ChainEntry = {
 };
 
 /** While a broadcast tx is still pending, reconcile this often (ms). The chain
- *  produces BLS fast blocks well under a second, so a tx is typically included
+ *  produces fast blocks well under a second, so a tx is typically included
  *  within ~1s; poll at 1.5s so a confirm surfaces near the chain's real speed.
  *  This poll lives at the App level (not the Activity tab) so it runs on EVERY
  *  screen while the popup is open — a tx sent from Send/Home flips without
