@@ -700,6 +700,25 @@ export async function bgWalletNameAccept(
   return send("wallet-name-accept", { name, chainIdHex });
 }
 
+export interface OwnedNameRow {
+  name: string;
+  category: string;
+  addedAt: number;
+  status: "owned" | "transferred" | "not-found" | "unknown";
+}
+
+/** Best-effort owned-names list (local ledger reconciled against the chain).
+ *  There is no on-chain owned-names reader, so this only ever lists names
+ *  registered/accepted from this wallet — never a fabricated set. */
+export async function bgWalletNamesOwned(
+  chainIdHex: string,
+): Promise<
+  | { ok: true; names: OwnedNameRow[] }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-names-owned", { chainIdHex });
+}
+
 // Indexer-status polling for the §28.2.1 staleness banner.
 // All success-path fields nullable: when the method is unavailable or
 // the response is malformed, the handler returns the defensive

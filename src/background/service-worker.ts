@@ -289,6 +289,14 @@ import {
   nameRegistryAddressHex,
   type NameCategory,
 } from "../shared/name-registry.js";
+import {
+  STORAGE_KEY_NAME_LEDGER,
+  validateNameLedger,
+  addOwnedNameEntry,
+  getOwnedNames,
+  type ReconciledOwnedName,
+  type OwnedNameStatus,
+} from "../shared/name-ledger.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { lythoshiDecimalToLythDecimal } from "../shared/lyth-units.js";
 import { decodeClaimedAmountLythoshi } from "../shared/claimed-log.js";
@@ -1835,6 +1843,36 @@ async function submitNameTx(opts: {
     chainIdHex: opts.chainIdHex,
   });
   return { txHash, via, costLythoshiHex: "0x" + costLythoshi.toString(16) };
+}
+
+/** Record a name the wallet just register/accept'd for `address` in the
+ *  best-effort local ledger (chrome.storage.local). Convenience only — the list
+ *  is reconciled against the chain on read; there is no on-chain owned-names
+ *  reader (Nayiem/SDK-gate). Best-effort: a write failure is swallowed (the tx
+ *  already broadcast). */
+async function recordOwnedName(
+  address: string,
+  name: string,
+  category: string,
+): Promise<void> {
+  try {
+    const raw = await new Promise<unknown>((resolve) => {
+      chrome.storage.local.get([STORAGE_KEY_NAME_LEDGER], (res) =>
+        resolve(res?.[STORAGE_KEY_NAME_LEDGER]),
+      );
+    });
+    const ledger = validateNameLedger(raw) ?? {};
+    const next = addOwnedNameEntry(ledger, address, {
+      name,
+      category,
+      addedAt: Date.now(),
+    });
+    await new Promise<void>((resolve) => {
+      chrome.storage.local.set({ [STORAGE_KEY_NAME_LEDGER]: next }, () => resolve());
+    });
+  } catch {
+    // best-effort — the ledger is a convenience, not truth.
+  }
 }
 
 interface ExecutionUnitPriceQuoteHex {
@@ -9680,6 +9718,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           chainIdHex: p.chainIdHex,
           boundVaultId,
         });
+        await recordOwnedName(fromAddr, v.canonical, v.category);
         return {
           ok: true,
           txHash: r.txHash,
@@ -9775,6 +9814,7 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           chainIdHex: p.chainIdHex,
           boundVaultId,
         });
+        await recordOwnedName(fromAddr, v.canonical, v.category);
         return {
           ok: true,
           txHash: r.txHash,
@@ -9785,6 +9825,52 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       } catch (e) {
         return nameSubmitError(e);
       }
+    }
+    case "wallet-names-owned": {
+      // Best-effort owned-names list: the local ledger (names THIS wallet
+      // register/accept'd for the active address) reconciled against the chain.
+      // There is NO on-chain owned-names reader (regular register/accept emit no
+      // events; reverse is single last-write-wins) — a lyth_namesOf gate, so this
+      // NEVER fabricates a list. Each name is forward-resolved: owner == you →
+      // owned; a different owner → transferred; unregistered → not-found; an
+      // unresolvable quorum → unknown.
+      const p = message.payload as { chainIdHex?: unknown };
+      if (typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "names are only wired for Monolythium Testnet today" };
+      }
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const raw = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_NAME_LEDGER], (res) =>
+          resolve(res?.[STORAGE_KEY_NAME_LEDGER]),
+        );
+      });
+      const ledger = validateNameLedger(raw) ?? {};
+      const entries = getOwnedNames(ledger, fromAddr);
+      const reconciled: ReconciledOwnedName[] = await Promise.all(
+        entries.map(async (e) => {
+          let status: OwnedNameStatus = "unknown";
+          try {
+            const res = await testnetResolveNameConsensus(e.name);
+            if (res.status === "confirmed-hit") {
+              status =
+                (res.addr0x ?? "").toLowerCase() === fromAddr.toLowerCase()
+                  ? "owned"
+                  : "transferred";
+            } else if (res.status === "confirmed-miss") {
+              status = "not-found";
+            }
+          } catch {
+            // leave as "unknown" — the chain is authoritative, we don't guess.
+          }
+          return { ...e, status };
+        }),
+      );
+      reconciled.reverse(); // newest first
+      return { ok: true, names: reconciled };
     }
     case "wallet-resolve-names": {
       // Batched name resolution. The de facto naming source on

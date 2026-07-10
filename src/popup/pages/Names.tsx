@@ -20,6 +20,8 @@ import {
   bgWalletNamePropose,
   bgWalletNameAccept,
   bgWalletResolveName,
+  bgWalletNamesOwned,
+  type OwnedNameRow,
 } from "../bg";
 import { validateRegisterableName } from "../../shared/name-registry.js";
 import { formatLythoshiToLythDecimal } from "../../shared/lyth-units.js";
@@ -136,6 +138,8 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
       </div>
 
       <div className="ext-body">
+        <MyNamesCard chainIdHex={chainIdHex} refreshKey={submit.status === "done" ? submit.txHash : ""} />
+
         <div className="ext-card">
           <div className="ext-card__head">
             <h3>Register a name</h3>
@@ -507,6 +511,77 @@ function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
   );
 }
 
+// ── My names — best-effort local ledger reconciled against the chain ─────────
+const STATUS_META: Record<OwnedNameRow["status"], { label: string; color: string }> = {
+  owned: { label: "Owned", color: "rgb(120,200,120)" },
+  transferred: { label: "Transferred away", color: "var(--fg-400)" },
+  "not-found": { label: "Not registered", color: "var(--fg-400)" },
+  unknown: { label: "Unverified", color: "var(--fg-400)" },
+};
+
+function MyNamesCard({ chainIdHex, refreshKey }: { chainIdHex: string; refreshKey: string }) {
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "ok"; names: OwnedNameRow[] }
+    | { status: "error" }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: "loading" });
+    void (async () => {
+      const r = await bgWalletNamesOwned(chainIdHex);
+      if (cancelled) return;
+      setState(r.ok ? { status: "ok", names: r.names } : { status: "error" });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chainIdHex, refreshKey]);
+
+  return (
+    <div className="ext-card">
+      <div className="ext-card__head">
+        <h3>My names</h3>
+      </div>
+      {state.status === "loading" ? (
+        <div style={hint}>Loading…</div>
+      ) : state.status === "error" ? (
+        <div style={hint}>Couldn&apos;t load your names.</div>
+      ) : state.names.length === 0 ? (
+        <div style={intro}>
+          Names you register or accept here will appear in this list. It&apos;s
+          best-effort — the chain has no owned-names lookup, so names registered
+          from another device or wallet won&apos;t show. You can still manage any
+          name by entering it below.
+        </div>
+      ) : (
+        <>
+          <div style={{ ...intro, marginBottom: 8 }}>
+            Registered from this wallet (best-effort — verified against the chain).
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {state.names.map((n) => {
+              const meta = STATUS_META[n.status];
+              return (
+                <div key={n.name} style={ledgerRow}>
+                  <span style={{ ...mono, fontSize: 12, flex: 1, minWidth: 0, wordBreak: "break-all" }}>
+                    {n.name}
+                  </span>
+                  <CategoryBadge category={n.category} />
+                  <span style={{ fontSize: 10, color: meta.color, fontWeight: 600 }}>
+                    {meta.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div
@@ -561,6 +636,15 @@ const quoteRow: CSSProperties = {
   alignItems: "center",
   gap: 8,
   marginTop: 10,
+};
+const ledgerRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.03)",
 };
 const primaryBtn: CSSProperties = {
   width: "100%",

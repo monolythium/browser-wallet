@@ -532,6 +532,11 @@ import {
 } from "../shared/__fixtures__/golden.js";
 import { submitMlDsaTx, testnetResolveNameConsensus } from "./tx-mldsa.js";
 import { quoteNameCostLythoshi } from "../shared/name-registry.js";
+import {
+  STORAGE_KEY_NAME_LEDGER,
+  validateNameLedger,
+  getOwnedNames,
+} from "../shared/name-ledger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -8310,5 +8315,73 @@ describe("name-registry (0x110E) submit handlers", () => {
       expect(r.ok).toBe(false);
     }
     expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("a successful registration records the name in the local ledger", async () => {
+    seedNameFeeAndNonce("0x1"); // default consensus = miss (available)
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean };
+    expect(r.ok).toBe(true);
+    const ledger = validateNameLedger(storageLocal[STORAGE_KEY_NAME_LEDGER]);
+    expect(ledger).not.toBeNull();
+    expect(getOwnedNames(ledger!, DETERMINISTIC_ADDRESS).map((e) => e.name)).toContain(
+      "alice.mono",
+    );
+  });
+
+  it("wallet-names-owned marks a ledger name owned when the chain agrees", async () => {
+    storageLocal[STORAGE_KEY_NAME_LEDGER] = {
+      [DETERMINISTIC_ADDRESS.toLowerCase()]: [
+        { name: "alice.mono", category: "human", addedAt: 1 },
+      ],
+    };
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: DETERMINISTIC_ADDRESS.toLowerCase(),
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-names-owned",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; names?: { name: string; status: string }[] };
+    expect(r.ok).toBe(true);
+    expect(r.names).toHaveLength(1);
+    expect(r.names![0]!.status).toBe("owned");
+  });
+
+  it("wallet-names-owned marks a name transferred away when the owner differs", async () => {
+    storageLocal[STORAGE_KEY_NAME_LEDGER] = {
+      [DETERMINISTIC_ADDRESS.toLowerCase()]: [
+        { name: "alice.mono", category: "human", addedAt: 1 },
+      ],
+    };
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: "0x" + "77".repeat(20),
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-names-owned",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; names?: { status: string }[] };
+    expect(r.ok).toBe(true);
+    expect(r.names![0]!.status).toBe("transferred");
+  });
+
+  it("wallet-names-owned returns an empty list when the ledger is empty (no fabrication)", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-names-owned",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; names?: unknown[] };
+    expect(r.ok).toBe(true);
+    expect(r.names).toEqual([]);
   });
 });
