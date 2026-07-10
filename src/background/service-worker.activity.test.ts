@@ -8384,4 +8384,60 @@ describe("name-registry (0x110E) submit handlers", () => {
     expect(r.ok).toBe(true);
     expect(r.names).toEqual([]);
   });
+
+  // ── wallet-has-name (onboarding nudge signal; biased HARD to not-nagging) ──
+  it("has-name: true when the ledger already has a name (no reverse lookup needed)", async () => {
+    storageLocal[STORAGE_KEY_NAME_LEDGER] = {
+      [DETERMINISTIC_ADDRESS.toLowerCase()]: [
+        { name: "alice.mono", category: "human", addedAt: 1 },
+      ],
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.ok).toBe(true);
+    expect(r.hasName).toBe(true);
+  });
+
+  it("has-name: false only when the ledger is empty AND the reverse resolve confirms no name", async () => {
+    rpcResponses["lyth_nameOf"] = { address: "mono1x", name: null, block: "latest" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.ok).toBe(true);
+    expect(r.hasName).toBe(false);
+  });
+
+  it("has-name: true when the reverse resolve returns a name (registered elsewhere)", async () => {
+    rpcResponses["lyth_nameOf"] = { address: "mono1x", name: "bob.mono", block: "latest" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.hasName).toBe(true);
+  });
+
+  it("has-name: true (do not nag) when the reverse resolve errors/unsupported", async () => {
+    rpcErrors["lyth_nameOf"] = { code: -32601, message: "method not found" };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: CHAIN },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.hasName).toBe(true);
+  });
+
+  it("has-name: true (do not nag) on a non-Monolythium chain", async () => {
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-has-name",
+      payload: { chainIdHex: "0x1" },
+    })) as { ok: boolean; hasName: boolean };
+    expect(r.hasName).toBe(true);
+  });
 });

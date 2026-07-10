@@ -1593,6 +1593,7 @@ export default function App() {
               <>
                 <SetupHealthChip
                   vaultId={activeVaultSummary.id}
+                  chainIdHex={activeChain.chainId}
                   onOpenSecurity={() => navigateTo("security")}
                 />
                 <UnifiedOnboardingHintBar

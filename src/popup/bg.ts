@@ -719,6 +719,15 @@ export async function bgWalletNamesOwned(
   return send("wallet-names-owned", { chainIdHex });
 }
 
+/** Best-effort "does the active address have a `.mono` name" for the onboarding
+ *  nudge. Biased to `hasName: true` on any uncertainty (never falsely nags a
+ *  name-owner). Always resolves `ok: true`. */
+export async function bgWalletHasName(
+  chainIdHex: string,
+): Promise<{ ok: true; hasName: boolean }> {
+  return send("wallet-has-name", { chainIdHex });
+}
+
 // Indexer-status polling for the §28.2.1 staleness banner.
 // All success-path fields nullable: when the method is unavailable or
 // the response is malformed, the handler returns the defensive

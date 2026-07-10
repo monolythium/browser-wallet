@@ -25,7 +25,7 @@
 //   §30.1  — SLH-DSA backup (post-quantum social recovery)
 
 /** Identifier for each onboarding step. */
-export type OnboardingStep = "slh-dsa-backup" | "passkey" | "features";
+export type OnboardingStep = "slh-dsa-backup" | "passkey" | "features" | "name";
 
 /** Input state the coordinator needs. The wallet collects these in
  *  parallel from existing storage / IPC reads. */
@@ -41,6 +41,17 @@ export interface OnboardingInputs {
    *  "passkey not required" (governance + escrow already exist) so the
    *  passkey hint is suppressed for them. */
   isMultisigVault: boolean;
+  /** The `.mono` name step applies to this vault — only when the REGISTRY
+   *  feature is enabled (name resolution is always on; the register/manage
+   *  surface is flag-gated). When false the name step is not-applicable and
+   *  is neither counted nor nudged. Optional (defaults to not-applicable) so
+   *  callers that don't track names — e.g. the hint-coordinator `pickHint`
+   *  path — need not supply it. */
+  nameApplicable?: boolean;
+  /** True when the active address already has a `.mono` name (best-effort:
+   *  the owned-names ledger and/or a reverse resolve). Biased to `true` on any
+   *  uncertainty so a name-owner is never falsely nagged. Optional. */
+  hasMonoName?: boolean;
   /** Per-vault dismissal map. The coordinator suppresses a hint that
    *  the user has dismissed (either permanently or within a re-surface
    *  window). The caller passes a snapshot of the relevant flags. */
@@ -106,6 +117,7 @@ const ALL_STEPS: ReadonlyArray<OnboardingStep> = [
   "slh-dsa-backup",
   "passkey",
   "features",
+  "name",
 ];
 
 /** Compute setup health from the same inputs the coordinator reads.
@@ -119,6 +131,12 @@ export function computeSetupHealth(inputs: OnboardingInputs): SetupHealth {
   const notApplicable: OnboardingStep[] = [];
   for (const step of ALL_STEPS) {
     if (step === "passkey" && inputs.isMultisigVault) {
+      notApplicable.push(step);
+      continue;
+    }
+    // The `.mono` name step only applies when the REGISTRY feature is on;
+    // otherwise it's neither counted nor nudged.
+    if (step === "name" && inputs.nameApplicable !== true) {
       notApplicable.push(step);
       continue;
     }
@@ -143,6 +161,10 @@ function isStepComplete(
       return inputs.hasPasskey;
     case "features":
       return inputs.hasAnyFeatureEnabled;
+    case "name":
+      // Biased to "complete" on uncertainty (hasMonoName defaults to true where
+      // the caller couldn't confirm) so a name-owner is never falsely nagged.
+      return inputs.hasMonoName !== false;
   }
 }
 
@@ -152,4 +174,5 @@ export const STEP_LABEL: Readonly<Record<OnboardingStep, string>> = {
   "slh-dsa-backup": "Post-quantum backup",
   passkey: "Passkey unlock",
   features: "Feature toggles",
+  name: ".mono name",
 };

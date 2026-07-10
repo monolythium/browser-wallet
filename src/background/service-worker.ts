@@ -9872,6 +9872,53 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       reconciled.reverse(); // newest first
       return { ok: true, names: reconciled };
     }
+    case "wallet-has-name": {
+      // Best-effort "does the active address have a `.mono` name" for the
+      // onboarding nudge. Biased HARD to `hasName: true` (don't nag): a false
+      // "you have no name" nudge to a name-owner is worse than a missed nudge.
+      // No-mock — ANY uncertainty (locked, unreadable ledger, reverse RPC
+      // error/unsupported) returns `true`. Only a definitive empty-ledger +
+      // successful empty reverse-resolve yields `false` (→ nudge).
+      const p = message.payload as { chainIdHex?: unknown };
+      if (typeof p?.chainIdHex !== "string" || !chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: true, hasName: true };
+      }
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: true, hasName: true };
+      // 1. Local ledger — names registered/accepted from THIS wallet. A non-empty
+      //    ledger means the user has engaged with names here (even a name later
+      //    transferred away makes them name-aware) → don't nag. No network.
+      try {
+        const raw = await new Promise<unknown>((resolve) => {
+          chrome.storage.local.get([STORAGE_KEY_NAME_LEDGER], (res) =>
+            resolve(res?.[STORAGE_KEY_NAME_LEDGER]),
+          );
+        });
+        const ledger = validateNameLedger(raw) ?? {};
+        if (getOwnedNames(ledger, fromAddr).length > 0) {
+          return { ok: true, hasName: true };
+        }
+      } catch {
+        return { ok: true, hasName: true }; // ledger unreadable → don't nag
+      }
+      // 2. Reverse resolve (`lyth_nameOf`) — catches a name registered elsewhere.
+      //    Only a SUCCESSFUL null-name read (empty ledger + no reverse name) lets
+      //    us nag; any error/unsupported method → don't nag.
+      try {
+        const { result } = await testnetJsonRpc<{ name?: unknown }>(
+          "lyth_nameOf",
+          [userAddressForNativeRpc(fromAddr)],
+        );
+        const name = result?.name;
+        if (typeof name === "string" && name.length > 0) {
+          return { ok: true, hasName: true };
+        }
+        // Confirmed: empty ledger AND no reverse name → genuinely no name.
+        return { ok: true, hasName: false };
+      } catch {
+        return { ok: true, hasName: true }; // reverse unreadable → don't nag
+      }
+    }
     case "wallet-resolve-names": {
       // Batched name resolution. The de facto naming source on
       // The testnet is `lyth_getAddressLabel` (per the §22.8 GAP-OPEN

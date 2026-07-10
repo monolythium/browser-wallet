@@ -125,7 +125,8 @@ describe("computeSetupHealth", () => {
     expect(h.percent).toBe(0);
     expect(h.completed).toEqual([]);
     expect(h.remaining).toEqual(["slh-dsa-backup", "passkey", "features"]);
-    expect(h.notApplicable).toEqual([]);
+    // `.mono` name is not-applicable until REGISTRY is enabled.
+    expect(h.notApplicable).toEqual(["name"]);
   });
 
   it("3/3 = 100% when everything is configured", () => {
@@ -158,10 +159,10 @@ describe("computeSetupHealth", () => {
       hasAnyFeatureEnabled: true,
       isMultisigVault: true,
     });
-    // 2 of 2 applicable steps complete; passkey is N/A.
+    // 2 of 2 applicable steps complete; passkey + name are N/A.
     expect(h.percent).toBe(100);
     expect(h.completed).toEqual(["slh-dsa-backup", "features"]);
-    expect(h.notApplicable).toEqual(["passkey"]);
+    expect(h.notApplicable).toEqual(["passkey", "name"]);
   });
 
   it("ignores dismissal — health tracks reality not preferences", () => {
@@ -179,10 +180,66 @@ describe("computeSetupHealth", () => {
   });
 });
 
+describe("computeSetupHealth — `.mono` name step (REGISTRY-gated)", () => {
+  it("is not-applicable (not counted) when REGISTRY is off", () => {
+    const h = computeSetupHealth({
+      ...BLANK_INPUTS,
+      hasSlhDsaBackup: true,
+      hasPasskey: true,
+      hasAnyFeatureEnabled: true,
+      // nameApplicable omitted → not-applicable
+    });
+    expect(h.percent).toBe(100);
+    expect(h.notApplicable).toContain("name");
+    expect(h.remaining).not.toContain("name");
+  });
+
+  it("counts as remaining when REGISTRY is on and the user has no name", () => {
+    const h = computeSetupHealth({
+      ...BLANK_INPUTS,
+      hasSlhDsaBackup: true,
+      hasPasskey: true,
+      hasAnyFeatureEnabled: true,
+      nameApplicable: true,
+      hasMonoName: false,
+    });
+    // 3 of 4 applicable (name outstanding).
+    expect(h.remaining).toEqual(["name"]);
+    expect(h.percent).toBe(75);
+  });
+
+  it("counts as complete when the user has a name", () => {
+    const h = computeSetupHealth({
+      ...BLANK_INPUTS,
+      hasSlhDsaBackup: true,
+      hasPasskey: true,
+      hasAnyFeatureEnabled: true,
+      nameApplicable: true,
+      hasMonoName: true,
+    });
+    expect(h.completed).toContain("name");
+    expect(h.percent).toBe(100);
+  });
+
+  it("does NOT nag (treats as complete) when the has-name signal is uncertain", () => {
+    const h = computeSetupHealth({
+      ...BLANK_INPUTS,
+      hasSlhDsaBackup: true,
+      hasPasskey: true,
+      hasAnyFeatureEnabled: true,
+      nameApplicable: true,
+      // hasMonoName omitted (undefined) → biased to complete
+    });
+    expect(h.remaining).not.toContain("name");
+    expect(h.completed).toContain("name");
+  });
+});
+
 describe("STEP_LABEL", () => {
   it("has a label for every onboarding step", () => {
     expect(STEP_LABEL["slh-dsa-backup"]).toBeTruthy();
     expect(STEP_LABEL.passkey).toBeTruthy();
     expect(STEP_LABEL.features).toBeTruthy();
+    expect(STEP_LABEL.name).toBeTruthy();
   });
 });
