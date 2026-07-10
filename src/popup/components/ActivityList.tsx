@@ -14,6 +14,7 @@ import { bgDismissPendingTx } from "../bg.js";
 import { useActivity } from "../hooks/useActivity.js";
 import { useActivityKind } from "../hooks/useActivityKind.js";
 import { useNameResolution } from "../hooks/useNameResolution.js";
+import { useReverseNamesCached, preferReverseNameLabel } from "../hooks/useReverseName.js";
 import { useIndexerStatus } from "../hooks/useIndexerStatus.js";
 import { ActivityRow } from "./ActivityRow.js";
 import { ActivityDetail } from "./ActivityDetail.js";
@@ -301,6 +302,15 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
   }, [cache, pending]);
 
   const { labels } = useNameResolution(counterpartyAddrs, chainIdHex);
+  // §22.8 quorum reverse names (cache-first — populated by the single-address
+  // sites like send-review; no eager per-row fan-out). Preferred over the
+  // operator label so a counterparty shows its canonical, quorum-verified
+  // `*.mono` name when we have one.
+  const reverseNames = useReverseNamesCached(counterpartyAddrs);
+  const labelFor = (cp: string | null): NameLabel | undefined =>
+    cp === null
+      ? undefined
+      : preferReverseNameLabel(cp, reverseNames.get(cp.toLowerCase()), labels.get(cp));
 
   // Confirmed on-chain history — SUPPRESSED while the chain is non-live
   // (hideConfirmed) since it's stale/untrusted right now. Pending + failed
@@ -384,7 +394,7 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
               }
               const row = item.row;
               const cp = counterpartyOf(row);
-              const label = cp ? labels.get(cp) : undefined;
+              const label = labelFor(cp);
               const key =
                 row.kind === "pending_tx"
                   ? `pending-${row.txHash}`

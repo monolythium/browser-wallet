@@ -3856,7 +3856,7 @@ export function ReqConnect({
           }}
         >
           {address ? (
-            <RevealableAddressBlock addr0x={address} />
+            <RevealableAddressBlock addr0x={address} chainIdHex={chain.chainId} />
           ) : (
             <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-400)" }}>
               —

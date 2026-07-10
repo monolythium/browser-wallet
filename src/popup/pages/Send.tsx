@@ -43,12 +43,10 @@ import {
 import { classifyAddressInput } from "../../shared/bech32m-typo-detect";
 import { classifySendError, errorLinksOperators, severityColours } from "../../shared/send-error";
 import {
-  STORAGE_KEY_NAME_CACHE,
   parseMonoName,
-  validateNameCache,
   type MonoNameParse,
-  type NameCache,
 } from "../../shared/name-resolution";
+import { useReverseName } from "../hooks/useReverseName";
 import {
   finalityPostureFor,
   monoscanTxUrl,
@@ -352,11 +350,12 @@ export function Send({
   }, [selectedContact, effectiveAddr0x, contactsMap]);
 
   // §25.2 item 6 — a §22.8 registered name for the recipient, reverse-
-  // resolved from the local name cache (the same cache the activity feed
-  // populates via lyth_getAddressLabel). Preferred over the contact name
-  // in the preview "To" row. There is no forward name->address RPC, so
-  // this is reverse-resolve + cache only (no new registry path).
-  const recipientRegisteredName = useRegisteredName(effectiveAddr0x);
+  // §22.8 reverse-resolve the recipient → its canonical `*.mono` name,
+  // QUORUM-checked (mirrors forward-resolve; a single rogue operator can't
+  // mislabel who you're paying). Cache-first; null → the review shows the
+  // bech32m address (which stays the source of truth). Preferred over the
+  // contact name in the preview "To" row.
+  const recipientRegisteredName = useReverseName(effectiveAddr0x, chainId);
 
   const handleMax = () => {
     // T4-03 (Item C): Max is computed against the spend guard (lowest
@@ -1519,62 +1518,6 @@ function useNameForwardResolve(
   }, [canonical, chainIdHex]);
 
   return state;
-}
-
-/**
- * §25.2 item 6 — reverse-resolve a recipient address to its registered
- * §22.8 display name from the local name cache (address-keyed,
- * populated by lyth_getAddressLabel elsewhere in the popup). Returns the
- * `displayName` string when the cache holds a non-null label for the
- * address, else null. Subscribes to chrome.storage.onChanged so a fresh
- * label resolved elsewhere lights up the preview without a re-render
- * loop. No forward registry/RPC path is wired here — the SDK does expose
- * `lyth_resolveName`, but this preview stays cache-only for now.
- */
-function useRegisteredName(addr0x: string | null): string | null {
-  const [name, setName] = useState<string | null>(null);
-  const key = addr0x === null ? null : addr0x.toLowerCase();
-
-  useEffect(() => {
-    if (key === null) {
-      setName(null);
-      return;
-    }
-    let cancelled = false;
-
-    const resolve = (cache: NameCache) => {
-      if (cancelled) return;
-      const entry = cache[key];
-      const displayName = entry?.label?.displayName ?? null;
-      setName(typeof displayName === "string" && displayName.length > 0 ? displayName : null);
-    };
-
-    chrome.storage.local.get([STORAGE_KEY_NAME_CACHE], (res) => {
-      if (cancelled) return;
-      const validated = validateNameCache(res?.[STORAGE_KEY_NAME_CACHE]);
-      resolve(validated ?? {});
-    });
-
-    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
-      changes,
-      area,
-    ) => {
-      if (area !== "local") return;
-      const change = changes[STORAGE_KEY_NAME_CACHE];
-      if (!change) return;
-      const validated = validateNameCache(change.newValue);
-      if (validated === null) return;
-      resolve(validated);
-    };
-    chrome.storage.onChanged.addListener(listener);
-
-    return () => {
-      cancelled = true;
-      chrome.storage.onChanged.removeListener(listener);
-    };
-  }, [key]);
-
-  return name;
 }
 
 interface MonoNameResolveHintProps {

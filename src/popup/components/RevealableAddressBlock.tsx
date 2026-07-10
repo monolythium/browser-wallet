@@ -14,6 +14,7 @@ import type { MouseEvent } from "react";
 
 import { AddressLine, CheckIcon, ClipboardIcon } from "./AddressLine";
 import { bech32mDisplay, type AddressKind } from "../../shared/bech32m";
+import { useReverseName } from "../hooks/useReverseName";
 
 export interface RevealableAddressBlockProps {
   /** Raw 0x-shaped wire address. AddressLine handles non-0x demo
@@ -22,13 +23,23 @@ export interface RevealableAddressBlockProps {
   /** §22.7 address-kind discriminator. Defaults to `"eoa"` for the
    *  user-account case which is by far the most common consumer. */
   kind?: AddressKind;
+  /** When set, the block quorum-reverse-resolves the address and shows its
+   *  canonical `*.mono` name above the bech32m string (the address stays the
+   *  source of truth). Omit to skip name resolution. */
+  chainIdHex?: string;
 }
 
 export function RevealableAddressBlock({
   addr0x,
   kind = "eoa",
+  chainIdHex,
 }: RevealableAddressBlockProps) {
   const [copied, setCopied] = useState(false);
+  // §22.8 reverse name (quorum-checked); null → show only the address.
+  const monoName = useReverseName(
+    chainIdHex !== undefined ? addr0x : null,
+    chainIdHex ?? null,
+  );
 
   const handleCopyBech32m = (e: MouseEvent) => {
     e.stopPropagation();
@@ -43,6 +54,35 @@ export function RevealableAddressBlock({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {monoName !== null && (
+        <div
+          style={{
+            fontFamily: "var(--f-sans)",
+            fontSize: 12,
+            fontWeight: 600,
+            color: "var(--gold)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+          title="Canonical .mono name (verified across operators)"
+        >
+          <span>{monoName}</span>
+          <span
+            style={{
+              fontSize: 8.5,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: "var(--fg-400)",
+              border: "1px solid var(--fg-700)",
+              borderRadius: 4,
+              padding: "1px 5px",
+            }}
+          >
+            name
+          </span>
+        </div>
+      )}
       <AddressLine
         addr0x={addr0x}
         kind={kind}
