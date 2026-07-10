@@ -7988,3 +7988,105 @@ describe("incoming-poll alarm (Option 1: active-scope, low-cadence)", () => {
     expect(hist.entries[0]!.kind).toBe("receive");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 — cross-path nonce unification (submitTrackedTx + the tracker)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("nonce unification — submitTrackedTx", () => {
+  const NONCE_FROM = "0x00000000000000000000000000000000000000aa";
+  const NONCE_CHAIN = "0x10f2c";
+  const NONCE_KEY = `${NONCE_FROM.toLowerCase()}:${NONCE_CHAIN.toLowerCase()}`;
+  const PENDING_NONCE_STORE_KEY = "mono.nonce.pending";
+  const REQ = {
+    to: "0x0000000000000000000000000000000000000001",
+    value: "0x0",
+    gas: "0x7530",
+    maxFeePerGas: "0x3b9aca00",
+    maxPriorityFeePerGas: "0x3b9aca00",
+    chainIdHex: NONCE_CHAIN,
+  } as const;
+
+  function lastSignedNonce(): string | undefined {
+    const last = submitMlDsaCalls[submitMlDsaCalls.length - 1];
+    return last?.nonce as string | undefined;
+  }
+  function recordedNonce(): number | undefined {
+    const map = storageSession[PENDING_NONCE_STORE_KEY] as
+      | Record<string, { nonce: number; ts: number }>
+      | undefined;
+    return map?.[NONCE_KEY]?.nonce;
+  }
+  async function tracked(preferredNonceHex?: string) {
+    const { submitTrackedTx } = await import("./service-worker.js");
+    return submitTrackedTx({ ...REQ }, "v1", {
+      from: NONCE_FROM,
+      chainIdHex: NONCE_CHAIN,
+      ...(preferredNonceHex !== undefined ? { preferredNonceHex } : {}),
+    });
+  }
+
+  it("signs the tracker nonce and advances across consecutive (mixed-path) sends", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 5; // committed stays 5
+    submitMlDsaCalls.length = 0;
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x5");
+    expect(recordedNonce()).toBe(5);
+    // 2nd send before the 1st commits: committed still 5, tracker → 6.
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x6");
+    // 3rd (a different logical path would hit the SAME helper): → 7.
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x7");
+    expect(recordedNonce()).toBe(7);
+    expect(submitMlDsaCalls).toHaveLength(3); // one submit per logical tx
+  });
+
+  it("records ONCE per logical tx (the fan-out is inside submitMlDsaTx)", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 0;
+    submitMlDsaCalls.length = 0;
+    await tracked();
+    // One submitTrackedTx → one submitMlDsaTx chokepoint call (which fans out to
+    // N operators internally) → one recorded nonce, never per-operator.
+    expect(submitMlDsaCalls).toHaveLength(1);
+    expect(recordedNonce()).toBe(0);
+  });
+
+  it("a FAILED submit does not record → the nonce is reused (no gap)", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 5;
+    submitMlDsaCalls.length = 0;
+    submitFailure = new Error("broadcast rejected");
+    await expect(tracked()).rejects.toThrow(/broadcast rejected/);
+    expect(recordedNonce()).toBeUndefined(); // nothing reserved
+    submitFailure = null;
+    // The next send re-picks the SAME committed nonce (5), not a gapped 6.
+    await tracked();
+    expect(lastSignedNonce()).toBe("0x5");
+  });
+
+  it("honors an explicit preferredNonceHex (dApp-supplied nonce)", async () => {
+    rpcResponses["lyth_getTransactionCount"] = 5;
+    submitMlDsaCalls.length = 0;
+    await tracked("0x9");
+    expect(lastSignedNonce()).toBe("0x9"); // explicit, not the tracker's 5/6
+    expect(recordedNonce()).toBe(9);
+  });
+
+  it("fail-safe: nextNonceHex falls back to committed when the entry is stale/absent", async () => {
+    const { nextNonceHex } = await import("./service-worker.js");
+    rpcResponses["lyth_getTransactionCount"] = 5;
+    // absent entry → committed
+    expect(await nextNonceHex(NONCE_FROM, NONCE_CHAIN)).toBe("0x5");
+    // stale entry (past the 5-min TTL) → ignored, committed wins
+    storageSession[PENDING_NONCE_STORE_KEY] = {
+      [NONCE_KEY]: { nonce: 99, ts: Date.now() - 10 * 60 * 1000 },
+    };
+    expect(await nextNonceHex(NONCE_FROM, NONCE_CHAIN)).toBe("0x5");
+  });
+
+  it("clear-on-commit: a fresh entry is superseded once committed advances past it", async () => {
+    const { nextNonceHex, recordSubmittedNonce } = await import("./service-worker.js");
+    await recordSubmittedNonce(NONCE_FROM, NONCE_CHAIN, "0x5"); // fresh entry = 5
+    rpcResponses["lyth_getTransactionCount"] = 8; // committed jumped to 8
+    expect(await nextNonceHex(NONCE_FROM, NONCE_CHAIN)).toBe("0x8"); // committed dominates
+  });
+});
