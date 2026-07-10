@@ -14,10 +14,18 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../Icon";
 import { CategoryBadge } from "../components/CategoryBadge";
-import { bgWalletNameQuote, bgWalletNameRegister } from "../bg";
+import {
+  bgWalletNameQuote,
+  bgWalletNameRegister,
+  bgWalletNamePropose,
+  bgWalletNameAccept,
+  bgWalletResolveName,
+} from "../bg";
 import { validateRegisterableName } from "../../shared/name-registry.js";
 import { formatLythoshiToLythDecimal } from "../../shared/lyth-units.js";
 import { parseHexQuantity } from "../../shared/native-amount.js";
+import { bech32mDisplay } from "../../shared/bech32m";
+import { validateToAddress } from "./Send";
 
 export interface NamesProps {
   chainIdHex: string;
@@ -230,8 +238,272 @@ export function Names({ chainIdHex, onBack }: NamesProps) {
             </>
           )}
         </div>
+
+        <ProposeCard chainIdHex={chainIdHex} />
+        <AcceptCard chainIdHex={chainIdHex} />
       </div>
     </>
+  );
+}
+
+// ── Propose-transfer (owner → recipient; FREE, opens a 24h window) ────────────
+function ProposeCard({ chainIdHex }: { chainIdHex: string }) {
+  const [name, setName] = useState("");
+  const [recipient, setRecipient] = useState("");
+  const [phase, setPhase] = useState<
+    "form" | "resolving" | "confirm" | "submitting" | "done" | "error"
+  >("form");
+  const [resolvedAddr0x, setResolvedAddr0x] = useState<string | null>(null);
+  const [msg, setMsg] = useState("");
+  const [txHash, setTxHash] = useState("");
+
+  const canonical = name.trim().toLowerCase();
+  const nameValid =
+    canonical.length > 0 && validateRegisterableName(canonical).ok;
+
+  const reset = () => {
+    setPhase("form");
+    setResolvedAddr0x(null);
+    setMsg("");
+    setTxHash("");
+  };
+
+  const proceed = async () => {
+    setMsg("");
+    const parse = validateToAddress(recipient.trim());
+    let addr0x = parse.addr0x;
+    if (addr0x === null && parse.monoName !== null) {
+      setPhase("resolving");
+      const r = await bgWalletResolveName(parse.monoName.canonical, chainIdHex);
+      if (r.ok && r.addr0x !== null) {
+        addr0x = r.addr0x;
+      } else {
+        setMsg(r.ok ? "That recipient name isn't registered." : r.reason ?? "Couldn't resolve the recipient.");
+        setPhase("error");
+        return;
+      }
+    }
+    if (addr0x === null) {
+      setMsg(parse.error ?? "Enter a valid recipient (a mono1… address or a .mono name).");
+      setPhase("error");
+      return;
+    }
+    setResolvedAddr0x(addr0x);
+    setPhase("confirm");
+  };
+
+  const submit = async () => {
+    if (resolvedAddr0x === null) return;
+    setPhase("submitting");
+    const r = await bgWalletNamePropose(canonical, resolvedAddr0x, chainIdHex);
+    if (r.ok) {
+      setTxHash(r.txHash);
+      setPhase("done");
+    } else {
+      setMsg(r.reason ?? "Couldn't propose the transfer.");
+      setPhase("error");
+    }
+  };
+
+  return (
+    <div className="ext-card">
+      <div className="ext-card__head">
+        <h3>Transfer a name</h3>
+      </div>
+      {phase === "done" ? (
+        <div style={okBox}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Transfer proposed</div>
+          <div style={{ fontSize: 10.5, color: "var(--fg-400)", wordBreak: "break-all" }}>
+            tx {txHash}
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--fg-400)", marginTop: 6 }}>
+            The recipient has 24 hours to accept. Accepting costs them the
+            registration fee.
+          </div>
+          <button style={{ ...primaryBtn, marginTop: 10 }} onClick={() => { reset(); setName(""); setRecipient(""); }}>
+            Done
+          </button>
+        </div>
+      ) : phase === "confirm" ? (
+        <div style={confirmBox}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
+            Confirm transfer
+          </div>
+          <Row label="Name" value={<span style={mono}>{canonical}</span>} />
+          <Row
+            label="To"
+            value={
+              <span style={{ ...mono, fontSize: 10.5, wordBreak: "break-all" }}>
+                {resolvedAddr0x !== null ? bech32mDisplay(resolvedAddr0x) : "—"}
+              </span>
+            }
+          />
+          <div style={{ fontSize: 10.5, color: "var(--fg-400)", margin: "6px 0 10px" }}>
+            Opens a 24-hour acceptance window. No registration cost — you pay only
+            the network fee. The recipient pays the registration fee when they
+            accept.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={{ ...ghostBtn, flex: 1 }} onClick={reset}>Cancel</button>
+            <button style={{ ...primaryBtn, flex: 1 }} onClick={() => void submit()}>
+              Propose
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={intro}>
+            Propose transferring a name you own to another address. They accept
+            within 24 hours to complete it.
+          </div>
+          <input
+            value={name}
+            onChange={(e) => { setName(e.target.value); if (phase === "error") reset(); }}
+            placeholder="name to transfer (alice.mono)"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            style={input}
+          />
+          <input
+            value={recipient}
+            onChange={(e) => { setRecipient(e.target.value); if (phase === "error") reset(); }}
+            placeholder="recipient (mono1… or a .mono name)"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{ ...input, marginTop: 8 }}
+          />
+          {phase === "error" && <div style={errBox}>{msg}</div>}
+          <button
+            style={{
+              ...primaryBtn,
+              marginTop: 10,
+              opacity: nameValid && recipient.trim().length > 0 && phase !== "resolving" ? 1 : 0.5,
+            }}
+            disabled={!nameValid || recipient.trim().length === 0 || phase === "resolving"}
+            onClick={() => void proceed()}
+          >
+            {phase === "resolving" ? "Resolving…" : "Continue"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Accept-transfer (recipient accepts; PAID — re-charges the full fee) ───────
+function AcceptCard({ chainIdHex }: { chainIdHex: string }) {
+  const [name, setName] = useState("");
+  const [quote, setQuote] = useState<QuoteState>({ status: "idle" });
+  const [phase, setPhase] = useState<"form" | "confirm" | "submitting" | "done" | "error">("form");
+  const [msg, setMsg] = useState("");
+  const [txHash, setTxHash] = useState("");
+
+  const canonical = name.trim().toLowerCase();
+  const nameValid = canonical.length > 0 && validateRegisterableName(canonical).ok;
+
+  useEffect(() => {
+    setPhase("form");
+    setMsg("");
+    if (!nameValid) {
+      setQuote({ status: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setQuote({ status: "loading" });
+    const t = setTimeout(() => {
+      void (async () => {
+        const r = await bgWalletNameQuote(canonical, chainIdHex);
+        if (cancelled) return;
+        if (r.ok) {
+          setQuote({ status: "ok", canonical: r.canonical, category: r.category, costLythoshiHex: r.costLythoshiHex });
+        } else {
+          setQuote({ status: "error", message: r.reason ?? "Couldn't fetch the cost." });
+        }
+      })();
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [canonical, nameValid, chainIdHex]);
+
+  const submit = async () => {
+    setPhase("submitting");
+    const r = await bgWalletNameAccept(canonical, chainIdHex);
+    if (r.ok) {
+      setTxHash(r.txHash);
+      setPhase("done");
+    } else {
+      setMsg(r.reason ?? "Couldn't accept the transfer.");
+      setPhase("error");
+    }
+  };
+
+  const costLyth = quote.status === "ok" ? costHexToLyth(quote.costLythoshiHex) : null;
+
+  return (
+    <div className="ext-card">
+      <div className="ext-card__head">
+        <h3>Accept a transfer</h3>
+      </div>
+      {phase === "done" ? (
+        <div style={okBox}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Acceptance submitted</div>
+          <div style={{ fontSize: 10.5, color: "var(--fg-400)", wordBreak: "break-all" }}>tx {txHash}</div>
+          <button style={{ ...primaryBtn, marginTop: 10 }} onClick={() => { setName(""); setPhase("form"); }}>
+            Done
+          </button>
+        </div>
+      ) : phase === "confirm" && quote.status === "ok" ? (
+        <div style={confirmBox}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Confirm acceptance</div>
+          <Row label="Name" value={<span style={mono}>{canonical}</span>} />
+          <Row label="You pay" value={<span style={{ ...mono, color: "var(--gold)" }}>{costLyth ?? "—"} LYTH</span>} />
+          <div style={warnBox}>
+            Accepting <strong>re-charges the full registration fee</strong> — you
+            pay {costLyth ?? "—"} LYTH (plus the network fee) to take ownership.
+            Only works within 24 hours of the proposal.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={{ ...ghostBtn, flex: 1 }} onClick={() => setPhase("form")}>Cancel</button>
+            <button style={{ ...primaryBtn, flex: 1 }} onClick={() => void submit()}>
+              Pay &amp; accept
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={intro}>
+            Accept a name someone proposed transferring to you. Accepting costs the
+            full registration fee.
+          </div>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="name being transferred to you"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            style={input}
+          />
+          {nameValid && quote.status === "loading" && <div style={hint}>Checking cost…</div>}
+          {nameValid && quote.status === "error" && <div style={errText}>{quote.message}</div>}
+          {quote.status === "ok" && (
+            <div style={warnBox}>
+              Accepting re-charges the <strong>full registration fee</strong>:{" "}
+              <span style={{ ...mono, color: "var(--gold)" }}>{costLyth ?? "—"} LYTH</span>.
+            </div>
+          )}
+          {phase === "error" && <div style={errBox}>{msg}</div>}
+          <button
+            style={{ ...primaryBtn, marginTop: 10, opacity: quote.status === "ok" ? 1 : 0.5 }}
+            disabled={quote.status !== "ok"}
+            onClick={() => setPhase("confirm")}
+          >
+            Continue
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -334,4 +606,14 @@ const errBox: CSSProperties = {
   borderRadius: 8,
   background: "rgba(220,80,80,0.08)",
   marginTop: 10,
+};
+const warnBox: CSSProperties = {
+  fontSize: 11,
+  color: "var(--fg-200)",
+  lineHeight: 1.5,
+  padding: 9,
+  border: "1px solid rgba(var(--gold-glow), 0.35)",
+  borderRadius: 8,
+  background: "rgba(var(--gold-glow), 0.08)",
+  margin: "10px 0",
 };
