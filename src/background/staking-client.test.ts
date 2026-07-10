@@ -839,6 +839,50 @@ describe("readClusterServiceTiers", () => {
     expect(r.data.anyReachable).toBe(false);
     expect(r.data.probedOperators).toBe(0);
   });
+
+  it("pre-filters non-public masks: probes only public tiers, never oracle (0x40) / bridgeRelay (0x80)", async () => {
+    // The chain rejects a non-public mask with InvalidParams, so those probes are
+    // always doomed round-trips. The wallet must never send them.
+    const probedMasks: number[] = [];
+    mockedRpc.mockImplementation(async (method: string, params: unknown[]) => {
+      if (method !== "lyth_getServiceProbe") {
+        throw new Error(`unexpected method ${method}`);
+      }
+      const [, mask] = params as [string, number];
+      probedMasks.push(mask);
+      return { via: "op-1", result: { serviceMask: mask, status: "unreachable" } };
+    });
+    await readClusterServiceTiers(["op-1"]);
+    // Exactly the public-service masks — RPC(1) / INDEXER(2) / ARCHIVE(8) — one
+    // probe each for the single operator; oracle/bridgeRelay never sent.
+    expect([...probedMasks].sort((a, b) => a - b)).toEqual([1, 2, 8]);
+    expect(probedMasks).not.toContain(0x40); // SERVES_ORACLE_WRITER
+    expect(probedMasks).not.toContain(0x80); // SERVES_BRIDGE_RELAY
+    expect(mockedRpc).toHaveBeenCalledTimes(3); // 3 public probes, not 5
+  });
+
+  it("populated public tiers still surface with the non-public masks filtered out", async () => {
+    // op-1 reachable for RPC (1) + ARCHIVE (8) — the public tiers still light up
+    // even though oracle/bridgeRelay are no longer probed at all.
+    mockedRpc.mockImplementation(async (_method: string, params: unknown[]) => {
+      const [, mask] = params as [string, number];
+      const reachable = mask === 1 || mask === 8;
+      return {
+        via: "op-1",
+        result: { serviceMask: mask, status: reachable ? "reachable" : "unreachable" },
+      };
+    });
+    const r = await readClusterServiceTiers(["op-1"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.rpc).toBe(true);
+    expect(r.data.archive).toBe(true);
+    expect(r.data.indexer).toBe(false);
+    // Excluded tiers stay false (honest absence — never probeable).
+    expect(r.data.oracle).toBe(false);
+    expect(r.data.bridgeRelay).toBe(false);
+    expect(r.data.anyReachable).toBe(true);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

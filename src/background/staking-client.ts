@@ -27,7 +27,10 @@
 // wallet typecheck the next time the SDK rebuilds.
 
 import { testnetJsonRpc } from "./tx-mldsa.js";
-import { NODE_REGISTRY_CAPABILITIES } from "@monolythium/core-sdk";
+import {
+  NODE_REGISTRY_CAPABILITIES,
+  isValidPublicServiceProbeMask,
+} from "@monolythium/core-sdk";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import {
   DIVERSITY_SCORE_MAX,
@@ -590,6 +593,18 @@ const USER_FACING_TIERS: ReadonlyArray<UserFacingTier> = [
   { key: "bridgeRelay", mask: NODE_REGISTRY_CAPABILITIES.SERVES_BRIDGE_RELAY },
 ];
 
+/** The subset of USER_FACING_TIERS the chain will actually probe.
+ *  `lyth_getServiceProbe` rejects any mask outside the SDK's PUBLIC_SERVICE_MASK
+ *  with `InvalidParams` ("not a public-service capability"), so probing a
+ *  non-public bit — oracle (0x40) or bridgeRelay (0x80) — is a guaranteed
+ *  round-trip failure that can never populate its tier. Pre-filter with the
+ *  SDK's authoritative validator so those bits are never sent: future-proof
+ *  (tracks the SDK's public set) and it drops the 2×N doomed probes per
+ *  ClusterDetail open. The excluded tiers stay `false` in ClusterServiceTiers —
+ *  honest absence (they were never probeable), not a mock. */
+const PUBLIC_PROBEABLE_TIERS: ReadonlyArray<UserFacingTier> =
+  USER_FACING_TIERS.filter((t) => isValidPublicServiceProbeMask(t.mask));
+
 interface RawServiceProbe {
   serviceMask?: number;
   status?: string;
@@ -639,7 +654,7 @@ export async function readClusterServiceTiers(
 
   const tasks: Promise<{ opId: string; key: UserFacingTier["key"]; reachable: boolean }>[] = [];
   for (const opId of operatorIds) {
-    for (const tier of USER_FACING_TIERS) {
+    for (const tier of PUBLIC_PROBEABLE_TIERS) {
       tasks.push(
         probeTier(opId, tier.mask).then((reachable) => ({
           opId,
