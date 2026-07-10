@@ -1671,7 +1671,7 @@ async function readPendingNonceMap(): Promise<Record<string, PendingNonceEntry>>
 
 /** Nonce hex to sign: max(committed-from-chain, local-pending + 1), TTL-healed.
  *  Falls back to the committed nonce on any error or a stale/absent entry. */
-async function nextNonceHex(address: string, chainIdHex: string): Promise<string> {
+export async function nextNonceHex(address: string, chainIdHex: string): Promise<string> {
   const committedHex = await testnetTransactionCountHex(address);
   let next: bigint;
   try {
@@ -1700,7 +1700,7 @@ async function nextNonceHex(address: string, chainIdHex: string): Promise<string
 
 /** Record a successfully-submitted nonce so the next tx advances past it. Only
  *  the SUCCESS path calls this (a rejected submit must NOT advance the nonce). */
-async function recordSubmittedNonce(
+export async function recordSubmittedNonce(
   address: string,
   chainIdHex: string,
   nonceHex: string,
@@ -1720,6 +1720,38 @@ async function recordSubmittedNonce(
   } catch {
     // best-effort — a write failure just means the next tx re-reads committed
   }
+}
+
+/** The single SW-side submit chokepoint that unifies nonce selection across
+ *  EVERY submit path (popup send, dApp eth_sendTransaction, MRV native + plan,
+ *  multisig-execute). Picks the nonce — an explicit caller-supplied
+ *  `preferredNonceHex` (e.g. a dApp-supplied nonce) when present, else the local
+ *  pending-nonce tracker `nextNonceHex` (committed-fallback + TTL-healed, §D5) —
+ *  then signs + broadcasts through the one `submitMlDsaTx` chokepoint (which fans
+ *  the SAME signed bytes out to N operators, Part B). On SUCCESS only, it records
+ *  the used nonce ONCE (after the single `submitMlDsaTx`, never per fan-out
+ *  operator) so the next cross-path send advances past it. A reject throws from
+ *  `submitMlDsaTx` before the record, so a failed submit never reserves a nonce
+ *  (no gap — a gap is worse than a collision). NO signing/sighash/wire change:
+ *  only WHICH nonce value gets signed is centralized here; `submitMlDsaTx` and
+ *  the SDK signer are untouched. Any `req.nonce` is IGNORED — the helper owns
+ *  the nonce (so a pre-built plan/tx can be passed as-is and its stale build-time
+ *  nonce is overridden here at submit time). */
+export async function submitTrackedTx(
+  req: Omit<EthSendTxFields, "nonce"> & { nonce?: string },
+  boundVaultId: string,
+  opts: { from: string; chainIdHex: string; preferredNonceHex?: string | undefined },
+): Promise<{ txHash: string; via: string; nonceHex: string }> {
+  const nonceHex =
+    opts.preferredNonceHex ?? (await nextNonceHex(opts.from, opts.chainIdHex));
+  const { txHash, via } = await submitMlDsaTx(
+    { ...req, nonce: nonceHex },
+    boundVaultId,
+  );
+  // Success path only (a reject threw above). Awaited so a rapid next send sees
+  // it immediately. Once per logical tx — the fan-out already happened inside.
+  await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
+  return { txHash, via, nonceHex };
 }
 
 interface ExecutionUnitPriceQuoteHex {
@@ -2259,9 +2291,11 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           // the chain registry's RPC alias resolves NXDOMAIN and the
           // existing `view` was built against that broken alias too, so
           // its fields are usually null on the testnet.
-          const nonceHex =
-            txReq.nonce ?? view.nonce ??
-            await testnetTransactionCountHex(fromAddr);
+          // Nonce (D3): honor an explicit dApp-supplied `txReq.nonce`; otherwise
+          // the tracker fills it at submit (submitTrackedTx below). `view.nonce`
+          // is the approval-PREVIEW value (display only) and is intentionally NOT
+          // used as the signed nonce — a wallet-filled nonce must reflect the
+          // CURRENT next nonce (tracker), not the stale approval-time count.
           // Prefer the price captured into `view` at approval time over a
           // fresh read, then clamp to the sane ceiling (T4-04 D3) so a
           // malicious/MITM operator cannot inflate the fee signed into the
@@ -2286,15 +2320,22 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
 
           // Sign + submit via the plaintext mesh_submitTx path.
           // The testnet does not use an eth_sendRawTransaction fallback path.
-          const { txHash } = await submitMlDsaTx({
-            ...(txReq.to !== undefined ? { to: txReq.to } : {}),
-            ...(txReq.value !== undefined ? { value: txReq.value } : {}),
-            ...(txReq.data !== undefined ? { data: txReq.data } : {}),
-            nonce: nonceHex,
-            gas: executionUnitsHex,
-            gasPrice: executionUnitPriceHex,
-            chainIdHex: session.chainId,
-          }, boundVaultId);
+          const { txHash } = await submitTrackedTx(
+            {
+              ...(txReq.to !== undefined ? { to: txReq.to } : {}),
+              ...(txReq.value !== undefined ? { value: txReq.value } : {}),
+              ...(txReq.data !== undefined ? { data: txReq.data } : {}),
+              gas: executionUnitsHex,
+              gasPrice: executionUnitPriceHex,
+              chainIdHex: session.chainId,
+            },
+            boundVaultId,
+            {
+              from: fromAddr,
+              chainIdHex: session.chainId,
+              preferredNonceHex: txReq.nonce,
+            },
+          );
           return ok(txHash);
         } catch (e) {
           return err(ERR_INTERNAL, `ml-dsa tx failed: ${(e as Error).message}`);
@@ -2381,7 +2422,15 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitMlDsaTx(approvedTxReq, boundVaultId);
+        // PRESERVE the plan's build-time nonce (the previewed tx — and, for a
+        // deploy, its expectedContractAddress — bind it; overriding would diverge
+        // from the preview). Still routed through the tracker so the nonce is
+        // RECORDED, advancing a subsequent cross-path send past it.
+        const { txHash, via } = await submitTrackedTx(approvedTxReq, boundVaultId, {
+          from: fromAddr,
+          chainIdHex,
+          preferredNonceHex: approvedTxReq.nonce,
+        });
         return ok({ txHash, via });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -2507,7 +2556,15 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
           chainIdHex,
           fromAddress: fromAddr,
         });
-        const { txHash, via } = await submitMlDsaTx(approvedTxReq, boundVaultId);
+        // PRESERVE the plan's build-time nonce (the previewed tx — and, for a
+        // deploy, its expectedContractAddress — bind it; overriding would diverge
+        // from the preview). Still routed through the tracker so the nonce is
+        // RECORDED, advancing a subsequent cross-path send past it.
+        const { txHash, via } = await submitTrackedTx(approvedTxReq, boundVaultId, {
+          from: fromAddr,
+          chainIdHex,
+          preferredNonceHex: approvedTxReq.nonce,
+        });
         return ok({ txHash, via, plan });
       } catch (e) {
         return err(ERR_INTERNAL, `MRV native submission failed: ${(e as Error).message}`);
@@ -7461,7 +7518,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         let txHash: string | null = null;
         let broadcastError: string | null = null;
         try {
-          const nonceHex = await testnetTransactionCountHex(fromAddr);
           const fee = await suggestFee(action.chainIdHex);
           const gasHex =
             action.gasLimitHex ?? fee.gasLimit ?? TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
@@ -7495,16 +7551,19 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           // p.vaultId and the assert passes on the sanctioned path; an
           // UNINTENDED swap during the nonce/fee awaits aborts (caught below,
           // finally restores the prior vault).
-          const r = await submitMlDsaTx({
-            to: action.to,
-            value: valueWeiHex,
-            ...(data !== undefined ? { data } : {}),
-            gas: gasHex,
-            nonce: nonceHex,
-            maxFeePerGas,
-            maxPriorityFeePerGas,
-            chainIdHex: action.chainIdHex,
-          }, p.vaultId);
+          const r = await submitTrackedTx(
+            {
+              to: action.to,
+              value: valueWeiHex,
+              ...(data !== undefined ? { data } : {}),
+              gas: gasHex,
+              maxFeePerGas,
+              maxPriorityFeePerGas,
+              chainIdHex: action.chainIdHex,
+            },
+            p.vaultId,
+            { from: fromAddr, chainIdHex: action.chainIdHex },
+          );
           txHash = r.txHash;
         } catch (e) {
           broadcastError = (e as Error).message ?? "send failed";
@@ -9852,7 +9911,15 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
             fromAddress: fromAddr,
           }),
         );
-        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
+        // PRESERVE the plan's build-time nonce (the previewed tx — and, for a
+        // deploy, its expectedContractAddress — bind it; overriding would diverge
+        // from the preview). Still routed through the tracker so the nonce is
+        // RECORDED, advancing a subsequent cross-path send past it.
+        const { txHash, via } = await submitTrackedTx(txReq, boundVaultId, {
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          preferredNonceHex: txReq.nonce,
+        });
         return { ok: true, txHash, via };
       } catch (e) {
         const err = e as Error & {
@@ -10753,10 +10820,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         }
       }
       try {
-        // Local pending-nonce: max(committed, last-submitted+1) so a 2nd tx
-        // sent before the 1st commits gets the NEXT nonce instead of reusing
-        // it (the chain has no pending-nonce read). See nextNonceHex.
-        const nonceHex = await nextNonceHex(fromAddr, p.chainIdHex);
         const fee = await suggestFee(p.chainIdHex);
         // T4-04 (Item D, b1): if the popup bound the exact fee it displayed,
         // sign THAT instead of a second operator read (closes the display-vs-
@@ -10795,22 +10858,23 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
           bound?.maxPriorityFeePerGasHex ?? fee.maxPriorityFeePerGas,
           maxFeePerGas,
         );
-        const txReq: EthSendTxFields = {
+        const txReq: Omit<EthSendTxFields, "nonce"> = {
           to: p.to,
           value: p.valueWeiHex,
           ...(p.data !== undefined ? { data: p.data } : {}),
           gas: gasHex,
-          nonce: nonceHex,
           maxFeePerGas,
           maxPriorityFeePerGas,
           chainIdHex: p.chainIdHex,
         };
-        const { txHash, via } = await submitMlDsaTx(txReq, boundVaultId);
-        // Advance the local pending-nonce now that the submit was accepted, so
-        // a 2nd tx sent before this one commits doesn't reuse this nonce.
-        // Awaited (small session write) so the next send sees it immediately.
-        // Only the success path reaches here — a reject throws to the catch.
-        await recordSubmittedNonce(fromAddr, p.chainIdHex, nonceHex);
+        // submitTrackedTx picks the pending-tracker nonce (max(committed,
+        // last-submitted+1), TTL-healed) and records it ONCE on success, so a 2nd
+        // tx (from ANY path) sent before this one commits gets the NEXT nonce.
+        const { txHash, via, nonceHex } = await submitTrackedTx(
+          txReq,
+          boundVaultId,
+          { from: fromAddr, chainIdHex: p.chainIdHex },
+        );
         // Part 3: SW-authoritative daily-cap count. A daily-mode passkey-
         // unlocked send was just submitted — append to the usage ledger here
         // (success path only) so the SW, not the popup, is the counter.
