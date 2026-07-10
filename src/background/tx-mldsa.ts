@@ -160,8 +160,9 @@ const SUBMIT_METHOD = "mesh_submitTx";
  *  over); mempool-WRAPPED (`upstream unavailable: mempool: <admission>`) = an
  *  admission decision about a tx (propagate — every operator answers the same). */
 const UPSTREAM_UNAVAILABLE_CODE = -32047;
-/** D1: cap read-failover attempts so one bad call doesn't walk the whole ~40-op
- *  fleet — after this many failover-band errors, surface the last one. */
+/** D1: cap read-failover attempts so one bad call doesn't walk the whole fleet
+ *  (the v0.4.0 four-cluster DVT set; its exact size comes from the SDK registry
+ *  and can change) — after this many failover-band errors, surface the last one. */
 const READ_FAILOVER_ATTEMPT_CAP = 4;
 /** D2: how long a read-failover-band error deprioritizes an operator (soft, in
  *  memory) so subsequent reads try healthier operators first. Never a hard
