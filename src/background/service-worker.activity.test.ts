@@ -530,7 +530,8 @@ import {
   NO_EVM_RECEIPT_PROOF_RECEIPTS_ROOT,
   NO_EVM_RECEIPT_PROOF_TARGET_RECEIPT_HASH,
 } from "../shared/__fixtures__/golden.js";
-import { submitMlDsaTx } from "./tx-mldsa.js";
+import { submitMlDsaTx, testnetResolveNameConsensus } from "./tx-mldsa.js";
+import { quoteNameCostLythoshi } from "../shared/name-registry.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -739,6 +740,9 @@ beforeEach(() => {
   // Reset to the non-null production-invariant default (see the declaration);
   // the cap gate is kept inert by policy.enabled=false below, not a null id.
   activePasskeyVaultId = "v1";
+  // Non-multisig active vault by default — the multisig-execute tests set this
+  // to a roster and it must not leak into later single-signer submit paths.
+  multisigMetaForTest = null;
   passkeyStateForTest = {
     policy: { enabled: false, mode: "per-tx", limitWei: 0n },
     credentials: [],
@@ -8088,5 +8092,223 @@ describe("nonce unification — submitTrackedTx", () => {
     await recordSubmittedNonce(NONCE_FROM, NONCE_CHAIN, "0x5"); // fresh entry = 5
     rpcResponses["lyth_getTransactionCount"] = 8; // committed jumped to 8
     expect(await nextNonceHex(NONCE_FROM, NONCE_CHAIN)).toBe("0x8"); // committed dominates
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §22.8 name-registry (0x110E) submit handlers — quote / register / propose /
+// accept. Exercises the real SDK encoders + cost curve (the harness spreads the
+// actual SDK), the Phase-3 submitTrackedTx routing, and the fail-safe pre-checks.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("name-registry (0x110E) submit handlers", () => {
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  // 1e9 — the chain base-price floor (config.rs INITIAL_BASE_PRICE); the name
+  // cost fee-unit tracks it.
+  const BASE_PRICE = "0x3b9aca00";
+  const NAME_REGISTRY_ADDR_SUFFIX = "110e";
+
+  function seedNameFeeAndNonce(nonce: number | string = "0x0") {
+    rpcResponses["lyth_getTransactionCount"] = nonce;
+    rpcResponses["lyth_executionUnitPrice"] = {
+      executionUnitPriceLythoshi: BASE_PRICE,
+      basePricePerExecutionUnitLythoshi: BASE_PRICE,
+      priorityTipLythoshi: "0x0",
+      source: "test",
+    };
+  }
+  function hexOfUtf8(s: string): string {
+    return Array.from(new TextEncoder().encode(s))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  const expectedCost = (cat: "human" | "agent", len: number) =>
+    "0x" + quoteNameCostLythoshi(cat, len, BigInt(BASE_PRICE)).toString(16);
+
+  it("wallet-name-quote returns the category + exact cost for a valid human name", async () => {
+    seedNameFeeAndNonce();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-quote",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; category?: string; canonical?: string; costLythoshiHex?: string };
+    expect(r.ok).toBe(true);
+    expect(r.category).toBe("human");
+    expect(r.canonical).toBe("alice.mono");
+    expect(r.costLythoshiHex).toBe(expectedCost("human", 5));
+  });
+
+  it("wallet-name-quote rejects a forbidden-prefix name (no fabricated price)", async () => {
+    seedNameFeeAndNonce();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-quote",
+      payload: { name: "0xfoo.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; invalid?: boolean; costLythoshiHex?: string };
+    expect(r.ok).toBe(false);
+    expect(r.invalid).toBe(true);
+    expect(r.costLythoshiHex).toBeUndefined();
+  });
+
+  it("wallet-name-register submits to 0x110E with value == the quoted cost (WYSIWYS) via the tracker", async () => {
+    seedNameFeeAndNonce("0x7"); // committed nonce 7
+    // default consensus = confirmed-miss => name available
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; txHash?: string; costLythoshiHex?: string };
+    expect(r.ok).toBe(true);
+    expect(r.txHash).toBe(SUBMITTED_TX_HASH);
+    expect(submitMlDsaCalls.length).toBe(1);
+    const tx = submitMlDsaCalls[0] as { to: string; value: string; data: string; nonce: string };
+    expect(tx.to.toLowerCase().endsWith(NAME_REGISTRY_ADDR_SUFFIX)).toBe(true);
+    expect(tx.value).toBe(expectedCost("human", 5));
+    expect(r.costLythoshiHex).toBe(expectedCost("human", 5));
+    expect(tx.nonce).toBe("0x7"); // tracker picked the committed nonce
+    // WYSIWYS: the calldata that signs carries the previewed name.
+    expect(tx.data.includes(hexOfUtf8("alice.mono"))).toBe(true);
+  });
+
+  it("wallet-name-register blocks a taken name (confirmed-hit) with no wasted-fee submit", async () => {
+    seedNameFeeAndNonce();
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: "0x" + "11".repeat(20),
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect((r.reason ?? "").toLowerCase()).toContain("already registered");
+    expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("wallet-name-register requires the caller to own the agent parent", async () => {
+    seedNameFeeAndNonce();
+    // Name-aware: the agent name is free (miss), the parent is owned by someone else.
+    const mock = vi.mocked(testnetResolveNameConsensus);
+    mock.mockImplementation(async (name: string) =>
+      name.startsWith("bot.agent")
+        ? { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" }
+        : { status: "confirmed-hit", addr0x: "0x" + "22".repeat(20), agreeing: 2, detail: "" },
+    );
+    try {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op: "wallet-name-register",
+        payload: { name: "bot.agent.alice.mono", chainIdHex: CHAIN },
+      })) as { ok: boolean; reason?: string };
+      expect(r.ok).toBe(false);
+      expect((r.reason ?? "").toLowerCase()).toContain("parent");
+      expect(submitMlDsaCalls.length).toBe(0);
+    } finally {
+      // Restore the factory behavior (reads the module-level driver, throwing on
+      // an Error value) so the override doesn't leak into later tests.
+      mock.mockImplementation(async (_n: string) => {
+        if (resolveNameConsensusResult instanceof Error) throw resolveNameConsensusResult;
+        return resolveNameConsensusResult;
+      });
+    }
+  });
+
+  it("wallet-name-propose submits a FREE (value 0) transfer for an owned name", async () => {
+    seedNameFeeAndNonce("0x3");
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: DETERMINISTIC_ADDRESS.toLowerCase(),
+      agreeing: 2,
+      detail: "",
+    };
+    const recipient = "0x" + "cd".repeat(20);
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-propose",
+      payload: { name: "alice.mono", recipientAddr0x: recipient, chainIdHex: CHAIN },
+    })) as { ok: boolean; txHash?: string };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(1);
+    const tx = submitMlDsaCalls[0] as { to: string; value: string; data: string };
+    expect(tx.to.toLowerCase().endsWith(NAME_REGISTRY_ADDR_SUFFIX)).toBe(true);
+    expect(tx.value).toBe("0x0"); // propose is free
+    expect(tx.data.includes(hexOfUtf8("alice.mono"))).toBe(true);
+    expect(tx.data.includes("cd".repeat(20))).toBe(true); // recipient in calldata
+  });
+
+  it("wallet-name-propose blocks a name the caller does not own", async () => {
+    seedNameFeeAndNonce();
+    resolveNameConsensusResult = {
+      status: "confirmed-hit",
+      addr0x: "0x" + "99".repeat(20), // someone else
+      agreeing: 2,
+      detail: "",
+    };
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-propose",
+      payload: { name: "alice.mono", recipientAddr0x: "0x" + "cd".repeat(20), chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect((r.reason ?? "").toLowerCase()).toContain("own");
+    expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("wallet-name-propose rejects an invalid recipient address", async () => {
+    seedNameFeeAndNonce();
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-propose",
+      payload: { name: "alice.mono", recipientAddr0x: "not-an-address", chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(submitMlDsaCalls.length).toBe(0);
+  });
+
+  it("wallet-name-accept re-charges the FULL registration cost as value (recipient pays)", async () => {
+    seedNameFeeAndNonce("0x4");
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-accept",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; costLythoshiHex?: string };
+    expect(r.ok).toBe(true);
+    expect(submitMlDsaCalls.length).toBe(1);
+    const tx = submitMlDsaCalls[0] as { to: string; value: string; data: string };
+    expect(tx.to.toLowerCase().endsWith(NAME_REGISTRY_ADDR_SUFFIX)).toBe(true);
+    // The accept fee equals a fresh registration of the same name (finding #2).
+    expect(tx.value).toBe(expectedCost("human", 5));
+    expect(r.costLythoshiHex).toBe(expectedCost("human", 5));
+    expect(tx.data.includes(hexOfUtf8("alice.mono"))).toBe(true);
+  });
+
+  it("a failed submit records no nonce (no gap) and surfaces honestly", async () => {
+    seedNameFeeAndNonce("0x2");
+    submitFailure = Object.assign(new Error("upstream unavailable"), { code: -32045 });
+    const r = (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-name-register",
+      payload: { name: "alice.mono", chainIdHex: CHAIN },
+    })) as { ok: boolean; reason?: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBeTruthy();
+    // No nonce reserved on failure — the next tx reuses the committed nonce.
+    const { nextNonceHex } = await import("./service-worker.js");
+    expect(await nextNonceHex(DETERMINISTIC_ADDRESS, CHAIN)).toBe("0x2");
+  });
+
+  it("rejects name ops on a non-Monolythium chain", async () => {
+    seedNameFeeAndNonce();
+    for (const op of ["wallet-name-quote", "wallet-name-register", "wallet-name-accept"]) {
+      const r = (await dispatchPopup({
+        kind: "popup",
+        op,
+        payload: { name: "alice.mono", chainIdHex: "0x1" },
+      })) as { ok: boolean };
+      expect(r.ok).toBe(false);
+    }
+    expect(submitMlDsaCalls.length).toBe(0);
   });
 });

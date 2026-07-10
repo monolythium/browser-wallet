@@ -35,6 +35,7 @@ import {
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   ML_DSA_65_PUBLIC_KEY_LEN,
   ML_DSA_65_SIGNATURE_LEN,
+  REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT,
   typedBech32ToAddress,
   verifyNoEvmArchiveProofSignatures,
   type NoEvmArchiveSignatureVerification,
@@ -278,6 +279,16 @@ import {
   type NameLabel,
   type NameCache,
 } from "../shared/name-resolution.js";
+import {
+  validateRegisterableName,
+  quoteNameCostLythoshi,
+  nameFeeUnitLythoshi,
+  encodeNameRegisterCall,
+  encodeNameProposeTransferCall,
+  encodeNameAcceptTransferCall,
+  nameRegistryAddressHex,
+  type NameCategory,
+} from "../shared/name-registry.js";
 import { legacyChainBalanceHexToLythoshiHex } from "../shared/chain-units.js";
 import { lythoshiDecimalToLythDecimal } from "../shared/lyth-units.js";
 import { decodeClaimedAmountLythoshi } from "../shared/claimed-log.js";
@@ -1752,6 +1763,78 @@ export async function submitTrackedTx(
   // it immediately. Once per logical tx — the fan-out already happened inside.
   await recordSubmittedNonce(opts.from, opts.chainIdHex, nonceHex);
   return { txHash, via, nonceHex };
+}
+
+// ── Name-registry (0x110E) submit helpers ────────────────────────────────────
+// The register / propose-transfer / accept-transfer flows are standard plaintext
+// `0x110E` precompile calls: SDK-encoded calldata, an exact-match `value` (the
+// U-curve registration cost, 0 for a free propose), routed through the Phase-3
+// tracker-aware submitTrackedTx. No new signing mechanism, no wire change.
+
+/** A 20-byte `0x` address, non-zero. */
+function isNonZeroAddr0x(v: unknown): v is string {
+  return (
+    typeof v === "string" &&
+    /^0x[0-9a-fA-F]{40}$/.test(v) &&
+    !/^0x0{40}$/.test(v)
+  );
+}
+
+/** Shape a submit error into the popup wire form (mirrors the MRV/send paths). */
+function nameSubmitError(e: unknown): {
+  ok: false;
+  reason: string;
+  code?: number;
+  method?: string;
+  via?: string;
+} {
+  const err = e as Error & { code?: number; via?: string; method?: string };
+  const out: { ok: false; reason: string; code?: number; method?: string; via?: string } = {
+    ok: false,
+    reason: err.message ?? "name transaction failed",
+  };
+  if (typeof err.code === "number") out.code = err.code;
+  if (typeof err.method === "string") out.method = err.method;
+  if (typeof err.via === "string") out.via = err.via;
+  return out;
+}
+
+/** Build + submit a name-registry tx via the Phase-3 tracker. Re-reads the fee
+ *  (and, for a priced op, re-quotes the cost from the live base price) right
+ *  BEFORE signing so the signed `value` matches the current base fee — the
+ *  chain enforces `value == cost` exactly (IncorrectFee otherwise). `cost:null`
+ *  is a free op (propose-transfer, value 0). Nonce-safe (tracker picks + records
+ *  once on success). */
+async function submitNameTx(opts: {
+  data: string;
+  cost: { category: NameCategory; primaryLabelLen: number } | null;
+  from: string;
+  chainIdHex: string;
+  boundVaultId: string;
+}): Promise<{ txHash: string; via?: string; costLythoshiHex: string }> {
+  const fee = await suggestFee(opts.chainIdHex);
+  const costLythoshi =
+    opts.cost === null
+      ? 0n
+      : quoteNameCostLythoshi(
+          opts.cost.category,
+          opts.cost.primaryLabelLen,
+          BigInt(fee.baseFeePerGas),
+        );
+  const txReq: Omit<EthSendTxFields, "nonce"> = {
+    to: nameRegistryAddressHex(),
+    value: "0x" + costLythoshi.toString(16),
+    data: opts.data,
+    gas: "0x" + REGISTRY_DEFAULT_EXECUTION_UNIT_LIMIT.toString(16),
+    maxFeePerGas: fee.maxFeePerGas,
+    maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+    chainIdHex: opts.chainIdHex,
+  };
+  const { txHash, via } = await submitTrackedTx(txReq, opts.boundVaultId, {
+    from: opts.from,
+    chainIdHex: opts.chainIdHex,
+  });
+  return { txHash, via, costLythoshiHex: "0x" + costLythoshi.toString(16) };
 }
 
 interface ExecutionUnitPriceQuoteHex {
@@ -9504,6 +9587,203 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         };
       } catch (e) {
         return { ok: false, reason: (e as Error).message ?? "resolve failed" };
+      }
+    }
+    case "wallet-name-quote": {
+      // §22.8 name-registration COST quote (read-only; no submit). Validates
+      // the name (Human/Agent scope + the chain's forbidden prefixes) and prices
+      // it from the LIVE base price (suggestFee.baseFeePerGas ==
+      // lyth_executionUnitPrice.basePricePerExecutionUnitLythoshi — the exact
+      // fee unit the chain's U-curve uses). No-mock: an unquotable cost is an
+      // honest error, never a fabricated price.
+      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name registration is only wired for Monolythium Testnet today" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) {
+        return { ok: false, reason: v.message, invalid: true, invalidReason: v.reason };
+      }
+      try {
+        const fee = await suggestFee(p.chainIdHex);
+        const baseFee = BigInt(fee.baseFeePerGas);
+        const cost = quoteNameCostLythoshi(v.category, v.primaryLabelLen, baseFee);
+        return {
+          ok: true,
+          canonical: v.canonical,
+          category: v.category,
+          parentName: v.parentName,
+          costLythoshiHex: "0x" + cost.toString(16),
+          feeUnitLythoshiHex: "0x" + nameFeeUnitLythoshi(baseFee).toString(16),
+        };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message ?? "couldn't quote the registration cost" };
+      }
+    }
+    case "wallet-name-register": {
+      // §22.8 REGISTER (Human/Agent). Standard plaintext 0x110E call via the
+      // Phase-3 tracker (submitTrackedTx): SDK-encoded calldata, value == the
+      // exact U-curve cost re-quoted right before signing. Fail-safe: the chain
+      // reverts a taken/invalid/unowned name post-inclusion; we pre-check
+      // availability (+ agent-parent ownership) to avoid a wasted-fee revert,
+      // but never fabricate success.
+      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name registration is only wired for Monolythium Testnet today" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) return { ok: false, reason: v.message };
+      if (!isUnlockedV4()) return { ok: false, reason: "wallet locked" };
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) return { ok: false, reason: "wallet locked" };
+      if (await activeVaultIsMultisig()) return { ok: false, reason: MULTISIG_SEND_REFUSAL };
+      // Availability pre-check (advisory — FCFS is authoritative). Block only on
+      // a CONFIRMED hit so a flaky quorum can't wedge the flow; a taken name that
+      // slips through reverts on-chain (fail-safe).
+      try {
+        const avail = await testnetResolveNameConsensus(v.canonical);
+        if (avail.status === "confirmed-hit") {
+          return { ok: false, reason: "That name is already registered." };
+        }
+      } catch {
+        // best-effort — proceed; the chain is authoritative.
+      }
+      // Agent: the caller must own the parent <human>.mono (chain: AgentParentInvalid).
+      if (v.registerableCategory === "agent" && v.parentName !== null) {
+        try {
+          const parent = await testnetResolveNameConsensus(v.parentName);
+          if (parent.status === "confirmed-hit") {
+            if ((parent.addr0x ?? "").toLowerCase() !== fromAddr.toLowerCase()) {
+              return { ok: false, reason: "You must own the parent name to register an agent under it." };
+            }
+          } else if (parent.status === "confirmed-miss") {
+            return { ok: false, reason: "The parent name isn't registered — register it first." };
+          }
+          // disagreement/insufficient → proceed; the chain enforces ownership.
+        } catch {
+          // proceed — the chain enforces.
+        }
+      }
+      try {
+        const r = await submitNameTx({
+          data: encodeNameRegisterCall(v.canonical),
+          cost: { category: v.category, primaryLabelLen: v.primaryLabelLen },
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          boundVaultId,
+        });
+        return {
+          ok: true,
+          txHash: r.txHash,
+          via: r.via,
+          canonical: v.canonical,
+          category: v.category,
+          costLythoshiHex: r.costLythoshiHex,
+        };
+      } catch (e) {
+        return nameSubmitError(e);
+      }
+    }
+    case "wallet-name-propose": {
+      // §22.8 PROPOSE-TRANSFER (owner → recipient). FREE (value 0); opens a 24h
+      // acceptance window on-chain. The recipient must be a resolved 0x address
+      // (the popup forward-resolves a .mono recipient before calling).
+      const p = message.payload as {
+        name?: unknown;
+        recipientAddr0x?: unknown;
+        chainIdHex?: unknown;
+      };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name transfers are only wired for Monolythium Testnet today" };
+      }
+      if (!isNonZeroAddr0x(p.recipientAddr0x)) {
+        return { ok: false, reason: "enter a valid recipient address" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) return { ok: false, reason: v.message };
+      if (!isUnlockedV4()) return { ok: false, reason: "wallet locked" };
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) return { ok: false, reason: "wallet locked" };
+      if (await activeVaultIsMultisig()) return { ok: false, reason: MULTISIG_SEND_REFUSAL };
+      if (p.recipientAddr0x.toLowerCase() === fromAddr.toLowerCase()) {
+        return { ok: false, reason: "The recipient is your own address." };
+      }
+      // Ownership pre-check (advisory): block only on a CONFIRMED owner mismatch.
+      try {
+        const owner = await testnetResolveNameConsensus(v.canonical);
+        if (owner.status === "confirmed-hit") {
+          if ((owner.addr0x ?? "").toLowerCase() !== fromAddr.toLowerCase()) {
+            return { ok: false, reason: "You don't own this name." };
+          }
+        } else if (owner.status === "confirmed-miss") {
+          return { ok: false, reason: "That name isn't registered." };
+        }
+      } catch {
+        // proceed — the chain enforces NotAuthorized.
+      }
+      try {
+        const r = await submitNameTx({
+          data: encodeNameProposeTransferCall(v.canonical, p.recipientAddr0x),
+          cost: null,
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          boundVaultId,
+        });
+        return { ok: true, txHash: r.txHash, via: r.via, canonical: v.canonical };
+      } catch (e) {
+        return nameSubmitError(e);
+      }
+    }
+    case "wallet-name-accept": {
+      // §22.8 ACCEPT-TRANSFER (recipient). PAID: the recipient re-pays the FULL
+      // U-curve registration cost (value == cost), within the 24h window. There
+      // is no on-chain pending-proposal reader, so a stale/absent proposal
+      // reverts post-inclusion (fail-safe) — surfaced honestly, never faked.
+      const p = message.payload as { name?: unknown; chainIdHex?: unknown };
+      if (typeof p?.name !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing name or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "name transfers are only wired for Monolythium Testnet today" };
+      }
+      const v = validateRegisterableName(p.name);
+      if (!v.ok) return { ok: false, reason: v.message };
+      if (!isUnlockedV4()) return { ok: false, reason: "wallet locked" };
+      const fromAddr = getUnlockedAddressV4();
+      if (!fromAddr) return { ok: false, reason: "wallet has no unlocked address" };
+      const boundVaultId = getActiveVaultIdV4();
+      if (boundVaultId === null) return { ok: false, reason: "wallet locked" };
+      if (await activeVaultIsMultisig()) return { ok: false, reason: MULTISIG_SEND_REFUSAL };
+      try {
+        const r = await submitNameTx({
+          data: encodeNameAcceptTransferCall(v.canonical),
+          cost: { category: v.category, primaryLabelLen: v.primaryLabelLen },
+          from: fromAddr,
+          chainIdHex: p.chainIdHex,
+          boundVaultId,
+        });
+        return {
+          ok: true,
+          txHash: r.txHash,
+          via: r.via,
+          canonical: v.canonical,
+          costLythoshiHex: r.costLythoshiHex,
+        };
+      } catch (e) {
+        return nameSubmitError(e);
       }
     }
     case "wallet-resolve-names": {

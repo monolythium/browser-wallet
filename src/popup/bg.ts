@@ -638,6 +638,68 @@ export async function bgWalletResolveName(
   return send("wallet-resolve-name", { name, chainIdHex });
 }
 
+// ── §22.8 name-registry (0x110E) write bridges ───────────────────────────────
+
+/** Read-only cost quote for a name registration (validates + prices; no submit).
+ *  `invalid:true` distinguishes a name-format rejection from a transport error. */
+export async function bgWalletNameQuote(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      canonical: string;
+      category: string;
+      parentName: string | null;
+      costLythoshiHex: string;
+      feeUnitLythoshiHex: string;
+    }
+  | { ok: false; reason?: string; invalid?: boolean; invalidReason?: string }
+> {
+  return send("wallet-name-quote", { name, chainIdHex });
+}
+
+/** Register a Human/Agent `.mono` name — value == the exact U-curve cost. */
+export async function bgWalletNameRegister(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | {
+      ok: true;
+      txHash: string;
+      via?: string;
+      canonical: string;
+      category: string;
+      costLythoshiHex: string;
+    }
+  | { ok: false; reason?: string; code?: number }
+> {
+  return send("wallet-name-register", { name, chainIdHex });
+}
+
+/** Propose transferring an owned name to a recipient (free; opens a 24h window). */
+export async function bgWalletNamePropose(
+  name: string,
+  recipientAddr0x: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; txHash: string; via?: string; canonical: string }
+  | { ok: false; reason?: string; code?: number }
+> {
+  return send("wallet-name-propose", { name, recipientAddr0x, chainIdHex });
+}
+
+/** Accept a pending transfer — the recipient re-pays the full U-curve cost. */
+export async function bgWalletNameAccept(
+  name: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; txHash: string; via?: string; canonical: string; costLythoshiHex: string }
+  | { ok: false; reason?: string; code?: number }
+> {
+  return send("wallet-name-accept", { name, chainIdHex });
+}
+
 // Indexer-status polling for the §28.2.1 staleness banner.
 // All success-path fields nullable: when the method is unavailable or
 // the response is malformed, the handler returns the defensive
