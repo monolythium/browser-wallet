@@ -192,14 +192,6 @@ export function MainMenu({
               hasChevron
             />
           )}
-          {onOpenNames && (
-            <MenuItem
-              icon="contacts"
-              label="Names"
-              onClick={onOpenNames}
-              hasChevron
-            />
-          )}
           {onOpenRiscv && (
             <MenuItem
               icon="contract"
@@ -232,6 +224,14 @@ export function MainMenu({
               icon="sliders"
               label="Features"
               onClick={onOpenFeatures}
+              hasChevron
+            />
+          )}
+          {onOpenNames && (
+            <MenuItem
+              icon="name-tag"
+              label="Names"
+              onClick={onOpenNames}
               hasChevron
             />
           )}
