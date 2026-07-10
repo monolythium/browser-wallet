@@ -172,6 +172,14 @@ export function MainMenu({
             onClick={onContacts}
             hasChevron
           />
+          {onOpenNames && (
+            <MenuItem
+              icon="name-tag"
+              label="Names"
+              onClick={onOpenNames}
+              hasChevron
+            />
+          )}
           <MenuItem
             icon="globe"
             label="Connected sites"
@@ -224,14 +232,6 @@ export function MainMenu({
               icon="sliders"
               label="Features"
               onClick={onOpenFeatures}
-              hasChevron
-            />
-          )}
-          {onOpenNames && (
-            <MenuItem
-              icon="name-tag"
-              label="Names"
-              onClick={onOpenNames}
               hasChevron
             />
           )}
