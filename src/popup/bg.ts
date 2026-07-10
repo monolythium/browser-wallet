@@ -728,6 +728,20 @@ export async function bgWalletHasName(
   return send("wallet-has-name", { chainIdHex });
 }
 
+/** §22.8 reverse-resolve an address → its canonical `*.mono` name, QUORUM-checked
+ *  (mirrors forward-resolve) and cache-backed. Display-only. Returns
+ *  `name: null` on a confirmed miss, a quorum disagreement, or any error — the
+ *  caller then shows the bech32m address (never a single-operator name). */
+export async function bgWalletReverseName(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; name: string | null; cached?: boolean; status?: string }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-reverse-name", { address, chainIdHex });
+}
+
 // Indexer-status polling for the §28.2.1 staleness banner.
 // All success-path fields nullable: when the method is unavailable or
 // the response is malformed, the handler returns the defensive

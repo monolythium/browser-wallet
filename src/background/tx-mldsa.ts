@@ -23,6 +23,8 @@ import {
 import { isWithinSaneBound } from "../shared/operator-bounds.js";
 import { bech32mToAddress } from "../shared/bech32m.js";
 import { extractMempoolInner } from "../shared/send-error.js";
+import { userAddressForNativeRpc } from "../shared/address-format.js";
+import { parseMonoName } from "../shared/name-resolution.js";
 
 /** Sentinel thrown by the fail-closed vault-binding assert when the active
  *  vault changed between approval and the synchronous pre-sign read (NN-01
@@ -742,6 +744,120 @@ export async function testnetResolveNameConsensus(
   return agreed === null
     ? { status: "confirmed-miss", addr0x: null, agreeing: answered.length, detail: "" }
     : { status: "confirmed-hit", addr0x: agreed, agreeing: answered.length, detail: "" };
+}
+
+/** Reverse name-resolution consensus (address → canonical `*.mono` name).
+ *
+ * The DIRECT MIRROR of {@link testnetResolveNameConsensus}: the same operator
+ * set (`getActiveOperators`), the same genesis-pin gate, the same parallel-probe-
+ * with-timeout, the same quorum threshold ({@link NAME_RESOLVE_QUORUM_MIN}), and
+ * the same EXACT-MATCH agreement reduce — only the RPC (`lyth_nameOf`) and the
+ * agreed value (a name string, not an address) differ.
+ *
+ * FAIL-CLOSED for display integrity: a `*.mono` name is shown to the user only
+ * on `confirmed-hit` (quorum agreed the SAME name). A single rogue operator
+ * returning a different name → `disagreement` → no name (the UI shows the
+ * bech32m address). This closes the SINGLE-ROGUE mislabel model — critical on
+ * send-review, where a wrong name could trick the user about who they're paying.
+ */
+export interface ReverseNameConsensusResult {
+  status: "confirmed-hit" | "confirmed-miss" | "disagreement" | "insufficient";
+  /** The agreed canonical `*.mono` name — `confirmed-hit` only, else null. */
+  name: string | null;
+  /** Operators that returned a definitive answer (a name OR an explicit miss). */
+  agreeing: number;
+  /** Per-operator outcome, for the SW console (diagnostics only). */
+  detail: string;
+}
+
+export async function testnetReverseNameConsensus(
+  address: string,
+): Promise<ReverseNameConsensusResult> {
+  const operators = getActiveOperators();
+  if (operators.length === 0) {
+    throw new Error("no Monolythium Testnet operators configured");
+  }
+  const addrParam = userAddressForNativeRpc(address);
+
+  const probes = operators.map(async (op) => {
+    // GAP #11: skip operators whose chain identity doesn't match our pin.
+    if (!(await verifyOperatorGenesis(op.rpc, BALANCE_GENESIS_PROBE_TIMEOUT_MS))) {
+      return { name: op.name, resolved: null, answered: false, reason: "untrusted genesis" };
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), BALANCE_CONSENSUS_TIMEOUT_MS);
+    try {
+      const res = await fetch(op.rpc, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "lyth_nameOf", params: [addrParam] }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        return { name: op.name, resolved: null, answered: false, reason: `HTTP ${res.status}` };
+      }
+      const body = (await res.json()) as {
+        result?: { name?: unknown } | null;
+        error?: { message?: string };
+      };
+      if (body.error) {
+        return { name: op.name, resolved: null, answered: false, reason: body.error.message ?? "rpc error" };
+      }
+      const name =
+        body.result !== null && typeof body.result === "object"
+          ? (body.result as { name?: unknown }).name
+          : null;
+      // No reverse record → a DEFINITIVE miss answer (null), still a quorum vote.
+      if (name === null || name === undefined) {
+        return { name: op.name, resolved: null, answered: true, reason: null };
+      }
+      // A malformed / non-`*.mono` value is NOT counted (never displayed).
+      if (typeof name !== "string" || parseMonoName(name) === null) {
+        return { name: op.name, resolved: null, answered: false, reason: "malformed name" };
+      }
+      return { name: op.name, resolved: name, answered: true, reason: null };
+    } catch (e) {
+      const err = e as Error;
+      return {
+        name: op.name,
+        resolved: null,
+        answered: false,
+        reason: err.name === "AbortError" ? "timeout" : err.message,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  const responses = await Promise.all(probes);
+  const answered = responses.filter((r) => r.answered);
+
+  if (answered.length < NAME_RESOLVE_QUORUM_MIN) {
+    return {
+      status: "insufficient",
+      name: null,
+      agreeing: answered.length,
+      detail: responses.map((r) => `${r.name}:${r.reason ?? "ok"}`).join("; "),
+    };
+  }
+
+  // EXACT-MATCH agreement: every definitive answer must be identical — all the
+  // SAME name, or all miss. A single divergent answer (a rogue's different name,
+  // or a hit-vs-miss split) → disagreement → fail-closed (show the address).
+  const distinct = new Set(answered.map((r) => (r.resolved === null ? "MISS" : r.resolved)));
+  if (distinct.size !== 1) {
+    return {
+      status: "disagreement",
+      name: null,
+      agreeing: answered.length,
+      detail: answered.map((r) => `${r.name}:${r.resolved ?? "MISS"}`).join("; "),
+    };
+  }
+
+  const agreed = answered[0]!.resolved;
+  return agreed === null
+    ? { status: "confirmed-miss", name: null, agreeing: answered.length, detail: "" }
+    : { status: "confirmed-hit", name: agreed, agreeing: answered.length, detail: "" };
 }
 
 function normalizeFields(req: EthSendTxFields): NativeEvmTxFields {

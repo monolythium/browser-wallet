@@ -307,8 +307,16 @@ import {
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   testnetResolveNameConsensus,
+  testnetReverseNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
+import {
+  STORAGE_KEY_REVERSE_NAME_CACHE,
+  validateReverseNameCache,
+  getReverseName,
+  putReverseName,
+  evictExpiredReverseNames,
+} from "../shared/reverse-name-cache.js";
 import {
   deriveWsUrl,
   getWsClient,
@@ -9917,6 +9925,56 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: true, hasName: false };
       } catch {
         return { ok: true, hasName: true }; // reverse unreadable → don't nag
+      }
+    }
+    case "wallet-reverse-name": {
+      // §22.8 reverse-resolve (address → canonical *.mono name), QUORUM-checked
+      // mirroring forward-resolve (testnetReverseNameConsensus). Display-only.
+      // Cache-first (mono.names.reverse, 30-min TTL); a miss triggers the quorum
+      // read. FAIL-CLOSED: only a confirmed-hit returns a name; a quorum
+      // disagreement / insufficient responders / any error returns null (the UI
+      // shows the bech32m address — never a single-operator-asserted name). A
+      // confirmed-miss (quorum agrees "no name") is cached as null.
+      const p = message.payload as { address?: unknown; chainIdHex?: unknown };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "reverse name resolution is only wired for Monolythium Testnet today" };
+      }
+      const addrLower = p.address.toLowerCase();
+      const now = Date.now();
+      const raw = await new Promise<unknown>((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_REVERSE_NAME_CACHE], (res) =>
+          resolve(res?.[STORAGE_KEY_REVERSE_NAME_CACHE]),
+        );
+      });
+      const cache = validateReverseNameCache(raw) ?? {};
+      const hit = getReverseName(cache, addrLower, now);
+      if (hit !== undefined) {
+        return { ok: true, name: hit.name, cached: true };
+      }
+      const persist = async (name: string | null) => {
+        const next = putReverseName(evictExpiredReverseNames(cache, now), addrLower, name, now);
+        await new Promise<void>((resolve) => {
+          chrome.storage.local.set({ [STORAGE_KEY_REVERSE_NAME_CACHE]: next }, () => resolve());
+        });
+      };
+      try {
+        const consensus = await testnetReverseNameConsensus(addrLower);
+        if (consensus.status === "confirmed-hit") {
+          await persist(consensus.name);
+          return { ok: true, name: consensus.name };
+        }
+        if (consensus.status === "confirmed-miss") {
+          await persist(null); // cache the agreed miss
+          return { ok: true, name: null };
+        }
+        // disagreement / insufficient — transient; do NOT cache. Show bech32m.
+        return { ok: true, name: null, status: consensus.status };
+      } catch {
+        // Transport / no-operators error → fail-closed to bech32m, not cached.
+        return { ok: true, name: null, status: "error" };
       }
     }
     case "wallet-resolve-names": {

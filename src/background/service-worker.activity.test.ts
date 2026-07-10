@@ -135,6 +135,12 @@ vi.mock("./tx-mldsa.js", () => ({
     if (resolveNameConsensusResult instanceof Error) throw resolveNameConsensusResult;
     return resolveNameConsensusResult;
   }),
+  // Quorum reverse-resolution (wallet-reverse-name). Driven by
+  // `reverseNameConsensusResult` — set a status object, or an Error to throw.
+  testnetReverseNameConsensus: vi.fn(async (_addr: string) => {
+    if (reverseNameConsensusResult instanceof Error) throw reverseNameConsensusResult;
+    return reverseNameConsensusResult;
+  }),
   // The DEFAULT (and only) submit path: `wallet-send-tx` plus the dApp
   // eth_sendTransaction / MRV / multisig paths all route here. It feeds
   // `submitMlDsaCalls` so the metadata-only invariant (`opKind` / cluster
@@ -312,6 +318,15 @@ let resolveNameConsensusResult:
       detail: string;
     }
   | Error = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
+// Drives the mocked testnetReverseNameConsensus (wallet-reverse-name).
+let reverseNameConsensusResult:
+  | {
+      status: "confirmed-hit" | "confirmed-miss" | "disagreement" | "insufficient";
+      name: string | null;
+      agreeing: number;
+      detail: string;
+    }
+  | Error = { status: "confirmed-miss", name: null, agreeing: 2, detail: "" };
 
 // Networks: only the bits the handlers touch. the testnet chain id is
 // "MlDsa" per the SW's gating helper; suggestFee returns a deterministic
@@ -537,6 +552,10 @@ import {
   validateNameLedger,
   getOwnedNames,
 } from "../shared/name-ledger.js";
+import {
+  STORAGE_KEY_REVERSE_NAME_CACHE,
+  validateReverseNameCache,
+} from "../shared/reverse-name-cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // chrome.* stub
@@ -736,6 +755,7 @@ beforeEach(() => {
   rpcErrors = {};
   submitFailure = null;
   resolveNameConsensusResult = { status: "confirmed-miss", addr0x: null, agreeing: 2, detail: "" };
+  reverseNameConsensusResult = { status: "confirmed-miss", name: null, agreeing: 2, detail: "" };
   approvalDecision = { ok: true };
   enqueuedApprovals.length = 0;
   mockRejectAllPending.mockClear();
@@ -8439,5 +8459,79 @@ describe("name-registry (0x110E) submit handlers", () => {
       payload: { chainIdHex: "0x1" },
     })) as { ok: boolean; hasName: boolean };
     expect(r.hasName).toBe(true);
+  });
+});
+
+// ── wallet-reverse-name (quorum reverse .mono display; fail-closed to bech32m) ──
+describe("wallet-reverse-name (quorum reverse-resolve)", () => {
+  const CHAIN = TESTNET_CHAIN_ID_HEX;
+  const ADDR = "0x" + "ab".repeat(20);
+
+  const call = (address = ADDR, chainIdHex = CHAIN) =>
+    dispatchPopup({
+      kind: "popup",
+      op: "wallet-reverse-name",
+      payload: { address, chainIdHex },
+    }) as Promise<{ ok: boolean; name?: string | null; cached?: boolean; status?: string }>;
+
+  it("returns + caches the quorum-agreed name on a confirmed hit", async () => {
+    reverseNameConsensusResult = {
+      status: "confirmed-hit",
+      name: "alice.mono",
+      agreeing: 3,
+      detail: "",
+    };
+    const r = await call();
+    expect(r.ok).toBe(true);
+    expect(r.name).toBe("alice.mono");
+    const cache = validateReverseNameCache(storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE]);
+    expect(cache![ADDR.toLowerCase()]!.name).toBe("alice.mono");
+  });
+
+  it("caches a confirmed miss as null (no re-query churn)", async () => {
+    reverseNameConsensusResult = { status: "confirmed-miss", name: null, agreeing: 3, detail: "" };
+    const r = await call();
+    expect(r.name).toBeNull();
+    const cache = validateReverseNameCache(storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE]);
+    expect(cache![ADDR.toLowerCase()]!.name).toBeNull();
+  });
+
+  it("shows NO name (null) and does NOT cache when the quorum disagrees (anti-mislabel)", async () => {
+    reverseNameConsensusResult = { status: "disagreement", name: null, agreeing: 3, detail: "a:x;b:y" };
+    const r = await call();
+    expect(r.name).toBeNull();
+    expect(r.status).toBe("disagreement");
+    // transient — not cached
+    const cache = validateReverseNameCache(storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE]) ?? {};
+    expect(cache[ADDR.toLowerCase()]).toBeUndefined();
+  });
+
+  it("shows NO name on insufficient responders / error (fail-closed to bech32m)", async () => {
+    reverseNameConsensusResult = new Error("no operators");
+    const r = await call();
+    expect(r.ok).toBe(true);
+    expect(r.name).toBeNull();
+    expect(r.status).toBe("error");
+  });
+
+  it("serves from cache without re-querying (fast path)", async () => {
+    // Seed a cached name, then set consensus to a DIFFERENT name — the cache wins.
+    storageLocal[STORAGE_KEY_REVERSE_NAME_CACHE] = {
+      [ADDR.toLowerCase()]: { name: "cached.mono", ts: Date.now() },
+    };
+    reverseNameConsensusResult = {
+      status: "confirmed-hit",
+      name: "different.mono",
+      agreeing: 3,
+      detail: "",
+    };
+    const r = await call();
+    expect(r.cached).toBe(true);
+    expect(r.name).toBe("cached.mono");
+  });
+
+  it("is testnet-gated", async () => {
+    const r = await call(ADDR, "0x1");
+    expect(r.ok).toBe(false);
   });
 });
