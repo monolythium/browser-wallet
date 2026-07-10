@@ -46,6 +46,7 @@ import { Send } from "./pages/Send";
 import { Settings } from "./pages/Settings";
 import { Security } from "./pages/Security";
 import { Features } from "./pages/Features";
+import { Names } from "./pages/Names";
 import { Theme } from "./pages/Theme";
 import { DisplayPreferences } from "./pages/DisplayPreferences";
 import { LanguageSettings } from "./pages/LanguageSettings";
@@ -176,6 +177,7 @@ type Screen =
   | "multisig-list"
   | "security"
   | "features"
+  | "names"
   | "theme"
   | "display-preferences"
   | "language-settings"
@@ -256,6 +258,9 @@ export default function App() {
   // popup matches the pre-v5 experience exactly. Flip on via Settings →
   // Features.
   const agentCommerceEnabled = useFeature("AGENT_COMMERCE");
+  // §22.8 name registration — gated behind REGISTRY (name resolution stays on
+  // always; only the register/manage page is flag-gated).
+  const registryEnabled = useFeature("REGISTRY");
   const developerMode = useFeature("DEVELOPER_MODE");
   // Custom chains only exist where the strict connect-src allows their RPC:
   // never in a hardened (production) build, and even in a dev build only under
@@ -1734,6 +1739,12 @@ export default function App() {
         <Features onBack={navigateBack} />
       )}
 
+      {/* §22.8 Names — register / manage `.mono` names. Gated behind REGISTRY;
+         reached from the main menu (which only shows the row when enabled). */}
+      {screen === "names" && registryEnabled && (
+        <Names chainIdHex={activeChain.chainId} onBack={navigateBack} />
+      )}
+
       {/* Theme page. Reached from the Display & Preferences hub via navigateTo,
          so onBack (navigateBack) returns to the hub. */}
       {screen === "theme" && <Theme onBack={navigateBack} />}
@@ -1916,6 +1927,7 @@ export default function App() {
           {...(agentCommerceEnabled
             ? { onAgentPolicy: () => navigateTo("agent-policy") }
             : {})}
+          {...(registryEnabled ? { onOpenNames: () => navigateTo("names") } : {})}
           onSettings={() => navigateTo("settings")}
           // Display & Preferences — the same hub the Settings page routes to.
           // navigateTo pushes "main-menu" so back returns here.

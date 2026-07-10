@@ -41,6 +41,9 @@ interface MainMenuProps {
   /** Optional — automation spending-limits management. Dev-gated; when
    *  omitted (or developer mode is off) the menu item is hidden. */
   onAgentPolicy?: () => void;
+  /** Optional — §22.8 name registration / management. Gated behind REGISTRY;
+   *  omitted (row hidden) when the feature is off. */
+  onOpenNames?: () => void;
   onSettings: () => void;
   /** Opens the Display & Preferences hub (theme / language / display
    *  currency) — the same hub the Settings page routes to. */
@@ -81,6 +84,7 @@ export function MainMenu({
   onOperators,
   onMultisig,
   onAgentPolicy,
+  onOpenNames,
   onSettings,
   onDisplayPreferences,
   onAbout,
@@ -185,6 +189,14 @@ export function MainMenu({
               icon="multisig"
               label="Multisig wallets"
               onClick={onMultisig}
+              hasChevron
+            />
+          )}
+          {onOpenNames && (
+            <MenuItem
+              icon="contacts"
+              label="Names"
+              onClick={onOpenNames}
               hasChevron
             />
           )}
