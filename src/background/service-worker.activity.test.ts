@@ -8535,3 +8535,165 @@ describe("wallet-reverse-name (quorum reverse-resolve)", () => {
     expect(r.ok).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-activity-page — #16(b) cursor-driven "load more"
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-activity-page", () => {
+  const activityRow = (block: number, amount: string) => ({
+    blockHeight: block,
+    txIndex: 0,
+    logIndex: 0,
+    kind: "transfer",
+    direction: "out",
+    counterparty: "0xdead",
+    tokenId: null,
+    amount,
+    cluster: null,
+    weightBps: null,
+    subKind: null,
+  });
+
+  async function page(cursor: unknown, chainIdHex = TESTNET_CHAIN_ID_HEX) {
+    return (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-page",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex, cursor },
+    })) as
+      | { ok: true; rows: Array<{ kind: string }>; nextCursor: string | null }
+      | { ok: false; reason?: string };
+  }
+
+  it("fetches the next page cursor-driven, maps rows, returns the next cursor", async () => {
+    rpcResponses["lyth_getAddressActivity"] = {
+      schemaVersion: 1,
+      address: DETERMINISTIC_ADDRESS,
+      limit: 30,
+      nextCursor: "0xnext",
+      activity: [activityRow(70, "1.5"), activityRow(69, "2.5")],
+    };
+    const r = await page("0xstart");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows).toHaveLength(2);
+    expect(r.rows[0]?.kind).toBe("tx_send");
+    expect(r.nextCursor).toBe("0xnext");
+    // The cursor is passed as the 3rd RPC param (address, limit, cursor).
+    const call = rpcCalls.find((c) => c.method === "lyth_getAddressActivity");
+    expect(call?.params[1]).toBe(30);
+    expect(call?.params[2]).toBe("0xstart");
+  });
+
+  it("returns nextCursor:null on a short (final) page → 'load more' hides", async () => {
+    rpcResponses["lyth_getAddressActivity"] = {
+      schemaVersion: 1,
+      address: DETERMINISTIC_ADDRESS,
+      limit: 30,
+      nextCursor: null,
+      activity: [activityRow(70, "1.5")],
+    };
+    const r = await page("0xstart");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.nextCursor).toBeNull();
+  });
+
+  it("surfaces a transient RPC error (never a fabricated 'no more pages')", async () => {
+    rpcErrors["lyth_getAddressActivity"] = { code: -32603, message: "operator down" };
+    const r = await page("0xstart");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("operator down");
+  });
+
+  it("rejects a missing cursor", async () => {
+    const r = await page(undefined);
+    expect(r.ok).toBe(false);
+  });
+
+  it("is testnet-gated", async () => {
+    const r = await page("0xstart", "0x1");
+    expect(r.ok).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallet-activity-txfeed — #B3-2 indexer-off fallback
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("wallet-activity-txfeed", () => {
+  const feedTx = (partial: Record<string, unknown>) => ({
+    txHash: "0x" + "ab".repeat(32),
+    blockHash: "0x" + "cd".repeat(32),
+    blockNumber: 90,
+    blockTimestamp: null,
+    txIndex: 0,
+    from: "0x" + "22".repeat(20),
+    to: DETERMINISTIC_ADDRESS,
+    nonce: 0,
+    value: "1000000000000000000",
+    executionUnitLimit: 21000,
+    maxExecutionFeeLythoshi: "0",
+    priorityTipLythoshi: "0",
+    fee: {},
+    input: "0x",
+    receipt: null,
+    ...partial,
+  });
+
+  async function fallback(chainIdHex = TESTNET_CHAIN_ID_HEX) {
+    return (await dispatchPopup({
+      kind: "popup",
+      op: "wallet-activity-txfeed",
+      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex },
+    })) as { ok: true; rows: Array<{ kind: string }> } | { ok: false; reason?: string };
+  }
+
+  it("maps recent txs involving the address, drops the rest", async () => {
+    rpcResponses["lyth_txFeed"] = {
+      schemaVersion: 1,
+      latestHeight: 100,
+      limit: 50,
+      nextCursor: null,
+      transactions: [
+        feedTx({ from: "0x" + "22".repeat(20), to: DETERMINISTIC_ADDRESS }), // receive
+        feedTx({ from: DETERMINISTIC_ADDRESS, to: "0x" + "33".repeat(20), blockNumber: 91 }), // send
+        feedTx({ from: "0x" + "44".repeat(20), to: "0x" + "55".repeat(20), blockNumber: 92 }), // not ours
+      ],
+    };
+    const r = await fallback();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows).toHaveLength(2);
+    expect(r.rows.map((x) => x.kind).sort()).toEqual(["tx_receive", "tx_send"]);
+    // Called lyth_txFeed with the fallback limit, no cursor.
+    const call = rpcCalls.find((c) => c.method === "lyth_txFeed");
+    expect(call?.params[0]).toBe(50);
+  });
+
+  it("returns an empty list when no txFeed row involves the address (honest empty)", async () => {
+    rpcResponses["lyth_txFeed"] = {
+      schemaVersion: 1,
+      latestHeight: 100,
+      limit: 50,
+      nextCursor: null,
+      transactions: [feedTx({ from: "0x" + "44".repeat(20), to: "0x" + "55".repeat(20) })],
+    };
+    const r = await fallback();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows).toHaveLength(0);
+  });
+
+  it("returns ok:false on a txFeed RPC error (popup keeps the honest empty state)", async () => {
+    rpcErrors["lyth_txFeed"] = { code: -32601, message: "method not found" };
+    const r = await fallback();
+    expect(r.ok).toBe(false);
+  });
+
+  it("is testnet-gated", async () => {
+    const r = await fallback("0x1");
+    expect(r.ok).toBe(false);
+  });
+});

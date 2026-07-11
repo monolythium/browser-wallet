@@ -252,6 +252,9 @@ const COALESCED_POPUP_OPS = new Set<string>([
   "wallet-balance",
   "wallet-activity-get",
   "wallet-indexer-snapshot",
+  // #B3-2 indexer-off fallback: an idempotent read fired automatically by the
+  // empty-state effect; coalesce so multiple mounts don't double-scan txFeed.
+  "wallet-activity-txfeed",
 ]);
 
 function send<T>(op: string, payload?: unknown): Promise<T> {
@@ -560,6 +563,43 @@ export async function bgWalletActivityGet(
   | { ok: false; reason?: string }
 > {
   return send("wallet-activity-get", { address, chainIdHex });
+}
+
+/** #16(b) "load more" — fetch the NEXT (older) page of the confirmed
+ *  address-activity timeline, cursor-driven. Read-only + additive: the SW does
+ *  NOT cache/reconcile these rows; the popup appends them (deduped) below the
+ *  cached window. Returns the mapped confirmed rows + the next keyset cursor
+ *  (null → timeline exhausted, hide "load more"). A transient/operator error
+ *  returns `ok:false` — never a fabricated "no more pages". */
+export async function bgWalletActivityPage(
+  address: string,
+  chainIdHex: string,
+  cursor: string,
+): Promise<
+  | {
+      ok: true;
+      rows: import("../shared/activity.js").ConfirmedRow[];
+      nextCursor: string | null;
+    }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-page", { address, chainIdHex, cursor });
+}
+
+/** #B3-2 indexer-OFF fallback — fetch recent activity from the GLOBAL
+ *  `lyth_txFeed` (served by a block scan even on indexer-OFF operators),
+ *  FILTERED to this address + mapped to confirmed rows. The popup fires this
+ *  ONLY when the per-address timeline is empty for a benign reason (indexer
+ *  disabled / genuinely empty) — never on a transient error. `ok:false` or an
+ *  empty `rows` → the popup keeps the honest empty state (no fabrication). */
+export async function bgWalletActivityTxFeed(
+  address: string,
+  chainIdHex: string,
+): Promise<
+  | { ok: true; rows: import("../shared/activity.js").ConfirmedRow[] }
+  | { ok: false; reason?: string }
+> {
+  return send("wallet-activity-txfeed", { address, chainIdHex });
 }
 
 /** Dismiss a TERMINAL (dropped/expired) pending row from the activity list.

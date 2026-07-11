@@ -9,20 +9,24 @@
 //
 // Empty/error/stale state copy is locked verbatim per the plan.
 
-import { useCallback, useMemo, useState } from "react";
-import { bgDismissPendingTx } from "../bg.js";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { bgDismissPendingTx, bgWalletActivityPage } from "../bg.js";
 import { useActivity } from "../hooks/useActivity.js";
 import { useActivityKind } from "../hooks/useActivityKind.js";
 import { useNameResolution } from "../hooks/useNameResolution.js";
 import { useReverseNamesEager, preferReverseNameLabel } from "../hooks/useReverseName.js";
 import { useIndexerStatus } from "../hooks/useIndexerStatus.js";
+import { useTxFeedFallback } from "../hooks/useTxFeedFallback.js";
+import { txFeedFallbackEnabled } from "../../shared/tx-feed.js";
 import { ActivityRow } from "./ActivityRow.js";
 import { ActivityDetail } from "./ActivityDetail.js";
 import { IndexerStaleBanner } from "./IndexerStaleBanner.js";
 import {
   confirmedRowDedupKey,
+  dedupeAppendConfirmed,
   mergeActivityNewestFirst,
   type ActivityRow as ActivityRowType,
+  type ConfirmedRow,
 } from "../../shared/activity.js";
 import type { WalletActivityKindEnvelope } from "../../shared/activity-kind.js";
 import type { NameLabel } from "../../shared/name-resolution.js";
@@ -246,6 +250,47 @@ function SuppressedHistoryNote({ hasOwnRows }: { hasOwnRows: boolean }) {
   );
 }
 
+/** #16(b) "load more" footer — a full-width action below the timeline that
+ *  fetches the next (older) cursor page. Shows a spinner-less "Loading…" while
+ *  in flight and an inline retry on the last page's error. */
+function LoadMoreFooter({
+  loading,
+  error,
+  onLoadMore,
+}: {
+  loading: boolean;
+  error: string | null;
+  onLoadMore: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onLoadMore}
+      disabled={loading}
+      style={{
+        width: "100%",
+        padding: "12px 18px",
+        marginTop: 4,
+        textAlign: "center",
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: error !== null ? "var(--err)" : "var(--fg-400)",
+        background: "transparent",
+        border: 0,
+        cursor: loading ? "default" : "pointer",
+        fontFamily: "inherit",
+        opacity: loading ? 0.6 : 1,
+      }}
+    >
+      {loading
+        ? "Loading…"
+        : error !== null
+          ? "Couldn't load more. Tap to retry."
+          : "Load more"}
+    </button>
+  );
+}
+
 export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById }: ActivityListProps) {
   const { cache, pending, failed, loading, errors, refresh } = useActivity(
     addr,
@@ -269,6 +314,42 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
   // the envelope is irrelevant.
   const activityKind = useActivityKind(addr, chainIdHex);
 
+  // #16(b) pagination ("load more"). Older pages the user explicitly requested
+  // are held in popup-only state — they are NOT persisted to the confirmed cache
+  // (that stays the newest read-through window), so a background poll never
+  // clobbers them and they cost no extra reconcile. `moreCursor === undefined`
+  // means "no load-more yet → use the cache's page-1 cursor"; once the user pages
+  // it holds the advancing keyset cursor, insulated from poll churn on the cache.
+  const [olderPages, setOlderPages] = useState<ConfirmedRow[]>([]);
+  const [moreCursor, setMoreCursor] = useState<string | null | undefined>(undefined);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState<string | null>(null);
+  // Reset pagination whenever the account / chain changes (the older pages
+  // belong to the previous address).
+  useEffect(() => {
+    setOlderPages([]);
+    setMoreCursor(undefined);
+    setLoadingMore(false);
+    setMoreError(null);
+  }, [addr, chainIdHex]);
+  const activeCursor = moreCursor === undefined ? cache?.nextCursor ?? null : moreCursor;
+  const loadMore = useCallback(() => {
+    if (!addr || !chainIdHex || activeCursor === null || loadingMore) return;
+    const cursor = activeCursor;
+    void (async () => {
+      setLoadingMore(true);
+      setMoreError(null);
+      const r = await bgWalletActivityPage(addr, chainIdHex, cursor);
+      if (r.ok) {
+        setOlderPages((prev) => dedupeAppendConfirmed(prev, r.rows));
+        setMoreCursor(r.nextCursor);
+      } else {
+        setMoreError(r.reason ?? "Couldn't load more activity.");
+      }
+      setLoadingMore(false);
+    })();
+  }, [addr, chainIdHex, activeCursor, loadingMore]);
+
   // CX1 — row tapped → open the compact tx-detail modal.
   const [selected, setSelected] = useState<{
     row: ActivityRowType;
@@ -280,6 +361,42 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
   // NotificationRecords, not ActivityRowType.
   const [selectedFailed, setSelectedFailed] = useState<NotificationRecord | null>(
     null,
+  );
+
+  // Confirmed on-chain history — SUPPRESSED while the chain is non-live
+  // (hideConfirmed) since it's stale/untrusted right now. Pending + failed
+  // (the wallet's own in-flight / failed sends) are always kept. The cached
+  // newest-window is extended (deduped) with any older pages the user loaded
+  // via "load more" (#16(b)); those live in popup-only state, so a background
+  // poll refreshing `cache.confirmed` keeps them appended.
+  const confirmed = useMemo(
+    () =>
+      hideConfirmed ? [] : dedupeAppendConfirmed(cache?.confirmed ?? [], olderPages),
+    [hideConfirmed, cache, olderPages],
+  );
+
+  const hasIndexerError = !!errors.ipc || !!errors.addressActivity;
+
+  // #B3-2 indexer-OFF fallback. When the confirmed timeline is empty for a BENIGN
+  // reason (indexer disabled / genuinely empty — NOT a transient error, which
+  // still surfaces/failovers per Phase 1), consult the GLOBAL `lyth_txFeed`
+  // (served by a block scan on indexer-OFF operators), filtered to this address,
+  // so recent activity still shows instead of a blank list. No-mock: a failed /
+  // empty txFeed → no rows → the honest empty state below.
+  const fallbackEnabled = txFeedFallbackEnabled({
+    hideConfirmed: !!hideConfirmed,
+    confirmedCount: confirmed.length,
+    failedCount: failed.length,
+    hasIndexerError,
+    kind: activityKind.envelope?.kind ?? null,
+  });
+  const txFeedFallback = useTxFeedFallback(addr, chainIdHex, fallbackEnabled);
+  // The rows the list actually renders: the primary confirmed timeline, or — when
+  // it's empty and the fallback is active — the txFeed-derived rows in its place.
+  const effectiveConfirmed = useMemo(
+    () =>
+      confirmed.length === 0 && fallbackEnabled ? txFeedFallback.rows : confirmed,
+    [confirmed, fallbackEnabled, txFeedFallback.rows],
   );
 
   // Derive counterparty addresses for name resolution. Pulls from both
@@ -296,10 +413,10 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
       seen.add(lower);
       out.push(lower);
     };
-    if (cache) for (const r of cache.confirmed) collect(counterpartyOf(r));
+    for (const r of effectiveConfirmed) collect(counterpartyOf(r));
     for (const r of pending) collect(counterpartyOf(r));
     return out.sort();
-  }, [cache, pending]);
+  }, [effectiveConfirmed, pending]);
 
   const { labels } = useNameResolution(counterpartyAddrs, chainIdHex);
   // §22.8 quorum reverse names — PROACTIVELY resolved for the visible rows but
@@ -312,26 +429,17 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
       ? undefined
       : preferReverseNameLabel(cp, reverseNames.get(cp.toLowerCase()), labels.get(cp));
 
-  // Confirmed on-chain history — SUPPRESSED while the chain is non-live
-  // (hideConfirmed) since it's stale/untrusted right now. Pending + failed
-  // (the wallet's own in-flight / failed sends) are always kept.
-  const confirmed = useMemo(
-    () => (hideConfirmed ? [] : cache?.confirmed ?? []),
-    [hideConfirmed, cache],
-  );
   // Single chronological list (newest-first), pending + confirmed + failed
   // interleaved — failed rows no longer pin to the top. `rows` (pending +
   // confirmed) is kept for the loading/empty/error guards below.
   const rows: ActivityRowType[] = useMemo(
-    () => [...pending, ...confirmed],
-    [pending, confirmed],
+    () => [...pending, ...effectiveConfirmed],
+    [pending, effectiveConfirmed],
   );
   const merged = useMemo(
-    () => mergeActivityNewestFirst(pending, confirmed, failed),
-    [pending, confirmed, failed],
+    () => mergeActivityNewestFirst(pending, effectiveConfirmed, failed),
+    [pending, effectiveConfirmed, failed],
   );
-
-  const hasIndexerError = !!errors.ipc || !!errors.addressActivity;
 
   return (
     <>
@@ -365,6 +473,18 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
         // IPC failure / total indexer outage with nothing to fall back to.
         if (!hideConfirmed && hasIndexerError && rows.length === 0 && failed.length === 0) {
           return errorState(() => void refresh());
+        }
+        // #B3-2 — the indexer-off txFeed fallback is in flight and hasn't yielded
+        // rows yet: show the skeleton (not the empty state) so the empty copy
+        // doesn't flash before the fallback resolves.
+        if (
+          !hideConfirmed &&
+          fallbackEnabled &&
+          txFeedFallback.loading &&
+          rows.length === 0 &&
+          failed.length === 0
+        ) {
+          return loadingSkeleton();
         }
         // Empty state. The kind probe (useActivityKind) discriminates
         // not_found / indexer_disabled / pruned / private / unknown
@@ -422,6 +542,16 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
                 </div>
               );
             })}
+            {/* #16(b) "load more" — only when the confirmed timeline has an older
+                page (or the last page fetch errored → retry). Suppressed while the
+                chain is non-live (confirmed history is hidden then). */}
+            {!hideConfirmed && (activeCursor !== null || moreError !== null) && (
+              <LoadMoreFooter
+                loading={loadingMore}
+                error={moreError}
+                onLoadMore={loadMore}
+              />
+            )}
           </div>
         );
       })()}

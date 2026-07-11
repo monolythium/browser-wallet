@@ -23,6 +23,7 @@ import {
   mapDelegationHistoryToRows,
   mapAddressActivityToRows,
   delegationKeySet,
+  dedupeAppendConfirmed,
   mergeIndexerSnapshot,
   applyCapturedClusterNames,
   mergeActivityNewestFirst,
@@ -2442,5 +2443,97 @@ describe("mergeIndexerSnapshot — claim amount survives the rebuild (the reopen
       | ClaimRow
       | undefined;
     expect(claim?.amountDecimal).toBe("1.5"); // not erased to null on rebuild
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #16(b) pagination — cache cursor + dedupe-append
+// ─────────────────────────────────────────────────────────────────────────────
+
+function send(block: number, tx: number, amount: string): TxSendRow {
+  return {
+    kind: "tx_send",
+    blockHeight: block,
+    txIndex: tx,
+    logIndex: 0,
+    counterparty: "0xdead",
+    amountDecimal: amount,
+  };
+}
+
+describe("mergeIndexerSnapshot — page-1 nextCursor storage (#16(b))", () => {
+  it("stores nextCursor on the cache when supplied", () => {
+    const r = mergeIndexerSnapshot(
+      { activity: [], delegation: [], nextCursor: "0xcursor1" },
+      1,
+    );
+    expect(r.nextCursor).toBe("0xcursor1");
+  });
+
+  it("stores null nextCursor (timeline exhausted)", () => {
+    const r = mergeIndexerSnapshot({ activity: [], delegation: [], nextCursor: null }, 1);
+    expect(r.nextCursor).toBeNull();
+  });
+
+  it("omits the field entirely when no cursor is supplied (byte-identical legacy shape)", () => {
+    const r = mergeIndexerSnapshot({ activity: [], delegation: [] }, 1);
+    expect("nextCursor" in r).toBe(false);
+  });
+});
+
+describe("validateActivityCache — nextCursor round-trip (#16(b))", () => {
+  it("preserves a string cursor", () => {
+    const v = validateActivityCache({ confirmed: [], lastFetchedAtMs: 1, nextCursor: "0xc" });
+    expect(v?.nextCursor).toBe("0xc");
+  });
+
+  it("preserves a null cursor", () => {
+    const v = validateActivityCache({ confirmed: [], lastFetchedAtMs: 1, nextCursor: null });
+    expect(v?.nextCursor).toBeNull();
+  });
+
+  it("tolerates a legacy cache with no cursor field", () => {
+    const v = validateActivityCache({ confirmed: [], lastFetchedAtMs: 1 });
+    expect(v).not.toBeNull();
+    expect("nextCursor" in v!).toBe(false);
+  });
+
+  it("drops a malformed cursor value", () => {
+    const v = validateActivityCache({ confirmed: [], lastFetchedAtMs: 1, nextCursor: 42 });
+    expect(v).not.toBeNull();
+    expect("nextCursor" in v!).toBe(false);
+  });
+});
+
+describe("dedupeAppendConfirmed — load-more append (#16(b))", () => {
+  it("appends a fresh older page after the existing rows", () => {
+    const existing = [send(200, 0, "2"), send(199, 0, "1.9")];
+    const page = [send(198, 0, "1.8"), send(197, 0, "1.7")];
+    const out = dedupeAppendConfirmed(existing, page);
+    expect(out).toHaveLength(4);
+    expect(out.slice(0, 2)).toEqual(existing);
+    expect((out[2] as TxSendRow).blockHeight).toBe(198);
+  });
+
+  it("drops rows already shown (cursor overlap between pages)", () => {
+    const existing = [send(200, 0, "2"), send(199, 0, "1.9")];
+    // page repeats the 199 row (overlap) + a genuinely new 198 row
+    const page = [send(199, 0, "1.9"), send(198, 0, "1.8")];
+    const out = dedupeAppendConfirmed(existing, page);
+    expect(out).toHaveLength(3);
+    expect(out.filter((r) => r.kind !== "pending_tx" && r.blockHeight === 199)).toHaveLength(1);
+  });
+
+  it("dedupes within the incoming page too", () => {
+    const page = [send(198, 0, "1.8"), send(198, 0, "1.8")];
+    const out = dedupeAppendConfirmed([], page);
+    expect(out).toHaveLength(1);
+  });
+
+  it("returns a copy of existing when the page is empty", () => {
+    const existing = [send(200, 0, "2")];
+    const out = dedupeAppendConfirmed(existing, []);
+    expect(out).toEqual(existing);
+    expect(out).not.toBe(existing);
   });
 });

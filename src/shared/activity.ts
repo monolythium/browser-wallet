@@ -396,6 +396,12 @@ export type ActivityRow = PendingTxRow | ConfirmedRow;
 export interface ActivityCache {
   confirmed: ConfirmedRow[];
   lastFetchedAtMs: number;
+  /** Keyset cursor for the NEXT (older) page of the `lyth_getAddressActivity`
+   *  timeline, surfaced from the page-1 envelope's `nextCursor` (#16(b)). Null
+   *  (or absent on a legacy cache) when the timeline is exhausted — the popup's
+   *  "load more" affordance is hidden. Stored in the cache so it survives the
+   *  30 s read-through window (a cache-hit poll keeps the same affordance). */
+  nextCursor?: string | null;
 }
 
 /** Persisted shape under `mono.activity.pending.<addr>.<chain>`. Always a
@@ -673,7 +679,17 @@ export function validateActivityCache(input: unknown): ActivityCache | null {
     const row = validateActivityRow(raw);
     if (row && row.kind !== "pending_tx") confirmed.push(row);
   }
-  return { confirmed, lastFetchedAtMs: r.lastFetchedAtMs };
+  // Optional pagination cursor (#16(b)): tolerate a string or null; a legacy
+  // cache (no field) or a malformed value degrades to "no more pages".
+  const nextCursor =
+    typeof r.nextCursor === "string" || r.nextCursor === null
+      ? r.nextCursor
+      : undefined;
+  return {
+    confirmed,
+    lastFetchedAtMs: r.lastFetchedAtMs,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  };
 }
 
 /** Validate the pending-row cache shape. Returns null on any failure. */
@@ -1414,6 +1430,28 @@ export function confirmedRowDedupKey(r: ConfirmedRow): string {
   return base;
 }
 
+/** Append a freshly-fetched OLDER activity page onto the rows already shown,
+ *  dropping any row already present (keyed by {@link confirmedRowDedupKey}) so a
+ *  cursor overlap between page N and page N+1 — or an event surfaced on both the
+ *  address-activity and delegation-history streams — never double-renders. The
+ *  incoming page keeps its incoming order; `mergeActivityNewestFirst` sorts the
+ *  combined list at render, so appended (older) rows fall to the bottom. Pure —
+ *  drives the popup's "load more" (#16(b) pagination). */
+export function dedupeAppendConfirmed(
+  existing: readonly ConfirmedRow[],
+  incoming: readonly ConfirmedRow[],
+): ConfirmedRow[] {
+  const seen = new Set(existing.map(confirmedRowDedupKey));
+  const out: ConfirmedRow[] = [...existing];
+  for (const row of incoming) {
+    const k = confirmedRowDedupKey(row);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(row);
+  }
+  return out;
+}
+
 /** Build the cross-stream suppression key-set from delegation-history rows.
  *  Exposed for the SW handler / tests so they can drive mapAddressActivityToRows. */
 export function delegationKeySet(
@@ -1558,6 +1596,10 @@ export function mergeIndexerSnapshot(
   fresh: {
     activity: RawAddressActivity[];
     delegation: RawDelegationHistory[];
+    /** Page-1 `nextCursor` from the address-activity envelope (#16(b)); stored
+     *  on the cache to drive "load more". Absent → no cursor field is written
+     *  (byte-identical to the pre-pagination cache). */
+    nextCursor?: string | null;
   },
   now: number,
   prior?: { pending?: PendingTxRow[]; confirmed?: ConfirmedRow[] },
@@ -1595,7 +1637,13 @@ export function mergeIndexerSnapshot(
   // doesn't blink out when applyLocalClaims retires the local copy.
   const withClaimAmounts = prior ? applyStickyClaimAmount(named, prior) : named;
 
-  return { confirmed: withClaimAmounts, lastFetchedAtMs: now };
+  return {
+    confirmed: withClaimAmounts,
+    lastFetchedAtMs: now,
+    // Conditional add: a caller that doesn't page (existing callers/tests) omits
+    // `nextCursor`, so the cache stays byte-identical to the pre-pagination shape.
+    ...(fresh.nextCursor !== undefined ? { nextCursor: fresh.nextCursor } : {}),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -246,6 +246,7 @@ import {
   activityPendingKey,
   activityLocalClaimsKey,
   mergeIndexerSnapshot,
+  mapAddressActivityToRows,
   transitionPending,
   applyLocalClaims,
   reconcilePending,
@@ -259,6 +260,7 @@ import {
   type RawAddressActivity,
   type RawDelegationHistory,
 } from "../shared/activity.js";
+import { mapTxFeedToRows, type RawTxFeedTx } from "../shared/tx-feed.js";
 import { isCurrencyCode, type CurrencyCode } from "../shared/iso4217.js";
 import {
   sentAddressesKey,
@@ -4811,6 +4813,9 @@ interface IndexerSnapshotRaw {
   addressLabel: unknown | null;
   delegationHistory: unknown[];
   addressActivity: unknown[];
+  /** Page-1 keyset `nextCursor` for the address-activity timeline (#16(b));
+   *  null when exhausted / legacy bare-array operator. */
+  addressActivityCursor: string | null;
   errors: Record<string, string>;
 }
 
@@ -4996,6 +5001,11 @@ async function readNativeAgentStateLookup(
  *  most what it asked for (P5-005). */
 const ADDRESS_ACTIVITY_RPC_LIMIT = 30;
 const DELEGATION_HISTORY_RPC_LIMIT = 20;
+/** Rows requested from the GLOBAL `lyth_txFeed` for the indexer-off activity
+ *  fallback (#B3-2), before filtering to the queried address. The chain caps
+ *  txFeed at 200; the block-scan that backs it (indexer-off path) is
+ *  budget-bounded regardless, so this is a request hint, not a scan bound. */
+const TXFEED_FALLBACK_LIMIT = 50;
 
 /** Extract the row array from a `lyth_getAddressActivity` response, tolerating
  *  BOTH shapes during the v2 fleet migration: a legacy operator returns a bare
@@ -5031,6 +5041,22 @@ function extractAddressActivity(value: unknown, limit: number): unknown[] {
     return [];
   }
   return rows.length > limit ? rows.slice(0, limit) : rows;
+}
+
+/** Read the keyset `nextCursor` from a `lyth_getAddressActivity` v2 envelope
+ *  (#16(b)) so the popup can page the timeline. A legacy bare-array response
+ *  (no envelope) or any shape lacking a string cursor → `null` (timeline
+ *  exhausted / not paginable). The chain emits `nextCursor` only when a FULL
+ *  page returned (more rows may exist strictly before the last), else null. */
+function extractAddressActivityCursor(value: unknown): string | null {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { nextCursor?: unknown }).nextCursor === "string"
+  ) {
+    return (value as { nextCursor: string }).nextCursor;
+  }
+  return null;
 }
 
 /** Parallel-fetch the indexer streams used by popup-facing
@@ -5110,6 +5136,7 @@ async function fetchIndexerSnapshot(
       addressActivity.value,
       ADDRESS_ACTIVITY_RPC_LIMIT,
     ),
+    addressActivityCursor: extractAddressActivityCursor(addressActivity.value),
     errors,
   };
 }
@@ -5248,6 +5275,46 @@ function validateRawDelegationList(input: unknown[]): RawDelegationHistory[] {
   const out: RawDelegationHistory[] = [];
   for (const raw of input) {
     const v = validateRawDelegationHistory(raw);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+/** Validate one `lyth_txFeed` transaction into the wallet-internal RawTxFeedTx
+ *  (the subset the indexer-off fallback consumes). Partial-data preferred: a
+ *  malformed row is dropped, the rest survive. */
+function validateRawTxFeedTx(input: unknown): RawTxFeedTx | null {
+  if (input === null || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  if (!isFiniteNum(r.blockNumber)) return null;
+  if (!isFiniteNum(r.txIndex)) return null;
+  if (typeof r.from !== "string") return null;
+  if (r.to !== null && typeof r.to !== "string") return null;
+  if (typeof r.value !== "string") return null;
+  if (typeof r.input !== "string") return null;
+  return {
+    blockNumber: r.blockNumber,
+    txIndex: r.txIndex,
+    from: r.from,
+    to: r.to,
+    value: r.value,
+    input: r.input,
+  };
+}
+
+/** Extract + validate the `transactions` array from a `lyth_txFeed` envelope
+ *  (`{ schemaVersion, latestHeight, limit, nextCursor, transactions }`).
+ *  Anything else → `[]` (defensive, matches the other stream extractors). */
+function validateRawTxFeedList(value: unknown): RawTxFeedTx[] {
+  const txs =
+    value !== null &&
+    typeof value === "object" &&
+    Array.isArray((value as { transactions?: unknown }).transactions)
+      ? (value as { transactions: unknown[] }).transactions
+      : [];
+  const out: RawTxFeedTx[] = [];
+  for (const raw of txs) {
+    const v = validateRawTxFeedTx(raw);
     if (v) out.push(v);
   }
   return out;
@@ -9240,10 +9307,14 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
       // cluster name is threaded onto its confirmed row (the indexer stream
       // carries only the numeric id, §C). prevConfirmed keeps the name sticky
       // across the rebuild once reconcilePending drops the pending row.
-      const nextCache = mergeIndexerSnapshot({ activity, delegation }, now, {
-        pending: prevPending,
-        confirmed: prevCache?.confirmed ?? [],
-      });
+      const nextCache = mergeIndexerSnapshot(
+        { activity, delegation, nextCursor: fresh.addressActivityCursor },
+        now,
+        {
+          pending: prevPending,
+          confirmed: prevCache?.confirmed ?? [],
+        },
+      );
       const reconciled = reconcilePending(prevPending, nextCache.confirmed);
       const reconciledHashes = new Set(reconciled.map((r) => r.txHash));
       // Indexer-lag bridge (open-surface display path). A tx confirmed via the
@@ -9513,6 +9584,89 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         });
       }
       return { ok: true, cache: nextCache, pending: committedPending, errors: fresh.errors };
+    }
+    case "wallet-activity-page": {
+      // #16(b) "load more" — fetch the NEXT (older) page of the address-activity
+      // timeline, cursor-driven, and return the mapped confirmed rows + the next
+      // cursor. READ-ONLY + ADDITIVE: NO caching, NO pending reconcile, NO
+      // notifications — the popup appends these older rows below the cached
+      // window (deduped by confirmedRowDedupKey). The richer, fund-adjacent
+      // wallet-activity-get path is deliberately untouched.
+      const p = message.payload as {
+        address?: unknown;
+        chainIdHex?: unknown;
+        cursor?: unknown;
+      };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (typeof p.cursor !== "string" || p.cursor.length === 0) {
+        return { ok: false, reason: "missing cursor" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "activity paging is only wired for Monolythium Testnet today" };
+      }
+      if (isDemoAddrSentinel(p.address)) {
+        return { ok: false, reason: "demo placeholder address — no chain query" };
+      }
+      const pageAddr = userAddressForNativeRpc(p.address);
+      const pageRes = await settleTestnetRpc<unknown>("lyth_getAddressActivity", [
+        pageAddr,
+        ADDRESS_ACTIVITY_RPC_LIMIT,
+        p.cursor,
+      ]);
+      // A transient/operator error surfaces to the caller (the popup keeps the
+      // already-shown rows + a retry) — it is NEVER masked as "no more pages".
+      if (pageRes.error !== null) {
+        return { ok: false, reason: pageRes.error };
+      }
+      const pageRows = validateRawActivityList(
+        extractAddressActivity(pageRes.value, ADDRESS_ACTIVITY_RPC_LIMIT),
+      );
+      // Map the address-activity stream ALONE for an older page (no
+      // delegation-history join): kind:"delegation" entries still map to
+      // delegate/undelegate/redelegate/claim rows; the empty key-set means no
+      // cross-stream suppression (there is no second stream to dedupe against).
+      const rows = mapAddressActivityToRows(pageRows, new Set<string>());
+      return {
+        ok: true,
+        rows,
+        nextCursor: extractAddressActivityCursor(pageRes.value),
+      };
+    }
+    case "wallet-activity-txfeed": {
+      // #B3-2 indexer-OFF fallback — surface recent activity from `lyth_txFeed`
+      // (a GLOBAL feed that indexer-OFF operators still serve via a block scan),
+      // FILTERED to txs involving this address. READ-ONLY + ADDITIVE: NO cache
+      // write, NO reconcile, NO notifications. The popup fires this ONLY when the
+      // per-address timeline is empty for a benign reason (indexer-disabled /
+      // genuinely-empty) — never to mask a transient error (that still surfaces +
+      // failovers per Phase 1). No-mock: a failed / empty txFeed → no rows → the
+      // popup shows the honest empty state (never fabricated activity).
+      const p = message.payload as { address?: unknown; chainIdHex?: unknown };
+      if (typeof p?.address !== "string" || typeof p?.chainIdHex !== "string") {
+        return { ok: false, reason: "missing address or chainIdHex" };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "txFeed fallback is only wired for Monolythium Testnet today" };
+      }
+      if (isDemoAddrSentinel(p.address)) {
+        return { ok: false, reason: "demo placeholder address — no chain query" };
+      }
+      const feedRes = await settleTestnetRpc<unknown>("lyth_txFeed", [
+        TXFEED_FALLBACK_LIMIT,
+      ]);
+      // txFeed itself failing (transient, or the operator lacks the
+      // TransactionsInBlock capability) → ok:false; the popup keeps the honest
+      // empty state, it does NOT fabricate rows.
+      if (feedRes.error !== null) {
+        return { ok: false, reason: feedRes.error };
+      }
+      const rows = mapTxFeedToRows(
+        validateRawTxFeedList(feedRes.value),
+        p.address,
+      );
+      return { ok: true, rows };
     }
     case "wallet-activity-failed": {
       // Failed txs are NOT in the success-only indexer activity stream, so the
