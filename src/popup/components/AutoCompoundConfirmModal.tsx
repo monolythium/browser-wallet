@@ -67,8 +67,8 @@ export function AutoCompoundConfirmModal({
       title={enabling ? "Turn on auto-compound" : "Turn off auto-compound"}
       description={
         enabling
-          ? "Future rewards will restake automatically."
-          : "Rewards will stop restacking automatically."
+          ? "Future rewards will be claimed and delegated back automatically."
+          : "Rewards will stop compounding — claim them manually."
       }
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
