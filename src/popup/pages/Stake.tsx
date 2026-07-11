@@ -35,6 +35,7 @@ import { AutovoteSelector } from "../components/AutovoteSelector";
 import { ClusterPicker } from "../components/ClusterPicker";
 import { RedelegateForm } from "../components/RedelegateForm";
 import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
+import { AutoCompoundSection } from "../components/AutoCompoundSection";
 import { StakeForm } from "../components/StakeForm";
 import { UnstakeForm } from "../components/UnstakeForm";
 import type { DelegationRejection } from "../components/DelegationRejectedBanner";
@@ -958,6 +959,10 @@ export function Stake({
                 )}
               </div>
             )}
+
+            {/* §23 auto-compound — a dedicated, explained section on the Delegate
+                page (self-gated: shown only for a LIVE pending-rewards read). */}
+            <AutoCompoundSection rewards={rewards} isMock={rewardsMock} chainId={chainId} />
 
             {/* Existing delegations — manage Unstake / Redelegate per row */}
             {delegations !== null && delegations.rows.length > 0 && (
