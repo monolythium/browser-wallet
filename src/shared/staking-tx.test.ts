@@ -30,6 +30,8 @@ import {
   encodeRedelegate,
   encodeUndelegate,
   encodeSetAutoCompound,
+  autoCompoundTxRequest,
+  AUTO_COMPOUND_UNIT_LIMIT_HEX,
   percentToBps,
 } from "./staking-tx.js";
 
@@ -140,6 +142,20 @@ describe("encodeSetAutoCompound", () => {
     expect(on).not.toBe(off);
     expect(on.endsWith("1")).toBe(true);
     expect(off.endsWith("0")).toBe(true);
+  });
+});
+
+describe("autoCompoundTxRequest — the submit shape (non-payable 0x100A call)", () => {
+  it("targets 0x100A with value 0 + the setAutoCompound calldata + a clear opKind", () => {
+    for (const enabled of [true, false]) {
+      const req = autoCompoundTxRequest(enabled, "0x10F2C");
+      expect(req.to).toBe(DELEGATION_PRECOMPILE);
+      expect(req.valueWeiHex).toBe("0x0"); // non-payable — no fund transfer
+      expect(req.chainIdHex).toBe("0x10F2C");
+      expect(req.data).toBe(encodeSetAutoCompound(enabled));
+      expect(req.executionUnitLimitHex).toBe(AUTO_COMPOUND_UNIT_LIMIT_HEX);
+      expect(req.opKind).toBe("set-auto-compound");
+    }
   });
 });
 

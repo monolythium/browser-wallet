@@ -15,12 +15,14 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Icon } from "../Icon";
 import { hoverBg } from "../hover";
 import { RewardCard, pendingRewardsArePositive } from "../components/RewardCard";
+import { AutoCompoundConfirmModal } from "../components/AutoCompoundConfirmModal";
 import {
   bgStakingClusterDirectory,
   bgStakingDelegations,
   bgStakingPendingRewards,
   bgWalletBalance,
   bgWalletSendTx,
+  bgWalletFeeSuggestion,
   type ClusterDirectoryEntry,
   type DelegationsView,
   type PendingRewardsView,
@@ -32,6 +34,8 @@ import {
   DELEGATION_PRECOMPILE,
   effectiveWeightWholeLythoshi,
   encodeClaimRewards,
+  autoCompoundTxRequest,
+  AUTO_COMPOUND_UNIT_LIMIT_HEX,
 } from "../../shared/staking-tx";
 import {
   lythoshiToLythDecimal,
@@ -58,6 +62,7 @@ interface DelegationsProps {
 // Pending-rewards poll cadence — matches App.tsx BALANCE_POLL_MS (3 s) so the
 // wallet keeps one refresh rhythm.
 const REWARDS_POLL_MS = 3_000;
+
 
 export function Delegations({
   account,
@@ -97,6 +102,64 @@ export function Delegations({
     const t = setTimeout(() => setClaimResult(null), 1500);
     return () => clearTimeout(t);
   }, [claimConfirmed]);
+
+  // ── Auto-compound toggle (§23; GLOBAL per-wallet flag on 0x100A) ──────────────
+  // acTarget !== null ⇒ the confirm modal is open for that TARGET value.
+  const [acTarget, setAcTarget] = useState<boolean | null>(null);
+  const [acSubmitting, setAcSubmitting] = useState(false);
+  const [acError, setAcError] = useState<string | null>(null);
+  const [acFeeDisplay, setAcFeeDisplay] = useState<string | null>(null);
+  // The value we're awaiting the on-chain re-read to reflect (STRICT — the
+  // toggle shows the actual `rewards.autoCompound` until the poll confirms the
+  // flip; never an optimistic lie). null ⇒ not in flight.
+  const [acPendingTarget, setAcPendingTarget] = useState<boolean | null>(null);
+
+  // Clear the in-flight state once the polled re-read reflects the target flag.
+  useEffect(() => {
+    if (acPendingTarget === null || rewards === null) return;
+    if (rewards.autoCompound === acPendingTarget) setAcPendingTarget(null);
+  }, [rewards, acPendingTarget]);
+
+  const currentPendingLythoshi = useMemo(
+    () => (rewards === null ? 0n : parseHexQuantity(rewards.totalAmountWei) ?? 0n),
+    [rewards],
+  );
+
+  const openAutoCompoundConfirm = (enabled: boolean) => {
+    setAcTarget(enabled);
+    setAcError(null);
+    setAcFeeDisplay(null);
+    // Best-effort fee estimate (limit × per-unit price). On any failure the
+    // confirm shows an honest "fee applies" note — never a fabricated number.
+    void (async () => {
+      const r = await bgWalletFeeSuggestion(chainId);
+      if (!r.ok) return;
+      const price = parseHexQuantity(r.suggestion.maxPricePerExecutionUnitLythoshiHex);
+      const limit = parseHexQuantity(AUTO_COMPOUND_UNIT_LIMIT_HEX);
+      if (price === null || limit === null) return;
+      setAcFeeDisplay(lythoshiToLythDecimal(price * limit));
+    })();
+  };
+
+  const confirmAutoCompound = async () => {
+    if (acTarget === null) return;
+    const target = acTarget;
+    setAcSubmitting(true);
+    setAcError(null);
+    try {
+      const r = await bgWalletSendTx(autoCompoundTxRequest(target, chainId));
+      if (r.ok) {
+        setAcPendingTarget(target); // await the strict re-read
+        setAcTarget(null); // close the modal
+      } else {
+        setAcError(r.reason ?? "Couldn't update auto-compound.");
+      }
+    } catch (e) {
+      setAcError((e as Error).message ?? "Couldn't update auto-compound.");
+    } finally {
+      setAcSubmitting(false);
+    }
+  };
 
   // Load active delegations + cluster directory + balance + rewards on
   // mount. The fan-out is identical to the Stake page's pick-step
@@ -267,8 +330,21 @@ export function Delegations({
             onClaim={() => void handleClaim()}
             claimDisabled={claimSubmitting || claimInFlight}
             claimPending={claimSubmitting || claimInFlight}
+            onSetAutoCompound={openAutoCompoundConfirm}
+            autoCompoundPending={acPendingTarget !== null}
           />
         )}
+
+        <AutoCompoundConfirmModal
+          open={acTarget !== null}
+          enabling={acTarget ?? false}
+          pendingLythoshi={currentPendingLythoshi}
+          feeLythDisplay={acFeeDisplay}
+          submitting={acSubmitting}
+          error={acError}
+          onConfirm={() => void confirmAutoCompound()}
+          onCancel={() => setAcTarget(null)}
+        />
 
         {/* Claim result toast */}
         {claimResult !== null && (
