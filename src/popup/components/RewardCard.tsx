@@ -74,6 +74,16 @@ interface RewardCardProps {
    *  amount / Claim-all button), hiding the per-cluster breakdown + mock
    *  footer. Default `false` (the full card). */
   compact?: boolean;
+  /** §23 auto-compound toggle. When provided (and the read is LIVE — not
+   *  `isMock`), the full card renders an On/Off row for the wallet's global
+   *  auto-compound preference (`rewards.autoCompound`). Flipping calls this with
+   *  the TARGET value; the parent owns the confirm + submit + re-read. Omit to
+   *  hide the row (opt-in — legacy call sites render unchanged). */
+  onSetAutoCompound?: (enabled: boolean) => void;
+  /** True while an auto-compound toggle tx is in flight — disables the toggle
+   *  and shows an "Updating…" state (strict: the flag only flips after the
+   *  post-tx re-read, never optimistically). Default false. */
+  autoCompoundPending?: boolean;
 }
 
 export function RewardCard({
@@ -86,6 +96,8 @@ export function RewardCard({
   claimPending = false,
   showAdvancedAnalytics = true,
   compact = false,
+  onSetAutoCompound,
+  autoCompoundPending = false,
 }: RewardCardProps) {
   const clusterById = useMemo(() => {
     const m = new Map<number, ClusterDirectoryEntry>();
@@ -318,6 +330,42 @@ export function RewardCard({
         </span>
       </div>
 
+      {/* §23 auto-compound toggle — a GLOBAL per-wallet preference. Shown only
+          for a LIVE read (never for a `via:"mock"` / illustrative flag — no-mock)
+          and only when the parent wires the submit. Flipping enables/disables
+          auto-compound; ENABLING also claims pending rewards (disclosed in the
+          parent's confirm). */}
+      {onSetAutoCompound !== undefined && !isMock && (
+        <div style={autoCompoundRow}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--fg-100)" }}>
+              Auto-compound
+            </span>
+            <span style={{ fontSize: 9.5, color: "var(--fg-400)", lineHeight: 1.35 }}>
+              Rewards restake automatically
+            </span>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={rewards.autoCompound}
+            aria-label="Toggle auto-compound"
+            disabled={autoCompoundPending}
+            onClick={() => onSetAutoCompound(!rewards.autoCompound)}
+            style={{
+              ...autoCompoundToggle,
+              background: rewards.autoCompound ? "var(--gold-bg)" : "rgba(255,255,255,0.04)",
+              borderColor: rewards.autoCompound ? "var(--gold)" : "var(--fg-700)",
+              color: rewards.autoCompound ? "var(--gold)" : "var(--fg-300)",
+              opacity: autoCompoundPending ? 0.5 : 1,
+              cursor: autoCompoundPending ? "default" : "pointer",
+            }}
+          >
+            {autoCompoundPending ? "Updating…" : rewards.autoCompound ? "On" : "Off"}
+          </button>
+        </div>
+      )}
+
       {/* Per-cluster breakdown — gated behind TRADING_INTERFACE
           (§28.5 Q29). When the flag is off, only the total + claim
           button stay visible. */}
@@ -430,6 +478,30 @@ const cardLabel: CSSProperties = {
   color: "var(--fg-400)",
   letterSpacing: "0.14em",
   textTransform: "uppercase",
+};
+
+const autoCompoundRow: CSSProperties = {
+  marginTop: 10,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.02)",
+};
+
+const autoCompoundToggle: CSSProperties = {
+  flexShrink: 0,
+  padding: "5px 14px",
+  borderRadius: 8,
+  border: "1px solid",
+  fontFamily: "var(--f-sans)",
+  fontSize: 11,
+  fontWeight: 600,
+  minWidth: 58,
+  transition: "all 150ms var(--e-out)",
 };
 
 // Staking-read failure banner.
