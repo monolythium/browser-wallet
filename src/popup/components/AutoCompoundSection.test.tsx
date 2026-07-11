@@ -47,7 +47,7 @@ describe("AutoCompoundSection — the explained Delegate-page section", () => {
       />,
     );
     expect(html).toContain("Auto-compound");
-    expect(html).toContain("Automatically restake your delegation rewards");
+    expect(html).toContain("Automatically claim your delegation rewards and delegate them back");
     // the section copy hints at the enable-claims (the full disclosure is in the modal)
     expect(html).toContain("also claims your current pending rewards now");
     // the toggle is present, reflecting the current OFF flag

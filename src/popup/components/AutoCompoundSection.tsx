@@ -128,8 +128,9 @@ export function AutoCompoundSection({ rewards, isMock, chainId }: AutoCompoundSe
         </button>
       </div>
       <div style={explain}>
-        Automatically restake your delegation rewards instead of leaving them to
-        claim by hand — compounding your effective weight over time.{" "}
+        Automatically claim your delegation rewards and delegate them back
+        instead of claiming by hand — compounding your effective weight over
+        time.{" "}
         <strong style={{ color: "var(--fg-200)" }}>
           Turning it on also claims your current pending rewards now.
         </strong>
