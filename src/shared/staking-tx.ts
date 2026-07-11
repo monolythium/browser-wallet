@@ -32,6 +32,7 @@ import {
   encodeUndelegateCalldata,
   encodeRedelegateCalldata,
   encodeClaimCalldata,
+  encodeSetAutoCompoundCalldata,
   LYTHOSHI_PER_LYTH,
 } from "@monolythium/core-sdk";
 
@@ -79,6 +80,19 @@ export function encodeRedelegate(
  *  — settles + withdraws the caller's pending delegation rewards. */
 export function encodeClaimRewards(): string {
   return encodeClaimCalldata();
+}
+
+/** `setAutoCompound(bool)` calldata via the SDK encoder (chain-canonical
+ *  selector `0x86593454`; mono-core `delegation/src/abi.rs`). Persists the
+ *  caller's GLOBAL per-wallet auto-compound preference (not per-cluster).
+ *  Non-custodial / non-payable — sent with `value = 0`.
+ *
+ *  ⚠️ ENABLING (`enabled=true`) also **claims the wallet's pending rewards
+ *  immediately** in the same tx (chain `auto_claim_if_enabled` → the whole
+ *  pending amount is withdrawn to balance, emitting `Claimed`). Disabling has
+ *  no such side effect. Callers MUST disclose the claim before signing. */
+export function encodeSetAutoCompound(enabled: boolean): string {
+  return encodeSetAutoCompoundCalldata(enabled);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
