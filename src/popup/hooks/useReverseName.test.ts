@@ -5,8 +5,15 @@
 // when there is no name).
 
 import { describe, expect, it } from "vitest";
-import { preferReverseNameLabel } from "./useReverseName.js";
+import {
+  preferReverseNameLabel,
+  selectReverseNamesToResolve,
+} from "./useReverseName.js";
 import type { NameLabel } from "../../shared/name-resolution.js";
+import {
+  putReverseName,
+  type ReverseNameCache,
+} from "../../shared/reverse-name-cache.js";
 
 const ADDR = "0x" + "ab".repeat(20);
 const operatorLabel: NameLabel = {
@@ -41,5 +48,45 @@ describe("preferReverseNameLabel", () => {
     const r = preferReverseNameLabel(ADDR, "weird", null);
     expect(r?.displayName).toBe("weird");
     expect(r?.category).toBe("human");
+  });
+});
+
+describe("selectReverseNamesToResolve — the bounded eager-resolve guard", () => {
+  const T0 = 1_000_000;
+  const addr = (n: number) => "0x" + n.toString(16).padStart(40, "0");
+
+  it("dedupes by unique address (one resolve per distinct counterparty, not per row)", () => {
+    const rows = [addr(1), addr(1), addr(2), addr(1), addr(2)];
+    expect(selectReverseNamesToResolve(rows, {}, T0, 30)).toEqual([addr(1), addr(2)]);
+  });
+
+  it("is cache-first — skips addresses already cached (a HIT or a cached MISS)", () => {
+    let cache: ReverseNameCache = {};
+    cache = putReverseName(cache, addr(1), "alice.mono", T0); // hit
+    cache = putReverseName(cache, addr(2), null, T0); // cached miss
+    const rows = [addr(1), addr(2), addr(3)];
+    // only the uncached one is resolved
+    expect(selectReverseNamesToResolve(rows, cache, T0, 30)).toEqual([addr(3)]);
+  });
+
+  it("re-resolves an entry that has gone STALE (past the TTL)", () => {
+    const cache = putReverseName({}, addr(1), "alice.mono", T0);
+    // 40 min later (> 30-min TTL) → treated as uncached
+    expect(selectReverseNamesToResolve([addr(1)], cache, T0 + 40 * 60_000, 30)).toEqual([
+      addr(1),
+    ]);
+  });
+
+  it("is BOUNDED — caps at `max`, preserving row order (top rows first)", () => {
+    const rows = Array.from({ length: 100 }, (_, i) => addr(i + 1));
+    const picked = selectReverseNamesToResolve(rows, {}, T0, 30);
+    expect(picked).toHaveLength(30);
+    expect(picked[0]).toBe(addr(1));
+    expect(picked[29]).toBe(addr(30));
+  });
+
+  it("lowercases addresses (cache keys + resolves stay canonical)", () => {
+    const upper = "0x" + "AB".repeat(20);
+    expect(selectReverseNamesToResolve([upper], {}, T0, 30)).toEqual([upper.toLowerCase()]);
   });
 });

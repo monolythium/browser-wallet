@@ -14,7 +14,7 @@ import { bgDismissPendingTx } from "../bg.js";
 import { useActivity } from "../hooks/useActivity.js";
 import { useActivityKind } from "../hooks/useActivityKind.js";
 import { useNameResolution } from "../hooks/useNameResolution.js";
-import { useReverseNamesCached, preferReverseNameLabel } from "../hooks/useReverseName.js";
+import { useReverseNamesEager, preferReverseNameLabel } from "../hooks/useReverseName.js";
 import { useIndexerStatus } from "../hooks/useIndexerStatus.js";
 import { ActivityRow } from "./ActivityRow.js";
 import { ActivityDetail } from "./ActivityDetail.js";
@@ -302,11 +302,11 @@ export function ActivityList({ addr, chainIdHex, hideConfirmed, clusterNameById 
   }, [cache, pending]);
 
   const { labels } = useNameResolution(counterpartyAddrs, chainIdHex);
-  // §22.8 quorum reverse names (cache-first — populated by the single-address
-  // sites like send-review; no eager per-row fan-out). Preferred over the
-  // operator label so a counterparty shows its canonical, quorum-verified
-  // `*.mono` name when we have one.
-  const reverseNames = useReverseNamesCached(counterpartyAddrs);
+  // §22.8 quorum reverse names — PROACTIVELY resolved for the visible rows but
+  // STRICTLY BOUNDED (deduped by unique address, cache-first, capped) so a long
+  // feed never fans a full-fleet quorum per row. Preferred over the operator
+  // label so a counterparty shows its canonical, quorum-verified `*.mono` name.
+  const reverseNames = useReverseNamesEager(counterpartyAddrs, chainIdHex);
   const labelFor = (cp: string | null): NameLabel | undefined =>
     cp === null
       ? undefined

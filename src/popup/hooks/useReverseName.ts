@@ -102,6 +102,37 @@ export function useReverseName(
 }
 
 /**
+ * The BOUNDING decision for eager activity resolution (pure — the load-bearing
+ * guard, unit-tested). Given the counterparty addresses of the visible rows,
+ * returns the addresses to reverse-resolve now: **deduped by unique address**
+ * (one resolve per distinct counterparty, never per row), **cache-first** (skip
+ * anything already in the cache — a hit OR a cached miss), and **capped** at
+ * `max` (so a long feed never fans a full-fleet quorum × M rows). Order is
+ * preserved so the first/top rows resolve first.
+ */
+export function selectReverseNamesToResolve(
+  addresses: ReadonlyArray<string>,
+  cache: ReverseNameCache,
+  now: number,
+  max: number,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of addresses) {
+    const addr = raw.toLowerCase();
+    if (seen.has(addr)) continue; // dedupe by unique address
+    seen.add(addr);
+    if (getReverseName(cache, addr, now) !== undefined) continue; // cache-first
+    out.push(addr);
+    if (out.length >= max) break; // bounded
+  }
+  return out;
+}
+
+/** Default cap on eager activity resolution — the visible / first-page rows. */
+export const EAGER_REVERSE_NAME_MAX = 30;
+
+/**
  * CACHE-ONLY batch reverse-name lookup for a list of addresses (e.g. activity
  * counterparties). Reads the quorum reverse cache and stays reactive, but does
  * NOT trigger resolution — so a long list never fans a full-fleet quorum per
@@ -151,6 +182,76 @@ export function useReverseNamesCached(
       chrome.storage.onChanged.removeListener(listener);
     };
   }, [key]);
+
+  return names;
+}
+
+/**
+ * Like {@link useReverseNamesCached}, but PROACTIVELY resolves the counterparty
+ * names of the visible activity rows — **strictly bounded** so it stays
+ * fleet-friendly: {@link selectReverseNamesToResolve} dedupes by unique address,
+ * skips anything already cached (cache-first), and caps at
+ * {@link EAGER_REVERSE_NAME_MAX}. Each pick goes through the SW's own cache-first
+ * `wallet-reverse-name` (quorum only on a genuine miss). Resolution fires ONCE
+ * per address-set / chain change; the storage listener only re-reads the cache
+ * (never re-triggers a resolve → no loop, no per-row fan-out).
+ */
+export function useReverseNamesEager(
+  addresses: ReadonlyArray<string>,
+  chainIdHex: string | null,
+  max: number = EAGER_REVERSE_NAME_MAX,
+): Map<string, string> {
+  const [names, setNames] = useState<Map<string, string>>(() => new Map());
+  const key = addresses.map((a) => a.toLowerCase()).join(",");
+
+  useEffect(() => {
+    let cancelled = false;
+    const wanted = key.length === 0 ? [] : key.split(",");
+
+    const apply = (cache: ReverseNameCache) => {
+      if (cancelled) return;
+      const now = Date.now();
+      const next = new Map<string, string>();
+      for (const addr of wanted) {
+        const entry = getReverseName(cache, addr, now);
+        if (entry !== undefined && entry.name !== null) next.set(addr, entry.name);
+      }
+      setNames(next);
+    };
+
+    // Read the cache once, render what's warm, then fire the BOUNDED eager
+    // resolves for the uncached picks (deduped + capped) — never per-row.
+    chrome.storage.local.get([STORAGE_KEY_REVERSE_NAME_CACHE], (res) => {
+      if (cancelled) return;
+      const cache = validateReverseNameCache(res?.[STORAGE_KEY_REVERSE_NAME_CACHE]) ?? {};
+      apply(cache);
+      if (chainIdHex !== null) {
+        const toResolve = selectReverseNamesToResolve(wanted, cache, Date.now(), max);
+        for (const addr of toResolve) {
+          void bgWalletReverseName(addr, chainIdHex); // cache-first + quorum-on-miss; writes cache
+        }
+      }
+    });
+
+    // Re-read only (no re-resolve) as resolutions land / other sites write.
+    const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+      changes,
+      area,
+    ) => {
+      if (area !== "local") return;
+      const change = changes[STORAGE_KEY_REVERSE_NAME_CACHE];
+      if (!change) return;
+      const validated = validateReverseNameCache(change.newValue);
+      if (validated === null) return;
+      apply(validated);
+    };
+    chrome.storage.onChanged.addListener(listener);
+
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [key, chainIdHex, max]);
 
   return names;
 }
