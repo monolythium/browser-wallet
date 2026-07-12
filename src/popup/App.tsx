@@ -35,7 +35,7 @@ import "./themes.css";
 import "./glass.css";
 import "./ext.css";
 import {
-  Home, Networks, Bridge,
+  Home, Networks,
   ReqConnect, ReqAuthenticate,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
@@ -168,7 +168,6 @@ type Screen =
   | "agent-policy"
   | "delegations"
   | "cluster-detail"
-  | "bridge"
   | "mrv-native"
   | "approval"
   | "connected-sites"
@@ -1575,7 +1574,6 @@ export default function App() {
           onOpenReceive={() => setScreen("receive")}
           onOpenSend={() => setScreen("send")}
           onOpenStake={() => setScreen("stake")}
-          onOpenBridge={() => setScreen("bridge")}
           // "New wallet" from the VaultPicker
           // dropdown routes through navigateTo so the screen stack
           // pushes "home" and NewWalletFlow's onCancel returns the
@@ -2186,13 +2184,6 @@ export default function App() {
             setClusterDetailEntrySource(null);
             setScreen(target);
           }}
-        />
-      )}
-
-      {screen === "bridge" && (
-        <Bridge
-          indexer={indexerSnapshot}
-          onBack={() => setScreen("home")}
         />
       )}
 

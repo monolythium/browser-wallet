@@ -26,15 +26,11 @@ import {
   shouldPauseBalanceDisplay,
   balanceIsLoading,
   pausedBalanceMonoscanUrl,
-  Bridge,
-  bridgeRouteDisclosureHasRequiredFloorData,
   computeNativeFeeLythoshi,
-  collectBridgeRouteDisclosuresFromIndexer,
   decodeCalldata,
   formatMrcAccountRecordLine,
   formatMrcPolicyLine,
   formatIndexedTokenBalanceRow,
-  formatBridgeRouteDisclosureDisplay,
   formatMrcHolderDisplayLine,
   formatMrcHolderSummaryTitle,
   formatMrcPolicySpendLine,
@@ -51,7 +47,6 @@ import {
 } from "./components.js";
 import type {
   ChainEntry,
-  WalletBridgeRouteDisclosure,
   WalletIndexerSnapshot,
 } from "./bg.js";
 import type { Account } from "./demo-data.js";
@@ -60,34 +55,6 @@ const NATIVE_MARKET_MODULE_ADDRESS = addressToTypedBech32(
   "systemModule",
   "0x4d41524b45545f4e41544956455f4d4f445f5631",
 );
-
-function sdkBridgeRoute(
-  routeId: string,
-  overrides: Partial<WalletBridgeRouteDisclosure> = {},
-): WalletBridgeRouteDisclosure {
-  return {
-    routeId,
-    bridge: "Chainlink CCIP",
-    protocol: "chainlink-ccip",
-    asset: "USDC",
-    feeToken: "LINK",
-    sourceChain: "Ethereum",
-    destinationChain: "Mono",
-    verifier: {
-      model: "CCIP DON",
-      participantCount: 7,
-      threshold: 5,
-    },
-    drainCapAtomic: "100000000000",
-    finalityBlocks: 64,
-    cooldownSeconds: 86_400,
-    adminControl: "consensusOnly",
-    circuitBreaker: "armed",
-    insuranceAtomic: "50000000000",
-    lastIncidentDate: null,
-    ...overrides,
-  };
-}
 
 describe("ReqSendTx native fee helpers", () => {
   it("formats native LYTH values with 18-decimal lythoshi precision", () => {
@@ -1210,239 +1177,6 @@ describe("native agent state summary", () => {
     expect(html).toContain("nonce 5");
     expect(html).toContain("nonce 6");
     expect(html).toContain("nonce 7");
-  });
-});
-
-describe("bridge route disclosure display", () => {
-  it("collects top-level and token-level disclosures without defaults", () => {
-    expect(
-      collectBridgeRouteDisclosuresFromIndexer({
-        bridgeRouteDisclosures: [
-          {
-            trustModel: "committee",
-            liquidityFloor: "1000",
-          },
-        ],
-        tokenBalances: [
-          {
-            tokenId: "0xwrapped",
-            balance: "7",
-            updatedAtBlock: 12,
-            bridgeRouteDisclosure: {
-              trust: { threshold: "5/7" },
-              liquidity: { available: "900" },
-            },
-          },
-        ],
-        mrcAccount: null,
-        addressLabel: null,
-        delegationHistory: [],
-        addressActivity: [],
-        errors: {},
-      }),
-    ).toEqual([
-      {
-        trustModel: "committee",
-        liquidityFloor: "1000",
-      },
-      {
-        trust: { threshold: "5/7" },
-        liquidity: { available: "900" },
-      },
-    ]);
-  });
-
-  it("classifies trust and liquidity fields and treats missing floors as closed", () => {
-    const complete = formatBridgeRouteDisclosureDisplay({
-      routeLabel: "eth-to-mono",
-      trustModel: "light-client",
-      liquidityFloor: "1000",
-      insurancePool: "500",
-    });
-
-    expect(complete.trustRows).toEqual([
-      { keyPath: "trustModel", value: "light-client" },
-    ]);
-    expect(complete.liquidityRows).toEqual([
-      { keyPath: "liquidityFloor", value: "1000" },
-      { keyPath: "insurancePool", value: "500" },
-    ]);
-    expect(complete.otherRows).toEqual([
-      { keyPath: "routeLabel", value: "eth-to-mono" },
-    ]);
-    expect(bridgeRouteDisclosureHasRequiredFloorData(complete)).toBe(true);
-
-    const incomplete = formatBridgeRouteDisclosureDisplay({
-      trustModel: "committee",
-    });
-    expect(incomplete.trustRows).toHaveLength(1);
-    expect(incomplete.liquidityRows).toHaveLength(0);
-    expect(bridgeRouteDisclosureHasRequiredFloorData(incomplete)).toBe(false);
-
-    const missingFloor = formatBridgeRouteDisclosureDisplay({
-      trustModel: "committee",
-      liquidity: { available: "900" },
-    });
-    expect(missingFloor.liquidityRows).toEqual([
-      { keyPath: "liquidity.available", value: "900" },
-    ]);
-    expect(bridgeRouteDisclosureHasRequiredFloorData(missingFloor)).toBe(false);
-  });
-
-  it("renders SDK-ranked route choice, candidates, and floor failures", () => {
-    const html = renderToStaticMarkup(
-      <Bridge
-        onBack={() => undefined}
-        indexer={{
-          bridgeRouteDisclosures: [
-            sdkBridgeRoute("under-disclosed", {
-              cooldownSeconds: 0,
-              drainCapAtomic: "0",
-              insuranceAtomic: "0",
-            }),
-            sdkBridgeRoute("short-cooldown", { cooldownSeconds: 60 }),
-          ],
-          tokenBalances: [
-            {
-              tokenId: "0xwrapped",
-              balance: "7",
-              updatedAtBlock: 12,
-              bridgeRouteDisclosure: sdkBridgeRoute("healthy"),
-            },
-          ],
-          mrcAccount: null,
-          addressLabel: null,
-          delegationHistory: [],
-          addressActivity: [],
-          errors: {},
-        }}
-      />,
-    );
-
-    expect(html).toContain("SDK route choice");
-    expect(html).toContain("healthy is the top SDK-ranked accepted route.");
-    expect(html).toMatch(/SDK rank 1[\s\S]*healthy[\s\S]*Selected/);
-    expect(html).toMatch(/SDK rank 2[\s\S]*short-cooldown[\s\S]*Candidate/);
-    expect(html).toContain("cooldown is under one hour");
-    expect(html).toMatch(/SDK rank 3[\s\S]*under-disclosed[\s\S]*Blocked/);
-    expect(html).toContain("route cooldown missing");
-    expect(html).toContain("per-asset drain cap missing or zero");
-    expect(html).toContain("slashable insurance pool missing or zero");
-    expect(html).toContain("Transfer intent / quote preview");
-    expect(html).toContain("The SDK can evaluate a transfer intent");
-    expect(html).toContain("transfer amount missing or zero");
-    expect(html).toContain("transfer recipient missing");
-    expect(html).toContain("standalone SDK exposes route-intent selection only");
-    expect(html).toContain("standalone SDK exposes no live bridge submit helper");
-    expect(html).toContain("Request quote");
-    expect(html).toContain("disabled");
-  });
-
-  it("renders discovery catalogue routes while keeping quote and submit disabled", () => {
-    const html = renderToStaticMarkup(
-      <Bridge
-        onBack={() => undefined}
-        indexer={{
-          bridgeRouteDisclosures: [
-            sdkBridgeRoute("catalogue-only", {
-              bridgeId: "catalogue-bridge-arb-usdc",
-              wrappedAsset: "mrc:wrapped-usdc",
-            }),
-          ],
-          bridgeRouteReadiness: {
-            routeSelectionReady: false,
-            quoteReady: false,
-            submitReady: false,
-            blockedReasons: ["bridge route selection requires transfer intent"],
-            warnings: [],
-          },
-          tokenBalances: [],
-          mrcAccount: null,
-          addressLabel: null,
-          delegationHistory: [],
-          addressActivity: [],
-          errors: {},
-        }}
-      />,
-    );
-
-    expect(html).toContain("catalogue-only is the top SDK-ranked accepted route.");
-    expect(html).toMatch(/SDK rank 1[\s\S]*catalogue-only[\s\S]*Selected/);
-    expect(html).toContain("Bridge ID");
-    expect(html).toContain("catalogue-bridge-arb-usdc");
-    expect(html).toContain("Wrapped asset");
-    expect(html).toContain("mrc:wrapped-usdc");
-    expect(html).toContain("Catalogue readiness");
-    expect(html).toContain("Selection");
-    expect(html).toContain("blocked");
-    expect(html).toContain("Quote");
-    expect(html).toContain("disabled");
-    expect(html).toContain("Submit");
-    expect(html).toContain("bridge route selection requires transfer intent");
-    expect(html).toContain("Transfer intent / quote preview");
-    expect(html).toContain("catalogue readiness reports quote disabled");
-    expect(html).toContain("catalogue readiness reports submit disabled");
-    expect(html).toContain("standalone SDK exposes route-intent selection only");
-    expect(html).toContain("standalone SDK exposes no live bridge submit helper");
-    expect(html).toContain("Request quote");
-    expect(html).toContain("Submit bridge");
-    expect(html).toContain("disabled");
-  });
-
-  it("renders blocked route quote guards without constructing an intent", () => {
-    const html = renderToStaticMarkup(
-      <Bridge
-        onBack={() => undefined}
-        indexer={{
-          bridgeRouteDisclosures: [
-            sdkBridgeRoute("under-disclosed", {
-              cooldownSeconds: 0,
-              drainCapAtomic: "0",
-              insuranceAtomic: "0",
-            }),
-          ],
-          tokenBalances: [],
-          mrcAccount: null,
-          addressLabel: null,
-          delegationHistory: [],
-          addressActivity: [],
-          errors: {},
-        }}
-      />,
-    );
-
-    expect(html).toContain("No SDK-ranked bridge route is selectable");
-    expect(html).toContain("no SDK-ranked bridge route satisfies the disclosure floor");
-    expect(html).toContain("No transfer intent is constructed until an SDK-shaped route is selected.");
-    expect(html).toContain("quote preview requires an SDK-selected route");
-    expect(html).not.toContain("transfer amount missing or zero");
-    expect(html).toContain("Request quote");
-    expect(html).toContain("disabled");
-  });
-
-  it("renders no-disclosure behavior without leaking route defaults", () => {
-    const html = renderToStaticMarkup(
-      <Bridge
-        onBack={() => undefined}
-        indexer={{
-          tokenBalances: [],
-          mrcAccount: null,
-          addressLabel: null,
-          delegationHistory: [],
-          addressActivity: [],
-          errors: {},
-        }}
-      />,
-    );
-
-    expect(html).toContain("Disclosure unavailable");
-    expect(html).toContain("No bridgeRouteDisclosure or bridgeRouteDisclosures field was");
-    expect(html).toContain("No transfer intent is constructed until an SDK-shaped route is selected.");
-    expect(html).toContain("no route disclosures supplied");
-    expect(html).not.toContain("SDK rank");
-    expect(html).not.toContain("Asset</div>");
-    expect(html).toContain("Request quote");
-    expect(html).toContain("disabled");
   });
 });
 

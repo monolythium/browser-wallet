@@ -5,7 +5,7 @@ import { addressToBech32m } from "../shared/bech32m.js";
 export type IconName =
   | "send" | "receive" | "stake" | "swap" | "chev" | "chev-d"
   | "check" | "clock" | "close" | "back" | "settings" | "lock" | "eye" | "search"
-  | "shield" | "warn" | "tpm" | "hw" | "passkey" | "bridge"
+  | "shield" | "warn" | "tpm" | "hw" | "passkey"
   | "contract" | "plus" | "more" | "pen" | "globe"
   | "menu" | "book" | "info" | "multisig" | "display"
   | "expand" | "copy" | "trash" | "external" | "bell" | "contrast" | "code"
@@ -366,13 +366,6 @@ export function Icon({ name, size = 16 }: IconProps) {
       return (
         <svg {...props}>
           <path d="M15 7a4 4 0 1 1-4 4M11 11l-7 7v3h3l7-7" />
-        </svg>
-      );
-    case "bridge":
-      return (
-        <svg {...props}>
-          <path d="M2 17c2-4 4-4 6-4s3 4 8 4" />
-          <path d="M2 13c2-4 4-4 6-4s4 4 8 4" />
         </svg>
       );
     case "contract":

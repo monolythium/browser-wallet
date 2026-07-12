@@ -136,7 +136,6 @@ const COALESCED_READ_METHODS = new Set<string>([
   "lyth_nativeReceipt",
   "lyth_getTokenBalances",
   "lyth_getAddressActivity",
-  "lyth_bridgeRoutes",
   "lyth_mrcAccount",
   "lyth_nativeAgentState",
   "lyth_getAddressLabel",

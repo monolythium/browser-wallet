@@ -351,11 +351,8 @@ import {
 } from "../shared/mrc-account.js";
 import type { NativeAgentStateResponse } from "../shared/native-agent-state.js";
 import {
-  collectWalletBridgeRouteDisclosures,
   validateWalletMrcHoldersResponse,
   validateWalletTokenBalanceList,
-  type WalletBridgeRouteDisclosure,
-  type WalletBridgeRouteReadiness,
   type WalletMrcHolderStandard,
   type WalletMrcHoldersResponse,
   type WalletTokenBalance,
@@ -372,11 +369,6 @@ import {
   readDelegationCap,
   readPendingRewards,
 } from "./staking-client.js";
-import { readBridgeRoutes } from "./bridge-routes-client.js";
-import {
-  readBridgeDrainStatus,
-  readBridgeHealth,
-} from "./bridge-health-client.js";
 import {
   buildSpendingPolicyClaim,
   readSpendingPolicy,
@@ -4824,8 +4816,6 @@ const CACHE_STALENESS_MS = 30 * 1000;
 
 interface IndexerSnapshotRaw {
   tokenBalances: WalletTokenBalance[];
-  bridgeRouteDisclosures: WalletBridgeRouteDisclosure[];
-  bridgeRouteReadiness: WalletBridgeRouteReadiness | null;
   mrcAccount: MrcAccountLookupResponse | null;
   nativeAgentState: NativeAgentStateResponse | null;
   addressLabel: unknown | null;
@@ -5096,7 +5086,6 @@ async function fetchIndexerSnapshot(
   const addressForChain = userAddressForNativeRpc(address);
   const [
     tokenBalances,
-    bridgeRoutes,
     mrcAccount,
     nativeAgentState,
     addressLabel,
@@ -5104,7 +5093,6 @@ async function fetchIndexerSnapshot(
     addressActivity,
   ] = await Promise.all([
     settleTestnetRpc<unknown>("lyth_getTokenBalances", [addressForChain]),
-    readBridgeRoutes(),
     options.includeMrcAccount
       ? readMrcAccountLookup(address)
       : Promise.resolve<{ value: MrcAccountLookupResponse | null; error?: string }>({
@@ -5123,9 +5111,6 @@ async function fetchIndexerSnapshot(
   ]);
   const errors: Record<string, string> = {};
   if (tokenBalances.error) errors.tokenBalances = tokenBalances.error;
-  if (bridgeRoutes.kind !== "live" && "reason" in bridgeRoutes) {
-    errors.bridgeRoutes = bridgeRoutes.reason;
-  }
   if (mrcAccount.error) errors.mrcAccount = mrcAccount.error;
   if (nativeAgentState.error) errors.nativeAgentState = nativeAgentState.error;
   if (addressLabel.error) errors.addressLabel = addressLabel.error;
@@ -5138,11 +5123,6 @@ async function fetchIndexerSnapshot(
   if (mrcHolderEnrichment.error) errors.mrcHolders = mrcHolderEnrichment.error;
   return {
     tokenBalances: mrcHolderEnrichment.tokenBalances,
-    bridgeRouteDisclosures: dedupeWalletBridgeRouteDisclosures([
-      ...bridgeRoutes.data.bridgeRouteDisclosures,
-      ...collectWalletBridgeRouteDisclosures(tokenBalances.value),
-    ]),
-    bridgeRouteReadiness: bridgeRoutes.data.readiness,
     mrcAccount: mrcAccount.value,
     nativeAgentState: nativeAgentState.value,
     addressLabel: addressLabel.value ?? null,
@@ -5157,48 +5137,6 @@ async function fetchIndexerSnapshot(
     addressActivityCursor: extractAddressActivityCursor(addressActivity.value),
     errors,
   };
-}
-
-function dedupeWalletBridgeRouteDisclosures(
-  disclosures: readonly WalletBridgeRouteDisclosure[],
-): WalletBridgeRouteDisclosure[] {
-  const seen = new Set<string>();
-  const out: WalletBridgeRouteDisclosure[] = [];
-  for (const disclosure of disclosures) {
-    const key =
-      typeof disclosure.routeId === "string"
-        ? `routeId:${disclosure.routeId}`
-        : `json:${JSON.stringify(disclosure)}`;
-    if (seen.has(key)) {
-      const index = out.findIndex((row) => {
-        const rowKey =
-          typeof row.routeId === "string"
-            ? `routeId:${row.routeId}`
-            : `json:${JSON.stringify(row)}`;
-        return rowKey === key;
-      });
-      if (index >= 0) {
-        out[index] = mergeWalletBridgeRouteDisclosure(out[index]!, disclosure);
-      }
-      continue;
-    }
-    seen.add(key);
-    out.push(disclosure);
-  }
-  return out;
-}
-
-function mergeWalletBridgeRouteDisclosure(
-  primary: WalletBridgeRouteDisclosure,
-  secondary: WalletBridgeRouteDisclosure,
-): WalletBridgeRouteDisclosure {
-  const merged: WalletBridgeRouteDisclosure = { ...primary };
-  for (const [key, value] of Object.entries(secondary)) {
-    if (merged[key] === undefined || merged[key] === null) {
-      merged[key] = value;
-    }
-  }
-  return merged;
 }
 
 // Structural validators for the raw wire shapes. These guard the SW
@@ -9202,8 +9140,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         ok: true,
         snapshot: {
           tokenBalances: fresh.tokenBalances,
-          bridgeRouteDisclosures: fresh.bridgeRouteDisclosures,
-          bridgeRouteReadiness: fresh.bridgeRouteReadiness,
           mrcAccount: fresh.mrcAccount,
           nativeAgentState: fresh.nativeAgentState,
           addressLabel: fresh.addressLabel,
@@ -11083,31 +11019,6 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: false, reason: "missing clusterId" };
       }
       return readClusterDiversity(p.clusterId);
-    }
-    case "bridge-health": {
-      // §20/§25.2 — live circuit-breaker / pause posture page (MB-2).
-      // Disclosure-only: the bridge has no live quote/submit path.
-      const p = message.payload as
-        | { cursor?: string | null; limit?: number }
-        | undefined;
-      const cursor = typeof p?.cursor === "string" ? p.cursor : null;
-      const outcome =
-        typeof p?.limit === "number"
-          ? await readBridgeHealth(cursor, p.limit)
-          : await readBridgeHealth(cursor);
-      return { ok: true, outcome };
-    }
-    case "bridge-drain-status": {
-      // §20/§25.2 — live per-route drain bucket (MB-2) for one
-      // (bridgeId, wrappedAsset). Disclosure-only.
-      const p = message.payload as
-        | { bridgeId?: string; wrappedAsset?: string }
-        | undefined;
-      if (typeof p?.bridgeId !== "string" || typeof p?.wrappedAsset !== "string") {
-        return { ok: false, reason: "missing bridgeId or wrappedAsset" };
-      }
-      const outcome = await readBridgeDrainStatus(p.bridgeId, p.wrappedAsset);
-      return { ok: true, outcome };
     }
     case "spending-policy-get": {
       // §18.8 — live spending-policy summary for one controlled

@@ -69,25 +69,6 @@ const DETERMINISTIC_SMART_ACCOUNT = addressToTypedBech32(
   DETERMINISTIC_ADDRESS,
 );
 const TESTNET_CHAIN_ID_HEX = "0x10F2C";
-const DISCOVERY_ROUTE = {
-  routeId: "ccip-usdc-eth-mono",
-  bridge: "CCIP",
-  asset: "USDC",
-  sourceChain: "Ethereum",
-  destinationChain: "Mono",
-  verifier: {
-    model: "DON",
-    participantCount: 7,
-    threshold: 5,
-  },
-  drainCapAtomic: "100000000000",
-  finalityBlocks: 64,
-  cooldownSeconds: 86_400,
-  adminControl: "consensusOnly",
-  circuitBreaker: "armed",
-  insuranceAtomic: "50000000000",
-  lastIncidentDate: null,
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module mocks — installed before the SW is imported.
@@ -1572,119 +1553,6 @@ describe("wallet-indexer-snapshot", () => {
     });
   });
 
-  it("passes through bridge route disclosures from token-balance envelopes", async () => {
-    rpcResponses["lyth_getTokenBalances"] = {
-      tokenBalances: [
-        {
-          tokenId: "0xbridged",
-          balance: "9",
-          updatedAtBlock: 125,
-          bridgeRouteDisclosure: {
-            trustModel: "committee",
-            liquidityFloor: "1000",
-          },
-        },
-      ],
-      bridgeRouteDisclosures: [
-        {
-          trust: { threshold: "5/7" },
-          liquidity: { available: "900" },
-        },
-      ],
-    };
-    rpcResponses["lyth_getAddressLabel"] = null;
-    rpcResponses["lyth_getDelegationHistory"] = [];
-    rpcResponses["lyth_getAddressActivity"] = [];
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-indexer-snapshot",
-      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
-    })) as {
-      ok: true;
-      snapshot: {
-        tokenBalances: Array<{
-          tokenId: string;
-          bridgeRouteDisclosure?: Record<string, unknown>;
-        }>;
-        bridgeRouteDisclosures: Array<Record<string, unknown>>;
-      };
-    };
-
-    expect(r.ok).toBe(true);
-    expect(r.snapshot.tokenBalances[0]?.bridgeRouteDisclosure).toEqual({
-      trustModel: "committee",
-      liquidityFloor: "1000",
-    });
-    expect(r.snapshot.bridgeRouteDisclosures).toEqual([
-      {
-        trust: { threshold: "5/7" },
-        liquidity: { available: "900" },
-      },
-    ]);
-  });
-
-  it("merges discovery-only bridge route catalogue responses into the snapshot", async () => {
-    rpcResponses["lyth_getTokenBalances"] = [];
-    rpcResponses["lyth_bridgeRoutes"] = {
-      selection: {
-        selected: null,
-        candidates: [],
-        blockedReasons: ["bridge route selection requires transfer intent"],
-      },
-      routeSelectionReady: false,
-      quoteReady: false,
-      submitReady: false,
-      blockedReasons: ["bridge route selection requires transfer intent"],
-      warnings: [],
-      routes: [DISCOVERY_ROUTE],
-      bridgeRouteDisclosures: [DISCOVERY_ROUTE],
-      source: {
-        address: null,
-        routeCount: 1,
-        globalRouteIndexAvailable: true,
-        routeDisclosureSource: "indexer.bridgeRouteDisclosures",
-      },
-    };
-    rpcResponses["lyth_getAddressLabel"] = null;
-    rpcResponses["lyth_getDelegationHistory"] = [];
-    rpcResponses["lyth_getAddressActivity"] = [];
-
-    const r = (await dispatchPopup({
-      kind: "popup",
-      op: "wallet-indexer-snapshot",
-      payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
-    })) as {
-      ok: true;
-      snapshot: {
-        bridgeRouteDisclosures: Array<Record<string, unknown>>;
-        bridgeRouteReadiness: {
-          routeSelectionReady: boolean;
-          quoteReady: boolean;
-          submitReady: boolean;
-          blockedReasons: string[];
-          warnings: string[];
-        } | null;
-        errors: Record<string, string>;
-      };
-    };
-
-    expect(r.ok).toBe(true);
-    expect(r.snapshot.bridgeRouteDisclosures).toEqual([DISCOVERY_ROUTE]);
-    expect(r.snapshot.bridgeRouteReadiness).toEqual({
-      routeSelectionReady: false,
-      quoteReady: false,
-      submitReady: false,
-      blockedReasons: ["bridge route selection requires transfer intent"],
-      warnings: [],
-    });
-    expect(r.snapshot.errors.bridgeRoutes).toBeUndefined();
-    expect(rpcCalls).toContainEqual({
-      method: "lyth_bridgeRoutes",
-      params: [],
-    });
-  });
-
   it("caps operator-returned activity + delegation arrays at the requested limit (P5-005)", async () => {
     // A rogue/buggy operator echoes far more rows than the wallet asked for.
     const overActivity = Array.from({ length: 45 }, (_, i) => ({
@@ -1880,8 +1748,11 @@ describe("wallet-activity-get", () => {
       payload: { address: DETERMINISTIC_ADDRESS, chainIdHex: TESTNET_CHAIN_ID_HEX },
     });
     const firstFetchCount = rpcCalls.length;
-    expect(firstFetchCount).toBe(6); // tokenBalances + bridgeRoutes + nativeAgentState + addressLabel + delegationHistory + addressActivity
+    expect(firstFetchCount).toBe(5); // tokenBalances + nativeAgentState + addressLabel + delegationHistory + addressActivity
     expect(rpcCalls.some((c) => c.method === "lyth_mrcAccount")).toBe(false);
+    // Phase 10 — the retired bridge surface must never be probed on a snapshot.
+    expect(rpcCalls.some((c) => c.method === "lyth_bridgeRoutes")).toBe(false);
+    expect(rpcCalls.some((c) => c.method === "lyth_bridgeHealth")).toBe(false);
     // Second call immediately after — cache is fresh, should NOT hit RPC.
     await dispatchPopup({
       kind: "popup",
