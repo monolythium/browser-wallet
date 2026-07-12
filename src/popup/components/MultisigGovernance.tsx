@@ -36,12 +36,16 @@ import {
   bgMultisigSignGovernance,
   bgVaultMultisigMeta,
 } from "../bg";
+import { NativeMultisigAddressCard } from "./NativeMultisigAddressCard";
 
 const MAX_LABEL_LEN = 32;
 const ML_DSA_65_PUBKEY_HEX_LEN = 2 + 1952 * 2;
 
 export interface MultisigGovernanceProps {
   vaultId: string;
+  /** Active chain id hex — used only for the read-only native-address balance
+   *  read in the DEVELOPER_MODE-gated preview card. */
+  chainId: string;
   onBack: () => void;
 }
 
@@ -52,7 +56,7 @@ type ProposeMode =
   | { kind: "replace-signer" }
   | { kind: "change-threshold" };
 
-export function MultisigGovernance({ vaultId, onBack }: MultisigGovernanceProps) {
+export function MultisigGovernance({ vaultId, chainId, onBack }: MultisigGovernanceProps) {
   const [meta, setMeta] = useState<MultisigVaultMeta | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -130,6 +134,8 @@ export function MultisigGovernance({ vaultId, onBack }: MultisigGovernanceProps)
         {loaded && meta !== null && (
           <>
             <CurrentRoster meta={meta} />
+            {/* Phase 9 read-only preview — self-gated behind DEVELOPER_MODE. */}
+            <NativeMultisigAddressCard meta={meta} chainId={chainId} />
             {propose.kind === "menu" && (
               <ProposeMenu
                 meta={meta}

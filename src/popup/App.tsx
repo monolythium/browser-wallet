@@ -2117,6 +2117,7 @@ export default function App() {
       {screen === "multisig-governance" && activeVaultSummary !== null && (
         <MultisigGovernance
           vaultId={activeVaultSummary.id}
+          chainId={activeChainId}
           onBack={() => setScreen("settings")}
         />
       )}
