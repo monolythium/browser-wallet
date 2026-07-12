@@ -148,7 +148,7 @@ describe("NativeMultisigAddressCard — hidden when DEVELOPER_MODE is off (defau
     };
     // SSR: useFeature's effect doesn't run → devMode stays false → card returns null.
     const html = renderToStaticMarkup(
-      <NativeMultisigAddressCard meta={meta} chainId="0x10F2C" />,
+      <NativeMultisigAddressCard meta={meta} vaultId="v1" chainId="0x10F2C" />,
     );
     expect(html).toBe("");
   });

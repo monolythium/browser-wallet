@@ -442,6 +442,11 @@ vi.mock("./keystore-mldsa.js", () => ({
   writeMultisigMetaV4: vi.fn(async () => undefined),
   listVaultsV4: vi.fn(async () => []),
   selectActiveVaultV4: vi.fn(async () => undefined),
+  // native-multisig-send collects self-member base-sighash signatures via this;
+  // a dummy sig (wrong length/bytes) makes the fail-closed assemble refuse AFTER
+  // the nonce read, which is all the native-send SW tests need (the real
+  // signing + valid assembly is proven offline in native-multisig-tx.test.ts).
+  signWithVaultV4: vi.fn(async () => new Uint8Array(3309)),
 }));
 
 // Multisig approval verification (shared/multisig.js): keep everything real
@@ -525,6 +530,7 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
 });
 
 import { buildWalletMrvCallNativePlan } from "../shared/mrv-native-plan.js";
+import { deriveNativeMultisigAddress } from "../shared/native-multisig.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
@@ -8694,6 +8700,99 @@ describe("wallet-activity-txfeed", () => {
 
   it("is testnet-gated", async () => {
     const r = await fallback("0x1");
+    expect(r.ok).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// native-multisig-send — Phase 9 c3 dev-gated native submit path
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("native-multisig-send", () => {
+  const TWO_TIER_KEY = "mono.two-tier-features.v1";
+  const PK1 = "0x" + "11".repeat(1952);
+  const PK2 = "0x" + "22".repeat(1952);
+
+  function setDevMode(on: boolean) {
+    if (on) {
+      storageLocal[TWO_TIER_KEY] = { DEVELOPER_MODE: { enabled: true, firstSeenAt: 1 } };
+    } else {
+      delete storageLocal[TWO_TIER_KEY];
+    }
+  }
+
+  function selfMeta(threshold: number, selfCount: number): unknown {
+    return {
+      threshold,
+      proposals: [],
+      governance: [],
+      signers: [
+        { id: "s1", label: "A", address: "0x" + "01".repeat(20), pubkey: PK1, role: "self", vaultId: "v1" },
+        selfCount >= 2
+          ? { id: "s2", label: "B", address: "0x" + "02".repeat(20), pubkey: PK2, role: "self", vaultId: "v2" }
+          : { id: "s2", label: "B", address: "0x" + "02".repeat(20), pubkey: PK2, role: "external" },
+      ],
+    };
+  }
+
+  async function send(chainIdHex = TESTNET_CHAIN_ID_HEX) {
+    return (await dispatchPopup({
+      kind: "popup",
+      op: "native-multisig-send",
+      payload: { vaultId: "v", to: "0x" + "33".repeat(20), valueWeiHex: "0x64", chainIdHex },
+    })) as { ok: true; txHash: string; monom: string } | { ok: false; reason?: string };
+  }
+
+  afterEach(() => {
+    setDevMode(false);
+    multisigMetaForTest = null;
+  });
+
+  it("REFUSES when DEVELOPER_MODE is off (server-side gate — not just hidden UI)", async () => {
+    setDevMode(false);
+    const r = await send();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("Developer mode");
+  });
+
+  it("is testnet-gated even with DEVELOPER_MODE on", async () => {
+    setDevMode(true);
+    const r = await send("0x1");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("Monolythium Testnet");
+  });
+
+  it("refuses a non-multisig vault", async () => {
+    setDevMode(true);
+    multisigMetaForTest = null;
+    const r = await send();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("not a multisig");
+  });
+
+  it("refuses fewer than `threshold` local (self) signers (fail-closed)", async () => {
+    setDevMode(true);
+    multisigMetaForTest = selfMeta(2, 1); // 1 self + 1 external, threshold 2
+    const r = await send();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("local (self) signer");
+  });
+
+  it("sources the nonce from the MONOM account (not the executor / a member)", async () => {
+    setDevMode(true);
+    multisigMetaForTest = selfMeta(2, 2); // 2 self, threshold 2
+    rpcResponses["lyth_getTransactionCount"] = "0x0";
+    const expectedMonom = deriveNativeMultisigAddress(2, [hexToBytes(PK1), hexToBytes(PK2)]);
+    // The send fails after the nonce read (unseeded fee / dummy self-sigs), but the
+    // nonce read already happened and MUST target the derived monom account — the
+    // point of this test (nonce = monom, never the executor / a member).
+    const r = await send();
+    const nonceCall = rpcCalls.find((c) => c.method === "lyth_getTransactionCount");
+    expect(nonceCall?.params[0]).toBe(expectedMonom);
     expect(r.ok).toBe(false);
   });
 });

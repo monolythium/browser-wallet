@@ -28,7 +28,8 @@ import type { MultisigVaultMeta } from "../../shared/multisig.js";
 import { bech32mDisplay } from "../../shared/bech32m.js";
 import { parseHexQuantity, lythoshiToLythDecimal } from "../../shared/native-amount.js";
 import { formatLythDecimalDisplay } from "../../shared/lyth-units.js";
-import { bgWalletBalance } from "../bg.js";
+import { lythToLythoshi } from "../../shared/spending-policy-tx.js";
+import { bgWalletBalance, bgNativeMultisigSend } from "../bg.js";
 import { useFeature } from "../hooks/useFeature.js";
 
 const ML_DSA_65_PUBKEY_LEN = 1952;
@@ -182,9 +183,11 @@ export function NativeMultisigAddressCardView({
  */
 export function NativeMultisigAddressCard({
   meta,
+  vaultId,
   chainId,
 }: {
   meta: MultisigVaultMeta;
+  vaultId: string;
   chainId: string;
 }) {
   const devMode = useFeature("DEVELOPER_MODE");
@@ -213,7 +216,105 @@ export function NativeMultisigAddressCard({
   }, [devMode, result, chainId]);
 
   if (!devMode) return null;
-  return <NativeMultisigAddressCardView result={result} balanceText={balanceText} />;
+  return (
+    <>
+      <NativeMultisigAddressCardView result={result} balanceText={balanceText} />
+      {result.ok && (
+        <NativeMultisigSendForm vaultId={vaultId} chainId={chainId} monom={result.display.monomAddress} />
+      )}
+    </>
+  );
+}
+
+/**
+ * DEVELOPER_MODE-only preview form to spend FROM the native monom address. It is
+ * UNVERIFIED on-chain — the server-side handler additionally refuses it unless
+ * DEVELOPER_MODE is on, and the whole surface is gated. This exists so trace-agent
+ * can run the live-testnet e2e once the chain stabilizes; it is not a user path.
+ */
+export const NATIVE_MULTISIG_SEND_UNVERIFIED_COPY =
+  "Unverified on-chain — this native multisig send has not passed a live end-to-end test. Developer preview only.";
+
+function NativeMultisigSendForm({
+  vaultId,
+  chainId,
+  monom,
+}: {
+  vaultId: string;
+  chainId: string;
+  monom: string;
+}) {
+  const [to, setTo] = useState("");
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const submit = () => {
+    setBusy(true);
+    setResult(null);
+    void (async () => {
+      let valueWeiHex: string;
+      try {
+        valueWeiHex = "0x" + lythToLythoshi(amount.trim() || "0").toString(16);
+      } catch {
+        setResult({ ok: false, text: "Invalid amount." });
+        setBusy(false);
+        return;
+      }
+      const r = await bgNativeMultisigSend({
+        vaultId,
+        to: to.trim(),
+        valueWeiHex,
+        chainIdHex: chainId,
+      });
+      setResult(r.ok ? { ok: true, text: `Broadcast: ${r.txHash}` } : { ok: false, text: r.reason ?? "Send failed." });
+      setBusy(false);
+    })();
+  };
+
+  return (
+    <div style={sendFormStyle}>
+      <div style={sendUnverifiedStyle}>{NATIVE_MULTISIG_SEND_UNVERIFIED_COPY}</div>
+      <div style={{ fontSize: 9.5, color: "var(--fg-500)", marginBottom: 6 }} title={monom}>
+        Spends from {bech32mDisplay(monom)}
+      </div>
+      <input
+        style={sendInputStyle}
+        placeholder="Recipient address"
+        value={to}
+        onChange={(e) => setTo(e.target.value)}
+        disabled={busy}
+      />
+      <input
+        style={sendInputStyle}
+        placeholder="Amount (LYTH)"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        disabled={busy}
+      />
+      <button
+        type="button"
+        onClick={submit}
+        disabled={busy || to.trim().length === 0}
+        style={{ ...sendButtonStyle, opacity: busy || to.trim().length === 0 ? 0.5 : 1 }}
+      >
+        {busy ? "Broadcasting…" : "Send (preview)"}
+      </button>
+      {result !== null && (
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 9.5,
+            marginTop: 6,
+            wordBreak: "break-all",
+            color: result.ok ? "var(--fg-200)" : "var(--err)",
+          }}
+        >
+          {result.text}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── styles ──────────────────────────────────────────────────────────────────
@@ -315,4 +416,41 @@ const balanceLineStyle: CSSProperties = {
   fontSize: 10.5,
   color: "var(--fg-300)",
   marginTop: 10,
+};
+const sendFormStyle: CSSProperties = {
+  marginTop: 10,
+  padding: 10,
+  borderRadius: 8,
+  border: "1px dashed rgba(220,80,80,0.4)",
+  background: "rgba(220,80,80,0.05)",
+};
+const sendUnverifiedStyle: CSSProperties = {
+  fontSize: 10.5,
+  lineHeight: 1.45,
+  color: "var(--err)",
+  marginBottom: 8,
+};
+const sendInputStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "6px 8px",
+  marginBottom: 6,
+  borderRadius: 6,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(0,0,0,0.15)",
+  color: "var(--fg-100)",
+  fontFamily: "var(--f-mono)",
+  fontSize: 10.5,
+};
+const sendButtonStyle: CSSProperties = {
+  width: "100%",
+  padding: "7px 10px",
+  borderRadius: 6,
+  border: "1px solid var(--fg-700)",
+  background: "rgba(255,255,255,0.04)",
+  color: "var(--fg-200)",
+  fontFamily: "var(--f-sans)",
+  fontSize: 11.5,
+  fontWeight: 600,
+  cursor: "pointer",
 };

@@ -135,7 +135,7 @@ export function MultisigGovernance({ vaultId, chainId, onBack }: MultisigGoverna
           <>
             <CurrentRoster meta={meta} />
             {/* Phase 9 read-only preview — self-gated behind DEVELOPER_MODE. */}
-            <NativeMultisigAddressCard meta={meta} chainId={chainId} />
+            <NativeMultisigAddressCard meta={meta} vaultId={vaultId} chainId={chainId} />
             {propose.kind === "menu" && (
               <ProposeMenu
                 meta={meta}

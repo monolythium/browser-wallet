@@ -2137,6 +2137,24 @@ export async function bgMultisigImportProposal(args: {
   return send("multisig-import-proposal", args);
 }
 
+/** Phase 9 commit 3 — the native `0x40` multisig submit path (spend FROM a monom
+ *  account). DEV-GATED + e2e-UNVERIFIED: the SW refuses it unless DEVELOPER_MODE
+ *  is on. It builds the base-sighash witness envelope + broadcasts via the
+ *  fan-out; it NEVER routes through the single-key plaintext path. c3 wires the
+ *  fully-local (self-only) roster; external-member collection is deferred. */
+export async function bgNativeMultisigSend(args: {
+  vaultId: string;
+  to: string;
+  valueWeiHex?: string;
+  dataHex?: string;
+  chainIdHex: string;
+}): Promise<
+  | { ok: true; txHash: string; via: string; monom: string }
+  | { ok: false; reason?: string }
+> {
+  return send("native-multisig-send", args);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Staking + delegation reads (§23 whitepaper)
 // ─────────────────────────────────────────────────────────────────────

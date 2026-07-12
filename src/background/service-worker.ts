@@ -306,12 +306,23 @@ import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { reconcileWalletUpdateOnInstalled } from "../shared/wallet-update.js";
 import {
   submitMlDsaTx,
+  broadcastPlaintextTransaction,
   testnetJsonRpc,
   testnetMaxBalanceConsensus,
   testnetResolveNameConsensus,
   testnetReverseNameConsensus,
   type EthSendTxFields,
 } from "./tx-mldsa.js";
+import { hexToBytes, type NativeEvmTxFields } from "@monolythium/core-sdk/crypto";
+import { isFeatureEnabled } from "../shared/two-tier-features.js";
+import {
+  deriveNativeMultisigAddress,
+  nativeMultisigBaseSighash,
+} from "../shared/native-multisig.js";
+import {
+  assembleNativeMultisigSignedTx,
+  type CollectedMemberSignature,
+} from "../shared/native-multisig-tx.js";
 import {
   STORAGE_KEY_REVERSE_NAME_CACHE,
   validateReverseNameCache,
@@ -1605,6 +1616,13 @@ function walletAuthInternalFailure(stage: string, cause?: unknown): RpcResponse 
 // address (chain enforces it; SDK now exposes the witness encoders — S6-01 resolved).
 const MULTISIG_SEND_REFUSAL =
   "This is a multisig wallet — transactions go through the multisig propose/approve flow.";
+
+/** Server-side refusal for the native `0x40` multisig send path while it is
+ *  e2e-unverified on-chain. The path is DEV-GATED: enforced here (not just hidden
+ *  in the UI) so no ordinary user can move funds through it until a live-testnet
+ *  e2e passes (fund a monom, spend with a threshold witness). */
+const NATIVE_MULTISIG_DEV_GATE_REFUSAL =
+  "native multisig send is not enabled — it is unverified on-chain and available only in Developer mode until a testnet end-to-end test passes.";
 
 /** True when the active (unlocked) vault is a multisig vault. Cheap +
  *  side-effect-free: getActiveVaultIdV4 is in-memory (null when locked);
@@ -8422,6 +8440,112 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
         return { ok: true, state };
       } catch (e) {
         return { ok: false, reason: (e as Error).message };
+      }
+    }
+    case "native-multisig-send": {
+      // Phase 9 commit 3 — the native 0x40 multisig submit path (spend FROM a
+      // monom account). E2E-UNVERIFIED on-chain: DEV-GATED server-side (refused
+      // unless DEVELOPER_MODE is on) so no ordinary user can move funds through
+      // it until a live-testnet e2e passes. It NEVER routes through the single-key
+      // plaintext path (buildPlaintextSubmission / submitTrackedTx, which the c1
+      // guard refuses for 0x40) — it builds the base-sighash witness envelope and
+      // broadcasts via the same content-agnostic fan-out.
+      const p = message.payload as {
+        vaultId?: unknown;
+        to?: unknown;
+        valueWeiHex?: unknown;
+        dataHex?: unknown;
+        chainIdHex?: unknown;
+      };
+      if (
+        typeof p?.vaultId !== "string" ||
+        typeof p?.to !== "string" ||
+        typeof p?.chainIdHex !== "string"
+      ) {
+        return { ok: false, reason: "missing vaultId, to, or chainIdHex" };
+      }
+      // Server-side dev-gate — the enforcement point, not just a hidden UI.
+      const twoTier = await loadTwoTierState();
+      if (!isFeatureEnabled(twoTier, "DEVELOPER_MODE")) {
+        return { ok: false, reason: NATIVE_MULTISIG_DEV_GATE_REFUSAL };
+      }
+      if (!chainRequiresMlDsa(p.chainIdHex)) {
+        return { ok: false, reason: "native multisig send is only wired for Monolythium Testnet today" };
+      }
+      const nmMeta = await readMultisigMetaV4(p.vaultId);
+      if (!nmMeta) {
+        return { ok: false, reason: "target vault is not a multisig vault" };
+      }
+      let members: Uint8Array[];
+      try {
+        members = nmMeta.signers.map((s) => hexToBytes(s.pubkey));
+      } catch {
+        return { ok: false, reason: "a member public key is malformed — cannot derive the native address" };
+      }
+      const monom = deriveNativeMultisigAddress(nmMeta.threshold, members);
+      // Local (self) signers the wallet can sign with. c3 wires the fully-local
+      // (self-only) path; external-member base-sighash collection is deferred.
+      const selfSigners = nmMeta.signers.filter(
+        (s) => s.role === "self" && typeof s.vaultId === "string",
+      );
+      if (selfSigners.length < nmMeta.threshold) {
+        return {
+          ok: false,
+          reason:
+            `native multisig send needs ${nmMeta.threshold} local (self) signer(s); this vault has ` +
+            `${selfSigners.length}. External-member signature collection isn't wired yet.`,
+        };
+      }
+      try {
+        // Nonce: the MONOM account's OWN committed nonce (fail-safe — never the
+        // local single-key tracker, which would risk a gap/collision for this
+        // account). A reused nonce is a chain-reject (fail-safe), never a stall.
+        const nonceHex = await testnetTransactionCountHex(monom);
+        const fee = await suggestFee(p.chainIdHex);
+        const gasHex = fee.gasLimit ?? TESTNET_TRANSFER_EXECUTION_UNIT_LIMIT_HEX;
+        const maxFeePerGas =
+          "0x" +
+          clampToSaneBound(BigInt(fee.maxFeePerGas), MAX_EXECUTION_UNIT_PRICE_LYTHOSHI).toString(16);
+        const maxPriorityFeePerGas = clampPriorityTipToMaxFee(fee.maxPriorityFeePerGas, maxFeePerGas);
+        const fields: NativeEvmTxFields = {
+          chainId: p.chainIdHex,
+          nonce: nonceHex,
+          gasLimit: gasHex,
+          maxFeePerGas,
+          maxPriorityFeePerGas,
+          to: p.to,
+          value: typeof p.valueWeiHex === "string" ? p.valueWeiHex : "0x0",
+          input: typeof p.dataHex === "string" ? p.dataHex : "0x",
+          extensions: [],
+        };
+        // Every signature (each member + the outer) is over the BASE sighash.
+        const base = nativeMultisigBaseSighash(fields);
+        const memberSignatures: CollectedMemberSignature[] = [];
+        for (const sm of selfSigners.slice(0, nmMeta.threshold)) {
+          const sig = await signWithVaultV4(sm.vaultId as string, base);
+          memberSignatures.push({ pubkey: hexToBytes(sm.pubkey), signature: sig });
+        }
+        // The outer envelope signer is the first local member (a roster member),
+        // signing the same base.
+        const outer = selfSigners[0]!;
+        const outerSignature = await signWithVaultV4(outer.vaultId as string, base);
+        const outerPubkey = hexToBytes(outer.pubkey);
+        // Fail-closed assembly (verifies quorum + outer-is-member + base digest +
+        // derived == monom). Throws before broadcast if the chain would reject.
+        const built = assembleNativeMultisigSignedTx({
+          fields,
+          threshold: nmMeta.threshold,
+          members,
+          memberSignatures,
+          outerPubkey,
+          outerSignature,
+          expectedMonom: monom,
+        });
+        // Reuse the Phase-1 content-agnostic fan-out (idempotent by tx hash).
+        const { txHash, via } = await broadcastPlaintextTransaction(built.wireHex, built.txHashHex);
+        return { ok: true, txHash, via, monom };
+      } catch (e) {
+        return { ok: false, reason: (e as Error).message ?? "native multisig send failed" };
       }
     }
     // (The two-tier feature WRITE is applied popup-side now — see bg.ts
