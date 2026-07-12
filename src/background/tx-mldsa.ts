@@ -25,6 +25,24 @@ import { bech32mToAddress } from "../shared/bech32m.js";
 import { extractMempoolInner } from "../shared/send-error.js";
 import { userAddressForNativeRpc } from "../shared/address-format.js";
 import { parseMonoName } from "../shared/name-resolution.js";
+import { carriesMultisigExtension } from "../shared/native-multisig.js";
+
+/** Fail-closed guard for the single-key plaintext path. The SDK signer signs the
+ *  FULL (extension-inclusive) sighash, but the chain verifies a native multisig
+ *  (`0x40`) tx's outer + member signatures over the BASE (witness-stripped)
+ *  sighash — so a `0x40`-bearing tx signed here would be chain-REJECTED. Refuse
+ *  it loudly so a native-multisig tx can never be full-sighash-signed by
+ *  accident. The genuine native path (Phase 9 commit 3) builds the base-sighash
+ *  witness envelope separately and never routes through here. Non-`0x40`
+ *  extensions (e.g. MRV v1, kind `0x30`) are unaffected. */
+export const MULTISIG_PLAINTEXT_REFUSAL =
+  "refusing to sign a native multisig (0x40) transaction on the single-key plaintext path — a 0x40 spend must use the base-sighash multisig submit path";
+
+function assertNoMultisigExtension(req: EthSendTxFields): void {
+  if (carriesMultisigExtension(req.extensions)) {
+    throw new Error(MULTISIG_PLAINTEXT_REFUSAL);
+  }
+}
 
 /** Sentinel thrown by the fail-closed vault-binding assert when the active
  *  vault changed between approval and the synchronous pre-sign read (NN-01
@@ -915,6 +933,8 @@ export async function buildPlaintextSubmission(args: {
   if (getActiveVaultIdV4() !== args.boundVaultId) {
     throw new Error(VAULT_BINDING_CHANGED_MESSAGE);
   }
+  // Fail-closed: never full-sighash-sign a native multisig (0x40) tx here.
+  assertNoMultisigExtension(args.txReq);
   const backend = getUnlockedBackendV4();
   if (backend === null) {
     throw new Error("v3 wallet is locked");
@@ -1131,5 +1151,9 @@ export async function submitMlDsaTx(
   via: string;
   innerSighashHex: string;
 }> {
+  // Front-door guard (defense in depth; also enforced at the sign point in
+  // buildPlaintextSubmission): a native multisig (0x40) tx must never reach the
+  // full-sighash single-key path — it would be chain-rejected.
+  assertNoMultisigExtension(req);
   return submitPlaintextMlDsaTx(req, boundVaultId);
 }

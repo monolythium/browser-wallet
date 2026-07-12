@@ -68,6 +68,8 @@ import {
   submitPlaintextMlDsaTx,
   buildPlaintextSubmission,
   broadcastPlaintextTransaction,
+  submitMlDsaTx,
+  MULTISIG_PLAINTEXT_REFUSAL,
   ChainGenesisMismatchError,
 } from "./tx-mldsa.js";
 import {
@@ -280,6 +282,29 @@ describe("NN-01 — vault-binding fail-closed assert (plaintext builder)", () =>
   it("signs when the active vault == boundVaultId (no false abort)", async () => {
     vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
     await buildPlaintextSubmission({ txReq: TX_REQ, boundVaultId: "v1" });
+    expect(sdkBuildPlaintextSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("REFUSES a native multisig (0x40) tx on the single-key plaintext path — never signs", async () => {
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
+    vi.mocked(sdkBuildPlaintextSubmission).mockClear();
+    const multisigReq = {
+      ...TX_REQ,
+      extensions: [{ kind: 0x40, bodyHex: "0x01" }],
+    };
+    await expect(
+      buildPlaintextSubmission({ txReq: multisigReq, boundVaultId: "v1" }),
+    ).rejects.toThrow(MULTISIG_PLAINTEXT_REFUSAL);
+    // The front-door dispatcher refuses it too, before any operator/backend work.
+    await expect(submitMlDsaTx(multisigReq, "v1")).rejects.toThrow(MULTISIG_PLAINTEXT_REFUSAL);
+    // The SDK signer was NEVER reached — nothing was signed.
+    expect(sdkBuildPlaintextSubmission).not.toHaveBeenCalled();
+    // A non-0x40 extension (e.g. MRV v1, kind 0x30) is NOT refused by this guard.
+    vi.mocked(getActiveVaultIdV4).mockReturnValue("v1");
+    await buildPlaintextSubmission({
+      txReq: { ...TX_REQ, extensions: [{ kind: 0x30, bodyHex: "0x01" }] },
+      boundVaultId: "v1",
+    });
     expect(sdkBuildPlaintextSubmission).toHaveBeenCalledTimes(1);
   });
 });

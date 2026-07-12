@@ -2521,7 +2521,7 @@ describe("dedupeAppendConfirmed — load-more append (#16(b))", () => {
     const page = [send(199, 0, "1.9"), send(198, 0, "1.8")];
     const out = dedupeAppendConfirmed(existing, page);
     expect(out).toHaveLength(3);
-    expect(out.filter((r) => r.kind !== "pending_tx" && r.blockHeight === 199)).toHaveLength(1);
+    expect(out.filter((r) => r.blockHeight === 199)).toHaveLength(1);
   });
 
   it("dedupes within the incoming page too", () => {
