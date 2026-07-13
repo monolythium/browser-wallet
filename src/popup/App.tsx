@@ -224,8 +224,7 @@ const TESTNET_FALLBACK: ChainEntry = {
   name: "Monolythium Testnet",
   // Bootstrap-window rpc. Mirrors TESTNET_OPERATOR_RPCS_DEFAULTS[0] in
   // src/background/networks.ts so a fresh-install's first paint targets a
-  // live endpoint. Points at operator-2 after the regenesis in which
-  // operator-1's bls.key was destroyed; see networks.ts docstring.
+  // live endpoint (that defaults list is SDK-registry-ordered).
   rpc: "http://192.0.2.1:8545",
   builtin: true,
   official: true,

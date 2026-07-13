@@ -2026,7 +2026,7 @@ describe("commitVaultFromSeed error-path zeroization (P2-004)", () => {
 
   // Mock argon2 so deriveMekV4 returns a buffer we hold (to observe the wipe),
   // and MlDsa65Backend so we can spy on dispose() + skip real keygen. The
-  // mnemonic helpers (generatePqm1Mnemonic / pqm1MnemonicToMlDsa65Seed) stay
+  // mnemonic helpers (generateMnemonic / mnemonicToMlDsa65Seed) stay
   // real via importOriginal.
   function installMocks(): {
     capturedMek: Uint8Array;
