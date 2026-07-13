@@ -79,11 +79,9 @@ import {
   type AutovoteResult,
 } from "../../shared/autovote";
 import {
-  isPerWalletCapRevert,
-  isWalletTotalCapRevert,
+  bindingPerClusterCapBps,
+  classifyDelegationRevert,
   preflightDelegationVerdict,
-  PER_WALLET_CAP_REVERT_MESSAGE,
-  WALLET_TOTAL_CAP_REVERT_MESSAGE,
 } from "../../shared/staking";
 
 type Step =
@@ -471,7 +469,13 @@ export function Stake({
     const input = {
       clusters,
       targetTotalBps: autovoteTargetBps,
-      capBps,
+      // The PREVIEW must bind the per-cluster cap exactly as the submit
+      // pre-flight does: the raw aggregate cap is disabled (null) on testnet, so
+      // passing it straight through would let a mode concentrate the whole target
+      // on one cluster — which the submit guard (bindingPerClusterCapBps → 50%
+      // floor) then rejects. Bind it here so the preview never promises an
+      // allocation the submit path refuses.
+      capBps: bindingPerClusterCapBps(capBps),
       seed: autovoteSeed,
       // §23.6 launch minimum diversification = 2 (Phase 12). The wallet
       // can tighten this as the chain reports phase transitions via
@@ -589,6 +593,8 @@ export function Stake({
             ?.weightBps ?? 0;
         let totalBps = delegations?.totalBps ?? 0;
         let freshCapBps = capBps;
+        // Distinct clusters currently held — drives the max-10 pre-flight (0x0206).
+        let currentDelegationCount = delegations?.rows.length ?? 0;
         try {
           const [freshDel, freshCap] = await Promise.all([
             bgStakingDelegations(account.addr),
@@ -599,6 +605,7 @@ export function Stake({
               freshDel.data.rows.find((row) => row.cluster === dstClusterId)
                 ?.weightBps ?? 0;
             totalBps = freshDel.data.totalBps;
+            currentDelegationCount = freshDel.data.rows.length;
           }
           if (freshCap.ok) freshCapBps = capBpsFromCapResult(freshCap);
         } catch {
@@ -610,6 +617,7 @@ export function Stake({
           totalDelegatedBps: totalBps,
           moveBps: bps,
           capBps: freshCapBps,
+          currentDelegationCount,
         });
         if (!verdict.ok) {
           setSubmitError({
@@ -669,19 +677,14 @@ export function Stake({
         if (action !== "claim") onDelegationRejected?.(null);
       } else {
         const code = typeof r.code === "number" ? r.code : null;
-        // Map the chain's cap reverts — PerWalletCapExceeded (0x0213) and
-        // WalletTotalExceeded (0x0205) — which the pre-flight guards now
-        // prevent, but could still slip through on a race or a future cap
-        // change — to clear messages instead of a generic "rejected". Specific
-        // to those codes; other revert codes keep the raw reason.
-        const isCapRevert =
-          isPerWalletCapRevert(r.reason, code) ||
-          isWalletTotalCapRevert(r.reason, code);
-        const message = isPerWalletCapRevert(r.reason, code)
-          ? PER_WALLET_CAP_REVERT_MESSAGE
-          : isWalletTotalCapRevert(r.reason, code)
-            ? WALLET_TOTAL_CAP_REVERT_MESSAGE
-            : (r.reason ?? `${action} rejected`);
+        // Map the delegation module's 0x02NN reverts — cap (0x0213/0x0205),
+        // max-10 (0x0206), inactive-cluster (0x020B), and the claim-path codes
+        // (0x020D/0x0214) — to clear messages. Most are now prevented by the
+        // pre-flight / picker filter but can still slip through on a race or a
+        // future rule change; unmapped codes keep the raw node reason.
+        const mappedMessage = classifyDelegationRevert(r.reason, code);
+        const isKnownDelegationRevert = mappedMessage !== null;
+        const message = mappedMessage ?? (r.reason ?? `${action} rejected`);
         setSubmitError({
           message,
           code,
@@ -691,7 +694,10 @@ export function Stake({
         setStep("error");
         // DURABLE signal: a residual-race cap rejection at chain admission still
         // surfaces after the user navigates away from this ephemeral error page.
-        if (isCapRevert && (action === "delegate" || action === "redelegate")) {
+        if (
+          isKnownDelegationRevert &&
+          (action === "delegate" || action === "redelegate")
+        ) {
           const rejClusterId =
             action === "redelegate" && redelegateDstClusterId !== null
               ? redelegateDstClusterId
@@ -1013,7 +1019,7 @@ export function Stake({
                 clusters={clusters}
                 targetBps={autovoteTargetBps}
                 onTargetChange={setAutovoteTargetBps}
-                capBps={capBps}
+                capBps={bindingPerClusterCapBps(capBps)}
                 seedAvailable={autovoteSeed !== null}
                 onProceed={() => {
                   if (autovotePlan === null) return;

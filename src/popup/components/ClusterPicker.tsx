@@ -69,11 +69,16 @@ export function ClusterPicker({
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const visible = useMemo(() => {
+    // Only clusters in the active consensus set are delegatable — a delegate or
+    // redelegate to an inactive cluster reverts 0x020B DelegationToInactiveCluster
+    // (mono-core AUD-0057). Filter them out of the picker (mirrors autovote's
+    // eligibleClusters) so an inactive cluster is never a submittable choice.
+    const selectable = clusters.filter((c) => c.active);
     const q = search.trim().toLowerCase();
     const filtered =
       q.length === 0
-        ? clusters.slice()
-        : clusters.filter((c) => {
+        ? selectable.slice()
+        : selectable.filter((c) => {
             if (String(c.clusterId).includes(q)) return true;
             if (c.name && c.name.toLowerCase().includes(q)) return true;
             for (const r of c.regions) {

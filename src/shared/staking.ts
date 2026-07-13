@@ -54,6 +54,13 @@ export function formatWeightBpsPercent(bps: number | null): string {
  *  `staking-client.readDelegationCap` uses as its offline mock. */
 export const DELEGATION_PER_WALLET_CAP_BPS = 5000;
 
+/** The maximum number of DISTINCT clusters a wallet may delegate to at once
+ *  (mono-core `MAX_DELEGATIONS_PER_WALLET = 10`, delegation/lib.rs). A delegate
+ *  or redelegate that lands on an 11th distinct cluster reverts 0x0206
+ *  TooManyDelegations; a top-up of an existing cluster row is exempt (the chain
+ *  only counts on a NEW row, ops.rs). */
+export const MAX_DELEGATIONS_PER_WALLET = 10;
+
 /** The binding per-cluster cap for a delegation move: the §16.7 per-wallet
  *  floor ALWAYS applies; a (future-active) aggregate cap tightens it further
  *  when present. A null aggregate cap (disabled / unread) does NOT lift the
@@ -154,6 +161,99 @@ export function isWalletTotalCapRevert(
   return r.includes("wallettotal") || r.includes("0x0205");
 }
 
+/** Clear user-facing message for a chain `0x0206 TooManyDelegations` revert —
+ *  the wallet already delegates to the maximum of 10 distinct clusters. */
+export const TOO_MANY_DELEGATIONS_REVERT_MESSAGE =
+  "You already delegate to the maximum of 10 clusters — undelegate from one before adding another.";
+
+/** Clear user-facing message for a chain `0x020B DelegationToInactiveCluster`
+ *  revert — the destination cluster is not on the active roster. */
+export const INACTIVE_CLUSTER_REVERT_MESSAGE =
+  "That cluster is no longer active — choose one from the active set.";
+
+/** Clear user-facing message for a chain `0x020D NoClaimableRewards` revert —
+ *  a claim ran with nothing currently claimable. */
+export const NO_CLAIMABLE_REWARDS_REVERT_MESSAGE =
+  "No rewards are available to claim right now.";
+
+/** Clear user-facing message for a chain `0x0214 RewardEscrowUnderfunded`
+ *  revert — the reward was settled but the on-chain escrow is temporarily
+ *  short. Recoverable: the claim can be retried once the escrow refills. */
+export const REWARD_ESCROW_UNDERFUNDED_REVERT_MESSAGE =
+  "Rewards are temporarily unfunded on-chain — try claiming again shortly.";
+
+/** Detect a specific mono-core delegation revert (payload `[0x02, tag]`, so the
+ *  numeric code is `0x02NN`) across the shapes it reaches the popup as — a
+ *  numeric `code`, or the variant name / hex tag in the reason string. */
+function isDelegationRevert(
+  reason: string | null | undefined,
+  code: number | null,
+  tag: number,
+  reasonNeedles: string[],
+): boolean {
+  if (code === tag) return true;
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return reasonNeedles.some((needle) => r.includes(needle));
+}
+
+/** True for a chain `0x0206 TooManyDelegations` revert (11th distinct cluster). */
+export function isTooManyDelegationsRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  return isDelegationRevert(reason, code, 0x0206, ["toomanydelegations", "0x0206"]);
+}
+
+/** True for a chain `0x020B DelegationToInactiveCluster` revert. */
+export function isInactiveClusterRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  return isDelegationRevert(reason, code, 0x020b, ["inactivecluster", "0x020b"]);
+}
+
+/** True for a chain `0x020D NoClaimableRewards` revert (claim with nothing due). */
+export function isNoClaimableRewardsRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  return isDelegationRevert(reason, code, 0x020d, ["noclaimablerewards", "0x020d"]);
+}
+
+/** True for a chain `0x0214 RewardEscrowUnderfunded` revert (retryable). */
+export function isRewardEscrowUnderfundedRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): boolean {
+  return isDelegationRevert(reason, code, 0x0214, [
+    "rewardescrowunderfunded",
+    "escrowunderfunded",
+    "0x0214",
+  ]);
+}
+
+/** Map a delegation-module revert (`0x02NN`) reachable by the wallet's
+ *  delegate / redelegate / claim paths to a clear user-facing message, or null
+ *  to fall through to the raw node reason. Centralises every 0x02NN the popup
+ *  surfaces so the classifier stays a single call. */
+export function classifyDelegationRevert(
+  reason: string | null | undefined,
+  code: number | null,
+): string | null {
+  if (isPerWalletCapRevert(reason, code)) return PER_WALLET_CAP_REVERT_MESSAGE;
+  if (isWalletTotalCapRevert(reason, code)) return WALLET_TOTAL_CAP_REVERT_MESSAGE;
+  if (isTooManyDelegationsRevert(reason, code))
+    return TOO_MANY_DELEGATIONS_REVERT_MESSAGE;
+  if (isInactiveClusterRevert(reason, code))
+    return INACTIVE_CLUSTER_REVERT_MESSAGE;
+  if (isNoClaimableRewardsRevert(reason, code))
+    return NO_CLAIMABLE_REWARDS_REVERT_MESSAGE;
+  if (isRewardEscrowUnderfundedRevert(reason, code))
+    return REWARD_ESCROW_UNDERFUNDED_REVERT_MESSAGE;
+  return null;
+}
+
 /** On-submit pre-flight verdict for a delegate/redelegate, modelling the two
  *  chain-reachable caps so the wallet blocks an over-cap tx client-side instead
  *  of submitting a guaranteed admission-revert:
@@ -169,15 +269,31 @@ export function isWalletTotalCapRevert(
 export function preflightDelegationVerdict(args: {
   action: "delegate" | "undelegate" | "redelegate";
   /** Existing weight at the cluster the move lands on (delegate: selected;
-   *  redelegate: destination). */
+   *  redelegate: destination). 0 ⇒ the move would open a NEW distinct row. */
   dstExistingWeightBps: number;
   totalDelegatedBps: number;
   moveBps: number;
   capBps: number | null;
+  /** Distinct clusters the wallet currently delegates to. When the move opens a
+   *  NEW row (dstExistingWeightBps === 0) and this is already at
+   *  MAX_DELEGATIONS_PER_WALLET, the chain reverts 0x0206 TooManyDelegations.
+   *  Optional — omit to skip the count pre-flight (callers without the count). */
+  currentDelegationCount?: number;
 }): { ok: true } | { ok: false; message: string } {
   const { action, dstExistingWeightBps, totalDelegatedBps, moveBps, capBps } =
     args;
   if (action === "undelegate") return { ok: true };
+  // Max-10 distinct clusters (0x0206). Only a NEW row counts — a top-up of an
+  // existing cluster is exempt (chain counts on append only, ops.rs). Mirrors
+  // the chain's own new-row-at-cap check so a redelegate-to-a-new-cluster while
+  // at 10 is blocked here (the chain rejects it before freeing the source).
+  if (
+    dstExistingWeightBps === 0 &&
+    args.currentDelegationCount !== undefined &&
+    args.currentDelegationCount >= MAX_DELEGATIONS_PER_WALLET
+  ) {
+    return { ok: false, message: TOO_MANY_DELEGATIONS_REVERT_MESSAGE };
+  }
   if (exceedsPerClusterCap(dstExistingWeightBps, moveBps, capBps)) {
     return { ok: false, message: PER_WALLET_CAP_REVERT_MESSAGE };
   }
