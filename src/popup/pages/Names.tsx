@@ -1,8 +1,8 @@
 // Names page — §22.8 hierarchical name registration + management (0x110E).
 //
 // Gated behind the REGISTRY feature flag. v1 scope: register a Human/Agent
-// `.mono` name (this file / commit 3). Transfer management (propose + accept)
-// and the best-effort owned-names ledger append as cards below in later commits.
+// `.mono` name. Transfer management (propose + accept) and the best-effort
+// owned-names ledger render as cards below.
 //
 // WYSIWYS is the safety anchor: the confirm step shows the exact name, its
 // category, and the exact cost (a real LYTH spend) BEFORE the user signs. The

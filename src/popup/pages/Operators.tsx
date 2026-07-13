@@ -1,7 +1,7 @@
 // Operators — the testnet operator override management.
 //
 // The testnet is a single chain with multiple operator RPC endpoints. Power
-// users can override the published 7-operator default list with their
+// users can override the published default operator list with their
 // own operator URLs, or pin a single operator to bypass round-robin.
 //
 // Storage flow: edits are local until [Save] writes via bgOperatorsSet.
