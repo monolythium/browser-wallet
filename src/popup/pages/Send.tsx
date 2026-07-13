@@ -138,6 +138,15 @@ const ADMISSION_REJECT_CODE_HI = -32020;
 // doesn't supply one.
 const FALLBACK_TRANSFER_EXECUTION_UNITS_HEX = "0x5208"; // 21000
 
+// Execution units the chain actually CHARGES for a plain native transfer
+// (mono-core `NATIVE_TRANSFER_EXECUTION_UNITS = 21000`, executor.rs). The tx is
+// signed with a higher limit (the 30000 admission ceiling) for mainnet-floor
+// headroom, but unused units are never charged — so the fee we DISPLAY (the
+// deduction the user will actually see) is computed from this figure, while the
+// Max/insufficient-funds reservation below still covers the full signed-limit
+// worst case. §22.4.1: show the honest charge, never overstate the deduction.
+const NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX = "0x5208"; // 21000
+
 // MEMPOOL_PRIORITY_TIP_FLOOR_LYTHOSHI is the single source of truth in
 // shared/operator-bounds (imported above) — both the submit clamp here and the
 // display clamp in native-fee-display reference the one constant.
@@ -252,14 +261,28 @@ export function Send({
   }, [account.addr, chainId]);
 
   const tierMultiplierBps = TIER_MULTIPLIERS_BPS[tier];
+  // DISPLAYED fee = the deduction the chain will actually take. A native
+  // transfer is charged NATIVE_TRANSFER_EXECUTION_UNITS (21000) regardless of
+  // the (higher) 30000 admission limit the tx is signed with — unused units are
+  // never charged (mono-core executor.rs). Override the suggestion's limit with
+  // the charge count so the headline is the honest deduction, not 1.43× it. A
+  // structured fee, if the chain ever supplies one, still wins (it is the
+  // authoritative charge and ignores this unit count).
   const estimatedFeeResult = useMemo(
     () =>
       feeSuggestion === null
         ? null
-        : nativeFeeDisplayFromExecutionFeeSuggestion(feeSuggestion, {
-            fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
-            priorityMultiplierBps: tierMultiplierBps,
-          }),
+        : nativeFeeDisplayFromExecutionFeeSuggestion(
+            {
+              ...feeSuggestion,
+              executionUnitLimitHex: NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX,
+            },
+            {
+              fallbackExecutionUnitLimitHex:
+                NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX,
+              priorityMultiplierBps: tierMultiplierBps,
+            },
+          ),
     [feeSuggestion, tierMultiplierBps],
   );
   const estimatedFeeDisplay =
@@ -269,6 +292,26 @@ export function Send({
       ? estimatedFeeResult.failures.join("; ")
       : null;
   const estimatedFeeLythoshi = estimatedFeeDisplay?.totalLythoshi ?? null;
+
+  // RESERVATION = the worst-case the chain requires at admission: it admits a tx
+  // only if the balance covers `max_execution_unit_price × execution_unit_limit`
+  // (the 30000 signed limit) + value (mono-core admission.rs). The Max button
+  // and the insufficient-funds gate must reserve THIS (not the smaller displayed
+  // charge) or a Max/near-balance send would be rejected on-chain; the surplus
+  // over the 21000-unit charge is refunded. Mirrors the signed limit exactly
+  // (suggestion limit, else the same 21000 fallback the signed tx uses).
+  const reserveFeeResult = useMemo(
+    () =>
+      feeSuggestion === null
+        ? null
+        : nativeFeeDisplayFromExecutionFeeSuggestion(feeSuggestion, {
+            fallbackExecutionUnitLimitHex: FALLBACK_TRANSFER_EXECUTION_UNITS_HEX,
+            priorityMultiplierBps: tierMultiplierBps,
+          }),
+    [feeSuggestion, tierMultiplierBps],
+  );
+  const reserveFeeLythoshi =
+    reserveFeeResult?.ok === true ? reserveFeeResult.display.totalLythoshi : null;
 
   const parsedRecipient = useMemo(() => validateToAddress(to), [to]);
   const nameResolution = useNameForwardResolve(parsedRecipient.monoName, chainId);
@@ -297,9 +340,9 @@ export function Send({
   const spendGateLythoshi = spendGuardLythoshi ?? balanceLythoshi;
   const insufficientFunds =
     amountLythoshi !== null &&
-    estimatedFeeLythoshi !== null &&
+    reserveFeeLythoshi !== null &&
     spendGateLythoshi !== null &&
-    amountLythoshi + estimatedFeeLythoshi > spendGateLythoshi;
+    amountLythoshi + reserveFeeLythoshi > spendGateLythoshi;
 
   const canContinue =
     effectiveAddr0x !== null &&
@@ -362,8 +405,10 @@ export function Send({
     // cross-operator balance), not the displayed MAX, so it can never exceed
     // affordable funds.
     const maxBasis = spendGuardLythoshi ?? balanceLythoshi;
-    if (maxBasis === null || estimatedFeeLythoshi === null) return;
-    const maxLythoshi = maxBasis - estimatedFeeLythoshi;
+    if (maxBasis === null || reserveFeeLythoshi === null) return;
+    // Reserve the admission worst case (30000-limit), not the displayed 21000
+    // charge — else the Max amount would leave too little to be admitted.
+    const maxLythoshi = maxBasis - reserveFeeLythoshi;
     if (maxLythoshi <= 0n) {
       setAmountStr("0");
       return;
@@ -1194,7 +1239,15 @@ export function Send({
                       </span>
                     </div>
                     <div>
-                      Execution units:{" "}
+                      Execution units (charged):{" "}
+                      <span style={{ fontFamily: "var(--f-mono)" }}>
+                        {formatExecutionUnits(
+                          NATIVE_TRANSFER_CHARGE_EXECUTION_UNITS_HEX,
+                        )}
+                      </span>
+                    </div>
+                    <div>
+                      Reserved limit:{" "}
                       <span style={{ fontFamily: "var(--f-mono)" }}>
                         {formatExecutionUnits(
                           feeSuggestion?.executionUnitLimitHex ??
