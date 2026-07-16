@@ -1,0 +1,8 @@
+# Release automation, dependency state, and store-visible version metadata are
+# security-sensitive and require an explicit owner review.
+/.github/workflows/ @NayiemW
+/.github/CODEOWNERS @NayiemW
+/.github/dependabot.yml @NayiemW
+/manifest.json @NayiemW
+/package.json @NayiemW
+/pnpm-lock.yaml @NayiemW

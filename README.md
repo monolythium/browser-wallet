@@ -42,8 +42,8 @@ The architecture splits into three contexts as Manifest V3 requires:
 
 To inspect, audit, or develop:
 
-- **Node** 22+
-- **pnpm** 10+ (`corepack enable && corepack prepare pnpm@10 --activate`)
+- **Node** 22+ (CI uses 22.22.1)
+- **pnpm** 10+ (CI uses 10.28.2; `corepack enable && corepack prepare pnpm@10.28.2 --activate`)
 - A Chromium-based browser (Chrome, Brave, Edge, Arc) or Firefox 109+
 
 ## Quick start
@@ -167,7 +167,13 @@ The full set of in-scope vulnerability categories is enumerated in [`SECURITY.md
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Short version: run the two gates (`pnpm typecheck`, `pnpm test`) locally before opening a PR — there is no public CI workflow that runs them today. Do not reintroduce real production RPC IPs to `FALLBACK_OPERATORS_*`; do not bypass the popup approval flow; do not loosen the content-script boundary.
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Short version: run the three gates (`pnpm typecheck`, `pnpm test`, `pnpm build`) locally before opening a PR. The public `Test` workflow repeats all three on pull requests and `master`. Do not reintroduce real production RPC IPs to `FALLBACK_OPERATORS_*`; do not bypass the popup approval flow; do not loosen the content-script boundary.
+
+## Release integrity
+
+Release tags are required to match the version in both `package.json` and `manifest.json`. A tag build reruns the complete typecheck, test, and production-build gates, creates a deterministic ZIP and SPDX SBOM, checksums and keylessly signs the release inputs, and verifies those signatures before any store submission. Chrome Web Store submissions use API v2 and are staged for review rather than made public automatically. GitHub releases remain drafts until they are reviewed separately.
+
+The release workflow cannot be dispatched manually. Pull requests and `master` builds run the complete typecheck, test, and production-build gates without store credentials or publishing capability.
 
 ## Security
 
