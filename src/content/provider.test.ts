@@ -19,6 +19,7 @@ let stubWindow: {
   dispatchEvent: unknown;
   postMessage: unknown;
   ethereum?: { on: (e: string, h: (a: unknown) => void) => void; request: (a: { method: string }) => Promise<unknown> };
+  monolythium?: { request: (a: { method: string; params?: object }) => Promise<unknown> };
 };
 
 function installEnv() {
@@ -217,5 +218,37 @@ describe("outbound request post targets the page origin (not '*')", () => {
     expect(reqCall).toBeTruthy();
     expect(reqCall![1]).toBe("https://dapp.example");
     expect(reqCall![1]).not.toBe("*");
+  });
+
+  it("exposes the native provider and forwards direct-object authentication params unchanged", async () => {
+    const provider = await loadProvider();
+    expect(stubWindow.monolythium).toBe(provider);
+    const params = {
+      version: "1",
+      domain: "dapp.example",
+      origin: "https://dapp.example",
+      uri: "https://dapp.example/",
+      chainId: "69420",
+      genesisHash: `0x${"ab".repeat(32)}`,
+      nonce: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      issuedAt: "2026-07-16T11:59:30.000Z",
+      expirationTime: "2026-07-16T12:01:30.000Z",
+      scopes: ["stele:web:session"],
+    };
+    void stubWindow.monolythium!.request({
+      method: "monolythium_authenticate",
+      params,
+    });
+    const spy = stubWindow.postMessage as ReturnType<typeof vi.fn>;
+    const outbound = spy.mock.calls
+      .map((call: unknown[]) => call[0] as { args?: unknown })
+      .find((message) =>
+        (message.args as { method?: string } | undefined)?.method ===
+        "monolythium_authenticate"
+      );
+    expect(outbound?.args).toEqual({
+      method: "monolythium_authenticate",
+      params,
+    });
   });
 });

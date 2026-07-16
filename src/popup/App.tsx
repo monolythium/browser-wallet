@@ -36,7 +36,7 @@ import "./glass.css";
 import "./ext.css";
 import {
   Home, Networks, Bridge,
-  ReqConnect,
+  ReqConnect, ReqAuthenticate,
   ReqSheet, ChainStatusBanner,
   ReqSendTx, ReqPersonalSignReal, ReqTypedSign, ReqAddChain,
   chainKindNotLive, type ChainHealthKind,
@@ -126,6 +126,7 @@ import {
   type PendingApproval,
   type KeystoreStatus,
   type ConnectRequest,
+  type AuthenticationRequest,
   type SendTxRequest,
   type PersonalSignRequest,
   type TypedSignRequest,
@@ -1269,7 +1270,17 @@ export default function App() {
     } catch {
       /* fail-open */
     }
-    await bgResolveApproval(activeApproval.approval.id, { ok }, windowId);
+    const request = activeApproval.approval.request;
+    const decision = request.kind === "authenticate" && ok
+      ? {
+          ok: true,
+          // The SW compares this to its own active-vault snapshot at the exact
+          // approval click. A concurrent account switch fails closed instead
+          // of signing with an account different from the one rendered here.
+          ...(keystore?.address ? { displayedAddress: keystore.address } : {}),
+        }
+      : { ok };
+    await bgResolveApproval(activeApproval.approval.id, decision, windowId);
     window.close();
   };
 
@@ -2236,6 +2247,20 @@ function ApprovalRoute({
       <ReqSheet onBack={onReject}>
         <ReqConnect
           request={req as ConnectRequest}
+          address={keystore?.address ?? ""}
+          custody={custody}
+          onApprove={onApprove}
+          onReject={onReject}
+          chain={chain}
+        />
+      </ReqSheet>
+    );
+  }
+  if (req.kind === "authenticate") {
+    return (
+      <ReqSheet onBack={onReject}>
+        <ReqAuthenticate
+          request={req as AuthenticationRequest}
           address={keystore?.address ?? ""}
           custody={custody}
           onApprove={onApprove}

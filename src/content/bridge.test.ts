@@ -102,6 +102,91 @@ describe("bridge postMessage source guard (F-2.1/F-2.2)", () => {
     messageListener!({ source: stubWindow, origin: "https://evil.example", data: pageEnvelope });
     expect(rpcForwards(before)).toHaveLength(0);
   });
+
+  it("rejects oversized wallet-auth params before forwarding them to the service worker", async () => {
+    await loadBridge();
+    const oversized: Record<string, unknown> = {
+      version: "1",
+      domain: "dapp.example",
+      origin: "https://dapp.example",
+      uri: "https://dapp.example/",
+      chainId: "69420",
+      genesisHash: `0x${"ab".repeat(32)}`,
+      nonce: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      issuedAt: "2026-07-16T11:59:30.000Z",
+      expirationTime: "2026-07-16T12:01:30.000Z",
+      scopes: ["stele:web:session"],
+    };
+    for (let index = 0; index < 1_000; index += 1) {
+      oversized[`extra${index}`] = index;
+    }
+    const before = sendMessageCalls.length;
+
+    messageListener!({
+      source: stubWindow,
+      origin: "https://dapp.example",
+      data: {
+        source: "monolythium-wallet-page",
+        id: "auth-oversized",
+        args: { method: "monolythium_authenticate", params: oversized },
+      },
+    });
+
+    expect(rpcForwards(before)).toHaveLength(0);
+    expect(stubWindow.postMessage).toHaveBeenCalledWith(
+      {
+        source: "monolythium-wallet-bridge",
+        id: "auth-oversized",
+        error: {
+          code: -32602,
+          message: "wallet authentication challenge is malformed",
+        },
+      },
+      "https://dapp.example",
+    );
+  });
+
+  it("whitelists wallet-auth args so an unbounded sibling never reaches the service worker", async () => {
+    await loadBridge();
+    const params = {
+      version: "1",
+      domain: "dapp.example",
+      origin: "https://dapp.example",
+      uri: "https://dapp.example/",
+      chainId: "69420",
+      genesisHash: `0x${"ab".repeat(32)}`,
+      nonce: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      issuedAt: "2026-07-16T11:59:30.000Z",
+      expirationTime: "2026-07-16T12:01:30.000Z",
+      scopes: ["stele:web:session"],
+    };
+    const before = sendMessageCalls.length;
+
+    messageListener!({
+      source: stubWindow,
+      origin: "https://dapp.example",
+      data: {
+        source: "monolythium-wallet-page",
+        id: "auth-with-padding",
+        args: {
+          method: "monolythium_authenticate",
+          params,
+          padding: "x".repeat(1_000_000),
+        },
+      },
+    });
+
+    const forwarded = rpcForwards(before);
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toMatchObject({
+      kind: "rpc",
+      origin: "https://dapp.example",
+      args: { method: "monolythium_authenticate", params },
+    });
+    expect((forwarded[0] as { args?: unknown }).args).not.toHaveProperty(
+      "padding",
+    );
+  });
 });
 
 // ---- BROKEN-1/2 fix — announce reply relayed as the initial-state sync ----

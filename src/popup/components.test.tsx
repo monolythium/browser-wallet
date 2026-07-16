@@ -46,6 +46,7 @@ import {
   lythoshiToLythString,
   MrcAccountSummary,
   NativeAgentStateSummary,
+  ReqAuthenticate,
   ReqSendTx,
 } from "./components.js";
 import type {
@@ -202,6 +203,63 @@ describe("ReqSendTx native fee helpers", () => {
     // The non-binding low/medium/high tier picker is gone (no false affordance).
     expect(html).not.toContain(">low</button>");
     expect(html).not.toContain(">high</button>");
+  });
+});
+
+describe("ReqAuthenticate wallet-auth v1 approval", () => {
+  it("renders the bound identity, network, expiry, scopes, and zero-value posture", () => {
+    const chain = {
+      chainId: "0x10F2C",
+      name: "Monolythium Testnet",
+      rpc: "http://localhost:8545",
+      chainIdNum: 69420,
+      builtin: true,
+      official: true,
+      active: true,
+    } satisfies ChainEntry;
+    const genesisHash = `0x${"ab".repeat(32)}`;
+    const html = renderToStaticMarkup(
+      <ReqAuthenticate
+        request={{
+          kind: "authenticate",
+          origin: "https://stele.monolythium.com",
+          networkLabel: "Monolythium Testnet",
+          challenge: {
+            version: "1",
+            domain: "stele.monolythium.com",
+            origin: "https://stele.monolythium.com",
+            uri: "https://stele.monolythium.com/",
+            chainId: "69420",
+            genesisHash,
+            nonce: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            issuedAt: "2026-07-16T11:59:30.000Z",
+            expirationTime: "2026-07-16T12:01:30.000Z",
+            scopes: ["stele:web:session"],
+          },
+        }}
+        address="0x1111111111111111111111111111111111111111"
+        custody="sw"
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        chain={chain}
+      />,
+    );
+
+    expect(html).toContain("Sign in with Monolythium?");
+    expect(html).toContain("https://stele.monolythium.com");
+    expect(html).toContain("Monolythium Testnet");
+    expect(html).toContain("69420");
+    expect(html).toContain("0xababababab…abababab");
+    expect(html).toContain("stele:web:session");
+    expect(html).toContain("2026-07-16T12:01:30.000Z");
+    expect(html).toContain("no transaction");
+    expect(html).toContain("cannot submit a transaction or transfer assets");
+    expect(html).toContain(
+      "stays connected and can see this account until you revoke access",
+    );
+    expect(html).toContain(
+      "Future signatures and transactions still require a separate wallet approval",
+    );
   });
 });
 

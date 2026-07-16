@@ -33,6 +33,11 @@ const DETERMINISTIC_SIG_BYTES = new Uint8Array(65).fill(0xab);
 DETERMINISTIC_SIG_BYTES[64] = 27; // valid recovery id
 const DETERMINISTIC_SIG_HEX = "0x" + Array.from(DETERMINISTIC_SIG_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
 const DETERMINISTIC_BLOCK_NUMBER = "0xdeadbeef";
+const WALLET_AUTH_PUBLIC_KEY_BYTES = new Uint8Array(1952).fill(0x23);
+const WALLET_AUTH_SIGNATURE_BYTES = new Uint8Array(3309).fill(0x45);
+const WALLET_AUTH_GENESIS_HASH =
+  "0xe22733f4d7e013b93f0f825667fcf852cbf7ad1ca31a42a1bfcf1ab6d79c89a3";
+const walletAuthDigests: Uint8Array[] = [];
 
 // ---- Mocks installed before the SUT module is imported ----
 
@@ -81,13 +86,37 @@ vi.mock("@monolythium/core-sdk", async (importOriginal) => {
   };
 });
 
+vi.mock("@monolythium/core-sdk/crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@monolythium/core-sdk/crypto")>();
+  return {
+    ...actual,
+    mlDsa65AddressFromPublicKey: () => DETERMINISTIC_ADDRESS,
+  };
+});
+
 // Approvals mock — auto-approve unless overridden by a test.
 let approvalDecision: { ok: true } | { ok: false; reason?: string } = { ok: true };
+let activeVaultId = "v1";
+let swapVaultAfterAuthenticationApproval = false;
+let authenticationApprovalBarrier: Promise<void> | null = null;
+let authenticationApprovalReached: (() => void) | null = null;
 const enqueuedApprovals: Array<{ kind: string; [k: string]: unknown }> = [];
 
 vi.mock("./approvals.js", () => ({
   enqueue: vi.fn(async (req: { kind: string }) => {
     enqueuedApprovals.push(req);
+    if (req.kind === "authenticate" && approvalDecision.ok) {
+      authenticationApprovalReached?.();
+      if (authenticationApprovalBarrier) await authenticationApprovalBarrier;
+      const snapshot = {
+        vaultId: activeVaultId,
+        address: DETERMINISTIC_ADDRESS,
+        chainId: "69420",
+        genesisHash: WALLET_AUTH_GENESIS_HASH,
+      };
+      if (swapVaultAfterAuthenticationApproval) activeVaultId = "v2";
+      return { ok: true, authentication: snapshot };
+    }
     return approvalDecision;
   }),
   resolve: vi.fn(() => true),
@@ -104,6 +133,7 @@ vi.mock("./approvals.js", () => ({
 // `unlocked` / `vaultExists` let tests flip the v4 mock's lock / has-vault state.
 let unlocked = true;
 let vaultExists = true;
+let walletAuthSigningFailure: Error | null = null;
 // S6 #45 B1 — flip to true to simulate a multisig active vault (exercises the
 // single-signer send-bypass guard). Reset to false after each guard test.
 let activeVaultMultisig = false;
@@ -120,7 +150,15 @@ vi.mock("./keystore-mldsa.js", () => ({
   tryRestoreFromSessionV4: vi.fn(async () => ({ ok: false })),
   isUnlockedV4: vi.fn(() => unlocked),
   // S6 #45 B1 — the send-bypass guard reads the active vault kind.
-  getActiveVaultIdV4: vi.fn(() => (unlocked ? "v1" : null)),
+  getActiveVaultIdV4: vi.fn(() => (unlocked ? activeVaultId : null)),
+  getUnlockedPublicKeyV4: vi.fn(() =>
+    unlocked ? WALLET_AUTH_PUBLIC_KEY_BYTES.slice() : null,
+  ),
+  signWalletAuthDigestV4: vi.fn((digest: Uint8Array) => {
+    walletAuthDigests.push(digest.slice());
+    if (walletAuthSigningFailure) throw walletAuthSigningFailure;
+    return WALLET_AUTH_SIGNATURE_BYTES.slice();
+  }),
   readMultisigMetaV4: vi.fn(async () =>
     activeVaultMultisig ? { signers: [], threshold: 1, proposals: [], governance: [] } : null,
   ),
@@ -153,7 +191,7 @@ vi.mock("./keystore-mldsa.js", () => ({
 interface RpcEnvelope {
   kind: "rpc";
   id: string;
-  args: { method: string; params?: unknown[] };
+  args: { method: string; params?: unknown[] | object };
   origin: string;
 }
 type OnMessageHandler = (
@@ -248,7 +286,7 @@ function installChromeStub(): void {
   };
 }
 
-function dispatch(method: string, params: unknown[] = [], origin = "https://dapp.example"): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+function dispatch(method: string, params: unknown[] | object = [], origin = "https://dapp.example"): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
   const handler = capturedOnMessage;
   if (!handler) throw new Error("service worker did not register onMessage listener");
   return new Promise((resolve) => {
@@ -309,6 +347,12 @@ beforeEach(() => {
   enqueuedApprovals.length = 0;
   broadcastEvents.length = 0;
   approvalDecision = { ok: true };
+  activeVaultId = "v1";
+  swapVaultAfterAuthenticationApproval = false;
+  authenticationApprovalBarrier = null;
+  authenticationApprovalReached = null;
+  walletAuthDigests.length = 0;
+  walletAuthSigningFailure = null;
   unlocked = true;
   vaultExists = true;
 });
@@ -357,6 +401,197 @@ describe("EIP-1193 conformance — service-worker request router", () => {
     const r = await dispatch("eth_accounts", [], origin);
     expect(r.error).toBeUndefined();
     expect(r.result).toEqual([]);
+  });
+
+  describe("monolythium_authenticate — atomic wallet authentication v1", () => {
+    const origin = "https://stele.monolythium.com";
+
+    function authRequest(now = Date.now()): Record<string, unknown> {
+      return {
+        version: "1",
+        domain: "stele.monolythium.com",
+        origin,
+        uri: `${origin}/`,
+        chainId: "69420",
+        genesisHash: WALLET_AUTH_GENESIS_HASH,
+        nonce: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        issuedAt: new Date(now - 1_000).toISOString(),
+        expirationTime: new Date(now + 119_000).toISOString(),
+        scopes: ["stele:web:session"],
+      };
+    }
+
+    it("returns one domain/network-bound ML-DSA proof without a separate connect prompt", async () => {
+      await popupDispatch("wallet-set-active-chain", { chainId: TESTNET_CHAIN_ID_HEX });
+      enqueuedApprovals.length = 0;
+      const r = await dispatch("monolythium_authenticate", authRequest(), origin);
+      expect(r.error).toBeUndefined();
+      const proof = r.result as {
+        challenge: Record<string, unknown>;
+        algorithm: string;
+        publicKey: string;
+        signature: string;
+      };
+      expect(enqueuedApprovals.map((approval) => approval.kind)).toEqual([
+        "authenticate",
+      ]);
+      expect(proof.algorithm).toBe("ml-dsa-65");
+      expect(proof.challenge.origin).toBe(origin);
+      expect(proof.challenge.domain).toBe("stele.monolythium.com");
+      expect(proof.challenge.uri).toBe(`${origin}/`);
+      expect(proof.challenge.chainId).toBe("69420");
+      expect(proof.challenge.genesisHash).toBe(WALLET_AUTH_GENESIS_HASH);
+      expect(proof.challenge.scopes).toEqual(["stele:web:session"]);
+      expect(proof.challenge.address).toMatch(/^mono1/);
+      expect(proof.publicKey).toMatch(/^0x[0-9a-f]+$/);
+      expect(proof.publicKey).toHaveLength(2 + 1952 * 2);
+      expect(proof.signature).toMatch(/^0x[0-9a-f]+$/);
+      expect(proof.signature).toHaveLength(2 + 3309 * 2);
+      expect(walletAuthDigests).toHaveLength(1);
+      expect(walletAuthDigests[0]).toHaveLength(32);
+
+      // Authentication grants connection visibility as part of the same
+      // consent, so no second eth_requestAccounts approval is needed.
+      const accounts = await dispatch("eth_accounts", [], origin);
+      expect(accounts.result).toEqual([DETERMINISTIC_ADDRESS]);
+    });
+
+    it.each([
+      ["caller-selected address", { address: DETERMINISTIC_ADDRESS }],
+      ["wrong domain", { domain: "evil.example" }],
+      ["wrong chain", { chainId: "1" }],
+      ["wrong genesis", { genesisHash: `0x${"cd".repeat(32)}` }],
+    ])("rejects %s before opening an approval", async (_label, patch) => {
+      enqueuedApprovals.length = 0;
+      const r = await dispatch(
+        "monolythium_authenticate",
+        { ...authRequest(), ...patch },
+        origin,
+      );
+      expect(r.error?.code).toBe(-32602);
+      expect(enqueuedApprovals.some((approval) => approval.kind === "authenticate")).toBe(
+        false,
+      );
+      expect(walletAuthDigests).toHaveLength(0);
+    });
+
+    it("rate-limits malformed authentication attempts before approval parsing", async () => {
+      const limitedOrigin = "https://auth-rate-limit.example";
+      for (let attempt = 0; attempt < 16; attempt += 1) {
+        const r = await dispatch("monolythium_authenticate", {}, limitedOrigin);
+        expect(r.error?.code).toBe(-32602);
+      }
+
+      const limited = await dispatch(
+        "monolythium_authenticate",
+        {},
+        limitedOrigin,
+      );
+      expect(limited.error).toEqual({
+        code: -32005,
+        message: "wallet authentication request limit exceeded",
+      });
+      expect(
+        enqueuedApprovals.some((approval) => approval.kind === "authenticate"),
+      ).toBe(false);
+    });
+
+    it("rejects a challenge bound to another bridge-stamped origin", async () => {
+      const r = await dispatch(
+        "monolythium_authenticate",
+        authRequest(),
+        "https://evil.example",
+      );
+      expect(r.error?.code).toBe(-32602);
+      expect(r.error?.message).toMatch(/origin|domain/);
+    });
+
+    it("revalidates freshness after the approval wait", async () => {
+      const now = Date.now();
+      const r = await dispatch(
+        "monolythium_authenticate",
+        {
+          ...authRequest(now),
+          issuedAt: new Date(now - 120_000).toISOString(),
+          expirationTime: new Date(now).toISOString(),
+        },
+        origin,
+      );
+      expect(r.error?.code).toBe(-32602);
+      expect(r.error?.message).toMatch(/expired/);
+      expect(walletAuthDigests).toHaveLength(0);
+    });
+
+    it("rejects a request that expires while its deferred approval resolves", async () => {
+      const now = Date.now();
+      let releaseApproval!: () => void;
+      authenticationApprovalBarrier = new Promise<void>((resolve) => {
+        releaseApproval = resolve;
+      });
+      const approvalReached = new Promise<void>((resolve) => {
+        authenticationApprovalReached = resolve;
+      });
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+      try {
+        const pending = dispatch(
+          "monolythium_authenticate",
+          {
+            ...authRequest(now),
+            issuedAt: new Date(now - 1_000).toISOString(),
+            expirationTime: new Date(now + 1_000).toISOString(),
+          },
+          origin,
+        );
+        await approvalReached;
+
+        nowSpy.mockReturnValue(now + 1_001);
+        releaseApproval();
+        const r = await pending;
+
+        expect(r.error?.code).toBe(-32602);
+        expect(r.error?.message).toMatch(/expired/);
+        expect(walletAuthDigests).toHaveLength(0);
+      } finally {
+        releaseApproval();
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("fails closed when the active vault changes after approval", async () => {
+      swapVaultAfterAuthenticationApproval = true;
+      const r = await dispatch("monolythium_authenticate", authRequest(), origin);
+      expect(r.error?.code).toBe(4100);
+      expect(r.error?.message).toMatch(/active vault or network changed/);
+      expect(walletAuthDigests).toHaveLength(0);
+    });
+
+    it("surfaces a declined authentication as EIP-1193 user rejection", async () => {
+      approvalDecision = { ok: false, reason: "not this time" };
+      const r = await dispatch("monolythium_authenticate", authRequest(), origin);
+      expect(r.error).toEqual({ code: 4001, message: "not this time" });
+      expect(walletAuthDigests).toHaveLength(0);
+    });
+
+    it("returns a stable generic internal error and sanitizes signing logs", async () => {
+      const sensitiveDetail = "seed handle /private/backend/slot-7";
+      walletAuthSigningFailure = new Error(sensitiveDetail);
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const r = await dispatch("monolythium_authenticate", authRequest(), origin);
+        expect(r.error).toEqual({
+          code: -32603,
+          message: "wallet authentication failed",
+        });
+        expect(log).toHaveBeenCalledWith(
+          "[Monolythium Wallet] wallet authentication failed",
+          { stage: "proof-generation", causeType: "Error" },
+        );
+        expect(JSON.stringify(log.mock.calls)).not.toContain(sensitiveDetail);
+      } finally {
+        log.mockRestore();
+      }
+    });
   });
 
   // ---- 3. eth_blockNumber ----

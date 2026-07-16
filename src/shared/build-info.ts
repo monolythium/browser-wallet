@@ -45,9 +45,9 @@ export const SDK_PACKAGE_VERSION: string =
  *  fallback) differs from this pin, in which case this security pin takes
  *  precedence. The wallet reads only `TESTNET_69420.chain_id` from the bundled
  *  SDK — never its bundled `genesis_hash` — so this pin is independent of the
- *  SDK version (the installed `@monolythium/core-sdk` 0.6.7 still bundles an
- *  older snapshot, but the wallet ignores that field, so the pin
- *  stays authoritative at 0xe22733f4). Bumping this security pin is a
+ *  SDK version (the installed `@monolythium/core-sdk` 0.6.8 now bundles the
+ *  same snapshot, but the wallet still ignores that field, so the pin stays
+ *  independently authoritative at 0xe22733f4). Bumping this security pin is a
  *  human-reviewer decision; the live-registry fetch shows the current
  *  GitHub-registry value alongside. */
 export const TESTNET_GENESIS_HASH =
@@ -67,10 +67,10 @@ export const TESTNET_BLOCK0_HASH =
  *  reviewer notices a registry-vs-pin drift on the next sync. Pinned to
  *  the v0.4.0-testnet four-cluster (4×10, 7-of-10) re-genesis value
  *  (2026-07-07) — matching the live GitHub chain-registry — so it does not
- *  lag. The installed `@monolythium/core-sdk` 0.6.7 still bundles an older
- *  snapshot in `TESTNET_69420.genesis_hash`, but the wallet reads only
- *  `.chain_id` from the SDK bundle, never its bundled genesis_hash, so this
- *  literal tracks the live registry directly. */
+ *  lag. The installed `@monolythium/core-sdk` 0.6.8 bundles the matching
+ *  snapshot in `TESTNET_69420.genesis_hash`; the wallet nevertheless reads
+ *  only `.chain_id` from the SDK bundle, so this reviewer-controlled literal
+ *  remains the direct registry pin. */
 export const SDK_REGISTRY_GENESIS_HASH: string =
   "0xe22733f4d7e013b93f0f825667fcf852cbf7ad1ca31a42a1bfcf1ab6d79c89a3";
 

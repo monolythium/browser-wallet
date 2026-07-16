@@ -11,6 +11,7 @@ import type { MrcAccountLookupResponse } from "../shared/mrc-account.js";
 import type { WalletMrvNativeSubmissionPlan } from "../shared/mrv-native-plan.js";
 import type { NativeExecutionFeeSuggestion } from "../shared/native-fee-display.js";
 import type { TxOpKind } from "../shared/notifications.js";
+import type { WalletAuthRequestV1 } from "../shared/wallet-auth.js";
 import type { CurrencyCode } from "../shared/iso4217.js";
 export type {
   WalletBridgeDisclosureValue,
@@ -108,6 +109,13 @@ export interface PersonalSignRequest {
   address: string;
 }
 
+export interface AuthenticationRequest {
+  kind: "authenticate";
+  origin: string;
+  challenge: WalletAuthRequestV1;
+  networkLabel: string;
+}
+
 export interface TypedSignRequest {
   kind: "typed_sign";
   origin: string;
@@ -159,6 +167,7 @@ export interface SwitchChainRequest {
 
 export type ApprovalRequest =
   | ConnectRequest
+  | AuthenticationRequest
   | PersonalSignRequest
   | TypedSignRequest
   | SendTxRequest
@@ -1340,7 +1349,7 @@ export async function bgListPending(): Promise<PendingApproval[]> {
 
 export async function bgResolveApproval(
   id: string,
-  decision: { ok: boolean; reason?: string },
+  decision: { ok: boolean; reason?: string; displayedAddress?: string },
   windowId?: number,
 ): Promise<{ found: boolean }> {
   return send<{ found: boolean }>("resolve", { id, decision, windowId });
