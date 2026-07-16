@@ -548,7 +548,10 @@ jobs:
 
   release:
     name: Create draft GitHub release
-    needs: [build, sign, publish-chrome]
+    # The signed source artifact is a release channel of its own. Chrome Store
+    # review and credentials must not suppress the independently verifiable
+    # GitHub ZIP, SBOM, checksums, or signatures.
+    needs: [build, sign]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
