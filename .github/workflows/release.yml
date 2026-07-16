@@ -3,188 +3,587 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag (e.g. v0.1.0). Empty = build only, no store upload."
-        required: false
-        type: string
-      upload:
-        description: "Upload to stores (true/false). Defaults to true on tag push."
-        required: false
-        type: boolean
-        default: false
+      - "v*.*.*"
 
-permissions:
-  contents: write
-  id-token: write
+# This privileged workflow is tag-push-only and cannot be dispatched manually.
+concurrency:
+  group: browser-wallet-release
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Test and build release artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          version: 10
+          fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
-          node-version: 22
-          cache: pnpm
+          version: 10.28.2
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
 
-      - name: Typecheck + build
-        run: |
-          pnpm typecheck
-          pnpm build
-
-      - name: Read version
+      - name: Validate source version and release tag
         id: version
-        run: echo "version=$(jq -r .version manifest.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Package extension (zip)
+        shell: bash
         run: |
-          cd dist
-          zip -r ../browser-wallet-${{ steps.version.outputs.version }}.zip .
+          set -euo pipefail
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
 
-      - name: SHA-256 checksum
-        run: sha256sum browser-wallet-*.zip > SHA256SUMS
+          if [[ "$PACKAGE_VERSION" != "$MANIFEST_VERSION" ]]; then
+            echo "::error::package.json version '$PACKAGE_VERSION' does not match manifest.json version '$MANIFEST_VERSION'"
+            exit 1
+          fi
+          if [[ ! "$MANIFEST_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Extension version must be three canonical numeric components"
+            exit 1
+          fi
 
-      - name: SPDX SBOM (syft)
-        uses: anchore/sbom-action@v0
+          IFS=. read -r VERSION_MAJOR VERSION_MINOR VERSION_PATCH <<< "$MANIFEST_VERSION"
+          for COMPONENT in "$VERSION_MAJOR" "$VERSION_MINOR" "$VERSION_PATCH"; do
+            if (( ${#COMPONENT} > 5 )) || (( 10#$COMPONENT > 65535 )); then
+              echo "::error::Extension version components must not exceed 65535"
+              exit 1
+            fi
+          done
+
+          if [[ "$GITHUB_REF_TYPE" != "tag" || ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Release workflow push must use a canonical vMAJOR.MINOR.PATCH tag"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" != "v$MANIFEST_VERSION" ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' does not match extension version '$MANIFEST_VERSION'"
+            exit 1
+          fi
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::Release tag commit is not contained in origin/master"
+            exit 1
+          fi
+
+          printf 'version=%s\n' "$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Check types
+        run: pnpm typecheck
+
+      - name: Run full test suite
+        run: pnpm test
+
+      - name: Build production extension
+        run: pnpm build
+
+      - name: Inspect production output
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_VERSION=$(node -p "require('./manifest.json').version")
+          BUILT_VERSION=$(node -p "require('./dist/manifest.json').version")
+          test "$SOURCE_VERSION" = "$BUILT_VERSION"
+          if find dist -type f -name '*.map' -print -quit | grep -q .; then
+            echo "::error::Production extension contains source maps"
+            exit 1
+          fi
+          if find dist -type l -print -quit | grep -q .; then
+            echo "::error::Production extension contains symbolic links"
+            exit 1
+          fi
+
+      - name: Package deterministic extension ZIP
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ZIP="browser-wallet-${VERSION}.zip"
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+          find dist -type d -exec chmod 0755 {} +
+          find dist -type f -exec chmod 0644 {} +
+          find dist -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
+          (
+            cd dist
+            LC_ALL=C find . -type f -print | LC_ALL=C sort | zip -X -q "../${ZIP}" -@
+          )
+          unzip -t "$ZIP"
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           path: ./
           format: spdx-json
           output-file: browser-wallet-${{ steps.version.outputs.version }}.spdx.json
+          syft-version: v1.46.0
+          dependency-snapshot: false
           upload-artifact: false
+          upload-release-assets: false
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: browser-wallet-zip
-          path: |
-            browser-wallet-*.zip
-            SHA256SUMS
-            browser-wallet-*.spdx.json
-
-  publish-chrome:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.upload == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: browser-wallet-zip
-
-      - name: Install Python deps
-        run: pip install pyjwt cryptography
-
-      - name: Upload to Chrome Web Store
+      - name: Validate SBOM and write checksums
+        shell: bash
         env:
-          SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
-          EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          echo "$SERVICE_ACCOUNT_JSON" > /tmp/sa.json
-          ACCESS_TOKEN=$(python3 - <<'PY'
-          import json, time, urllib.request, urllib.parse, jwt
-          sa = json.load(open("/tmp/sa.json"))
-          now = int(time.time())
-          payload = {
-              "iss": sa["client_email"],
-              "scope": "https://www.googleapis.com/auth/chromewebstore",
-              "aud": "https://oauth2.googleapis.com/token",
-              "iat": now,
-              "exp": now + 3600,
-          }
-          assertion = jwt.encode(payload, sa["private_key"], algorithm="RS256")
-          data = urllib.parse.urlencode({
-              "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-              "assertion": assertion,
-          }).encode()
-          resp = urllib.request.urlopen("https://oauth2.googleapis.com/token", data=data)
-          print(json.load(resp)["access_token"])
-          PY
-          )
-          ZIP=$(ls browser-wallet-*.zip | head -1)
-          echo "Uploading $ZIP …"
-          UP=$(curl -sS -X PUT \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "x-goog-api-version: 2" \
-            -T "$ZIP" \
-            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$EXTENSION_ID")
-          echo "upload response: $UP"
-          if ! echo "$UP" | grep -q '"uploadState": *"SUCCESS"'; then
-            rm -f /tmp/sa.json
-            echo "::error::Chrome Web Store upload did not reach SUCCESS"
-            exit 1
-          fi
-          echo "Publishing to the default (public) channel …"
-          PUB=$(curl -sS -X POST \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "x-goog-api-version: 2" \
-            -H "Content-Length: 0" \
-            -w $'\n__HTTP__%{http_code}' \
-            "https://www.googleapis.com/chromewebstore/v1.1/items/$EXTENSION_ID/publish")
-          rm -f /tmp/sa.json
-          CODE=${PUB##*__HTTP__}
-          BODY=${PUB%__HTTP__*}
-          echo "publish HTTP $CODE"
-          echo "publish response: $BODY"
-          case "$CODE" in
-            2*) echo "Publish request accepted by the Chrome Web Store." ;;
-            *)
-              echo "::error::Chrome Web Store publish failed (HTTP $CODE): $BODY"
-              exit 1
-              ;;
-          esac
+          set -euo pipefail
+          ZIP="browser-wallet-${VERSION}.zip"
+          SBOM="browser-wallet-${VERSION}.spdx.json"
+          jq -e '.spdxVersion | startswith("SPDX-")' "$SBOM" >/dev/null
+          sha256sum -- "$ZIP" "$SBOM" > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+
+      - name: Upload unsigned release inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-wallet-${{ steps.version.outputs.version }}-release-inputs
+          path: |
+            browser-wallet-${{ steps.version.outputs.version }}.zip
+            browser-wallet-${{ steps.version.outputs.version }}.spdx.json
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
 
   sign:
+    name: Sign and verify release artifact
     needs: build
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write
+      id-token: write # Required only for keyless Cosign signing.
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download unsigned release inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: browser-wallet-zip
+          name: browser-wallet-${{ needs.build.outputs.version }}-release-inputs
+          path: release-inputs
+          digest-mismatch: error
 
-      - uses: sigstore/cosign-installer@v3
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.1
 
-      - name: Cosign keyless sign (zip + SBOM)
+      - name: Verify checksums and sign release inputs
+        shell: bash
         env:
-          COSIGN_EXPERIMENTAL: "1"
+          VERSION: ${{ needs.build.outputs.version }}
+        working-directory: release-inputs
         run: |
-          ZIP=$(ls browser-wallet-*.zip | head -1)
-          SBOM=$(ls browser-wallet-*.spdx.json | head -1)
-          cosign sign-blob --yes "$ZIP" \
-            --bundle "${ZIP}.cosign.bundle"
-          cosign sign-blob --yes "$SBOM" \
-            --bundle "${SBOM}.cosign.bundle"
+          set -euo pipefail
+          ZIP="browser-wallet-${VERSION}.zip"
+          SBOM="browser-wallet-${VERSION}.spdx.json"
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          ISSUER="https://token.actions.githubusercontent.com"
 
-      - uses: actions/upload-artifact@v4
+          sha256sum --check --strict SHA256SUMS
+          for FILE in "$ZIP" "$SBOM" SHA256SUMS; do
+            cosign sign-blob --yes --bundle "${FILE}.cosign.bundle" "$FILE"
+            cosign verify-blob \
+              --bundle "${FILE}.cosign.bundle" \
+              --certificate-identity "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" \
+              "$FILE"
+          done
+
+      - name: Upload signature bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cosign-bundles
-          path: "*.cosign.bundle"
+          name: browser-wallet-${{ needs.build.outputs.version }}-signatures
+          path: release-inputs/*.cosign.bundle
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+  publish-chrome:
+    name: Stage Chrome Web Store submission
+    needs: [build, sign]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: chrome-web-store-production
+    permissions:
+      contents: read
+      id-token: write # Required only for Google Workload Identity Federation.
+    steps:
+      - name: Download release inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: browser-wallet-${{ needs.build.outputs.version }}-release-inputs
+          path: release-inputs
+          digest-mismatch: error
+
+      - name: Download signature bundles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: browser-wallet-${{ needs.build.outputs.version }}-signatures
+          path: release-inputs
+          digest-mismatch: error
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.1
+
+      - name: Verify signed release inputs
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        working-directory: release-inputs
+        run: |
+          set -euo pipefail
+          ZIP="browser-wallet-${VERSION}.zip"
+          SBOM="browser-wallet-${VERSION}.spdx.json"
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          ISSUER="https://token.actions.githubusercontent.com"
+
+          sha256sum --check --strict SHA256SUMS
+          for FILE in "$ZIP" "$SBOM" SHA256SUMS; do
+            cosign verify-blob \
+              --bundle "${FILE}.cosign.bundle" \
+              --certificate-identity "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" \
+              "$FILE"
+          done
+
+      - name: Authenticate to Google Cloud
+        id: google-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.CWS_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.CWS_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+          access_token_lifetime: 600s
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Upload and stage Chrome Web Store package
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          VERSION: ${{ needs.build.outputs.version }}
+        working-directory: release-inputs
+        run: |
+          set -euo pipefail
+          EXTENSION_ID="hendlkmpghhmhmggjebkpbedncpepkgj"
+          ZIP="browser-wallet-${VERSION}.zip"
+
+          if [[ ! "$PUBLISHER_ID" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
+            echo "::error::CWS_PUBLISHER_ID has an invalid format"
+            exit 1
+          fi
+          if [[ -z "$ACCESS_TOKEN" ]]; then
+            echo "::error::Google authentication did not return an access token"
+            exit 1
+          fi
+          if [[ ! -s "$ZIP" ]]; then
+            echo "::error::Release ZIP is missing or empty"
+            exit 1
+          fi
+
+          RESOURCE="publishers/${PUBLISHER_ID}/items/${EXTENSION_ID}"
+          UPLOAD_URL="https://chromewebstore.googleapis.com/upload/v2/${RESOURCE}:upload"
+          STATUS_URL="https://chromewebstore.googleapis.com/v2/${RESOURCE}:fetchStatus"
+          PUBLISH_URL="https://chromewebstore.googleapis.com/v2/${RESOURCE}:publish"
+          CANCEL_URL="https://chromewebstore.googleapis.com/v2/${RESOURCE}:cancelSubmission"
+          UPLOAD_RESPONSE=$(mktemp)
+          STATUS_RESPONSE=$(mktemp)
+          PUBLISH_RESPONSE=$(mktemp)
+          CANCEL_RESPONSE=$(mktemp)
+          trap 'rm -f "$UPLOAD_RESPONSE" "$STATUS_RESPONSE" "$PUBLISH_RESPONSE" "$CANCEL_RESPONSE"' EXIT
+
+          request_status() {
+            local method=$1
+            local url=$2
+            local output=$3
+            local max_time=${REQUEST_MAX_TIME_SECONDS:-120}
+            local connect_timeout=15
+            shift 3
+            if (( max_time < 1 )); then
+              return 124
+            fi
+            if (( connect_timeout > max_time )); then
+              connect_timeout=$max_time
+            fi
+            curl --silent --show-error \
+              --request "$method" \
+              --proto '=https' \
+              --tlsv1.2 \
+              --connect-timeout "$connect_timeout" \
+              --max-time "$max_time" \
+              --header "Authorization: Bearer ${ACCESS_TOKEN}" \
+              --output "$output" \
+              --write-out '%{http_code}' \
+              "$@" \
+              "$url"
+          }
+
+          cancel_submission() {
+            local cancel_http
+            if ! cancel_http=$(REQUEST_MAX_TIME_SECONDS=15 request_status POST "$CANCEL_URL" "$CANCEL_RESPONSE"); then
+              echo "::error::Chrome Web Store submission cancellation request failed; inspect the developer dashboard immediately"
+              return 1
+            fi
+            if [[ ! "$cancel_http" =~ ^2[0-9][0-9]$ ]]; then
+              jq -c '{error: (.error // {message: "Chrome Web Store submission cancellation failed"})}' "$CANCEL_RESPONSE" >&2 || true
+              echo "::error::Chrome Web Store submission cancellation failed with HTTP ${cancel_http}; inspect the developer dashboard immediately"
+              return 1
+            fi
+            echo "Chrome Web Store submission was cancelled before release"
+          }
+
+          fail_after_submission() {
+            local message=$1
+            cancel_submission || true
+            echo "::error::${message}"
+            exit 1
+          }
+
+          HTTP_CODE=$(request_status POST "$UPLOAD_URL" "$UPLOAD_RESPONSE" \
+            --header 'Content-Type: application/zip' \
+            --upload-file "$ZIP")
+          if [[ ! "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+            jq -c '{error: (.error // {message: "Chrome Web Store upload failed"})}' "$UPLOAD_RESPONSE" >&2 || true
+            echo "::error::Chrome Web Store v2 upload failed with HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+          ITEM_ID=$(jq -er '.itemId' "$UPLOAD_RESPONSE")
+          UPLOAD_STATE=$(jq -er '.uploadState' "$UPLOAD_RESPONSE")
+          INITIAL_UPLOAD_STATE=$UPLOAD_STATE
+          if [[ "$ITEM_ID" != "$EXTENSION_ID" ]]; then
+            echo "::error::Chrome Web Store response targeted unexpected item '$ITEM_ID'"
+            exit 1
+          fi
+          if [[ "$INITIAL_UPLOAD_STATE" == "SUCCEEDED" ]]; then
+            if ! REPORTED_VERSION=$(jq -er '.crxVersion | select(type == "string" and length > 0)' "$UPLOAD_RESPONSE"); then
+              echo "::error::Synchronous Chrome Web Store upload omitted the parsed CRX version"
+              exit 1
+            fi
+            if [[ "$REPORTED_VERSION" != "$VERSION" ]]; then
+              echo "::error::Chrome Web Store parsed version '$REPORTED_VERSION', expected '$VERSION'"
+              exit 1
+            fi
+          fi
+
+          UPLOAD_DEADLINE=$((SECONDS + 120))
+          ATTEMPT=0
+          while (( SECONDS < UPLOAD_DEADLINE )); do
+            ATTEMPT=$((ATTEMPT + 1))
+            case "$UPLOAD_STATE" in
+              SUCCEEDED)
+                break
+                ;;
+              IN_PROGRESS)
+                echo "Chrome Web Store is processing the upload (poll ${ATTEMPT})"
+                REMAINING=$((UPLOAD_DEADLINE - SECONDS))
+                if (( REMAINING > 5 )); then
+                  sleep 5
+                else
+                  sleep "$REMAINING"
+                fi
+                REMAINING=$((UPLOAD_DEADLINE - SECONDS))
+                if (( REMAINING < 1 )); then
+                  break
+                fi
+                STATUS_TIMEOUT=$REMAINING
+                if (( STATUS_TIMEOUT > 10 )); then
+                  STATUS_TIMEOUT=10
+                fi
+                if ! HTTP_CODE=$(REQUEST_MAX_TIME_SECONDS="$STATUS_TIMEOUT" request_status GET "$STATUS_URL" "$STATUS_RESPONSE"); then
+                  continue
+                fi
+                if [[ ! "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+                  jq -c '{error: (.error // {message: "Chrome Web Store status check failed"})}' "$STATUS_RESPONSE" >&2 || true
+                  echo "::error::Chrome Web Store status check failed with HTTP ${HTTP_CODE}"
+                  exit 1
+                fi
+                STATUS_ITEM_ID=$(jq -er '.itemId' "$STATUS_RESPONSE")
+                UPLOAD_STATE=$(jq -er '.lastAsyncUploadState' "$STATUS_RESPONSE")
+                if [[ "$STATUS_ITEM_ID" != "$EXTENSION_ID" ]]; then
+                  echo "::error::Chrome Web Store status targeted unexpected item '$STATUS_ITEM_ID'"
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "::error::Chrome Web Store upload entered terminal state '${UPLOAD_STATE}'"
+                exit 1
+                ;;
+            esac
+          done
+          if [[ "$UPLOAD_STATE" != "SUCCEEDED" ]]; then
+            echo "::error::Chrome Web Store upload did not complete within 120 seconds"
+            exit 1
+          fi
+
+          if ! HTTP_CODE=$(REQUEST_MAX_TIME_SECONDS=60 request_status POST "$PUBLISH_URL" "$PUBLISH_RESPONSE" \
+            --header 'Content-Type: application/json' \
+            --data '{"publishType":"STAGED_PUBLISH","blockOnWarnings":true,"skipReview":false}'); then
+            cancel_submission || true
+            echo "::error::Chrome Web Store staged-publish response was lost; inspect the developer dashboard immediately"
+            exit 1
+          fi
+          if [[ ! "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+            jq -c '{error: (.error // {message: "Chrome Web Store staged publish failed"})}' "$PUBLISH_RESPONSE" >&2 || true
+            echo "::error::Chrome Web Store staged publish failed with HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+          if ! ITEM_ID=$(jq -er '.itemId' "$PUBLISH_RESPONSE") ||
+            ! ITEM_STATE=$(jq -er '.state' "$PUBLISH_RESPONSE"); then
+            fail_after_submission "Chrome Web Store returned a malformed staged-publish response"
+          fi
+          if [[ "$ITEM_ID" != "$EXTENSION_ID" ]]; then
+            fail_after_submission "Chrome Web Store publish response targeted unexpected item '$ITEM_ID'"
+          fi
+          if [[ "$ITEM_STATE" != "PENDING_REVIEW" && "$ITEM_STATE" != "STAGED" ]]; then
+            fail_after_submission "Expected a non-public staged submission, got '${ITEM_STATE}'"
+          fi
+
+          SUBMISSION_VERIFIED=false
+          SUBMISSION_DEADLINE=$((SECONDS + 120))
+          ATTEMPT=0
+          while (( SECONDS < SUBMISSION_DEADLINE )); do
+            ATTEMPT=$((ATTEMPT + 1))
+            REMAINING=$((SUBMISSION_DEADLINE - SECONDS))
+            STATUS_TIMEOUT=$REMAINING
+            if (( STATUS_TIMEOUT > 10 )); then
+              STATUS_TIMEOUT=10
+            fi
+            if ! HTTP_CODE=$(REQUEST_MAX_TIME_SECONDS="$STATUS_TIMEOUT" request_status GET "$STATUS_URL" "$STATUS_RESPONSE"); then
+              echo "Chrome Web Store submitted-revision status request failed (poll ${ATTEMPT})"
+              REMAINING=$((SUBMISSION_DEADLINE - SECONDS))
+              if (( REMAINING > 5 )); then
+                sleep 5
+              elif (( REMAINING > 0 )); then
+                sleep "$REMAINING"
+              fi
+              continue
+            fi
+            if [[ ! "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+              echo "Chrome Web Store submitted-revision status returned HTTP ${HTTP_CODE} (poll ${ATTEMPT})"
+              REMAINING=$((SUBMISSION_DEADLINE - SECONDS))
+              if (( REMAINING > 5 )); then
+                sleep 5
+              elif (( REMAINING > 0 )); then
+                sleep "$REMAINING"
+              fi
+              continue
+            fi
+
+            if ! STATUS_ITEM_ID=$(jq -er '.itemId' "$STATUS_RESPONSE") ||
+              ! SUBMITTED_STATE=$(jq -r '.submittedItemRevisionStatus.state // ""' "$STATUS_RESPONSE"); then
+              fail_after_submission "Chrome Web Store returned a malformed submitted-revision status"
+            fi
+            if [[ "$STATUS_ITEM_ID" != "$EXTENSION_ID" ]]; then
+              fail_after_submission "Chrome Web Store submitted status targeted unexpected item '$STATUS_ITEM_ID'"
+            fi
+            case "$SUBMITTED_STATE" in
+              PENDING_REVIEW|STAGED)
+                if ! REPORTED_VERSIONS=$(jq -ce '
+                  .submittedItemRevisionStatus.distributionChannels
+                  | if type != "array" or length == 0 then
+                      error("submitted revision has no distribution channels")
+                    elif any(.[]; (.crxVersion | type) != "string" or (.crxVersion | length) == 0) then
+                      error("submitted revision has a missing CRX version")
+                    else
+                      [.[].crxVersion] | unique
+                    end
+                ' "$STATUS_RESPONSE"); then
+                  fail_after_submission "Chrome Web Store submitted revision omitted a valid CRX version"
+                fi
+                if [[ $(jq -r 'length' <<<"$REPORTED_VERSIONS") -ne 1 ]]; then
+                  fail_after_submission "Chrome Web Store reported multiple submitted CRX versions"
+                fi
+                REPORTED_VERSION=$(jq -er '.[0]' <<<"$REPORTED_VERSIONS")
+                if [[ "$REPORTED_VERSION" != "$VERSION" ]]; then
+                  fail_after_submission "Chrome Web Store submitted version '$REPORTED_VERSION', expected '$VERSION'"
+                fi
+                SUBMISSION_VERIFIED=true
+                break
+                ;;
+              ""|ITEM_STATE_UNSPECIFIED)
+                echo "Chrome Web Store submitted revision is propagating (poll ${ATTEMPT})"
+                ;;
+              *)
+                fail_after_submission "Chrome Web Store submitted revision entered unexpected state '${SUBMITTED_STATE}'"
+                ;;
+            esac
+            REMAINING=$((SUBMISSION_DEADLINE - SECONDS))
+            if (( REMAINING > 5 )); then
+              sleep 5
+            elif (( REMAINING > 0 )); then
+              sleep "$REMAINING"
+            fi
+          done
+          if [[ "$SUBMISSION_VERIFIED" != "true" ]]; then
+            fail_after_submission "Chrome Web Store submitted revision was not verifiable within 120 seconds"
+          fi
+          jq -nc --arg itemId "$EXTENSION_ID" --arg state "$SUBMITTED_STATE" --arg crxVersion "$REPORTED_VERSION" \
+            '{itemId: $itemId, state: $state, crxVersion: $crxVersion}'
 
   release:
-    needs: [build, sign]
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
-    runs-on: ubuntu-latest
+    name: Create draft GitHub release
+    needs: [build, sign, publish-chrome]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # Required only to create the draft release and its assets.
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download release inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: ./artifacts
-          merge-multiple: true
+          name: browser-wallet-${{ needs.build.outputs.version }}-release-inputs
+          path: release-assets
+          digest-mismatch: error
 
-      - uses: softprops/action-gh-release@v2
+      - name: Download signature bundles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: ./artifacts/*
+          name: browser-wallet-${{ needs.build.outputs.version }}-signatures
+          path: release-assets
+          digest-mismatch: error
+
+      - name: Create draft release # zizmor: ignore[superfluous-actions] full pin preferred over mutable runner gh
+        # A full, verified commit pin is more reproducible than the runner's
+        # mutable preinstalled gh CLI.
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ github.ref_name }}
           draft: true
-          fail_on_unmatched_files: false
+          generate_release_notes: true
+          make_latest: false
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/browser-wallet-${{ needs.build.outputs.version }}.zip
+            release-assets/browser-wallet-${{ needs.build.outputs.version }}.spdx.json
+            release-assets/SHA256SUMS
+            release-assets/browser-wallet-${{ needs.build.outputs.version }}.zip.cosign.bundle
+            release-assets/browser-wallet-${{ needs.build.outputs.version }}.spdx.json.cosign.bundle
+            release-assets/SHA256SUMS.cosign.bundle

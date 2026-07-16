@@ -1,37 +1,64 @@
 name: Test
 
-# PR + default-branch test gate (S7 #51). release.yml only runs typecheck+build
-# on tag push, so a logic/policy regression could merge + ship green. This runs
-# the full suite on every PR (and on master as a backstop). Making it a REQUIRED
-# merge check is a separate GitHub branch-protection setting (repo admin).
 on:
   pull_request:
   push:
     branches:
       - master
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          version: 10
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
-          node-version: 22
+          version: 10.28.2
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.1
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - run: pnpm typecheck
+      - name: Check types
+        run: pnpm typecheck
 
-      - run: pnpm build
+      - name: Run full test suite
+        run: pnpm test
 
-      - run: pnpm test
+      - name: Build production extension
+        run: pnpm build
+
+      - name: Inspect production output
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_VERSION=$(node -p "require('./manifest.json').version")
+          BUILT_VERSION=$(node -p "require('./dist/manifest.json').version")
+          test "$SOURCE_VERSION" = "$BUILT_VERSION"
+          if find dist -type f -name '*.map' -print -quit | grep -q .; then
+            echo "::error::Production extension contains source maps"
+            exit 1
+          fi
+          if find dist -type l -print -quit | grep -q .; then
+            echo "::error::Production extension contains symbolic links"
+            exit 1
+          fi
