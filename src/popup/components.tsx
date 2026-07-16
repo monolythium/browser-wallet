@@ -41,6 +41,7 @@ import type {
 } from "./demo-data";
 import type {
   ConnectRequest,
+  AuthenticationRequest,
   PersonalSignRequest,
   TypedSignRequest,
   SendTxRequest,
@@ -2085,6 +2086,8 @@ function describeApproval(item: PendingApproval): ApprovalDisplay {
   switch (req.kind) {
     case "connect":
       return { title: `Connect · ${host}`, subtitle: "Connection request", letter };
+    case "authenticate":
+      return { title: `Sign in · ${host}`, subtitle: req.challenge.scopes.join(", "), letter };
     case "personal_sign":
       return { title: `Sign message · ${host}`, subtitle: previewMessage(req.message), letter };
     case "typed_sign":
@@ -3867,6 +3870,116 @@ export function ReqConnect({
         <button onClick={onReject}>Reject</button>
         <button className={hasDanger ? "danger" : "prim"} onClick={onApprove}>
           {hasDanger ? "Connect anyway" : "Connect"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+interface ReqAuthenticateProps {
+  request: AuthenticationRequest;
+  /** Active account from the keystore. Never supplied by the dApp. */
+  address: string;
+  custody: Custody;
+  onApprove: () => void;
+  onReject: () => void;
+  chain: ChainEntry;
+}
+
+/** Human-readable rendering of the exact wallet-auth v1 authority. No generic
+ * message or calldata is hidden behind this approval. */
+export function ReqAuthenticate({
+  request,
+  address,
+  custody,
+  onApprove,
+  onReject,
+  chain,
+}: ReqAuthenticateProps) {
+  const { challenge } = request;
+  const originWarnings = detectOriginWarnings(challenge.origin);
+  const hasDanger = originWarnings.some((warning) => warning.level === "danger");
+  let hostname = challenge.domain;
+  try {
+    hostname = new URL(challenge.origin).hostname;
+  } catch {
+    // The service worker rejects malformed origins before enqueue. Retain the
+    // validated domain as a defensive display fallback.
+  }
+
+  return (
+    <>
+      <ChainStatusBanner network={chain} />
+      <div className="req-head">
+        <div className="origin">
+          <div className="fav G">{(hostname[0] ?? "?").toUpperCase()}</div>
+          <div className="info">
+            <div className="n">{hostname}</div>
+            <div className="u" title={challenge.origin}>{challenge.origin}</div>
+          </div>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--fg-200)", padding: "3px 7px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4 }}>
+            authenticate
+          </div>
+        </div>
+        <h2>Sign in with Monolythium?</h2>
+        <div className="sub">authentication only · no transaction · no value transferred</div>
+      </div>
+
+      <OriginWarningPanel warnings={originWarnings} />
+
+      <div className="req-section">
+        <div className="req-section__h">Signing as</div>
+        <div className="req-kv">
+          <span className="k">Address</span>
+          <span className="v">{address ? bech32mDisplay(address) : "—"}</span>
+        </div>
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">Bound network</div>
+        <div className="req-kv">
+          <span className="k">Network</span>
+          <span className="v">{request.networkLabel}</span>
+        </div>
+        <div className="req-kv">
+          <span className="k">Chain ID</span>
+          <span className="v">{challenge.chainId}</span>
+        </div>
+        <div className="req-kv">
+          <span className="k">Genesis</span>
+          <span className="v" title={challenge.genesisHash}>
+            {challenge.genesisHash.slice(0, 12)}…{challenge.genesisHash.slice(-8)}
+          </span>
+        </div>
+      </div>
+
+      <div className="req-section">
+        <div className="req-section__h">Requested access</div>
+        {challenge.scopes.map((scope) => (
+          <div className="req-kv" key={scope}>
+            <span className="k">Scope</span>
+            <span className="v">{scope}</span>
+          </div>
+        ))}
+        <div className="req-kv">
+          <span className="k">Expires</span>
+          <span className="v">{challenge.expirationTime}</span>
+        </div>
+      </div>
+
+      <div className="req-warn warn">
+        This signs a one-time login challenge. It cannot submit a transaction or transfer assets.
+      </div>
+      <div className="req-warn warn">
+        This site stays connected and can see this account until you revoke access. Future
+        signatures and transactions still require a separate wallet approval.
+      </div>
+
+      <CustodyBadge mode={custody} />
+      <div className="req-foot">
+        <button onClick={onReject}>Reject</button>
+        <button className={hasDanger ? "danger" : "prim"} onClick={onApprove}>
+          {hasDanger ? "Sign in anyway" : "Sign in"}
         </button>
       </div>
     </>

@@ -34,12 +34,14 @@ import {
   getNoEvmReceiptTrustPolicy,
   MONOLYTHIUM_TESTNET_CHAIN_ID,
   ML_DSA_65_PUBLIC_KEY_LEN,
+  ML_DSA_65_SIGNATURE_LEN,
   typedBech32ToAddress,
   verifyNoEvmArchiveProofSignatures,
   type NoEvmArchiveSignatureVerification,
   type NoEvmArchiveTrustedSigner,
   type NoEvmReceiptTrustPolicy,
 } from "@monolythium/core-sdk";
+import { mlDsa65AddressFromPublicKey } from "@monolythium/core-sdk/crypto";
 import {
   buildWalletMrvCallNativePlan,
   buildWalletMrvDeployNativePlan,
@@ -53,17 +55,23 @@ import {
   enqueue as enqueueApproval,
   resolve as resolveApproval,
   rejectByWindow,
+  getPending,
   listPending,
   clearPending,
   rejectAllPending,
   reapExpired,
   focusApproval,
   type ApprovalDecision,
+  type AuthenticationApprovalSnapshot,
   type SendTxView,
   type AddChainSpec,
   type TypedDataEnvelope,
 } from "./approvals.js";
 import { computeTypedDataDigest } from "./typed-data.js";
+import {
+  bindWalletAuthApprovalSnapshot,
+  walletAuthApprovalStateMatches,
+} from "./wallet-auth-approval.js";
 import {
   isUnlockedV4,
   getUnlockedAddressV4,
@@ -75,6 +83,7 @@ import {
   personalSignV4,
   signTypedDataV4FromV4,
   getUnlockedPublicKeyV4,
+  signWalletAuthDigestV4,
   // Multi-vault surface.
   hasContainerV4,
   storedContainerNeedsRestoreV4,
@@ -526,6 +535,17 @@ import {
   renameContact,
 } from "./contacts.js";
 import { addressToBech32m } from "../shared/bech32m.js";
+import { TESTNET_GENESIS_HASH } from "../shared/build-info.js";
+import {
+  WALLET_AUTH_ALGORITHM,
+  WalletAuthRequestError,
+  buildWalletAuthChallengeV1,
+  bytesToLowerHex,
+  parseWalletAuthRequestV1,
+  walletAuthChallengeDigestV1,
+  type WalletAuthRequestV1,
+  type WalletAuthProofV1,
+} from "../shared/wallet-auth.js";
 import {
   ALARM_AUTO_LOCK,
   ALARM_NOTIF_POLL,
@@ -1480,6 +1500,67 @@ const ERR_UNAUTHORIZED = 4100;
 const ERR_UNSUPPORTED_METHOD = 4200;
 const ERR_CHAIN_NOT_ADDED = 4902;
 const ERR_INTERNAL = -32603;
+const ERR_REQUEST_LIMIT = -32005;
+
+const WALLET_AUTH_ATTEMPT_WINDOW_MS = 10_000;
+const WALLET_AUTH_ATTEMPT_MAX_PER_ORIGIN = 16;
+const WALLET_AUTH_ATTEMPT_MAX_TRACKED_ORIGINS = 256;
+const WALLET_AUTH_INTERNAL_MESSAGE = "wallet authentication failed";
+interface WalletAuthAttemptWindow {
+  startedAt: number;
+  count: number;
+}
+const walletAuthAttemptsByOrigin = new Map<string, WalletAuthAttemptWindow>();
+
+/** Cheap, bounded gate before wallet-auth params reach URL/regex/decoder work. */
+function consumeWalletAuthAttempt(origin: string, now = Date.now()): boolean {
+  const current = walletAuthAttemptsByOrigin.get(origin);
+  if (current) {
+    if (
+      now < current.startedAt ||
+      now - current.startedAt >= WALLET_AUTH_ATTEMPT_WINDOW_MS
+    ) {
+      walletAuthAttemptsByOrigin.set(origin, { startedAt: now, count: 1 });
+      return true;
+    }
+    if (current.count >= WALLET_AUTH_ATTEMPT_MAX_PER_ORIGIN) return false;
+    current.count += 1;
+    return true;
+  }
+
+  // Keep the limiter itself bounded across many navigated origins. The scan
+  // happens only when the small fixed cap is full, never per normal request.
+  if (walletAuthAttemptsByOrigin.size >= WALLET_AUTH_ATTEMPT_MAX_TRACKED_ORIGINS) {
+    for (const [trackedOrigin, window] of walletAuthAttemptsByOrigin) {
+      if (
+        now < window.startedAt ||
+        now - window.startedAt >= WALLET_AUTH_ATTEMPT_WINDOW_MS
+      ) {
+        walletAuthAttemptsByOrigin.delete(trackedOrigin);
+      }
+    }
+    if (walletAuthAttemptsByOrigin.size >= WALLET_AUTH_ATTEMPT_MAX_TRACKED_ORIGINS) {
+      return false;
+    }
+  }
+
+  walletAuthAttemptsByOrigin.set(origin, { startedAt: now, count: 1 });
+  return true;
+}
+
+/** Stable external failure with only controlled, non-secret internal context. */
+function walletAuthInternalFailure(stage: string, cause?: unknown): RpcResponse {
+  console.error("[Monolythium Wallet] wallet authentication failed", {
+    stage,
+    causeType:
+      cause instanceof Error
+        ? "Error"
+        : cause === undefined
+          ? "none"
+          : typeof cause,
+  });
+  return err(ERR_INTERNAL, WALLET_AUTH_INTERNAL_MESSAGE);
+}
 
 // S6 #45 B1 — multisig send-bypass guard.
 //
@@ -1800,6 +1881,48 @@ function connectionScopedProviderState(origin: string): {
   return { accounts, chainId: session.chainId };
 }
 
+interface WalletAuthNetworkSnapshot {
+  chainId: string;
+  genesisHash: string;
+  label: string;
+}
+
+/** Wallet-auth v1 requires an independently pinned genesis identity. The
+ * browser wallet only has such an identity for its built-in Monolythium
+ * testnet today; custom EIP-3085 networks therefore fail closed. */
+function activeWalletAuthNetwork(): WalletAuthNetworkSnapshot | null {
+  if (canonicalChainKey(session.chainId) !== canonicalChainKey(TESTNET_CHAIN_ID_HEX)) {
+    return null;
+  }
+  const chain = lookupChain(session.chainId);
+  if (!chain?.builtin) return null;
+  return {
+    chainId: BigInt(session.chainId).toString(10),
+    genesisHash: TESTNET_GENESIS_HASH,
+    label: chain.name,
+  };
+}
+
+function currentWalletAuthApprovalState(): AuthenticationApprovalSnapshot | null {
+  const vaultId = getActiveVaultIdV4();
+  const address = getUnlockedAddressV4();
+  const network = activeWalletAuthNetwork();
+  if (!vaultId || !address || !network) return null;
+  return {
+    vaultId,
+    address,
+    chainId: network.chainId,
+    genesisHash: network.genesisHash,
+  };
+}
+
+function walletAuthStateMatches(snapshot: AuthenticationApprovalSnapshot): boolean {
+  return walletAuthApprovalStateMatches(
+    snapshot,
+    currentWalletAuthApprovalState(),
+  );
+}
+
 // ---- RPC dispatch ----
 
 async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
@@ -1851,6 +1974,150 @@ async function handleRpc(message: RpcMessage): Promise<RpcResponse> {
       broadcastEvent("accountsChanged", [addr]);
       broadcastEvent("connect", { chainId: session.chainId });
       return ok([addr]);
+    }
+
+    case "monolythium_authenticate": {
+      // This is an atomic authentication request, not connect + arbitrary
+      // personal_sign. The dApp never supplies the signer address and one
+      // approval covers exactly one short-lived, domain-bound challenge.
+      if (!consumeWalletAuthAttempt(origin)) {
+        return err(
+          ERR_REQUEST_LIMIT,
+          "wallet authentication request limit exceeded",
+        );
+      }
+      try {
+        await bootHydrated;
+      } catch {
+        return err(ERR_INTERNAL, "wallet state could not be hydrated");
+      }
+      if (!(await hasContainerV4())) {
+        return err(
+          ERR_UNAUTHORIZED,
+          "Monolythium Wallet has no vault — open the extension and complete onboarding first",
+        );
+      }
+      const networkAtRequest = activeWalletAuthNetwork();
+      if (!networkAtRequest) {
+        return err(
+          ERR_UNAUTHORIZED,
+          "wallet authentication requires an active network with a pinned genesis identity",
+        );
+      }
+
+      let authRequest: WalletAuthRequestV1;
+      try {
+        authRequest = parseWalletAuthRequestV1(params, {
+          origin,
+          chainId: networkAtRequest.chainId,
+          genesisHash: networkAtRequest.genesisHash,
+        });
+      } catch (error) {
+        const message =
+          error instanceof WalletAuthRequestError
+            ? error.message
+            : "wallet authentication challenge is malformed";
+        return err(-32602, message);
+      }
+
+      const decision = await gatedEnqueue({
+        kind: "authenticate",
+        origin,
+        challenge: authRequest,
+        networkLabel: networkAtRequest.label,
+      });
+      if (!decision.ok) {
+        return err(
+          ERR_USER_REJECTED,
+          decision.reason ?? "user rejected wallet authentication",
+        );
+      }
+      const snapshot = decision.authentication;
+      if (
+        !snapshot ||
+        snapshot.chainId !== networkAtRequest.chainId ||
+        snapshot.genesisHash !== networkAtRequest.genesisHash ||
+        !walletAuthStateMatches(snapshot)
+      ) {
+        return err(
+          ERR_UNAUTHORIZED,
+          "active vault or network changed during wallet authentication — retry",
+        );
+      }
+
+      // Re-run freshness and every binding after the human approval wait. A
+      // challenge that expired while its window was open is never signed.
+      try {
+        authRequest = parseWalletAuthRequestV1(authRequest, {
+          origin,
+          chainId: snapshot.chainId,
+          genesisHash: snapshot.genesisHash,
+        });
+      } catch (error) {
+        return err(
+          -32602,
+          error instanceof Error
+            ? error.message
+            : "wallet authentication challenge expired before approval",
+        );
+      }
+
+      try {
+        const publicKey = getUnlockedPublicKeyV4();
+        if (!publicKey || publicKey.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
+          return walletAuthInternalFailure("public-key-unavailable");
+        }
+        const snapshotAddressHex = snapshot.address.startsWith("mono1")
+          ? typedBech32ToAddress(snapshot.address, "user").hex
+          : snapshot.address.toLowerCase();
+        const signerAddressHex = mlDsa65AddressFromPublicKey(publicKey);
+        if (signerAddressHex !== snapshotAddressHex) {
+          return walletAuthInternalFailure("account-key-binding");
+        }
+        const challenge = buildWalletAuthChallengeV1(
+          authRequest,
+          addressToBech32m(signerAddressHex),
+        );
+        if (!walletAuthStateMatches(snapshot)) {
+          return err(
+            ERR_UNAUTHORIZED,
+            "active vault or network changed during wallet authentication — retry",
+          );
+        }
+        const signature = signWalletAuthDigestV4(
+          walletAuthChallengeDigestV1(challenge),
+        );
+        if (signature.length !== ML_DSA_65_SIGNATURE_LEN) {
+          return walletAuthInternalFailure("signature-shape");
+        }
+        // Signing is synchronous, but retain the explicit post-sign check so
+        // future custody backends cannot accidentally weaken this invariant.
+        if (!walletAuthStateMatches(snapshot)) {
+          return err(
+            ERR_UNAUTHORIZED,
+            "active vault or network changed during wallet authentication — retry",
+          );
+        }
+
+        const proof: WalletAuthProofV1 = {
+          challenge,
+          algorithm: WALLET_AUTH_ALGORITHM,
+          publicKey: bytesToLowerHex(publicKey),
+          signature: bytesToLowerHex(signature),
+        };
+
+        // The authentication approval also authorizes normal account
+        // visibility for this origin; there is deliberately no second connect
+        // prompt. Persistence is best-effort and never delays the atomic sign
+        // path or creates an await-sized vault-swap window before return.
+        session.connectedOrigins.add(origin);
+        void saveConnectedSite(origin, snapshot.address);
+        broadcastEvent("accountsChanged", [snapshot.address]);
+        broadcastEvent("connect", { chainId: session.chainId });
+        return ok(proof);
+      } catch (error) {
+        return walletAuthInternalFailure("proof-generation", error);
+      }
     }
 
     case "eth_sign":
@@ -5945,10 +6212,29 @@ async function handlePopup(message: PopupMessage): Promise<unknown> {
     case "resolve": {
       const p = message.payload as {
         id: string;
-        decision: ApprovalDecision;
+        decision: { ok: boolean; reason?: string; displayedAddress?: string };
         windowId?: number;
       };
-      const found = resolveApproval(p.id, p.decision, p.windowId);
+      let decision: ApprovalDecision = p.decision.ok
+        ? { ok: true }
+        : { ok: false, ...(p.decision.reason ? { reason: p.decision.reason } : {}) };
+      const pendingApproval = getPending(p.id);
+      if (p.decision.ok && pendingApproval?.request.kind === "authenticate") {
+        const snapshot = bindWalletAuthApprovalSnapshot(
+          pendingApproval.request.challenge,
+          p.decision.displayedAddress,
+          currentWalletAuthApprovalState(),
+        );
+        if (!snapshot) {
+          decision = {
+            ok: false,
+            reason: "active account or network changed — review and retry",
+          };
+        } else {
+          decision = { ok: true, authentication: snapshot };
+        }
+      }
+      const found = resolveApproval(p.id, decision, p.windowId);
       return { found };
     }
     case "focus-approval": {

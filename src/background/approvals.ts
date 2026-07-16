@@ -17,6 +17,7 @@
 // the user's eyeballs on the request, which is the EIP-1193 contract.
 
 import { STORAGE_KEY_PENDING_APPROVALS } from "../shared/constants";
+import type { WalletAuthRequestV1 } from "../shared/wallet-auth";
 
 export interface ConnectApprovalReq {
   kind: "connect";
@@ -28,6 +29,16 @@ export interface PersonalSignApprovalReq {
   origin: string;
   message: string; // raw input from dapp (utf8 or 0x-hex)
   address: string;
+}
+
+/** One-shot, domain/network-bound wallet authentication. The dApp request is
+ * already strictly validated by the service worker before it reaches storage;
+ * notably, it contains no caller-selected address. */
+export interface AuthenticationApprovalReq {
+  kind: "authenticate";
+  origin: string;
+  challenge: WalletAuthRequestV1;
+  networkLabel: string;
 }
 
 /** EIP-712 typed-data v4. The popup decodes / hashes for display. */
@@ -127,6 +138,7 @@ export interface AddChainApprovalReq {
 
 export type ApprovalReq =
   | ConnectApprovalReq
+  | AuthenticationApprovalReq
   | PersonalSignApprovalReq
   | TypedSignApprovalReq
   | SendTxApprovalReq
@@ -139,8 +151,17 @@ export interface PendingApproval {
   createdAt: number;
 }
 
+export interface AuthenticationApprovalSnapshot {
+  /** Snapshot captured by the service worker at the approval click. */
+  vaultId: string;
+  /** Keystore-native address used by the rest of the wallet (0x today). */
+  address: string;
+  chainId: string;
+  genesisHash: string;
+}
+
 export type ApprovalDecision =
-  | { ok: true }
+  | { ok: true; authentication?: AuthenticationApprovalSnapshot }
   | { ok: false; reason?: string };
 
 interface PendingResolver {
@@ -220,7 +241,7 @@ export function enqueue(request: ApprovalReq): Promise<ApprovalDecision> {
   // carries no consent-relevant payload (its full identity IS kind+origin), and
   // double-executing it is harmless — it merely re-returns the account list.
   //
-  // Every payload-bearing kind (send_tx, personal_sign, typed_sign,
+  // Every payload-bearing kind (authenticate, send_tx, personal_sign, typed_sign,
   // switch_chain, add_chain) is DELIBERATELY excluded: the dedup collapses the
   // approval *window*, but each request's continuation independently signs and
   // submits its OWN payload. Collapsing a send/sign would therefore either sign

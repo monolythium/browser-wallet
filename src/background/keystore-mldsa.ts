@@ -2082,6 +2082,19 @@ export function getUnlockedBackendV4(): MlDsa65Backend | null {
   return unlocked?.backend ?? null;
 }
 
+/** Sign the already-domain-separated wallet-auth v1 32-byte digest with the
+ * active ML-DSA-65 backend. Kept separate from personal_sign (which applies an
+ * EIP-191 prefix and keccak itself) so authentication bytes cannot cross into
+ * the generic message-signing domain. Synchronous by design: the service
+ * worker can snapshot, sign, and recheck the active vault without yielding. */
+export function signWalletAuthDigestV4(digest: Uint8Array): Uint8Array {
+  if (!unlocked) throw new Error("v4 wallet is locked");
+  if (digest.length !== 32) {
+    throw new Error(`wallet authentication digest must be 32 bytes, got ${digest.length}`);
+  }
+  return unlocked.backend.signPrehash(digest);
+}
+
 /**
  * EIP-191 personal_sign with the v4 ML-DSA-65 backend. The v4 vault
  * derives the wallet address from the ML-DSA pubkey, so signing

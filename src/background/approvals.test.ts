@@ -41,6 +41,24 @@ const sendTx = (origin: string, to: string, value: string) => ({
   },
 });
 
+const authenticate = (origin: string) => ({
+  kind: "authenticate" as const,
+  origin,
+  networkLabel: "Monolythium Testnet",
+  challenge: {
+    version: "1" as const,
+    domain: new URL(origin).host,
+    origin,
+    uri: `${origin}/`,
+    chainId: "69420",
+    genesisHash: `0x${"ab".repeat(32)}`,
+    nonce: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    issuedAt: "2026-07-16T11:59:30.000Z",
+    expirationTime: "2026-07-16T12:01:30.000Z",
+    scopes: ["stele:web:session"],
+  },
+});
+
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
 beforeEach(() => {
@@ -108,6 +126,20 @@ describe("approvals — window-bomb guards (T4-06)", () => {
     const settled = [await p1, await p2];
     expect(settled).toContainEqual({ ok: true });
     expect(settled).toContainEqual({ ok: false, reason: "second consent" });
+  });
+
+  it("two identical authentication challenges require two independent one-shot approvals", async () => {
+    const a = await import("./approvals.js");
+    const p1 = a.enqueue(authenticate("https://stele.example"));
+    const p2 = a.enqueue(authenticate("https://stele.example"));
+    await tick();
+    expect(createCalls).toBe(2);
+    expect(a.listPending()).toHaveLength(2);
+    const [first, second] = a.listPending();
+    a.resolve(first!.id, { ok: true });
+    a.resolve(second!.id, { ok: false, reason: "second rejected" });
+    expect(await p1).toEqual({ ok: true });
+    expect(await p2).toEqual({ ok: false, reason: "second rejected" });
   });
 
   it("C7: two switch_chain to DIFFERENT chainIds from one origin → two windows (distinct intents not collapsed)", async () => {

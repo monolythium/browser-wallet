@@ -36,6 +36,59 @@ interface InboundState {
   state: { accounts?: unknown; chainId?: unknown };
 }
 
+const MAX_RPC_ID_LENGTH = 128;
+const MAX_RPC_METHOD_LENGTH = 128;
+const WALLET_AUTH_STRING_LIMITS = {
+  version: 8,
+  domain: 512,
+  origin: 528,
+  uri: 529,
+  chainId: 78,
+  genesisHash: 66,
+  nonce: 43,
+  issuedAt: 24,
+  expirationTime: 24,
+} as const;
+const WALLET_AUTH_FIELDS = new Set<string>([
+  ...Object.keys(WALLET_AUTH_STRING_LIMITS),
+  "scopes",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Keep oversized authentication payloads from crossing the second structured-
+ * clone boundary into the privileged service worker. The authoritative parser
+ * still runs there; this only enforces cheap structural/length ceilings first.
+ */
+function fitsWalletAuthBridgeBudget(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  let fieldCount = 0;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    fieldCount += 1;
+    if (fieldCount > WALLET_AUTH_FIELDS.size || !WALLET_AUTH_FIELDS.has(key)) {
+      return false;
+    }
+  }
+  if (fieldCount !== WALLET_AUTH_FIELDS.size) return false;
+
+  for (const [field, maxLength] of Object.entries(WALLET_AUTH_STRING_LIMITS)) {
+    const fieldValue = value[field];
+    if (typeof fieldValue !== "string" || fieldValue.length > maxLength) {
+      return false;
+    }
+  }
+  const scopes = value.scopes;
+  if (!Array.isArray(scopes) || scopes.length === 0 || scopes.length > 16) {
+    return false;
+  }
+  return scopes.every(
+    (scope) => typeof scope === "string" && scope.length <= 128,
+  );
+}
+
 // Announce this page's origin to the service worker the moment the bridge loads.
 // This runs in the ISOLATED world at document_start — before the page's own
 // scripts — so the SW learns the tab's CURRENT origin on every navigation, not
@@ -79,11 +132,45 @@ window.addEventListener("message", (ev) => {
   if (ev.origin !== window.location.origin) return;
   const data = ev.data as OutboundEnvelope | undefined;
   if (!data || data.source !== "monolythium-wallet-page") return;
+  if (
+    typeof data.id !== "string" ||
+    data.id.length === 0 ||
+    data.id.length > MAX_RPC_ID_LENGTH ||
+    !isRecord(data.args) ||
+    typeof data.args.method !== "string" ||
+    data.args.method.length === 0 ||
+    data.args.method.length > MAX_RPC_METHOD_LENGTH
+  ) {
+    return;
+  }
+  if (
+    data.args.method === "monolythium_authenticate" &&
+    !fitsWalletAuthBridgeBudget(data.args.params)
+  ) {
+    const reply: InboundEnvelope = {
+      source: "monolythium-wallet-bridge",
+      id: data.id,
+      error: {
+        code: -32602,
+        message: "wallet authentication challenge is malformed",
+      },
+    };
+    window.postMessage(reply, window.location.origin);
+    return;
+  }
+
+  // For authentication, rebuild the argument object from its two allowed
+  // fields. A page can post an object with arbitrary runtime-only siblings
+  // despite the TypeScript interface; none may cross into the service worker.
+  const argsToForward =
+    data.args.method === "monolythium_authenticate"
+      ? { method: data.args.method, params: data.args.params }
+      : data.args;
 
   // Forward to the service worker. The service worker enforces user approval
   // for every state-changing request and pings back over the same id.
   chrome.runtime.sendMessage(
-    { kind: "rpc", id: data.id, args: data.args, origin: window.location.origin },
+    { kind: "rpc", id: data.id, args: argsToForward, origin: window.location.origin },
     (response: { result?: unknown; error?: { code: number; message: string } } | undefined) => {
       const reply: InboundEnvelope = {
         source: "monolythium-wallet-bridge",
@@ -111,4 +198,3 @@ chrome.runtime.onMessage.addListener((message: { kind: string; event?: string; p
 // This content script is bundled as an ES module by @crxjs; the explicit export
 // keeps it a TS module (so it can be dynamically imported by its test).
 export {};
-
